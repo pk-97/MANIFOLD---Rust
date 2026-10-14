@@ -379,16 +379,12 @@ pub struct InspectorCompositePanel {
     card_drag_indicator_id: Option<NodeId>,
     card_drag_label: String,
     /// The `Ghost`-tier region (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1–D3)
-    /// wrapping the ghost + indicator, minted fresh in
-    /// [`try_begin_card_drag`](Self::try_begin_card_drag) each time a drag
-    /// starts. Its root sits BEFORE `card_drag_ghost_id` in the tree, so
-    /// [`card_drag_first_node`](Self::card_drag_first_node) reports this
-    /// index (not the ghost label's own) — the render pass's
-    /// `render_tree_range(start, usize::MAX)` walks registered regions, not
-    /// a raw root scan, and would miss the region entirely otherwise.
+    /// wrapping the ghost + indicator, in the tree's ghost region; names the
+    /// root [`card_drag_ghost_root`](Self::card_drag_ghost_root) reports.
     card_drag_region_root: Option<NodeId>,
 
-    // Cache tracking
+    // Cache tracking: slots in `cache_region`'s arena.
+    cache_region: u8,
     cache_first_node: usize,
     cache_node_count: usize,
 
@@ -434,6 +430,11 @@ impl InspectorCompositePanel {
             .next()
             .unwrap_or(action)
     }
+    /// The region whose arena holds the inspector column's nodes.
+    pub fn region(&self) -> u8 {
+        self.cache_region
+    }
+
     pub fn audio_drawer_intent(
         &mut self, node: NodeId, target: GraphParamTarget,
         param_id: &manifold_foundation::ParamId, click: AudioDrawerClick,
@@ -441,7 +442,7 @@ impl InspectorCompositePanel {
         for card in self.effects.iter_mut().flatten()
             .chain(self.modifier_cards.iter_mut()).chain(self.gen_params.iter_mut())
         {
-            if in_range(node.index(), card.first_node(), card.node_count()) {
+            if card.owns_node(node) {
                 return card.audio_drawer_intent(target, param_id, click);
             }
         }
@@ -538,6 +539,7 @@ impl InspectorCompositePanel {
             card_drag_indicator_id: None,
             card_drag_label: String::new(),
             card_drag_region_root: None,
+            cache_region: crate::tree::DEFAULT_REGION,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
             drawer_anim_active: false,
@@ -1813,7 +1815,7 @@ mod tests {
                 _ => None,
             }
         }).unwrap();
-        tree.offset_nodes(card.first_node(), card.node_count(), -37.0);
+        tree.offset_nodes(card.region(), card.first_node(), card.node_count(), -37.0);
         inspector.effects[0].push(card);
         let refreshed = inspector.refresh_driver_period_intent(button, &tree, action);
         assert!(matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })
@@ -2209,14 +2211,14 @@ mod tests {
         panel.build(&mut tree, &layout);
         tree.end_region(region, content_start);
 
-        let start = region.root.index();
+        let start = region.root.slot();
         let end = tree.count();
 
         // Collect node indices the full-render traversal actually visits.
         let mut visited = std::collections::HashSet::new();
-        tree.traverse_range(start, end, |ev| {
+        tree.traverse_range(crate::tree::DEFAULT_REGION, start, end, |ev| {
             if let TraversalEvent::Node(n) = ev {
-                visited.insert(n.id.index());
+                visited.insert(n.id.slot());
             }
         });
 
@@ -2256,7 +2258,7 @@ mod tests {
         let (gs, gc) = (genp.first_node(), genp.node_count());
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut culled: Vec<(usize, crate::node::Rect)> = Vec::new();
-        tree.traverse_range(start, end, |ev| match ev {
+        tree.traverse_range(crate::tree::DEFAULT_REGION, start, end, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
                 clip_stack.push(clipped);
@@ -2265,7 +2267,7 @@ mod tests {
                 clip_stack.pop();
             }
             TraversalEvent::Node(n) => {
-                let i = n.id.index();
+                let i = n.id.slot();
                 if i < gs || i >= gs + gc {
                     return;
                 }
@@ -2382,7 +2384,7 @@ mod tests {
         }
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut painted_over_tab_strip: Vec<(usize, Rect)> = Vec::new();
-        tree.traverse_range(start, end, |ev| match ev {
+        tree.traverse_range(crate::tree::DEFAULT_REGION, start, end, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
                 clip_stack.push(clipped);
@@ -2404,14 +2406,14 @@ mod tests {
                 let Some(c) = clip_stack.last() else {
                     // No active clip ancestor at all — definitely paints
                     // wherever its raw bounds say, tab strip included.
-                    painted_over_tab_strip.push((n.id.index(), b));
+                    painted_over_tab_strip.push((n.id.slot(), b));
                     return;
                 };
                 // Effective clip must not extend above columns_y — if it
                 // does, this node's visible (unclipped) portion still
                 // reaches above the tab strip's lower edge.
                 if c.y < columns_y - 0.01 {
-                    painted_over_tab_strip.push((n.id.index(), b));
+                    painted_over_tab_strip.push((n.id.slot(), b));
                 }
             }
         });
@@ -3461,7 +3463,7 @@ mod tests {
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut violations: Vec<String> = Vec::new();
         let mut checked = 0usize;
-        tree.traverse_flat_range(start, end, false, |ev| match ev {
+        tree.traverse_flat_range(crate::tree::DEFAULT_REGION, start, end, false, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map_or(r, |c| intersect(*c, r));
                 clip_stack.push(clipped);

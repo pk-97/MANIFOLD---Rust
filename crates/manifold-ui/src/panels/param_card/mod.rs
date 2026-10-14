@@ -464,7 +464,8 @@ pub struct ParamCardPanel {
     /// in release.
     row_value_synced: Vec<bool>,
 
-    // Node range
+    // Node range: slots in `region`'s arena.
+    region: u8,
     first_node: usize,
     node_count: usize,
 
@@ -557,6 +558,7 @@ impl ParamCardPanel {
             delete_fade: None,
             row_id_index: ahash::AHashMap::new(),
             row_value_synced: Vec::new(),
+            region: crate::tree::DEFAULT_REGION,
             first_node: 0,
             node_count: 0,
         }
@@ -810,6 +812,19 @@ impl ParamCardPanel {
         self.node_count
     }
 
+    /// The region whose arena holds this card's nodes.
+    pub fn region(&self) -> u8 {
+        self.region
+    }
+
+    /// Whether `id` is one of the nodes this card built this frame.
+    pub fn owns_node(&self, id: NodeId) -> bool {
+        self.is_live()
+            && id.region() == self.region
+            && id.slot() >= self.first_node
+            && id.slot() < self.first_node + self.node_count
+    }
+
     /// D9 widget catalog — enumerate this card's sanctioned row affordances by
     /// walking its own node range and resolving each interactive node through
     /// the SAME [`RowIndex`](crate::param_surface::RowIndex) routing uses,
@@ -827,7 +842,7 @@ impl ParamCardPanel {
         if self.is_live() {
             let end = self.first_node.saturating_add(self.node_count);
             for idx in self.first_node..end {
-                let node_id = tree.id_at(idx);
+                let node_id = tree.id_in(self.region, idx);
                 let widget = tree.widget_of(node_id);
                 if let Some((row, role)) = self.row_host.row_index.get(widget) {
                     affordances.push(CatalogAffordance {
@@ -1810,8 +1825,7 @@ pub(super) mod tests {
             let mut tree = UITree::new();
             panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 500.0));
             assert!(!tree
-                .nodes()
-                .iter()
+                .all_nodes()
                 .any(|node| node.text.as_deref() == Some("Owner lane")));
         }
     }
@@ -2073,7 +2087,7 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clips_midflight =
-            tree.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+            tree.all_nodes().filter(|n| n.node_type == UINodeType::ClipRegion).count();
         assert!(clips_midflight >= 1, "an animating trigger-gate drawer builds under a clip region");
         // The drawer still builds (not skipped) — just clipped to the reveal.
         assert!(panel.row_host.audio_configs[gi].is_some());
@@ -2089,7 +2103,7 @@ pub(super) mod tests {
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clips_settled =
-            tree2.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+            tree2.all_nodes().filter(|n| n.node_type == UINodeType::ClipRegion).count();
         assert!(
             clips_settled < clips_midflight,
             "settled build drops the trigger-gate drawer clip: settled={clips_settled} midflight={clips_midflight}"
@@ -2310,7 +2324,7 @@ pub(super) mod tests {
         let mut panel = ParamCardPanel::new();
         panel.configure(&config);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
-        assert!(tree.nodes().iter().any(|node| {
+        assert!(tree.all_nodes().any(|node| {
             node.flags.contains(UIFlags::INTERACTIVE)
                 && node.tooltip.as_deref() == Some("Shape the surface.")
         }));
@@ -2910,8 +2924,7 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         let clips_midflight = tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert!(clips_midflight >= 1, "an animating card collapse builds its body under a clip region");
@@ -2926,8 +2939,7 @@ pub(super) mod tests {
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
         let clips_settled = tree2
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert_eq!(clips_settled, 0, "settled collapsed card has no leftover clip region");
@@ -3033,8 +3045,7 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clips_midflight = tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert!(clips_midflight >= 1, "an animating drawer builds under a clip region");
@@ -3051,8 +3062,7 @@ pub(super) mod tests {
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clips_settled = tree2
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert!(

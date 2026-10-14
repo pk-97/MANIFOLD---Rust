@@ -78,7 +78,7 @@ pub(super) fn panel_rename_command(project: &Project, layer: &LayerId, object_no
     ui.scene_setup_panel.set_selection(layer.clone(),
         manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id));
     build_scene_tree(&mut ui);
-    let header = ui.tree.nodes().iter().find(|node|
+    let header = ui.tree.all_nodes().find(|node|
         ui.tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap().id;
     let (_, actions) = ui.scene_setup_panel.handle_event(&manifold_ui::UIEvent::Click {
         node_id: header, pos: manifold_ui::Vec2::ZERO, modifiers: manifold_ui::Modifiers::default(),
@@ -132,14 +132,13 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
         &manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneItemRightClicked),
         None,
     );
-    assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Copy")));
-    assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Cut")));
-    assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Delete")));
-    assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Duplicate")));
+    assert!(!ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Copy")));
+    assert!(!ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Cut")));
+    assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Delete")));
+    assert!(!ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Duplicate")));
 
     let toggle = ui.tree
-        .nodes()
-        .iter()
+        .all_nodes()
         .find_map(|node| {
             (ui.tree.name_of(node.id) == Some("scene_setup.objects.group_toggle"))
                 .then_some(node.id)
@@ -156,18 +155,17 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     ui.scene_setup_panel
         .set_selection(layer.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
     build_scene_tree(&mut ui);
-    assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Size")),
+    assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Size")),
         "Foam retains its recipe-owned Size row");
-    assert!(ui.tree.nodes().iter().any(|node| ui.tree.name_of(node.id)
+    assert!(ui.tree.all_nodes().any(|node| ui.tree.name_of(node.id)
         .is_some_and(|name| name.ends_with("foam_size.value"))),
         "the flow selector comes from the recipe-owned foam_size binding");
-    assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Cast Shadows")));
+    assert!(!ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Cast Shadows")));
     let selected = ui.scene_setup_panel.selected_scene_item().unwrap();
     assert!(selected.is_family_child);
     assert!(!selected.is_family_parent);
     let hide_button = ui.tree
-        .nodes()
-        .iter()
+        .all_nodes()
         .find_map(|node| {
             (ui.tree.name_of(node.id) == Some("scene_setup.properties.hide"))
                 .then_some(node.id)
@@ -203,14 +201,13 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
         None,
     );
     for label in ["Copy", "Cut", "Delete", "Duplicate"] {
-        assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(label)),
+        assert!(!ui.tree.all_nodes().any(|node| node.text.as_deref() == Some(label)),
             "child context menu must omit {label}");
     }
-    assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Hide")));
+    assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Hide")));
     let hide_menu_id = ui.tree
-        .nodes()
+        .region_nodes(ui.tree.overlay_region())
         .iter()
-        .rev()
         .find_map(|node| (node.text.as_deref() == Some("Hide")).then_some(node.id))
         .expect("Water child Hide context item");
     let menu_action = ui.dropdown.handle_event(
@@ -279,7 +276,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     driven_ui.scene_setup_panel.set_selection(layer.clone(),
         manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
     build_scene_tree(&mut driven_ui);
-    let button = driven_ui.tree.nodes().iter().find(|node|
+    let button = driven_ui.tree.all_nodes().find(|node|
         driven_ui.tree.name_of(node.id) == Some("scene_setup.properties.hide")).unwrap().id;
     let (_, actions) = driven_ui.scene_setup_panel.handle_event(
         &manifold_ui::UIEvent::Click { node_id: button, pos: manifold_ui::Vec2::ZERO,
@@ -289,7 +286,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     assert!(driven_ui.scene_setup_panel.remove_selection_action().is_none(), "keyboard Delete is inert");
     driven_ui.try_open_dropdown(
         &manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneItemRightClicked), None);
-    let menu = driven_ui.tree.nodes().iter().rev()
+    let menu = driven_ui.tree.region_nodes(driven_ui.tree.overlay_region()).iter()
         .find(|node| node.text.as_deref() == Some("Hide")).expect("driven Hide stays present").id;
     assert!(matches!(driven_ui.dropdown.handle_event(
         &manifold_ui::UIEvent::Click { node_id: menu, pos: manifold_ui::Vec2::ZERO,
@@ -322,7 +319,7 @@ fn water_family_clipboard_rejects_every_group_output() {
 }
 
 fn tree_has_name(tree: &manifold_ui::UITree, name: &str) -> bool {
-    tree.nodes().iter().any(|node| tree.name_of(node.id) == Some(name))
+    tree.all_nodes().any(|node| tree.name_of(node.id) == Some(name))
 }
 
 #[test]

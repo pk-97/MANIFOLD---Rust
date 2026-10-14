@@ -118,11 +118,15 @@ impl ScrollContainer {
     /// the content scrolls within the stable viewport. Returns false if there's
     /// no recorded content to move (caller should fall back to a rebuild).
     pub fn offset_content(&self, tree: &mut UITree, delta_y: f32) -> bool {
+        let Some(clip) = self.clip_node_id else {
+            return false;
+        };
         if self.content_end <= self.content_start {
             return false;
         }
+        // The content shares the clip node's arena.
         for i in self.content_start..self.content_end {
-            let id = tree.id_at(i);
+            let id = tree.id_in(clip.region(), i);
             let mut b = tree.get_bounds(id);
             b.y += delta_y;
             tree.set_bounds(id, b);

@@ -3302,8 +3302,7 @@ impl Application {
             // text, slider drags, etc.). Overlay nodes (perf HUD, dropdowns,
             // popups) are excluded — they render every frame via the overlay
             // pass and don't need the full offscreen re-render.
-            let panel_end = self.ws.ui_root.overlay_region_start;
-            if self.ws.ui_root.tree.has_dirty_in_range(0, panel_end) {
+            if self.ws.ui_root.atlas_dirty() {
                 self.ws.offscreen_dirty = true;
             }
             // The Audio Setup scope is a live waterfall: force a full redraw each
@@ -3776,8 +3775,7 @@ mod live_sim_hud_flow_tests {
 
     fn hud_texts(root: &UIRoot) -> Vec<String> {
         root.tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter_map(|node| node.text.clone())
             .collect()
     }

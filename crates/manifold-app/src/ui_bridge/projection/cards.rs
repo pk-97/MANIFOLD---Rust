@@ -1544,8 +1544,7 @@ mod sync_card_values_tests {
 
     fn tree_has_text(ui: &UIRoot, needle: &str) -> bool {
         ui.tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .any(|n| n.text.as_deref() == Some(needle))
     }
 

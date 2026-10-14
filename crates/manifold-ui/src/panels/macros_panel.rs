@@ -149,7 +149,7 @@ impl MacrosPanel {
     }
 
     pub fn first_node(&self) -> usize {
-        self.first_node.map_or(usize::MAX, |id| id.index())
+        self.first_node.map_or(usize::MAX, |id| id.slot())
     }
 
     /// Set Ableton display data per macro slot (call before build).
@@ -362,7 +362,7 @@ impl MacrosPanel {
             }
         }
 
-        let first = self.first_node.map_or(0, |id| id.index());
+        let first = self.first_node.map_or(0, |id| id.slot());
         self.node_count = tree.count() - first;
     }
 
@@ -489,8 +489,8 @@ impl MacrosPanel {
         let Some(first) = self.first_node else {
             return false;
         };
-        let id = node_id.index();
-        id >= first.index() && id < first.index() + self.node_count
+        let id = node_id.slot();
+        node_id.region() == first.region() && id >= first.slot() && id < first.slot() + self.node_count
     }
 
     pub fn label_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {

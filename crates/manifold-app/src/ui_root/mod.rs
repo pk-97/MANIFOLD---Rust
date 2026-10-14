@@ -4,6 +4,7 @@
 //! and the dropdown overlay. The app layer creates one UIRoot per
 //! workspace window and forwards winit events through it.
 
+use crate::frame_plan::MainRegion;
 use manifold_core::work_count::{record_work, WorkKind};
 use manifold_playback::ableton_bridge::AbletonSession;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
@@ -109,16 +110,6 @@ pub struct ScrollDirty {
     pub zoom: bool,
     /// Non-axis visual changes: hover, selection, overlay state.
     pub visual: bool,
-}
-
-/// Where a suffix rebuild of the flat tree starts, in build order: the whole
-/// tree, the scroll panels (layer headers on), or the viewport panels (the
-/// viewport and the overlays after it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RegionSlot {
-    Full,
-    ScrollPanels,
-    ViewportPanels,
 }
 
 impl ScrollDirty {
@@ -229,16 +220,13 @@ pub struct UIRoot {
 
     // State
     built: bool,
+    /// Regions whose rebuild an active drag deferred; they rebuild alone on
+    /// the first frame the drag no longer holds them (the drag guards go in
+    /// P5a).
+    pub(crate) deferred_rebuild: crate::frame_plan::RegionMask,
     screen_width: f32,
     screen_height: f32,
     time_accumulator: f32,
-    /// Tree index where scroll-affected panels begin (layer_headers, viewport, perf_hud).
-    /// Everything before this index is "static" (transport, header, footer, inspector)
-    /// and preserved during scroll-only rebuilds via tree.truncate_from().
-    scroll_panels_start: usize,
-    /// Tree index where viewport panels begin (after layer_headers).
-    /// On horizontal-only scroll, truncate from here to skip layer header rebuild.
-    viewport_panels_start: usize,
 
     /// Context for the currently-open dropdown (set before open, read on selection).
     dropdown_context: Option<DropdownContext>,
@@ -380,8 +368,8 @@ pub struct UIRoot {
     /// `AbletonRediscover` on the content thread so the picker shows fresh data.
     pub ableton_rediscovery_needed: bool,
 
-    /// Node ranges `[start, end)` of each open overlay, in z-order, recorded by
-    /// `build_overlays`. The draw pass renders these at `Depth::OVERLAY` offset
+    /// Slot ranges `[start, end)` in the Overlays region of each open overlay,
+    /// in z-order, recorded by `build_overlays`. The draw pass renders these at `Depth::OVERLAY` offset
     /// by stack index — so build and draw share one source and cannot drift
     /// (the bug class this system eliminates).
     pub overlay_draw: Vec<(usize, usize)>,
@@ -397,9 +385,6 @@ pub struct UIRoot {
     /// this guards (the docked Audio Setup panel), and the placeholder sits
     /// at the screen origin, away from where the seams live in practice.
     overlay_rects: Vec<(OverlayId, Rect)>,
-    /// Tree index where the overlay region begins (after all scroll panels).
-    /// The waveform/stem-lane overlay render uses this as its upper bound.
-    pub overlay_region_start: usize,
     /// Open-state of every overlay (one bit per `OverlayId::Z_ORDER` slot) as of
     /// the last `build_overlays`. The driver compares this against the live
     /// open-set each frame ([`detect_overlay_open_change`]); any difference — an
@@ -541,6 +526,9 @@ impl UIRoot {
                 tree.set_text_measure(Box::new(
                     manifold_ui_paint::native_text::CachedTextMeasure::new(),
                 ));
+                // Event-time overlay mints (a dropdown opening) and the
+                // card-drag ghost land in their own regions (D7).
+                tree.set_region_roles(MainRegion::Overlays.id(), MainRegion::Ghosts.id());
                 tree
             },
             driver_bpm: None,
@@ -592,8 +580,6 @@ impl UIRoot {
             screen_width: 1280.0,
             screen_height: 720.0,
             time_accumulator: 0.0,
-            scroll_panels_start: 0,
-            viewport_panels_start: 0,
             dropdown_context: None,
             display_resolutions: Vec::new(),
             master_effect_names: Vec::new(),
@@ -643,8 +629,8 @@ impl UIRoot {
             ableton_rediscovery_needed: false,
             overlay_draw: Vec::new(),
             overlay_rects: Vec::new(),
-            overlay_region_start: 0,
             overlay_open_snapshot: 0,
+            deferred_rebuild: crate::frame_plan::RegionMask::default(),
             closed_overlays: smallvec::SmallVec::new(),
             warmup: None,
         }
@@ -670,106 +656,56 @@ impl UIRoot {
         self.display_resolutions = resolutions;
     }
 
-    /// Build panel cache info for UICacheManager.
-    /// Returns one entry per cacheable panel with its node range and screen rect.
+    /// One entry per atlas region with nodes, for UICacheManager: the
+    /// region, the panel's slot range in that region's arena, and its screen
+    /// rect. Each region is its own atlas slot (D7). A panel's range starts
+    /// after its region root, as the cache's ancestor-aware scan expects;
+    /// the inspector's runs to its arena's end so the docked Scene panel built
+    /// after it paints in the same slot.
     pub fn panel_cache_info(&self) -> Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo> {
         use manifold_ui_paint::ui_cache_manager::{PanelCacheInfo, PanelSlot};
 
-        let mut info = Vec::with_capacity(7);
-
-        // Transport
-        let (start, end) = self.transport.node_range();
-        if start < end {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::Transport,
-                node_start: start,
-                node_end: end,
-                rect: self.layout.transport_bar(),
-                sub_regions: None,
-            });
+        let full_screen = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
+        let len = |r: MainRegion| self.tree.region_len(r.id());
+        let entries = [
+            (PanelSlot::Transport, MainRegion::Transport, self.transport.node_range(), self.layout.transport_bar()),
+            (PanelSlot::Header, MainRegion::Header, self.header.node_range(), self.layout.header()),
+            (PanelSlot::Footer, MainRegion::Footer, self.footer.node_range(), self.layout.footer()),
+            (
+                PanelSlot::Inspector,
+                MainRegion::Inspector,
+                (self.inspector.first_node(), len(MainRegion::Inspector)),
+                self.layout.inspector(),
+            ),
+            (PanelSlot::AudioDock, MainRegion::AudioDock, (0, len(MainRegion::AudioDock)), self.layout.audio_setup()),
+            (PanelSlot::SplitHandles, MainRegion::SplitHandles, (0, len(MainRegion::SplitHandles)), full_screen),
+            (PanelSlot::LayerHeaders, MainRegion::LayerHeaders, self.layer_headers.node_range(), self.layout.layer_controls()),
+            (PanelSlot::Viewport, MainRegion::Viewport, self.viewport.node_range(), self.layout.timeline_body()),
+        ];
+        let mut info = Vec::with_capacity(entries.len());
+        for (slot, region, (start, end), rect) in entries {
+            if start < end && end <= len(region) {
+                info.push(PanelCacheInfo {
+                    slot,
+                    region: region.id(),
+                    start,
+                    end,
+                    rect,
+                    sub_regions: (slot == PanelSlot::Inspector).then(|| self.inspector.sub_region_ranges()),
+                });
+            }
         }
-
-        // Header
-        let (start, end) = self.header.node_range();
-        if start < end {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::Header,
-                node_start: start,
-                node_end: end,
-                rect: self.layout.header(),
-                sub_regions: None,
-            });
-        }
-
-        // Footer
-        let (start, end) = self.footer.node_range();
-        if start < end {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::Footer,
-                node_start: start,
-                node_end: end,
-                rect: self.layout.footer(),
-                sub_regions: None,
-            });
-        }
-
-        // Inspector (with per-card sub-regions for incremental re-rendering)
-        let (start, end) = self.inspector.node_range();
-        if start < end {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::Inspector,
-                node_start: start,
-                node_end: end,
-                rect: self.layout.inspector(),
-                sub_regions: Some(self.inspector.sub_region_ranges()),
-            });
-        }
-
-        // SplitHandles — nodes between inspector end and scroll_panels_start
-        let inspector_end = self
-            .inspector
-            .first_node()
-            .saturating_add(self.inspector.node_count());
-        if inspector_end < self.scroll_panels_start && self.inspector.first_node() != usize::MAX {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::SplitHandles,
-                node_start: inspector_end,
-                node_end: self.scroll_panels_start,
-                rect: Rect::new(
-                    0.0,
-                    0.0,
-                    self.layout.screen_width,
-                    self.layout.screen_height,
-                ),
-                sub_regions: None,
-            });
-        }
-
-        // LayerHeaders
-        let (start, end) = self.layer_headers.node_range();
-        if start < end {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::LayerHeaders,
-                node_start: start,
-                node_end: end,
-                rect: self.layout.layer_controls(),
-                sub_regions: None,
-            });
-        }
-
-        // Viewport (timeline body)
-        let (start, end) = self.viewport.node_range();
-        if start < end {
-            info.push(PanelCacheInfo {
-                slot: PanelSlot::Viewport,
-                node_start: start,
-                node_end: end,
-                rect: self.layout.timeline_body(),
-                sub_regions: None,
-            });
-        }
-
         info
+    }
+
+    /// Whether any node of an atlas region is dirty, so the offscreen needs a
+    /// repaint. Overlays and the ghost draw every frame through the overlay
+    /// pass and are excluded.
+    pub fn atlas_dirty(&self) -> bool {
+        MainRegion::ALL
+            .into_iter()
+            .filter(|r| r.panel_slot().is_some())
+            .any(|r| self.tree.has_dirty_in_region(r.id()))
     }
 
     /// Apply saved layout from project settings. Called after project load.
@@ -817,16 +753,11 @@ impl UIRoot {
 
     /// Build all panels. Call once after creation and after resize.
     ///
-    /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2: every top-level panel
-    /// builds under a region (`begin_region` .. `end_region`) instead of
-    /// rooting itself at the tree directly — the region mints `CLIPS_CHILDREN`
-    /// by construction and carries a stacking tier, so a panel can never
-    /// paint outside its own rect and Chrome always wins over Base
-    /// regardless of build order. Each panel's own build code is UNCHANGED
-    /// (still mints its own subtree with `None` parents internally); the
-    /// wrap here mechanically sweeps that subtree under the region via
-    /// `end_region`, the same idiom the inspector's own pre-existing
-    /// `ClipRegion` already used before this design generalized it.
+    /// Every main region builds into its own arena, in `MainRegion` order
+    /// (UI_INVALIDATION_DESIGN.md D7), under a region root that clips it and
+    /// carries its stacking tier (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2).
+    /// A region rebuilds alone through [`build_region`](Self::build_region)
+    /// after its arena is cleared.
     pub fn build(&mut self) {
         record_work(WorkKind::FullBuild);
         self.tree.clear();
@@ -834,186 +765,210 @@ impl UIRoot {
         self.input.invalidate_hover();
 
         self.layout.resize(self.screen_width, self.screen_height);
-
-        // Static panels — preserved during scroll-only rebuilds.
-        // Order: transport, header, footer, inspector (non-scroll-affected).
-        // Chrome tier (transport/header/footer): the always-visible frame —
-        // painted after (on top of) Base regardless of this build order.
-        let region =
-            self.tree
-                .begin_region(self.layout.transport_bar(), ZTier::Chrome, "transport", UIFlags::empty());
-        let start = self.tree.count();
-        self.transport.build(&mut self.tree, &self.layout);
-        self.tree.end_region(region, start);
-
-        let region = self.tree.begin_region(self.layout.header(), ZTier::Chrome, "header", UIFlags::empty());
-        let start = self.tree.count();
-        self.header.build(&mut self.tree, &self.layout);
-        self.tree.end_region(region, start);
-
-        let region = self.tree.begin_region(self.layout.footer(), ZTier::Chrome, "footer", UIFlags::empty());
-        let start = self.tree.count();
-        self.footer.build(&mut self.tree, &self.layout);
-        self.tree.end_region(region, start);
-
-        // Base tier: main content surfaces.
-        let region = self.tree.begin_region(self.layout.inspector(), ZTier::Base, "inspector", UIFlags::empty());
-        let start = self.tree.count();
-        self.inspector.build(&mut self.tree, &self.layout);
-        // The Scene tab's content is the scene panel, built into the column
-        // area below the inspector's tab strip (SCENE_SURFACES D16).
-        let scene_rect = self.inspector.scene_content_rect();
-        if scene_rect.width > 0.0 {
-            self.scene_setup_panel.build_docked(&mut self.tree, scene_rect);
+        for region in MainRegion::ALL {
+            self.build_region(region);
         }
-        self.tree.end_region(region, start);
+        self.built = true;
+    }
 
-        // Audio Setup dock (D1) — a Base-tier column between the content area
-        // and the inspector, built from the root pass when open. It's no longer
-        // an overlay; opening/closing changes `audio_setup_width`, which shrinks
-        // the content area, so a full rebuild lands here at the new geometry.
-        // Guard on the WIDTH (the geometry), not the panel's `open` flag, so an
-        // open-without-width state can never build a degenerate zero-rect dock.
-        if self.layout.audio_setup_width > 0.0 {
-            let dock = self.layout.audio_setup();
-            let region = self.tree.begin_region(dock, ZTier::Base, "audio_setup", UIFlags::empty());
-            let start = self.tree.count();
-            self.audio_setup_panel.build_docked(&mut self.tree, dock);
-            self.tree.end_region(region, start);
+    /// Whether the window has been built once.
+    pub(crate) fn is_built(&self) -> bool {
+        self.built
+    }
+
+    /// Build one region into its arena, which the caller has cleared (D7).
+    /// Each panel's own build code is unchanged: it mints its subtree with
+    /// `None` parents inside the region's bracket, and `end_region` sweeps it
+    /// under the region root.
+    pub(crate) fn build_region(&mut self, region: MainRegion) {
+        let id = region.id();
+        match region {
+            // Chrome tier: the always-visible frame, painted over Base.
+            MainRegion::Transport => {
+                let token = self.tree.begin_region_in(id, self.layout.transport_bar(), ZTier::Chrome, "transport", UIFlags::empty());
+                let start = self.tree.count();
+                self.transport.build(&mut self.tree, &self.layout);
+                self.tree.end_region(token, start);
+            }
+            MainRegion::Header => {
+                let token = self.tree.begin_region_in(id, self.layout.header(), ZTier::Chrome, "header", UIFlags::empty());
+                let start = self.tree.count();
+                self.header.build(&mut self.tree, &self.layout);
+                self.tree.end_region(token, start);
+            }
+            MainRegion::Footer => {
+                let token = self.tree.begin_region_in(id, self.layout.footer(), ZTier::Chrome, "footer", UIFlags::empty());
+                let start = self.tree.count();
+                self.footer.build(&mut self.tree, &self.layout);
+                self.tree.end_region(token, start);
+            }
+            MainRegion::Inspector => {
+                let token = self.tree.begin_region_in(id, self.layout.inspector(), ZTier::Base, "inspector", UIFlags::empty());
+                let start = self.tree.count();
+                self.inspector.build(&mut self.tree, &self.layout);
+                // The Scene tab's content is the scene panel, built into the
+                // column area below the inspector's tab strip (SCENE_SURFACES D16).
+                let scene_rect = self.inspector.scene_content_rect();
+                if scene_rect.width > 0.0 {
+                    self.scene_setup_panel.build_docked(&mut self.tree, scene_rect);
+                }
+                self.tree.end_region(token, start);
+            }
+            // Audio Setup dock (D1) — a Base-tier column between the content
+            // area and the inspector. Guard on the WIDTH (the geometry), not
+            // the panel's `open` flag, so an open-without-width state can never
+            // build a degenerate zero-rect dock.
+            MainRegion::AudioDock => {
+                if self.layout.audio_setup_width > 0.0 {
+                    let dock = self.layout.audio_setup();
+                    let token = self.tree.begin_region_in(id, dock, ZTier::Base, "audio_setup", UIFlags::empty());
+                    let start = self.tree.count();
+                    self.audio_setup_panel.build_docked(&mut self.tree, dock);
+                    self.tree.end_region(token, start);
+                }
+            }
+            MainRegion::SplitHandles => self.build_split_handles(),
+            MainRegion::LayerHeaders => {
+                self.viewport.prepare_layout(&self.layout);
+                if let Some((target, param)) = self.pending_automation_reveal.as_ref()
+                    && self.viewport.has_visible_automation_lane(target, param)
+                {
+                    self.viewport.reveal_automation_lane(target, param);
+                    self.pending_automation_reveal = None;
+                }
+                let token =
+                    self.tree.begin_region_in(id, self.layout.layer_controls(), ZTier::Base, "layer_headers", UIFlags::empty());
+                let start = self.tree.count();
+                self.layer_headers.build(
+                    &mut self.tree,
+                    &self.layout,
+                    self.viewport.mapper(),
+                    self.viewport.scroll_y_px(),
+                );
+                self.tree.end_region(token, start);
+            }
+            MainRegion::Viewport => {
+                let token = self.tree.begin_region_in(id, self.layout.timeline_body(), ZTier::Base, "viewport", UIFlags::empty());
+                let start = self.tree.count();
+                self.viewport.build(&mut self.tree, &self.layout);
+                self.tree.end_region(token, start);
+            }
+            // Every top-level overlay (perf HUD, dropdown, modals, toast) via
+            // the single overlay driver, then the load-time warmup overlay.
+            MainRegion::Overlays => {
+                self.build_overlays();
+                self.build_warmup_overlay();
+            }
+            MainRegion::Ghosts => self.inspector.rebuild_card_drag_overlay(&mut self.tree),
         }
+    }
 
-        // Split handle + inspector resize handle — thin drag affordances at
-        // panel seams. Chrome tier: utility chrome that should never be
-        // occluded, same reasoning as transport/header/footer. One shared
-        // region (mirrors `panel_cache_info`'s existing `SplitHandles` slot,
-        // which already treats these two ad hoc nodes as one unit) at a
-        // full-screen rect — the clip is a no-op (both handles are well
-        // inside the screen) so this is purely stacking/registration, not
-        // containment.
+    /// Split handle + inspector resize handle + dock handle — thin drag
+    /// affordances at panel seams. Chrome tier: utility chrome that should
+    /// never be occluded. One full-screen region; its clip is a no-op (the
+    /// handles sit well inside the screen), so this is stacking and
+    /// registration, not containment.
+    fn build_split_handles(&mut self) {
         let full_screen = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
-        let region = self.tree.begin_region(full_screen, ZTier::Chrome, "split_handles", UIFlags::empty());
+        let token = self.tree.begin_region_in(
+            MainRegion::SplitHandles.id(),
+            full_screen,
+            ZTier::Chrome,
+            "split_handles",
+            UIFlags::empty(),
+        );
         let start = self.tree.count();
+        let handle = |tree: &mut UITree, x: f32, y: f32, w: f32, h: f32| {
+            tree.add_panel(
+                None,
+                x,
+                y,
+                w,
+                h,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            )
+        };
         // Split handle — thin bar between video and timeline areas.
-        // From Unity PanelResizeHandle.cs: idle (transparent), hover, drag color states.
-        {
-            let r = self.layout.split_handle();
-            self.split_handle_id = Some(self.tree.add_panel(
-                None,
-                r.x,
-                r.y,
-                r.width,
-                r.height,
-                manifold_ui::node::UIStyle {
-                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
-                    ..manifold_ui::node::UIStyle::default()
-                },
-            ));
-        }
-
+        let r = self.layout.split_handle();
+        self.split_handle_id = Some(handle(&mut self.tree, r.x, r.y, r.width, r.height));
         // Inspector resize handle — thin vertical bar at the inspector's LEFT
-        // edge (the inspector now sits on the right, preview to its left).
-        // Drawn just *inside* the inspector (not straddling the edge): the
-        // preview is an opaque GPU blit on top of the UI atlas and fills the
-        // video area up to `insp.x`, so a straddling handle would have its left
-        // half painted over. The hit test (`is_near_inspector_edge`) stays
-        // centered on the seam, so the grab zone is unchanged.
-        {
-            let insp = self.layout.inspector();
-            let edge_x = insp.x;
-            self.inspector_handle_id = Some(self.tree.add_panel(
-                None,
-                edge_x,
-                insp.y,
-                4.0,
-                insp.height,
-                manifold_ui::node::UIStyle {
-                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
-                    ..manifold_ui::node::UIStyle::default()
-                },
-            ));
-        }
-
-        // Audio Setup dock resize handle — thin vertical bar at the dock's LEFT
-        // edge (D1). Dragging it LEFT widens the dock (it expands leftward,
-        // pushing the content). Only present while the dock is open.
+        // edge, drawn just *inside* the inspector: the preview is an opaque GPU
+        // blit over the UI atlas up to `insp.x`, so a straddling handle would
+        // lose its left half. The hit test (`is_near_inspector_edge`) stays
+        // centered on the seam.
+        let insp = self.layout.inspector();
+        self.inspector_handle_id = Some(handle(&mut self.tree, insp.x, insp.y, 4.0, insp.height));
+        // Audio Setup dock resize handle at the dock's LEFT edge (D1), only
+        // while the dock is open.
         self.audio_setup_handle_id = None;
         if self.layout.audio_setup_width > 0.0 {
             let dock = self.layout.audio_setup();
-            self.audio_setup_handle_id = Some(self.tree.add_panel(
-                None,
-                dock.x,
-                dock.y,
-                4.0,
-                dock.height,
-                manifold_ui::node::UIStyle {
-                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
-                    ..manifold_ui::node::UIStyle::default()
-                },
-            ));
+            self.audio_setup_handle_id = Some(handle(&mut self.tree, dock.x, dock.y, 4.0, dock.height));
         }
+        self.tree.end_region(token, start);
+    }
 
-        self.tree.end_region(region, start);
+    /// Load-time warmup overlay: centered progress bar + layer label, drawn
+    /// above the panels while the content thread warms. A Chrome-tier
+    /// sub-region of the Overlays region.
+    fn build_warmup_overlay(&mut self) {
+        if self.export_progress.is_open() {
+            return;
+        }
+        let Some(ref warmup) = self.warmup else {
+            return;
+        };
+        use manifold_ui::chrome::{materialize, Align, Pad, Sizing, View};
+        use manifold_ui::color;
+        use manifold_ui::node::Color32;
 
-        // Mark boundary — everything after this is rebuilt on scroll.
-        self.scroll_panels_start = self.tree.count();
+        const OVERLAY_W: f32 = 360.0;
+        const OVERLAY_H: f32 = 80.0;
+        const BAR_W: f32 = 280.0;
+        const BAR_H: f32 = 10.0;
+        const BAR_RADIUS: f32 = 4.0;
 
-        // Scroll-affected panels — rebuilt on scroll/zoom changes.
-        self.build_scroll_panels();
-
-        // Load-time warmup overlay: centered progress bar + layer label,
-        // drawn above everything else while the content thread is warming.
-        if !self.export_progress.is_open() && let Some(ref warmup) = self.warmup {
-            use manifold_ui::chrome::{materialize, Align, Pad, Sizing, View};
-            use manifold_ui::color;
-            use manifold_ui::node::Color32;
-
-            const OVERLAY_W: f32 = 360.0;
-            const OVERLAY_H: f32 = 80.0;
-            const BAR_W: f32 = 280.0;
-            const BAR_H: f32 = 10.0;
-            const BAR_RADIUS: f32 = 4.0;
-
-            let fill_w = (BAR_W - 2.0) * warmup.fraction();
-            let track = View::panel()
-                .fixed(BAR_W, BAR_H)
-                .bg(color::SLIDER_TRACK_PRESSED_C32)
-                .radius(BAR_RADIUS)
-                .pad(Pad::all(1.0))
-                .child(
-                    View::panel()
-                        .w(Sizing::Fixed(fill_w))
-                        .fill_h()
-                        .bg(Color32::new(64, 184, 82, 255))
-                        .radius(2.0),
-                );
-            let label = View::label(format!(
-                "Warming project — layer {} of {}\n{}",
-                warmup.done, warmup.total, warmup.label
-            ))
-            .font(color::FONT_LABEL)
-            .text_color(color::TEXT_PRIMARY_C32)
-            .align_text(manifold_ui::node::TextAlign::Center);
-            let overlay = View::stack()
-                .fixed(OVERLAY_W, OVERLAY_H)
-                .main_align(Align::Center)
-                .cross_align(Align::Center)
-                .child(label)
-                .child(track);
-
-            let full = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
-            let region = self.tree.begin_region(
-                full,
-                ZTier::Chrome,
-                "warmup_overlay",
-                manifold_ui::node::UIFlags::empty(),
+        let fill_w = (BAR_W - 2.0) * warmup.fraction();
+        let track = View::panel()
+            .fixed(BAR_W, BAR_H)
+            .bg(color::SLIDER_TRACK_PRESSED_C32)
+            .radius(BAR_RADIUS)
+            .pad(Pad::all(1.0))
+            .child(
+                View::panel()
+                    .w(Sizing::Fixed(fill_w))
+                    .fill_h()
+                    .bg(Color32::new(64, 184, 82, 255))
+                    .radius(2.0),
             );
-            let start = self.tree.count();
-            let _ = materialize(&mut self.tree, &overlay, full);
-            self.tree.end_region(region, start);
-        }
+        let label = View::label(format!(
+            "Warming project — layer {} of {}\n{}",
+            warmup.done, warmup.total, warmup.label
+        ))
+        .font(color::FONT_LABEL)
+        .text_color(color::TEXT_PRIMARY_C32)
+        .align_text(manifold_ui::node::TextAlign::Center);
+        let overlay = View::stack()
+            .fixed(OVERLAY_W, OVERLAY_H)
+            .main_align(Align::Center)
+            .cross_align(Align::Center)
+            .child(label)
+            .child(track);
 
-        self.inspector.rebuild_card_drag_overlay(&mut self.tree);
-        self.built = true;
+        let full = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
+        let token = self.tree.begin_region_in(
+            MainRegion::Overlays.id(),
+            full,
+            ZTier::Chrome,
+            "warmup_overlay",
+            UIFlags::empty(),
+        );
+        let start = self.tree.count();
+        let _ = materialize(&mut self.tree, &overlay, full);
+        self.tree.end_region(token, start);
     }
 
     /// Build just the inspector column into an explicit `rect` (the disjoint
@@ -1122,10 +1077,6 @@ impl UIRoot {
         filtered
     }
 
-    /// Rebuild only scroll-affected panels (layer_headers, viewport, perf_hud).
-    /// Static panels (transport, header, footer, inspector) keep their tree nodes.
-    ///
-    /// Uses `dirty` flags to skip layer header rebuild on horizontal-only scroll.
     /// Scroll the inspector in place (offset its content nodes) instead of
     /// rebuilding the whole tree. Returns true if handled in place; false means
     /// nothing is built yet and the caller should fall back to a full rebuild.
@@ -1136,144 +1087,47 @@ impl UIRoot {
             .try_scroll_in_place(delta, cursor_x, &mut self.tree)
     }
 
-    pub fn rebuild_scroll_panels(&mut self, dirty: ScrollDirty) {
-        if !self.built {
-            return self.build();
+    /// Apply a scroll-only change (no zoom, no visual) to the layer headers
+    /// and viewport in place: ruler ticks, markers and export markers on a
+    /// horizontal move, track and header rows on a vertical one. Returns
+    /// false when the change is not scroll-only or a count no longer matches,
+    /// and the caller rebuilds [`scroll_rebuild_regions`](Self::scroll_rebuild_regions).
+    pub fn scroll_in_place(&mut self, dirty: ScrollDirty) -> bool {
+        if !self.built || !dirty.is_scroll_only() {
+            return false;
         }
-
-        // Fast-path: scroll-only (no zoom, no visual) — update positions in-place.
-        // No tree truncation, no hover invalidation, no node recreation.
-        if dirty.is_scroll_only() {
-            let mut ok = true;
-
-            // Horizontal: update ruler ticks, markers, export markers
-            if dirty.scroll_x {
-                ok = self.viewport.try_update_horizontal_scroll(&mut self.tree);
-            }
-
-            // Vertical: update track bg Y positions + layer header Y positions
-            if ok && dirty.scroll_y {
-                let scroll_y_px = self.viewport.scroll_y_px();
-                ok = self.layer_headers.try_update_vertical_scroll(
-                    &mut self.tree,
-                    &self.layout,
-                    scroll_y_px,
-                ) && self.viewport.try_update_vertical_scroll(&mut self.tree);
-            }
-
-            if ok {
-                record_work(WorkKind::InPlaceUpdate);
-                return;
-            }
-            // Fallback: count mismatch or never-built — do normal rebuild below.
+        let mut ok = true;
+        if dirty.scroll_x {
+            ok = self.viewport.try_update_horizontal_scroll(&mut self.tree);
         }
+        if ok && dirty.scroll_y {
+            let scroll_y_px = self.viewport.scroll_y_px();
+            ok = self.layer_headers.try_update_vertical_scroll(&mut self.tree, &self.layout, scroll_y_px)
+                && self.viewport.try_update_vertical_scroll(&mut self.tree);
+        }
+        if ok {
+            record_work(WorkKind::InPlaceUpdate);
+        }
+        ok
+    }
 
+    /// The regions a scroll, zoom or visual change rebuilds when it cannot
+    /// update in place: the layer headers unless only the horizontal scroll
+    /// moved, the viewport, and the overlays.
+    pub(crate) fn scroll_rebuild_regions(dirty: ScrollDirty) -> crate::frame_plan::RegionMask {
+        let mut mask = crate::frame_plan::RegionMask::NONE;
         if dirty.needs_layer_headers() {
-            self.rebuild_from(RegionSlot::ScrollPanels);
-        } else {
-            self.rebuild_from(RegionSlot::ViewportPanels);
+            mask.insert(MainRegion::LayerHeaders);
         }
-    }
-
-    /// Rebuild the flat tree from `slot` to its end: the suffix rebuild a
-    /// frame plan's rebuild mask maps to until regions own arenas (P4e).
-    pub fn rebuild_from(&mut self, slot: RegionSlot) {
-        if !self.built || slot == RegionSlot::Full {
-            return self.build();
-        }
-        record_work(WorkKind::RegionRebuild);
-        let start = match slot {
-            RegionSlot::ScrollPanels => self.scroll_panels_start,
-            _ => self.viewport_panels_start,
-        };
-        self.tree.truncate_from(start);
-        self.input.invalidate_hover();
-        if slot == RegionSlot::ScrollPanels {
-            self.build_scroll_panels();
-        } else {
-            self.build_viewport_panels();
-        }
-    }
-
-    /// Internal: build the scroll-affected panel group. Base tier, same as
-    /// the static Base panels above (D1/D2) — `layer_headers`/`viewport`
-    /// rebuild far more often than transport/header/footer/inspector, but
-    /// the region mechanism costs the same one wrapper node per rebuild
-    /// either way.
-    fn build_scroll_panels(&mut self) {
-        self.viewport.prepare_layout(&self.layout);
-        if let Some((target, param)) = self.pending_automation_reveal.as_ref()
-            && self.viewport.has_visible_automation_lane(target, param)
-        {
-            self.viewport.reveal_automation_lane(target, param);
-            self.pending_automation_reveal = None;
-        }
-
-        let region =
-            self.tree
-                .begin_region(self.layout.layer_controls(), ZTier::Base, "layer_headers", UIFlags::empty());
-        let start = self.tree.count();
-        self.layer_headers.build(
-            &mut self.tree,
-            &self.layout,
-            self.viewport.mapper(),
-            self.viewport.scroll_y_px(),
-        );
-        self.tree.end_region(region, start);
-
-        // Record boundary between layer headers and viewport panels — now the
-        // viewport region's own root index (captured before `begin_region`
-        // mints it), so `truncate_from(viewport_panels_start)` still cleanly
-        // drops the whole viewport region, not just its content.
-        self.viewport_panels_start = self.tree.count();
-        let region =
-            self.tree
-                .begin_region(self.layout.timeline_body(), ZTier::Base, "viewport", UIFlags::empty());
-        let start = self.tree.count();
-        self.viewport.build(&mut self.tree, &self.layout);
-        self.tree.end_region(region, start);
-
-        // All top-level overlays (perf HUD + dropdown + modals) build at the
-        // tail of the tree via the single overlay driver — one enumeration for
-        // build, draw, and input. See build_overlays / route_overlay_event.
-        self.build_overlays();
-    }
-
-    /// Internal: build viewport + remaining scroll panels (skip layer headers).
-    /// Used on horizontal-only scroll where layer headers don't change.
-    fn build_viewport_panels(&mut self) {
-        let region =
-            self.tree
-                .begin_region(self.layout.timeline_body(), ZTier::Base, "viewport", UIFlags::empty());
-        let start = self.tree.count();
-        self.viewport.build(&mut self.tree, &self.layout);
-        self.tree.end_region(region, start);
-
-        // Overlays build at the tail of the tree via the single driver.
-        self.build_overlays();
+        mask.insert(MainRegion::Viewport);
+        mask.insert(MainRegion::Overlays);
+        mask
     }
 
     // ── Overlay driver ──────────────────────────────────────────────
     // One enumeration of the top-level overlays for build, draw, and input.
     // The exhaustive `overlay_mut` match is what makes "built but never drawn"
     // unrepresentable. See docs/OVERLAY_SYSTEM_DESIGN.md.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     /// Handle a resize event. Rebuilds all panels.
     pub fn resize(&mut self, width: f32, height: f32) {
@@ -1752,9 +1606,9 @@ mod region_structural_tests {
     }
 
     /// Same check with an overlay open (settings modal, with its dim scrim)
-    /// and a scroll-triggered partial rebuild in between — covers
-    /// `build_overlays`'s per-overlay regions and the `truncate_from` /
-    /// region-list pruning path `build_viewport_panels` exercises.
+    /// and a scroll-triggered region rebuild in between — covers
+    /// `build_overlays`'s per-overlay regions and `clear_region`'s
+    /// sub-region pruning.
     #[test]
     fn main_window_build_with_overlay_and_scroll_rebuild_has_no_stray_roots() {
         let mut ui = UIRoot::new();
@@ -1766,12 +1620,14 @@ mod region_structural_tests {
             "a stray root survived with an overlay open"
         );
 
-        // zoom: true forces `needs_layer_headers()` — the full
-        // `tree.truncate_from(scroll_panels_start)` + `build_scroll_panels()`
-        // path, not the scroll-only in-place fast path that skips
-        // truncation (and so wouldn't exercise the region-list pruning at
-        // all).
-        ui.rebuild_scroll_panels(ScrollDirty { scroll_x: false, scroll_y: true, zoom: true, visual: false });
+        // zoom: true forces `needs_layer_headers()` — the layer headers,
+        // viewport and overlays rebuild alone, not the scroll-only in-place
+        // fast path that rebuilds nothing.
+        let mut signals = crate::ui_frame::UiFrameSignals {
+            scroll_dirty: ScrollDirty { scroll_x: false, scroll_y: true, zoom: true, visual: false },
+            ..Default::default()
+        };
+        crate::ui_frame::apply_ui_frame_invalidations(&mut ui, None, &mut signals);
         assert!(
             ui.tree.all_roots_are_regions(),
             "a stray root survived a scroll-triggered partial rebuild"

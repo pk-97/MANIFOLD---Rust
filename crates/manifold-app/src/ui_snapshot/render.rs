@@ -560,8 +560,8 @@ pub fn render_graph_editor_to_png(
 
     // Same paint order as `present_graph_editor_window` because it's the
     // SAME function: clear + canvas immediate-mode draws + the merged
-    // sidebar/inspector `UITree` (ONE tree-range render call, narrowed to
-    // `[0, overlay_region_start)`, D2) + dock + mini-timeline + the shared
+    // sidebar/inspector `UITree` (ONE tree-range render call over the
+    // default arena, D2) + dock + mini-timeline + the shared
     // tree-overlay pass (open overlays, if any) + popover/text-input +
     // prepare/render.
     let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);

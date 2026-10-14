@@ -42,7 +42,7 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 8034,
+        "FrameAlloc": 8023,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
@@ -50,16 +50,16 @@
         "OverviewRepaint": 1,
         "PresetListProjection": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "SlotInvalidate": 8,
         "ValuePush": 61
       }
     },
     "work-automation-hover": {
       "hover_lanes_2s": {
         "ChromeLayout": 366,
-        "FrameAlloc": 62902,
+        "FrameAlloc": 59615,
         "GridBitmapRepaint": 4,
-        "RegionRebuild": 122,
+        "RegionRebuild": 366,
         "SlotInvalidate": 244,
         "ValuePush": 122
       }
@@ -68,15 +68,15 @@
       "point_drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 3,
-        "FrameAlloc": 35620,
-        "FullBuild": 3,
+        "FrameAlloc": 33213,
+        "FullBuild": 1,
         "GridBitmapRepaint": 22,
         "InspectorSync": 3,
         "LaneProjection": 64,
         "OverviewRepaint": 3,
         "ProjectSync": 3,
-        "RegionRebuild": 59,
-        "SlotInvalidate": 139,
+        "RegionRebuild": 184,
+        "SlotInvalidate": 132,
         "ValuePush": 62
       }
     },
@@ -101,16 +101,16 @@
       "drag_2s": {
         "ChromeLayout": 369,
         "ClipProjection": 120,
-        "FrameAlloc": 67792,
-        "FullBuild": 4,
+        "FrameAlloc": 63406,
+        "FullBuild": 2,
         "GridBitmapRepaint": 22,
         "InspectorSync": 3,
         "LaneProjection": 7,
         "OverviewRepaint": 120,
-        "PresetListProjection": 2,
+        "PresetListProjection": 1,
         "ProjectSync": 3,
-        "RegionRebuild": 118,
-        "SlotInvalidate": 264,
+        "RegionRebuild": 362,
+        "SlotInvalidate": 258,
         "ValuePush": 122
       }
     },
@@ -118,16 +118,16 @@
       "trim_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 61,
-        "FrameAlloc": 35414,
-        "FullBuild": 4,
+        "FrameAlloc": 32997,
+        "FullBuild": 2,
         "GridBitmapRepaint": 22,
         "InspectorSync": 3,
         "LaneProjection": 7,
         "OverviewRepaint": 61,
-        "PresetListProjection": 2,
+        "PresetListProjection": 1,
         "ProjectSync": 3,
-        "RegionRebuild": 58,
-        "SlotInvalidate": 144,
+        "RegionRebuild": 182,
+        "SlotInvalidate": 138,
         "ValuePush": 62
       }
     },
@@ -144,24 +144,23 @@
       "four_cursor_moves": {
         "ChromeLayout": 12,
         "ClipProjection": 1,
-        "FrameAlloc": 2440,
-        "FullBuild": 2,
+        "FrameAlloc": 1570,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 6,
         "OverviewRepaint": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 14,
+        "RegionRebuild": 2,
+        "SlotInvalidate": 2,
         "ValuePush": 2
       }
     },
     "work-dock-scroll": {
       "four_notches": {
         "ChromeLayout": 12,
-        "FrameAlloc": 7136,
+        "FrameAlloc": 6996,
         "FullBuild": 4,
-        "OverviewRepaint": 4,
-        "SlotInvalidate": 28,
+        "SlotInvalidate": 32,
         "ValuePush": 4
       }
     },
@@ -169,22 +168,23 @@
       "drawer_change_half_second": {
         "ChromeLayout": 96,
         "ClipProjection": 2,
-        "FrameAlloc": 6280,
-        "FullBuild": 3,
+        "FrameAlloc": 4388,
+        "FullBuild": 2,
         "GridBitmapRepaint": 2,
         "InspectorSync": 2,
         "LaneProjection": 4,
-        "OverviewRepaint": 32,
+        "OverviewRepaint": 2,
+        "PresetListProjection": 2,
         "ProjectSync": 2,
-        "SlotInvalidate": 21,
-        "ValuePush": 32
+        "SlotInvalidate": 16,
+        "ValuePush": 2
       }
     },
     "work-driver-trim": {
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 8033,
+        "FrameAlloc": 8022,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
@@ -192,7 +192,7 @@
         "OverviewRepaint": 1,
         "PresetListProjection": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "SlotInvalidate": 8,
         "ValuePush": 61
       }
     },
@@ -200,19 +200,19 @@
       "idle_2s": {
         "ChromeLayout": 360,
         "EditorTreeBuild": 120,
-        "FrameAlloc": 81368
+        "FrameAlloc": 80048
       }
     },
     "work-editor-open": {
       "after_open_half_second": {
         "ChromeLayout": 90,
         "EditorTreeBuild": 30,
-        "FrameAlloc": 20349
+        "FrameAlloc": 20019
       },
       "open_click": {
         "ChromeLayout": 3,
         "EditorTreeBuild": 1,
-        "FrameAlloc": 1445,
+        "FrameAlloc": 1461,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 7
@@ -222,7 +222,7 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 6623,
+        "FrameAlloc": 6612,
         "FullBuild": 1,
         "GridBitmapRepaint": 1,
         "InspectorSync": 1,
@@ -230,16 +230,16 @@
         "OverviewRepaint": 1,
         "PresetListProjection": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "SlotInvalidate": 8,
         "ValuePush": 61
       }
     },
     "work-fold-toggle": {
       "chrome_fold": {
         "ChromeLayout": 3,
-        "FrameAlloc": 855,
-        "FullBuild": 1,
-        "SlotInvalidate": 7,
+        "FrameAlloc": 534,
+        "RegionRebuild": 1,
+        "SlotInvalidate": 1,
         "ValuePush": 1
       }
     },
@@ -259,9 +259,9 @@
     "work-hover": {
       "hover_clips_2s": {
         "ChromeLayout": 366,
-        "FrameAlloc": 60437,
+        "FrameAlloc": 57150,
         "GridBitmapRepaint": 1,
-        "RegionRebuild": 122,
+        "RegionRebuild": 366,
         "SlotInvalidate": 244,
         "ValuePush": 122
       }
@@ -275,11 +275,11 @@
     "work-inspector-resize": {
       "resize_1s": {
         "ChromeLayout": 180,
-        "FrameAlloc": 93110,
+        "FrameAlloc": 91610,
         "FullBuild": 60,
         "GridBitmapRepaint": 180,
         "OverviewRepaint": 60,
-        "SlotInvalidate": 420,
+        "SlotInvalidate": 480,
         "ValuePush": 60
       }
     },
@@ -287,15 +287,15 @@
       "resize_1s": {
         "ChromeLayout": 186,
         "ClipProjection": 59,
-        "FrameAlloc": 67321,
+        "FrameAlloc": 65305,
         "FullBuild": 60,
         "GridBitmapRepaint": 414,
         "InspectorSync": 59,
         "LaneProjection": 119,
         "OverviewRepaint": 59,
         "ProjectSync": 59,
-        "RegionRebuild": 1,
-        "SlotInvalidate": 422,
+        "RegionRebuild": 3,
+        "SlotInvalidate": 482,
         "ValuePush": 61
       }
     },
@@ -303,7 +303,7 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 7850,
+        "FrameAlloc": 7839,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
@@ -311,7 +311,7 @@
         "OverviewRepaint": 1,
         "PresetListProjection": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "SlotInvalidate": 8,
         "ValuePush": 61
       }
     },
@@ -319,15 +319,16 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 2,
-        "FrameAlloc": 8823,
-        "FullBuild": 2,
+        "FrameAlloc": 7414,
+        "FullBuild": 1,
         "GridBitmapRepaint": 14,
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 2,
         "PresetListProjection": 2,
         "ProjectSync": 2,
-        "SlotInvalidate": 14,
+        "RegionRebuild": 4,
+        "SlotInvalidate": 12,
         "ValuePush": 2
       }
     },
@@ -335,25 +336,25 @@
       "marquee_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 62,
-        "FrameAlloc": 35555,
-        "FullBuild": 4,
+        "FrameAlloc": 33127,
+        "FullBuild": 2,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 7,
         "OverviewRepaint": 62,
-        "PresetListProjection": 2,
+        "PresetListProjection": 1,
         "ProjectSync": 3,
-        "RegionRebuild": 58,
-        "SlotInvalidate": 144,
+        "RegionRebuild": 182,
+        "SlotInvalidate": 138,
         "ValuePush": 62
       }
     },
     "work-modifier": {
       "four_modifier_changes": {
         "ChromeLayout": 12,
-        "FrameAlloc": 2161,
+        "FrameAlloc": 2065,
         "FullBuild": 4,
-        "SlotInvalidate": 28,
+        "SlotInvalidate": 32,
         "ValuePush": 4
       }
     },
@@ -361,14 +362,14 @@
       "cursor_select_cursor_paused": {
         "ChromeLayout": 99,
         "ClipProjection": 3,
-        "FrameAlloc": 6811,
-        "FullBuild": 4,
+        "FrameAlloc": 5228,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 9,
         "OverviewRepaint": 3,
         "ProjectSync": 3,
-        "SlotInvalidate": 28,
+        "RegionRebuild": 4,
+        "SlotInvalidate": 4,
         "ValuePush": 4
       }
     },
@@ -384,7 +385,7 @@
       "region_move_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 61,
-        "FrameAlloc": 34625,
+        "FrameAlloc": 32590,
         "FullBuild": 2,
         "GridBitmapRepaint": 14,
         "InspectorSync": 2,
@@ -392,8 +393,8 @@
         "OverviewRepaint": 61,
         "PresetListProjection": 1,
         "ProjectSync": 2,
-        "RegionRebuild": 60,
-        "SlotInvalidate": 134,
+        "RegionRebuild": 180,
+        "SlotInvalidate": 136,
         "ValuePush": 62
       }
     },
@@ -401,7 +402,7 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 7850,
+        "FrameAlloc": 7839,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
@@ -409,19 +410,19 @@
         "OverviewRepaint": 1,
         "PresetListProjection": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "SlotInvalidate": 8,
         "ValuePush": 61
       }
     },
     "work-scrollbar-drag": {
       "drag_1s": {
         "ChromeLayout": 186,
-        "FrameAlloc": 19148,
+        "FrameAlloc": 17462,
         "GridBitmapRepaint": 413,
         "InPlaceUpdate": 14,
         "OverviewRepaint": 59,
-        "RegionRebuild": 45,
-        "SlotInvalidate": 118,
+        "RegionRebuild": 90,
+        "SlotInvalidate": 73,
         "ValuePush": 59
       }
     },
@@ -429,14 +430,14 @@
       "select_clip": {
         "ChromeLayout": 3,
         "ClipProjection": 1,
-        "FrameAlloc": 1253,
-        "FullBuild": 1,
+        "FrameAlloc": 855,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 3,
         "OverviewRepaint": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "RegionRebuild": 1,
+        "SlotInvalidate": 1,
         "ValuePush": 1
       }
     },
@@ -451,22 +452,23 @@
       "drag_2s": {
         "ChromeLayout": 369,
         "ClipProjection": 1,
-        "FrameAlloc": 104862,
+        "FrameAlloc": 101307,
         "FullBuild": 61,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
         "LaneProjection": 2,
-        "OverviewRepaint": 123,
+        "OverviewRepaint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 427,
-        "ValuePush": 123
+        "SlotInvalidate": 488,
+        "ValuePush": 121
       }
     },
     "work-slider-grab": {
       "three_grabs_lanes_hidden": {
         "ChromeLayout": 33,
         "ClipProjection": 2,
-        "FrameAlloc": 8198,
+        "FrameAlloc": 8067,
         "FullBuild": 4,
         "GridBitmapRepaint": 6,
         "InspectorSync": 2,
@@ -474,33 +476,34 @@
         "OverviewRepaint": 2,
         "PresetListProjection": 2,
         "ProjectSync": 2,
-        "SlotInvalidate": 28,
+        "SlotInvalidate": 32,
         "ValuePush": 7
       }
     },
     "work-split-drag": {
       "split_1s": {
         "ChromeLayout": 180,
-        "FrameAlloc": 31990,
+        "FrameAlloc": 30550,
         "FullBuild": 60,
-        "OverviewRepaint": 60,
-        "SlotInvalidate": 420,
+        "SlotInvalidate": 480,
         "ValuePush": 60
       }
     },
     "work-trigger-shape": {
       "drag_1s": {
         "ChromeLayout": 189,
-        "ClipProjection": 1,
-        "FrameAlloc": 11274,
+        "ClipProjection": 2,
+        "FrameAlloc": 9678,
         "FullBuild": 1,
-        "GridBitmapRepaint": 3,
-        "InspectorSync": 1,
-        "LaneProjection": 2,
-        "OverviewRepaint": 63,
-        "ProjectSync": 1,
-        "SlotInvalidate": 7,
-        "ValuePush": 63
+        "GridBitmapRepaint": 6,
+        "InspectorSync": 2,
+        "LaneProjection": 4,
+        "OverviewRepaint": 2,
+        "PresetListProjection": 2,
+        "ProjectSync": 2,
+        "RegionRebuild": 4,
+        "SlotInvalidate": 12,
+        "ValuePush": 62
       }
     },
     "work-trim-undo": {
@@ -520,10 +523,10 @@
     "work-zoom": {
       "zoom_30_notches": {
         "ChromeLayout": 90,
-        "FrameAlloc": 9354,
+        "FrameAlloc": 9024,
         "GridBitmapRepaint": 119,
         "OverviewRepaint": 17,
-        "RegionRebuild": 30,
+        "RegionRebuild": 90,
         "SlotInvalidate": 60,
         "TextMeasureMiss": 17,
         "ValuePush": 30

@@ -1197,17 +1197,15 @@ impl UIRenderer {
 
     // ── UITree rendering ────────────────────────────────────────────
 
-    /// Render a UITree. When `skip_from` is `Some(n)`, nodes with
-    /// `id >= n` are skipped (used to exclude dropdown overlay nodes
-    /// that render separately via `render_tree_range`).
-    pub fn render_tree(&mut self, tree: &UITree, skip_from: Option<usize>) {
+    /// Render a UITree in paint order. When `skip_region` is `Some(r)`,
+    /// region `r`'s nodes are skipped (an overlay region that renders
+    /// separately via `render_tree_range`).
+    pub fn render_tree(&mut self, tree: &UITree, skip_region: Option<u8>) {
         self.begin_scissor_tracking();
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
-                if let Some(start) = skip_from
-                    && node.id.index() >= start
-                {
+                if skip_region == Some(node.id.region()) {
                     return;
                 }
                 self.draw_node(tree, node);
@@ -1217,33 +1215,33 @@ impl UIRenderer {
         });
     }
 
-    /// Render tree nodes in range [start_node, end_node) on the current
-    /// layer. Uses `traverse_range` to only walk root nodes in the given
-    /// range, avoiding a full-tree traversal per section. Traversals are
+    /// Render the sub-regions of `region` whose roots sit in slots
+    /// [start_node, end_node) on the current layer. Uses `traverse_range`,
+    /// avoiding a full-tree traversal per section. Traversals are
     /// additive within a prepare cycle: earlier commands (including pending
     /// immediate-mode draws) are preserved — batches derive from all of
     /// `rect_commands` together in `prepare()`.
-    pub fn render_tree_range(&mut self, tree: &UITree, start_node: usize, end_node: usize) {
+    pub fn render_tree_range(&mut self, tree: &UITree, region: u8, start_node: usize, end_node: usize) {
         self.begin_scissor_tracking();
 
-        tree.traverse_range(start_node, end_node, |event| match event {
+        tree.traverse_range(region, start_node, end_node, |event| match event {
             TraversalEvent::Node(node) => self.draw_node(tree, node),
             TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
             TraversalEvent::PopClip => self.handle_pop_clip(),
         });
     }
 
-    /// Render a sub-region using flat sequential traversal.
+    /// Render slots [start, end) of `region` using flat sequential traversal.
     /// Used for incremental inspector rendering — correctly handles reparented
     /// nodes (where `traverse_range` would skip them).
     ///
     /// When `dirty_only` is true, only draws dirty nodes. The atlas already
     /// contains previous content via LoadOp::Load, so non-dirty nodes are
     /// preserved. Clip events are always processed for correctness.
-    pub fn render_sub_region(&mut self, tree: &UITree, start: usize, end: usize, dirty_only: bool) {
+    pub fn render_sub_region(&mut self, tree: &UITree, region: u8, start: usize, end: usize, dirty_only: bool) {
         self.begin_scissor_tracking();
 
-        tree.traverse_flat_range(start, end, dirty_only, |event| match event {
+        tree.traverse_flat_range(region, start, end, dirty_only, |event| match event {
             TraversalEvent::Node(node) => self.draw_node(tree, node),
             TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
             TraversalEvent::PopClip => self.handle_pop_clip(),
@@ -2449,7 +2447,7 @@ mod tests {
         );
 
         tree.end_region(region, content_start);
-        ui.render_sub_region(&tree, content_start, tree.count(), false);
+        ui.render_sub_region(&tree, region.root.region(), content_start, tree.count(), false);
 
         // The pill (x=15) and the chevron (x=60) are children of the clip
         // container: their RectCommands must each carry the container's

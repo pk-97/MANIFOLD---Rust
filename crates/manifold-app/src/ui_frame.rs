@@ -21,8 +21,8 @@
 //!    readiness (no `self.gpu`-gated early return upstream of the
 //!    invalidation block, unlike `present_all_windows`), and
 //!    `self.ui_cache_manager` is genuinely `None` before GPU init
-//!    completes. The original code reflects this: `ui_root.build()` /
-//!    `rebuild_scroll_panels()` always run; only the `cache.invalidate_*`
+//!    completes. The original code reflects this: `ui_root.build()` and the
+//!    region rebuilds always run; only the `cache.invalidate_*`
 //!    calls are individually wrapped in `if let Some(cm) = ...`
 //!    (app_render.rs:960-964, 2827, 2843, 2849, pre-extraction). A
 //!    non-Option `cache` would force either skipping `ui_root.build()`
@@ -31,7 +31,7 @@
 //!    the call site (reintroducing the exact drift D3 exists to kill).
 //! 2. Both functions take `ui_root: &mut UIRoot`, not `&UIRoot`. Each
 //!    performs a mutation `UIRoot` itself owns: `apply_ui_frame_invalidations`
-//!    calls `ui_root.build()` / `rebuild_scroll_panels()`;
+//!    calls `ui_root.build()` and the region rebuilds;
 //!    `composite_main_ui_frame` clears the dirty ranges `render_dirty_panels`
 //!    just painted via `ui_root.tree.clear_dirty_range(..)` (the cache
 //!    manager doesn't own the tree — this loop is the sole place panel-range
@@ -147,8 +147,10 @@ use manifold_spectral::{ScopeColumn, Spectrogram, SpectrogramConfig};
 use manifold_ui::node::{Color32, Vec2};
 use manifold_ui::panels::viewport::{ClipScreenRect, TimelineOverlays};
 
+use crate::frame_plan::{MainRegion, RegionMask, MAIN_REGION_COUNT};
 use crate::texture_pane::TexturePane;
 use crate::ui_root::{ScrollDirty, UIRoot};
+use manifold_core::work_count::{record_work, WorkKind};
 
 /// The per-frame UI dirty signals the invalidation decision reads. Filled by
 /// the caller from its own state (the live App from `self.needs_rebuild`
@@ -156,26 +158,27 @@ use crate::ui_root::{ScrollDirty, UIRoot};
 #[derive(Default)]
 pub(crate) struct UiFrameSignals {
     pub needs_rebuild: bool,
-    /// A projection rewrote the panels' lists this frame, so the tree
-    /// rebuilds; unlike `needs_rebuild` it is not kept across a drag that
-    /// defers the rebuild.
-    pub projected: bool,
     pub scroll_dirty: ScrollDirty,
-    pub scrolled_in_place: bool, // the scroll-in-place path (app_render.rs, pre-extraction :960-964)
+    pub scrolled_in_place: bool,
+    /// The regions the frame plan rebuilds, each alone in its own arena (D7).
+    pub rebuild: RegionMask,
+    /// The regions the frame plan moves in place, and by how much.
+    pub translate: RegionMask,
+    pub translate_by: [(i32, i32); MAIN_REGION_COUNT],
 }
 
-/// Owns the invalidate/rebuild decision block. Reads `ui_root`'s drag guards
-/// and applies `build()` / `rebuild_scroll_panels()` and the matching
-/// `UICacheManager::invalidate_*` exactly as `tick_and_render` did before
-/// extraction. THE single place these decisions live.
-/// Precedent: app_render.rs (pre-extraction) :2819-2852 + :960-964, moved,
-/// not rewritten.
+/// Owns the invalidate/rebuild decision: a full build when an old flag asks
+/// for one, else each planned or scroll-fallback region rebuilt alone with
+/// its atlas slot invalidated (UI_INVALIDATION_DESIGN.md D7). THE single place
+/// these decisions live; the only caller of `clear_region` besides the full
+/// build.
 ///
 /// `signals` is `&mut` because the block WRITES BACK: it clears
-/// `needs_rebuild` when it rebuilds, and deliberately KEEPS it set when an
-/// active inspector/layer drag defers the rebuild to the next frame. The
-/// live caller copies the residual flags back into its own state after the
-/// call; the harness carries them to its next frame.
+/// `needs_rebuild` when it rebuilds, and KEEPS it set when an active
+/// inspector or layer drag defers a full build to the next frame. A deferred
+/// region waits in `UIRoot::deferred_rebuild` and rebuilds alone once the
+/// drag lets go (the drag guards go in P5a). The live caller copies the residual flags back into its
+/// own state after the call; the harness carries them to its next frame.
 ///
 /// `cache` is `Option<&mut UICacheManager>` — see module doc deviation #1.
 /// Returns whether any part of the tree was rebuilt or scrolled.
@@ -184,15 +187,9 @@ pub(crate) fn apply_ui_frame_invalidations(
     mut cache: Option<&mut UICacheManager>,
     signals: &mut UiFrameSignals,
 ) -> bool {
-    // An in-place inspector scroll (wheel in window_input, or a scrollbar
-    // drag handled inside process_events) offset the content nodes without a
-    // rebuild — re-render just the inspector's atlas slot. A full rebuild
-    // later this frame (needs_rebuild → invalidate_all) supersedes it
-    // harmlessly. One-shot, like `needs_rebuild`: cleared here so a caller
-    // that reuses the same `UiFrameSignals` across frames (the P0 harness)
-    // doesn't replay a stale scroll on every later frame — the live App
-    // doesn't need this (it builds `signals` fresh every tick) but the
-    // harness does, and the field means the same thing for both.
+    // An in-place inspector scroll offset the content nodes without a
+    // rebuild: repaint just the inspector's atlas slot. One-shot, so a caller
+    // that reuses `UiFrameSignals` across frames (the harness) never replays it.
     if signals.scrolled_in_place {
         signals.scrolled_in_place = false;
         if let Some(cm) = &mut cache {
@@ -200,49 +197,144 @@ pub(crate) fn apply_ui_frame_invalidations(
         }
     }
 
-    // GUARD: If the inspector has an active drag (slider being dragged),
-    // defer the rebuild to prevent node destruction mid-drag which causes
-    // snap-back.
+    // GUARD: an active inspector drag (a slider being dragged) defers an
+    // inspector rebuild, which would destroy the dragged node and snap back;
+    // an active layer drag defers the layer headers, viewport and overlays,
+    // whose node ids handle_drag / handle_drag_end depend on.
     let inspector_dragging = ui_root.inspector.is_dragging();
     let layer_dragging = ui_root.layer_headers.is_dragging();
-    if signals.needs_rebuild || signals.projected {
+    let rebuilt = if signals.needs_rebuild {
         if inspector_dragging {
-            // Defer — keep needs_rebuild set so it fires after drag ends.
-            // But still rebuild scroll panels if needed (they're separate
-            // from the inspector).
-            if signals.scroll_dirty.any() {
-                ui_root.rebuild_scroll_panels(signals.scroll_dirty);
-                if let Some(cm) = &mut cache {
-                    cm.invalidate_scroll_panels();
-                }
-                return true;
-            }
-            false
+            // Keep needs_rebuild set so it fires after the drag ends; the
+            // scroll regions are separate from the inspector.
+            signals.scroll_dirty.any()
+                && rebuild_regions(ui_root, cache.as_deref_mut(), UIRoot::scroll_rebuild_regions(signals.scroll_dirty))
         } else if layer_dragging {
-            // Defer — rebuilding scroll panels while a layer drag is active
-            // would destroy the node IDs that handle_drag / handle_drag_end
-            // depend on.
             false
         } else {
             signals.needs_rebuild = false;
-            ui_root.rebuild_from(crate::ui_root::RegionSlot::Full);
-            // Re-apply effect card selection visuals after rebuild —
-            // structural changes recreate cards with is_selected=false.
+            ui_root.deferred_rebuild = RegionMask::default();
+            ui_root.build();
+            // A rebuild recreates the effect cards with is_selected=false.
             ui_root.inspector.apply_selection_visuals(&mut ui_root.tree);
             if let Some(cm) = &mut cache {
                 cm.invalidate_all();
             }
             true
         }
-    } else if signals.scroll_dirty.any() && !layer_dragging {
-        ui_root.rebuild_scroll_panels(signals.scroll_dirty);
-        if let Some(cm) = &mut cache {
-            cm.invalidate_scroll_panels();
-        }
-        true
     } else {
-        false
+        let mut regions = signals.rebuild.union(std::mem::take(&mut ui_root.deferred_rebuild));
+        let mut scrolled = false;
+        if signals.scroll_dirty.any() && !layer_dragging {
+            if ui_root.scroll_in_place(signals.scroll_dirty) {
+                scrolled = true;
+                if let Some(cm) = &mut cache {
+                    cm.invalidate_scroll_panels();
+                }
+            } else {
+                regions = regions.union(UIRoot::scroll_rebuild_regions(signals.scroll_dirty));
+            }
+        }
+        if inspector_dragging && regions.contains(MainRegion::Inspector) {
+            regions.remove(MainRegion::Inspector);
+            ui_root.deferred_rebuild.insert(MainRegion::Inspector);
+        }
+        if layer_dragging {
+            for r in [MainRegion::LayerHeaders, MainRegion::Viewport, MainRegion::Overlays] {
+                if regions.contains(r) {
+                    regions.remove(r);
+                    ui_root.deferred_rebuild.insert(r);
+                }
+            }
+        }
+        // A region rebuilt this frame is built at its new rect already.
+        let mut translate = signals.translate;
+        for r in regions.iter() {
+            translate.remove(r);
+        }
+        let moved = translate_regions(ui_root, cache.as_deref_mut(), translate, &signals.translate_by);
+        rebuild_regions(ui_root, cache, regions) || scrolled || moved
+    };
+    settle_ghosts(ui_root);
+    rebuilt
+}
+
+/// Rebuild each region of `regions` alone, in build order: clear its arena,
+/// build it again, invalidate its atlas slot (D7). Every other region keeps
+/// its nodes, ids and pixels. Returns whether anything rebuilt.
+fn rebuild_regions(ui_root: &mut UIRoot, mut cache: Option<&mut UICacheManager>, regions: RegionMask) -> bool {
+    if regions.is_empty() {
+        return false;
     }
+    if !ui_root.is_built() {
+        ui_root.build();
+        if let Some(cm) = &mut cache {
+            cm.invalidate_all();
+        }
+        return true;
+    }
+    // Hover may point into a rebuilt region.
+    ui_root.input.invalidate_hover();
+    for region in regions.iter() {
+        // The ghost follows the drag, not the plan: see `settle_ghosts`.
+        if region == MainRegion::Ghosts {
+            continue;
+        }
+        record_work(WorkKind::RegionRebuild);
+        ui_root.tree.clear_region(region.id());
+        ui_root.build_region(region);
+        if let Some(slot) = region.panel_slot()
+            && let Some(cm) = &mut cache
+        {
+            cm.invalidate_slot(slot);
+        }
+    }
+    if regions.contains(MainRegion::Inspector) {
+        // A rebuilt inspector recreates its cards with is_selected=false.
+        ui_root.inspector.apply_selection_visuals(&mut ui_root.tree);
+    }
+    true
+}
+
+/// The Ghosts region (D7) holds only the live card drag's ghost: the drag
+/// start mints it, the drag moves it in place, and this clears it once the
+/// drag ends or refills it when it holds anything else (a ghost from an
+/// earlier drag in the same frame). No work while a drag lives or none does.
+/// It has no atlas slot.
+fn settle_ghosts(ui_root: &mut UIRoot) {
+    let ghosts = MainRegion::Ghosts.id();
+    let live = ui_root.inspector.card_drag_ghost_root();
+    let len = ui_root.tree.region_len(ghosts);
+    match live {
+        None if len == 0 => return,
+        Some(root) if len > 0 && ui_root.tree.id_in(ghosts, 0) == root => return,
+        _ => {}
+    }
+    ui_root.tree.clear_region(ghosts);
+    if live.is_some() {
+        ui_root.build_region(MainRegion::Ghosts);
+    }
+}
+
+/// Move each translated region's nodes by the plan's delta and repaint its
+/// atlas slot (D7): a region whose rect only moved never rebuilds.
+fn translate_regions(
+    ui_root: &mut UIRoot,
+    mut cache: Option<&mut UICacheManager>,
+    regions: RegionMask,
+    by: &[(i32, i32); MAIN_REGION_COUNT],
+) -> bool {
+    for region in regions.iter() {
+        let (dx, dy) = by[region as usize];
+        record_work(WorkKind::RegionTranslate);
+        ui_root.tree.translate_region(region.id(), dx as f32, dy as f32);
+        if let Some(slot) = region.panel_slot()
+            && let Some(cm) = &mut cache
+        {
+            cm.invalidate_slot(slot);
+        }
+    }
+    !regions.is_empty()
 }
 
 /// The per-frame UI flags that outlive one frame: what input handlers and the
@@ -444,23 +536,19 @@ pub(crate) fn apply_frame_plan(
     scroll_dirty.scroll_x |= plan.viewport.scroll_x;
     scroll_dirty.scroll_y |= plan.viewport.scroll_y;
     scroll_dirty.zoom |= plan.viewport.zoom;
-    // The plan's rebuild mask as the flat-tree suffix it maps to, through
-    // the old signals so the drag guards still hold (P5a deletes them). A
-    // viewport-only suffix rides the scroll-panel rebuild: the old signals
-    // have no viewport-only rebuild that is not an in-place scroll.
-    let mut needs_rebuild = *flags.needs_rebuild;
-    match plan.rebuild.slot() {
-        Some(crate::ui_root::RegionSlot::Full) => needs_rebuild = true,
-        Some(_) => scroll_dirty.visual = true,
-        None => {}
+    // The plan's regions rebuild alone (D7); an inspector projection
+    // rewrote the inspector's lists, so its region rebuilds with it.
+    let mut rebuild = plan.rebuild;
+    if inspector_sync {
+        rebuild.insert(MainRegion::Inspector);
     }
-
     let mut signals = UiFrameSignals {
-        needs_rebuild,
-        // A projection rewrote the inspector or the timeline lists: rebuild.
-        projected: inspector_sync,
+        needs_rebuild: *flags.needs_rebuild,
         scroll_dirty,
         scrolled_in_place: changes.scrolled_in_place,
+        rebuild,
+        translate: plan.translate,
+        translate_by: plan.translate_by,
     };
     let rebuilt = apply_ui_frame_invalidations(ui_root, cache, &mut signals);
     *flags.needs_rebuild = signals.needs_rebuild;
@@ -573,8 +661,8 @@ pub(crate) fn composite_main_ui_frame(
     let panel_infos = ui_root.panel_cache_info();
     let (_, rendered_ranges) =
         cache.render_dirty_panels(device, ui_renderer, &ui_root.tree, &panel_infos);
-    for (start, end) in &rendered_ranges {
-        ui_root.tree.clear_dirty_range(*start, *end);
+    for &(region, start, end) in &rendered_ranges {
+        ui_root.tree.clear_dirty_range(region, start, end);
     }
 
     let sf = scale_factor as f32;
@@ -1134,10 +1222,8 @@ pub(crate) fn render_main_ui_passes(
     }
     encoder.commit();
 
-    // The overlay-region dirty-clear (Panel ranges are already cleared per
-    // rendered range by `composite_main_ui_frame`; the 7 panels contiguously
-    // tile [0, overlay_region_start), so this and that together clear every
-    // non-overlay node — BUG-015) now runs INSIDE
+    // The Overlays and Ghosts arenas' dirty-clear (the atlas regions are
+    // cleared per rendered range by `composite_main_ui_frame` — BUG-015) runs INSIDE
     // `tree_passes::render_tree_overlay_passes`, above, before this commit —
     // see that module's doc deviation 1 for why the reordering relative to
     // the commit is safe.

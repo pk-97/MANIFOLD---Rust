@@ -1847,8 +1847,7 @@ mod tests {
             .build_docked(&mut tree, rect);
         tree.end_region(region, content_start);
         assert!(
-            tree.nodes()
-                .iter()
+            tree.all_nodes()
                 .any(|node| node.text.as_deref() == Some("Physics")),
             "fresh builtin cube exposes the Physics property"
         );
@@ -1937,8 +1936,7 @@ mod tests {
         ui.scene_setup_panel.build_docked(&mut enabled_tree, enabled_rect);
         enabled_tree.end_region(enabled_region, enabled_content_start);
         let enabled_texts: Vec<&str> = enabled_tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter_map(|node| node.text.as_deref())
             .collect();
         assert!(enabled_texts.contains(&"Density"));
@@ -2431,7 +2429,7 @@ mod tests {
             rect: Rect::new(0.0, 0.0, size.x, size.y), screen: Vec2::new(1280.0, 720.0),
         });
         tree.end_region(region, start);
-        let track = tree.nodes().iter().find(|node| node.tooltip.as_deref() == Some(
+        let track = tree.all_nodes().find(|node| node.tooltip.as_deref() == Some(
             "Simulation updates per second. Hits land up to one update late; kicks are read at this rate."
         ) && node.text.is_none() && node.flags.contains(manifold_ui::UIFlags::INTERACTIVE)).expect("shared slider track").bounds;
         let point = Vec2::new(track.x + track.width - 1.0, track.y + track.height * 0.5);
@@ -2493,7 +2491,7 @@ mod tests {
                 screen: Vec2::new(1280.0, 720.0),
             });
             tree.end_region(region, content_start);
-            let bounds = tree.nodes().iter()
+            let bounds = tree.all_nodes()
                 .find(|node| node.text.as_deref() == Some(label))
                 .expect("settings control exists").bounds;
             let point = Vec2::new(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);

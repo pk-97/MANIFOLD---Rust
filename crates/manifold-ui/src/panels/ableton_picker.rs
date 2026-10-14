@@ -141,6 +141,8 @@ pub struct AbletonPickerPopup {
     track_row_ids: Vec<(NodeId, usize)>,
     /// (node_id, address) for each visible macro item.
     macro_item_ids: Vec<(NodeId, AbletonMacroAddress)>,
+    /// Slots in `region`'s arena.
+    region: u8,
     first_node: usize,
     node_count: usize,
     /// Selection captured by `Overlay::on_event`, drained by the app-layer
@@ -171,6 +173,7 @@ impl AbletonPickerPopup {
             backdrop_id: None,
             track_row_ids: Vec::new(),
             macro_item_ids: Vec::new(),
+            region: crate::tree::DEFAULT_REGION,
             first_node: 0,
             node_count: 0,
             pending_selection: None,
@@ -259,6 +262,7 @@ impl AbletonPickerPopup {
         }
 
         self.first_node = tree.count();
+        self.region = tree.building_region();
         self.track_row_ids.clear();
         self.macro_item_ids.clear();
 
@@ -374,7 +378,7 @@ impl AbletonPickerPopup {
 
         let body_vp = Rect::new(px + BORDER, body_y, pw - BORDER * 2.0, body_bottom - body_y);
         let clip_id = self.scroll.begin(tree, body_vp);
-        tree.reparent_root_nodes(clip_id.index(), 1, shell.container);
+        tree.reparent_root_nodes(clip_id.slot(), 1, shell.container);
         let body_parent = Some(clip_id);
 
         // ── Left column: track rows ───────────────────────────────
@@ -634,8 +638,8 @@ impl AbletonPickerPopup {
     }
 
     pub fn contains_node(&self, node_id: NodeId) -> bool {
-        let id = node_id.index();
-        id >= self.first_node && id < self.first_node + self.node_count
+        let id = node_id.slot();
+        node_id.region() == self.region && id >= self.first_node && id < self.first_node + self.node_count
     }
 
     // ── Layout ────────────────────────────────────────────────────

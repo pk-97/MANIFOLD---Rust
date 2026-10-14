@@ -430,7 +430,7 @@ impl AudioTriggerSection {
             }
         }
 
-        let first = self.first_node.map_or(0, |id| id.index());
+        let first = self.first_node.map_or(0, |id| id.slot());
         self.node_count = tree.count() - first;
     }
 
@@ -438,8 +438,8 @@ impl AudioTriggerSection {
         let Some(first) = self.first_node else {
             return false;
         };
-        let id = node_id.index();
-        id >= first.index() && id < first.index() + self.node_count
+        let id = node_id.slot();
+        node_id.region() == first.region() && id >= first.slot() && id < first.slot() + self.node_count
     }
 
     // ── Click resolution ─────────────────────────────────────────────

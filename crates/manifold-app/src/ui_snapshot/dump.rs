@@ -21,26 +21,31 @@ use manifold_ui::hit_targets::HitTargets;
 use manifold_ui::{Color32, UITree};
 use serde_json::{json, Value};
 
+/// A node's address as one number, unique across region arenas: region in
+/// the high bits, slot in the low 24.
+fn flat_id(id: manifold_ui::node::NodeId) -> u64 {
+    (u64::from(id.region()) << 24) | id.slot() as u64
+}
+
 /// Full machine-readable dump of every node in paint order, plus the
 /// enumeration of every `surfaces` entry under a sibling top-level
 /// `custom_surfaces` array (empty when `surfaces` is empty) — additive: the
 /// per-node fields are unaffected by whether any surfaces are passed.
 pub fn dump_tree_ex(tree: &UITree, surfaces: &[&dyn HitTargets]) -> Value {
     let nodes: Vec<Value> = tree
-        .nodes()
-        .iter()
+        .all_nodes()
         .map(|n| {
             let s = &n.style;
             let widget = tree.widget_of(n.id);
             json!({
-                "id": n.id.index(),
+                "id": flat_id(n.id),
                 "gen": n.id.generation(),
                 // BUG-071: the LIVE reparented parent (`UITree::parent_of`,
                 // backed by `parent_index`), not `n.parent_id` — the mint-time
                 // struct field `reparent_root_nodes` never updates. Serializing
                 // the stale field made a correctly reparented (and correctly
                 // clipped/rendered) tree look unclipped in the dump.
-                "parent": tree.parent_of(n.id).map(|p| p.index()),
+                "parent": tree.parent_of(n.id).map(flat_id),
                 "type": format!("{:?}", n.node_type),
                 "rect": [n.bounds.x, n.bounds.y, n.bounds.width, n.bounds.height],
                 "text": n.text,
@@ -146,16 +151,16 @@ pub fn terse_catalog(panel: &str, surfaces: &[manifold_ui::param_surface::Catalo
 /// actually distinguish a node: type, rect, bg, text, font size, radius, border.
 pub fn terse(tree: &UITree) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{} nodes:", tree.nodes().len());
-    for n in tree.nodes() {
+    let _ = writeln!(out, "{} nodes:", tree.total_count());
+    for n in tree.all_nodes() {
         let s = &n.style;
         // BUG-071: live reparented parent, not the mint-time `n.parent_id` —
         // see the matching comment in `dump_tree_ex` above.
-        let parent = tree.parent_of(n.id).map_or_else(|| "-".to_string(), |p| p.index().to_string());
+        let parent = tree.parent_of(n.id).map_or_else(|| "-".to_string(), |p| flat_id(p).to_string());
         let _ = write!(
             out,
             "#{:<3} {:<9} p={:<3} ({:>6.1},{:>6.1} {:>6.1}x{:>5.1}) bg={}",
-            n.id.index(),
+            flat_id(n.id),
             format!("{:?}", n.node_type),
             parent,
             n.bounds.x,
