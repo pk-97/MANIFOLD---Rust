@@ -58,12 +58,21 @@ pub trait Command: Debug + Send {
 }
 
 /// Run a project write and return Effects when it changed which rows exist
-/// (`manifold_core::change::row_facts_key`), else nothing. The row rule
+/// (`manifold_core::change::row_facts_key`), else nothing. The row walk
 /// lives here and only here: every stamp site writes through it (commands,
 /// `EditingService::mutate`, the UI's `ProjectRef`), so a value write that
 /// flips a feature switch moves Effects whoever made it: a command, OSC,
-/// Ableton, MIDI or a scrub (UI_INVALIDATION D21).
+/// Ableton or MIDI (UI_INVALIDATION D21). A gesture's live moves skip it
+/// ([`rows_deferred`]) and its commit reports the move ([`value_moves_rows`]).
+///
+/// The key covers every card param in the project, so only the outermost
+/// write walks it: a write nested inside another (a composite's children, a
+/// batch, a command run inside a `mutate` closure) returns nothing, and the
+/// outer write's one walk covers it.
 pub fn rows_written<R>(project: &mut Project, f: impl FnOnce(&mut Project) -> R) -> (R, ChangeSet) {
+    let Some(_outermost) = RowWalk::open() else {
+        return (f(project), ChangeSet::NONE);
+    };
     let before = manifold_core::change::row_facts_key(project);
     let out = f(project);
     let rows = if manifold_core::change::row_facts_key(project) == before {
@@ -72,6 +81,56 @@ pub fn rows_written<R>(project: &mut Project, f: impl FnOnce(&mut Project) -> R)
         ChangeSet::of(&[manifold_core::change::Part::Effects])
     };
     (out, rows)
+}
+
+thread_local! {
+    static ROW_WALK_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    #[cfg(test)]
+    static ROW_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The open outermost row walk on this thread; closes on drop, so a panic
+/// inside the write cannot leave later writes unwalked.
+struct RowWalk;
+
+impl RowWalk {
+    /// `None` when a walk is already open: the write is nested.
+    fn open() -> Option<Self> {
+        if ROW_WALK_OPEN.replace(true) {
+            return None;
+        }
+        #[cfg(test)]
+        ROW_WALKS.set(ROW_WALKS.get() + 1);
+        Some(RowWalk)
+    }
+}
+
+/// A gesture's live move: run the write with the row walk held open and
+/// never walked, so nothing inside it walks either. Its commit reports the
+/// rows ([`value_moves_rows`]).
+pub fn rows_deferred<R>(project: &mut Project, f: impl FnOnce(&mut Project) -> R) -> R {
+    let _held = (!ROW_WALK_OPEN.replace(true)).then_some(RowWalk);
+    f(project)
+}
+
+impl Drop for RowWalk {
+    fn drop(&mut self) {
+        ROW_WALK_OPEN.set(false);
+    }
+}
+
+/// Effects when moving card param `param_id` from `old` to `new` changes
+/// which rows exist. A gesture's live moves skip the row walk, so the value
+/// is already in the project when its commit runs and the walk sees
+/// nothing; the commit measures its own move with the same rule
+/// (`ParamSpecDef::row_fact`). Rows then change on mouse-up, never under the
+/// cursor.
+pub fn value_moves_rows(project: &Project, target: &GraphTarget, param_id: &str, old: f32, new: f32) -> ChangeSet {
+    let moves = project
+        .preset_instance(target)
+        .and_then(|inst| inst.params.get(param_id))
+        .is_some_and(|param| param.spec.row_fact(old) != param.spec.row_fact(new));
+    if moves { ChangeSet::of(&[manifold_core::change::Part::Effects]) } else { ChangeSet::NONE }
 }
 
 /// Callbacks for layer lifecycle events (add/remove).
@@ -384,5 +443,27 @@ mod tests {
         );
         command.execute(&mut Project::default());
         assert_eq!(command.rejection_reason(), Some("first"));
+    }
+
+    /// The row key covers every card param, so a paste or multi-delete of
+    /// hundreds of clips must walk it once, not twice per child.
+    #[test]
+    fn a_composite_walks_the_row_facts_once() {
+        let mut project = Project::default();
+        let items: Vec<String> = (0..64).map(|i| i.to_string()).collect();
+        let mut cmd = composite(&items.iter().map(String::as_str).collect::<Vec<_>>());
+        let walks = || ROW_WALKS.get();
+        let before = walks();
+        cmd.execute(&mut project);
+        assert_eq!(walks() - before, 1, "execute");
+        let before = walks();
+        cmd.undo(&mut project);
+        assert_eq!(walks() - before, 1, "undo");
+        let before = walks();
+        rows_deferred(&mut project, |project| cmd.execute(project));
+        assert_eq!(walks() - before, 0, "a gesture move walks nothing, nested or not");
+        let before = walks();
+        cmd.undo(&mut project);
+        assert_eq!(walks() - before, 1, "the walk reopens after a deferred write");
     }
 }

@@ -1645,9 +1645,13 @@ impl ContentThread {
 
             // ── Direct project mutation ────────────────────────────
             // Reactions run once per drain pass from the stamps (D4).
-            ContentCommand::MutateProject { touches, f } => {
+            ContentCommand::MutateProject { touches, f, gesture } => {
                 if let Some(edit) = self.engine.project_edit() {
-                    self.editing_service.mutate(touches, edit, f);
+                    if gesture {
+                        self.editing_service.mutate_gesture(touches, edit, f);
+                    } else {
+                        self.editing_service.mutate(touches, edit, f);
+                    }
                 }
             }
 

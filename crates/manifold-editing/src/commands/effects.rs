@@ -487,6 +487,10 @@ pub struct ChangeGraphParamCommand {
     old_value: f32,
     new_value: f32,
     rejection: Option<&'static str>,
+    /// Effects when the move from old to new changes which rows exist. A
+    /// gesture commit's value is already live, so it measures its own move
+    /// (`command::value_moves_rows`). Read on every execute and undo.
+    rows: ChangeSet,
 }
 
 impl ChangeGraphParamCommand {
@@ -502,24 +506,29 @@ impl ChangeGraphParamCommand {
             old_value,
             new_value,
             rejection: None,
+            rows: ChangeSet::NONE,
         }
+    }
+
+    fn note_rows(&mut self, project: &Project) {
+        self.rows = crate::command::value_moves_rows(project, &self.target, self.param_id.as_ref(), self.old_value, self.new_value);
     }
 }
 
 impl Command for ChangeGraphParamCommand {
     /// A plain value is Values. A scene-modifier param lives inside the
     /// owner's graph definition, so it is Effects too (UI_INVALIDATION D21,
-    /// D22). A feature switch that flips adds Effects at execute
-    /// (`rows_written`).
+    /// D22). A feature switch it flips is Effects too.
     fn touches(&self) -> manifold_core::change::ChangeSet {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             ChangeSet::of(&[Part::Values, Part::Effects])
         } else {
-            ChangeSet::of(&[Part::Values])
+            ChangeSet::of(&[Part::Values]).union(self.rows)
         }
     }
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
+        self.note_rows(project);
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
             && let Some(graph) = project.graph_for_target(&self.target, None)
             && let Some(reason) = manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, self.param_id.as_ref())
@@ -535,6 +544,7 @@ impl Command for ChangeGraphParamCommand {
     }
 
     fn do_undo(&mut self, project: &mut Project) {
+        self.note_rows(project);
         let id = self.param_id.clone();
         let val = self.old_value;
         project.with_preset_graph_mut(&self.target, |host| {

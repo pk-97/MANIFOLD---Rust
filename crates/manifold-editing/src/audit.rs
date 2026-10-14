@@ -7,13 +7,21 @@ mod on {
     use manifold_core::change::{ChangeSet, audit};
     use manifold_core::project::Project;
 
-    pub(crate) struct Window(audit::Fingerprint);
+    pub(crate) struct Window(audit::Fingerprint, u64);
 
     pub(crate) fn open(project: &Project) -> Window {
-        Window(audit::fingerprint(project))
+        Window(audit::fingerprint(project), manifold_core::change::row_facts_key(project))
     }
 
+    /// Row facts are measured, not declared: the outermost write's walk
+    /// reports them (`command::rows_written`), or a gesture's commit does, so
+    /// a nested write or a live gesture move that moved them is not undeclared.
     pub(crate) fn close(window: Window, project: &Project, declared: ChangeSet, what: &str) {
+        let declared = if manifold_core::change::row_facts_key(project) == window.1 {
+            declared
+        } else {
+            declared.union(ChangeSet::of(&[manifold_core::change::Part::Effects]))
+        };
         let undeclared = audit::changed(&window.0, &audit::fingerprint(project)).minus(declared);
         assert!(
             undeclared.is_empty(),

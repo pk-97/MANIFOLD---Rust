@@ -854,7 +854,7 @@ impl MappingHost<'_> {
             .preset_instance(&target)
             .is_some_and(|inst| inst.graph.is_none());
         let pid = param_id.to_string();
-        self.project.mutate(
+        self.project.gesture_move(
             crate::content_command::touch::shapes_first_move(graph_absent),
             move |p| {
                 build_mapping_command(&target, &pid, edit, seed_def).execute(p);

@@ -17,7 +17,7 @@ use crate::user_prefs::UserPrefs;
 use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
-use manifold_editing::command::{rows_written, Command};
+use manifold_editing::command::{rows_deferred, rows_written, Command};
 
 use super::scrub::ScrubState;
 
@@ -80,7 +80,7 @@ pub struct ProjectRef<'a> {
 }
 
 impl<'a> ProjectRef<'a> {
-    pub fn new(
+    pub(crate) fn new(
         project: &'a mut Project,
         edits: &'a mut crate::gesture_preview::UiEdits,
         content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
@@ -100,6 +100,18 @@ impl<'a> ProjectRef<'a> {
         ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
     }
 
+    /// A gesture's live move (a scrub tick): as [`Self::mutate`], but rows
+    /// wait for the gesture's commit on both threads, so no row appears or
+    /// vanishes under the cursor mid-drag.
+    pub fn gesture_move<F>(&mut self, touches: ChangeSet, f: F)
+    where
+        F: FnOnce(&mut Project) + Clone + Send + 'static,
+    {
+        rows_deferred(self.project, f.clone());
+        self.edits.stamps.bump(touches);
+        ContentCommand::send(self.content_tx, ContentCommand::gesture_move(touches, Box::new(f)));
+    }
+
     /// An undoable edit: execute `cmd` locally, stamp what it touches (read
     /// after execute, so a command can learn its parts from the project), and
     /// send it to the content thread.
@@ -110,12 +122,12 @@ impl<'a> ProjectRef<'a> {
     }
 
     /// Several undoable edits as one undo step, stamped with their union.
+    /// One row walk covers the batch; the commands inside it skip theirs.
     pub fn execute_batch(&mut self, mut cmds: Vec<Box<dyn Command>>, label: String) {
-        let mut touches = ChangeSet::NONE;
-        for cmd in &mut cmds {
-            touches = touches.union(cmd.execute(self.project));
-        }
-        self.edits.stamps.bump(touches);
+        let (touches, rows) = rows_written(self.project, |project| {
+            cmds.iter_mut().fold(ChangeSet::NONE, |touches, cmd| touches.union(cmd.execute(project)))
+        });
+        self.edits.stamps.bump(touches.union(rows));
         ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
     }
 
@@ -224,5 +236,13 @@ impl DispatchCtx<'_> {
     /// See [`ProjectRef::execute`].
     pub fn execute(&mut self, cmd: Box<dyn Command>) {
         self.project.execute(cmd);
+    }
+
+    /// See [`ProjectRef::gesture_move`].
+    pub fn gesture_move<F>(&mut self, touches: ChangeSet, f: F)
+    where
+        F: FnOnce(&mut Project) + Clone + Send + 'static,
+    {
+        self.project.gesture_move(touches, f);
     }
 }

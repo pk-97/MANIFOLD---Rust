@@ -854,9 +854,18 @@ fn change_graph_param_switch_declares_effects() {
 
     let mut plain = ChangeGraphParamCommand::new(target.clone(), "amount", 0.5, 0.9);
     assert_eq!(plain.execute(&mut project), ChangeSet::of(&[Part::Values]));
-    let mut flip = ChangeGraphParamCommand::new(target, "dof_on", 0.0, 1.0);
+    let mut flip = ChangeGraphParamCommand::new(target.clone(), "dof_on", 0.0, 1.0);
     assert_eq!(flip.execute(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
     assert_eq!(flip.undo(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
+
+    // A scrub: the live move defers rows, so the commit, whose value is
+    // already in the project, reports them on mouse-up.
+    let live = target.clone();
+    manifold_editing::command::rows_deferred(&mut project, |p| {
+        p.with_preset_graph_mut(&live, |inst| inst.set_base_param("dof_on", 1.0));
+    });
+    let mut commit = ChangeGraphParamCommand::new(target, "dof_on", 0.0, 1.0);
+    assert_eq!(commit.execute(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
 }
 
 #[test]

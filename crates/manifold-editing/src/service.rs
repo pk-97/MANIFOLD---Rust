@@ -1,5 +1,5 @@
 use crate::audit;
-use crate::command::{rows_written, Command, CompositeCommand};
+use crate::command::{rows_deferred, rows_written, Command, CompositeCommand};
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
 use crate::edit::ProjectEdit;
@@ -85,6 +85,17 @@ impl EditingService {
         audit::close(window, project, wrote, "mutate");
         self.stamps.bump(wrote);
         wrote
+    }
+
+    /// A gesture's live move (a scrub tick): as [`Self::mutate`], but rows
+    /// are left to the gesture's commit (`rows_deferred`), so no row appears
+    /// or vanishes under the cursor mid-drag.
+    pub fn mutate_gesture<'p>(&mut self, touches: ChangeSet, project: impl Into<ProjectEdit<'p>>, f: impl FnOnce(&mut Project)) {
+        let project = project.into().into_mut();
+        let window = audit::open(project);
+        rows_deferred(project, f);
+        audit::close(window, project, touches, "mutate_gesture");
+        self.stamps.bump(touches);
     }
 
     /// A write whose later steps read earlier ones, so it cannot be built as

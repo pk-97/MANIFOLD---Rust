@@ -1790,7 +1790,7 @@ impl Application {
                                 if let Some(tx) = self.content_tx.as_ref() {
                                     let t = target.clone();
                                     let oid = outer_id.clone();
-                                    self.local_project.edit(&mut self.ui_edits, tx).mutate(
+                                    self.local_project.edit(&mut self.ui_edits, tx).gesture_move(
                                         crate::content_command::touch::VALUES,
                                         move |p| {
                                             p.with_preset_graph_mut(&t, |inst| {
@@ -1868,7 +1868,7 @@ impl Application {
                         let touches = crate::content_command::touch::shapes_first_move(
                             is_new_session && graph_absent,
                         );
-                        self.send_content_cmd(ContentCommand::mutate(touches, Box::new(
+                        self.send_content_cmd(ContentCommand::gesture_move(touches, Box::new(
                             move |p| {
                                 live_cmd.execute(p);
                             },
