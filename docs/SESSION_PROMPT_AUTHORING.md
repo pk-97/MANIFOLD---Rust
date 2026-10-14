@@ -165,24 +165,25 @@ nightly on main via `scripts/trunk_health.py`, which files beads on red
 The spec is `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol); the prompt names the mode and fills
 in the blanks rather than re-deriving the rules.
 
-- **Mode A — docs-only.** The worktree-guard hook (2026-07-08) denies agent edits
-  in the main checkout, docs included — docs edits go through a worktree too (any
-  idle one; no warm cargo target needed). Worktrees have a private index; in the
+- **Mode A — docs-only.** `worktree-guard.py` denies agent edits in the main
+  checkout except `docs/**/*.md` and `.claude/` tooling (its docstring is the
+  spec); anything else goes through a worktree (any idle one; no warm cargo
+  target needed). Worktrees have a private index; in the
   MAIN checkout commit ONLY with explicit pathspec (`git commit -m '…' -- docs/…`;
-  a NEW file gets one targeted `git add <path>` first). Land per section 2: fetch → merge
-  → `merge --no-ff` → push.
+  a NEW file gets one targeted `git add -- <path>` first). Changes confined to
+  `.beads/`, `docs/` and `.claude/hooks/` may go to main directly; anything else
+  lands through `scripts/land_branch.py`.
 - **Mode B — code.** ONE warm worktree per workstream (never per phase), acquired
   via `scripts/agent-worktree.py acquire <name> <branch> [--tip REF]` — it
   reuses the warmest idle pool dir, copies gitignored fixtures, and prints the
   step-0 line (still confirm the tip; a reused dir keeps its old name). NEVER the
-  Agent tool's `isolation: "worktree"` (bases off the default branch); raw
-  `git worktree add -b <branch> ".claude/worktrees/<name>" <verified-tip>` only if
-  the script is unavailable. Every worker brief OPENS with the base check
+  Agent tool's `isolation: "worktree"` (bases off the default branch) and never
+  raw `git worktree add` (both hook-denied). Every worker brief OPENS with the base check
   (`git -C "<worktree-abs>" log --oneline -1` matches the tip). Workers use
   `-C`/`--manifest-path` with absolute QUOTED paths (the repo path has a space) and
-  NEVER land. The orchestrator lands from the main checkout — fetch → merge
-  origin/main into the branch → gate → `merge --no-ff` → push → repeat if rejected
-  — BATCHED per 2–3 phases (commits stay per-phase). No branch deletion until
+  NEVER land. The lead lands each reviewed branch with `scripts/land_branch.py`
+  (GIT_TREE_DISCIPLINE.md section 2 (Landing protocol)), batched per 2–3 phases
+  (commits stay per-phase). No branch deletion until
   `git merge-base --is-ancestor` confirms; `agent-worktree.py release <name>` at
   session end.
 

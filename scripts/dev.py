@@ -175,7 +175,7 @@ VERBS = [
      "live-ui-safety-demo", "live_ui_safety_demo.py", "rollback when a live client disconnects mid-gesture"),
 
     ("Process, beads, usage",
-     "fleet-health", "fleet_health.py", "stalls and blockers across lanes (the lead's cron)"),
+     "fleet-health", "fleet_health.py", "Astra job stalls, orphaned slot edits, disk, GPU lock, nightly (the lead's cron)"),
     ("Process, beads, usage",
      "status", "status.py", "one screen: lanes, GPU holder, worktree slots, running gate with ETA"),
     ("Process, beads, usage",

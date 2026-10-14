@@ -91,4 +91,4 @@ Call 600 costs **6x** what call 20 cost, for identical work. Session totals:
 
 **12% of sessions burn 50% of all tokens.**
 
-> **No rotation rule.** Per-call cost grows with context, but Peter ruled no cap on worker seats (2026-10-14); see the context-cap bullet in `docs/AGENT_ROUTING.md`. The numbers above stay as a cost record.
+> **No rotation rule.** Per-call cost grows with context, but worker seats have no context cap; see the context-cap bullet in `docs/AGENT_ROUTING.md`. The numbers above stay as a cost record.
