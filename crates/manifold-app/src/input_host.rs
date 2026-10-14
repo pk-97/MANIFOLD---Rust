@@ -1785,7 +1785,7 @@ fn resolve_effect_target(
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => {
             let layer_id = active_layer.clone().unwrap_or_default();
             EffectTarget::Layer { layer_id }
         }
@@ -1990,7 +1990,7 @@ mod automation_clipboard_host_tests {
         )
         .expect("Water preset").as_ref().clone();
         h.selection.select_layer(layer_id.clone());
-        h.ui_root.scene_setup_panel.open();
+        h.selection.pin_scope(manifold_ui::InspectorTab::Scene);
         crate::ui_bridge::sync_inspector_data(
             &mut h.ui_root,
             &h.project,
@@ -2632,7 +2632,7 @@ mod automation_clipboard_host_tests {
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         h.selection.select_layer(layer_id.clone());
-        h.ui_root.scene_setup_panel.open();
+        h.selection.pin_scope(manifold_ui::InspectorTab::Scene);
         crate::ui_bridge::sync_inspector_data(&mut h.ui_root, &h.project, Some(0), &h.selection, &[], None);
         h.ui_root.object_cards_have_focus = true;
         let before = serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap();

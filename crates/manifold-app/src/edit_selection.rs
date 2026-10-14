@@ -202,6 +202,7 @@ pub(crate) fn apply_update(
             if !light_ids(project, layer_id).contains(light_id) {
                 return false;
             }
+            focus_scene_tab(selection, active_layer, layer_id);
             ui.scene_setup_panel.set_selection(
                 layer_id.clone(),
                 manifold_ui::panels::scene_setup_panel::SceneSelection::Light(*light_id),
@@ -214,6 +215,7 @@ pub(crate) fn apply_update(
             if !object_ids(project, layer_id).contains(object_id) {
                 return false;
             }
+            focus_scene_tab(selection, active_layer, layer_id);
             ui.scene_setup_panel.set_selection(
                 layer_id.clone(),
                 manifold_ui::panels::scene_setup_panel::SceneSelection::Object(*object_id),
@@ -221,6 +223,25 @@ pub(crate) fn apply_update(
         }
     }
     true
+}
+
+/// A scene item selection shows in the inspector's Scene tab (SCENE_SURFACES
+/// D16). The layer is selected only when the inspector is on another layer, so
+/// a clip selected on the scene's own layer stays selected.
+fn focus_scene_tab(
+    selection: &mut crate::app::SelectionState,
+    active_layer: &mut Option<LayerId>,
+    layer_id: &LayerId,
+) {
+    let inspected = selection
+        .selected_layer_id_for_clip
+        .as_ref()
+        .or(selection.primary_selected_layer_id.as_ref());
+    if inspected != Some(layer_id) {
+        selection.select_layer(layer_id.clone());
+    }
+    *active_layer = Some(layer_id.clone());
+    selection.pin_scope(manifold_ui::panels::InspectorTab::Scene);
 }
 
 #[cfg(test)]

@@ -36,8 +36,8 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
     assert_eq!(editing.take_rejection(), None);
     let (_, _state, mut ui, mut selection, _active_layer, _prefs) = dispatch_harness();
 
-    ui.scene_setup_panel.open();
     selection.select_layer(layer_id.clone());
+    selection.pin_scope(manifold_ui::InspectorTab::Scene);
     crate::ui_bridge::projection::inspector::sync_inspector_data(
         &mut ui,
         &project,

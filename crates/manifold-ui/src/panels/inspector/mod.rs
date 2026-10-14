@@ -314,6 +314,9 @@ pub struct InspectorCompositePanel {
     columns_y: f32,
     /// Height available for columns (viewport height minus macros).
     columns_height: f32,
+    /// Where the Scene tab's panel builds: the column area below the tab
+    /// strip. `Rect::ZERO` unless the Scene tab is active.
+    scene_content_rect: Rect,
     dragging_scrollbar: bool,
     dragging_scrollbar_master: bool,
     /// Set whenever a scroll (wheel or scrollbar drag) offset the content nodes
@@ -439,7 +442,7 @@ impl InspectorCompositePanel {
     fn scope_idx(tab: InspectorTab) -> usize {
         match tab {
             InspectorTab::Master => Self::SCOPE_MASTER,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => Self::SCOPE_LAYER,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => Self::SCOPE_LAYER,
         }
     }
 
@@ -485,6 +488,7 @@ impl InspectorCompositePanel {
             column_split_x: 0.0,
             columns_y: 0.0,
             columns_height: 0.0,
+            scene_content_rect: Rect::ZERO,
             dragging_scrollbar: false,
             dragging_scrollbar_master: false,
             scrolled_in_place: false,
@@ -572,6 +576,9 @@ impl InspectorCompositePanel {
     fn clip_visible(&self) -> bool {
         self.active_tab == InspectorTab::Clip
     }
+    fn scene_visible(&self) -> bool {
+        self.active_tab == InspectorTab::Scene
+    }
 
 
     /// Point the inspector at a single scope. `Group` shares the layer section.
@@ -591,6 +598,7 @@ impl InspectorCompositePanel {
             InspectorTab::Layer => "Layer",
             InspectorTab::Group => "Group",
             InspectorTab::Master => "Master",
+            InspectorTab::Scene => "Scene",
         }
     }
 
@@ -846,6 +854,11 @@ impl InspectorCompositePanel {
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_rect
     }
+    /// The rect the host builds the scene panel into while the Scene tab is
+    /// active (SCENE_SURFACES D16); `Rect::ZERO` otherwise.
+    pub fn scene_content_rect(&self) -> Rect {
+        self.scene_content_rect
+    }
     pub fn scroll_offset(&self) -> f32 {
         self.layer_scroll.scroll_offset()
     }
@@ -1027,14 +1040,14 @@ impl InspectorCompositePanel {
     fn last_clicked_for_tab(&self, tab: InspectorTab) -> Option<&EffectId> {
         match tab {
             InspectorTab::Master => self.last_clicked_master.as_ref(),
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => self.last_clicked_layer.as_ref(),
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => self.last_clicked_layer.as_ref(),
         }
     }
 
     fn set_last_clicked_for_tab(&mut self, tab: InspectorTab, id: Option<EffectId>) {
         match tab {
             InspectorTab::Master => self.last_clicked_master = id,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => self.last_clicked_layer = id,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => self.last_clicked_layer = id,
         }
     }
 
