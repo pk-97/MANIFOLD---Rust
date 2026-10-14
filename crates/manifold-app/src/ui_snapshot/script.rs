@@ -590,11 +590,10 @@ impl Runner {
                         &mut data.project,
                         self.modulation_engine.project_mut().expect("initialized engine"),
                     );
-                    self.modulation_engine.set_time(manifold_core::Seconds(self.clock as f64));
+                    self.modulation_engine.locate(manifold_core::Seconds(self.clock as f64));
                     let result = self.modulation_engine.tick(manifold_playback::engine::TickContext {
-                        dt_seconds: manifold_core::Seconds(DT as f64),
+                        frames: 1,
                         realtime_now: manifold_core::Seconds(self.clock as f64),
-                        pre_render_dt: manifold_core::Seconds(DT as f64),
                         ..Default::default()
                     });
                     // In the live App modulated values arrive by value

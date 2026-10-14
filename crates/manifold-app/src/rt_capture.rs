@@ -450,6 +450,9 @@ pub fn run(args: &[String]) -> ! {
         .find(|w| w[0] == "--fps")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(real_project.settings.frame_rate as f64);
+    // The project rate is the only fps (FRAME_EXACT_TRANSPORT_DESIGN D10):
+    // the transport clock and the content timer both follow it.
+    real_project.settings.frame_rate = fr as f32;
     let w = real_project.settings.output_width.max(1) as u32;
     let h = real_project.settings.output_height.max(1) as u32;
     println!("output={w}x{h} fps={fr}");
@@ -480,7 +483,6 @@ pub fn run(args: &[String]) -> ! {
 
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, w, h);
-    ct.timer.set_target_fps(fr);
     ct.timer.set_frame_clocked(frame_clock);
     ct.timer.ensure_thread_policy();
 
@@ -494,8 +496,6 @@ pub fn run(args: &[String]) -> ! {
     let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &cmd_tx, &state_tx);
     eprintln!("[rt-capture] warmup pass took {:.1}ms (completed={})",
         load.warmup.elapsed_ms, load.warmup.completed);
-    // This tool deliberately permits an FPS override after the production load.
-    ct.timer.set_target_fps(fr);
     if profile_cpu {
         for renderer in ct.engine.renderers_mut() {
             if let Some(generator) = renderer.as_any_mut()

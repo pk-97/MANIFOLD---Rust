@@ -368,8 +368,8 @@ impl OscSyncController {
         let receiving = (now - self.last_timecode_received_time).0 < self.transport_timeout as f64;
         self.is_receiving_timecode = receiving;
 
-        // Only suppress local deltaTime when OSC is the selected authority and
-        // timecode is actively arriving — gated by arbiter.
+        // STOPGAP(frame-exact P3): the clock stops advancing on its own only
+        // while OSC is the selected authority and timecode is arriving.
         arbiter.set_external_time_sync(ClockAuthority::Osc, authority, arb_target, receiving);
 
         // Transport detection: timecode arriving = play, timecode stopped = pause.

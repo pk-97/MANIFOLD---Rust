@@ -99,7 +99,7 @@ impl TransportController {
             engine.set_recording(false);
         }
 
-        // Clear external time sync on authority change
+        // STOPGAP(frame-exact P3): an authority change hands the clock back.
         engine.set_external_time_sync(false);
     }
 

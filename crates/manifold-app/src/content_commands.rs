@@ -914,10 +914,12 @@ impl ContentThread {
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                     && clk.is_midi_clock_enabled()
                 {
+                    // STOPGAP(frame-exact P3): first frame at or after the
+                    // clock's beat; P3 locates to the nearest frame at the
+                    // beat projected to the deadline.
                     let midi_beat = Beats::from_f32(clk.current_clock_beat());
-                    self.engine.set_beat(midi_beat);
                     let time = self.engine.beat_to_timeline_time(midi_beat);
-                    self.engine.set_time(Seconds(time.0.max(0.0)));
+                    self.engine.locate(Seconds(time.0.max(0.0)));
                 }
                 self.engine.play();
                 self.cache_link_beat_offset();
@@ -1296,14 +1298,14 @@ impl ContentThread {
             ContentCommand::Undo => {
                 self.commit_automation_recording(true);
                 self.engine.clear_automation_previews();
-                // Capture pre-undo settings so we can detect resolution/FPS changes.
+                // Capture pre-undo settings so we can detect resolution changes. The fps
+                // follows through the engine clock (FRAME_EXACT_TRANSPORT_DESIGN D10).
                 // Port of Unity WorkspaceController.OnUndoRedo() which calls
                 // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
                 let pre = self.engine.project().map(|p| {
                     (
                         p.settings.output_width,
                         p.settings.output_height,
-                        p.settings.frame_rate,
                         p.settings.render_scale,
                     )
                 });
@@ -1316,7 +1318,7 @@ impl ContentThread {
                     let (renderers, project) = self.engine.split_renderer_project_mut();
                     if let Some(project) = project {
                         self.editing_service.undo_with_validation(project, |candidate| {
-                            let changed = pre.is_some_and(|(pre_w, pre_h, _, pre_rs)| {
+                            let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
                                 candidate.settings.output_width != pre_w
                                     || candidate.settings.output_height != pre_h
                                     || (candidate.settings.render_scale - pre_rs).abs() > 0.01
@@ -1348,26 +1350,18 @@ impl ContentThread {
                 if undone {
                     self.engine.mark_compositor_dirty_now();
                 }
-                // Apply resolution/FPS changes if the undo altered project settings.
+                // Apply resolution changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
                     (
                         p.settings.output_width,
                         p.settings.output_height,
-                        p.settings.frame_rate,
                         p.settings.render_scale,
                     )
                 });
-                if let (
-                    Some((pre_w, pre_h, pre_fps, pre_rs)),
-                    Some((post_w, post_h, post_fps, post_rs)),
-                ) = (pre, post)
+                if let (Some((pre_w, pre_h, pre_rs)), Some((post_w, post_h, post_rs))) = (pre, post)
+                    && (post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01)
                 {
-                    if post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01 {
-                        self.graph_edit_diagnostic = None;
-                    }
-                    if (post_fps - pre_fps).abs() > 0.01 {
-                        self.timer.set_target_fps(post_fps as f64);
-                    }
+                    self.graph_edit_diagnostic = None;
                 }
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
@@ -1383,7 +1377,6 @@ impl ContentThread {
                     (
                         p.settings.output_width,
                         p.settings.output_height,
-                        p.settings.frame_rate,
                         p.settings.render_scale,
                     )
                 });
@@ -1394,7 +1387,7 @@ impl ContentThread {
                     let (renderers, project) = self.engine.split_renderer_project_mut();
                     if let Some(project) = project {
                         self.editing_service.redo_with_validation(project, |candidate| {
-                            let changed = pre.is_some_and(|(pre_w, pre_h, _, pre_rs)| {
+                            let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
                                 candidate.settings.output_width != pre_w
                                     || candidate.settings.output_height != pre_h
                                     || (candidate.settings.render_scale - pre_rs).abs() > 0.01
@@ -1426,26 +1419,18 @@ impl ContentThread {
                 if redone {
                     self.engine.mark_compositor_dirty_now();
                 }
-                // Apply resolution/FPS changes if the redo altered project settings.
+                // Apply resolution changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
                     (
                         p.settings.output_width,
                         p.settings.output_height,
-                        p.settings.frame_rate,
                         p.settings.render_scale,
                     )
                 });
-                if let (
-                    Some((pre_w, pre_h, pre_fps, pre_rs)),
-                    Some((post_w, post_h, post_fps, post_rs)),
-                ) = (pre, post)
+                if let (Some((pre_w, pre_h, pre_rs)), Some((post_w, post_h, post_rs))) = (pre, post)
+                    && (post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01)
                 {
-                    if post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01 {
-                        self.graph_edit_diagnostic = None;
-                    }
-                    if (post_fps - pre_fps).abs() > 0.01 {
-                        self.timer.set_target_fps(post_fps as f64);
-                    }
+                    self.graph_edit_diagnostic = None;
                 }
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
@@ -1497,10 +1482,6 @@ impl ContentThread {
                     if let Err(message) = self.content_pipeline.resize(&mut self.engine, w, h, rs) {
                         self.report_graph_edit_rejection(format!("Project resize rejected: {message}"));
                     }
-                }
-                // Sync frame timer to loaded project's frame rate.
-                if let Some(p) = self.engine.project() {
-                    self.timer.set_target_fps(p.settings.frame_rate as f64);
                 }
                 // Prewarm chain-fusion segments for every chain in the project
                 // (background worker; enqueue-only) so the show's first scenes
@@ -1661,10 +1642,11 @@ impl ContentThread {
                 }
             }
             ContentCommand::SetFrameRate(fps) => {
+                // The engine's clock and then the content timer follow the
+                // setting on the next tick (FRAME_EXACT_TRANSPORT_DESIGN D10).
                 if let Some(p) = self.engine.project_mut() {
                     p.settings.frame_rate = fps as f32;
                 }
-                self.timer.set_target_fps(fps);
             }
 
             // ── GPU ────────────────────────────────────────────────
@@ -2255,7 +2237,7 @@ mod recording_save_tests {
         let mut editing = manifold_editing::service::EditingService::new();
         engine.initialize(project);
         engine.set_state(manifold_core::types::PlaybackState::Playing);
-        engine.set_time(Seconds(1.0));
+        engine.locate(Seconds(1.0));
         engine.set_automation_armed(true);
         engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7);
         // Match the ordered FinishAutomationRecording -> Execute messages.
@@ -2284,7 +2266,7 @@ mod recording_save_tests {
         let mut editing = manifold_editing::service::EditingService::new();
         engine.initialize(project);
         engine.set_state(manifold_core::types::PlaybackState::Playing);
-        engine.set_time(Seconds(1.0));
+        engine.locate(Seconds(1.0));
         engine.set_automation_armed(true);
         engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7);
         let (snapshot, version) = prepare_project_save(&mut engine, &mut editing).unwrap();

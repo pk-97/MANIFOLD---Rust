@@ -83,10 +83,12 @@ const GESTURE_INACTIVITY_BEATS: f64 = 2.0;
 pub struct GestureState {
     /// Where the eventual `CommitRecordedGestureCommand` writes.
     target: GraphTarget,
-    /// The first touched frame's beat (the punch-in point).
+    /// The first touched frame's exact beat (the punch-in point).
     punch_in_beat: Beats,
-    /// The most recent touched frame's beat (the eventual punch-out point).
-    /// Updated every frame this gesture records a new point.
+    /// The most recent touched frame's sampled beat (the eventual punch-out
+    /// point): the take holds its last value through the instant that frame
+    /// was read, so replay shows it there. Updated every frame this gesture
+    /// records a new point.
     last_touch_beat: Beats,
     /// The lane's point set immediately before this gesture started — the
     /// explicit reverse `CommitRecordedGestureCommand` carries (the
@@ -174,15 +176,32 @@ pub fn evaluate_all_automation_with_mode(
     gestures: &mut AutomationGestures,
     mode: AutomationSamplingMode,
 ) -> (bool, Vec<Box<dyn Command>>) {
+    evaluate_all_automation_at(project, current_beat, current_beat, latches, armed, gestures, mode)
+}
+
+/// `evaluate_all_automation_with_mode` with the transport's two beats
+/// (FRAME_EXACT_TRANSPORT_DESIGN D14): lanes are sampled at `current_beat`,
+/// a hair past the frame, and touches are recorded at `frame_beat`, the
+/// frame's exact beat, so a recorded step replays on the frame it was played.
+pub fn evaluate_all_automation_at(
+    project: &mut Project,
+    current_beat: Beats,
+    frame_beat: Beats,
+    latches: &mut AutomationLatches,
+    armed: bool,
+    gestures: &mut AutomationGestures,
+    mode: AutomationSamplingMode,
+) -> (bool, Vec<Box<dyn Command>>) {
     if mode != AutomationSamplingMode::Playback {
         return evaluate_all_automation_inspection(project, current_beat, latches, gestures, mode == AutomationSamplingMode::Export);
     }
 
     let mut any_wrote = false;
+    let beats = (current_beat, frame_beat);
 
     for fx in project.settings.master_effects.iter_mut() {
         let target = GraphTarget::Effect(fx.id.clone());
-        if evaluate_instance_automation(fx, &target, current_beat, latches, armed, gestures) {
+        if evaluate_instance_automation(fx, &target, beats, latches, armed, gestures) {
             any_wrote = true;
         }
     }
@@ -190,7 +209,7 @@ pub fn evaluate_all_automation_with_mode(
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
                 let target = GraphTarget::Effect(fx.id.clone());
-                if evaluate_instance_automation(fx, &target, current_beat, latches, armed, gestures) {
+                if evaluate_instance_automation(fx, &target, beats, latches, armed, gestures) {
                     any_wrote = true;
                 }
             }
@@ -198,7 +217,7 @@ pub fn evaluate_all_automation_with_mode(
         let layer_id = layer.layer_id.clone();
         if let Some(gp) = layer.gen_params_mut() {
             let target = GraphTarget::Generator(layer_id);
-            if evaluate_instance_automation(gp, &target, current_beat, latches, armed, gestures) {
+            if evaluate_instance_automation(gp, &target, beats, latches, armed, gestures) {
                 any_wrote = true;
             }
         }
@@ -388,10 +407,12 @@ pub(crate) fn contains_automation_key<T>(
 /// Evaluate every automation lane on a single instance, plus (when armed)
 /// any touched param that has no lane yet at all — the "arm creates a lane"
 /// path (section 5). Returns true if any lane wrote a value or recorded a point.
+/// `beats` is (sampled beat, the frame's exact beat): lanes read the first,
+/// touches record the second.
 fn evaluate_instance_automation(
     fx: &mut PresetInstance,
     target: &GraphTarget,
-    current_beat: Beats,
+    (current_beat, frame_beat): (Beats, Beats),
     latches: &mut AutomationLatches,
     armed: bool,
     gestures: &mut AutomationGestures,
@@ -521,7 +542,7 @@ fn evaluate_instance_automation(
                 .unwrap_or_else(|| (Vec::new(), false));
             GestureState {
                 target: target.clone(),
-                punch_in_beat: current_beat,
+                punch_in_beat: frame_beat,
                 last_touch_beat: current_beat,
                 pre_gesture_points: pre_points,
                 pre_gesture_existed: existed,
@@ -531,10 +552,10 @@ fn evaluate_instance_automation(
         // Punch-over: drop any already-recorded points at/after this beat —
         // a loop or backward scrub re-passing the same range overwrites it —
         // then append the new sample.
-        gesture.punch_in_beat = gesture.punch_in_beat.min(current_beat);
-        gesture.recorded.retain(|p| p.beat.0 < current_beat.0);
+        gesture.punch_in_beat = gesture.punch_in_beat.min(frame_beat);
+        gesture.recorded.retain(|p| p.beat.0 < frame_beat.0);
         gesture.recorded.push(AutomationPoint {
-            beat: current_beat,
+            beat: frame_beat,
             value: applied_base,
             shape,
         });
@@ -567,7 +588,15 @@ fn close_expired_gestures(
         };
         let (_, param_id) = key;
 
-        let new_points = punch_recorded_points(&gesture.pre_gesture_points, &gesture.recorded);
+        // Points sit on their frames' exact beats; the old curve resumes only
+        // after the last touched frame's sampled beat, where replay reads it.
+        let mut recorded = gesture.recorded;
+        if let Some(&last) = recorded.last()
+            && gesture.last_touch_beat > last.beat
+        {
+            recorded.push(AutomationPoint { beat: gesture.last_touch_beat, value: last.value, shape: SegmentShape::Hold });
+        }
+        let new_points = punch_recorded_points(&gesture.pre_gesture_points, &recorded);
 
         let old_points = gesture.pre_gesture_existed.then_some(gesture.pre_gesture_points);
         commits.push(Box::new(CommitRecordedGestureCommand::new(

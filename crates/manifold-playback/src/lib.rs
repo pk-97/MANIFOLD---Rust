@@ -36,5 +36,7 @@ pub mod sync;
 pub mod sync_source;
 pub mod tempo_recorder;
 pub mod transport_controller;
+pub mod transport_clock;
+pub mod frame_grid;
 pub mod transport_sync;
 pub mod video_time;

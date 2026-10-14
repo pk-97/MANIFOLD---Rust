@@ -169,6 +169,10 @@ mod mute_visibility_probe;
 // Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
+// Frame-exact transport determinism through the real content thread (opens
+// the test GPU device: one queued GPU run).
+#[cfg(all(test, target_os = "macos"))]
+mod frame_exact_app;
 // The count gate's content half (docs/UI_INVALIDATION_DESIGN.md D10).
 #[cfg(all(test, target_os = "macos"))]
 mod content_reaction_budget;

@@ -45,6 +45,24 @@ fn add_session_slot(project: &mut Project, layer_id: &LayerId, scene_id: &SceneI
     });
 }
 
+/// Move the playhead to `beat`'s frame and return the frame's exact beat,
+/// where a launch, stop or return made on that frame is recorded
+/// (FRAME_EXACT_TRANSPORT_DESIGN D14). Every beat these tests use sits on a
+/// 60 fps frame at 120 BPM.
+fn locate_beat(engine: &mut PlaybackEngine, beat: Beats) -> Beats {
+    let time = engine.beat_to_timeline_time_immut(beat);
+    engine.locate(time);
+    engine.frame_beat()
+}
+
+/// Elapsed phases are differences of on-frame beats: exact up to rounding.
+fn assert_elapsed(actual: Option<Beats>, expected: Option<f64>, context: &str) {
+    match (actual, expected) {
+        (Some(a), Some(e)) => assert!((a.0 - e).abs() < 1e-9, "{context}: {} vs {e}", a.0),
+        (a, e) => assert_eq!(a.map(|b| b.0), e, "{context}"),
+    }
+}
+
 fn one_clip_sequence(length_beats: f64, clip_id: &str) -> ClipSequence {
     let mut clip = TimelineClip::new_generator(Beats(0.0), Beats(length_beats));
     clip.id = ClipId::new(clip_id);
@@ -88,7 +106,7 @@ fn session_override_suppresses_timeline_clip_on_same_layer() {
     let mut engine = create_engine();
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
-    engine.set_beat(Beats(1.0));
+    locate_beat(&mut engine, Beats(1.0));
     engine.sync_clips_to_time();
 
     // Before any session launch: the timeline clip plays normally.
@@ -145,37 +163,38 @@ fn back_to_arrangement_preserves_control_history_and_phase() {
     engine.session_set_quantize(Beats::ZERO);
     engine.set_state(PlaybackState::Playing);
     engine.sync_clips_to_time();
-    engine.set_beat(Beats(1.0));
+    locate_beat(&mut engine, Beats(1.0));
     engine.session_launch_slot(layer_id.clone(), scene.clone());
-    engine.set_beat(Beats(2.5));
+    let back = locate_beat(&mut engine, Beats(2.5));
     engine.session_back_to_arrangement(Some(layer_id.clone()));
     for _ in 0..2 {
         engine.sync_clips_to_time();
         let controls = engine.clip_controls();
-        for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (2.5, 2.5)] {
-            assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(Beats(elapsed)), "at beat {beat}");
+        for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (back.0, back.0)] {
+            assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(elapsed), &format!("at beat {beat}"));
         }
         assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&layer_id)).iter()
             .filter(|start| start.clip_id.as_str() == "arrangement").count(), 1);
     }
-    engine.set_beat(Beats(3.0));
+    locate_beat(&mut engine, Beats(3.0));
     engine.session_launch_slot(layer_id.clone(), scene.clone());
-    engine.set_beat(Beats(4.0));
+    let back = locate_beat(&mut engine, Beats(4.0));
     engine.session_back_to_arrangement(Some(layer_id.clone()));
-    for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (2.75, 2.75), (3.5, 0.5), (4.0, 4.0)] {
-        assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(Beats(elapsed)), "after second return at beat {beat}");
+    for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (2.75, 2.75), (3.5, 0.5), (back.0, back.0)] {
+        assert_elapsed(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(elapsed), &format!("after second return at beat {beat}"));
     }
-    engine.set_beat(Beats(5.0));
+    locate_beat(&mut engine, Beats(5.0));
     engine.session_launch_slot(layer_id.clone(), scene);
-    engine.set_beat(Beats(5.5));
+    locate_beat(&mut engine, Beats(5.5));
     engine.session_stop_slot(layer_id.clone());
-    engine.set_beat(Beats(6.0));
+    let back = locate_beat(&mut engine, Beats(6.0));
     engine.session_back_to_arrangement(None);
-    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.25)), Some(Beats(0.25)));
-    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.75)), None);
-    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(6.0)), Some(Beats(6.0)));
+    let controls = engine.clip_controls();
+    assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.25)), Some(0.25), "5.25");
+    assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.75)), None, "5.75");
+    assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), back), Some(back.0), "at the return");
     engine.seek_to(Seconds(1.0));
-    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(2.0)), Some(Beats(2.0)));
+    assert_elapsed(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(2.0)), Some(2.0), "after seek");
 }
 
 #[test]
@@ -206,7 +225,8 @@ fn scene_launch_and_stop_matrix_end_to_end() {
     engine.session_launch_scene(scene_b.clone());
     // Quantize defaults to 1 bar (4 beats) and playback just started at beat 0,
     // so nothing is due yet on this same tick — advance to the boundary.
-    engine.set_beat(engine.current_beat() + Beats(4.0));
+    let next_bar = engine.current_beat() + Beats(4.0);
+    locate_beat(&mut engine, next_bar);
     engine.sync_clips_to_time();
 
     assert!(engine.session_runtime().is_playing_layer(&l0));
@@ -215,7 +235,8 @@ fn scene_launch_and_stop_matrix_end_to_end() {
     assert!(engine.session_runtime().is_overridden(&l1), "l1 goes black, no arrangement fallback");
 
     engine.session_stop_all();
-    engine.set_beat(engine.current_beat() + Beats(4.0));
+    let next_bar = engine.current_beat() + Beats(4.0);
+    locate_beat(&mut engine, next_bar);
     engine.sync_clips_to_time();
     assert_eq!(engine.session_runtime().playing_count(), 0);
 }
@@ -237,11 +258,9 @@ fn tick_does_not_panic_with_session_runtime_wired() {
     // guarantees several wrap-restart boundaries are crossed live via tick().
     for i in 0..120 {
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames: 1,
             realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
         };
         let _ = engine.tick(ctx);
         realtime += dt;
