@@ -1367,11 +1367,11 @@ impl Application {
             .map(|ws| {
                 let s = ws.window.inner_size();
                 let sf = ws.window.scale_factor();
-                (
-                    ((s.width as f64 / sf) * 0.75) as u32,
-                    ((s.height as f64 / sf) * 0.75) as u32,
-                    sf,
-                )
+                let (w, h) = crate::editor_frame::first_open_logical_size(
+                    s.width as f64 / sf,
+                    s.height as f64 / sf,
+                );
+                (w, h, sf)
             })
             .unwrap_or((960, 540, 1.0));
 
@@ -1447,40 +1447,29 @@ impl Application {
             },
         );
 
-        let mut ws = crate::workspace::Workspace::new(crate::workspace::WorkspaceKind::GraphEditor);
-        ws.ui_offscreen = Some(offscreen);
+        // The window-free half of the open, shared with the ui-snap script
+        // runner (`editor_frame.rs`): the workspace, the canvas and the
+        // inspector column projected from the same snapshot the main window
+        // reads (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md).
+        let active_idx = self
+            .active_layer_id
+            .as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+        let (mut ws, canvas) = crate::editor_frame::open_editor_workspace(
+            Some(offscreen),
+            &self.local_project,
+            active_idx,
+            &self.selection,
+            &self.content_state,
+        );
         #[cfg(target_os = "macos")]
         {
             ws.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window));
         }
         self.graph_editor = Some(ws);
         self.graph_editor_window_id = Some(wid);
-        self.graph_canvas = Some(crate::graph_canvas::GraphCanvas::new());
-
-        // Populate the editor's own inspector column immediately so it isn't
-        // blank until the next selection change. Same snapshot the main window's
-        // inspector reads; kept in lockstep thereafter by the tick's gated
-        // re-sync. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
-        let active_idx = self
-            .active_layer_id
-            .as_ref()
-            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        if let Some(ed) = self.graph_editor.as_mut() {
-            crate::ui_bridge::sync_project_data(
-                &mut ed.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-            );
-            crate::ui_bridge::sync_inspector_data(
-                &mut ed.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-                &self.content_state.automation_latched_params,
-                self.content_state.led_preview.as_ref(),
-            );
-        }
+        self.graph_canvas = Some(canvas);
 
         log::info!(
             "[GraphEditor] Opened ({}x{} logical, scale {:.2})",

@@ -226,6 +226,10 @@
       "material-inspector-groups",
       "material-inspector-looks",
       "material-inspector-textures"
+    ],
+    "crates/manifold-app/src/editor_frame.rs": [
+      "work-editor-open",
+      "work-editor-idle"
     ]
   },
   "flows": {
@@ -333,7 +337,9 @@
     "scene-card-to-tab": "gltfscene",
     "scene-slider-range": "gltfscene",
     "scene-use-this-view": "gltfscene",
-    "scene-light-swatch": "gltfscene"
+    "scene-light-swatch": "gltfscene",
+    "work-editor-open": "paramsteps",
+    "work-editor-idle": "paramsteps"
   },
   "expected_fail": {
     "render-mode-solid": {

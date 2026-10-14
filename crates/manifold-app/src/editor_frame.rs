@@ -84,6 +84,18 @@
 //!    `sync_project_data` moments earlier, or `self.graph_editor`'s owned
 //!    field), so this is source-compatible at every call site.
 
+//!
+//! ── BUG-12iyh (UI runner drives editor window, perform mode and text
+//! input), editor part: the window's open and its per-frame tree build are
+//! seams here too, so the ui-snap script runner opens and drives the same
+//! editor the live app does. `open_editor_workspace` is what
+//! `open_graph_editor` does once a window exists; `EditorLayout::compute` and
+//! `build_editor_tree` are the tree half of `present_graph_editor_window`.
+//! The live app and the runner call all three. What differs is input
+//! presence only: the live app passes a real offscreen and a surface-derived
+//! logical size and gates the frame on its vsync pulse; the runner has no
+//! window, so no offscreen, a fixed logical size and a frame per step.
+
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture};
 use manifold_ui_paint::ui_renderer::{Depth, UIRenderer};
 use manifold_ui::graph_canvas::mapping_popover::MappingPopover;
@@ -95,6 +107,183 @@ use manifold_ui::{Dock, MiniClip, MiniLayerLabel, MiniTimeline, Rect as UiRect, 
 use crate::frame_timer::FrameTimer;
 use crate::text_input::TextInputState;
 use crate::ui_root::UIRoot;
+use crate::workspace::{Workspace, WorkspaceKind};
+
+/// A first open sizes the editor at three quarters of the primary window's
+/// logical size; later opens restore where the user left it.
+pub(crate) fn first_open_logical_size(primary_logical_w: f64, primary_logical_h: f64) -> (u32, u32) {
+    ((primary_logical_w * 0.75) as u32, (primary_logical_h * 0.75) as u32)
+}
+
+/// The graph editor's workspace and canvas as a fresh open makes them, with
+/// the inspector column already projected so it is not blank on its first
+/// frame. `offscreen` is the window's render target; `None` when there is no
+/// window to present to. The caller owns everything window-bound (the
+/// surface, the display link).
+pub(crate) fn open_editor_workspace(
+    offscreen: Option<GpuTexture>,
+    project: &manifold_core::project::Project,
+    active_layer: Option<usize>,
+    selection: &manifold_ui::UIState,
+    content_state: &crate::content_state::ContentState,
+) -> (Workspace, GraphCanvas) {
+    let mut ws = Workspace::new(WorkspaceKind::GraphEditor);
+    ws.ui_offscreen = offscreen;
+    crate::ui_bridge::sync_project_data(&mut ws.ui_root, project, active_layer, selection);
+    crate::ui_bridge::sync_inspector_data(
+        &mut ws.ui_root,
+        project,
+        active_layer,
+        selection,
+        &content_state.automation_latched_params,
+        content_state.led_preview.as_ref(),
+    );
+    (ws, GraphCanvas::new())
+}
+
+/// The editor window's geometry for one frame: the dock's columns, the two
+/// stacked monitors in the left column and the card lane on the right. One
+/// computation feeds the tree build, the composite and the monitor blits.
+#[derive(Clone, Copy)]
+pub(crate) struct EditorLayout {
+    pub logical_w: u32,
+    pub logical_h: u32,
+    pub area: UiRect,
+    pub preview_width: f32,
+    pub canvas: UiRect,
+    pub bottom: UiRect,
+    pub card_viewport: UiRect,
+    pub preview_x: f32,
+    pub preview_w: f32,
+    pub preview_h: f32,
+    pub node_title_y: f32,
+    pub node_img_y: f32,
+    pub master_title_y: f32,
+    pub master_img_y: f32,
+    /// Width over height of the monitors and the node atlas cells.
+    pub monitor_aspect: f32,
+}
+
+impl EditorLayout {
+    /// Monitors take the output aspect (a portrait show gets portrait
+    /// monitors), fit to the column width and clamp in height so both panes
+    /// fit above the mini-timeline strip; the pair is centred vertically.
+    /// `monitor_aspect` is the content pipeline's output aspect; 16:9 when
+    /// there is no pipeline.
+    pub(crate) fn compute(dock: &Dock, logical_w: u32, logical_h: u32, monitor_aspect: Option<f32>) -> Self {
+        let monitor_aspect = monitor_aspect.unwrap_or(16.0 / 9.0);
+        let area = UiRect::new(0.0, 0.0, logical_w as f32, logical_h as f32);
+        let rects = dock.rects(area);
+        let preview_width = rects.left.width;
+        let canvas_height = rects.canvas.height;
+        let preview_pad = 8.0_f32;
+        let preview_title_h = 18.0_f32;
+        let avail_w = (preview_width - 2.0 * preview_pad).max(1.0);
+        let max_body_h =
+            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+        let width_bound_h = avail_w / monitor_aspect;
+        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
+            (avail_w, width_bound_h)
+        } else {
+            (max_body_h * monitor_aspect, max_body_h)
+        };
+        let preview_x = (preview_width - preview_w) * 0.5;
+        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
+        let node_title_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
+        let node_img_y = node_title_y + preview_title_h;
+        let master_title_y = node_img_y + preview_h + preview_pad;
+        let master_img_y = master_title_y + preview_title_h;
+        Self {
+            logical_w,
+            logical_h,
+            area,
+            preview_width,
+            canvas: rects.canvas,
+            bottom: rects.bottom,
+            card_viewport: UiRect::new(rects.right.x, 0.0, rects.right.width, canvas_height),
+            preview_x,
+            preview_w,
+            preview_h,
+            node_title_y,
+            node_img_y,
+            master_title_y,
+            master_img_y,
+            monitor_aspect,
+        }
+    }
+
+    /// The canvas viewport `canvas.render` and the pointer handlers use.
+    pub(crate) fn canvas_rect(&self) -> CanvasRect {
+        CanvasRect::new(self.canvas.x, 0.0, self.canvas.width, self.canvas.height)
+    }
+}
+
+/// What one editor tree build reads besides the workspace itself.
+pub(crate) struct EditorTreeInputs<'a> {
+    pub project: &'a manifold_core::project::Project,
+    pub active_layer: Option<usize>,
+    pub fire_meters: &'a manifold_core::audio_trigger::FireMeterCapture,
+    pub dt: f32,
+    /// The node monitor shows an image this frame (the selected node has one,
+    /// or the 3D viewport is displaying a frame).
+    pub show_image: bool,
+}
+
+/// Builds the editor window's tree for one frame: ticks the inspector's own
+/// tweens and fire meters, rebuilds the card lane, builds the preview column
+/// and the overlays, re-applies hover and press flags, and lays out the
+/// canvas's pending focus and fit. `panel` is configured by the caller as for
+/// [`build_editor_preview_column`]. Returns the smart-preview toggle's id.
+pub(crate) fn build_editor_tree(
+    ui_root: &mut UIRoot,
+    panel: &GraphEditorPanel,
+    canvas: Option<&mut GraphCanvas>,
+    layout: &EditorLayout,
+    inputs: EditorTreeInputs<'_>,
+) -> Option<NodeId> {
+    // The editor root never sets `built`, so its `update()` early-returns;
+    // tick the inspector's drawer tweens, value flash and fire meters here,
+    // before the rebuild reads them, or the card frame sits at a stale height
+    // under rows built at their true size (BUG-160 (editor card frame stale
+    // height)).
+    ui_root.tick_inspector();
+    ui_root.update_fire_meters(inputs.fire_meters, inputs.dt);
+    crate::editor_bridge::rebuild_editor_inspector(
+        ui_root,
+        inputs.project,
+        inputs.active_layer,
+        layout.card_viewport,
+    );
+    let toggle_id = build_editor_preview_column(
+        &mut ui_root.tree,
+        panel,
+        layout.preview_width,
+        layout.canvas.height,
+        layout.preview_x,
+        layout.preview_w,
+        layout.preview_h,
+        layout.node_title_y,
+        layout.node_img_y,
+        layout.master_title_y,
+        inputs.show_image,
+    );
+    // Overlays build last, through the main window's driver, so they sit on
+    // top and record `overlay_draw`/`overlay_region_start` for real.
+    ui_root.build_overlays_for_screen(layout.logical_w as f32, layout.logical_h as f32);
+    ui_root.tick_editor_perf_hud();
+    // The rebuild cleared every node's flags; restore hover and press from the
+    // input system's durable widget state.
+    ui_root.input.apply_interaction_flags(&mut ui_root.tree);
+    if let Some(canvas) = canvas {
+        let vp = layout.canvas_rect();
+        canvas.resolve_pending_focus(vp);
+        canvas.apply_pending_fit(vp);
+        // Wire-to-port magnetize needs port screen positions, so it ticks
+        // here beside the draw rather than in the main canvas tick.
+        canvas.tick_wire_magnet(vp);
+    }
+    toggle_id
+}
 
 /// Builds the editor sidebar's left preview column — backing panel,
 /// node-output pane (image, or `panel`'s value-inspector text, or a "Select
