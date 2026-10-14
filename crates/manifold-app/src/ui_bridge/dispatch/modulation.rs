@@ -314,8 +314,8 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         let spec = inst.params.get(param_id.as_ref());
                         (
                             action,
-                            spec.map(|p| p.spec.min).unwrap_or(0.0),
-                            spec.map(|p| p.spec.max).unwrap_or(1.0),
+                            spec.map(|p| p.slider_span().0).unwrap_or(0.0),
+                            spec.map(|p| p.slider_span().1).unwrap_or(1.0),
                             spec.map(|p| p.whole_numbers()).unwrap_or(false),
                         )
                     })
@@ -412,8 +412,8 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         let spec = inst.params.get(param_id.as_ref());
                         (
                             env,
-                            spec.map(|p| p.spec.min).unwrap_or(0.0),
-                            spec.map(|p| p.spec.max).unwrap_or(1.0),
+                            spec.map(|p| p.slider_span().0).unwrap_or(0.0),
+                            spec.map(|p| p.slider_span().1).unwrap_or(1.0),
                             spec.map(|p| p.whole_numbers()).unwrap_or(false),
                         )
                     })

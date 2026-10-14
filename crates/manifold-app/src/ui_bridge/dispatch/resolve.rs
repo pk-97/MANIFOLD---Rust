@@ -252,18 +252,12 @@ pub(crate) fn macro_mapping_target(
     }
 }
 
-/// The `(min, max)` range for `param_id` on `inst`, graph-authority-first:
-/// the per-instance graph `preset_metadata` (where graph-backed presets —
-/// notably generators — carry their authoritative ranges) takes precedence
-/// over the registry, falling back to [`PresetInstance::resolve_param`] (and
-/// `(0.0, 1.0)` if unresolved). Unifies the old per-kind range lookups.
+/// The slider range of `param_id` on `inst` (the user's choice, else the
+/// declared range), or `(0.0, 1.0)` when the id is unknown.
 pub(crate) fn resolve_param_range(inst: &PresetInstance, param_id: &str) -> (f32, f32) {
-    // The manifest entry is the single range authority: calibration edits
-    // `spec.min`/`spec.max` in place (D6), so the old override-then-catalog
-    // lookup collapses to reading the `Param.spec`.
     inst.params
         .get(param_id)
-        .map(|p| (p.spec.min, p.spec.max))
+        .map(|p| p.slider_span())
         .unwrap_or((0.0, 1.0))
 }
 

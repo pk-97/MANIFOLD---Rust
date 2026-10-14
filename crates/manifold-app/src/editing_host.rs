@@ -911,7 +911,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     .iter()
                     .find(|l| l.param_id.as_ref() == param_id_str)
                     .and_then(|lane| lane.points.iter().position(|p| {
-                        let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(p.value, param.spec.min, param.spec.max);
+                        let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(p.value, param.slider_span().0, param.slider_span().1);
                         p.beat == beat && norm == value_norm
                     }))
             })

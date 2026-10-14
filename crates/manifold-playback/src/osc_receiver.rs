@@ -266,7 +266,7 @@ impl OscReceiver {
     /// Port of Unity OscReceiver.Update().
     /// Queue a message exactly as the UDP thread does, so a headless test
     /// drives the real `update` → subscriber → router path.
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn inject(&self, address: &str, values: &[f32]) {
         self.queue.lock().push(address.to_string(), values.to_vec());
     }

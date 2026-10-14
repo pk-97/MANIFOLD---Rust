@@ -1217,9 +1217,22 @@ impl BindingMappingEdit {
         prev
     }
 
+    /// The part of this edit that lands on a control's spec: all of it for an
+    /// authored control, everything but the range for a described one.
+    fn spec_edit(&self, source: manifold_core::params::SpecSource) -> Self {
+        if source == manifold_core::params::SpecSource::Lookup {
+            Self { min: None, max: None, ..self.clone() }
+        } else {
+            self.clone()
+        }
+    }
+
     /// Write the touched fields as user choices, read off the edited `spec`.
     /// Same rule as the calibration wire: only a non-default curve or invert
-    /// is a choice, so save and reload is a fixed point.
+    /// is a choice, and a slider range equal to the declared range is none,
+    /// so save and reload is a fixed point. The range goes to the slider
+    /// choice alone; the spec keeps the declared range
+    /// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
     fn apply_to_choices(
         &self,
         spec: &manifold_core::effect_graph_def::ParamSpecDef,
@@ -1232,7 +1245,9 @@ impl BindingMappingEdit {
             choices.section = Some(section.clone());
         }
         if self.min.is_some() || self.max.is_some() {
-            choices.slider = Some((spec.min, spec.max));
+            let (lo, hi) = choices.slider.unwrap_or((spec.min, spec.max));
+            let span = (self.min.unwrap_or(lo), self.max.unwrap_or(hi));
+            choices.slider = (span != (spec.min, spec.max)).then_some(span);
         }
         if self.curve.is_some() {
             choices.curve =
@@ -1481,8 +1496,9 @@ impl Command for EditParamMappingCommand {
                 let p = host.params.get_mut(&binding_id)?;
                 // A lookup control saves only its choices (D7), so the edit
                 // is written there; the spec is the in-memory join and moves
-                // with it. An authored control saves its spec.
-                let spec_snap = new.apply_to_manifest_spec(&mut p.spec);
+                // with it, except the range, which stays declared. An
+                // authored control saves its spec: its range is the author's.
+                let spec_snap = new.spec_edit(p.source).apply_to_manifest_spec(&mut p.spec);
                 let prev_choices = (p.source == manifold_core::params::SpecSource::Lookup).then(|| {
                     let prev = p.choices.clone();
                     new.apply_to_choices(&p.spec, &mut p.choices);
@@ -1511,13 +1527,17 @@ impl Command for EditParamMappingCommand {
         // Drag-commit: apply the explicit pre-drag reverse edit (partial — only
         // the fields the drag moved), landing on the true pre-drag values.
         if let Some(reverse_edit) = self.explicit_reverse.clone() {
+            // The choices captured at commit already hold the live preview,
+            // so a lookup control takes the reverse as choices instead.
             project.with_preset_graph_mut(&self.target, |host| {
                 apply_scale_offset_on_graph(host, &binding_id, &reverse_edit);
                 if let Some(p) = host.params.get_mut(&binding_id) {
-                    reverse_edit.apply_to_manifest_spec(&mut p.spec);
+                    reverse_edit.spec_edit(p.source).apply_to_manifest_spec(&mut p.spec);
+                    if p.source == manifold_core::params::SpecSource::Lookup {
+                        reverse_edit.apply_to_choices(&p.spec, &mut p.choices);
+                    }
                 }
             });
-            self.restore_choices(project);
             return;
         }
         // Single-shot: restore the self-captured pre-edit snapshot.
@@ -1776,12 +1796,14 @@ pub(crate) mod tests {
         (spec.invert, spec.max, scale)
     }
 
-    /// Read a param's live `(invert, max)` off the MANIFEST — the sole
+    /// Read a param's live `(invert, slider max)` off the MANIFEST — the sole
     /// authority a card/renderer reads after a calibration edit
-    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4).
+    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). The max is the user's slider
+    /// span, never the declared range (SCENE_SURFACES_DESIGN.md D15 (slider
+    /// range vs hard limit)).
     fn manifest_reshape(inst: &manifold_core::effects::PresetInstance, id: &str) -> (bool, f32) {
         let p = inst.params.get(id).expect("manifest entry present");
-        (p.spec.invert, p.spec.max)
+        (p.spec.invert, p.slider_span().1)
     }
 
     /// Manually seed `inst`'s manifest with a bundled [`Param`] matching
@@ -2120,8 +2142,8 @@ pub(crate) mod tests {
             "the plain graph-version bump still fires — the renderer's rehydrate signal",
         );
         let p = fx.params.get("amount").expect("manifest entry present");
-        assert_eq!(p.spec.min, 0.25);
-        assert_eq!(p.spec.max, 4.0);
+        assert_eq!(p.slider_span(), (0.25, 4.0));
+        assert_eq!((p.spec.min, p.spec.max), (0.0, 1.0), "the declared range never takes the user's span");
         assert!(p.spec.invert);
         assert_eq!(p.spec.curve, MacroCurve::Exponential);
         assert!(p.choices.calibrated());
@@ -2131,8 +2153,7 @@ pub(crate) mod tests {
         let fx = &project.settings.master_effects[0];
         assert!(fx.graph.is_none(), "undo must not materialize either");
         let p = fx.params.get("amount").expect("manifest entry present");
-        assert_eq!(p.spec.min, 0.0, "undo restores the seeded min");
-        assert_eq!(p.spec.max, 1.0, "undo restores the seeded max");
+        assert_eq!(p.slider_span(), (0.0, 1.0), "undo restores the seeded span");
         assert!(!p.spec.invert, "undo restores the seeded invert");
         assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
         assert_ne!(
@@ -2145,7 +2166,7 @@ pub(crate) mod tests {
         cmd.execute(&mut project);
         let fx = &project.settings.master_effects[0];
         assert!(fx.graph.is_none());
-        assert_eq!(fx.params.get("amount").unwrap().spec.max, 4.0);
+        assert_eq!(fx.params.get("amount").unwrap().slider_span().1, 4.0);
     }
 
     /// The generator twin of [`spec_only_edit_on_catalog_default_stays_unmaterialized`]:

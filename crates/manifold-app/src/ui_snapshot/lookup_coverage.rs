@@ -348,7 +348,7 @@ fn drawer_rename_is_a_choice_and_survives_reload() {
     );
     let control = |project: &manifold_core::project::Project| {
         let p = project.timeline.layers[index].gen_params().unwrap().params.get(&id).unwrap().clone();
-        (p.spec.name.clone(), (p.spec.min, p.spec.max), p.choices.clone())
+        (p.spec.name.clone(), p.slider_span(), p.choices.clone())
     };
     let reload = |project: &manifold_core::project::Project| {
         let json = serde_json::to_string(project).expect("save");
@@ -390,8 +390,7 @@ fn saved_scene_has_id_only_lookup_entries() {
             fx.folded_sections = vec!["Light".into()];
             if let Some(p) = fx.params.iter_mut().find(|p| p.source == SpecSource::Lookup) {
                 p.choices.rename = Some("Chosen".into());
-                p.spec.max += 1.0;
-                p.choices.slider = Some((p.spec.min, p.spec.max));
+                p.choices.slider = Some((p.spec.min, p.spec.max + 1.0));
                 p.choices.clone().apply(&mut p.spec);
                 chosen += 1;
             }
@@ -447,6 +446,51 @@ fn saved_scene_has_id_only_lookup_entries() {
             }
         }
         assert!(lookup_entries > 0, "{scene} saved no lookup entries: {}", &json[..json.len().min(400)]);
+    }
+}
+
+/// SCENE_SURFACES_DESIGN.md P8 round trip: a slider range set on a card row
+/// and on a Scene tab row holds across save and reload, and the declared
+/// range under it never moves.
+#[test]
+fn slider_range_round_trips_on_card_and_panel_rows() {
+    use manifold_core::scene_surface::SurfaceRole;
+    use manifold_editing::command::Command;
+    let mut cache = super::fixtures::FixtureCache::default();
+    let mut project = super::fixtures::build_cached("gltfscene", &mut cache).expect("fixture").project.clone();
+    let (index, layer) = project
+        .timeline
+        .layers
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.gen_params().is_some_and(|g| g.params.iter().any(|p| p.spec.scene.is_some())))
+        .map(|(i, l)| (i, l.layer_id.clone()))
+        .expect("gltfscene has a scene layer");
+    let pick = |role: SurfaceRole| {
+        project.timeline.layers[index].gen_params().unwrap().params.iter()
+            .find(|p| p.spec.scene.is_some_and(|s| s.role == role) && !p.spec.is_toggle && !p.spec.is_trigger
+                && p.spec.value_labels.is_empty() && p.spec.max > p.spec.min)
+            .map(|p| (p.id().to_string(), (p.spec.min, p.spec.max)))
+            .expect("a slider row in that role")
+    };
+    let (card, card_declared) = pick(SurfaceRole::Performance);
+    let (panel, panel_declared) = pick(SurfaceRole::Setup);
+    for (id, (lo, hi)) in [(&card, card_declared), (&panel, panel_declared)] {
+        let range = Some((lo - 1.0, hi + 3.0));
+        manifold_editing::commands::graph::SetSliderRangeCommand::new(
+            manifold_core::GraphTarget::Generator(layer.clone()),
+            id.clone(),
+            range,
+        )
+        .execute(&mut project);
+    }
+    let json = serde_json::to_string(&project).expect("save");
+    let reloaded = manifold_io::loader::load_project_from_json(&json).expect("reload");
+    let params = &reloaded.timeline.layers[index].gen_params().unwrap().params;
+    for (id, (lo, hi)) in [(&card, card_declared), (&panel, panel_declared)] {
+        let p = params.get(id).unwrap();
+        assert_eq!(p.slider_span(), (lo - 1.0, hi + 3.0), "{id} slider range holds");
+        assert_eq!((p.spec.min, p.spec.max), (lo, hi), "{id} declared range never moves");
     }
 }
 

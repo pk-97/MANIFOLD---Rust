@@ -21,15 +21,23 @@ impl HardLimit {
         matches!(self, Self::Slider)
     }
 
-    /// Clamp `v` to this limit; `slider` is the control's slider range.
-    pub fn clamp(self, v: f32, slider: (f32, f32)) -> f32 {
+    /// Clamp `v` to this limit; `declared` is the control's declared range,
+    /// never the user's slider choice.
+    pub fn clamp(self, v: f32, declared: (f32, f32)) -> f32 {
         match self {
-            Self::Slider => v.clamp(slider.0, slider.1),
+            Self::Slider => v.clamp(declared.0, declared.1),
             Self::Unlimited => v,
             Self::AtLeast(lo) => v.max(lo),
             Self::AtMost(hi) => v.min(hi),
             Self::Between(lo, hi) => v.clamp(lo, hi),
         }
+    }
+
+    /// Clamp a typed or OSC value: only a declared limit restricts it. Under
+    /// `Slider` it passes through, since a range hint never restricts what a
+    /// user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)).
+    pub fn clamp_input(self, v: f32, declared: (f32, f32)) -> f32 {
+        if self.is_slider() { v } else { self.clamp(v, declared) }
     }
 }
 

@@ -969,6 +969,7 @@
                     material_role: None,
                     inactive_reason: None,
                     scene: None,
+                    limit: Default::default(),
                 },
                 value: crate::param_surface::RowValue {
                     base: 0.0,

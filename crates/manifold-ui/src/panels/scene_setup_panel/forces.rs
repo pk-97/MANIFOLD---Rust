@@ -263,6 +263,7 @@ mod tests {
                     material_role: None,
                     inactive_reason: None,
                     scene: None,
+                    limit: Default::default(),
                 },
                 value: RowValue {
                     base: 0.25,

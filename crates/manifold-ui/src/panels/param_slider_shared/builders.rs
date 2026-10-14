@@ -2228,6 +2228,7 @@ pub(crate) fn build_param_row(
             node.tooltip.clone_from(&info.spec.tooltip);
         }
     }
+    BitmapSlider::mark_past_end(tree, &slider, super::state::past_slider_end(shown_value, &info.spec));
     ids.slider = Some(slider);
 
     // D/E buttons (right of the slider row), at the column x's computed up top.

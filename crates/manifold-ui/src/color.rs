@@ -648,6 +648,9 @@ pub const SLIDER_TRACK_PRESSED_C32: Color32 = Color32::new(8, 9, 13, 255);
 /// override this with the selected layer's hue.
 pub const SLIDER_FILL_C32: Color32 = Color32::new(89, 148, 235, 255);
 pub const SLIDER_THUMB_C32: Color32 = Color32::new(255, 255, 255, 255);
+/// The thumb when the value sits past the slider's end: pinned at the end,
+/// amber, while the readout shows the true value.
+pub const SLIDER_PAST_END_C32: Color32 = AMBER_ACTIVE;
 pub const SLIDER_TEXT_C32: Color32 = Color32::new(255, 255, 255, 255);
 
 // ── Bitmap Toggle / Accent ──────────────────────────────────────────

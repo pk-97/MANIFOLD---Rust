@@ -399,7 +399,7 @@ pub(super) fn dispatch_editing(
                 lanes.iter().find(|lane| lane.param_id.as_ref() == param_id.as_ref())
                     .and_then(|lane| lane.points.iter().find(|point| {
                         point.beat == *beat && manifold_ui::slider::BitmapSlider::value_to_normalized(
-                            point.value, param.spec.min, param.spec.max,
+                            point.value, param.slider_span().0, param.slider_span().1,
                         ) == *value_norm
                     }))
                     .copied()

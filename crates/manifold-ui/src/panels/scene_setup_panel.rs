@@ -923,6 +923,7 @@ fn placeholder_param_info() -> ParamRow {
         material_role: None,
         inactive_reason: None,
         scene: None,
+        limit: Default::default(),
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
         audio: AudioRowState::default(),

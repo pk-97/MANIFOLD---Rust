@@ -3,12 +3,19 @@
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flows. Row entries are EXACT flow names, never families or substrings (a family is expanded to its flows when the row is written); only the positional CLI filter keeps substring matching. Test-only paths (/tests/, tests.rs, test.rs, _tests.rs, _test.rs) select nothing. A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
     "crates/manifold-app/src/ui_bridge/dispatch/params.rs": [
-      "trigger-lane-assignment"
+      "trigger-lane-assignment",
+      "scene-slider-range"
     ],
     "crates/manifold-app/src/ui_root/dropdowns.rs": [
       "trigger-lane-assignment",
       "water-family-controls",
-      "scene-pin-roundtrip"
+      "scene-pin-roundtrip",
+      "scene-slider-range"
+    ],
+    "crates/manifold-app/src/ui_root/card_pin.rs": [
+      "scene-pin-roundtrip",
+      "scene-card-to-tab",
+      "scene-slider-range"
     ],
     "crates/manifold-app/src/ui_bridge/projection/trigger_routing.rs": [
       "trigger-lane-assignment"
@@ -164,7 +171,8 @@
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
       "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo",
+      "scene-slider-range"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
@@ -323,6 +331,7 @@
     "scene-panel-tree-physics": "physicsscene",
     "scene-pin-roundtrip": "gltfscene",
     "scene-card-to-tab": "gltfscene",
+    "scene-slider-range": "gltfscene",
     "scene-use-this-view": "gltfscene",
     "scene-light-swatch": "gltfscene"
   },

@@ -628,6 +628,31 @@ pub struct ParamSpecDef {
     pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
 }
 
+impl ParamSpecDef {
+    /// The value modulation and automation may write
+    /// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)). A
+    /// periodic param wraps over the declared range — `rem_euclid`, so a
+    /// downward saw lands in range — so a saw or a ramp past the end keeps
+    /// spinning (BUG-039). Anything else clamps to the hard limit, `Slider`
+    /// being the declared range. A degenerate range (`max <= min`) clamps.
+    #[inline]
+    pub fn clamp_value(&self, v: f32) -> f32 {
+        if self.wraps && self.max > self.min {
+            self.min + (v - self.min).rem_euclid(self.max - self.min)
+        } else {
+            self.limit.clamp(v, (self.min, self.max))
+        }
+    }
+
+    /// A typed or OSC value: see [`HardLimit::clamp_input`].
+    ///
+    /// [`HardLimit::clamp_input`]: manifold_foundation::param_range::HardLimit::clamp_input
+    #[inline]
+    pub fn clamp_input(&self, v: f32) -> f32 {
+        self.limit.clamp_input(v, (self.min, self.max))
+    }
+}
+
 fn default_card_visible() -> bool {
     true
 }

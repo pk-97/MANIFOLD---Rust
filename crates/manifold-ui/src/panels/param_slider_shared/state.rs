@@ -493,14 +493,15 @@ pub(crate) fn format_param_value(
 /// px since grab. A drag converts `dx` px to `dx * range / track_width` value
 /// units at full sensitivity (mathematically identical to absolute-position
 /// tracking for a non-fine drag, since `base` is the grab value); the fine
-/// factor scales that to a tenth. Clamped to `[min, max]` so a fine drag past
-/// the track edge can't overshoot the param's own range.
+/// factor scales that to a tenth. `[min, max]` is the slider range, which sets
+/// the speed only: the value carries on past the slider's end and stops at
+/// `limit` (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
 pub(crate) fn fine_scrub_value(
     base: f32,
     dx: f32,
     track_width: f32,
-    min: f32,
-    max: f32,
+    (min, max): (f32, f32),
+    limit: manifold_foundation::param_range::HardLimit,
     fine: bool,
 ) -> f32 {
     let sensitivity = if fine { 0.1 } else { 1.0 };
@@ -508,7 +509,13 @@ pub(crate) fn fine_scrub_value(
     if track_width > 0.0 {
         value += dx * (max - min) / track_width * sensitivity;
     }
-    value.clamp(min, max)
+    limit.clamp(value, (min, max))
+}
+
+/// True when `value` sits past either end of the row's slider range, so the
+/// thumb is pinned at the end and marked.
+pub(crate) fn past_slider_end(value: f32, spec: &crate::param_surface::RowSpec) -> bool {
+    value < spec.min.min(spec.max) || value > spec.max.max(spec.min)
 }
 
 
@@ -615,6 +622,7 @@ pub(crate) struct ToggleTriggerRowIds {
 #[cfg(test)]
 mod fine_scrub_tests {
     use super::*;
+    use manifold_foundation::param_range::HardLimit::Slider;
 
     /// D8: the pure sensitivity contract — 1 px of pointer travel maps to
     /// `range / track_width` value units, a tenth of that under Shift (fine).
@@ -624,10 +632,10 @@ mod fine_scrub_tests {
     fn shift_fine_scales_sensitivity_by_a_tenth() {
         // Full sensitivity: 10 px of travel over a 200 px track on a 200-unit
         // range = 10 units.
-        let coarse = fine_scrub_value(50.0, 10.0, 200.0, 0.0, 200.0, false);
+        let coarse = fine_scrub_value(50.0, 10.0, 200.0, (0.0, 200.0), Slider, false);
         assert!((coarse - 60.0).abs() < 1e-4, "coarse: {coarse}");
         // Shift (fine): the same 10 px is a tenth — 1 unit.
-        let fine = fine_scrub_value(50.0, 10.0, 200.0, 0.0, 200.0, true);
+        let fine = fine_scrub_value(50.0, 10.0, 200.0, (0.0, 200.0), Slider, true);
         assert!((fine - 51.0).abs() < 1e-4, "fine: {fine}");
     }
 
@@ -636,17 +644,28 @@ mod fine_scrub_tests {
     /// param's own range, not the raw delta.
     #[test]
     fn fine_scrub_clamps_to_the_param_range() {
-        let clamped = fine_scrub_value(0.0, 2000.0, 200.0, -100.0, 100.0, true);
+        let clamped = fine_scrub_value(0.0, 2000.0, 200.0, (-100.0, 100.0), Slider, true);
         assert!((clamped - 100.0).abs() < 1e-4, "clamped: {clamped}");
-        let clamped_neg = fine_scrub_value(0.0, -2000.0, 200.0, -100.0, 100.0, true);
+        let clamped_neg = fine_scrub_value(0.0, -2000.0, 200.0, (-100.0, 100.0), Slider, true);
         assert!((clamped_neg + 100.0).abs() < 1e-4, "clamped neg: {clamped_neg}");
+    }
+
+    /// INV-S18: past the slider's end a drag keeps going to the hard limit.
+    #[test]
+    fn drag_past_slider_end_reaches_limit() {
+        let past = fine_scrub_value(0.0, 400.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0), false);
+        assert!((past - 4.0).abs() < 1e-4, "past the end: {past}");
+        let stopped = fine_scrub_value(0.0, 4000.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0), false);
+        assert!((stopped - 5.0).abs() < 1e-4, "stops at the limit: {stopped}");
+        let free = fine_scrub_value(0.0, 4000.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Unlimited, false);
+        assert!((free - 40.0).abs() < 1e-3, "unlimited: {free}");
     }
 
     /// A zero-width track (a degenerate layout) must not divide by zero — the
     /// value stays at the grab, regardless of the fine flag.
     #[test]
     fn fine_scrub_zero_width_track_is_a_no_op() {
-        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, false), 25.0);
-        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, true), 25.0);
+        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, false), 25.0);
+        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, true), 25.0);
     }
 }

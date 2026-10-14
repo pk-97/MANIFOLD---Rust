@@ -196,15 +196,15 @@ FLIP Fluids' own terms stay (Sheet Fill Rate). Re-derivation for any row: `rg -n
 
 **D15 — Slider range and hard limit are two facts.** Today one min/max both sets the slider span and caps the value (`constrain_to_range`, `params.rs:167`), so ranges are either huge or limiting. Following Blender (soft and hard limits), Houdini and TouchDesigner (slider range vs clamp), every control's description in the lookup carries:
 - a **slider range**: what the slider spans. Today's min/max, and today's scene-scaled bands, widened to include the control's default as the stamp rule does now.
-- a **hard limit**: what the value may never pass. `HardLimit::{Slider, Unlimited, AtLeast(x), AtMost(x), Between(a, b)}`. `Slider` means the limit equals the declared slider range. It is the default for every param the tables do not mention, so nothing changes behaviour until a table declares a limit. Toggles, triggers, enums and whole-number indices are always `Slider`.
+- a **hard limit**: what the value may never pass. `HardLimit::{Slider, Unlimited, AtLeast(x), AtMost(x), Between(a, b)}`. `Slider` is the default for every param the tables do not mention: drags, automation and modulation stop at the declared slider range as they do today, and typed and OSC values stay free, since a range hint never restricts what a user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)). Toggles, triggers, enums and whole-number indices are always `Slider`.
 
 The scene table declares limits for scene params, for example positions `Unlimited`, distances and intensities `AtLeast(0)`, field of view `Between(1, 179)`. Preset JSON can declare `limit` for template params.
 
 Behaviour:
-- Typing a value clamps only to the hard limit.
+- Typing a value clamps only to a declared limit (`Unlimited`, `AtLeast`, `AtMost`, `Between`); under `Slider` it is unclamped.
 - Dragging is relative to where the press started, so it carries on past the slider end until the hard limit. The slider shows its thumb pinned at the end with an overflow mark, and the readout shows the true value.
 - Automation and modulation clamp to the hard limit. Modulation depth is measured over the slider range.
-- OSC and MIDI 0–1 values map over the slider range (the user's, if set), as calibration does today.
+- OSC and MIDI 0–1 values map over the slider range (the user's, if set), as calibration does today, and clamp only to a declared limit; an OSC value outside 0–1 on an exact 0–1 range passes through raw as it does today.
 - Wrapping params wrap over the declared slider range, never the user's.
 - The card-to-node reshape (invert and curve) normalises over the declared slider range, never the user's, so a user's slider range never changes what reaches the node.
 
@@ -348,7 +348,8 @@ pub struct ParamChoices {                 // the only per-control display state 
 }
 pub enum SpecSource { Lookup, Authored, Unresolved }
 // Param: + choices: ParamChoices, + source: SpecSource; - calibrated (now choices.slider/curve/invert.is_some())
-// Param.spec = describe(key) joined with choices — the one in-memory answer every reader reads.
+// Param.spec = describe(key) joined with choices, except the slider range: spec.min/max stay the
+// declared range (wraps, the Slider limit, the reshape); Param::slider_span() is the user's span.
 
 // effect_graph_def.rs, on ParamSpecDef (all #[serde(default, skip_serializing_if = …)]):
 pub limit: HardLimit,                    // saved only on Authored specs; Slider by default

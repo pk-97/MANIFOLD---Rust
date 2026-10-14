@@ -7,7 +7,6 @@
 use manifold_core::audio_mod::ParameterAudioMod;
 use manifold_core::effects::{ParamEnvelope, ParameterDriver};
 use manifold_core::params::{Param, ParamManifest};
-use manifold_core::params::constrain_to_range;
 use manifold_core::{Beats, Bpm, Seconds};
 
 /// Sources for one parameter-manifest composition pass.
@@ -208,10 +207,10 @@ fn compose_dynamic(
                     sample.time,
                     sample.bpm,
                     sample.fps,
-                    param.spec.min,
-                    param.spec.max,
+                    param.slider_span().0,
+                    param.slider_span().1,
                 );
-                value = constrain_to_range(raw, param.spec.min, param.spec.max, param.spec.wraps);
+                value = param.spec.clamp_value(raw);
                 written = true;
             }
         }
@@ -251,8 +250,8 @@ fn compose_dynamic(
             if targets(envelope.param_id.as_ref(), id)
                 && apply_envelope_offset(
                     &mut value,
-                    param.spec.min,
-                    param.spec.max,
+                    param.slider_span().0,
+                    param.slider_span().1,
                     envelope.target_normalized,
                     ParamEnvelope::decay_level(active_elapsed, envelope.decay_beats),
                 )
