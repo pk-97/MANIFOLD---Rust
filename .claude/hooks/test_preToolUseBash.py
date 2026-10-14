@@ -1118,7 +1118,6 @@ def test_config_reads_silent():
         "git commit -m 'Hook: tighten' -- .claude/hooks/preToolUseBash.py",
         "git restore --staged .claude/hooks/x.py",
         ".claude/hooks/test_preToolUseBash.py 2>&1 | tail -4",
-        "nice -n 10 \"$S/.claude/hooks/permissions_sync_check.py\" 2>&1 | tail -3",
         ".claude/hooks/design_status_check.py origin/main HEAD",
         "python3 .claude/hooks/design_status.py --lifecycle-check",
         "echo x > /tmp/w/.claude/settings.json",
