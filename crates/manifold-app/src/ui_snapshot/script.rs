@@ -500,6 +500,9 @@ struct Runner {
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
     work: WorkWindow,
+    /// The headless stand-in for the graph editor's viewport: the layer it
+    /// shows and its navigation camera, moved by `ViewportOrbit`.
+    viewport: Option<(LayerId, manifold_node_engine::scene::viewport_camera::ViewportCamera)>,
 }
 
 /// The count gate's state for one flow (UI_INVALIDATION_DESIGN.md D10, D11).
@@ -549,6 +552,7 @@ impl Runner {
             last_gesture_points: Vec::new(),
             modulation_engine,
             work: WorkWindow::default(),
+            viewport: None,
         }
     }
 
@@ -792,6 +796,23 @@ impl Runner {
                 }
                 StepResult { index, action: action_desc, status: "ok", detail: format!("{steps} wheel notch(es)"), artifact: None }
             }
+            AutomationAction::ViewportOrbit { dx, dy } => match ui.scene_setup_panel.live_layer_id().cloned() {
+                Some(layer) => {
+                    let camera = match self.viewport.take() {
+                        Some((shown, camera)) if shown == layer => camera,
+                        _ => Default::default(),
+                    };
+                    let mut camera = camera;
+                    crate::viewport_input::apply(
+                        &mut camera,
+                        crate::viewport_input::ViewportGesture::Orbit { dx: *dx, dy: *dy },
+                        &crate::viewport_input::ViewportInputSensitivity::default(),
+                    );
+                    self.viewport = Some((layer, camera));
+                    StepResult { index, action: action_desc, status: "ok", detail: format!("viewport yaw {:.3} pitch {:.3}", camera.yaw, camera.pitch), artifact: None }
+                }
+                None => self.fail(index, action_desc, ui, out_dir, "ViewportOrbit needs the Scene tab open on a scene layer".into()),
+            },
             AutomationAction::ResetWork => {
                 // Settle whatever setup left pending, so the window counts
                 // only the gesture that follows.
@@ -1761,6 +1782,15 @@ impl Runner {
     /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
+            // The live app resolves this in `app_render.rs` from its graph
+            // editor's viewport; here the runner's viewport stands in.
+            if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
+                let view = self.viewport.as_ref().filter(|(shown, _)| shown == layer).map(|(_, camera)| *camera);
+                if crate::scene_view_copy::run(&mut data.project, &self.content_tx, ui, &mut self.edits.stamps, layer, view.as_ref()) {
+                    self.flags.structural = true;
+                }
+                continue;
+            }
             if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {
                 // Use the live input host: treating this app-intercepted action
                 // as a bridge no-op loses clipboard state while reporting success.

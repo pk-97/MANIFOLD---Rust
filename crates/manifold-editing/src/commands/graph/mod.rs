@@ -49,6 +49,8 @@ mod skin;
 pub use skin::*;
 mod paste;
 pub use paste::*;
+mod view_copy;
+pub use view_copy::*;
 
 #[cfg(test)]
 mod test_support;

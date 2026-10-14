@@ -66,6 +66,12 @@
       "drag-automation-point",
       "toggle-lanes"
     ],
+    "crates/manifold-app/src/scene_view_copy.rs": [
+      "scene-use-this-view"
+    ],
+    "crates/manifold-ui/src/panels/scene_setup_panel/item_header.rs": [
+      "scene-use-this-view"
+    ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
       "scene-setup-add-object",
       "scene-setup-light-intensity-drag",
@@ -310,7 +316,8 @@
     "scene-surfaces-clickthrough": "gltfscene",
     "scene-surfaces-clickthrough-physics": "physicsscene",
     "scene-panel-tree": "gltfscene",
-    "scene-panel-tree-physics": "physicsscene"
+    "scene-panel-tree-physics": "physicsscene",
+    "scene-use-this-view": "gltfscene"
   },
   "expected_fail": {
     "render-mode-solid": {

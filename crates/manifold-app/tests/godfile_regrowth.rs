@@ -115,7 +115,7 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-ui/src/panels/param_slider_shared.rs", 3650),
     // SCENE_SURFACES P6b moved the tree and item header into their own
     // modules; capped at the size that left.
-    ("crates/manifold-ui/src/panels/scene_setup_panel.rs", 2481),
+    ("crates/manifold-ui/src/panels/scene_setup_panel.rs", 2477),
     // SCENE_SURFACES_DESIGN.md INV-S12 (godfiles do not regrow): scene
     // surface files capped at their size when the scene table landed.
     ("crates/manifold-nodes-scene/src/node_graph/scene_vm.rs", 3320),

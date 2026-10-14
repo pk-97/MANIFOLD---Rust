@@ -6,6 +6,7 @@ pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
+pub mod view_copy;
 pub(crate) mod decode_cache;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
