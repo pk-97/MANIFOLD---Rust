@@ -348,7 +348,7 @@ mod tests {
     }
 
     /// BUG-7k1z regression: `bundled_preset_def` must carry scene-vocabulary
-    /// bindings (rt_denoise_feed et al.) stamped by `migrate_scene_exposures`
+    /// bindings (rt_gi et al.) stamped by `migrate_scene_exposures`
     /// at cache-build time. The runtime def resolution path in
     /// generators/registry.rs must go through the migrated cache, never raw
     /// catalog JSON, or the live flip of a load-time-stamped exposure is inert
@@ -392,8 +392,8 @@ mod tests {
             })
             .collect();
         assert!(
-            binding_names.contains(&"rt_denoise_feed"),
-            "bundled_preset_def(Scene) must carry rt_denoise_feed binding; \
+            binding_names.contains(&"rt_gi"),
+            "bundled_preset_def(Scene) must carry rt_gi binding; \
              migrate_scene_exposures stamps it at cache-build time. \
              Got: {binding_names:?}"
         );
@@ -451,8 +451,13 @@ mod tests {
             })
             .collect();
         assert!(
-            stamped_bindings.contains(&"rt_denoise_feed"),
-            "migrate_scene_exposures must stamp rt_denoise_feed on render_scene; \
+            stamped_bindings.contains(&"rt_gi"),
+            "migrate_scene_exposures must stamp rt_gi on render_scene; \
+             Got: {stamped_bindings:?}"
+        );
+        assert!(
+            !stamped_bindings.contains(&"rt_denoise_feed"),
+            "RT Denoise Feed has the Hidden role and is never stamped; \
              Got: {stamped_bindings:?}"
         );
     }

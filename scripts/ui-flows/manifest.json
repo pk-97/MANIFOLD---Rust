@@ -109,7 +109,8 @@
     "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
     "scene-card-bands",
     "scene-card-free-camera",
-    "scene-card-dof-switch"
+    "scene-card-dof-switch",
+    "scene-naming"
   ],
   "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
@@ -293,6 +294,7 @@
     "scene-card-bands": "physicsscene",
     "scene-card-free-camera": "oceanscene",
     "scene-card-dof-switch": "gltfscene",
+    "scene-naming": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
     "scene-modifier-preset": "mushroomscene",
     "material-inspector-groups": "gltfscene",

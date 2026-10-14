@@ -77,7 +77,7 @@
       },
       {
         "id": "liveliness",
-        "name": "Liveliness",
+        "name": "FLIP Ratio",
         "min": 0.0,
         "max": 1.0,
         "defaultValue": 0.0,
@@ -90,7 +90,7 @@
       },
       {
         "id": "points_per_cell",
-        "name": "Points per Cell",
+        "name": "Particles per Cell",
         "min": 0.0,
         "max": 1.0,
         "defaultValue": 0.0,
@@ -294,7 +294,7 @@
       },
       {
         "id": "liveliness",
-        "label": "Liveliness",
+        "label": "FLIP Ratio",
         "defaultValue": 0.0,
         "target": {
           "kind": "node",
@@ -307,7 +307,7 @@
       },
       {
         "id": "points_per_cell",
-        "label": "Points per Cell",
+        "label": "Particles per Cell",
         "defaultValue": 0.0,
         "target": {
           "kind": "node",

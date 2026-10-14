@@ -3,7 +3,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "type": "Button"
         }
       }
@@ -13,7 +13,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "type": "Button"
         }
       },
@@ -33,7 +33,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "text": "ON"
         }
       },
@@ -181,7 +181,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "type": "Button"
         }
       }
@@ -191,7 +191,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "text": "ON"
         }
       },
@@ -202,7 +202,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "type": "Button"
         }
       },
@@ -222,7 +222,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "type": "Button"
         }
       },
@@ -247,7 +247,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "under_text": "RT Enabled",
+          "under_text": "Ray Tracing",
           "text": "ON"
         }
       },

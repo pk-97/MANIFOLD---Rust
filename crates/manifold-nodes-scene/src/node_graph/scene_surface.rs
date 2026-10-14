@@ -101,9 +101,12 @@ pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> 
         "node.physics_world" => physics_world(param),
         "node.fluid_role_source" => fluid_role_source(param),
         "node.transform_3d" => transform(param),
-        "node.pbr_material" => {
-            material_param_role(type_id, param).map(|_| setup(ControlGroup::Material))
-        }
+        "node.pbr_material" => material_param_role(type_id, param).map(|_| match param {
+            "iridescence_thickness_min" | "iridescence_thickness_max" => {
+                setup(ControlGroup::Material).unit(Unit::Nanometres)
+            }
+            _ => setup(ControlGroup::Material),
+        }),
         "node.unlit_material" => unlit_material(param),
         "node.cel_material" => cel_material(param),
         "node.light" => light(param),
@@ -341,11 +344,13 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
         "intensity" => card(Environment, CardBand::Lighting, 1)
             .label(CardLabel::GroupName)
             .limit(AT_LEAST_ZERO),
-        // White Furnace becomes Hidden with the naming pass (P5).
         "width" | "height" | "horizon_strength" | "azimuth_variation" | "mode"
         | "emitter_count" | "emitter_intensity" | "emitter_elevation" | "emitter_width"
-        | "sun_x" | "sun_y" | "sun_z" | "sun_disc_intensity" | "sun_disc_size" | "fill"
-        | "uniform" => setup(Environment),
+        | "sun_x" | "sun_y" | "sun_z" | "sun_disc_intensity" | "sun_disc_size" | "fill" => {
+            setup(Environment)
+        }
+        // White Furnace is a lighting test, not a look.
+        "uniform" => hidden(Environment),
         _ => return None,
     })
 }
@@ -375,10 +380,9 @@ fn mesh_modifier(type_id: &str, param: &str) -> Option<SceneParamFacts> {
 fn render_scene(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::RayTracing;
     Some(match param {
-        // RT Denoise Feed becomes Hidden with the naming pass (P5).
         "rt_enabled" | "temporal_upscale" | "rt_reflections" | "rt_shadows" | "rt_ao"
-        | "rt_gi" | "rt_denoise_feed" => setup(RayTracing),
-        "objects" | "lights" | "rt_firefly_clamp" => hidden(RayTracing),
+        | "rt_gi" => setup(RayTracing),
+        "objects" | "lights" | "rt_firefly_clamp" | "rt_denoise_feed" => hidden(RayTracing),
         _ => return None,
     })
 }

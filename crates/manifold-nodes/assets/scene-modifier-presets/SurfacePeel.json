@@ -90,7 +90,8 @@
       },
       {
         "id": "burst_duration",
-        "name": "Burst Duration (beats)",
+        "name": "Burst Duration",
+        "unit": "beats",
         "min": 0.0,
         "max": 2.0,
         "defaultValue": 0.5

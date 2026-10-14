@@ -131,6 +131,8 @@ pub enum Unit {
     Pixels,
     MillionCells,
     Seconds,
+    Nanometres,
+    Beats,
 }
 
 impl Unit {
@@ -144,6 +146,8 @@ impl Unit {
             Self::Pixels => " px",
             Self::MillionCells => " M cells",
             Self::Seconds => " s",
+            Self::Nanometres => " nm",
+            Self::Beats => " beats",
         }
     }
 }

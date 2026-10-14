@@ -2139,7 +2139,7 @@ impl StepState {
 /// never clamped, so a level the lattice lacks is a named error.
 pub(crate) fn read_solve_level(value: f32, lattice: [u32; 3]) -> Result<usize, String> {
     if !(value.is_finite() && value >= 0.0 && value.fract() == 0.0) {
-        return Err(format!("Solve Level must be a whole number from 0, not {value}"));
+        return Err(format!("Coarse Solve must be a whole number from 0, not {value}"));
     }
     let level = value as usize;
     match level_refusal(lattice, level) {

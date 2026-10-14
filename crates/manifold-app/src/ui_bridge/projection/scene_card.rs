@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(sections(&rows)[0], "Camera", "camera comes first");
         assert_eq!(
             names_in(&rows, "Camera"),
-            ["Orbit", "Tilt", "Distance", "Look Y", "FOV Y", "Focus Distance"],
+            ["Orbit", "Tilt", "Distance", "Target Height", "Field of View", "Focus Distance"],
         );
         let focus = rows.iter().find(|row| row.spec.name == "Focus Distance").unwrap();
         assert_eq!(
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(sections(&rows)[0], "Camera");
         assert_eq!(
             names_in(&rows, "Camera"),
-            ["Yaw", "Pitch", "Pos X", "Pos Y", "Pos Z", "FOV Y", "Focus Distance"],
+            ["Pan", "Tilt", "Position X", "Position Y", "Position Z", "Field of View", "Focus Distance"],
         );
         assert!(!rows.iter().any(|row| matches!(row.spec.name.as_str(), "Orbit" | "Distance")));
     }
@@ -294,8 +294,8 @@ mod tests {
     fn physics_card_bands() {
         let rows = card("PhysicsSolids");
         assert_eq!(sections(&rows), ["Camera", "Physics", "Lighting", "Look"]);
-        assert_eq!(names_in(&rows, "Physics"), ["Copy Count", "Reset"]);
-        assert_eq!(names_in(&rows, "Lighting"), ["Exposure (EV)", "Environment", "Sun", "Fill Light"]);
+        assert_eq!(names_in(&rows, "Physics"), ["Count", "Reset"]);
+        assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Sun", "Fill Light"]);
         assert_eq!(names_in(&rows, "Look"), ["Depth of Field", "Motion Blur"], "details fold while off");
     }
 
@@ -313,7 +313,7 @@ mod tests {
         for id in ["sheet_fill_rate", "solve_level", "max_iterations", "particle_capacity"] {
             assert!(!rows.iter().any(|row| row.id.ends_with(id)), "{id} is setup, off the card");
         }
-        assert_eq!(names_in(&rows, "Lighting"), ["Exposure (EV)", "Environment", "Light", "Rim Light"]);
+        assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Light", "Rim Light"]);
     }
 
     #[test]
@@ -325,7 +325,7 @@ mod tests {
             assert_eq!(scene.role, SurfaceRole::Performance, "{id}");
             assert_eq!(scene.band, Some(CardBand::Scene), "{id}");
         }
-        assert_eq!(names_in(&rows, "Water"), ["Speed", "Reset", "Cohesion", "Stiffness", "Liveliness"]);
+        assert_eq!(names_in(&rows, "Water"), ["Speed", "Reset", "Cohesion", "Stiffness", "FLIP Ratio"]);
         for (id, _) in manifold_nodes_water::presets::gpu_flip::MESHER_CONTROLS {
             assert!(!rows.iter().any(|row| row.id == id), "mesher control {id} is setup, off the card");
         }
@@ -373,7 +373,7 @@ mod tests {
 
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
         let lighting = names_in(&rows, "Lighting");
-        assert_eq!(lighting[..2], ["Exposure (EV)", "Environment"]);
+        assert_eq!(lighting[..2], ["Exposure", "Environment"]);
         assert_eq!(lighting[2..], names[..], "one intensity row per light, named by the light");
     }
 

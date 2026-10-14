@@ -37,7 +37,7 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef {
             name: Cow::Borrowed("pos_x"),
-            label: "Pos X",
+            label: "Position X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-1000.0, 1000.0)),
@@ -45,7 +45,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("pos_y"),
-            label: "Pos Y",
+            label: "Position Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-1000.0, 1000.0)),
@@ -53,7 +53,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("pos_z"),
-            label: "Pos Z",
+            label: "Position Z",
             ty: ParamType::Float,
             default: ParamValue::Float(-3.0),
             range: Some((-1000.0, 1000.0)),
@@ -61,7 +61,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("yaw"),
-            label: "Yaw",
+            label: "Pan",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
@@ -69,7 +69,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("pitch"),
-            label: "Pitch",
+            label: "Tilt",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-1.5, 1.5)),
@@ -85,7 +85,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("fov_y"),
-            label: "FOV Y",
+            label: "Field of View",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.9),
             range: Some((0.05, 2.5)),
@@ -93,7 +93,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("near"),
-            label: "Near",
+            label: "Near Clip",
             ty: ParamType::Float,
             // Stays 0.05 (Peter's P4 near=0 ask is unsafe — clip.w = 0 →
             // NaN NDC — and 0.01 breaks two RT byte-identity gpu gates;
@@ -105,7 +105,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("far"),
-            label: "Far",
+            label: "Far Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(200.0),
             range: Some((1.0, 10000.0)),

@@ -2186,7 +2186,7 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
     let lattice = Water { lattice: [64; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
     let refused = rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Fixed(1))).expect_err("level 4 on 64³");
-    assert_eq!(refused, "Solve Level must be 0 to 3 on a [64, 64, 64] lattice, not 4");
+    assert_eq!(refused, "Coarse Solve must be 0 to 3 on a [64, 64, 64] lattice, not 4");
     assert_eq!(read_solve_level(4.0, [64; 3]).expect_err("the step's reading"), refused);
     assert_eq!(read_solve_level(3.0, [64; 3]), Ok(3));
     assert_eq!(read_solve_level(1.0, [25; 3]), Ok(1));

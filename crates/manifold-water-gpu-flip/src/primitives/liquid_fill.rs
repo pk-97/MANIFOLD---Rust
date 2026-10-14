@@ -160,7 +160,7 @@ manifold_node_engine::primitive! {
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
         int_param!("epoch", "Epoch", 0.0, 0.0, 16_777_215.0),
-        int_param!("particle_capacity", "Particle Capacity", 0.0, 0.0, 16_777_216.0),
+        int_param!("particle_capacity", "Max Particles", 0.0, 0.0, 16_777_216.0),
         float_param!("wall_inset", "Wall Inset (cells)", 0.0, 0.0, 8.0),
     ],
     depth_rule: Terminal,

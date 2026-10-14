@@ -20,7 +20,7 @@
       {
         "id": "direction_x",
         "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
-        "name": "Vector X",
+        "name": "Direction X",
         "min": -2.0,
         "max": 2.0,
         "defaultValue": 0.0
@@ -28,7 +28,7 @@
       {
         "id": "direction_y",
         "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
-        "name": "Vector Y",
+        "name": "Direction Y",
         "min": -2.0,
         "max": 2.0,
         "defaultValue": 1.0
@@ -36,7 +36,7 @@
       {
         "id": "direction_z",
         "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
-        "name": "Vector Z",
+        "name": "Direction Z",
         "min": -2.0,
         "max": 2.0,
         "defaultValue": 0.0
@@ -44,7 +44,8 @@
       {
         "id": "strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 1, "cardLabel": "param"},
-        "name": "Strength (m/s\u00b2)",
+        "name": "Strength",
+        "unit": "metresPerSecondSquared",
         "min": -20.0,
         "max": 20.0,
         "defaultValue": 1.0
@@ -52,7 +53,8 @@
       {
         "id": "impulse_strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 3, "cardLabel": "param"},
-        "name": "Impulse (m/s)",
+        "name": "Kick Size",
+        "unit": "metresPerSecond",
         "min": -20.0,
         "max": 20.0,
         "defaultValue": 2.0
@@ -60,7 +62,7 @@
       {
         "id": "fire",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 2, "cardLabel": "param"},
-        "name": "Fire",
+        "name": "Kick",
         "min": 0.0,
         "max": 16777216.0,
         "defaultValue": 0.0,
@@ -80,7 +82,7 @@
       },
       {
         "id": "direction_x",
-        "label": "Vector X",
+        "label": "Direction X",
         "defaultValue": 0.0,
         "target": {
           "kind": "node",
@@ -90,7 +92,7 @@
       },
       {
         "id": "direction_y",
-        "label": "Vector Y",
+        "label": "Direction Y",
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
@@ -100,7 +102,7 @@
       },
       {
         "id": "direction_z",
-        "label": "Vector Z",
+        "label": "Direction Z",
         "defaultValue": 0.0,
         "target": {
           "kind": "node",
@@ -110,7 +112,7 @@
       },
       {
         "id": "strength",
-        "label": "Strength (m/s\u00b2)",
+        "label": "Strength",
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
@@ -120,7 +122,7 @@
       },
       {
         "id": "impulse_strength",
-        "label": "Impulse (m/s)",
+        "label": "Kick Size",
         "defaultValue": 2.0,
         "target": {
           "kind": "node",
