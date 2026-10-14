@@ -113,7 +113,7 @@ impl LinkTempoGuard {
     /// No Link session, or no source to compare: the guard lets go at once.
     pub fn release(&mut self) {
         if self.latched {
-            log::info!("[SyncGuard] Link tempo released: nothing to compare");
+            log::info!("[Transport] guard: Link tempo released, nothing to compare");
         }
         self.latched = false;
         self.disagree_since = None;
@@ -159,14 +159,14 @@ impl LinkTempoGuard {
     fn judge(&mut self, now: f64, gap: f64, what: &str) {
         if gap <= GUARD_TOLERANCE {
             if !self.latched {
-                log::info!("[SyncGuard] Link tempo latched: {what} within {:.3}%", gap * 100.0);
+                log::info!("[Transport] guard: Link tempo latched, {what} within {:.3}%", gap * 100.0);
             }
             self.latched = true;
             self.disagree_since = None;
         } else if self.latched {
             let since = *self.disagree_since.get_or_insert(now);
             if now - since >= GUARD_UNLATCH_HOLD {
-                log::info!("[SyncGuard] Link tempo released: {what} {:.3}% apart for 2 s", gap * 100.0);
+                log::info!("[Transport] guard: Link tempo released, {what} {:.3}% apart for 2 s", gap * 100.0);
                 self.latched = false;
                 self.disagree_since = None;
             }

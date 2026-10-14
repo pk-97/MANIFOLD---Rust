@@ -167,6 +167,8 @@ pub struct PlaybackEngine {
     /// The follow segment while `tempo` is `Follow`; kept inline so an
     /// authority change never allocates.
     follower: ExternalFollower,
+    /// What the follower did on this tick, for the operating log.
+    follow_event: FollowEvent,
     /// Active clips' start beats and latched start times (D8). Reserved at
     /// load to the clip count; inserts only at activation.
     clip_starts: AHashMap<ClipId, (Beats, Option<Seconds>)>,
@@ -354,6 +356,7 @@ impl PlaybackEngine {
             frame_beat: 0.0,
             tick_frames: 0,
             tempo: TempoSource::Map { beat_offset: 0.0 },
+            follow_event: FollowEvent::None,
             follower: ExternalFollower::starting_at(
                 crate::external_follow::FollowProfile::FAST,
                 Seconds::ZERO,
@@ -535,6 +538,10 @@ impl PlaybackEngine {
     }
     pub fn follower(&self) -> &ExternalFollower {
         &self.follower
+    }
+    /// What the follower did on the last playing tick.
+    pub fn follow_event(&self) -> FollowEvent {
+        self.follow_event
     }
     pub fn is_export_mode(&self) -> bool {
         self.is_export_mode
@@ -1202,6 +1209,7 @@ impl PlaybackEngine {
         }
         self.is_ticking = true;
         self.reconcile_clip_control_bindings();
+        self.follow_event = FollowEvent::None;
         self.stopped_this_tick.clear();
 
         if self.project.is_none() {
@@ -1350,9 +1358,11 @@ impl PlaybackEngine {
             self.clock.advance(ctx.frames);
             if self.tempo == TempoSource::Follow
                 && let Some(sample) = sample
-                && let FollowEvent::Seek { beat } = self.follower.observe(self.clock.time(), sample)
             {
-                self.seek_external(beat);
+                self.follow_event = self.follower.observe(self.clock.time(), sample);
+                if let FollowEvent::Seek { beat, .. } = self.follow_event {
+                    self.seek_external(beat);
+                }
             }
         }
         self.refresh_beat();

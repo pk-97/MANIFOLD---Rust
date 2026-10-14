@@ -146,7 +146,7 @@ fn lasting_error_seeks_after_the_hold() {
                 let t = n as f64 * STEP;
                 let offset = if t >= 5.0 { step / 1000.0 } else { 0.0 };
                 let src = music(t, offset);
-                if let FollowEvent::Seek { beat } = f.observe(Seconds(t), sample(src, BPM)) {
+                if let FollowEvent::Seek { beat, .. } = f.observe(Seconds(t), sample(src, BPM)) {
                     seeks.push(t);
                     assert_eq!(beat.0, src, "the seek goes to the source's beat");
                     f.seek_to(Seconds(t), beat, Bpm(BPM as f32));

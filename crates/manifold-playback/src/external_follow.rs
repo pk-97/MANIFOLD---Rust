@@ -95,7 +95,8 @@ pub enum FollowEvent {
     /// The first fresh sample after a seed point set the segment.
     Seeded,
     /// An error past the seek threshold lasted the hold: relocate to `beat`.
-    Seek { beat: Beats },
+    /// `error` is the source's lead over the shown beat, s.
+    Seek { beat: Beats, error: f64 },
 }
 
 /// `beat(t) = anchor_beat + (t − anchor_time) × beats_per_second`.
@@ -347,7 +348,7 @@ impl ExternalFollower {
             let since = *self.over_since.get_or_insert(t);
             if t - since >= self.profile.seek_hold - 1e-9 {
                 self.over_since = None;
-                return FollowEvent::Seek { beat: Beats(sample.beat) };
+                return FollowEvent::Seek { beat: Beats(sample.beat), error };
             }
         } else {
             self.over_since = None;

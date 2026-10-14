@@ -164,6 +164,8 @@ pub struct ContentThread {
     pub tempo_guard: LinkTempoGuard,
     /// The read instant's output latency and the source offsets (D19).
     pub calibration: SyncCalibration,
+    /// The `[Transport]` operating log.
+    pub sync_log: manifold_playback::sync_log::SyncLog,
     /// The deadline of the frame this tick shows.
     pub(crate) frame_deadline: std::time::Instant,
     /// Stage presents waiting for their presented time.
@@ -733,6 +735,7 @@ impl ContentThread {
             manifold_editing::edit::tick_audit::close(window, p, gateway);
         }
         self.rig_probe_tick(now, frames, authority);
+        self.log_sync(authority);
         // The engine's clock follows the project rate (D10); the tick grid
         // follows the clock, so the two never run at different rates.
         let clock_fps = f64::from(self.engine.frame_rate());
@@ -2224,6 +2227,28 @@ impl ContentThread {
         let beat = song_time_beat_at(report.beat, seconds_between(report.at, r), tempo.before, tempo.bpm, seconds_between(tempo.at, r));
         let bpm = self.latched_link_tempo().unwrap_or(tempo.bpm);
         Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+    }
+
+    /// The operating log's view of this tick, after the engine's tick.
+    fn log_sync(&mut self, authority: ClockAuthority) {
+        let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+        let (name, calibrated) = match (authority, mode) {
+            (ClockAuthority::Link, _) => (Some("Link"), None),
+            (ClockAuthority::MidiClock, _) => (Some("CLK"), Some(CalibratedSource::MidiClock)),
+            (ClockAuthority::Osc, OscSyncMode::AbletonOsc) => (Some("OSC"), Some(CalibratedSource::AbletonOsc)),
+            (ClockAuthority::Osc, OscSyncMode::M4L) => (Some("timecode"), Some(CalibratedSource::Timecode)),
+            (ClockAuthority::Internal, _) => (None, None),
+        };
+        let tick = manifold_playback::sync_log::SyncTick {
+            now: self.time_since_start.0,
+            source: name.filter(|_| self.engine.follows_external()),
+            playing: self.engine.is_playing(),
+            follower: self.engine.follower(),
+            event: self.engine.follow_event(),
+            calibration: &self.calibration,
+            offset: calibrated.map(|s| self.calibration.offset(s)),
+        };
+        self.sync_log.observe(&tick);
     }
 
     /// While Link and another source both deliver, each source's offset

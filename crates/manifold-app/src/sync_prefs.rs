@@ -33,7 +33,7 @@ impl SyncPrefs {
         let extra_delay_ms = match raw.trim().parse::<f64>() {
             Ok(ms) if ms.is_finite() && (0.0..=250.0).contains(&ms) => ms,
             _ => {
-                log::warn!("[SyncCalibration] {EXTRA_DELAY_KEY}={raw:?} is not 0-250 ms; using 0");
+                log::warn!("[Transport] {EXTRA_DELAY_KEY}={raw:?} is not 0-250 ms; using 0");
                 0.0
             }
         };
@@ -71,7 +71,7 @@ impl SyncPrefs {
         }
         self.display = display;
         let delay = display.and_then(crate::sync_rig_log::display::output_latency_seconds).unwrap_or(0.0);
-        log::info!("[SyncCalibration] output display {display:?}: reported delay {:.1} ms", delay * 1000.0);
+        log::info!("[Transport] output display {display:?}: reported delay {:.1} ms", delay * 1000.0);
         Some(ContentCommand::SetDisplayDelay(delay))
     }
 }

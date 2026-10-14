@@ -14,7 +14,8 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::Beats;
+use manifold_core::{Beats, Bpm, Seconds};
+use manifold_playback::external_follow::{ExternalFollower, ExternalSample, FollowEvent, FollowProfile};
 use manifold_playback::sync_calibration::CalibratedSource;
 use support::sync_sources::*;
 
@@ -512,4 +513,69 @@ fn run_measured(driver: &mut Driver, reader: &mut dyn Reader, live: &Live, secs:
         meter.observe(shown, live.beat(r), live.bpm(r), shown.deadline >= warm);
     }
     (meter, read)
+}
+
+/// A source for one hour: name, reader, its music, profile, phase bound in ms.
+struct HourRun<'a>(&'static str, Box<dyn Reader>, &'a Live, FollowProfile, f64);
+
+/// One-hour runs, follower only (section 5 (Proof plan)): each source model
+/// drives the real filter, guard and projections into the real follower, no
+/// engine, for one simulated hour at 60 fps at a steady tempo. Zero seeks,
+/// zero catch-up opens after warm-up, D7's bounds throughout.
+#[test]
+fn no_false_seeks_or_catch_up_in_an_hour() {
+    const HOUR: f64 = 3600.0;
+    let live = Live::new(Tempo::constant(128.0));
+    let timecode_live = Live::new(Tempo::constant(120.0));
+    let runs: [HourRun; 5] = [
+        HourRun("Link", Box::new(LinkReader::new(live.clone(), 901)), &live, FollowProfile::FAST, 1.0),
+        HourRun("CLK alone", Box::new(ClkReader::new(clock_arrivals(&live, HOUR, 902, &[], 0.0))), &live, FollowProfile::FAST, 1.5),
+        HourRun(
+            "CLK, Link latched",
+            Box::new(ClkReader::new(clock_arrivals(&live, HOUR, 903, &[], 0.0)).with_link(LinkReader::new(live.clone(), 904))),
+            &live,
+            FollowProfile::FAST,
+            1.0,
+        ),
+        HourRun("AbletonOSC", Box::new(OscReader::new(osc_arrivals(&live, HOUR, 905, 0.1))), &live, FollowProfile::SLOW, 8.0),
+        HourRun(
+            "timecode",
+            Box::new(TimecodeReader::new(timecode_arrivals(&timecode_live, HOUR, 906, 0.040, 0.013, false), 120.0)),
+            &timecode_live,
+            FollowProfile::SLOW,
+            2.0,
+        ),
+    ];
+    for HourRun(what, mut reader, live, profile, bound_ms) in runs {
+        let mut follower = ExternalFollower::starting_at(profile, Seconds(0.0), Beats(0.0), Bpm(120.0));
+        follower.reseed();
+        let mut rng = Rng(907);
+        let (mut seeks, mut opens, mut max_phase_ms, mut was_open) = (0u32, 0u32, 0.0f64, false);
+        let ticks = (HOUR / STEP) as u64;
+        for tick in 1..=ticks {
+            // The shown frame's deadline is its grid time; the tick wakes
+            // up to 40% of a frame later.
+            let deadline = tick as f64 * STEP;
+            let wake = deadline + rng.range(0.0, 0.4) * STEP;
+            let t = Seconds(deadline);
+            if let Some(s) = reader.read(deadline, wake) {
+                let sample = ExternalSample { beat: s.beat, bpm: s.bpm, fresh: s.fresh, exact: s.exact };
+                if let FollowEvent::Seek { beat, .. } = follower.observe(t, sample) {
+                    seeks += 1;
+                    follower.seek_to(t, beat, Bpm(s.bpm as f32));
+                }
+            }
+            if deadline < WARM {
+                continue;
+            }
+            let open = follower.catch_up_open();
+            opens += u32::from(open && !was_open);
+            was_open = open;
+            let phase = (live.beat(deadline) - follower.beat_at(t).0) * 60.0 / live.bpm(deadline);
+            max_phase_ms = max_phase_ms.max(phase.abs() * 1000.0);
+        }
+        let report = format!("{what}: phase {max_phase_ms:.2} ms (bound {bound_ms}), seeks {seeks}, catch-up opens {opens}");
+        assert_eq!((seeks, opens), (0, 0), "{report}");
+        assert!(max_phase_ms <= bound_ms, "{report}");
+    }
 }

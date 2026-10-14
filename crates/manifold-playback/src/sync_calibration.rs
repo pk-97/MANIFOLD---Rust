@@ -86,7 +86,7 @@ impl PresentDelay {
         let n = sorted.len();
         let median = 0.5 * (sorted[(n - 1) / 2] + sorted[n / 2]);
         if (median - self.current).abs() > PRESENT_ADOPT_STEP {
-            log::info!("[SyncCalibration] screen delay {:.1} ms (was {:.1})", median * 1000.0, self.current * 1000.0);
+            log::info!("[Transport] screen delay {:.1} ms (was {:.1})", median * 1000.0, self.current * 1000.0);
             self.current = median;
         }
     }
@@ -222,9 +222,13 @@ impl SyncCalibration {
         self.extra = if ms.is_finite() && (0.0..=EXTRA_DELAY_MAX * 1000.0).contains(&ms) {
             ms / 1000.0
         } else {
-            log::warn!("[SyncCalibration] MANIFOLD_ExtraOutputDelayMs {ms} is outside 0-250 ms; using 0");
+            log::warn!("[Transport] MANIFOLD_ExtraOutputDelayMs {ms} is outside 0-250 ms; using 0");
             0.0
         };
+    }
+
+    pub fn display_delay(&self) -> f64 {
+        self.display
     }
 
     pub fn extra_delay(&self) -> f64 {
@@ -253,7 +257,7 @@ impl SyncCalibration {
     pub fn observe_offset(&mut self, source: CalibratedSource, now: f64, difference: f64, steady: bool) -> Option<f64> {
         let adopted = self.learners[source as usize].observe(now, difference, steady);
         if let Some(offset) = adopted {
-            log::info!("[SyncCalibration] {source:?} offset against Link {:.1} ms", offset * 1000.0);
+            log::info!("[Transport] {source:?} offset against Link {:.1} ms", offset * 1000.0);
         }
         adopted
     }

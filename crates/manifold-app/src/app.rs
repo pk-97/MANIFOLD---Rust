@@ -2579,6 +2579,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 link_offset: manifold_playback::external_sync::LinkOffset::new(),
                 tempo_guard: manifold_playback::external_sync::LinkTempoGuard::new(),
                 calibration: manifold_playback::sync_calibration::SyncCalibration::new(),
+                sync_log: manifold_playback::sync_log::SyncLog::new(),
                 frame_deadline: std::time::Instant::now(),
                 issued_presents: crate::content_thread::IssuedPresents::default(),
                 #[cfg(test)]

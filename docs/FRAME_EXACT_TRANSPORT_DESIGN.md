@@ -1,6 +1,6 @@
 # Frame-Exact Transport — one frame grid for live play and export
 
-**Status:** IN PROGRESS · 2026-10-14 · P1 and P2 landed on main (ff922660e). P3 is designed for Peter's two upgrades and the review rulings of 2026-10-14: a tempo-trim follower that trims or seeks, a catch-up window for sudden tempo changes, measured output latency and learned source offsets. Owed: C0's rig log on main, P3 on `feat/frame-exact-sync`, Peter's rig test, P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
+**Status:** IN PROGRESS · 2026-10-14 · P1 and P2 landed on main (ff922660e). P3 (a tempo-trim follower, a catch-up window, measured output latency, learned source offsets) is built on `feat/frame-exact-sync`. Owed: P3 review and landing, Peter's rig test (section 6 (Phasing), P3 demo), constants tuned from the rig log, P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -872,6 +872,8 @@ Each model produces raw arrivals (ticks with instants, packets with instants) an
 
 **Rig log.** C0 lands it on main before any constant is frozen (section 6 (Phasing), P3); C10 keeps it as the operating log. One info line per seed, seek, catch-up window, guard latch or unlatch, adopted offset and handover, for example `[Transport] CLK seek −312 ms` and `[Transport] guard: Link tempo latched for CLK`. While an external source drives, one line every 5 s: `[Transport] CLK lock: phase +0.4 ms, trim +0.03%, base 128.00 BPM, L 24.8 ms (present 24.8, display 0, extra 0), CLK offset +6.1 ms`.
 
+As built (C10): `sync_log.rs` writes the operating lines from the follower's per-tick event (`FollowEvent::Seek` carries its error) and state, after the engine's tick. Guard and calibration lines moved under the `[Transport]` prefix. C0's rig log files (`sync-*` beside the session log) stay as they are, for the raw arrivals.
+
 ## 6. Phasing
 
 P1 and P2 land together as one merge. That merge keeps today's external-sync behaviour as a named stopgap. Peter then rig-tests it. P3 lands next. P4 lands separately. Repeatable video frames are not promised before P4.
@@ -953,7 +955,7 @@ P1 and P2 land together as one merge. That merge keeps today's external-sync beh
   - `cargo nextest run -p manifold-gpu` for the presented handler;
   - clippy `--tests` on the three crates;
   - `frame_exact_app::same_values_per_index_through_content_thread`, one queued GPU run through `scripts/gpu_proofs_gate.py`.
-  - Negative: `rg -n 'STOPGAP\(frame-exact P3\)|external_time_sync|follow_external|defer_external|PhaseLock|enum Correction|NudgeBeats|fn sync_time_from_beat|fn set_beat|Snapped' crates` = 0.
+  - Negative: `rg -n 'STOPGAP\(frame-exact P3\)|external_time_sync|follow_external|defer_external|PhaseLock|enum Correction|NudgeBeats|fn sync_time_from_beat|fn set_beat\b|Snapped' crates` = 0.
 - **Demo:** L4 on Peter's rig. The launch command for the branch build goes with the request.
   - MIDI clock with Link on, 5 minutes, including a tempo ramp and a scene with a tempo jump. The 5-second lock lines stay under 1 ms and no seek appears. LFO motion is smooth where it stair-stepped before.
   - The same with Link off, including a big tempo drop: the beat eases into the new tempo within a second, with no jump back (Q5).
