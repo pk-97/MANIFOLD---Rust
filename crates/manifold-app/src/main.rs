@@ -282,6 +282,9 @@ fn main() {
             std::process::exit(2);
         }
     }
+    // Only the live GUI opens real devices. Every headless subcommand has
+    // branched off above, and tests never reach `main`.
+    manifold_core::device_guard::allow_real_devices();
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN section 5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing

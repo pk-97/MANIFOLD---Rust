@@ -64,6 +64,7 @@ mod imp {
     }
 
     pub fn request() {
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::MicPermission);
         let Some(cls) = av_capture_device() else {
             return;
         };

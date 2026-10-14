@@ -301,6 +301,12 @@ impl ArtNetOutput {
             }
         }
 
+        // Outside the live app the pipeline runs without a socket: DMX is
+        // packed as usual and never reaches the rig.
+        if !manifold_foundation::device_guard::allowed(manifold_foundation::device_guard::RealDevice::ArtNet) {
+            self.udp_socket = None;
+            return true;
+        }
         match UdpSocket::bind("0.0.0.0:0") {
             Ok(sock) => {
                 let _ = sock.set_broadcast(true);

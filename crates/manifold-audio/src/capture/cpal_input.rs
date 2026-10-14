@@ -52,6 +52,7 @@ impl AudioCaptureDevice {
     /// configuration (sample rate, channels) to avoid format mismatches.
     /// Does NOT start capturing until [`start()`] is called.
     pub fn new(config: AudioCaptureConfig) -> Result<Self, String> {
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::AudioInput);
         let host = cpal::default_host();
 
         let device = if let Some(ref name) = config.device_name {
