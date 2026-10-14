@@ -297,6 +297,9 @@ pub struct AudioSetupPanel {
     /// Screen-space rect of the waterfall image (logical units), set by `build`.
     /// The present pass blits the spectrogram texture here. `None` when closed.
     scope_rect: Option<Rect>,
+    /// Scroll offset the built body nodes sit at, so an in-place scroll
+    /// moves them by the difference.
+    shown_scroll: f32,
     /// Resolved panel width and waterfall height, set by
     /// [`AudioSetupPanel::build_docked`] from the dock rect (D1). The width is
     /// the dock column; the scope takes a fixed fraction of the height so the
@@ -385,6 +388,7 @@ impl Default for AudioSetupPanel {
             delete_armed: None,
             selected_send: None,
             scope_rect: None,
+            shown_scroll: 0.0,
             panel_w: 0.0,
             scope_h: 0.0,
             host: ChromeHost::new(),
@@ -555,11 +559,30 @@ impl AudioSetupPanel {
     }
 
     /// Mouse-wheel scroll for the docked body. Returns true if the offset moved;
-    /// the planner sees the offset ([`Self::scroll_px`]) and rebuilds the dock.
-    /// Sign convention matches the inspector's wheel handler (positive
-    /// `delta` = wheel up).
+    /// the planner sees the offset ([`Self::scroll_px`]) and the frame moves
+    /// the built body to it ([`Self::scroll_in_place`]). Sign convention
+    /// matches the inspector's wheel handler (positive `delta` = wheel up).
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
         self.scroll.apply_scroll_delta(delta)
+    }
+
+    /// Move the built body to the current scroll offset in place: the
+    /// content nodes, the scope rect and the scrollbar. False when nothing
+    /// is built to move; the caller rebuilds the dock then.
+    pub fn scroll_in_place(&mut self, tree: &mut UITree) -> bool {
+        let delta = self.scroll.scroll_offset() - self.shown_scroll;
+        if delta == 0.0 {
+            return true;
+        }
+        if !self.scroll.offset_content(tree, -delta) {
+            return false;
+        }
+        if let Some(r) = self.scope_rect.as_mut() {
+            r.y -= delta;
+        }
+        self.scroll.update_scrollbar(tree);
+        self.shown_scroll = self.scroll.scroll_offset();
+        true
     }
 
     /// The docked body's scroll offset, a planner input.
@@ -1184,6 +1207,7 @@ impl AudioSetupPanel {
         self.scroll.reparent_content(tree, content_start);
         // Apply the current scroll offset by shifting the reparented content up.
         let offset = self.scroll.scroll_offset();
+        self.shown_scroll = offset;
         if offset != 0.0 {
             self.scroll.offset_content(tree, -offset);
             // `scope_rect` isn't a tree node — it's plain geometry the present

@@ -735,6 +735,40 @@ fn compute_audio_row(
     d
 }
 
+/// Row `i`'s geometry from the mapper: what a build lays out, and what a
+/// relayout compares against. `None` for a row with no height.
+fn row_geometry(
+    layers: &[LayerInfo],
+    i: usize,
+    mapper: &CoordinateMapper,
+    panel_width: f32,
+) -> Option<LayerRowData> {
+    let layer = &layers[i];
+    let height = mapper.get_layer_height(i);
+    if height <= 0.0 {
+        return None;
+    }
+    let is_child = layer.parent_layer_id.is_some();
+    let is_last_child = is_child
+        && layers
+            .get(i + 1)
+            .is_none_or(|next| next.parent_layer_id != layer.parent_layer_id);
+    Some(compute_layer_row(
+        mapper.get_layer_y_offset(i),
+        height,
+        panel_width,
+        layer.is_collapsed,
+        layer.is_group,
+        layer.is_generator,
+        layer.is_audio,
+        layer.is_trigger,
+        is_child,
+        is_last_child,
+        layer.is_group && !layer.is_collapsed,
+        layer.generator_type.is_some(),
+    ))
+}
+
 // ── LayerRowIds ─────────────────────────────────────────────────────
 
 /// Node IDs for one layer row, keyed by `LayerControl`. Absent controls are
@@ -841,6 +875,11 @@ fn gain_db_text(db: f32) -> String {
 pub struct LayerHeaderPanel {
     layers: Vec<LayerInfo>,
     rows: Vec<LayerRowIds>,
+    /// The panel-local geometry each row was laid out at; `None` for a row
+    /// with no height. A relayout moves the nodes by the difference.
+    row_geom: Vec<Option<LayerRowData>>,
+    /// The layer-controls rect the top chrome was laid out in.
+    chrome_rect: Rect,
 
     // Drag-reorder state. drag_source/drag_target/pending_drag_layer are
     // layer-row indices (into self.rows / self.layers), not tree node ids;
@@ -925,6 +964,8 @@ impl LayerHeaderPanel {
         Self {
             layers: Vec::new(),
             rows: Vec::new(),
+            row_geom: Vec::new(),
+            chrome_rect: Rect::ZERO,
             drag_source: -1,
             drag_target: -1,
             insert_indicator_id: None,
@@ -2348,10 +2389,11 @@ impl LayerHeaderPanel {
         // so it needs its own self-only shift (mirrors the insert-indicator
         // shift below). Missing this is what let controls scroll out from
         // under a stationary clip and render greyed/cut (BUG-025).
-        for row in &self.rows {
+        for (i, row) in self.rows.iter().enumerate() {
             row.for_each_id(|id| {
                 tree.offset_node_and_children(id, delta_y);
             });
+            self.offset_gain_siblings(tree, i, delta_y);
             if let Some(clip_id) = row.clip {
                 let mut bounds = tree.get_bounds(clip_id);
                 bounds.y += delta_y;
@@ -2367,6 +2409,103 @@ impl LayerHeaderPanel {
         }
 
         self.panel_origin.y = new_origin_y;
+        true
+    }
+
+    /// The gain slider's value text and label sit beside its track, not under
+    /// it, so moving the Gain control moves them too.
+    fn offset_gain_siblings(&self, tree: &mut UITree, row: usize, dy: f32) {
+        if let Some(ids) = self.gain_sliders.get(row).and_then(|s| s.ids()) {
+            tree.offset_node_and_children(ids.value_text, dy);
+            if let Some(label) = ids.label {
+                tree.offset_node_and_children(label, dy);
+            }
+        }
+    }
+
+    /// Lay the built rows out again in place for a new panel rect, new row
+    /// heights or a new scroll: every control moves by its own difference,
+    /// and the ones whose size follows the row height take their new rect.
+    /// False when the width or the left edge moved, or a row gained or lost
+    /// a control; the caller rebuilds then. Checks before it writes, so a
+    /// false leaves the tree as it was.
+    pub fn try_relayout(
+        &mut self,
+        tree: &mut UITree,
+        layout: &ScreenLayout,
+        mapper: &CoordinateMapper,
+        scroll_y_px: f32,
+    ) -> bool {
+        use LayerControl as C;
+        let n = self.layers.len();
+        if self.rows.len() != n || self.row_geom.len() != n {
+            return false;
+        }
+        let lc = layout.layer_controls();
+        if lc.width != self.panel_width || lc.x != self.panel_origin.x {
+            return false;
+        }
+        for i in 0..n {
+            let next = row_geometry(&self.layers, i, mapper, lc.width);
+            match (&self.row_geom[i], &next) {
+                (None, None) => {}
+                (Some(was), Some(now)) if was.present == now.present => {}
+                _ => return false,
+            }
+        }
+        if lc != self.chrome_rect {
+            let chrome = self.top_chrome_view();
+            if self.host.update(tree, &chrome, lc) != crate::chrome::Reconcile::Updated {
+                return false;
+            }
+            self.chrome_rect = lc;
+        }
+
+        let header_spacer = layout.track_header_height();
+        let origin = Vec2::new(lc.x, lc.y + header_spacer - scroll_y_px);
+        if let Some(clip) = self.scroll.clip_node_id() {
+            tree.set_bounds(
+                clip,
+                Rect::new(lc.x, lc.y + header_spacer, lc.width, (lc.height - header_spacer).max(0.0)),
+            );
+        }
+        for i in 0..n {
+            let (Some(was), Some(now)) = (self.row_geom[i], row_geometry(&self.layers, i, mapper, lc.width))
+            else {
+                continue;
+            };
+            let ids = self.rows[i];
+            for &c in &C::ALL {
+                let Some(id) = ids.id(c).filter(|_| now.has(c)) else {
+                    continue;
+                };
+                let from = screen(was.rect(c), self.panel_origin);
+                let to = screen(now.rect(c), origin);
+                if from == to {
+                    continue;
+                }
+                if to.y != from.y {
+                    tree.offset_node_and_children(id, to.y - from.y);
+                    if c == C::Gain {
+                        self.offset_gain_siblings(tree, i, to.y - from.y);
+                    }
+                }
+                if to.width != from.width || to.height != from.height || to.x != from.x {
+                    tree.set_bounds(id, to);
+                }
+            }
+            if let Some(clip) = ids.clip {
+                let bg = now.rect(C::Background);
+                tree.set_bounds(clip, screen(Rect::new(0.0, bg.y, bg.x + bg.width, bg.height), origin));
+            }
+            self.row_geom[i] = Some(now);
+        }
+        if let Some(indicator) = self.insert_indicator_id {
+            let mut bounds = tree.get_bounds(indicator);
+            bounds.y += origin.y - self.panel_origin.y;
+            tree.set_bounds(indicator, bounds);
+        }
+        self.panel_origin = origin;
         true
     }
 }
@@ -2418,6 +2557,7 @@ impl LayerHeaderPanel {
         // are still built imperatively into the scroll region.
         let chrome = self.top_chrome_view();
         self.host.build(tree, &chrome, lc);
+        self.chrome_rect = lc;
         self.record_btn_id = self.host.node_id_for_key(KEY_RECORD);
         self.audio_device_label_id = self.host.node_id_for_key(KEY_DEVICE);
 
@@ -2457,44 +2597,14 @@ impl LayerHeaderPanel {
         // (takes O(1), avoids cloning the entire Vec)
         let layers_snapshot = std::mem::take(&mut self.layers);
 
+        self.row_geom.clear();
+        self.row_geom.resize(layer_count, None);
         for i in 0..layer_count {
             let layer = &layers_snapshot[i];
-            let height = mapper.get_layer_height(i);
-            if height <= 0.0 {
+            let Some(row) = row_geometry(&layers_snapshot, i, mapper, lc.width) else {
                 continue;
-            }
-            let y_offset = mapper.get_layer_y_offset(i);
-
-            // Build ALL rows (including off-screen) for update-in-place.
-            // The CLIPS_CHILDREN clip region handles visual clipping, and
-            // the renderer early-outs for nodes outside the clip bounds.
-
-            let is_child = layer.parent_layer_id.is_some();
-            let is_last_child = if is_child {
-                if i + 1 < layer_count {
-                    layers_snapshot[i + 1].parent_layer_id != layer.parent_layer_id
-                } else {
-                    true
-                }
-            } else {
-                false
             };
-
-            let row = compute_layer_row(
-                y_offset,
-                height,
-                lc.width,
-                layer.is_collapsed,
-                layer.is_group,
-                layer.is_generator,
-                layer.is_audio,
-                layer.is_trigger,
-                is_child,
-                is_last_child,
-                layer.is_group && !layer.is_collapsed,
-                layer.generator_type.is_some(),
-            );
-
+            self.row_geom[i] = Some(row);
             self.build_layer_row(tree, i, layer, row, self.panel_origin, clip_parent);
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;

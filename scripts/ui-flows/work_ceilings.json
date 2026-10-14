@@ -173,26 +173,30 @@
     "work-dock-scroll": {
       "four_notches": {
         "ChromeLayout": 12,
-        "FrameAlloc": 3840,
-        "RegionRebuild": 4,
+        "FrameAlloc": 1496,
+        "InPlaceUpdate": 4,
         "SlotInvalidate": 4,
         "ValuePush": 4
       }
     },
     "work-drawer-tween": {
-      "drawer_change_half_second": {
-        "ChromeLayout": 96,
+      "drawer_change_click": {
+        "ChromeLayout": 6,
         "ClipProjection": 2,
-        "FrameAlloc": 4325,
+        "FrameAlloc": 1254,
         "GridBitmapRepaint": 2,
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 2,
         "PresetListProjection": 2,
         "ProjectSync": 2,
-        "RegionRebuild": 9,
-        "SlotInvalidate": 9,
-        "ValuePush": 3
+        "RegionRebuild": 8,
+        "SlotInvalidate": 8,
+        "ValuePush": 2
+      },
+      "drawer_change_half_second": {
+        "FrameAlloc": 85,
+        "ValuePush": 1
       }
     },
     "work-driver-trim": {
@@ -213,21 +217,18 @@
     },
     "work-editor-idle": {
       "idle_2s": {
-        "ChromeLayout": 360,
         "EditorTreeBuild": 120,
-        "FrameAlloc": 98288
+        "FrameAlloc": 87848
       }
     },
     "work-editor-open": {
       "after_open_half_second": {
-        "ChromeLayout": 90,
         "EditorTreeBuild": 30,
-        "FrameAlloc": 24579
+        "FrameAlloc": 21969
       },
       "open_click": {
-        "ChromeLayout": 6,
         "EditorTreeBuild": 2,
-        "FrameAlloc": 2979,
+        "FrameAlloc": 2807,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 7
@@ -262,7 +263,7 @@
       "follow_2s": {
         "ChromeLayout": 360,
         "DriverScan": 1,
-        "FrameAlloc": 16491,
+        "FrameAlloc": 16477,
         "GridBitmapRepaint": 7,
         "InPlaceUpdate": 1,
         "OverviewRepaint": 1,
@@ -279,33 +280,29 @@
     },
     "work-idle": {
       "idle_2s": {
-        "ChromeLayout": 360,
-        "FrameAlloc": 10928
+        "FrameAlloc": 8
       }
     },
     "work-inspector-resize": {
       "resize_1s": {
         "ChromeLayout": 180,
-        "FrameAlloc": 78830,
+        "FrameAlloc": 78430,
         "GridBitmapRepaint": 180,
+        "InPlaceUpdate": 60,
         "OverviewRepaint": 60,
-        "RegionRebuild": 240,
+        "RegionRebuild": 180,
         "SlotInvalidate": 480,
         "ValuePush": 60
       }
     },
     "work-lane-resize": {
       "resize_1s": {
-        "ChromeLayout": 186,
-        "ClipProjection": 59,
-        "FrameAlloc": 52965,
-        "GridBitmapRepaint": 413,
-        "InspectorSync": 59,
-        "LaneProjection": 119,
-        "OverviewRepaint": 59,
-        "ProjectSync": 59,
-        "RegionRebuild": 177,
-        "SlotInvalidate": 177,
+        "ChromeLayout": 177,
+        "FrameAlloc": 14167,
+        "GridBitmapRepaint": 59,
+        "InPlaceUpdate": 59,
+        "LaneProjection": 60,
+        "SlotInvalidate": 118,
         "ValuePush": 59
       }
     },
@@ -334,14 +331,12 @@
     },
     "work-mapping-drawer": {
       "open_drawer": {
-        "ChromeLayout": 3,
         "EditorTreeBuild": 1,
-        "FrameAlloc": 993
+        "FrameAlloc": 906
       },
       "type_range_max": {
-        "ChromeLayout": 12,
         "EditorTreeBuild": 4,
-        "FrameAlloc": 4306,
+        "FrameAlloc": 3958,
         "ValuePush": 2
       }
     },
@@ -366,14 +361,17 @@
         "FrameAlloc": 393
       }
     },
+    "work-modulated-step": {
+      "step_half_second": {
+        "FrameAlloc": 862,
+        "ValuePush": 28
+      }
+    },
     "work-node-param-drag": {
       "card_lane_drag": {
-        "ChromeLayout": 33,
         "EditorTreeBuild": 11,
-        "FrameAlloc": 12421,
-        "RegionRebuild": 3,
-        "SlotInvalidate": 3,
-        "ValuePush": 11
+        "FrameAlloc": 9669,
+        "ValuePush": 10
       }
     },
     "work-paused-cursor": {
@@ -406,8 +404,8 @@
     },
     "work-playback": {
       "play_2s": {
-        "ChromeLayout": 360,
-        "FrameAlloc": 11708,
+        "ChromeLayout": 51,
+        "FrameAlloc": 2335,
         "OverviewRepaint": 120,
         "TextMeasureMiss": 17
       }
@@ -445,13 +443,12 @@
     },
     "work-scrollbar-drag": {
       "drag_1s": {
-        "ChromeLayout": 186,
-        "FrameAlloc": 17417,
+        "ChromeLayout": 177,
+        "FrameAlloc": 9632,
         "GridBitmapRepaint": 413,
-        "InPlaceUpdate": 14,
+        "InPlaceUpdate": 59,
         "OverviewRepaint": 59,
-        "RegionRebuild": 45,
-        "SlotInvalidate": 73,
+        "SlotInvalidate": 118,
         "ValuePush": 59
       }
     },
@@ -479,27 +476,21 @@
     },
     "work-slider-drag": {
       "drag_2s": {
-        "ChromeLayout": 369,
-        "FrameAlloc": 82492,
-        "RegionRebuild": 60,
-        "SlotInvalidate": 60,
+        "FrameAlloc": 3977,
         "ValuePush": 121
       }
     },
     "work-slider-grab": {
       "three_grabs_lanes_hidden": {
-        "ChromeLayout": 33,
-        "FrameAlloc": 3471,
-        "RegionRebuild": 2,
-        "SlotInvalidate": 2,
-        "ValuePush": 7
+        "FrameAlloc": 221,
+        "ValuePush": 5
       }
     },
     "work-split-drag": {
       "split_1s": {
-        "ChromeLayout": 180,
-        "FrameAlloc": 18730,
-        "RegionRebuild": 120,
+        "ChromeLayout": 240,
+        "FrameAlloc": 9190,
+        "InPlaceUpdate": 60,
         "RegionTranslate": 120,
         "SlotInvalidate": 480,
         "ValuePush": 60
@@ -544,11 +535,11 @@
     },
     "work-zoom": {
       "zoom_30_notches": {
-        "ChromeLayout": 90,
-        "FrameAlloc": 6407,
+        "ChromeLayout": 51,
+        "FrameAlloc": 2701,
         "GridBitmapRepaint": 119,
+        "InPlaceUpdate": 17,
         "OverviewRepaint": 17,
-        "RegionRebuild": 34,
         "SlotInvalidate": 34,
         "TextMeasureMiss": 17,
         "ValuePush": 17

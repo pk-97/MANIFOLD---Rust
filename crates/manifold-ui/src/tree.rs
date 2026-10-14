@@ -1247,6 +1247,14 @@ impl UITree {
         self.structure_version = self.structure_version.wrapping_add(1);
     }
 
+    /// Give a region's root clip a new rect, for a region its panel laid out
+    /// again in place at a new rect.
+    pub fn set_region_rect(&mut self, region: u8, rect: Rect) {
+        if let Some(root) = self.arenas[region as usize].sub_regions.first().map(|s| s.root) {
+            self.set_bounds(root, rect);
+        }
+    }
+
     /// Move every node of `region` by `(dx, dy)` in place (D7): a region whose
     /// rect moved but kept its size is translated, never rebuilt.
     pub fn translate_region(&mut self, region: u8, dx: f32, dy: f32) {

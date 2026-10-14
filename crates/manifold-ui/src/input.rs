@@ -386,6 +386,9 @@ pub struct UIInputSystem {
     // dirty-tracked timeline and the immediate-mode editor. See
     // `docs/INPUT_IDENTITY_UNIFICATION.md`.
     hovered_widget: Option<WidgetId>,
+    /// Where the pointer last was, so hover can be resolved again when the
+    /// tree moves under a still cursor.
+    pointer_pos: Option<Vec2>,
     pressed_widget: Option<WidgetId>,
     focused_widget: Option<WidgetId>,
     press_origin: Vec2,
@@ -416,6 +419,7 @@ impl UIInputSystem {
     pub fn new() -> Self {
         Self {
             hovered_widget: None,
+            pointer_pos: None,
             pressed_widget: None,
             focused_widget: None,
             press_origin: Vec2::ZERO,
@@ -496,6 +500,15 @@ impl UIInputSystem {
         // Do NOT clear pressed_widget or is_dragging here.
     }
 
+    /// Resolve hover again at the pointer's last position: nodes moved in
+    /// place under a still cursor, with no rebuild to clear the old hover.
+    pub fn refresh_hover(&mut self, tree: &mut UITree) {
+        if let Some(pos) = self.pointer_pos {
+            let hit_id = tree.hit_test(pos);
+            self.update_hover(tree, hit_id, pos);
+        }
+    }
+
     /// Clear keyboard focus.
     pub fn clear_focus(&mut self) {
         self.focused_widget = None;
@@ -521,6 +534,7 @@ impl UIInputSystem {
         time: f32,
     ) {
         let hit_id = tree.hit_test(screen_pos);
+        self.pointer_pos = Some(screen_pos);
         // The durable identity of whatever is under the cursor right now. hit_test
         // only returns interactive nodes, which are exactly the ones in the widget
         // map, so this is `Some(widget)` for any hit.

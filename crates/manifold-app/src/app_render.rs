@@ -2502,9 +2502,10 @@ impl Application {
         // 6·drag-motion. P2 drag-visual tweens (`UI_CRAFT_AND_MOTION_PLAN.md`
         // D15/D17: grab lift, duplicate ghost, grid settle, landing-line
         // flash, error shake). The clip-body pass draws them at paint time, so
-        // a live tween only asks for a repaint (D8). The drawer, object-card
-        // and split tweens need nothing here: each moves its panel's view
-        // version or the layout rects, and the next plan rebuilds from that.
+        // a live tween only asks for a repaint (D8). The drawer and object-card
+        // tweens need nothing here: they move their nodes in place in the
+        // panel update. The split tween moves the layout rects, which the next
+        // plan lays out in place.
         if self.overlay.tick((dt * 1000.0) as f32) {
             self.ws.offscreen_dirty = true;
         }

@@ -1,0 +1,6 @@
+[
+  "ResetWork",
+  {"Step": {"frames": 30}},
+  {"AssertWork": {"window": "step_half_second"}},
+  "AssertFresh"
+]

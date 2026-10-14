@@ -180,6 +180,8 @@ pub(crate) struct ChromeInputs {
     /// Detect progress in tenths of a percent, and whether it shows.
     pub detect_permille: u16,
     pub detect_show: bool,
+    /// Export progress is open: the header hides the detect status.
+    pub export_open: bool,
     pub is_dirty: bool,
     /// Moves when a shown string changed: the clock device and position, the
     /// detect status, the project path (compared by retained pointer).
@@ -262,8 +264,10 @@ pub(crate) struct FrameInputs {
     /// D14: the insert cursor.
     pub cursor: u64,
     pub active_layer: u64,
-    /// D19 (selected point's lane and lane heights included).
+    /// D19 (selected point's lane included).
     pub automation_view: u64,
+    /// Automation lane heights the timeline shows.
+    pub lane_heights: u64,
     pub chrome: ChromeInputs,
     pub rects: RegionRects,
     pub scroll_x_px: i32,
@@ -317,6 +321,9 @@ pub(crate) enum Projection {
     LaneGeometry,
     /// The dragged lane only.
     LanePreview,
+    /// `sync_track_layout`: the track and lane heights, which the layer
+    /// headers and viewport then lay out in place.
+    TrackLayout,
     /// The dragged marker: the viewport's marker list.
     MarkerPreview,
     /// Live push, Values displays.
@@ -376,11 +383,16 @@ pub(crate) struct ViewportMoves {
     pub scroll_x: bool,
     pub scroll_y: bool,
     pub zoom: bool,
+    /// The layer headers' or viewport's rect, or the track heights, moved:
+    /// both lay their rows out again in place.
+    pub relayout: bool,
+    /// A marker drag moved the marker list: the flags lay out again in place.
+    pub markers: bool,
 }
 
 impl ViewportMoves {
     pub(crate) fn any(self) -> bool {
-        self.scroll_x || self.scroll_y || self.zoom
+        self.scroll_x || self.scroll_y || self.zoom || self.relayout || self.markers
     }
 }
 
@@ -562,10 +574,18 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         p.insert(Projection::SelectionPush);
     }
 
+    let lane_heights = last.lane_heights != next.lane_heights;
+    if lane_heights {
+        p.insert(Projection::TrackLayout);
+        p.insert(Projection::LaneGeometry);
+    }
+
     plan.viewport = ViewportMoves {
         scroll_x: last.scroll_x_bits != next.scroll_x_bits,
         scroll_y: last.scroll_y_bits != next.scroll_y_bits,
         zoom: last.zoom_bits != next.zoom_bits,
+        relayout: lane_heights,
+        markers: false,
     };
     // The timeline lists change shape only when their project parts move or
     // the lanes open or close; a selection or active-layer change re-projects
@@ -581,10 +601,10 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
 /// Translate is live for the regions whose panels take a new rect after a
 /// move: the three chrome bars (their host re-lays out at the rect it is
 /// handed, [`crate::ui_root::UIRoot::follow_translate`]) and the split
-/// handle (ids only). The inspector, dock, layer headers and viewport keep
-/// their rects inside the panel (scroll containers, hit rects, the
-/// coordinate mapper's origin), so any rect change rebuilds them until each
-/// re-anchors in place (P5b, with the in-place height column).
+/// handle (ids only). The layer headers and viewport lay out again in place
+/// on a rect move ([`ViewportMoves::relayout`]). The inspector and dock keep
+/// their rects inside their scroll containers, so a rect change rebuilds
+/// them.
 #[allow(clippy::too_many_arguments)]
 fn plan_regions(
     plan: &mut FramePlan,
@@ -621,7 +641,12 @@ fn plan_regions(
         } else if origin(chrome) {
             translate.insert(chrome);
         }
-        if projections.contains(Projection::ChromePush) || projections.contains(Projection::SelectionPush) {
+        // The bars lay out only when a value they show moved: the chrome and
+        // selection pushes, and the header's dock button on a dock toggle.
+        if projections.contains(Projection::ChromePush)
+            || projections.contains(Projection::SelectionPush)
+            || (chrome == MainRegion::Header && last.dock_view != next.dock_view)
+        {
             in_place.insert(chrome);
         }
     }
@@ -637,14 +662,15 @@ fn plan_regions(
         in_place.insert(inspector);
     }
 
-    // The dock body's wheel scroll rebuilds it until it scrolls in place (P5b).
     let dock = MainRegion::AudioDock;
     if moved(dock)
         || projections.contains(Projection::AudioDevices)
         || last.dock_view != next.dock_view
-        || last.dock_scroll_px != next.dock_scroll_px
     {
         rebuild.insert(dock);
+    }
+    if last.dock_scroll_px != next.dock_scroll_px {
+        in_place.insert(dock);
     }
 
     let handles = MainRegion::SplitHandles;
@@ -654,12 +680,25 @@ fn plan_regions(
         translate.insert(handles);
     }
 
+    // A header row's controls sit at panel-local x, so a new left edge or
+    // width rebuilds the headers. Any other move of either rect lays both out
+    // again in place, as a lane height change does.
     let headers = MainRegion::LayerHeaders;
-    if moved(headers) || timeline_shape {
+    let viewport = MainRegion::Viewport;
+    let header_columns = {
+        let (a, b) = (last.rects.get(headers), next.rects.get(headers));
+        a[0] != b[0] || a[2] != b[2]
+    };
+    if moved(headers) || moved(viewport) {
+        plan.viewport.relayout = true;
+    }
+    let relayout = plan.viewport.relayout;
+    if header_columns || timeline_shape {
         rebuild.insert(headers);
     }
     if last.scroll_y_px != next.scroll_y_px
         || plan.viewport.scroll_y
+        || relayout
         || selection_visual
         || active_layer
         || automation_view
@@ -667,13 +706,14 @@ fn plan_regions(
         in_place.insert(headers);
     }
 
-    let viewport = MainRegion::Viewport;
-    // Marker flags are tree nodes with no in-place path yet (P5b), so a marker
-    // drag rebuilds the viewport like a committed marker edit.
-    if moved(viewport) || timeline_shape || projections.contains(Projection::MarkerPreview) {
+    if timeline_shape {
         rebuild.insert(viewport);
     }
-    if last.scroll_x_px != next.scroll_x_px
+    // A marker drag keeps the marker count, so the flags move in place.
+    plan.viewport.markers = projections.contains(Projection::MarkerPreview);
+    if relayout
+        || plan.viewport.markers
+        || last.scroll_x_px != next.scroll_x_px
         || last.scroll_y_px != next.scroll_y_px
         || last.zoom_bits != next.zoom_bits
         || plan.viewport.scroll_x
@@ -753,6 +793,8 @@ impl FramePlanner {
             time_digits: time_digits(content, source.project.settings.time_signature_numerator),
             detect_permille: (progress * 1000.0).round() as u16,
             detect_show: content.percussion_show_progress,
+            // The gatherer, which holds the UI, fills this in.
+            export_open: false,
             is_dirty: source.is_dirty,
             text: self.chrome_text.version(content, source.project_path),
         }
@@ -1140,10 +1182,10 @@ mod tests {
         next.dock_view = 1;
         assert!(plan(next).rebuild.contains(r));
         assert!(plan(moved(r)).rebuild.contains(r));
-        // The dock body scrolls by rebuilding until it scrolls in place (P5b).
         let mut next = base();
         next.dock_scroll_px = 3;
-        assert!(plan(next).rebuild.contains(r));
+        let p = plan(next);
+        assert!(p.in_place.contains(r) && !p.rebuild.contains(r), "dock scrolls in place");
     }
 
     #[test]
@@ -1159,14 +1201,21 @@ mod tests {
         let r = MainRegion::LayerHeaders;
         assert!(plan(resized(r)).rebuild.contains(r), "width");
         assert!(plan(with_parts(&[Part::Layers])).rebuild.contains(r), "project projection ran");
-        // The headers keep their rects inside the panel: any rect change
-        // rebuilds until the in-place height column lands (P5b).
-        assert!(plan(moved(r)).rebuild.contains(r));
+        // A new top or height lays the rows out again in place.
+        let p = plan(moved(r));
+        assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "top");
         let mut next = base();
         let mut rect = next.rects.get(r);
         rect[3] += 5;
         next.rects.set(r, rect);
-        assert!(plan(next).rebuild.contains(r), "height");
+        let p = plan(next);
+        assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "height");
+        let mut next = base();
+        next.lane_heights = 1;
+        let p = plan(next);
+        assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "lane heights");
+        assert!(runs(&p, Projection::TrackLayout) && !runs(&p, Projection::ProjectSync));
+        assert!(!runs(&p, Projection::InspectorSync), "a lane resize leaves the inspector alone");
         let in_place: [fn(&mut FrameInputs); 4] = [
             |i| i.scroll_y_px = 9,
             |i| i.selection_visual = 1,
@@ -1186,10 +1235,12 @@ mod tests {
     #[test]
     fn region_viewport() {
         let r = MainRegion::Viewport;
-        assert!(plan(resized(r)).rebuild.contains(r), "width");
         assert!(plan(with_parts(&[Part::Clips])).rebuild.contains(r), "project projection ran");
         assert!(plan(with_parts(&[Part::Markers])).rebuild.contains(r), "markers");
-        assert!(plan(moved(r)).rebuild.contains(r), "the mapper keeps its origin");
+        for next in [moved(r), resized(r)] {
+            let p = plan(next);
+            assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "a rect move lays out in place");
+        }
         let in_place: [fn(&mut FrameInputs); 6] = [
             |i| i.scroll_x_px = 9,
             |i| i.zoom_bits = 2,
@@ -1210,7 +1261,7 @@ mod tests {
         let mut next = base();
         next.preview.markers = 1;
         let p = plan(next);
-        assert!(p.rebuild.contains(r), "marker flags have no in-place path yet");
+        assert!(p.in_place.contains(r) && !p.rebuild.contains(r), "marker flags move in place");
         assert!(!runs(&p, Projection::ProjectSync), "a marker drag projects only the markers");
     }
 
@@ -1273,7 +1324,7 @@ mod tests {
     /// rebuilds the two timeline regions; every slot repaints because the
     /// pixels a moved region leaves behind belong to no slot.
     #[test]
-    fn a_rect_change_flags_the_atlas_and_rebuilds_only_what_caches_rects() {
+    fn a_rect_change_flags_the_atlas_and_moves_regions_in_place() {
         assert!(!plan(base()).rects_moved);
         let mut next = base();
         for region in [MainRegion::Footer, MainRegion::SplitHandles] {
@@ -1289,8 +1340,15 @@ mod tests {
         let p = plan(next);
         assert!(p.rects_moved);
         assert!(p.translate.contains(MainRegion::Footer) && p.translate.contains(MainRegion::SplitHandles));
-        assert!(p.rebuild.contains(MainRegion::LayerHeaders) && p.rebuild.contains(MainRegion::Viewport));
-        for untouched in [MainRegion::Transport, MainRegion::Header, MainRegion::Inspector, MainRegion::AudioDock] {
+        assert!(p.viewport.relayout, "the layer headers and viewport lay out again in place");
+        for untouched in [
+            MainRegion::Transport,
+            MainRegion::Header,
+            MainRegion::Inspector,
+            MainRegion::AudioDock,
+            MainRegion::LayerHeaders,
+            MainRegion::Viewport,
+        ] {
             assert!(!p.rebuild.contains(untouched) && !p.translate.contains(untouched), "{untouched:?}");
         }
         let mut next = base();
@@ -1354,6 +1412,8 @@ mod tests {
         assert!(runs(&p, Projection::MarkerPreview));
         assert!(!runs(&p, Projection::InspectorSync));
         assert!(!runs(&p, Projection::ClipPreview));
+        assert!(p.viewport.markers && p.in_place.contains(MainRegion::Viewport));
+        assert!(!p.rebuild.contains(MainRegion::Viewport), "a marker drag moves the flags in place");
     }
 
     #[test]

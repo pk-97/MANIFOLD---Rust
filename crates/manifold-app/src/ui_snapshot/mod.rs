@@ -1520,25 +1520,19 @@ mod cache_path_full_render {
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
         filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
 
-        // ── poll the drawer tween to settlement, capturing a filmstrip tile
-        // after every stepped frame (D9a). `InspectorCompositePanel::update`'s
-        // `tick_drawers` derives dt from `Instant::now()`, not a fixed step
-        // (unlike script.rs's driver clock) — a real, small wall-clock sleep
-        // between polls is the honest way to advance it; see the report's
-        // Shortcuts note. MOTION_MED_MS is 160ms, so ~8 ticks at 25ms plus
-        // one settle frame comfortably covers it. ──
-        for i in 0..16 {
+        // ── run the drawer tween to settlement, capturing a filmstrip tile
+        // after every stepped frame (D9a). `InspectorCompositePanel::update`
+        // derives dt from `Instant::now()`, so a real wall-clock sleep
+        // advances it. MOTION_MED_MS is 160ms: ten ticks at 25ms settle it.
+        // The drawers move in place, so a frame plans no rebuild for them. ──
+        for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(25));
             clock += 25.0 / 1000.0;
             ui.update();
-            let still_active = ui.inspector.drawer_anim_active();
             signals.rebuild = frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
             apply_decision(&mut ui, &mut cache, &mut signals);
             composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
             filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
-            if !still_active && i > 0 {
-                break;
-            }
         }
 
         // ── scroll again ──

@@ -477,21 +477,19 @@ impl ScenePanel {
     pub fn tick_object_cards(&mut self, tree: &mut UITree, dt_ms: f32) {
         if !self.open { self.object_cards_animating = false; return; }
         let mut any = false;
-        for card in &mut self.object_modifier_cards {
+        for card in self.object_modifier_cards.iter_mut().chain(self.force_cards.iter_mut()) {
             if card.node_count() == 0 { continue; }
-            any |= card.tick_drawers(dt_ms);
+            card.tick_drawers(dt_ms);
+            any |= card.structural_motion();
             card.tick_value_flash(tree, dt_ms);
         }
-        for card in &mut self.force_cards {
-            if card.node_count() == 0 { continue; }
-            any |= card.tick_drawers(dt_ms);
-            card.tick_value_flash(tree, dt_ms);
-        }
+        // A structural tween rebuilds; drawer tweens move in place.
         self.object_cards_animating = any || self.object_cards_were_animating;
         self.object_cards_were_animating = any;
         if self.object_cards_animating {
             self.view_version += 1;
         }
+        self.moved_in_place |= self.apply_object_card_motion(tree);
         if let Some(pos) = self.object_modifier_drag.as_ref().and_then(|drag| drag.pointer) {
             let bounds = self.object_modifier_bounds;
             if bounds.contains(pos) {
@@ -511,18 +509,47 @@ impl ScenePanel {
 
     pub fn object_cards_animating(&self) -> bool { self.object_cards_animating }
 
+    /// Whether object-card motion moved built nodes since the last call.
+    pub fn take_moved_in_place(&mut self) -> bool {
+        std::mem::take(&mut self.moved_in_place)
+    }
+
     /// Settle shared card motion for scripted frames without a running UI clock.
     pub fn skip_cards_to_settled(&mut self, tree: &mut UITree) -> bool {
+        let mut structural = false;
         let mut any = false;
         for card in self.object_modifier_cards.iter_mut().chain(self.force_cards.iter_mut()) {
+            structural |= card.structural_motion();
             any |= card.skip_to_settled(tree);
         }
+        let moved = self.apply_object_card_motion(tree);
+        self.moved_in_place |= moved;
+        any |= moved;
         self.object_cards_animating = false;
         self.object_cards_were_animating = false;
-        if any {
+        if structural {
             self.view_version += 1;
         }
         any
+    }
+
+    /// Move the built object cards to where their drawer and tab-ink tweens
+    /// are now, in place (decided item 10). Returns whether anything moved.
+    fn apply_object_card_motion(&mut self, tree: &mut UITree) -> bool {
+        let reflows = &mut self.reflow_scratch;
+        reflows.clear();
+        for card in self.object_modifier_cards.iter_mut().chain(self.force_cards.iter_mut()) {
+            card.take_motion(tree, reflows);
+        }
+        if reflows.is_empty() {
+            return false;
+        }
+        let mut moved = false;
+        for r in reflows.iter() {
+            moved |= self.scroll.reflow(tree, *r);
+        }
+        self.scroll.update_scrollbar(tree);
+        moved
     }
 
     pub fn update_object_card_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>, dt: f32) {

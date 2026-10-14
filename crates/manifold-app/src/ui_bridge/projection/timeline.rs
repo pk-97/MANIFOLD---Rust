@@ -92,6 +92,33 @@ mod automation_order_tests {
 /// Sync structural project data (layers, tracks) into UI panels.
 /// Call once at init and whenever the project structure changes.
 /// Triggers a full UI rebuild afterward.
+/// The track and lane heights into the coordinate mapper, the one Y layout
+/// the layer headers and viewport both read. `_for_layout` (not the plain
+/// `layers_to_ui`) resolves `automation_lane_count` from
+/// `selection.automation_mode_visible`, the one flag that grows a track when
+/// lanes are visible (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
+pub fn sync_track_layout(ui: &mut UIRoot, project: &Project, selection: &SelectionState) {
+    let layout_layers = crate::ui_translate::layers_to_ui_for_layout_with_view(
+        &project.timeline.layers,
+        selection.automation_mode_visible(),
+        selection.chosen_automation_params(),
+        selection.automation_lane_order(),
+        selection.hidden_automation_lanes(),
+        selection.pinned_automation_lanes(),
+    );
+    let lane_heights: Vec<Vec<f32>> = project.timeline.layers.iter().map(|layer| {
+        if !selection.automation_mode_visible() || layer.is_collapsed || layer.is_group() { return Vec::new(); }
+        crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+            layer, selection.chosen_automation_params().get(&layer.layer_id),
+            selection.automation_lane_order(),
+            selection.hidden_automation_lanes(),
+            selection.pinned_automation_lanes(),
+        ).iter().map(|lane| selection.automation_lane_height(&lane.target, &lane.param_id)).collect()
+    }).collect();
+    ui.viewport.set_automation_lane_layout(&lane_heights);
+    ui.viewport.rebuild_mapper_layout(&layout_layers);
+}
+
 pub fn sync_project_data(
     ui: &mut UIRoot,
     project: &Project,
@@ -108,31 +135,9 @@ pub fn sync_project_data(
     ui.pinned_automation_lanes.clear();
     ui.pinned_automation_lanes.extend_from_slice(selection.pinned_automation_lanes());
     {
-        // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
-        // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
-        // `_for_layout` (not the plain `layers_to_ui`) resolves
-        // `automation_lane_count` from `selection.automation_mode_visible` — the
-        // one flag that grows a track when lanes are visible
-        // (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
-        let layout_layers = crate::ui_translate::layers_to_ui_for_layout_with_view(
-            &project.timeline.layers,
-            selection.automation_mode_visible(),
-            selection.chosen_automation_params(),
-            selection.automation_lane_order(),
-            selection.hidden_automation_lanes(),
-            selection.pinned_automation_lanes(),
-        );
-        let lane_heights: Vec<Vec<f32>> = project.timeline.layers.iter().map(|layer| {
-            if !selection.automation_mode_visible() || layer.is_collapsed || layer.is_group() { return Vec::new(); }
-            crate::ui_translate::layer_automation_lanes_to_ui_with_view(
-                layer, selection.chosen_automation_params().get(&layer.layer_id),
-                selection.automation_lane_order(),
-                selection.hidden_automation_lanes(),
-                selection.pinned_automation_lanes(),
-            ).iter().map(|lane| selection.automation_lane_height(&lane.target, &lane.param_id)).collect()
-        }).collect();
-        ui.viewport.set_automation_lane_layout(&lane_heights);
-        ui.viewport.rebuild_mapper_layout(&layout_layers);
+        // The mapper's Y layout first, so layer headers and viewport share the
+        // same Y offsets.
+        sync_track_layout(ui, project, selection);
         if let Some(id) = ui.take_layer_reveal()
             && let Some(index) = project.timeline.find_layer_index_by_id(&id)
         {

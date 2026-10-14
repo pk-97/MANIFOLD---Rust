@@ -223,9 +223,12 @@ pub struct UIState {
     automation_lane_heights: HashMap<(UiGraphTarget, ParamId), f32>,
 
     /// D19: one version over mode visibility, lane order, hidden, pinned,
-    /// chosen params, the selected point's lane and lane heights. Moves only
-    /// on a change the timeline shows.
+    /// chosen params and the selected point's lane. Moves only on a change
+    /// the timeline shows.
     automation_view: u64,
+    /// Lane heights, apart from `automation_view`: a resize lays the rows
+    /// out again in place and touches no lane list or inspector.
+    lane_heights_view: u64,
     /// The selected point's lane last folded into `automation_view` (D8).
     seen_point_lane: Option<AutomationLaneKey>,
 
@@ -298,6 +301,7 @@ impl UIState {
             pinned_automation_lanes: Vec::new(),
             automation_lane_heights: HashMap::new(),
             automation_view: 0,
+            lane_heights_view: 0,
             seen_point_lane: None,
             automation_clipboard: None,
             automation_paste_context: None,
@@ -315,9 +319,14 @@ impl UIState {
     pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
         let height = height.clamp(64.0, 240.0);
         let previous = self.automation_lane_heights.insert((target, param_id), height);
-        if previous != Some(height) {
-            self.note_lane_view_change();
+        if previous != Some(height) && self.automation_mode_visible {
+            self.lane_heights_view += 1;
         }
+    }
+
+    /// Moves when a lane height the timeline shows changes.
+    pub fn lane_heights_view(&self) -> u64 {
+        self.lane_heights_view
     }
 
     pub fn automation_lane_heights(&self) -> &HashMap<(UiGraphTarget, ParamId), f32> {
@@ -401,7 +410,7 @@ impl UIState {
         self.automation_view
     }
 
-    /// Lane order, visibility, pins, chosen params and heights only show
+    /// Lane order, visibility, pins and chosen params only show
     /// while the lanes do; showing them bumps once (D19).
     fn note_lane_view_change(&mut self) {
         if self.automation_mode_visible {
