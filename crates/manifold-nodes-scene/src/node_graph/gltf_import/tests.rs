@@ -2770,3 +2770,45 @@ fn authored_spot_light_preserves_raw_intensity_cone_and_physical_range() {
         line.contains("raw") && line.contains("candela") && line.contains("spot cone")
     }));
 }
+
+#[test]
+fn imported_light_title_is_glb_name_and_rung_restores_it() {
+    use super::gltf_load::{GltfLightKind, GltfPunctualLight};
+    use crate::node_graph::scene_exposure::migrate_light_titles_for_test;
+
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "M", 3)],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: vec![GltfPunctualLight {
+            name: Some("Key Spot".to_string()),
+            kind: GltfLightKind::Point,
+            color: [1.0, 1.0, 1.0],
+            intensity: 100.0,
+            range: None,
+            world_pos: [0.0, 1.0, 0.0],
+            world_forward: [0.0, 0.0, -1.0],
+        }],
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let (mut def, _) =
+        build_import_graph(&summary, std::path::Path::new("/tmp/synthetic_title.glb")).expect("build");
+    let title = |def: &manifold_core::effect_graph_def::EffectGraphDef| {
+        def.nodes.iter().find(|n| n.node_id == "light_0").and_then(|n| n.title.clone())
+    };
+    assert_eq!(title(&def).as_deref(), Some("Key Spot"), "importer writes the GLB name into title");
+
+    // An import from before the importer wrote titles: the rung recovers the
+    // name from the intensity stamp's section string, once.
+    def.nodes.iter_mut().find(|n| n.node_id == "light_0").unwrap().title = None;
+    assert!(migrate_light_titles_for_test(&mut def));
+    assert_eq!(title(&def).as_deref(), Some("Key Spot"));
+    assert!(!migrate_light_titles_for_test(&mut def), "rung is idempotent");
+}

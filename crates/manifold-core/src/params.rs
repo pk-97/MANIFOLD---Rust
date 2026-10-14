@@ -191,8 +191,11 @@ impl Param {
     /// it onto choices.
     pub fn calibrate_from_spec(&mut self) {
         self.choices.slider = Some((self.spec.min, self.spec.max));
-        self.choices.curve = Some(self.spec.curve);
-        self.choices.invert = Some(self.spec.invert);
+        // Same rule as the calibration wire: only a non-default curve or
+        // invert is a choice, so save and reload is a fixed point.
+        self.choices.curve =
+            (!crate::effects::curve_is_linear(&self.spec.curve)).then_some(self.spec.curve);
+        self.choices.invert = self.spec.invert.then_some(true);
     }
 
     #[inline]

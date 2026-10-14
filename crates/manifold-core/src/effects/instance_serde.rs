@@ -141,8 +141,10 @@ impl ParamEntryWire {
         // shape stay so old files load and save byte-identically.
         if let Some(c) = &self.calibration {
             p.choices.slider = Some((c.min, c.max));
-            p.choices.curve = Some(c.curve);
-            p.choices.invert = Some(c.invert);
+            // The wire omits a linear curve and no invert, so only a
+            // non-default one is a choice; a save-load is then a fixed point.
+            p.choices.curve = (!curve_is_linear(&c.curve)).then_some(c.curve);
+            p.choices.invert = c.invert.then_some(true);
         }
         self.base.is_some()
     }

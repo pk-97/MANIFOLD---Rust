@@ -407,6 +407,8 @@ pub(super) fn build_import_graph(
         let node_str_id = format!("light_{i}");
         let light_id = fresh_id();
         let mut light_node = plain_node(light_id, &node_str_id, "node.light", &node_str_id);
+        // SCENE_SURFACES D11 (Lights): the readable name is the node title.
+        light_node.title = Some(label.clone());
 
         let (mode, spec_unit, kind_note, cones) = match light.kind {
             gltf_load::GltfLightKind::Directional => (0u32, "lux", String::new(), (0.0, 0.0)),

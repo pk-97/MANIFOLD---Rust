@@ -2804,6 +2804,7 @@ impl Command for ImportModelIntoSceneCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -2818,6 +2819,7 @@ impl Command for ImportModelIntoSceneCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {

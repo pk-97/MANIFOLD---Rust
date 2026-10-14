@@ -222,12 +222,46 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
+    let light_titles = migrate_light_titles(def);
     compound
+        || light_titles
         || fluid_objects
         || material_migrated
         || repaired
         || migrated
         || bokeh_source_migrated
+}
+
+/// SCENE_SURFACES D11 (Lights) load rung: a light imported before the
+/// importer wrote `title` carries its readable GLB name only as the section
+/// string of its intensity stamp. Copy that into `title` when it differs from
+/// the handle. Idempotent: a light with a title is never touched.
+fn migrate_light_titles(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return false;
+    };
+    let mut changed = false;
+    for node in def.nodes.iter_mut().filter(|n| n.type_id == "node.light" && n.title.is_none()) {
+        let section = meta
+            .bindings
+            .iter()
+            .find(|b| matches!(&b.target, BindingTarget::Node { node_id, param }
+                if *node_id == node.node_id && param == "intensity"))
+            .and_then(|b| meta.params.iter().find(|p| p.id == b.id))
+            .and_then(|p| p.section.as_deref())
+            .filter(|s| !s.is_empty() && Some(*s) != node.handle.as_deref());
+        if let Some(section) = section {
+            node.title = Some(section.to_string());
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+pub(crate) fn migrate_light_titles_for_test(def: &mut EffectGraphDef) -> bool {
+    migrate_light_titles(def)
 }
 
 /// The layered gather consumes the original signed CoC and computes its own

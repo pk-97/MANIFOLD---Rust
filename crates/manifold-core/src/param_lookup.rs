@@ -258,8 +258,9 @@ impl<'a> Join<'a> {
 
     /// A user-exposed control keeps its saved spec. A saved label that
     /// differs from what the lookup calls its target becomes a rename
-    /// choice, the one place an old file holds a user rename (D2 (one live
-    /// lookup), old projects).
+    /// choice, and a saved range that differs from the lookup's becomes a
+    /// slider-range choice: the one place an old file holds them (D2 (one
+    /// live lookup), old projects).
     pub(crate) fn user_choices(&mut self, saved: &ParamSpecDef) -> ParamChoices {
         let mut matching = self.bindings.iter().filter(|b| b.id == saved.id);
         let (Some(binding), None) = (matching.next(), matching.next()) else {
@@ -269,8 +270,13 @@ impl<'a> Join<'a> {
             .and_then(|key| self.resolver.describe(key));
         ParamChoices {
             rename: described
+                .as_ref()
                 .filter(|d| !saved.name.is_empty() && saved.name != d.name)
                 .map(|_| saved.name.clone()),
+            slider: described
+                .as_ref()
+                .filter(|d| (saved.min, saved.max) != (d.min, d.max))
+                .map(|_| (saved.min, saved.max)),
             ..ParamChoices::default()
         }
     }
@@ -590,6 +596,24 @@ mod tests {
         // A label equal to what the lookup calls the target is no rename.
         let plain = load(&scene_json(chosen_params(), "Intensity"));
         assert_eq!(plain.params.get("user.lamp").unwrap().choices.rename, None);
+    }
+
+    #[test]
+    fn user_exposure_range_becomes_slider_choice_once() {
+        // The saved user control spans 0..1; the lookup says 0..10.
+        let fx = load(&scene_json(chosen_params(), "Lamp Power"));
+        let p = fx.params.get("user.lamp").unwrap();
+        assert_eq!(p.choices.slider, Some((0.0, 1.0)));
+        assert_eq!((p.spec.min, p.spec.max), (0.0, 1.0));
+        let again = load(&save(&fx));
+        assert_eq!(again.params.get("user.lamp").unwrap().choices, p.choices);
+        assert_eq!(save(&again), save(&fx), "the conversion happens once");
+        // A saved range equal to the lookup's is no slider choice.
+        let mut wire: serde_json::Value =
+            serde_json::from_str(&scene_json(chosen_params(), "Lamp Power")).unwrap();
+        wire["graph"]["presetMetadata"]["params"][2]["max"] = serde_json::json!(10.0);
+        let plain = load(&wire.to_string());
+        assert_eq!(plain.params.get("user.lamp").unwrap().choices.slider, None);
     }
 
     #[test]

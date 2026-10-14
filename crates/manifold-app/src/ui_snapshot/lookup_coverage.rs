@@ -257,10 +257,7 @@ fn merged_model_layer() -> PresetInstance {
         &mut project,
     );
     assert_eq!(editing.take_rejection(), None);
-    let mut fx = project.timeline.layers[index].gen_params().expect("merged layer").clone();
-    // The command edits the graph; the manifest rebuild runs on the content
-    // thread in the app, so do it here.
-    fx.refresh_manifest_from_graph();
+    let fx = project.timeline.layers[index].gen_params().expect("merged layer").clone();
     let merged = plan.new_card_params.iter().filter(|s| fx.params.get(&s.id).is_some_and(|p| p.source == SpecSource::Lookup)).count();
     println!("JOIN_DUMP merged tiger_lily: {merged} of {} merged controls resolve through the lookup", plan.new_card_params.len());
     assert!(merged > 0, "merged controls missing from the joined manifest");
