@@ -608,8 +608,8 @@ not a recovery system.
 - [x] **1.4** Plumb `TextMeasure` into the build path. _Done when:_ a panel can
   size a cell to its text at build time. → `UITree` now owns a `Box<dyn TextMeasure>`
   (`tree.measure_text` / `text_width`), defaulting to an always-on GPU-free
-  `HeuristicTextMeasure`; the app installs a CoreText-accurate `CoreTextMeasure`
-  (manifold-nodes, `RefCell<FontManager>`, no GPU) in `UIRoot::new()` so both
+  `HeuristicTextMeasure`; the app installs a CoreText-accurate `CachedTextMeasure`
+  (manifold-ui-paint, bounded cache, no GPU) in `UIRoot::new()` so both
   windows get it. Proof: the footer's static "Q:" label is sized to its measured
   text at build, right-anchored so the glyphs render unchanged (test
   `quantize_label_sized_to_text`). Signature-free: no panel `build()` arg changed —

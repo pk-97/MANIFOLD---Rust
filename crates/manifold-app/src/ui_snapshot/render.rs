@@ -635,6 +635,7 @@ pub fn render_transform_proof_to_png(path: &str) {
     let target = RenderTarget::new(&device, TEX_W, TEX_H, UI_FORMAT, "ui-snap-transform");
 
     let mut tree = UITree::new();
+    tree.set_text_measure(Box::new(manifold_ui_paint::native_text::CachedTextMeasure::new()));
     // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: a standalone scratch tree
     // local to this function, same reasoning as the sidebar wrap above —
     // still a real `UITree`, still subject to `mint`'s debug assertion.
