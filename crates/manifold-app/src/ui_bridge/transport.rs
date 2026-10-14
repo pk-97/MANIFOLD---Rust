@@ -93,7 +93,7 @@ pub(super) fn dispatch_transport(
             // Uses set_insert_cursor_beat (non-clearing variant)
             // since we don't have a layer index here.
             selection.set_insert_cursor_beat(manifold_core::Beats::from_f32(*beat));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Clock/Sync (handled at Application level, these are fallbacks) ──
@@ -128,15 +128,13 @@ pub(super) fn dispatch_transport(
             ContentCommand::send(content_tx, ContentCommand::AutomationBackToArrangement);
             DispatchResult::handled()
         }
-        // Pure UI view-state — no project mutation, no runtime playback
-        // state, so no ContentCommand. It DOES change the Y-layout (a visible
-        // lane grows its track), so this must return `structural()`, not
-        // `handled()`, to force `sync_project_data` to re-derive
-        // `automation_lane_count` and the lane list on the next frame.
+        // Pure UI view-state. The lanes change the Y-layout; the
+        // `automation_view` version runs the project sync that re-derives the
+        // lane list, so no structural flag.
         TransportAction::ToggleAutomationMode => {
             selection.toggle_automation_mode_visible();
             selection.clear_automation_selection();
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         TransportAction::ToggleAutomationDrawMode => {

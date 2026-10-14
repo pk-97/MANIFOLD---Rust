@@ -27,7 +27,7 @@ pub(super) fn dispatch_marker(
             } else {
                 selection.select_marker(marker_id);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── DoubleClick: intercepted in app_render.rs for text input

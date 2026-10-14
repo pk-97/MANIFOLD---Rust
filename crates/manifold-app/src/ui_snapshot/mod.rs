@@ -1402,6 +1402,7 @@ mod cache_path_full_render {
         ui.pointer_event(pos, PointerAction::Down, clock);
         ui.pointer_event(pos, PointerAction::Up, clock);
         let view_before = ui.inspector.view_version();
+        let identity_before = data.selection.selection_identity_version();
         let actions = ui.process_events();
         let mut structural = false;
         let mut scrub = crate::ui_bridge::ScrubState::default();
@@ -1422,7 +1423,10 @@ mod cache_path_full_render {
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             structural |= result.structural_change;
         }
-        structural || ui.inspector.view_version() != view_before
+        // A tab click moves only the selection identity (P4d batch d).
+        structural
+            || ui.inspector.view_version() != view_before
+            || data.selection.selection_identity_version() != identity_before
     }
 
     #[test]

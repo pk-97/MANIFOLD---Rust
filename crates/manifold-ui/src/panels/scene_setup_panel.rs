@@ -1010,6 +1010,14 @@ pub struct ScenePanel {
     /// `BTreeMap` — is the map that actually compiles; same "keyed per
     /// layer, UI-local, never serialized" contract either way.
     selection: std::collections::HashMap<LayerId, SceneSelection>,
+    /// UI_INVALIDATION D14 for the Scene panel: moves when a noted selection
+    /// differs from the last noted one, or the selection write cleared a
+    /// reveal or modifier focus. Noted at the gesture's commit (click, menu,
+    /// external pick), never on press, so a press does not rebuild under a
+    /// drag.
+    selection_version: u64,
+    noted_selection: Option<(LayerId, Option<SceneSelection>)>,
+    focus_cleared: bool,
     /// Every outliner row's click target this frame — `(node_id, what
     /// selecting it means)`.
     outliner_row_ids: Vec<(NodeId, SceneSelection)>,
@@ -1152,6 +1160,9 @@ impl Default for ScenePanel {
             tree_groups: Vec::new(),
             header_buttons: Default::default(),
             selection: std::collections::HashMap::new(),
+            selection_version: 0,
+            noted_selection: None,
+            focus_cleared: false,
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
             object_hide_ids: Vec::new(),
@@ -1483,17 +1494,45 @@ impl ScenePanel {
     /// object-pick sets the SAME UI-local `self.selection` map an outliner
     /// row click does (`handle_event`'s `SceneSetupSelectionChanged` arm) —
     /// one selection store for the whole app, not a second one that could
-    /// drift from the panel's own. The caller (the graph-editor window's
-    /// mouse-press handler) is responsible for redrawing/rebuilding
-    /// whatever reads this panel's Properties section afterward; this call
-    /// alone doesn't trigger one (it has no `PanelAction` dispatch loop to
-    /// push through, unlike `handle_event`'s click arm).
+    /// drift from the panel's own. A change moves the selection version, which
+    /// rebuilds the Properties section.
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
+        self.clear_item_focus();
+        self.selection.insert(layer_id.clone(), sel);
+        self.reveal_properties = true;
+        self.note_selection(&layer_id);
+    }
+
+    /// The Scene panel's selection version (UI_INVALIDATION D14): the
+    /// planner re-runs the inspector projection when it moves.
+    pub fn selection_version(&self) -> u64 {
+        self.selection_version
+    }
+
+    /// A selection write drops any reveal and modifier focus; the next note
+    /// counts that as a change when something was focused.
+    fn clear_item_focus(&mut self) {
+        if self.pending_parameter_reveal.is_some()
+            || self.revealed_property.is_some()
+            || self.selected_object_modifier.is_some()
+        {
+            self.focus_cleared = true;
+        }
         self.pending_parameter_reveal = None;
         self.revealed_property = None;
         self.selected_object_modifier = None;
-        self.selection.insert(layer_id, sel);
-        self.reveal_properties = true;
+    }
+
+    /// Compare-before-bump: the version moves only when `layer_id`'s
+    /// selection differs from the last noted one, or a focus was cleared
+    /// since the last note.
+    pub(crate) fn note_selection(&mut self, layer_id: &LayerId) {
+        let current = (layer_id.clone(), self.selection.get(layer_id).cloned());
+        let cleared = std::mem::take(&mut self.focus_cleared);
+        if cleared || self.noted_selection.as_ref() != Some(&current) {
+            self.noted_selection = Some(current);
+            self.selection_version += 1;
+        }
     }
 
     /// Capture the destination before a keyboard shortcut can overtake the
@@ -1504,10 +1543,9 @@ impl ScenePanel {
         };
         if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
         let SceneSetupState::Live(vm) = &self.state else { return false; };
-        self.pending_parameter_reveal = None;
-        self.revealed_property = None;
-        self.selected_object_modifier = None;
-        self.selection.insert(vm.layer_id.clone(), selection.clone());
+        let (layer_id, selection) = (vm.layer_id.clone(), selection.clone());
+        self.clear_item_focus();
+        self.selection.insert(layer_id, selection);
         true
     }
 
@@ -1522,6 +1560,13 @@ impl ScenePanel {
             Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
         };
+        // The build shows the fallback, so it is what the next note compares
+        // against: reselecting the vanished item after a redo is a change.
+        if let Some((layer, noted)) = self.noted_selection.as_mut()
+            && *layer == vm.layer_id
+        {
+            *noted = Some(resolved.clone());
+        }
         self.selection.insert(vm.layer_id.clone(), resolved.clone());
         resolved
     }
@@ -1826,6 +1871,9 @@ impl ScenePanel {
         }
         match event {
             UIEvent::RightClick { node_id: Some(node_id), .. } if self.select_outliner_node(*node_id) => {
+                if let Some(layer_id) = self.state.as_live().map(|vm| vm.layer_id.clone()) {
+                    self.note_selection(&layer_id);
+                }
                 (true, vec![PanelAction::Root(RootAction::SceneItemRightClicked)])
             }
             UIEvent::Click { node_id, .. } => {
@@ -1847,9 +1895,8 @@ impl ScenePanel {
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
-                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: also emit
-                // `SceneSetupSelectionChanged` so the dispatch loop's
-                // `structural_change: true` rebuilds Properties THIS frame
+                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: the noted
+                // selection version re-projects Properties THIS frame
                 // instead of waiting for the next unrelated sync.
                 if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
                     // scene-panel-ux lane: handle outliner fold toggles
@@ -1860,11 +1907,11 @@ impl ScenePanel {
                     }
                     // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
-                        self.pending_parameter_reveal = None;
-                        self.revealed_property = None;
-                        self.selected_object_modifier = None;
-                        self.selection.insert(vm.layer_id.clone(), sel.clone());
-                        return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
+                        let (layer_id, sel) = (vm.layer_id.clone(), sel.clone());
+                        self.clear_item_focus();
+                        self.selection.insert(layer_id.clone(), sel);
+                        self.note_selection(&layer_id);
+                        return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer_id))]);
                     }
                     return (true, Vec::new());
                 }

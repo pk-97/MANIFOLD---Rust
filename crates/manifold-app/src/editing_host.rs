@@ -408,7 +408,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         }
         if new_layer != *self.active_layer {
             *self.active_layer = new_layer;
-            *self.needs_structural_sync = true;
         }
     }
 
@@ -443,7 +442,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .map(|l| l.layer_id.clone());
         if new_layer != *self.active_layer {
             *self.active_layer = new_layer;
-            *self.needs_structural_sync = true;
         }
     }
 

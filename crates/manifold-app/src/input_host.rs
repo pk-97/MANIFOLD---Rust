@@ -143,9 +143,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         //   ResetAllInspectors();
         //   masterInspector?.Show();
         let ui = &mut self.ui_root;
+        // The cleared timeline selection moved its versions; the card
+        // highlights clear in place.
         ui.inspector.clear_effect_selection(&mut ui.tree);
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
         self.scroll_dirty.visual = true;
     }
 
@@ -182,9 +183,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         if bpm > 0.0 { 60.0 / bpm } else { 0.5 }
     }
 
-    fn on_clip_selected(&mut self, _clip_id: &str) {
-        *self.needs_structural_sync = true;
-    }
+    /// The selection setters already moved the selection versions.
+    fn on_clip_selected(&mut self, _clip_id: &str) {}
 
     // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
 
@@ -548,7 +548,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .collect();
             self.selection.select_clips(ids);
         }
-        *self.needs_structural_sync = true;
     }
 
     fn copy_clips(&mut self, clip_ids: &[ClipId]) {
@@ -1583,14 +1582,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn toggle_automation_mode_visible(&mut self) {
-        // Mirrors `PanelAction::ToggleAutomationMode` (ui_bridge/transport.rs)
-        // exactly — same view-state flip, same `DispatchResult::structural()`
-        // semantics: it changes the Y-layout (lane strips appear/disappear),
-        // so both dirty flags are needed, not just `needs_rebuild`.
+        // Mirrors `PanelAction::ToggleAutomationMode` (ui_bridge/transport.rs):
+        // the `automation_view` version runs the project sync.
         self.selection.toggle_automation_mode_visible();
         self.selection.clear_automation_selection();
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2) ──
