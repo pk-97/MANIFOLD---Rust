@@ -227,6 +227,12 @@ pub struct Application {
     /// `SetNodeAtlasVisible` command so it sends only when the visible scope
     /// (or topology) changes, not every frame. Empty = atlas off / editor closed.
     pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
+    /// The snapshot (held, compared by pointer) and scope path the visible-node set was
+    /// last computed from; it is recomputed only when either moves.
+    pub(crate) atlas_visible_snap: Option<std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>>,
+    pub(crate) atlas_visible_scope: Vec<u32>,
+    /// The editor mini-timeline, rebuilt only when its key moves.
+    pub(crate) mini_timeline: crate::app_render::MiniTimelineCache,
     /// Single shared IOSurface + the UI-side texture imported from it for the
     /// clip-thumbnail atlas (section 24 5c, BUG-119: one surface, no rotation — see
     /// `crate::shared_texture::SharedAtlasSurface`).
@@ -611,6 +617,9 @@ impl Application {
             #[cfg(target_os = "macos")]
             ui_node_atlas_textures: [None, None, None],
             last_atlas_visible_sent: Vec::new(),
+            atlas_visible_snap: None,
+            atlas_visible_scope: Vec::new(),
+            mini_timeline: Default::default(),
             #[cfg(target_os = "macos")]
             clip_atlas_surface: None,
             #[cfg(target_os = "macos")]
@@ -1027,7 +1036,7 @@ impl Application {
                             ),
                         ] {
                             let mut dctx = crate::ui_bridge::DispatchCtx {
-                                project: &mut self.local_project,
+                                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
                                 content_tx: &content_tx,
                                 content_state: &self.content_state,
                                 ui: &mut self.ws.ui_root,
@@ -1036,7 +1045,6 @@ impl Application {
                                 user_prefs: &mut self.user_prefs,
                                 editor_target: None,
                                 scrub: &mut self.scrub,
-                                stamps: &mut self.ui_edits.stamps,
                                 dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                             };
                             let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1055,7 +1063,7 @@ impl Application {
                     let content_tx = self.content_tx.as_ref().unwrap().clone();
                     for action in crate::text_input::material_colour_scrub_actions(ctx, values) {
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: &mut self.local_project,
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
                             content_tx: &content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -1064,7 +1072,6 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target: None,
                             scrub: &mut self.scrub,
-                            stamps: &mut self.ui_edits.stamps,
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
@@ -1098,7 +1105,7 @@ impl Application {
                         value,
                     ));
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: &mut self.local_project,
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
                         content_tx: &content_tx,
                         content_state: &self.content_state,
                         ui: &mut self.ws.ui_root,
@@ -1107,7 +1114,6 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
-                        stamps: &mut self.ui_edits.stamps,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1124,7 +1130,7 @@ impl Application {
                     use manifold_ui::panels::PanelAction;
                     let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(ctx.send_id, parsed));
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: &mut self.local_project,
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
                         content_tx: &content_tx,
                         content_state: &self.content_state,
                         ui: &mut self.ws.ui_root,
@@ -1133,7 +1139,6 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
-                        stamps: &mut self.ui_edits.stamps,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1164,7 +1169,7 @@ impl Application {
                             DriverConfigAction::SetFreePeriod(parsed),
                         ));
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: &mut self.local_project,
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
                             content_tx: &content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -1173,7 +1178,6 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target: None,
                             scrub: &mut self.scrub,
-                            stamps: &mut self.ui_edits.stamps,
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1708,7 +1712,7 @@ impl Application {
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {
-                                    project: &mut self.local_project,
+                                    project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
                                     content_tx,
                                     content_state: &self.content_state,
                                     ui: &mut self.ws.ui_root,
@@ -1717,7 +1721,6 @@ impl Application {
                                     user_prefs: &mut self.user_prefs,
                                     editor_target,
                                     scrub: &mut self.scrub,
-                                    stamps: &mut self.ui_edits.stamps,
                                     dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                                 };
                                 let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
@@ -2578,6 +2581,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_midi_clock_device: Arc::from(""),
                 cached_perc_message: Arc::from(""),
                 last_sent_midi_device_names: Arc::from([]),
+                last_sent_ableton_session: None,
                 reactions: Default::default(),
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
@@ -2642,6 +2646,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &self.content_state.automation_latched_params,
             self.content_state.led_preview.as_ref(),
         );
+        crate::ui_bridge::sync_audio_dock(&mut self.ws.ui_root, &self.local_project);
 
         // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content
         // thread + GPU are up, so this is the earliest point that can load a

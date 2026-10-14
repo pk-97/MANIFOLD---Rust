@@ -48,7 +48,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 63
@@ -59,8 +58,6 @@
         "ChromeLayout": 366,
         "FrameAlloc": 62902,
         "GridBitmapRepaint": 4,
-        "OverviewRepaint": 122,
-        "PresetFingerprint": 122,
         "RegionRebuild": 122,
         "SlotInvalidate": 244,
         "ValuePush": 122
@@ -76,7 +73,6 @@
         "InspectorSync": 3,
         "LaneProjection": 64,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 3,
         "RegionRebuild": 59,
         "SlotInvalidate": 139,
@@ -94,7 +90,6 @@
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 2,
         "SlotInvalidate": 14,
         "ValuePush": 63
@@ -110,7 +105,6 @@
         "InspectorSync": 3,
         "LaneProjection": 7,
         "OverviewRepaint": 123,
-        "PresetFingerprint": 123,
         "ProjectSync": 3,
         "RegionRebuild": 119,
         "SlotInvalidate": 259,
@@ -128,7 +122,6 @@
         "InspectorSync": 3,
         "LaneProjection": 7,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 3,
         "RegionRebuild": 59,
         "SlotInvalidate": 139,
@@ -140,11 +133,9 @@
       "jitter_2s": {
         "ChromeLayout": 360,
         "DriverScan": 120,
-        "FrameAlloc": 17611,
+        "FrameAlloc": 11984,
         "OverviewRepaint": 120,
-        "PresetFingerprint": 120,
-        "TextMeasureMiss": 17,
-        "ValuePush": 120
+        "TextMeasureMiss": 17
       }
     },
     "work-cursor-nav": {
@@ -157,7 +148,6 @@
         "InspectorSync": 1,
         "LaneProjection": 6,
         "OverviewRepaint": 4,
-        "PresetFingerprint": 4,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "TextMeasureMiss": 1,
@@ -170,7 +160,6 @@
         "FrameAlloc": 7136,
         "FullBuild": 4,
         "OverviewRepaint": 4,
-        "PresetFingerprint": 4,
         "SlotInvalidate": 28,
         "ValuePush": 4
       }
@@ -185,7 +174,6 @@
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 32,
-        "PresetFingerprint": 32,
         "ProjectSync": 2,
         "SlotInvalidate": 21,
         "ValuePush": 32
@@ -201,7 +189,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 63
@@ -217,7 +204,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 63
@@ -231,7 +217,6 @@
         "GridBitmapRepaint": 7,
         "InPlaceUpdate": 1,
         "OverviewRepaint": 120,
-        "PresetFingerprint": 120,
         "SlotInvalidate": 2,
         "TextMeasureMiss": 120,
         "ValuePush": 120
@@ -242,8 +227,6 @@
         "ChromeLayout": 366,
         "FrameAlloc": 60437,
         "GridBitmapRepaint": 1,
-        "OverviewRepaint": 122,
-        "PresetFingerprint": 122,
         "RegionRebuild": 122,
         "SlotInvalidate": 244,
         "ValuePush": 122
@@ -252,10 +235,7 @@
     "work-idle": {
       "idle_2s": {
         "ChromeLayout": 360,
-        "FrameAlloc": 17768,
-        "OverviewRepaint": 120,
-        "PresetFingerprint": 120,
-        "ValuePush": 120
+        "FrameAlloc": 11408
       }
     },
     "work-inspector-resize": {
@@ -265,7 +245,6 @@
         "FullBuild": 60,
         "GridBitmapRepaint": 180,
         "OverviewRepaint": 60,
-        "PresetFingerprint": 60,
         "SlotInvalidate": 420,
         "ValuePush": 60
       }
@@ -274,17 +253,17 @@
       "resize_1s": {
         "ChromeLayout": 186,
         "ClipProjection": 60,
-        "FrameAlloc": 68619,
+        "FrameAlloc": 68566,
         "FullBuild": 60,
         "GridBitmapRepaint": 421,
         "InspectorSync": 60,
         "LaneProjection": 121,
-        "OverviewRepaint": 62,
-        "PresetFingerprint": 62,
+        "OverviewRepaint": 60,
+        "PresetListProjection": 60,
         "ProjectSync": 60,
         "RegionRebuild": 1,
         "SlotInvalidate": 422,
-        "ValuePush": 62
+        "ValuePush": 61
       }
     },
     "work-layer-gain": {
@@ -297,7 +276,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 63
@@ -313,7 +291,6 @@
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 2,
         "SlotInvalidate": 14,
         "ValuePush": 63
@@ -329,7 +306,6 @@
         "InspectorSync": 3,
         "LaneProjection": 7,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 3,
         "RegionRebuild": 59,
         "SlotInvalidate": 139,
@@ -342,8 +318,6 @@
         "ChromeLayout": 12,
         "FrameAlloc": 2161,
         "FullBuild": 4,
-        "OverviewRepaint": 4,
-        "PresetFingerprint": 4,
         "SlotInvalidate": 28,
         "ValuePush": 4
       }
@@ -358,7 +332,6 @@
         "InspectorSync": 3,
         "LaneProjection": 9,
         "OverviewRepaint": 33,
-        "PresetFingerprint": 33,
         "ProjectSync": 3,
         "SlotInvalidate": 21,
         "TextMeasureMiss": 1,
@@ -368,11 +341,9 @@
     "work-playback": {
       "play_2s": {
         "ChromeLayout": 360,
-        "FrameAlloc": 17851,
+        "FrameAlloc": 12188,
         "OverviewRepaint": 120,
-        "PresetFingerprint": 120,
-        "TextMeasureMiss": 17,
-        "ValuePush": 120
+        "TextMeasureMiss": 17
       }
     },
     "work-region-move": {
@@ -385,7 +356,6 @@
         "InspectorSync": 2,
         "LaneProjection": 5,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 2,
         "RegionRebuild": 60,
         "SlotInvalidate": 134,
@@ -402,7 +372,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 63
@@ -412,16 +381,16 @@
       "drag_1s": {
         "ChromeLayout": 186,
         "ClipProjection": 60,
-        "FrameAlloc": 56626,
+        "FrameAlloc": 56520,
         "FullBuild": 60,
         "GridBitmapRepaint": 420,
         "InspectorSync": 60,
         "LaneProjection": 120,
-        "OverviewRepaint": 62,
-        "PresetFingerprint": 62,
+        "OverviewRepaint": 60,
+        "PresetListProjection": 60,
         "ProjectSync": 60,
         "SlotInvalidate": 420,
-        "ValuePush": 62
+        "ValuePush": 60
       }
     },
     "work-select-click": {
@@ -434,7 +403,7 @@
         "InspectorSync": 1,
         "LaneProjection": 3,
         "OverviewRepaint": 1,
-        "PresetFingerprint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "TextMeasureMiss": 1,
@@ -446,7 +415,6 @@
         "ChromeLayout": 186,
         "FrameAlloc": 13152,
         "OverviewRepaint": 62,
-        "PresetFingerprint": 62,
         "ValuePush": 62
       }
     },
@@ -460,7 +428,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 123,
-        "PresetFingerprint": 123,
         "ProjectSync": 1,
         "SlotInvalidate": 427,
         "ValuePush": 123
@@ -470,16 +437,16 @@
       "three_grabs_lanes_hidden": {
         "ChromeLayout": 33,
         "ClipProjection": 2,
-        "FrameAlloc": 8487,
+        "FrameAlloc": 8198,
         "FullBuild": 4,
         "GridBitmapRepaint": 6,
         "InspectorSync": 2,
         "LaneProjection": 4,
-        "OverviewRepaint": 11,
-        "PresetFingerprint": 11,
+        "OverviewRepaint": 2,
+        "PresetListProjection": 2,
         "ProjectSync": 2,
         "SlotInvalidate": 28,
-        "ValuePush": 11
+        "ValuePush": 7
       }
     },
     "work-split-drag": {
@@ -488,7 +455,6 @@
         "FrameAlloc": 31990,
         "FullBuild": 60,
         "OverviewRepaint": 60,
-        "PresetFingerprint": 60,
         "SlotInvalidate": 420,
         "ValuePush": 60
       }
@@ -503,7 +469,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 63,
-        "PresetFingerprint": 63,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 63
@@ -519,7 +484,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 1,
-        "PresetFingerprint": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 1
@@ -535,7 +499,6 @@
         "InspectorSync": 1,
         "LaneProjection": 2,
         "OverviewRepaint": 1,
-        "PresetFingerprint": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
         "ValuePush": 1
@@ -547,7 +510,6 @@
         "FrameAlloc": 9474,
         "GridBitmapRepaint": 119,
         "OverviewRepaint": 30,
-        "PresetFingerprint": 30,
         "RegionRebuild": 30,
         "SlotInvalidate": 60,
         "TextMeasureMiss": 17,

@@ -1,7 +1,6 @@
 //! Layer-related dispatch: mute/solo/click/chevron/blend/drag/add/delete.
 
 use manifold_core::PresetTypeId;
-use manifold_core::project::Project;
 use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::{Beats, LayerId};
 use manifold_editing::commands::audio_setup::SetLayerAudioSendCommand;
@@ -16,14 +15,14 @@ use crate::ui_root::UIRoot;
 
 pub(super) fn dispatch_layer(
     action: &LayerAction,
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
+    _content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
     active_layer: &mut Option<LayerId>,
 ) -> DispatchResult {
-    use crate::content_command::ContentCommand;
+    
     match action {
         // ── Layer operations ───────────────────────────────────────
         LayerAction::ToggleMute(id) => {
@@ -41,21 +40,13 @@ pub(super) fn dispatch_layer(
                 .find_layer_by_id(id)
                 .map(|(_, l)| !l.is_muted)
                 .unwrap_or(true);
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.is_muted = new_muted;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.is_muted = new_muted;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.is_muted = new_muted;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::handled()
         }
         LayerAction::ToggleAnalysisOnly(id) => {
@@ -74,21 +65,13 @@ pub(super) fn dispatch_layer(
                 .find_layer_by_id(id)
                 .map(|(_, l)| !l.analysis_only)
                 .unwrap_or(true);
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.analysis_only = new_analysis;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.analysis_only = new_analysis;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.analysis_only = new_analysis;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::handled()
         }
         LayerAction::ToggleSolo(id) => {
@@ -104,21 +87,13 @@ pub(super) fn dispatch_layer(
                 .find_layer_by_id(id)
                 .map(|(_, l)| !l.is_solo)
                 .unwrap_or(true);
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.is_solo = new_solo;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.is_solo = new_solo;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.is_solo = new_solo;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::handled()
         }
         LayerAction::ToggleLed(id) => {
@@ -146,21 +121,13 @@ pub(super) fn dispatch_layer(
                 .find_layer_by_id(id)
                 .map(|(_, l)| !l.blit_to_led)
                 .unwrap_or(true);
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.blit_to_led = new_led;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.blit_to_led = new_led;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.blit_to_led = new_led;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::handled()
         }
         LayerAction::LayerClicked(id, modifiers) => {
@@ -204,21 +171,13 @@ pub(super) fn dispatch_layer(
                 .find_layer_by_id(id)
                 .map(|(_, l)| !l.is_collapsed)
                 .unwrap_or(true);
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.is_collapsed = new_collapsed;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.is_collapsed = new_collapsed;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.is_collapsed = new_collapsed;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::structural()
         }
         LayerAction::BlendModeClicked(_id) => {
@@ -236,10 +195,9 @@ pub(super) fn dispatch_layer(
                     {
                         let cmd = ChangeLayerBlendModeCommand::new(layer_id, old_mode, *new_mode);
                         {
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            let boxed: Box<dyn manifold_editing::command::Command + Send> =
                                 Box::new(cmd);
-                            boxed.execute(project);
-                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                            project.execute(boxed);
                         }
                     }
                 }
@@ -252,10 +210,9 @@ pub(super) fn dispatch_layer(
             // layer onto a default send makes a live capture+layer mix.
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                let boxed: Box<dyn manifold_editing::command::Command + Send> =
                     Box::new(SetLayerAudioSendCommand::new(layer_id, send_id.clone()));
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                project.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -269,21 +226,13 @@ pub(super) fn dispatch_layer(
             } else {
                 vec![id.clone()]
             };
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.is_collapsed = false;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.is_collapsed = false;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.is_collapsed = false;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::structural()
         }
         LayerAction::CollapseLayer(id) => {
@@ -296,21 +245,13 @@ pub(super) fn dispatch_layer(
             } else {
                 vec![id.clone()]
             };
-            for lid in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                    layer.is_collapsed = true;
-                }
-            }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    for lid in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
-                            layer.is_collapsed = true;
-                        }
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                for lid in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
+                        layer.is_collapsed = true;
                     }
-                })),
-            );
+                }
+            });
             DispatchResult::structural()
         }
         LayerAction::FolderClicked(_id) => {
@@ -321,29 +262,19 @@ pub(super) fn dispatch_layer(
             let beat = content_state.current_beat;
             // create_clip_at_position takes a positional index; resolve the
             // stable id to its current row against the live model.
-            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
-                && let Some((cmd, _)) = EditingService::create_clip_at_position(
-                    project,
-                    beat,
-                    layer_idx,
-                    Beats(4.0),
-                )
-            {
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id) {
+                project.executed_by(|p| {
+                    EditingService::create_clip_at_position(p, beat, layer_idx, Beats(4.0))
+                });
             }
             DispatchResult::structural()
         }
         LayerAction::AddGenClipClicked(id) => {
             let beat = content_state.current_beat;
-            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
-                && let Some((cmd, _)) = EditingService::create_clip_at_position(
-                    project,
-                    beat,
-                    layer_idx,
-                    Beats(4.0),
-                )
-            {
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id) {
+                project.executed_by(|p| {
+                    EditingService::create_clip_at_position(p, beat, layer_idx, Beats(4.0))
+                });
             }
             DispatchResult::structural()
         }
@@ -481,10 +412,9 @@ pub(super) fn dispatch_layer(
                         new_parents,
                     );
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
@@ -504,10 +434,9 @@ pub(super) fn dispatch_layer(
                     None,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             DispatchResult::structural()
@@ -520,10 +449,9 @@ pub(super) fn dispatch_layer(
                     let layer_clone = layer.clone();
                     let cmd = DeleteLayerCommand::new(layer_clone);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                     // Fix active_layer if deleted layer was active
                     if let Some(al) = active_layer.as_ref()

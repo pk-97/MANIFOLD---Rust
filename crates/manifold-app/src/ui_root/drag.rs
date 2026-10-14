@@ -35,7 +35,7 @@ impl UIRoot {
                 if !inside {
                     self.dropdown.close(&mut tree);
                     self.closed_overlays.push(OverlayId::Dropdown);
-                    self.overlay_dirty = true;
+                    self.mark_overlay_dirty();
                     continue;
                 }
                 owner = Some(DragOwner::Overlay(OverlayId::Dropdown));
@@ -472,8 +472,7 @@ mod drag_capture_tests {
     /// exact path `app_render.rs` takes, which re-runs `build_overlays` and
     /// re-mints the Audio Setup chrome.
     fn settle(ui: &mut UIRoot) {
-        if ui.overlay_dirty {
-            ui.overlay_dirty = false;
+        if ui.take_overlay_dirty() {
             ui.rebuild_scroll_panels(ScrollDirty {
                 visual: true,
                 ..ScrollDirty::default()

@@ -587,7 +587,7 @@ impl UIRoot {
     pub(crate) fn open_dropdown_typed(&mut self, items: Vec<DropdownItem>, trigger: Rect) {
         self.dropdown_context = None;
         self.dropdown.open(items, trigger, 120.0, &mut self.tree);
-        self.overlay_dirty = true;
+        self.mark_overlay_dirty();
     }
 
     /// Open the searchable one-column list picker below `trigger`: typing
@@ -628,19 +628,13 @@ impl UIRoot {
             actions,
             list,
         );
-        self.overlay_dirty = true;
+        self.mark_overlay_dirty();
     }
 
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
-    /// project snapshot. Change-gated by the embedded-preset fingerprint so the
-    /// Vec rebuilds only when a fork / import / remove actually changed the set,
-    /// not every frame. Called from the per-frame UI sync before event routing.
+    /// project. The frame planner runs it when the EmbeddedPresets stamp moved
+    /// (UI_INVALIDATION_DESIGN.md section 4).
     pub fn sync_embedded_presets(&mut self, project: &manifold_core::project::Project) {
-        let fp = crate::project_io::embedded_presets_fingerprint(project);
-        if fp == self.embedded_presets_fingerprint {
-            return;
-        }
-        self.embedded_presets_fingerprint = fp;
         manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetListProjection);
         self.embedded_presets = project
             .embedded_presets
@@ -819,7 +813,7 @@ impl UIRoot {
     pub(crate) fn try_open_dropdown(&mut self, action: &PanelAction, click_node: Option<NodeId>) -> bool {
         let opened = self.try_open_dropdown_inner(action, click_node);
         if opened {
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
         opened
     }
@@ -1103,7 +1097,7 @@ impl UIRoot {
                     keep_open: true,
                     ..Default::default()
                 });
-                self.overlay_dirty = true;
+                self.mark_overlay_dirty();
                 true
             }
             PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {
@@ -1999,7 +1993,7 @@ impl UIRoot {
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
-                    self.overlay_dirty = true;
+                    self.mark_overlay_dirty();
                     self.ableton_rediscovery_needed = true;
                 }
                 true
@@ -2012,7 +2006,7 @@ impl UIRoot {
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
-                    self.overlay_dirty = true;
+                    self.mark_overlay_dirty();
                     self.ableton_rediscovery_needed = true;
                 }
                 true
@@ -2460,6 +2454,6 @@ impl UIRoot {
             let picker = trigger_target_picker_items(&source, &self.trigger_routing.targets);
             self.browser_popup.refresh_actions(picker.items, picker.categories, picker.actions, picker.secondary_actions);
         }
-        self.overlay_dirty = true;
+        self.mark_overlay_dirty();
     }
 }

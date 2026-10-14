@@ -7,7 +7,6 @@
 //! helper moved alongside its callers.
 
 use manifold_core::audio_clip_detection::DetectionConfig;
-use manifold_core::project::Project;
 use manifold_editing::commands::clip::{ChangeClipLoopCommand, ChangeClipRecordedBpmCommand};
 use manifold_editing::commands::clip_detection::SetClipDetectionConfigCommand;
 use manifold_ui::ClipAction;
@@ -20,24 +19,22 @@ use crate::content_command::ContentCommand;
 /// config change (local + content thread), then asks the orchestrator to re-plan
 /// — instant, no backend run. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
 fn apply_detection_edit(
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     clip_id: &manifold_core::ClipId,
     mutate: impl FnOnce(&mut DetectionConfig),
 ) {
     use crate::content_command::ContentCommand;
     let mut config = project
-        .timeline
         .find_clip_by_id(clip_id)
         .and_then(|c| c.audio_detection.as_ref())
         .map(|d| d.config.clone())
         .unwrap_or_default();
     mutate(&mut config);
 
-    let mut cmd: Box<dyn manifold_editing::command::Command + Send> =
+    let cmd: Box<dyn manifold_editing::command::Command + Send> =
         Box::new(SetClipDetectionConfigCommand::new(clip_id.clone(), config));
-    cmd.execute(project);
-    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+    project.execute(cmd);
     ContentCommand::send(content_tx, ContentCommand::ReplanClip(clip_id.clone()));
 }
 
@@ -51,7 +48,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         ClipAction::ClipBpmClicked => DispatchResult::handled(),
         ClipAction::ClipWarpToggled => {
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id()
-                && let Some(clip) = ctx.project.timeline.find_clip_by_id(clip_id)
+                && let Some(clip) = ctx.project.find_clip_by_id(clip_id)
             {
                 ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(
                     ChangeClipRecordedBpmCommand::new_warp(
@@ -95,7 +92,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     ctx.dialogs,
                     ctx.user_prefs,
                 )
-                && let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id)
+                && let Some(clip) = ctx.project.find_clip_by_id(&clip_id)
             {
                 let new_path = path.to_string_lossy().into_owned();
                 let new_source_duration = crate::project_io::audio_source_duration(&new_path);
@@ -126,19 +123,18 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                 // Always composite (even for just the replace) so the undo
                 // stack always sees one "Replace Audio File" step regardless
                 // of how many generated clips came along.
-                let mut cmd: Box<dyn Command + Send> = Box::new(CompositeCommand::new(
+                let cmd: Box<dyn Command + Send> = Box::new(CompositeCommand::new(
                     commands,
                     "Replace Audio File".to_string(),
                 ));
-                cmd.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(cmd));
+                ctx.execute(cmd);
             }
             DispatchResult::structural()
         }
         ClipAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
-                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
+                apply_detection_edit(&mut ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.enabled = !inst.enabled;
                     }
@@ -149,7 +145,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         ClipAction::ClipDetectSensitivityChanged(idx, value) => {
             let (idx, value) = (*idx, *value);
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
-                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
+                apply_detection_edit(&mut ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.sensitivity = value.clamp(0.0, 1.0);
                     }
@@ -160,7 +156,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         ClipAction::ClipDetectOnsetChanged(ms) => {
             let secs = manifold_core::Seconds((*ms / 1000.0) as f64);
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
-                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
+                apply_detection_edit(&mut ctx.project, ctx.content_tx, &clip_id, |c| {
                     c.onset_compensation = secs;
                 });
             }
@@ -169,7 +165,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         ClipAction::ClipDetectSetQuantize(step) => {
             let step = *step;
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
-                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| match step {
+                apply_detection_edit(&mut ctx.project, ctx.content_tx, &clip_id, |c| match step {
                     Some(beats) => {
                         c.quantize_on = true;
                         c.quantize_step_beats = beats;
@@ -182,7 +178,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         ClipAction::ClipDetectSetLayer(idx, layer) => {
             let (idx, layer) = (*idx, layer.clone());
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
-                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
+                apply_detection_edit(&mut ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.target_layer = layer;
                     }
@@ -198,16 +194,15 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         ClipAction::ClipLoopToggle => {
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id() {
                 let clip_id = clip_id.clone();
-                if let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id) {
+                if let Some(clip) = ctx.project.find_clip_by_id(&clip_id) {
                     let old_loop = clip.is_looping;
                     let old_dur = clip.loop_duration_beats;
                     let cmd =
                         ChangeClipLoopCommand::new(clip_id, old_loop, !old_loop, old_dur, old_dur);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(ctx.project);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                        ctx.execute(boxed);
                     }
                 }
             }

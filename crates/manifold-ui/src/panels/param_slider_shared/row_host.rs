@@ -240,6 +240,28 @@ impl RowHost {
 
     }
 
+    /// Rewrite a frame-aligned driver's period readout in place (D20): the
+    /// content clock moved the frame-quantized period, nothing structural.
+    pub(crate) fn sync_driver_frame_rate(
+        &self,
+        tree: &mut UITree,
+        mod_state: &mut super::state::ParamModState,
+        row: usize,
+        rate: Option<(u32, f32)>,
+    ) {
+        let Some(shown) = mod_state.driver_frame_rate.get_mut(row) else {
+            return;
+        };
+        if *shown == rate {
+            return;
+        }
+        *shown = rate;
+        let aligned = mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false);
+        if let Some(button) = self.driver_config_ids.get(row).and_then(Option::as_ref).and_then(|ids| ids.last_button()) {
+            tree.set_text(button, &super::builders::driver_frame_label(aligned, rate));
+        }
+    }
+
     /// Screen-space bounds of a row's label, shared by every row host. Slider
     /// and toggle/trigger rows use different id bundles, but navigation uses
     /// the same addressable row surface.

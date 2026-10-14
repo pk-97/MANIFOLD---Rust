@@ -482,8 +482,8 @@ fn param_surface(
                 spec: RowSpec {
                     tooltip: p.spec.tooltip.clone(),
                     name: p.spec.name.clone(),
-                    min: p.spec.min,
-                    max: p.spec.max,
+                    min: p.slider_span().0,
+                    max: p.slider_span().1,
                     default: p.spec.default_value,
                     whole_numbers: p.spec.whole_numbers,
                     is_angle: p.spec.is_angle,

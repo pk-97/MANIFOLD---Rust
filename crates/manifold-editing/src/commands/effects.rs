@@ -481,9 +481,9 @@ pub struct ChangeGraphParamCommand {
     old_value: f32,
     new_value: f32,
     rejection: Option<&'static str>,
-    /// The param switches a scene feature on or off, so
-    /// its base value decides which card rows exist (SCENE_SURFACES D12 (row
-    /// sets follow authored values)).
+    /// The param turns a scene feature on or off, so its base value decides
+    /// which card rows exist (SCENE_SURFACES D12 (row sets follow authored
+    /// values)). Read from the project on every execute and undo.
     sets_rows: bool,
 }
 
@@ -504,30 +504,22 @@ impl ChangeGraphParamCommand {
         }
     }
 
-    /// [`Self::new`], reading from `project` whether the edit can change
-    /// which scene card rows exist.
-    pub fn for_project(
-        project: &Project,
-        target: GraphTarget,
-        param_id: impl Into<ParamId>,
-        old_value: f32,
-        new_value: f32,
-    ) -> Self {
-        let mut command = Self::new(target, param_id, old_value, new_value);
-        command.sets_rows = project
-            .preset_instance(&command.target)
-            .and_then(|inst| inst.params.get(command.param_id.as_ref()))
+    fn note_sets_rows(&mut self, project: &Project) {
+        self.sets_rows = project
+            .preset_instance(&self.target)
+            .and_then(|inst| inst.params.get(self.param_id.as_ref()))
             .and_then(|param| param.spec.scene)
             .is_some_and(|scene| scene.switch.is_some());
-        command
     }
 }
 
 impl Command for ChangeGraphParamCommand {
+    /// A plain value is Values. A scene-modifier param lives inside the
+    /// owner's graph definition, and a feature switch decides which rows
+    /// exist, so both are Effects too (UI_INVALIDATION D21, D22). Only valid
+    /// after `execute`, which reads the switch from the project.
     fn touches(&self) -> manifold_core::change::ChangeSet {
         use manifold_core::change::{ChangeSet, Part};
-        // A scene-modifier param lives inside the owner's graph definition;
-        // a scene switch decides the card's rows.
         if matches!(self.target, GraphTarget::SceneModifier { .. }) || self.sets_rows {
             ChangeSet::of(&[Part::Values, Part::Effects])
         } else {
@@ -536,6 +528,7 @@ impl Command for ChangeGraphParamCommand {
     }
     fn execute(&mut self, project: &mut Project) {
         self.rejection = None;
+        self.note_sets_rows(project);
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
             && let Some(graph) = project.graph_for_target(&self.target, None)
             && let Some(reason) = manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, self.param_id.as_ref())
@@ -551,6 +544,7 @@ impl Command for ChangeGraphParamCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        self.note_sets_rows(project);
         let id = self.param_id.clone();
         let val = self.old_value;
         project.with_preset_graph_mut(&self.target, |host| {

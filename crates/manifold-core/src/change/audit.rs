@@ -338,12 +338,12 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     fp.put(Part::Values, &inst.base_tracked);
     for p in inst.params.iter() {
         let mut structural = p.spec.clone();
-        // Mapping reshape (range, curve, invert, label) is a live scalar.
-        fp.put(Part::Shapes, &(&structural.name, structural.min, structural.max, &structural.curve, structural.invert, p.choices.slider, &p.choices.curve, p.choices.invert));
-        // Committed choices that decide labels or which rows exist and where are
-        // never dragged, and the live Shapes push writes no labels (UI_INVALIDATION D22).
+        // Mapping reshape (range, curve, invert) is a live scalar.
+        fp.put(Part::Shapes, &(structural.min, structural.max, &structural.curve, structural.invert, p.choices.slider, &p.choices.curve, p.choices.invert));
+        // The label and the committed choices that decide labels or which rows
+        // exist and where are discrete, never dragged; the live Shapes push
+        // writes no labels (UI_INVALIDATION D22), so they rebuild through Effects.
         fp.put(Part::Effects, &(&p.choices.rename, &p.choices.section, &p.choices.pin));
-        structural.name = String::new();
         structural.min = 0.0;
         structural.max = 0.0;
         structural.curve = Default::default();

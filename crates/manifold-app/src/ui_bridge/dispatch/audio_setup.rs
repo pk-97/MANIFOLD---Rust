@@ -29,7 +29,7 @@ pub(crate) const AUDIO_SEND_GAIN_MIN_DB: f32 = -24.0;
 pub(crate) const AUDIO_SEND_GAIN_MAX_DB: f32 = 24.0;
 
 pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
-    use crate::content_command::ContentCommand;
+    
 
     match action {
 
@@ -68,12 +68,11 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 trigger.enabled = true;
                 let new_index = ctx.project
                     .timeline
-                    .find_layer_by_id_mut(layer_id)
+                    .find_layer_by_id(layer_id)
                     .map(|(_, l)| l.clip_triggers.len());
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                let boxed: Box<dyn manifold_editing::command::Command + Send> =
                     Box::new(AddLayerClipTriggerCommand::new(layer_id.clone(), trigger));
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                ctx.execute(boxed);
                 // Open the new row's drawer so its (now minimal) tuning is
                 // immediately visible.
                 if let Some(index) = new_index {
@@ -83,32 +82,30 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             DispatchResult::structural()
         }
         AudioSetupAction::AudioTriggerRemove(layer_id, index) => {
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+            let boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(RemoveLayerClipTriggerCommand::new(layer_id.clone(), *index));
-            boxed.execute(ctx.project);
-            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+            ctx.execute(boxed);
             DispatchResult::structural()
         }
         AudioSetupAction::AudioTriggerEnabledToggle(layer_id, index) => {
             let old = ctx.project
                 .timeline
-                .find_layer_by_id_mut(layer_id)
+                .find_layer_by_id(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
             if let Some(old) = old {
                 let mut new = old.clone();
                 new.enabled = !old.enabled;
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                     SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
                 );
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                ctx.execute(boxed);
             }
             DispatchResult::structural()
         }
         AudioSetupAction::AudioTriggerSetSource(layer_id, index, send_id, feature) => {
             let old = ctx.project
                 .timeline
-                .find_layer_by_id_mut(layer_id)
+                .find_layer_by_id(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
             if let Some(old) = old {
                 let mut new = old.clone();
@@ -116,11 +113,10 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                     send_id: send_id.clone(),
                     feature: crate::ui_translate::audio_feature_to_core(*feature),
                 };
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                     SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
                 );
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                ctx.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -132,17 +128,16 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         AudioSetupAction::AudioTriggerSetLength(layer_id, index, beats) => {
             let old = ctx.project
                 .timeline
-                .find_layer_by_id_mut(layer_id)
+                .find_layer_by_id(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
             if let Some(old) = old {
                 let mut new = old.clone();
                 new.one_shot_beats = manifold_core::Beats(*beats as f64);
                 if new != old {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                         SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
                     );
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    ctx.execute(boxed);
                 }
             }
             DispatchResult::structural()
@@ -152,8 +147,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         AudioSetupAction::AudioSetDevice(device) => {
             let old = ctx.project.audio_setup.device.clone();
             audio_setup_command(
-                ctx.project,
-                ctx.content_tx,
+                &mut ctx.project,
                 Box::new(SetAudioInputDeviceCommand::new(
                     old,
                     device.as_ref().map(crate::ui_translate::audio_device_ref_to_core),
@@ -165,11 +159,10 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 "Audio {}",
                 ctx.project.audio_setup.sends.len() + 1
             ));
-            audio_setup_command(ctx.project, ctx.content_tx, Box::new(AddAudioSendCommand::new(send)))
+            audio_setup_command(&mut ctx.project, Box::new(AddAudioSendCommand::new(send)))
         }
         AudioSetupAction::AudioRemoveSend(id) => audio_setup_command(
-            ctx.project,
-            ctx.content_tx,
+            &mut ctx.project,
             Box::new(RemoveAudioSendCommand::new(id.clone())),
         ),
         AudioSetupAction::AudioRenameSend(id, label) => {
@@ -179,8 +172,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 .map(|s| s.label.clone())
                 .unwrap_or_default();
             audio_setup_command(
-                ctx.project,
-                ctx.content_tx,
+                &mut ctx.project,
                 Box::new(RenameAudioSendCommand::new(id.clone(), old, label.clone())),
             )
         }
@@ -201,8 +193,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 return DispatchResult::structural();
             }
             audio_setup_command(
-                ctx.project,
-                ctx.content_tx,
+                &mut ctx.project,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
         }
@@ -222,8 +213,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 return DispatchResult::structural();
             }
             audio_setup_command(
-                ctx.project,
-                ctx.content_tx,
+                &mut ctx.project,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, *new_db)),
             )
         }
@@ -249,8 +239,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 return DispatchResult::structural();
             }
             audio_setup_command(
-                ctx.project,
-                ctx.content_tx,
+                &mut ctx.project,
                 Box::new(SetAudioSendFloorCommand::new(id.clone(), old, new)),
             )
         }

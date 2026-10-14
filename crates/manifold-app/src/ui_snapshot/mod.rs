@@ -998,6 +998,7 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
         &data.content.automation_latched_params,
         data.content.led_preview.as_ref(),
     );
+    crate::ui_bridge::sync_audio_dock(ui, &data.project);
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(zoom_ppb);
@@ -1402,8 +1403,9 @@ mod cache_path_full_render {
         let mut structural = false;
         let mut scrub = crate::ui_bridge::ScrubState::default();
         for action in &actions {
+            let mut stamps = crate::frame_plan::UiStamps::default();
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: &mut data.project,
+                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut stamps, content_tx),
                 content_tx,
                 content_state,
                 ui: &mut *ui,
@@ -1412,7 +1414,6 @@ mod cache_path_full_render {
                 user_prefs: &mut *user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
-                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
@@ -1662,6 +1663,7 @@ mod editor_window_harness {
         };
         sync_project_data(&mut ui_root, &project, active_idx, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);
+        crate::ui_bridge::sync_audio_dock(&mut ui_root, &project);
         ui_root.build_inspector_in_rect(UiRect::new(
             card_x,
             0.0,

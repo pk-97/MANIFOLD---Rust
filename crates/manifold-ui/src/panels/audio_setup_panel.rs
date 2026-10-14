@@ -275,6 +275,10 @@ enum AudioSetupDrag {
 
 /// The Audio Setup modal panel.
 pub struct AudioSetupPanel {
+    /// Bumped only by the view setters below, and only when the value changes
+    /// (open, selected send, armed delete). The frame planner keys the dock
+    /// rebuild on it (UI_INVALIDATION_DESIGN.md D17, panel view versions).
+    view_version: u64,
     open: bool,
     // Configured data.
     current_device: Option<AudioDeviceRef>,
@@ -373,6 +377,7 @@ pub struct AudioSetupPanel {
 impl Default for AudioSetupPanel {
     fn default() -> Self {
         Self {
+            view_version: 0,
             open: false,
             current_device: None,
             sends: Vec::new(),
@@ -424,20 +429,45 @@ impl AudioSetupPanel {
         self.open
     }
 
+    pub fn view_version(&self) -> u64 {
+        self.view_version
+    }
+
+    fn set_open(&mut self, open: bool) {
+        if self.open != open {
+            self.open = open;
+            self.view_version += 1;
+        }
+    }
+
+    fn set_delete_armed(&mut self, armed: Option<AudioSendId>) {
+        if self.delete_armed != armed {
+            self.delete_armed = armed;
+            self.view_version += 1;
+        }
+    }
+
+    fn set_selected_send(&mut self, send: Option<AudioSendId>) {
+        if self.selected_send != send {
+            self.selected_send = send;
+            self.view_version += 1;
+        }
+    }
+
     /// Open the modal (idempotent) — the headless harness's `open:audio_setup`
     /// interact verb uses this so a repeated call can't accidentally close it,
     /// unlike [`Self::toggle`].
     pub fn open(&mut self) {
-        self.open = true;
+        self.set_open(true);
     }
 
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        self.set_open(!self.open);
     }
 
     pub fn close(&mut self) {
-        self.open = false;
-        self.delete_armed = None;
+        self.set_open(false);
+        self.set_delete_armed(None);
     }
 
     /// The currently selected input device (`None` = system default). The app
@@ -479,7 +509,8 @@ impl AudioSetupPanel {
     /// [`configure`]: Self::configure
     fn normalize_selection(&mut self) {
         if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
-            self.selected_send = self.sends.first().map(|s| s.id.clone());
+            let first = self.sends.first().map(|s| s.id.clone());
+            self.set_selected_send(first);
         }
     }
 
@@ -1665,7 +1696,7 @@ impl AudioSetupPanel {
     /// after toggling closed) so the caller just dispatches the action.
     pub fn handle_click(&mut self, id: NodeId) -> Option<PanelAction> {
         if id == self.close_id {
-            self.open = false;
+            self.set_open(false);
             return None;
         }
         self.handle_click_inner(id)
@@ -1673,17 +1704,17 @@ impl AudioSetupPanel {
 
     fn handle_click_inner(&mut self, id: NodeId) -> Option<PanelAction> {
         if id == self.device_dropdown_id {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             // App opens the device dropdown anchored to this trigger.
             return Some(PanelAction::Root(RootAction::AudioSetupDeviceClicked));
         }
         if id == self.add_send_id {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             return Some(PanelAction::AudioSetup(AudioSetupAction::AudioAddSend));
         }
         // Pre-analysis floor stepper (the spectrogram squelch) for the selected send.
         if self.floor_minus_id == Some(id) || self.floor_plus_id == Some(id) {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             let send = self.selected_send.clone()?;
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(send, delta)));
@@ -1695,7 +1726,7 @@ impl AudioSetupPanel {
         // Consumers section: navigate to the owning layer — read-only, no
         // edit (D3).
         if let Some(i) = self.consumer_row_ids.iter().position(|&r| r == id) {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             let consumers = self
                 .selected_send
                 .as_ref()
@@ -1731,20 +1762,20 @@ impl AudioSetupPanel {
             RowControl::Select => {
                 // Pure UI state — the app reads `selected_send()` each frame to
                 // drive the scope + worker. Swallow (no command).
-                self.delete_armed = None;
-                self.selected_send = Some(send_id);
+                self.set_delete_armed(None);
+                self.set_selected_send(Some(send_id));
                 None
             }
             RowControl::Label => {
-                self.delete_armed = None;
+                self.set_delete_armed(None);
                 Some(PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)))
             }
             RowControl::GainDown => {
-                self.delete_armed = None;
+                self.set_delete_armed(None);
                 Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, -1.0)))
             }
             RowControl::GainUp => {
-                self.delete_armed = None;
+                self.set_delete_armed(None);
                 Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, 1.0)))
             }
             RowControl::Delete => {
@@ -1754,10 +1785,10 @@ impl AudioSetupPanel {
                 if self.sends[i].driven_count == 0
                     || self.delete_armed.as_ref() == Some(&send_id)
                 {
-                    self.delete_armed = None;
+                    self.set_delete_armed(None);
                     Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(send_id)))
                 } else {
-                    self.delete_armed = Some(send_id);
+                    self.set_delete_armed(Some(send_id));
                     None
                 }
             }
@@ -2049,6 +2080,22 @@ fn dropdown_trigger_style() -> UIStyle {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    /// INV-15: the dock view version moves only when a view value changes.
+    #[test]
+    fn view_version_moves_only_on_change() {
+        let mut panel = AudioSetupPanel::new();
+        let v0 = panel.view_version();
+        panel.close();
+        assert_eq!(panel.view_version(), v0, "closing a closed dock is no change");
+        panel.open();
+        let v1 = panel.view_version();
+        assert!(v1 > v0);
+        panel.open();
+        assert_eq!(panel.view_version(), v1, "opening an open dock is no change");
+        panel.toggle();
+        assert!(panel.view_version() > v1);
+    }
 
     /// The docked column rect for a 1280×720 screen with the default inspector
     /// (500) + dock (460): x = 1280 - 500 - 460 = 320, full content height

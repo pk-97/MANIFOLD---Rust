@@ -492,12 +492,13 @@ pub fn markers_to_ui(markers: &[TimelineMarker]) -> Vec<UiMarker> {
 }
 
 pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
+    let (min, max) = p.slider_span();
     UiParamSlot {
         value: p.value,
         base: p.base,
         exposed: p.exposed,
-        min: p.spec.min,
-        max: p.spec.max,
+        min,
+        max,
     }
 }
 

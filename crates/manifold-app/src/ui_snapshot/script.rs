@@ -260,7 +260,7 @@ fn run_flow(
     // dropdown → ChangeRtQualityCommand → state-sync path.
     if scene == "rtquality" {
         ui.rt_quality_panel.open();
-        ui.overlay_dirty = true;
+        ui.mark_overlay_dirty();
     }
     super::sync_build(&mut ui, &data, zoom_ppb);
 
@@ -289,6 +289,7 @@ fn run_flow(
         .active
         .and_then(|i| data.project.timeline.layers.get(i).map(|l| l.layer_id.clone()));
     // `sync_build` already projected this state: the planner starts from it.
+    let automation_draw_mode = data.selection.automation_draw_mode;
     let seed = crate::ui_frame::gather_frame_inputs(
         &mut runner.planner,
         &ui,
@@ -296,6 +297,7 @@ fn run_flow(
         &runner.active_layer,
         &runner.edits,
         &data.content,
+        crate::frame_plan::ChromeSource { project: &data.project, is_dirty: false, project_path: None, automation_draw_mode },
     );
     runner.planner.plan(seed);
     // The App's first frame after a load is a structural one; `sync_build`
@@ -891,17 +893,10 @@ impl Runner {
         scrolled_in_place: bool,
         settle_tweens: bool,
     ) {
-        ui.sync_embedded_presets(&data.project);
-        if data.content.bpm.is_finite() && data.content.bpm > 0.0 {
-            let bpm = manifold_core::Bpm(data.content.bpm as f32);
-            if ui.sync_driver_bpm(&data.project, bpm) {
-                self.flags.structural = true;
-                self.flags.rebuild = true;
-            }
-        }
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
+        let automation_draw_mode = data.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(
             &mut self.planner,
             ui,
@@ -909,6 +904,12 @@ impl Runner {
             &self.active_layer,
             &self.edits,
             &data.content,
+            crate::frame_plan::ChromeSource {
+                project: &data.project,
+                is_dirty: false,
+                project_path: None,
+                automation_draw_mode,
+            },
         );
         let plan = self.planner.plan(inputs);
         let changes = crate::ui_frame::ProjectionChanges {
@@ -1286,8 +1287,12 @@ impl Runner {
                     changed = true;
                 }
                 ContentCommand::ExecuteOnContent(cmd) => {
-                    self.content_stamps.bump(cmd.touches());
-                    changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
+                    let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
+                    if applied {
+                        // After execute, as EditingService reads it.
+                        self.content_stamps.bump(self.undo.peek_undo_touches());
+                    }
+                    changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
                         data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
@@ -1854,7 +1859,7 @@ impl Runner {
                 continue;
             }
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: &mut data.project,
+                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits.stamps, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut *ui,
@@ -1863,7 +1868,6 @@ impl Runner {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
-                stamps: &mut self.edits.stamps,
                 dialogs: Default::default(),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);

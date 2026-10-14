@@ -215,12 +215,9 @@ pub struct UIRoot {
     /// open. `None` when no warmup is active.
     pub warmup: Option<manifold_core::WarmupProgress>,
 
-    /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
-    /// in sync with the content snapshot. Change-gated by
-    /// `embedded_presets_fingerprint` so the Vec rebuilds only when the embedded
-    /// set actually changes, not every frame.
+    /// Project-embedded ("forked") presets surfaced into the Add pickers,
+    /// rebuilt when the EmbeddedPresets stamp moves.
     pub embedded_presets: Vec<EmbeddedPresetItem>,
-    embedded_presets_fingerprint: u64,
 
     // State
     built: bool,
@@ -246,9 +243,9 @@ pub struct UIRoot {
     /// Updated by state_sync when project changes.
     pub master_effect_names: Vec<String>,
 
-    /// Cached MIDI clock device names for the CLK device dropdown.
-    /// Updated from ContentState each frame.
-    pub midi_device_names: Vec<String>,
+    /// MIDI clock device names for the CLK device dropdown: the content
+    /// thread's retained Arc, taken when its pointer changes.
+    pub midi_device_names: std::sync::Arc<[String]>,
 
     /// Currently selected audio input device name for live recording.
     pub selected_audio_input_device: Option<String>,
@@ -276,9 +273,12 @@ pub struct UIRoot {
     audio_setup_drag_start_x: f32,
     audio_setup_drag_start_width: f32,
 
-    /// Set when overlay state changes (popup open/close, scroll, category change).
-    /// Consumed by app.rs to trigger rebuild_scroll_panels.
-    pub overlay_dirty: bool,
+    /// Set when overlay content changes (popup open, scroll, category
+    /// change); consumed by the frame seam. Only `mark_overlay_dirty` sets it.
+    overlay_dirty: bool,
+    /// Bumped by `mark_overlay_dirty` (UI_INVALIDATION D6); the open set is
+    /// folded in by `overlays_version`.
+    overlay_version: u64,
 
     /// Effect clipboard count (set by app.rs, used by browser popup).
     pub effect_clipboard_count: usize,
@@ -414,6 +414,24 @@ pub struct UIRoot {
 }
 
 impl UIRoot {
+    /// Take the content thread's shared lists by pointer: each is compared
+    /// against the Arc this root retains, never element by element
+    /// (UI_INVALIDATION_DESIGN.md section 3). True when the Ableton session
+    /// changed.
+    pub fn intake_shared(&mut self, content_state: &crate::content_state::ContentState) -> bool {
+        if !std::sync::Arc::ptr_eq(&self.midi_device_names, &content_state.midi_device_names) {
+            self.midi_device_names = std::sync::Arc::clone(&content_state.midi_device_names);
+        }
+        match (&self.ableton_session, &content_state.ableton_session) {
+            (Some(held), Some(sent)) if std::sync::Arc::ptr_eq(held, sent) => false,
+            (_, Some(sent)) => {
+                self.ableton_session = Some(std::sync::Arc::clone(sent));
+                true
+            }
+            (_, None) => false,
+        }
+    }
+
     /// Refresh only when a frame-aligned period changes, not on every clock sample.
     pub fn sync_driver_bpm(&mut self, project: &manifold_core::project::Project, bpm: manifold_core::Bpm) -> bool {
         let previous = self.driver_bpm.replace(bpm).unwrap_or(project.settings.bpm);
@@ -483,7 +501,6 @@ impl UIRoot {
             last_modifier_selection_sequence: None,
             last_object_modifier_selection_sequence: None,
             embedded_presets: Vec::new(),
-            embedded_presets_fingerprint: 0,
             built: false,
             screen_width: 1280.0,
             screen_height: 720.0,
@@ -493,7 +510,7 @@ impl UIRoot {
             dropdown_context: None,
             display_resolutions: Vec::new(),
             master_effect_names: Vec::new(),
-            midi_device_names: Vec::new(),
+            midi_device_names: std::sync::Arc::from([]),
             selected_audio_input_device: None,
             audio_setup_devices: Vec::new(),
             audio_setup_apps: Vec::new(),
@@ -505,6 +522,7 @@ impl UIRoot {
             audio_setup_drag_start_x: 0.0,
             audio_setup_drag_start_width: 0.0,
             overlay_dirty: false,
+            overlay_version: 0,
             effect_clipboard_count: 0,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),

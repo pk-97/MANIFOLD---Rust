@@ -46,7 +46,7 @@ mod gpu {
                 param_id.to_owned(),
                 value,
             ),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -201,7 +201,7 @@ mod gpu {
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_node_id),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,

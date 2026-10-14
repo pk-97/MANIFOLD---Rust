@@ -29,7 +29,7 @@ pub(crate) mod scrub;
 mod state_sync;
 mod transport;
 
-pub(crate) use context::DispatchCtx;
+pub(crate) use context::{DispatchCtx, ProjectRef};
 pub(crate) use scrub::ScrubState;
 
 /// Re-exported so `Application::handle_text_input_commit`'s
@@ -175,7 +175,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
     match action {
         PanelAction::Transport(a) => transport::dispatch_transport(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -183,7 +183,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Editing(a) => editing::dispatch_editing(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -194,7 +194,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Layer(a) => layer::dispatch_layer(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -203,7 +203,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Marker(a) => marker::dispatch_marker(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.ui,
             ctx.selection,
@@ -211,7 +211,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Project(a) => project::dispatch_project(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -239,7 +239,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             }
             // Inspector tab strip — mirrors the timeline selection.
             RootAction::SelectInspectorTab(tab) => {
-                inspector_select_tab(*tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
+                inspector_select_tab(*tab, &ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
                 DispatchResult::structural()
             }
             // Opened at the Application layer (app_render) / ui_root before
@@ -325,14 +325,14 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 } else {
                     InspectorTab::Scene
                 };
-                inspector_select_tab(tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
+                inspector_select_tab(tab, &ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
                 DispatchResult::structural()
             }
             // RT Quality overlay (headless-harness path; the live app opens it
             // in app_render's PanelAction loop). Structural: overlay geometry.
             RootAction::OpenRtQuality => {
                 ctx.ui.rt_quality_panel.open();
-                ctx.ui.overlay_dirty = true;
+                ctx.ui.mark_overlay_dirty();
                 DispatchResult::structural()
             }
             // Dropdown/picker opens intercepted earlier in ui_root/app_render.
@@ -603,55 +603,6 @@ pub(crate) fn resolve_effects_ref<'a>(
     resolve_effects_read(tab, project, active_layer, selection).0
 }
 
-/// Get a mutable reference to the effects list and EffectTarget.
-pub(crate) fn resolve_effects_mut<'a>(
-    tab: InspectorTab,
-    project: &'a mut Project,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-) -> (Option<&'a mut Vec<PresetInstance>>, EffectTarget) {
-    match tab {
-        InspectorTab::Master => {
-            let effects = &mut project.settings.master_effects;
-            (Some(effects), EffectTarget::Master)
-        }
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
-            let layer_id = active_layer.clone().unwrap_or_else(|| {
-                project
-                    .timeline
-                    .layers
-                    .first()
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default()
-            });
-            let target = EffectTarget::Layer { layer_id };
-            let effects = resolve_active_layer_index(active_layer, project)
-                .and_then(move |idx| project.timeline.layers.get_mut(idx))
-                .map(|l| l.effects_mut());
-            (effects, target)
-        }
-        InspectorTab::Clip => {
-            let layer_id = active_layer.clone().unwrap_or_else(|| {
-                project
-                    .timeline
-                    .layers
-                    .first()
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default()
-            });
-            let target = EffectTarget::Layer { layer_id };
-            let clip_id = selection.primary_selected_clip_id().cloned();
-            let effects = clip_id.and_then(|cid| {
-                project
-                    .timeline
-                    .find_clip_by_id_mut(&cid)
-                    .map(|c| &mut c.effects)
-            });
-            (effects, target)
-        }
-    }
-}
-
 /// Resolve "which effect instance" a single-effect card edit targets, as a
 /// stable [`EffectId`].
 ///
@@ -761,11 +712,11 @@ pub(crate) fn led_exit_path_label(
 
 // Re-export public functions from sub-modules
 pub use state_sync::{
-    TransportDisplayCache, check_auto_scroll, drain_events, push_chrome, push_live, push_selection,
+    TransportDisplayCache, check_auto_scroll, drain_events, push_chrome, push_frame, push_live, push_selection,
     sync_automation_lane_geometry,
-    sync_card_values, sync_clip_positions,
+    sync_card_values, sync_clip_positions, sync_driver_readouts,
     sync_scene_row_values,
-    sync_inspector_data, sync_project_data,
+    sync_audio_dock, sync_inspector_data, sync_project_data,
 };
 #[cfg(feature = "ui-snapshot")]
 pub use state_sync::push_state;

@@ -32,18 +32,13 @@ impl Application {
         //    (BPM, current beat, Ableton session) but DO NOT push anything
         //    to panels — the normal UI is frozen.
         //
-        // The Ableton session is published edge-triggered (Some only when it
-        // changes, None otherwise). The persistent cache lives at
-        // `ui_root.ableton_session` and is normally maintained by state_sync,
-        // which doesn't run in perform mode — so we update it ourselves here
-        // whenever a non-None session arrives.
+        // The event drain, which takes the Ableton session, does not run in
+        // perform mode, so the session is taken here by pointer.
         if let Some(ref rx) = self.state_rx {
             while let Ok(state) = rx.try_recv() {
-                if let Some(session) = &state.ableton_session {
-                    self.ws.ui_root.ableton_session = Some(std::sync::Arc::clone(session));
-                }
                 self.content_state = state;
             }
+            self.ws.ui_root.intake_shared(&self.content_state);
         }
 
         // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1) — this is the

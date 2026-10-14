@@ -43,9 +43,16 @@ impl TimelineViewportPanel {
         let ppb = self.mapper.pixels_per_beat();
         let scroll_x = self.scroll_x_beats.as_f32();
         let playhead = self.playhead_beat.as_f32();
-        if !self.overview_dirty
+        // The playhead keys on the pixel it lands on, not the beat: playback
+        // moves the beat every frame but the strip pixel rarely.
+        let playhead_px = if self.overview_max_beat > 0.0 {
+            ((playhead / self.overview_max_beat) * tex_w as f32).round().clamp(0.0, tex_w as f32) as i32
+        } else {
+            -1
+        };
+        if !self.overview_repaint
             && !self.overview_clips_dirty
-            && self.overview_last_playhead == playhead
+            && self.overview_last_playhead_px == playhead_px
             && self.overview_last_scroll_x == scroll_x
             && self.overview_last_ppb == ppb
             && self.overview_last_track_count == self.tracks.len()
@@ -63,7 +70,7 @@ impl TimelineViewportPanel {
             || size_changed
             || self.overview_last_track_count != self.tracks.len();
 
-        self.overview_last_playhead = playhead;
+        self.overview_repaint = false;
         self.overview_last_scroll_x = scroll_x;
         self.overview_last_ppb = ppb;
         self.overview_last_track_count = self.tracks.len();
@@ -76,7 +83,9 @@ impl TimelineViewportPanel {
         if self.total_clip_count() == 0 || self.tracks.is_empty() {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
-            self.overview_dirty = true;
+            self.overview_upload = true;
+            self.overview_max_beat = 0.0;
+            self.overview_last_playhead_px = -1;
             return;
         }
 
@@ -88,10 +97,13 @@ impl TimelineViewportPanel {
                 max_beat = end;
             }
         }
+        self.overview_max_beat = max_beat;
         if max_beat <= 0.0 {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
-            self.overview_dirty = true;
+            self.overview_upload = true;
+            self.overview_max_beat = 0.0;
+            self.overview_last_playhead_px = -1;
             return;
         }
 
@@ -182,6 +194,7 @@ impl TimelineViewportPanel {
         // Playhead (red line, 1-2px)
         let ph_norm = playhead / max_beat;
         let ph_x = (ph_norm * tex_w as f32).round().clamp(0.0, tex_w as f32) as i32;
+        self.overview_last_playhead_px = ph_x;
         let ph_w = (1.0 * scale).round().max(1.0) as i32;
         bitmap_painter::fill_rect(
             &mut self.overview_pixels,
@@ -194,13 +207,13 @@ impl TimelineViewportPanel {
             color::OVERVIEW_PLAYHEAD,
         );
 
-        self.overview_dirty = true;
+        self.overview_upload = true;
     }
 
     /// Overview bitmap data for GPU upload. Returns (pixels, w, h) if dirty.
     pub fn overview_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
-        if self.overview_dirty && self.overview_tex_w > 0 && self.overview_tex_h > 0 {
-            self.overview_dirty = false;
+        if self.overview_upload && self.overview_tex_w > 0 && self.overview_tex_h > 0 {
+            self.overview_upload = false;
             Some((
                 &self.overview_pixels,
                 self.overview_tex_w,

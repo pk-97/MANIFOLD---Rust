@@ -52,7 +52,9 @@ impl InspectorCompositePanel {
             if group.member_ids.contains(&id) { group.collapsed = false; }
         }
         self.pending_reveal = Some((id, Some(param.clone())));
-        self.mods_compact = false;
+        // The card unfolded its section and switched its mod tab.
+        self.view_version += 1;
+        self.set_mods_compact(false);
         self.apply_mods_compact();
         true
     }
@@ -536,7 +538,7 @@ impl InspectorCompositePanel {
         // here and return a structural no-op so the inspector rebuilds with the
         // new state propagated to every card.
         if self.compact_toggle_btn_id == Some(node_id) {
-            self.mods_compact = !self.mods_compact;
+            self.set_mods_compact(!self.mods_compact);
             return vec![PanelAction::Params(ParamsAction::ModsCompactToggled)];
         }
         // Add Effect buttons. The action carries the invocation context

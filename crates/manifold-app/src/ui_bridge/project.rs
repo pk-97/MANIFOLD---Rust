@@ -4,7 +4,6 @@
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
-use manifold_editing::command::Command;
 use manifold_ui::ProjectAction;
 
 use super::DispatchResult;
@@ -73,7 +72,7 @@ fn scene_object_source_identity(
 
 pub(super) fn dispatch_project(
     action: &ProjectAction,
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     _content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
@@ -89,9 +88,8 @@ pub(super) fn dispatch_project(
             let old_hdr = project.settings.export_hdr;
             let cmd = manifold_editing::commands::settings::ToggleExportHdrCommand::new(old_hdr);
             {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
@@ -101,9 +99,8 @@ pub(super) fn dispatch_project(
             let cmd =
                 manifold_editing::commands::settings::ToggleSplitSectionsCommand::new(old_split);
             {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             log::info!(
                 "Split export at markers → {}",
@@ -142,10 +139,9 @@ pub(super) fn dispatch_project(
                     layer_id, old_note, *note,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             DispatchResult::structural()
@@ -160,10 +156,9 @@ pub(super) fn dispatch_project(
                     *channel,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             DispatchResult::structural()
@@ -177,9 +172,8 @@ pub(super) fn dispatch_project(
                     old_device,
                     device.clone(),
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -196,9 +190,8 @@ pub(super) fn dispatch_project(
                     manifold_editing::commands::settings::ChangeLayerMidiTriggerModeCommand::new(
                         layer_id, old_mode, new_mode,
                     );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -212,9 +205,8 @@ pub(super) fn dispatch_project(
                         old_mode,
                         crate::ui_translate::midi_trigger_mode_to_core(*new_mode),
                     );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -263,10 +255,9 @@ pub(super) fn dispatch_project(
                     *new_settings,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             // The panel's tier labels are baked into the tree at build —
@@ -823,9 +814,8 @@ pub(super) fn dispatch_project(
                     source_string,
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -847,9 +837,8 @@ pub(super) fn dispatch_project(
                         map_skin_target_map(*target_map),
                         default,
                     );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             DispatchResult::structural()
         }
@@ -1109,9 +1098,8 @@ pub(super) fn dispatch_project(
                 default,
             )
             .with_scene_bounds(plan.scene_bounds);
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            project.execute(boxed);
             if !plan.report_lines.is_empty() {
                 log::info!(
                     "[Scene Setup] Import Model… report: {}",
@@ -1188,12 +1176,11 @@ pub(super) fn dispatch_project(
         ProjectAction::ContextClearAutomationLane(target, param_id) => {
             ContentCommand::send(content_tx, ContentCommand::FinishAutomationRecording);
             let graph_target = crate::editing_host::to_graph_target(target);
-            let mut cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
+            let cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
                 graph_target,
                 param_id.as_ref(),
             );
-            cmd.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            project.execute(Box::new(cmd));
             DispatchResult::structural()
         }
         ProjectAction::ContextRemoveAutomationLane(target, param_id) => {
@@ -1342,7 +1329,7 @@ fn map_skin_target_map(
 
 /// Shared parameter/lane menu path: remove the envelope and its stale UI targets.
 pub(super) fn remove_parameter_automation(
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
@@ -1356,15 +1343,11 @@ pub(super) fn remove_parameter_automation(
         content_tx,
         crate::content_command::ContentCommand::FinishAutomationRecording,
     );
-    let mut command = manifold_editing::commands::automation::RemoveLaneCommand::for_param(
+    let command = manifold_editing::commands::automation::RemoveLaneCommand::for_param(
         graph_target,
         param_id.as_ref(),
     );
-    command.execute(project);
-    crate::content_command::ContentCommand::send(
-        content_tx,
-        crate::content_command::ContentCommand::Execute(Box::new(command)),
-    );
+    project.execute(Box::new(command));
     selection.unchoose_automation_lane(target, param_id);
     selection
         .selected_automation_points
@@ -1503,6 +1486,7 @@ mod tests {
     use super::*;
     use crate::content_command::ContentCommand;
     use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_editing::command::Command;
     use manifold_core::types::LayerType;
     mod water_family;
     mod water_family_actions;
@@ -1711,7 +1695,7 @@ mod tests {
             } else {
                 ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), scene_id, 0)
             };
-            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+            dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                 &mut selection, &mut active_layer, &mut prefs, Default::default());
             assert!(effective_def(&project, &layer_id) == before_dispatch,
                 "UI dispatch waits for content");
@@ -1772,7 +1756,7 @@ mod tests {
                 render_scene_id,
                 object_index,
             ),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -1875,7 +1859,7 @@ mod tests {
                 render_scene_id,
                 object_index,
             ),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -2029,7 +2013,7 @@ mod tests {
             let before_toggle = effective_def(&project, &layer_id);
             dispatch_project(
                 &action,
-                &mut project,
+                &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
                 &tx,
                 &state,
                 &mut ui,
@@ -2075,7 +2059,7 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let result = dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
         assert!(result.structural_change);
@@ -2279,7 +2263,7 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, lights),
-            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
         let ContentCommand::ExecuteSelecting(mut command, _) = content_rx.try_recv().expect("queued light insertion")
@@ -2319,7 +2303,7 @@ mod tests {
             ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
             ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
         ] {
-            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+            dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                 &mut selection, &mut active, &mut prefs, Default::default());
             let ContentCommand::ExecuteSelecting(mut command, _) = rx.try_recv().unwrap()
             else { panic!("insertion must execute on content"); };
@@ -2340,7 +2324,7 @@ mod tests {
         dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
             layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
             object_index: object.index as u32, domain: domains[0].node.clone(), role: 1,
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
         let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
         else { panic!("role assignment must execute on content"); };
@@ -2383,7 +2367,7 @@ mod tests {
         assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
 
         dispatch_project(&ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         let ContentCommand::ExecuteSelecting(mut second_fluid, _) = rx.try_recv().unwrap()
         else { panic!("second fluid insertion executes on content"); };
         second_fluid.execute(&mut project);
@@ -2394,7 +2378,7 @@ mod tests {
         let new_domain = manifold_core::SceneNodeRef::locate(&with_second, &domains[1].node).unwrap();
         dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
             layer_id: layer_id.clone(), source_node_id: role.id, domain: domains[1].node.clone(),
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
         let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
         else { panic!("retarget executes on content"); };
@@ -2407,7 +2391,7 @@ mod tests {
         assert_eq!(effective_def(&reloaded, &layer_id), retargeted);
         dispatch_project(&ProjectAction::SceneSetupRemoveFluidRole {
             layer_id: layer_id.clone(), source_node_id: role.id,
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), retargeted, "removal waits for content");
         let ContentCommand::ExecuteOnContent(mut remove) = rx.try_recv().unwrap()
         else { panic!("removal executes on content"); };
@@ -2458,7 +2442,7 @@ mod tests {
             if let OverlayResponse::Consumed(actions) = ui.settings_popup.on_event(&event, &mut tree) {
                 for action in actions {
                     if let PanelAction::Project(action) = action {
-                        dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                        dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                             &mut selection, &mut active, &mut prefs, Default::default());
                     }
                 }
@@ -2523,7 +2507,7 @@ mod tests {
                             panic!("settings control emitted unexpected action");
                         };
                         dispatch_project(
-                            &action, &mut project, &content_tx, &content_state,
+                            &action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state,
                             &mut ui, &mut selection, &mut active_layer, &mut user_prefs, Default::default(),
                         );
                     }
@@ -2599,7 +2583,7 @@ mod tests {
         let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
         let result = dispatch_project(
             &action,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2658,7 +2642,7 @@ mod tests {
         let add = ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before);
         dispatch_project(
             &add,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2696,7 +2680,7 @@ mod tests {
         );
         dispatch_project(
             &duplicate,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2764,7 +2748,7 @@ mod tests {
         );
         dispatch_project(
             &write,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2820,7 +2804,7 @@ mod tests {
         );
         dispatch_project(
             &duplicate,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2876,7 +2860,7 @@ mod tests {
         );
         dispatch_project(
             &write,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -3025,7 +3009,7 @@ mod tests {
         let mut user_prefs = UserPrefs::for_test();
         dispatch_project(
             &action,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -3111,7 +3095,7 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let result = dispatch_project(
             action,
-            project,
+            &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -3385,7 +3369,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs, Default::default(),
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs, Default::default(),
         );
         let add = rx.try_recv().expect("Add Fluid queued a content edit");
 
