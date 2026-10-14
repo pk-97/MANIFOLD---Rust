@@ -37,6 +37,9 @@ pub struct AppInputHost<'a> {
     pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
+    /// The UI's part stamps: a local write goes through [`Self::project_ref`],
+    /// which stamps what it touches (UI_INVALIDATION D5).
+    pub stamps: &'a mut crate::frame_plan::UiStamps,
     pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
     #[cfg_attr(not(feature = "profiling"), allow(dead_code))]
     pub current_project_path: &'a Option<std::path::PathBuf>,
@@ -131,7 +134,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         // to sync render pipeline with potentially changed settings.
         // Requires PlaybackEngine.set_resolution()/set_fps() (not yet ported).
 
-        *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
 
@@ -250,7 +252,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 
             let ui = &mut self.ui_root;
             ui.inspector.clear_effect_selection(&mut ui.tree);
-            *self.needs_structural_sync = true;
             *self.needs_rebuild = true;
             return true;
         }
@@ -276,7 +277,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                             ),
                         ),
                     );
-                    *self.needs_structural_sync = true;
                     *self.needs_rebuild = true;
                 }
                 Err(reason) => ContentCommand::send(
@@ -309,7 +309,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                         ),
                     ),
                 );
-                *self.needs_structural_sync = true;
                 *self.needs_rebuild = true;
             }
             return true;
@@ -324,7 +323,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
                     crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer, self.ui_root.inspector.selected_modifier_ids()),
                 ));
-                *self.needs_structural_sync = true;
                 *self.needs_rebuild = true;
             }
             return true;
@@ -349,7 +347,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 let ids = self.ui_root.inspector.selected_modifier_ids();
                 ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
                     crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids)));
-                *self.needs_structural_sync = true;
                 *self.needs_rebuild = true;
             }
             return true;
@@ -378,7 +375,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         let ui = &mut self.ui_root;
         ui.inspector.clear_effect_selection(&mut ui.tree);
-        *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true
     }
@@ -416,7 +412,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         }).unwrap_or_default();
         if !commands.is_empty() {
             ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(commands, "Ungroup effects".into()));
-            *self.needs_structural_sync = true;
             *self.needs_rebuild = true;
         }
         true
@@ -619,7 +614,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.selection,
             &mut self.ui_root.toast,
         );
-        *self.needs_structural_sync = true;
     }
 
     fn duplicate_clips(&mut self, clip_ids: &[ClipId]) {
@@ -642,20 +636,12 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
             let region_core = crate::ui_translate::selection_region_to_core(&region);
-            let mut commands =
+            let commands =
                 EditingService::duplicate_clips(project, clip_ids, &region_core);
             if !commands.is_empty() {
-                // Execute locally for read-back (need new clip IDs for selection).
-                for c in commands.iter_mut() {
-                    c.execute(project);
-                }
-                ContentCommand::send(
-                    self.content_tx,
-                    crate::content_command::ContentCommand::ExecuteBatch(
-                        commands,
-                        "Duplicate clips".into(),
-                    ),
-                );
+                // Executed locally for read-back (need new clip IDs for selection).
+                self.project_ref().execute_batch(commands, "Duplicate clips".into());
+                let project = &*self.project;
 
                 // Find newly created clips and select them
                 let new_ids: Vec<ClipId> = project
@@ -694,7 +680,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 // set — D1 no longer synthesises a bounding region from it.
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
@@ -718,7 +703,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn delete_layer(&mut self, layer_index: usize) {
@@ -812,7 +796,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32) {
@@ -826,7 +809,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn toggle_mute_clips(&mut self, clip_ids: &[ClipId]) {
@@ -876,7 +858,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
-        *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
 
@@ -911,12 +892,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group,
                 original_order,
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::Execute(boxed),
-            );
+            self.project_ref().execute(Box::new(cmd));
         }
 
         self.selection.clear_selection();
@@ -925,7 +901,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn ungroup_selected_layers(&mut self) {
@@ -959,12 +934,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 child_ids,
                 original_order,
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::Execute(boxed),
-            );
+            self.project_ref().execute(Box::new(cmd));
         }
 
         self.selection.clear_selection();
@@ -973,7 +943,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn delete_selected_layers(&mut self) {
@@ -1032,7 +1001,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn duplicate_selected_layers(&mut self) {
@@ -1042,18 +1010,9 @@ impl TimelineInputHost for AppInputHost<'_> {
         let selected_ids: Vec<manifold_core::LayerId> =
             self.selection.selected_layer_ids().iter().cloned().collect();
         if let Some(cmd) = EditingService::duplicate_layers(self.project, &selected_ids) {
-            let mut boxed: Box<dyn manifold_editing::command::Command> = cmd;
-            boxed.execute(self.project);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::ExecuteBatch(
-                    vec![boxed],
-                    "Duplicate Layers".to_string(),
-                ),
-            );
+            self.project_ref().execute_batch(vec![cmd], "Duplicate Layers".to_string());
         }
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn layer_count(&self) -> usize {
@@ -1714,6 +1673,11 @@ impl TimelineInputHost for AppInputHost<'_> {
 }
 
 impl AppInputHost<'_> {
+    /// The local project as a stamping writer (UI_INVALIDATION D5).
+    fn project_ref(&mut self) -> crate::ui_bridge::ProjectRef<'_> {
+        crate::ui_bridge::ProjectRef::new(self.project, self.stamps, self.content_tx)
+    }
+
     /// D4: record the general pasteboard's current changeCount as the
     /// baseline for "how recent is the internal clipboard". Called after
     /// every internal copy/cut — never after paste, which doesn't change
@@ -1879,6 +1843,7 @@ mod automation_clipboard_host_tests {
         active_layer: Option<LayerId>,
         needs_rebuild: bool,
         needs_structural_sync: bool,
+        stamps: crate::frame_plan::UiStamps,
         scroll_dirty: crate::ui_root::ScrollDirty,
         current_project_path: Option<std::path::PathBuf>,
         pending_close_output: bool,
@@ -1923,7 +1888,7 @@ mod automation_clipboard_host_tests {
             Self {
                 project, tx, rx, content_state: Default::default(), ui_root: UIRoot::new(),
                 selection: UIState::new(), active_layer: None, needs_rebuild: false,
-                needs_structural_sync: false, scroll_dirty: Default::default(),
+                needs_structural_sync: false, stamps: Default::default(), scroll_dirty: Default::default(),
                 current_project_path: None, pending_close_output: false, pending_export: false,
                 project_io: crate::project_io::ProjectIOService::new(&crate::user_prefs::UserPrefs::in_memory()),
                 #[cfg(target_os = "macos")]
@@ -1940,6 +1905,7 @@ mod automation_clipboard_host_tests {
                 selection: &mut self.selection, active_layer: &mut self.active_layer,
                 needs_rebuild: &mut self.needs_rebuild,
                 needs_structural_sync: &mut self.needs_structural_sync,
+                stamps: &mut self.stamps,
                 scroll_dirty: &mut self.scroll_dirty,
                 current_project_path: &self.current_project_path, has_output_window: false,
                 pending_close_output: &mut self.pending_close_output,

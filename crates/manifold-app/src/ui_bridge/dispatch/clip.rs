@@ -57,7 +57,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     ),
                 )));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ClipAction::ClipDetectClicked => {
             // Per-clip detection: analyze the selected audio clip's file and place
@@ -130,7 +130,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                 ));
                 ctx.execute(cmd);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ClipAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
@@ -141,7 +141,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     }
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ClipAction::ClipDetectSensitivityChanged(idx, value) => {
             let (idx, value) = (*idx, *value);
@@ -152,7 +152,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     }
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ClipAction::ClipDetectOnsetChanged(ms) => {
             let secs = manifold_core::Seconds((*ms / 1000.0) as f64);
@@ -161,7 +161,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     c.onset_compensation = secs;
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ClipAction::ClipDetectSetQuantize(step) => {
             let step = *step;
@@ -174,7 +174,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     None => c.quantize_on = false,
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ClipAction::ClipDetectSetLayer(idx, layer) => {
             let (idx, layer) = (*idx, layer.clone());
@@ -185,7 +185,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     }
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // The open actions are consumed by UIRoot::try_open_dropdown before
         // dispatch; these arms are defensive no-ops.
@@ -207,7 +207,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // BUG-061: the clip in-point ("slip") slider and its right-click reset
         // were removed (`ClipSlipSnapshot`/`Changed`/`Commit`/`RightClick`) —

@@ -126,7 +126,7 @@ pub(super) fn dispatch_editing(
                 .layers
                 .get(*layer)
                 .map(|l| l.layer_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ViewportHoverChanged(_clip_id) => {
             // Hover state is already tracked on viewport panel
@@ -145,7 +145,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextDeleteClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
@@ -165,7 +165,7 @@ pub(super) fn dispatch_editing(
                 );
             }
             selection.deselect_clips(&target_ids);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextDuplicateClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
@@ -189,7 +189,7 @@ pub(super) fn dispatch_editing(
                     );
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextPasteAtTrack(beat, layer) => {
             // Paste the clip clipboard at the clicked beat/layer — same content-thread
@@ -202,7 +202,7 @@ pub(super) fn dispatch_editing(
                 selection,
                 &mut ui.toast,
             );
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddVideoLayer(after_layer) => {
             {
@@ -221,7 +221,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddGeneratorLayer(after_layer) => {
             {
@@ -242,7 +242,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddLedLayer(after_layer) => {
             {
@@ -267,7 +267,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddAudioLayer(after_layer) => {
             {
@@ -283,7 +283,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextDeleteLayer(layer_id) => {
@@ -300,7 +300,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextDuplicateLayer(layer_id) => {
@@ -322,7 +322,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextAutomationCopy(target, param_id, _beat) => {
@@ -336,7 +336,7 @@ pub(super) fn dispatch_editing(
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
                 automation::cut_selected(p, selection, content_tx, &mut needs_rebuild)
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAutomationPaste(target, param_id, beat) => {
             automation::set_lane_context(selection, target, param_id);
@@ -344,7 +344,7 @@ pub(super) fn dispatch_editing(
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
                 automation::paste(p, selection, content_tx, *beat, &mut needs_rebuild)
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
@@ -356,7 +356,7 @@ pub(super) fn dispatch_editing(
                 ui.viewport.grid_step(),
                 &mut needs_rebuild,
             ));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextSelectAllAutomation(target, param_id) => {
             automation::select_all_in_lane(project, selection, target, param_id);
@@ -368,7 +368,7 @@ pub(super) fn dispatch_editing(
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
                 automation::delete_selected(p, selection, content_tx, &mut needs_rebuild)
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
             let mut needs_rebuild = false;
@@ -382,7 +382,7 @@ pub(super) fn dispatch_editing(
                 *shape,
                 &mut needs_rebuild,
             ));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAutomationSetShape(target, param_id, beat, value_norm, shape) => {
             let graph_target = crate::editing_host::to_graph_target(target);
@@ -419,7 +419,7 @@ pub(super) fn dispatch_editing(
                 graph_target.clone(), param_id.as_ref(), old_point, new_point,
             );
             project.execute(Box::new(local));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::AutomationPointEditValue(_, _, _, _)
         | EditingAction::AutomationPointEditTime(_, _, _, _) => {
@@ -471,7 +471,7 @@ pub(super) fn dispatch_editing(
             // Paste at the current playhead beat on the right-clicked layer.
             // Re-resolve the id to its current index at execution time (BUG-031).
             let Some((idx, _)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             super::paste_clips_and_select(
                 content_tx,
@@ -480,7 +480,7 @@ pub(super) fn dispatch_editing(
                 selection,
                 &mut ui.toast,
             );
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextImportMidi(layer_id) => {
             if let Some(path) = crate::file_dialogs::pick_file(
@@ -516,7 +516,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextGroupSelectedLayers => {
             let selected_ids: Vec<manifold_core::LayerId> =
@@ -545,7 +545,7 @@ pub(super) fn dispatch_editing(
                 }
             }
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextUngroup(layer_id) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str())
@@ -573,7 +573,7 @@ pub(super) fn dispatch_editing(
                 }
             }
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextSetLayerColor(layer_id, color) => {
@@ -589,7 +589,7 @@ pub(super) fn dispatch_editing(
                     layer.layer_color = manifold_core::color::Color { r, g, b, a };
                 }
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)

@@ -144,7 +144,7 @@ pub(super) fn dispatch_project(
                     project.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetMidiChannel(id, channel) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
@@ -161,7 +161,7 @@ pub(super) fn dispatch_project(
                     project.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetMidiDevice(id, device) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
@@ -175,7 +175,7 @@ pub(super) fn dispatch_project(
                 let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::MidiTriggerModeClicked(id) => {
             use manifold_core::types::MidiTriggerMode;
@@ -193,7 +193,7 @@ pub(super) fn dispatch_project(
                 let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetMidiTriggerMode(id, new_mode) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
@@ -208,7 +208,7 @@ pub(super) fn dispatch_project(
                 let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetResolution(preset_idx) => {
             use manifold_core::types::ResolutionPreset;
@@ -260,9 +260,9 @@ pub(super) fn dispatch_project(
                     project.execute(boxed);
                 }
             }
-            // The panel's tier labels are baked into the tree at build —
-            // structural so the overlay rebuilds and the click is visible.
-            DispatchResult::structural()
+            // The panel's tier labels are baked into the tree at build; the
+            // Settings stamp rebuilds it so the click is visible.
+            DispatchResult::handled()
         }
         ProjectAction::SetGenType(opt_layer_id, new_type) => {
             let new_type = crate::ui_translate::preset_type_id_to_core(new_type);
@@ -287,7 +287,7 @@ pub(super) fn dispatch_project(
                     );
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── SCENE_SETUP_PANEL_DESIGN P1: the panel's fourth-surface writes ──
@@ -407,7 +407,7 @@ pub(super) fn dispatch_project(
                     ContentCommand::ExecuteOnContent(Box::new(cmd)),
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAddFog(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -427,7 +427,7 @@ pub(super) fn dispatch_project(
                     ContentCommand::ExecuteOnContent(Box::new(cmd)),
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         ProjectAction::SceneModifierApply(layer, preset) => {
@@ -599,7 +599,7 @@ pub(super) fn dispatch_project(
                     Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAssignFluidRole {
             layer_id, render_scene_node_id, object_index, domain, role,
@@ -621,7 +621,7 @@ pub(super) fn dispatch_project(
                     ));
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveFluidRole { layer_id, source_node_id }
         | ProjectAction::SceneSetupRetargetFluidRole { layer_id, source_node_id, .. } => {
@@ -656,7 +656,7 @@ pub(super) fn dispatch_project(
                     ));
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -685,7 +685,7 @@ pub(super) fn dispatch_project(
                     crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // BUG-hlw8 "+ Plane" button: mirrors `SceneSetupAddObject` above but
         // dispatches `AddSceneLayerPlaneCommand`, which builds a grouped plane
@@ -722,7 +722,7 @@ pub(super) fn dispatch_project(
                     Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAddLight(layer_id, render_scene_node_id, next_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -741,7 +741,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewLight(layer_id.clone())));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // BUG-193 per-row "✕": the inverse of SceneSetupAddObject/
         // SceneSetupAddLight above — `object_index`/`light_index` ride on
@@ -761,7 +761,7 @@ pub(super) fn dispatch_project(
                 ).with_expected_source(source);
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveSubmesh(layer_id, render_scene_node_id, physical_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -774,7 +774,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -788,12 +788,12 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
-        // P4b: Skin row source/target edits — same shape as the modifier-stack
-        // arms above: resolve `GraphTarget::Generator(layer_id)`, grab the
-        // catalog default, execute locally + send to content thread.
+        // Skin row source/target edits: content-owned like the other scene
+        // edits above; the snapshot brings them back (BUG-bo2mx (scene setup
+        // skin edits run against the UI snapshot)).
         ProjectAction::SceneSetupSkinSourceSet {
             layer_id,
             scope_path,
@@ -814,10 +814,9 @@ pub(super) fn dispatch_project(
                     source_string,
                     default,
                 );
-                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                project.execute(boxed);
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupSkinTargetMapSet {
             layer_id,
@@ -837,10 +836,9 @@ pub(super) fn dispatch_project(
                         map_skin_target_map(*target_map),
                         default,
                     );
-                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                project.execute(boxed);
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // Buttons and keyboard duplication use the same content-owned transfer.
@@ -849,7 +847,7 @@ pub(super) fn dispatch_project(
                 layer: layer_id.clone(), scene: *render_scene_node_id,
                 kind: crate::scene_item_transfer::SceneItemKind::Object, index: *source_index,
             }));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
@@ -863,7 +861,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
@@ -896,7 +894,7 @@ pub(super) fn dispatch_project(
                 };
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
         // effective def through the SAME SceneVm the panel builds, takes the
@@ -1036,7 +1034,7 @@ pub(super) fn dispatch_project(
                 content_tx,
                 ContentCommand::ExecuteOnContent(Box::new(composite)),
             );
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // P4 "Import Model…" button (D5): a native file dialog picks a
@@ -1106,7 +1104,7 @@ pub(super) fn dispatch_project(
                     plan.report_lines.join("; ")
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // ── SCENE_SETUP_PANEL_DESIGN P5: the modifier stack (D6) ──
         // All three resolve `GraphTarget::Generator(layer_id)` exactly like
@@ -1120,7 +1118,7 @@ pub(super) fn dispatch_project(
                     type_id: type_id.clone(), after: None,
                 },
             ));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -1134,7 +1132,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupMoveModifier(
             layer_id,
@@ -1154,19 +1152,19 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // Both scene actions resolve against authoritative content state.
         ProjectAction::SceneSetupPrepareCamera(layer_id) => {
             ContentCommand::send(content_tx, ContentCommand::SceneCameraSetup(layer_id.clone()));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupNewScene(layer_id) => {
             ContentCommand::send(content_tx, ContentCommand::ChangeGeneratorType {
                 layer_id: layer_id.clone(),
                 new_type: PresetTypeId::new("Scene"),
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // BUG-184: the automation-lane right-click context menu's two items
@@ -1181,11 +1179,11 @@ pub(super) fn dispatch_project(
                 param_id.as_ref(),
             );
             project.execute(Box::new(cmd));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::ContextRemoveAutomationLane(target, param_id) => {
             remove_parameter_automation(project, content_tx, ui, _selection, target, param_id);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::ContextRestoreAutomationLane(target, param_id) => {
             ContentCommand::send(
@@ -2062,7 +2060,7 @@ mod tests {
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
-        assert!(result.structural_change);
+        assert!(!result.structural_change, "the content receipt drives the projection");
         assert_eq!(effective_def(&project, &layer_id), original,
             "UI dispatch must leave the project unchanged until content accepts the edit");
         let ContentCommand::ExecuteSelecting(mut command, request) =
@@ -2593,8 +2591,8 @@ mod tests {
             Default::default(),
         );
         assert!(
-            result.structural_change,
-            "framing the camera is a param write"
+            !result.structural_change,
+            "framing the camera is a content-owned param write"
         );
         assert_eq!(
             (
@@ -3228,7 +3226,7 @@ mod tests {
 
             let action = (case.action)(layer_id.clone(), render_scene_id, before as u32);
             let (result, content_rx) = dispatch_once(&action, &mut project);
-            assert!(result.structural_change, "{name}: structural graph edit");
+            assert!(!result.structural_change, "{name}: the content receipt drives the projection");
             assert_eq!(
                 (case.count)(&project, &layer_id, render_scene_id),
                 before,

@@ -100,7 +100,7 @@ pub(super) fn dispatch_marker(
                     project.execute(cmd);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Right-click: context menu (placeholder) ────────────
@@ -124,7 +124,7 @@ pub(super) fn dispatch_marker(
             }
             project.execute_batch(commands, "Delete Markers".into());
             selection.clear_marker_selection();
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
     }
