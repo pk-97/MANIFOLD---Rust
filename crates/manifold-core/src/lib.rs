@@ -130,4 +130,5 @@ pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgr
 // Re-export the cross-cutting cold-touch detector from `manifold-foundation`
 // so `manifold-app` can reach it through `manifold_core`.
 pub use manifold_foundation::cold_touch;
+pub use manifold_foundation::device_guard;
 pub use manifold_foundation::work_count;

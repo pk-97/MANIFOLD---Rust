@@ -71,6 +71,9 @@ impl OscPositionSender {
             return;
         }
 
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::OscSend) {
+            return;
+        }
         let addr = format!("{}:{}", DESTINATION_IP, port);
         match UdpSocket::bind("0.0.0.0:0") {
             Ok(sock) => {

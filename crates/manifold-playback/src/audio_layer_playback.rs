@@ -300,8 +300,8 @@ fn make_voice<B: Backend>(
 
 /// Owns the kira manager, one sub-track per audio layer, and one voice per active
 /// audio clip. Lives on the content thread beside the imported-audio controller.
-pub struct AudioLayerPlayback {
-    manager: AudioManager<DefaultBackend>,
+pub struct AudioLayerPlayback<B: Backend = DefaultBackend> {
+    manager: AudioManager<B>,
     /// One sub-track + tap per audio layer, keyed by `LayerId`.
     layer_tracks: AHashMap<LayerId, LayerTrack>,
     voices: AHashMap<ClipId, Voice>,
@@ -310,6 +310,7 @@ pub struct AudioLayerPlayback {
 impl AudioLayerPlayback {
     /// Create the playback manager (opens kira's default-output backend).
     pub fn new() -> Result<Self, String> {
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::AudioOutput);
         let manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
             .map_err(|e| format!("Failed to create audio-layer manager: {e}"))?;
         Ok(Self {
@@ -317,6 +318,14 @@ impl AudioLayerPlayback {
             layer_tracks: AHashMap::new(),
             voices: AHashMap::new(),
         })
+    }
+}
+
+impl<B: Backend> AudioLayerPlayback<B> {
+    /// Wrap an already-built manager (tests use kira's mock backend).
+    #[cfg(test)]
+    fn with_manager(manager: AudioManager<B>) -> Self {
+        Self { manager, layer_tracks: AHashMap::new(), voices: AHashMap::new() }
     }
 
     /// Drive every audio clip under the playhead. Called each content tick.
@@ -380,7 +389,7 @@ impl AudioLayerPlayback {
                 continue;
             };
             let track = &lt.track;
-            Self::sync_clip(
+            AudioLayerPlayback::sync_clip(
                 &mut self.manager,
                 &mut self.voices,
                 track,
@@ -427,6 +436,9 @@ impl AudioLayerPlayback {
         }
     }
 
+}
+
+impl AudioLayerPlayback {
     /// Sync a single clip's voice to the transport-expected position + volume,
     /// routed to its layer's `track`. The voice is removed from the map for the
     /// duration so the manager and the voice can be borrowed independently, then
@@ -558,6 +570,9 @@ impl AudioLayerPlayback {
 
         voices.insert(id.clone(), voice);
     }
+}
+
+impl<B: Backend> AudioLayerPlayback<B> {
 
     /// Drain the layer's post-fader tap, handing each stamped event and its mono
     /// samples to `f` (oldest → newest). Gap events carry an empty sample slice;
@@ -675,22 +690,40 @@ impl AudioLayerPlayback {
 /// Realtime-tap path (steps 2–3 of the section 3R plan): proves a clip routed to a
 /// layer's sub-track is captured post-fader off the [`LayerTap`] and reaches the
 /// content thread through [`AudioLayerPlayback::drain_layer_tap`] — the exact
-/// signal the send analyzer consumes. Ignored because it opens the default
-/// output device; run with:
-///   cargo test -p manifold-playback layer_tap -- --ignored --nocapture
+/// signal the send analyzer consumes. Runs on kira's mock backend, so no output
+/// device is opened.
 #[cfg(test)]
 mod layer_tap_tests {
     use std::sync::Arc;
 
+    use kira::manager::backend::mock::{MockBackend, MockBackendSettings};
     use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
     use kira::Frame;
 
     use super::*;
 
+    fn mock_playback() -> AudioLayerPlayback<MockBackend> {
+        let manager = AudioManager::<MockBackend>::new(AudioManagerSettings {
+            backend_settings: MockBackendSettings { sample_rate: 48_000 },
+            ..Default::default()
+        })
+        .expect("mock audio manager");
+        AudioLayerPlayback::with_manager(manager)
+    }
+
+    /// Render `frames` samples through the mock backend in 64-frame blocks.
+    fn render(playback: &mut AudioLayerPlayback<MockBackend>, frames: usize) {
+        for i in 0..frames {
+            if i % 64 == 0 {
+                playback.manager.backend_mut().on_start_processing();
+            }
+            let _ = playback.manager.backend_mut().process();
+        }
+    }
+
     #[test]
-    #[ignore = "opens the default audio output device; run with --ignored"]
     fn layer_tap_streams_post_fader_samples() {
-        let mut playback = AudioLayerPlayback::new().expect("open default output device");
+        let mut playback = mock_playback();
         let layer_id = LayerId::new("test-layer");
 
         // Create the layer's sub-track + tap, then route a tone to it.
@@ -713,7 +746,7 @@ mod layer_tap_tests {
         .output_destination(track);
         let _handle = playback.manager.play(data).expect("play tone on layer track");
 
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        render(&mut playback, 7_200);
 
         let mut captured = Vec::<f32>::new();
         playback.drain_layer_tap(&layer_id, |chunk| captured.extend_from_slice(chunk));
@@ -735,9 +768,8 @@ mod layer_tap_tests {
     /// sub-track volume before the effect chain and analysis-only needs a different
     /// tap point (see AUDIO_LAYER_DESIGN section 5).
     #[test]
-    #[ignore = "opens the default audio output device; run with --ignored"]
     fn tap_stays_hot_when_subtrack_muted_to_master() {
-        let mut playback = AudioLayerPlayback::new().expect("open default output device");
+        let mut playback = mock_playback();
         let layer_id = LayerId::new("test-layer");
 
         playback.ensure_layer_track(&layer_id);
@@ -766,7 +798,7 @@ mod layer_tap_tests {
         .output_destination(track);
         let _handle = playback.manager.play(data).expect("play tone on layer track");
 
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        render(&mut playback, 7_200);
 
         let mut captured = Vec::<f32>::new();
         playback.drain_layer_tap(&layer_id, |chunk| captured.extend_from_slice(chunk));

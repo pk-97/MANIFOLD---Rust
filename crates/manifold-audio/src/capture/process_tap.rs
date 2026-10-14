@@ -365,6 +365,7 @@ unsafe impl Send for ProcessTapCapture {}
 /// Build a tap from an already-constructed `CATapDescription` and wrap it in a
 /// running-capable aggregate + IO proc. `description` is consumed.
 fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, String> {
+    manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::AudioTap);
     let syms = syms().ok_or("process taps unavailable (requires macOS 14.4+)")?;
 
     // 1. Create the tap.
