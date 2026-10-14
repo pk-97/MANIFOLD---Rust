@@ -16,6 +16,9 @@ use manifold_core::project::Project;
 use parking_lot::Mutex;
 use std::net::UdpSocket;
 use std::sync::Arc;
+use std::time::Instant;
+
+use crate::sync_projection::{SongTimeReport, TempoReport};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 // ── Constants ────────���────────────────────────────────────────────
@@ -238,10 +241,11 @@ const FILTER_SETTLE_EPSILON: f32 = 1.0e-5;
 #[derive(Default)]
 struct PendingTransportState {
     is_playing: Option<bool>,
-    tempo: Option<f32>,
+    /// Tempo with its arrival.
+    tempo: Option<(f32, Instant)>,
     /// Song position in beats from the `current_song_time` listener —
-    /// the position-acknowledgment channel (design D4).
-    song_time: Option<f32>,
+    /// the position-acknowledgment channel (design D4) — with its arrival.
+    song_time: Option<SongTimeReport>,
 }
 
 // ── Write target (pre-built lookup for hot path) ──────────────────
@@ -274,6 +278,8 @@ struct WriteTarget {
 struct OscMessage {
     address: String,
     args: Vec<rosc::OscType>,
+    /// Stamped on the receive thread when the packet arrived (D7).
+    at: Instant,
 }
 
 /// Thread-safe message queue for the Ableton receiver.
@@ -371,6 +377,9 @@ pub struct AbletonBridge {
     ableton_is_playing: bool,
     /// Latest tempo from Ableton (UI/HUD reads).
     ableton_tempo: f32,
+    /// The latest song-time report and tempo change, for the follower (D7).
+    last_song_time: Option<SongTimeReport>,
+    tempo_report: Option<TempoReport>,
     /// Wall-clock time of last transport message from Ableton.
     transport_last_received: f64,
     /// Outbound: last known MANIFOLD play state (edge detection feeding
@@ -448,6 +457,8 @@ impl AbletonBridge {
             transport_enabled: false,
             ableton_is_playing: false,
             ableton_tempo: 120.0,
+            last_song_time: None,
+            tempo_report: None,
             transport_last_received: 0.0,
             transport_last_was_playing: false,
             transport_sync: crate::transport_sync::AbletonTransportSync::new(),
@@ -534,6 +545,7 @@ impl AbletonBridge {
                                 continue;
                             }
                         };
+                        let at = Instant::now();
 
                         // Wrap message processing in catch_unwind so a
                         // malformed packet can't kill the receiver thread.
@@ -551,7 +563,7 @@ impl AbletonBridge {
                             // transport, and any other message types.
                             match rosc::decoder::decode_udp(&buf[..size]) {
                                 Ok((_, packet)) => {
-                                    Self::handle_packet_static(packet, &queue);
+                                    Self::handle_packet_static(packet, &queue, at);
                                 }
                                 Err(e) => {
                                     log::error!(
@@ -615,10 +627,12 @@ impl AbletonBridge {
         self.transport_last_received = 0.0;
         self.transport_sync.reset();
         *self.pending_transport.lock() = PendingTransportState::default();
+        self.last_song_time = None;
+        self.tempo_report = None;
         log::info!("[AbletonBridge] Disconnected");
     }
 
-    fn handle_packet_static(packet: rosc::OscPacket, queue: &Arc<Mutex<AbletonMessageQueue>>) {
+    fn handle_packet_static(packet: rosc::OscPacket, queue: &Arc<Mutex<AbletonMessageQueue>>, at: Instant) {
         match packet {
             rosc::OscPacket::Message(msg) => {
                 // Rig log (C0): transport reports stamped on arrival, before
@@ -646,11 +660,12 @@ impl AbletonBridge {
                 queue.lock().messages.push(OscMessage {
                     address: msg.addr,
                     args: msg.args,
+                    at,
                 });
             }
             rosc::OscPacket::Bundle(bundle) => {
                 for inner in bundle.content {
-                    Self::handle_packet_static(inner, queue);
+                    Self::handle_packet_static(inner, queue, at);
                 }
             }
         }
@@ -927,13 +942,13 @@ impl AbletonBridge {
                 }
                 "/live/song/get/tempo" => {
                     if let Some(val) = msg.args.first().and_then(osc_arg_float) {
-                        self.pending_transport.lock().tempo = Some(val);
+                        self.pending_transport.lock().tempo = Some((val, msg.at));
                     }
                     return;
                 }
                 "/live/song/get/current_song_time" => {
-                    if let Some(val) = msg.args.first().and_then(osc_arg_float) {
-                        self.pending_transport.lock().song_time = Some(val);
+                    if let Some(beat) = msg.args.first().and_then(osc_arg_f64) {
+                        self.pending_transport.lock().song_time = Some(SongTimeReport { beat, at: msg.at });
                     }
                     return;
                 }
@@ -2425,6 +2440,8 @@ impl AbletonBridge {
         self.transport_last_received = 0.0;
         self.transport_sync.reset();
         *self.pending_transport.lock() = PendingTransportState::default();
+        self.last_song_time = None;
+        self.tempo_report = None;
         log::info!("[AbletonBridge] Transport sync disabled");
     }
 
@@ -2453,6 +2470,19 @@ impl AbletonBridge {
         self.ableton_tempo
     }
 
+    /// The latest song-time report and Live's tempo around it, while reports
+    /// arrive and the relay hands position to the follower (T10): Settled,
+    /// CLK silent, both sides playing, within the seek threshold.
+    pub fn follower_song_time(&self, realtime: f64) -> Option<(SongTimeReport, TempoReport)> {
+        if !self.is_transport_receiving(realtime) || !self.transport_sync.report_steers_follower() {
+            return None;
+        }
+        let report = self.last_song_time?;
+        let bpm = f64::from(self.ableton_tempo);
+        let tempo = self.tempo_report.unwrap_or(TempoReport { before: bpm, bpm, at: report.at });
+        Some((report, tempo))
+    }
+
     /// Drain pending transport state from the receiver thread into the
     /// state machine. Call once per frame from `update()`.
     pub fn drain_transport(&mut self, realtime: f64) {
@@ -2479,7 +2509,11 @@ impl AbletonBridge {
         // Feed observations to the state machine — ordering matters for ack
         // checks: tempo first (dead-reckoning input), then playing, then
         // position (the ack evaluation reads the full observed snapshot).
-        if let Some(tempo) = pending.tempo {
+        if let Some((tempo, at)) = pending.tempo {
+            if tempo != self.ableton_tempo {
+                self.tempo_report =
+                    Some(TempoReport { before: f64::from(self.ableton_tempo), bpm: f64::from(tempo), at });
+            }
             self.ableton_tempo = tempo;
             self.transport_sync.on_osc_tempo(tempo, realtime);
         }
@@ -2487,8 +2521,9 @@ impl AbletonBridge {
             self.ableton_is_playing = playing;
             self.transport_sync.on_osc_is_playing(playing, realtime);
         }
-        if let Some(beats) = pending.song_time {
-            self.transport_sync.on_osc_song_time(beats, realtime);
+        if let Some(report) = pending.song_time {
+            self.transport_sync.on_osc_song_time(report.beat as f32, realtime);
+            self.last_song_time = Some(report);
         }
     }
 
@@ -2754,6 +2789,15 @@ fn osc_arg_int(arg: &rosc::OscType) -> Option<i32> {
         rosc::OscType::Int(i) => Some(*i),
         rosc::OscType::Float(f) => Some(*f as i32),
         rosc::OscType::Bool(b) => Some(if *b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn osc_arg_f64(arg: &rosc::OscType) -> Option<f64> {
+    match arg {
+        rosc::OscType::Float(f) => Some(f64::from(*f)),
+        rosc::OscType::Int(i) => Some(f64::from(*i)),
+        rosc::OscType::Double(d) => Some(*d),
         _ => None,
     }
 }

@@ -344,13 +344,16 @@ fn video_elapsed_survives_tempo_changes() {
         assert!(*w <= STEP, "clip {i}: video elapsed off by {:.1} ms through the tempo change", w * 1000.0);
     }
 
-    // Ten minutes under LiveMTC timecode labels: within 1 ms.
+    // Ten minutes under LiveMTC timecode labels: the start is latched on the
+    // activation frame, sub-frame (D8), so the offset from whole frames is
+    // that frame's phase error, inside the label bound (test 7); after it
+    // the elapsed time drifts by no more than 1 ms.
     let live = Live::new(Tempo::constant(120.0));
     let mut tc = TimecodeReader::new(timecode_arrivals(&live, 600.0, 122, 0.040, 0.0, true), 120.0);
     let mut driver = Driver::new(engine_with_map(120.0, Some(video_project(&[8.0]))), 13);
     set_authority(&mut driver.engine, Some(Kind::Timecode));
     driver.engine.play();
-    let (mut frames, mut worst) = (None::<u32>, 0.0f64);
+    let (mut frames, mut first, mut drift) = (None::<u32>, None::<f64>, 0.0f64);
     while driver.wall() < 600.0 {
         let shown = driver.step(Some(&mut tc), 0);
         if shown.beat >= 8.0 {
@@ -358,12 +361,14 @@ fn video_elapsed_survives_tempo_changes() {
             *f += shown.frames;
             let clip = driver.engine.project().expect("project").timeline.layers[0].clips[0].clone();
             let elapsed = driver.engine.get_clip_source_elapsed_seconds(&clip).0;
-            if *f > 60 {
-                worst = worst.max((elapsed - f64::from(*f - 1) * STEP).abs());
-            }
+            let offset = elapsed - f64::from(*f - 1) * STEP;
+            let first = *first.get_or_insert(offset);
+            drift = drift.max((offset - first).abs());
         }
     }
-    assert!(worst <= 0.001, "timecode: video elapsed off by {:.2} ms", worst * 1000.0);
+    let first = first.expect("the clip started");
+    assert!(first.abs() <= 0.021, "timecode: activation offset {:.2} ms", first * 1000.0);
+    assert!(drift <= 0.001, "timecode: video elapsed drifted by {:.2} ms", drift * 1000.0);
 }
 
 /// Test 13: With Live on Link, a tempo jump under MIDI clock stays within the
@@ -404,7 +409,10 @@ fn abletonosc_tempo_change_with_listener_lag() {
             let mut osc = OscReader::new(osc_arrivals(&live, 40.0, 151, lag));
             let (m, _) = follow(engine_with_map(120.0, None), &mut osc, &live, 40.0, WARM, 16);
             let what = format!("AbletonOSC {from} -> {to}, listener lag {lag}");
-            assert!(m.seeks.is_empty() && m.backward == 0, "{what}: {}", m.report());
+            assert_eq!(m.backward, 0, "{what}: {}", m.report());
+            // No seek up to 100 ms of lag. At 200 ms a halving may seek once
+            // by D6's catch-up rule (past 150 ms for 250 ms); no bound is set.
+            assert!(lag > 0.1 || m.seeks.is_empty(), "{what}: {}", m.report());
             let bound = if lag == 0.0 {
                 8.0
             } else if lag <= 0.1 {

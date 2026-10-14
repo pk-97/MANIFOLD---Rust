@@ -12,52 +12,48 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 /// Callback type for OSC subscribers. Receives (address, values) on the main thread.
 /// Port of Unity `Action<string, float[]>`.
 pub type OscCallback = Box<dyn Fn(&str, &[f32]) + Send + Sync + 'static>;
+
+/// A subscriber that needs full precision and the arrival time: the values
+/// as `f64` (doubles kept), and the instant the receive thread decoded the
+/// packet (FRAME_EXACT_TRANSPORT_DESIGN.md D7).
+pub type OscStampedCallback = Box<dyn Fn(&str, &[f64], Instant) + Send + Sync + 'static>;
 
 /// Pending OSC message captured from the background thread.
 /// Preserves the latest-message-per-address semantics: intermediate values
 /// between frames are discarded (only the last arriving value is dispatched).
 struct PendingMessage {
     address: String,
+    /// Floats and ints, as plain subscribers have always seen them.
     values: Vec<f32>,
+    /// Floats, ints and doubles at full precision, for stamped subscribers.
+    wide: Vec<f64>,
+    at: Instant,
 }
 
 /// Thread-safe message store shared between the background receive thread and
 /// the main-thread dispatch loop.
-/// Port of Unity OscReceiver's `queueLock` + `latestMessages` + `latestMessagesList`.
 #[derive(Default)]
 struct MessageQueue {
-    /// Latest message per address (O(1) keyed replacement from background thread).
-    latest: HashMap<String, Vec<f32>>,
-    /// Parallel iteration list — avoids HashMap enumerator alloc on drain.
-    /// Kept in sync with `latest`. Port of `latestMessagesList`.
+    /// Each address's slot in `latest_list`.
+    latest: HashMap<String, usize>,
+    /// Latest message per address, in first-arrival order.
     latest_list: Vec<PendingMessage>,
 }
 
 impl MessageQueue {
-    /// Record or replace the latest message for `address`.
+    /// Record or replace the latest message for its address.
     /// Called from the background receive thread under lock.
-    fn push(&mut self, address: String, values: Vec<f32>) {
-        if let Some(existing) = self.latest.get_mut(&address) {
-            // Update in-place: reuse allocation if same count, otherwise replace.
-            if existing.len() == values.len() {
-                existing.copy_from_slice(&values);
-            } else {
-                *existing = values.clone();
-            }
-            // Update the parallel iteration list in-place (same as Unity's backward scan).
-            for entry in self.latest_list.iter_mut().rev() {
-                if entry.address == address {
-                    entry.values = values;
-                    return;
-                }
-            }
+    fn push(&mut self, message: PendingMessage) {
+        if let Some(&slot) = self.latest.get(&message.address) {
+            self.latest_list[slot] = message;
         } else {
-            self.latest.insert(address.clone(), values.clone());
-            self.latest_list.push(PendingMessage { address, values });
+            self.latest.insert(message.address.clone(), self.latest_list.len());
+            self.latest_list.push(message);
         }
     }
 
@@ -69,7 +65,7 @@ impl MessageQueue {
     }
 
     fn is_empty(&self) -> bool {
-        self.latest.is_empty()
+        self.latest_list.is_empty()
     }
 }
 
@@ -92,6 +88,8 @@ pub struct OscReceiver {
     /// Subscriber registry: address → list of callbacks invoked on main thread.
     /// Port of `subscribers`.
     subscribers: HashMap<String, Vec<OscCallback>>,
+    /// Stamped subscribers, dispatched after the plain ones.
+    stamped: HashMap<String, Vec<OscStampedCallback>>,
 
     /// Pre-allocated buffer for draining latestMessages on main thread.
     /// Port of `dispatchBuffer`.
@@ -111,6 +109,7 @@ impl OscReceiver {
             is_listening: false,
             queue: Arc::new(Mutex::new(MessageQueue::default())),
             subscribers: HashMap::new(),
+            stamped: HashMap::new(),
             dispatch_buffer: Vec::new(),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             recv_thread: None,
@@ -179,8 +178,9 @@ impl OscReceiver {
                     }
                 };
 
+                let at = Instant::now();
                 match rosc::decoder::decode_udp(&buf[..size]) {
-                    Ok((_, packet)) => Self::handle_packet(packet, &queue),
+                    Ok((_, packet)) => Self::handle_packet(packet, &queue, at),
                     Err(e) => log::error!("[OscReceiver] OSC decode error: {}", e),
                 }
             }
@@ -191,7 +191,7 @@ impl OscReceiver {
         log::info!("[OscReceiver] Listening on port {}", self.listen_port);
     }
 
-    fn handle_packet(packet: rosc::OscPacket, queue: &Arc<Mutex<MessageQueue>>) {
+    fn handle_packet(packet: rosc::OscPacket, queue: &Arc<Mutex<MessageQueue>>, at: Instant) {
         match packet {
             rosc::OscPacket::Message(msg) => {
                 let values: Vec<f32> = msg
@@ -203,11 +203,21 @@ impl OscReceiver {
                         _ => None,
                     })
                     .collect();
-                queue.lock().push(msg.addr, values);
+                let wide: Vec<f64> = msg
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        rosc::OscType::Float(f) => Some(f64::from(*f)),
+                        rosc::OscType::Int(i) => Some(f64::from(*i)),
+                        rosc::OscType::Double(d) => Some(*d),
+                        _ => None,
+                    })
+                    .collect();
+                queue.lock().push(PendingMessage { address: msg.addr, values, wide, at });
             }
             rosc::OscPacket::Bundle(bundle) => {
                 for inner in bundle.content {
-                    Self::handle_packet(inner, queue);
+                    Self::handle_packet(inner, queue, at);
                 }
             }
         }
@@ -262,7 +272,12 @@ impl OscReceiver {
     /// drives the real `update` → subscriber → router path.
     #[cfg(feature = "testkit")]
     pub fn inject(&self, address: &str, values: &[f32]) {
-        self.queue.lock().push(address.to_string(), values.to_vec());
+        self.queue.lock().push(PendingMessage {
+            address: address.to_string(),
+            values: values.to_vec(),
+            wide: values.iter().map(|&v| f64::from(v)).collect(),
+            at: Instant::now(),
+        });
     }
 
     pub fn update(&mut self) {
@@ -282,6 +297,11 @@ impl OscReceiver {
         let mut buf = std::mem::take(&mut self.dispatch_buffer);
         for msg in &buf {
             self.dispatch_to_subscribers(&msg.address, &msg.values);
+            if let Some(callbacks) = self.stamped.get(&msg.address) {
+                for cb in callbacks {
+                    cb(&msg.address, &msg.wide, msg.at);
+                }
+            }
         }
         buf.clear();
         self.dispatch_buffer = buf;
@@ -333,6 +353,13 @@ impl OscReceiver {
     /// sufficient for single-subscriber use cases (OscSyncController).
     pub fn unsubscribe_all(&mut self, address: &str) {
         self.subscribers.remove(address);
+        self.stamped.remove(address);
+    }
+
+    /// Subscribe with full-precision values and the receive-thread arrival
+    /// instant. `unsubscribe_all` removes it.
+    pub fn subscribe_stamped(&mut self, address: &str, callback: OscStampedCallback) {
+        self.stamped.entry(address.to_string()).or_default().push(callback);
     }
 
     /// Subscribe with a stable integer key for later removal.
@@ -404,7 +431,7 @@ mod tests {
         let bytes = rosc::encoder::encode(&packet).expect("encode");
         let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
 
-        OscReceiver::handle_packet(decoded, &receiver.queue);
+        OscReceiver::handle_packet(decoded, &receiver.queue, Instant::now());
         receiver.update();
 
         let entries = log.lock();
@@ -429,7 +456,7 @@ mod tests {
         let bytes = rosc::encoder::encode(&packet).expect("encode");
         let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
 
-        OscReceiver::handle_packet(decoded, &receiver.queue);
+        OscReceiver::handle_packet(decoded, &receiver.queue, Instant::now());
         receiver.update();
 
         let entries = log.lock();
@@ -455,7 +482,7 @@ mod tests {
             });
             let bytes = rosc::encoder::encode(&packet).expect("encode");
             let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
-            OscReceiver::handle_packet(decoded, &receiver.queue);
+            OscReceiver::handle_packet(decoded, &receiver.queue, Instant::now());
         }
         receiver.update();
 
@@ -483,12 +510,43 @@ mod tests {
         let bytes = rosc::encoder::encode(&outer_bundle).expect("encode");
         let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
 
-        OscReceiver::handle_packet(decoded, &receiver.queue);
+        OscReceiver::handle_packet(decoded, &receiver.queue, Instant::now());
         receiver.update();
 
         let entries = log.lock();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "/manifold/nested");
         assert_eq!(entries[0].1, vec![9.0]);
+    }
+
+    /// A stamped subscriber gets doubles at full precision and the receive
+    /// thread's arrival instant; a plain one on the same address still sees
+    /// floats only.
+    #[test]
+    fn stamped_subscribers_get_doubles_and_the_arrival() {
+        let (mut receiver, log) = recording_receiver("/time");
+        type Stamped = Arc<Mutex<Vec<(Vec<f64>, Instant)>>>;
+        let stamped: Stamped = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&stamped);
+        receiver.subscribe_stamped(
+            "/time",
+            Box::new(move |_, values, at| sink.lock().push((values.to_vec(), at))),
+        );
+        let seconds = 3_600.123_456_789_f64;
+        let packet = rosc::OscPacket::Message(rosc::OscMessage {
+            addr: "/time".to_string(),
+            args: vec![rosc::OscType::Double(seconds)],
+        });
+        let bytes = rosc::encoder::encode(&packet).expect("encode");
+        let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
+        let at = Instant::now();
+
+        OscReceiver::handle_packet(decoded, &receiver.queue, at);
+        receiver.update();
+
+        assert_eq!(*stamped.lock(), vec![(vec![seconds], at)]);
+        assert_eq!(log.lock()[0].1, Vec::<f32>::new(), "plain subscribers never saw doubles");
+        receiver.unsubscribe_all("/time");
+        assert!(receiver.stamped.is_empty());
     }
 }

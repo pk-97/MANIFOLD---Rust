@@ -18,6 +18,7 @@ use manifold_playback::external_follow::{ExternalSample, FollowProfile};
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::midi_clock_sync::tick_filter::{ClockKind, ClockTracker};
 use manifold_playback::renderer::StubRenderer;
+use manifold_playback::sync_projection::{map_sample, song_time_beat_at, timecode_seconds_at};
 
 pub const FPS: f32 = 60.0;
 pub const STEP: f64 = 1.0 / 60.0;
@@ -291,8 +292,6 @@ impl Reader for ClkReader {
 pub struct OscArrivals {
     pub song: Vec<(f64, f64)>,
     pub tempo: Vec<(f64, f64)>,
-    #[expect(dead_code, reason = "read by the AbletonOSC projection, P3 C7")]
-    pub rtt: f64,
 }
 
 pub fn osc_arrivals(live: &Live, until: f64, seed: u64, lag: f64) -> OscArrivals {
@@ -317,22 +316,27 @@ pub fn osc_arrivals(live: &Live, until: f64, seed: u64, lag: f64) -> OscArrivals
         t += 0.01;
     }
     tempo.sort_by(|a, b| a.0.total_cmp(&b.0));
-    OscArrivals { song, tempo, rtt }
+    OscArrivals { song, tempo }
 }
 
-/// AbletonOSC as the content thread reads it today: the last report,
-/// stamped when a tick drains it, dead-reckoned at the last tempo.
+/// AbletonOSC as the content thread reads it: the last report with its
+/// arrival stamp, projected to the read instant at the tempo in force as
+/// the tempo listener reported it (D7), no one-way delay, every tick.
 pub struct OscReader {
     arrivals: OscArrivals,
     next_song: usize,
     next_tempo: usize,
+    /// (arrival, reported beat)
     last: Option<(f64, f64)>,
     bpm: f64,
+    /// The tempo before the last change, and the change's arrival.
+    before: f64,
+    changed_at: f64,
 }
 
 impl OscReader {
     pub fn new(arrivals: OscArrivals) -> Self {
-        Self { arrivals, next_song: 0, next_tempo: 0, last: None, bpm: 120.0 }
+        Self { arrivals, next_song: 0, next_tempo: 0, last: None, bpm: 120.0, before: 120.0, changed_at: f64::NEG_INFINITY }
     }
 }
 
@@ -342,47 +346,59 @@ impl Reader for OscReader {
     }
     fn read(&mut self, r: f64, now: f64) -> Option<Sample> {
         while self.next_tempo < self.arrivals.tempo.len() && self.arrivals.tempo[self.next_tempo].0 <= now {
-            self.bpm = self.arrivals.tempo[self.next_tempo].1;
+            let (at, bpm) = self.arrivals.tempo[self.next_tempo];
+            if bpm != self.bpm {
+                (self.before, self.changed_at) = (self.bpm, at);
+            }
+            self.bpm = bpm;
             self.next_tempo += 1;
         }
-        let mut fresh = false;
         while self.next_song < self.arrivals.song.len() && self.arrivals.song[self.next_song].0 <= now {
-            self.last = Some((now, self.arrivals.song[self.next_song].1));
+            self.last = Some(self.arrivals.song[self.next_song]);
             self.next_song += 1;
-            fresh = true;
         }
-        let (stamp, beat) = self.last?;
-        Some(Sample { beat: beat + (r - stamp) * self.bpm / 60.0, bpm: self.bpm, fresh, exact: false })
+        let (at, beat) = self.last?;
+        let beat = song_time_beat_at(beat, r - at, self.before, self.bpm, r - self.changed_at);
+        Some(Sample { beat, bpm: self.bpm, fresh: true, exact: false })
     }
 }
 
 /// Timecode messages: song seconds sent on a free-running metro of `metro`
 /// seconds from `phase`, floored to 25 fps labels when `labels`, arriving up
-/// to 1 ms late.
-pub fn timecode_arrivals(live: &Live, until: f64, seed: u64, metro: f64, phase: f64, labels: bool) -> Vec<(f64, f64)> {
+/// to 1 ms late. (arrival, seconds) pairs.
+pub struct TimecodeArrivals {
+    pub messages: Vec<(f64, f64)>,
+    /// The label frame's length, when the messages are frame labels.
+    pub frame: Option<f64>,
+}
+
+pub fn timecode_arrivals(live: &Live, until: f64, seed: u64, metro: f64, phase: f64, labels: bool) -> TimecodeArrivals {
     let mut rng = Rng(seed | 1);
-    let mut out = Vec::new();
+    let mut messages = Vec::new();
     let mut t = live.start + phase;
     while t < until {
         let song = live.live_time(t);
         let song = if labels { (song * 25.0).floor() / 25.0 } else { song };
-        out.push((t + rng.range(0.0, 0.001), song));
+        messages.push((t + rng.range(0.0, 0.001), song));
         t += metro;
     }
-    out
+    TimecodeArrivals { messages, frame: labels.then_some(1.0 / 25.0) }
 }
 
-/// Timecode as the content thread reads it today: the last message's
-/// seconds, stamped at drain, through the project's map.
+/// Timecode as the content thread reads it: the last message's seconds
+/// projected from its arrival to the read instant, the half-frame bias on a
+/// label, then through the project's map at the map's tempo over the next
+/// frame (D7).
 pub struct TimecodeReader {
-    arrivals: Vec<(f64, f64)>,
+    arrivals: TimecodeArrivals,
     next: usize,
+    /// (arrival, seconds)
     last: Option<(f64, f64)>,
     map_bpm: f64,
 }
 
 impl TimecodeReader {
-    pub fn new(arrivals: Vec<(f64, f64)>, map_bpm: f64) -> Self {
+    pub fn new(arrivals: TimecodeArrivals, map_bpm: f64) -> Self {
         Self { arrivals, next: 0, last: None, map_bpm }
     }
 }
@@ -391,15 +407,17 @@ impl Reader for TimecodeReader {
     fn kind(&self) -> Kind {
         Kind::Timecode
     }
-    fn read(&mut self, _r: f64, now: f64) -> Option<Sample> {
-        let mut fresh = false;
-        while self.next < self.arrivals.len() && self.arrivals[self.next].0 <= now {
-            self.last = Some((now, self.arrivals[self.next].1));
+    fn read(&mut self, r: f64, now: f64) -> Option<Sample> {
+        let messages = &self.arrivals.messages;
+        while self.next < messages.len() && messages[self.next].0 <= now {
+            self.last = Some(messages[self.next]);
             self.next += 1;
-            fresh = true;
         }
-        let (_, seconds) = self.last?;
-        Some(Sample { beat: seconds * self.map_bpm / 60.0, bpm: self.map_bpm, fresh, exact: false })
+        let (at, seconds) = self.last?;
+        let s = timecode_seconds_at(seconds, r - at, self.arrivals.frame);
+        let map_bpm = self.map_bpm;
+        let (beat, bpm) = map_sample(s, STEP, |s| s * map_bpm / 60.0);
+        Some(Sample { beat, bpm, fresh: true, exact: false })
     }
 }
 

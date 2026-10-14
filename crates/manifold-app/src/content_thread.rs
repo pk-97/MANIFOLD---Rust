@@ -22,6 +22,7 @@ use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
+use manifold_playback::sync_projection::{map_sample, seconds_between, song_time_beat_at, timecode_seconds_at};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
 use manifold_node_engine::gpu::context::GpuContext;
@@ -1992,20 +1993,6 @@ impl ContentThread {
                             time,
                         );
                     }
-                    // One per fresh report under the relay's own gates: the
-                    // reported beat, stamped at drain as today, is this
-                    // tick's sample (D7). C7 replaces it with the projection
-                    // at the read instant.
-                    EngineAction::NudgeBeats(beat) => {
-                        if authority == ClockAuthority::Osc {
-                            self.engine.set_external_sample(ExternalSample {
-                                beat: f64::from(beat),
-                                bpm: f64::from(self.ableton_bridge.ableton_tempo()),
-                                fresh: true,
-                                exact: false,
-                            });
-                        }
-                    }
                 }
             }
         }
@@ -2056,7 +2043,6 @@ impl ContentThread {
     /// This tick's sample from the authority's own source, after every
     /// transport action the sources took this tick (D7): a placement drops
     /// the sample, so it is handed over last. Today's gates stay in front.
-    /// The AbletonOSC relay hands its sample from its action loop.
     fn hand_external_sample(&mut self, authority: ClockAuthority) {
         if self.engine.current_state() != PlaybackState::Playing || !self.engine.follows_external() {
             return;
@@ -2101,23 +2087,36 @@ impl ContentThread {
                 }
             }
             ClockAuthority::Osc => {
-                // M4L timecode: song seconds through the map, fresh on the
-                // tick it was drained. C7 projects it to the read instant.
-                let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
-                match self.osc_sync.last_timecode() {
-                    Some((seconds, at)) if mode == OscSyncMode::M4L => {
-                        let beat = self.engine.time_to_timeline_beat(seconds);
-                        let bpm = self.engine.project().map_or(Bpm::DEFAULT, |p| {
-                            p.tempo_map.get_bpm_at_beat_immut(beat, p.settings.bpm)
-                        });
-                        Some(ExternalSample {
-                            beat: beat.0,
-                            bpm: f64::from(bpm.0),
-                            fresh: at == self.time_since_start,
-                            exact: false,
+                // The latest report projected from its arrival to the read
+                // instant, every tick while the source is live, as for CLK
+                // (D6: one sample per tick; D7).
+                let r = self.link_sample_at;
+                match self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode) {
+                    // M4L timecode: song seconds through the map, at the
+                    // map's tempo over the next frame.
+                    OscSyncMode::M4L => self.osc_sync.timecode_report().map(|tc| {
+                        let s = timecode_seconds_at(tc.seconds, seconds_between(tc.at, r), tc.frame);
+                        let step = 1.0 / f64::from(self.engine.frame_rate());
+                        let engine = &mut self.engine;
+                        let (beat, bpm) = map_sample(s, step, |s| engine.time_to_timeline_beat(Seconds(s)).0);
+                        ExternalSample { beat, bpm, fresh: true, exact: false }
+                    }),
+                    // The relay's song time at Live's tempo in force. No
+                    // one-way delay: the relay's round trip measures command
+                    // to acknowledgement, not the wire; the constant is the
+                    // calibration's to learn (D19).
+                    OscSyncMode::AbletonOsc => {
+                        self.ableton_bridge.follower_song_time(self.time_since_start.0).map(|(report, tempo)| {
+                            let beat = song_time_beat_at(
+                                report.beat,
+                                seconds_between(report.at, r),
+                                tempo.before,
+                                tempo.bpm,
+                                seconds_between(tempo.at, r),
+                            );
+                            ExternalSample { beat, bpm: tempo.bpm, fresh: true, exact: false }
                         })
                     }
-                    _ => None,
                 }
             }
             ClockAuthority::Internal => None,

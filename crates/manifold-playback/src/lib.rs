@@ -36,6 +36,7 @@ pub mod scheduler;
 pub mod session_state;
 pub mod sync;
 pub mod sync_source;
+pub mod sync_projection;
 pub mod tempo_recorder;
 pub mod transport_controller;
 pub mod transport_clock;
