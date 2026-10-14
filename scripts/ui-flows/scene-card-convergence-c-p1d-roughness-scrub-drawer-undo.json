@@ -248,7 +248,7 @@
         }
       },
       "check": {
-        "TextEquals": "-0.02"
+        "TextEquals": "-0.02 m"
       }
     }
   },
@@ -289,7 +289,7 @@
         "Query": {
           "name": "param_row.23_pos_x.value",
           "under_name": "scene_setup",
-          "text": "0.00"
+          "text": "0.00 m"
         }
       },
       "check": {
@@ -314,7 +314,7 @@
         }
       },
       "check": {
-        "TextEquals": "-0.02"
+        "TextEquals": "-0.02 m"
       }
     }
   },
