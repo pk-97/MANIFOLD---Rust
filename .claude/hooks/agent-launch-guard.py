@@ -8,19 +8,21 @@ zero judgment — so the hook rewrites it and allows the launch with a note sayi
 what it did. Two defect classes still deny, because fixing them is a decision, not
 a rewrite:
 
-- `model` absent -> deny. House default for workers is "sonnet"; "opus"/"fable" are an explicit per-launch decision. Silent inherit of the orchestrator's tier double-billed a worker (2026-07-06); passing the tier explicitly IS the sign-off.
+- `model` absent -> deny. The tier is a per-launch call (CLAUDE.md section How every
+  session works): "opus" for judgment, "sonnet" for decided directed tasks, "haiku" for
+  retrieval and running a given command. A silent inherit of the orchestrator's tier
+  double-bills the worker; passing the tier explicitly IS the sign-off.
 - task part not descriptive -> deny (the hook will not invent words for you).
 
 Naming rule: name = "<slot>-<descriptive-task>", kebab-case, task part >= 2 plain words
 (opaque labels like T1/D-52 denied: no-opaque-task-labels rule). The slot label is
 derived AT SPAWN TIME from the backend the harness will actually use: the `model` param
 selects a tier slot; the session env (`ANTHROPIC_DEFAULT_<TIER>_MODEL`) says which
-backend that slot resolves to. Unset or claude-* -> Anthropic path, label = tier name.
-SHORT_LABEL is the only human-maintained piece — extend it when onboarding a model
-(seat_tool warns when it's missing).
+backend that slot resolves to. Unset or claude-* -> Anthropic path, label = tier name;
+any other backend is labelled by its last dash segment.
 
-seat_tool.py and gate_runner.py import backend_for_slot()/slot_map() from this file — it
-is the single source of truth for slot labels.
+gate_runner.py imports slot_map() from this file — it is the single source of truth for
+slot labels.
 
 Fails open on any error: a guard hook must never be able to block a session.
 
@@ -39,24 +41,13 @@ SLOT_ENV = {
     "fable": "ANTHROPIC_DEFAULT_FABLE_MODEL",
 }
 
-# Lane-name labels per backend model. Fallback: last dash segment — ugly;
-# extend when onboarding a model (seat_tool assign warns on a miss).
-SHORT_LABEL = {
-    "deepseek-v4-flash": "flash",
-    "ox-alpha-free": "ox",
-    "mimo-v2.5": "v25",
-    "deepseek-v4-pro": "pro",
-    "glm-4.7": "glm47",
-    "glm-5.2": "glm52",
-    "k3": "k3",
-    "kimi-for-coding": "k27",
-}
-
 # Opaque label segments: T1, D52, D-52, W3, P2, P2G, R1, S8, BUG-NNN-style
 # refs — fine INSIDE a descriptive name, denied as the whole task part.
 OPAQUE_SEG = re.compile(r"^[a-z]?-?\d+[a-z]?$", re.IGNORECASE)
 
-DEFAULT_MODEL = "sonnet"
+# Stands in for the tier in a deny's corrected call when `model` is absent;
+# choosing it is the launcher's judgment, never the hook's.
+TIER_PLACEHOLDER = "<opus|sonnet|haiku>"
 
 
 def backend_for_slot(model_param: str, env=os.environ) -> tuple[str, str]:
@@ -67,9 +58,7 @@ def backend_for_slot(model_param: str, env=os.environ) -> tuple[str, str]:
     backend = (env.get(SLOT_ENV.get(model_param, ""), "") or "").strip()
     if not backend or backend.startswith("claude-"):
         return backend or model_param, model_param
-    label = SHORT_LABEL.get(backend)
-    if not label:
-        label = re.sub(r"[^a-z0-9]", "", backend.split("-")[-1].lower()) or backend
+    label = re.sub(r"[^a-z0-9]", "", backend.split("-")[-1].lower()) or backend
     return backend, label
 
 
@@ -96,14 +85,7 @@ def decide(tool_input: dict, env=os.environ) -> tuple[str, str, dict | None]:
 
     note = ""
     model = tool_input.get("model")
-    effective_model = str(DEFAULT_MODEL if model is None else model).strip().lower()
-
-    if model is not None and effective_model in ("opus", "fable"):
-        note = (
-            f'Explicit model="{effective_model}" — allowed (explicit beats '
-            "silent). Reminder: workers run Sonnet here; a whole-fleet launch "
-            "at this tier should be a deliberate, stated choice."
-        )
+    effective_model = TIER_PLACEHOLDER if model is None else str(model).strip().lower()
 
     name = (tool_input.get("name") or "").strip()
     expected_slot = ""
@@ -112,8 +94,8 @@ def decide(tool_input: dict, env=os.environ) -> tuple[str, str, dict | None]:
     if name:
         mapping = slot_map(env)
         valid_slots = {label for _, label in mapping.values()}
-        _, expected_slot = mapping.get(effective_model, ("", DEFAULT_MODEL))
-        expected_slot = expected_slot or DEFAULT_MODEL
+        _, expected_slot = mapping.get(effective_model, ("", effective_model))
+        expected_slot = expected_slot or effective_model
 
         fixed = re.sub(r"[^a-z0-9-]", "-", name.lower().replace("_", "-")).strip("-")
         slot, _, task_part = fixed.partition("-")
@@ -139,10 +121,10 @@ def decide(tool_input: dict, env=os.environ) -> tuple[str, str, dict | None]:
     if model is None:
         denies.append(
             "no explicit `model` — it would silently inherit the "
-            "orchestrator's tier and double-bill the worker (2026-07-06 "
-            f'incident). "{DEFAULT_MODEL}" is the house worker default; '
-            '"opus"/"fable" only when the task genuinely needs that tier — '
-            "passing it explicitly IS the sign-off"
+            "orchestrator's tier and double-bill the worker. Pick the tier: "
+            '"opus" for judgment (diagnosis, GPU, design, reviews, audits), '
+            '"sonnet" for decided directed tasks, "haiku" for retrieval and '
+            "running a given command — passing it explicitly IS the sign-off"
         )
     if name_deny:
         denies.append(name_deny + f" (live map: {describe_map(env)})")

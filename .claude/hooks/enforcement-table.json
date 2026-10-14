@@ -2,12 +2,12 @@
   "comment": "Machine form of the enforcement-table concept (docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md \u00a73) \u2014 every workflow transition and what enforces it. hook = machine, cannot be ignored; exit-code = runtime-checked; prompt = model goodwill (the known failure surface; migrate rows upward one at a time). gate_runner pre-wave verifies hook rows are registered and present, exit-code rows exist, and reports the prompt-row count as the open migration surface. Keep rows aligned with settings.json and the hooks directory; a row here with no live file goes red at wave start.",
   "transitions": [
     {
-      "transition": "worktrees from slot ring only; no agent edits on main",
+      "transition": "no agent edits on the main checkout",
       "enforcement": "hook",
       "file": ".claude/hooks/worktree-guard.py"
     },
     {
-      "transition": "raw `git worktree add` denied; landing protocol; pre-land verdict coverage (I1); persistent-cd denial; shell allowlist",
+      "transition": "worktrees from the slot ring only: raw `git worktree add`/`remove` denied (worktree_add_guard); landing protocol; pre-land verdict coverage (I1); persistent-cd denial; shell allowlist",
       "enforcement": "hook",
       "file": ".claude/hooks/preToolUseBash.py"
     },
@@ -18,6 +18,11 @@
     },
     {
       "transition": "memory is rules, not history",
+      "enforcement": "hook",
+      "file": ".claude/hooks/memory-history-guard.py"
+    },
+    {
+      "transition": "rules written without attribution or dated provenance (CLAUDE.md, docs, .claude markdown, memory)",
       "enforcement": "hook",
       "file": ".claude/hooks/memory-history-guard.py"
     },

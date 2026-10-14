@@ -25,19 +25,10 @@
 - Validity checks written as rejections (`x >= limit` → invalid) PASS NaN through, because every NaN comparison is false. Test the accept-condition or guard finiteness first.
 - Rust `f32::clamp` propagates NaN, and a NaN entering a one-pole smoother poisons it permanently (`smoothed += (NaN - smoothed) * coeff` — NaN in, NaN out forever). Sanitize non-finite at the entry of any modulation/smoothing chain (`audio_mod.rs condition()` does, BUG-84fv).
 - A NaN camera/view matrix NaNs the depth prepass; the RT intersector is undefined on NaN rays (hang → page fault). Void NaN texels at the ray source, never let them reach traversal.
----
-name: metal-resource-residency-bugs
-description: "GPU memory-error class agents miss — driver reclaims undeclared resources; symptoms, suspect list, and the cure-decomposition method (BUG-jddy, 2026-07-27)"
-metadata: 
-  node_type: memory
-  type: feedback
-  originSessionId: 6fcf2579-33b2-426d-a9d6-5c6e2916f1cb
-  modified: 2026-07-26T23:46:01.400Z
----
 
 # Metal resource-residency bugs — the class agents struggle with
 
-BUG-jddy (RT static-death) cost ~3 days because every agent (Fable review lane, GLM consult, DeepSeek fix lane) reached for *data-content* theories (stale caches, address spaces, buffer lifetimes in Rust) when the mechanism was *driver bookkeeping*: Metal reclaims GPU resources that no submitted command declares usage on (`useResource`). Static scene → no refits → TLAS-referenced BLASes + instance buffer undeclared → reclaimed ~5 frames later. Details: [[rt-static-death-stopgap-handoff]].
+Agents reach for *data-content* theories (stale caches, address spaces, buffer lifetimes in Rust) when the mechanism is *driver bookkeeping*, as in BUG-jddy (RT static-death): Metal reclaims GPU resources that no submitted command declares usage on (`useResource`). Static scene → no refits → TLAS-referenced BLASes + instance buffer undeclared → reclaimed ~5 frames later. Details: [[rt-static-death-stopgap-handoff]].
 
 **Why:** GPU memory errors don't look like memory errors. No crash, no warning, no validation error — the shader just reads plausible garbage, and only in scenarios where *nothing is changing*. Agents debug logic; this class lives in housekeeping.
 
@@ -47,14 +38,14 @@ BUG-jddy (RT static-death) cost ~3 days because every agent (Fable review lane, 
 - A seemingly unrelated per-frame operation "cures" it. Don't ask "why does the cure's data matter" — decompose the cure into its atomic actions (write / GPU command / flag / resource reference) and bisect which atom is load-bearing. The cure IS the bisect ([[cure-test-before-deep-reads]]).
 
 **The Metal suspect list, in order:**
-1. Missing `useResource` for indirectly-reached resources — anything behind a bindless GPU address, a BLAS referenced by a TLAS, an instance buffer consumed at build time. Metal's "binding makes transitives resident" doc claim is NOT sufficient (proven 2026-07-27).
+1. Missing `useResource` for indirectly-reached resources — anything behind a bindless GPU address, a BLAS referenced by a TLAS, an instance buffer consumed at build time. Metal's "binding makes transitives resident" doc claim is NOT sufficient (proven).
 2. CPU-written shared buffers with no per-frame GPU command touching them.
 3. `constant` address space on anything the CPU rewrites (hygiene, not proven harmful — but `device` is the honest space for per-frame CPU writes).
 4. Resources referenced only by command buffers that have already completed.
-5. Metal 4 work: classic-created textures are invisible to MTL4-committed command buffers without an explicit `MTLResidencySet` attached to the `MTL4CommandQueue` — silent zero output, no validation error (proven 2026-08-11, MTL4FX temporal scaler). And MTL4FX effects require `outputTextureBarrierStages` set (KVC — no public setter) or they encode to black; only `MTL_VALIDATION=1 MTL_DEBUG_LAYER=1` surfaces the assertion. As-built: `metalfx_m4.rs` (`ensure_resident`, `set_mtl4fx_barrier_stages`).
+5. Metal 4 work: classic-created textures are invisible to MTL4-committed command buffers without an explicit `MTLResidencySet` attached to the `MTL4CommandQueue` — silent zero output, no validation error (proven on the MTL4FX temporal scaler). And MTL4FX effects require `outputTextureBarrierStages` set (KVC — no public setter) or they encode to black; only `MTL_VALIDATION=1 MTL_DEBUG_LAYER=1` surfaces the assertion. As-built: `metalfx_m4.rs` (`ensure_resident`, `set_mtl4fx_barrier_stages`).
 
 **Reusable diagnostic signature:** shadow/AO survived, GI/reflections died — the split case told us traversal was fine and instance-data-following reads were broken. Always enumerate what the survivors share that the dead lack ([[the-split-case-is-the-diagnosis]]).
 
 **Debug tooling reality:** no static lint exists for this class. `MTL_VALIDATION=1` catches crashes, not silent reclamation. The only reliable oracle is a scenario run (rt-capture-style) that holds the system in the inactivity state.
 
-**Touching the RT accumulation path → run `scripts/rt_noise_gate.py`.** Frame-to-frame |delta| per RT channel on a paused static scene, against committed ceilings; nightly on main via `trunk_health.py`, on demand for you. It exists because the 11x flicker cut of 2026-07-30 was won by measuring and nothing else stops it being given back. A channel that goes silent fails as inert rather than passing as calm, because "stable" and "dead" look identical without that check. Seven of ten runs once read every RT channel at zero while the composite still rendered; the cause was capture-directory contention between parallel sessions, not RT — BUG-mw0x (concurrent rt-capture runs clobbered each other via a shared /tmp dir). If you run `rt-capture` by hand alongside anything else, set `MANIFOLD_RT_CAPTURE_DIR` to a unique path or you will measure someone else's frames.
+**Touching the RT accumulation path → run `scripts/rt_noise_gate.py`.** Frame-to-frame |delta| per RT channel on a paused static scene, against committed ceilings; nightly on main via `trunk_health.py`, on demand for you. It exists because the 11x flicker cut was won by measuring and nothing else stops it being given back. A channel that goes silent fails as inert rather than passing as calm, because "stable" and "dead" look identical without that check. Seven of ten runs once read every RT channel at zero while the composite still rendered; the cause was capture-directory contention between parallel sessions, not RT — BUG-mw0x (concurrent rt-capture runs clobbered each other via a shared /tmp dir). If you run `rt-capture` by hand alongside anything else, set `MANIFOLD_RT_CAPTURE_DIR` to a unique path or you will measure someone else's frames.
