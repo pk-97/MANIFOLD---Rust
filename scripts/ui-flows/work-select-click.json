@@ -6,5 +6,6 @@
       "gesture": { "Click": { "modifiers": {} } }
     }
   },
-  { "AssertWork": { "window": "select_clip" } }
+  { "AssertWork": { "window": "select_clip" } },
+  "AssertFresh"
 ]

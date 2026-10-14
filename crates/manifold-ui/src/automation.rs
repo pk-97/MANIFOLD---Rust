@@ -123,6 +123,12 @@ pub enum AutomationAction {
     AssertWork {
         window: String,
     },
+    /// The freshness check (UI_INVALIDATION_DESIGN.md D10, INV-4): record the
+    /// tree, the immediate-pass inputs and the pending toast, force every
+    /// projection and a full build from the same inputs, record again, and
+    /// fail on any difference. Generations, node slots and input-state flags
+    /// are ignored.
+    AssertFresh,
 }
 
 /// A raw resize handle `window_input` drags outside the widget tree.

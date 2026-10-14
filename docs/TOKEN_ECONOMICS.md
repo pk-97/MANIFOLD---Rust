@@ -1,4 +1,4 @@
-# Token Economics — measured spend and why seats rotate at 200K
+# Token Economics — measured spend and why long sessions cost more
 
 **Status:** MEASURED BASELINE 2026-07-23, trimmed 2026-10-01. Every number below came from local Claude Code transcripts, not from estimates; regenerate with `scripts/token_report.py`. The metered-price, provider-plan and purchasing sections are retired with the multi-provider roster (git history). Live routing policy: `docs/AGENT_ROUTING.md`.
 
@@ -91,4 +91,4 @@ Call 600 costs **6x** what call 20 cost, for identical work. Session totals:
 
 **12% of sessions burn 50% of all tokens.**
 
-> **Rotate worker seats at ~200K context (around call 150).** At 500K every subsequent call costs half a megatoken. This is the single largest lever in this document. Workers only; the lead seat is exempt (Peter, 2026-07-24). The hook that enforced it was retired 2026-10-03 after 120k fires and zero interventions: well-shaped workers never got near the ceiling.
+> **No rotation rule.** Per-call cost grows with context, but worker seats have no context cap; see the context-cap bullet in `docs/AGENT_ROUTING.md`. The numbers above stay as a cost record.

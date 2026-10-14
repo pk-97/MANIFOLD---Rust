@@ -1,9 +1,8 @@
-# Git tree discipline — build spec
+# Git tree discipline
 
-Status: section 1 shared-checkout guard RETIRED 2026-07-27 (pidfile signal retired
-with the daemon, 2026-07-18); section 1b landing-protocol guard IN PROGRESS
-2026-07-04; section 2 ff-only model RETIRED 2026-07-04, replaced by the merge-trunk
-landing protocol below.
+Rules for the shared main checkout, worktrees and landing on main. Hooks are
+the spec where they enforce a rule; this doc holds the rationale and the
+incidents behind them.
 
 ## Incident 1 (section 1's origin)
 
@@ -13,121 +12,76 @@ merge resurrected the moved files' old paths and the second session's commit
 landed on a branch it never chose. Full incident: `88257631` commit message +
 the hazards section of the `agent-execution-playbook` memory.
 
-Root cause: N concurrent sessions, one HEAD. The fix (section 1) makes main-checkout
-branch state owned and enforced, not remembered.
+Root cause: N concurrent sessions, one HEAD. Branch work therefore lives in
+worktrees, never in the shared checkout.
 
 ## Incident 2 (section 2's origin — the ff-only model itself was unsatisfiable)
 
 The original section 2 said main is fast-forward-only: a workstream lands with
 `git branch -f main <tip> && git push origin <tip>:main`. That assumed one
 integrator lands at a time. It broke under N orchestrator sessions finishing
-at different times (plus daemon/docs commits landing on main directly between
-them) — a clean fast-forward was never actually possible, so every finishing
+at different times (plus docs commits landing on main directly between them)
+— a clean fast-forward was never actually possible, so every finishing
 session improvised its own landing. The observed result was **twin commits**:
 the same content merged onto main once and onto `feat/timeline-ui-redesign`
 again, under different SHAs.
 
-- Motion P1: `c6e2bd5f`/`90e3034b` (on feat) vs. `bfc1ebd4`/`18b82ab4` (on
-  origin/main) — same content, two lineages.
-- Automation P1–P3: `b1631a2f` ("local integration" merge, on main) vs.
-  `2a51fb29` (on feat) — same content, two lineages.
-- Automation P4 (feat-only, main's one genuine gap) sits on top of feat's
-  twins, so a plain feat→main merge conflicts with its own doppelgänger.
-
 Root cause: a single-integrator model applied to a multi-integrator reality.
-Full diagnosis + the P4 cleanup brief: the `git-landing-protocol` memory.
-Decided with Peter 2026-07-04, replacing section 2 below.
+Main became a merge-based trunk (section 2).
 
-## 1. Shared-checkout guard (RETIRED 2026-07-27)
+## 1. Shared-checkout guard (retired)
 
-Detected a concurrent session's live daemon pidfile
-(`.claude/daemon/verdicts/*.pid`) and warned on a main-checkout branch
-switch. Retired because the daemon — the only pidfile writer — was retired
-2026-07-18; the guard had been inert since (no pidfile source). Removed:
-`_VERDICTS_DIR` / `find_live_foreign_session` / `shared_checkout_guard` in
-`preToolUseBash.py` + the matching tests in `test_preToolUseBash.py`.
+The pidfile-based warning on a main-checkout branch switch is gone with the
+daemon that wrote the pidfiles. The Incident-1 hazard (two sessions sharing
+one HEAD) stays mitigated by the worktree slot ring (`scripts/agent-worktree.py`
+— branch work lives in worktrees, not the shared checkout), the merge-trunk
+landing protocol (section 2) and `detect_unverified_compound_landing_merge`.
 
-The Incident-1 hazard (two sessions sharing one HEAD — a branch switch
-moves the tree under the other) is NOT retired. It stays mitigated by the
-worktree slot ring (`scripts/agent-worktree.py` — branch work lives in
-worktrees, not the shared checkout) and the merge-trunk landing protocol
-(section 2) plus `detect_unverified_compound_landing_merge`.
-
-## 1b. Landing-protocol guard (spec — implementing this session)
+## 1b. Landing-protocol guard
 
 Obsolete when: landing moves to a server-side gate (CI-enforced merge checks) — a local hook guarding a shared checkout has nothing left to guard.
 
-File: `.claude/hooks/preToolUseBash.py`. Two new behaviors, both scoped to
-the MAIN checkout only (same `in_main` resolution as section 1; worktree-targeted
-commands are unaffected):
+`.claude/hooks/preToolUseBash.py` is the spec (`landing_protocol_guard`,
+`land_pass_guard`, `detect_unverified_compound_landing_merge`). In the main
+checkout, `git branch -f main` and any force-push to main ask unconditionally;
+a merge or push that lands on main without a recorded `land_branch.py` gate
+pass is denied unless it touches only `.beads/`, `docs/` and `.claude/hooks/`;
+an allowed one carries a reminder pointing at `scripts/land_branch.py`.
+Worktree-targeted commands and merges of main into a branch are unaffected.
 
-1. **Always ask** (regardless of foreign-session liveness — this is now
-   simply wrong under the merge-trunk model, not just concurrency-unsafe):
-   - `git branch -f main ...` / `git branch -F main ...` (force-moves the
-     main pointer, dropping whatever commits aren't its ancestors).
-   - `git push` carrying a force flag (`--force`, `-f`,
-     `--force-with-lease`, `--force-if-includes`) whose target is `main` —
-     either an explicit `main` / `HEAD:main` / `refs/heads/main` token, or a
-     bare/no-branch-arg push while the current branch (resolved via
-     `git rev-parse --abbrev-ref HEAD` in the target dir) is `main`.
-   Reason string: names the merge-trunk model and points at the landing
-   protocol below instead.
-2. **Allow + reminder** (deterministic nudge, not a permission gate): a
-   non-force `git push` or `git merge` that lands on main (same target
-   detection as above, minus the force-flag requirement) gets the normal
-   allow plus a short `additionalContext` reminder of the landing-protocol
-   loop (fetch → merge origin/main → gate → merge --no-ff → push → retry on
-   rejection) and the two twin-killers (section 2 below).
-
-Failure posture: same as section 1 — any exception falls back to today's behavior
-for that command.
-
-Tests: extend the hook's existing test setup. Cases: `branch -f main <tip>`
-in main tree (asks) vs. in a worktree (unaffected); `push --force origin
-main` (asks); bare `git push` on branch main with a force flag set via
-config alias — out of scope, flag detection is argv-only; non-force `push
-origin main` (allow + reminder present); `merge <branch>` while on main
-(allow + reminder); same commands with target dir under
-`.claude/worktrees/` (unaffected, no reminder, no ask).
-
-## 2. Landing protocol (replaces the retired ff-only convention)
+## 2. Landing protocol
 
 Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merges) — the protocol's invariants would then be server-enforced.
 
-- **Main is the merge-based trunk.** No separate integration branch — the
-  branch that accidentally became one (`feat/timeline-ui-redesign`) is
-  exactly the failure mode: two landing spots is what produced the twins.
-  "Last-known-good" is now a property of the gate (clippy + tests before any
-  merge), not of linearity.
-- **More than one branch ready → land them as one batch.** Merge each onto
-  `origin/main` in queue order into one landing branch, run
-  `scripts/landing_gate.py` once on the result, and land it as one no-ff
-  merge whose message lists every branch and tip. If the gate goes red, find
-  the culprit by re-gating without each branch in turn, drop it with its name
-  and the failure in the report, and land the rest. A single ready branch
-  still lands alone. Shared passes avoid repeated checks of unchanged inputs.
-  Batching also avoids separate checks of overlapping changes.
-  Mechanism: `scripts/land_wave.py --batch`
-  (module docstring is the spec, tests in `scripts/test_land_wave.py`).
-- **To land a workstream:** fetch → merge current `origin/main` into your
-  branch → run `scripts/landing_gate.py --repo <worktree path>` (agents
-  cannot cd, and a run on main's checkout refuses) → `git merge
-  --no-ff` into main → push → if the push is rejected because someone landed
-  first, repeat. **`scripts/land_branch.py` runs this whole ceremony in one
-  command (Peter, 2026-07-31)** — the lead reviews and makes the named-red
-  call, the script does fetch/merge-in/gate/merge/push/bead-close/branch-
-  delete with per-step exit checks; push happens only after a green gate or
-  an explicit `--named-red BUG-id --reason` over a gate that ran every check
-  (`landing_gate.py` exit `CHECKS_RED`; a refusal or crash never lands).
-  Merge, verdict and bead-close commits and the one push run under a
-  landing lock shared by every worktree; gates never do. If main moved, the
-  branch takes it and re-gates outside the lock; a named red carries over
-  only when that re-gate ran every check and went red on exactly the same
-  checks. Each attempt logs one row to `.claude/orchestration/landing-runs.jsonl`.
-  **The gate collects cheap reds before flows and GPU proofs.** Any cheap red
-  stops at that boundary; every red prints its `rerun:` command. `--fail-fast`
-  stops at the first red; `--keep-going` is an explicit diagnostic run. A named
-  red never waives an unrun leg. Fix the reds with their printed commands.
+- **Main is the merge-based trunk.** No separate integration branch — two
+  landing spots is what produced the twins. "Last-known-good" is a property
+  of the gate, not of linearity.
+- **Lanes commit once and stop; the lead commits, pushes and lands**
+  (CLAUDE.md section Hard rules). Workers never land.
+- **Land with `scripts/land_branch.py`.** One command after the lead's
+  review: `scripts/land_branch.py <branch> --worktree <path> --message '...'
+  [--close-bead <id> ...]`. It fetches, merges current `origin/main` into the
+  branch, runs `scripts/landing_gate.py --repo <worktree path>`, merges
+  `--no-ff` into main, closes the beads, pushes and deletes the landed branch,
+  with per-step exit checks. The lead reviews and makes the named-red call;
+  push happens only after a green gate or an explicit `--named-red BUG-id
+  --reason` over a gate that ran every check (`landing_gate.py` exit
+  `CHECKS_RED`; a refusal or crash never lands). Merge, verdict and
+  bead-close commits and the one push run under a landing lock shared by
+  every worktree; gates never do. If main moved, the branch takes it and
+  re-gates outside the lock; a named red carries over only when that re-gate
+  ran every check and went red on exactly the same checks. Each attempt logs
+  one row to `.claude/orchestration/landing-runs.jsonl`.
+- **Several ready branches.** Land each with `land_branch.py`.
+  `scripts/land_wave.py --batch` (merge them in queue order, gate once, drop a
+  red culprit by name, land one merge listing every branch and tip) is a
+  fallback for a pile-up, not the standard path; its module docstring is the
+  spec.
+- **The gate.** It collects cheap reds before flows and GPU proofs. Any
+  cheap red stops at that boundary; every red prints its `rerun:` command.
+  `--fail-fast` stops at the first red; `--keep-going` is an explicit
+  diagnostic run. A named red never waives an unrun leg. Fix the reds with
+  their printed commands.
   Follow background runs with `scripts/watch_land.py --pid PID --log PATH`
   (`--kind land` for `land_branch.py`). It reads the active leg's live transcript
   and exits on a red, refusal, hang or completion; `--hang-seconds` sets silence
@@ -149,8 +103,8 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   `--tests` + module-scoped nextest filtersets (including sibling test modules
   and mapped integration binaries), and `scripts/gpu_proofs_gate.py` when
   the diff touches GPU paths (scoped: mapped tests + smoke set from
-  `scripts/gpu_scope.py`, 360s test-time budget, unmapped GPU path fails,
-  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly).
+  `scripts/gpu_scope.py`, unmapped GPU path fails, `glb_conformance` only for
+  glTF paths; the whole suite is `--all`, nightly).
   Comment/blank-only and docs-only diffs skip the build, clippy, CPU-test, and
   GPU-proof legs. The selected CPU tests retain the GPU lock because device use
   cannot be known cheaply; builds run outside that hold. Full touched-crate and
@@ -170,85 +124,84 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   and flow marker after reuse. `land_branch.py` checks the proposed merge tree
   before committing it. If main changed that tree, it merges main into the
   slot and gates again; only changed inputs need new checks.
-  Scoped runs skip any test measured over 60s in the committed
-  `scripts/gpu_test_times.json` (tests missing from it run). Nightly
-  `trunk_health.py` runs `--all --record-times /tmp/gpu_test_times.nightly.json`
-  and prints the diff; it never commits. To refresh: copy that file over
-  `scripts/gpu_test_times.json` on a branch and land it. Over-budget landing
-  fix: record times if the slow test is slow on purpose, else shorten it. (Bug status lives in beads since
-  BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and its landing-time
-  reflow are retired.) The post-merge housekeeper on main is a backstop, not
+- **The GPU-proofs time budget is a warning, never a red.** Scoped runs never
+  drop tests by duration. When passing tests exceed the landing budget,
+  `gpu_proofs_gate.py` prints `GPU-PROOFS BUDGET: OVER` and the exit code is
+  unchanged, so a green gate lands as usual. Speed up proofs only when a run
+  is many times the budget. Hangs, failed tests, drifted goldens and a new
+  heavy proof without a reviewed allowance in `scripts/gpu_test_times.json`
+  stay red. Nightly `trunk_health.py` runs `--all --record-times
+  /tmp/gpu_test_times.nightly.json` and prints the diff; it never commits. To
+  refresh allowances, copy that file over `scripts/gpu_test_times.json` on a
+  branch and land it. The post-merge housekeeper on main is a backstop, not
   the workflow — its remedies are worktree-shaped, never in-place edits to
   main.
-- **The workspace-wide sweep is NOT a landing item (Peter, 2026-07-29).**
-  Lanes verify their branches; the only merge-time risk is the touched-crate
-  collision with fresh main, and the touched-crate gate covers it. Workspace
-  clippy `--tests`, `cargo nextest run --workspace`, and
-  `scripts/feature_matrix.py` (non-default features are invisible to the
-  workspace sweep and rot without it, FOUNDATIONAL_GAPS.md A7
-  (feature-matrix build rot)) run nightly on main instead:
-  `scripts/trunk_health.py` (launchd `com.manifold.trunk-health`, 04:30),
-  which files a P1 `trunk-health` bead per red gate. Cross-crate rot
+- **The workspace-wide sweep is NOT a landing item.** Lanes verify their
+  branches; the only merge-time risk is the touched-crate collision with fresh
+  main, and the touched-crate gate covers it. Workspace clippy `--tests`,
+  `cargo nextest run --workspace`, and `scripts/feature_matrix.py`
+  (non-default features are invisible to the workspace sweep and rot without
+  it, FOUNDATIONAL_GAPS.md A7 (feature-matrix build rot)) run nightly on main
+  instead: `scripts/trunk_health.py` (launchd `com.manifold.trunk-health`,
+  04:30), which files a P1 `trunk-health` bead per red gate. Cross-crate rot
   surfaces next morning as a bead, never as landing ceremony.
-- **Perf soak is NOT a landing-gate item** (Peter, 2026-07-29 — it burns time
-  and GPU on every render-path landing, and the relative baseline is noisy on
-  a loaded machine). `cargo xtask perf-soak` (PERF_BUDGET_GATE_DESIGN.md P3)
-  is a deliberate, on-demand tool: run it when a change is suspected of frame
-  cost (profiling beads, hot-loop rewrites) or when Peter asks — never as
-  landing ceremony.
-- **Supersession sweep (part of the gate when a landing completes/supersedes
-  a design phase, bug, or named plan):** update the design doc status header
-  and the backlog `**Status:` line, then `rg` the plan's name AND its stage
-  labels across `docs/` and the memory directory and fix or tombstone every
-  hit still asserting the old state. Supersession under a different name is
-  the known killer (PRESET_INSTANCE_COLLAPSE absorbed BINDING_UNIFICATION's
-  "B+/B++/C" 2026-06-07; the stale memories cost two Fable sessions a month
-  later). Full rule: CLAUDE.md hard rules.
+- **Perf soak is NOT a landing-gate item.** It burns time and GPU on every
+  render-path landing, and the relative baseline is noisy on a loaded
+  machine. `cargo xtask perf-soak` (PERF_BUDGET_GATE_DESIGN.md P3) is a
+  deliberate, on-demand tool: run it when a change is suspected of frame cost
+  (profiling beads, hot-loop rewrites) or when Peter asks — never as landing
+  ceremony.
+- **Visual checks are NOT landing items.** The gates are the gates. A
+  headless render verifies work during review; Peter's eye is a stage check
+  after landing.
+- **Supersession sweep** (when a landing completes or supersedes a design
+  phase, bug, or named plan): update the design doc status header and close
+  the bead, then `rg` the plan's name AND its stage labels across `docs/` and
+  the memory directory and fix or tombstone every hit still asserting the old
+  state. Supersession under a different name is the known killer
+  (PRESET_INSTANCE_COLLAPSE absorbed BINDING_UNIFICATION's "B+/B++/C"; the
+  stale memories cost two Fable sessions a month later). Full rule:
+  `.claude/hooks/context-nudges/landing-protocol.md`.
 - **Twin-killer 1:** never cherry-pick or re-commit content that already
   exists as commits on a live branch — merge the branch so SHAs stay shared.
-  The one sanctioned exception: landing the final content of a branch that
-  is being retired immediately afterward (the P4 cleanup below is the
-  precedent — feat's lineage is being fully retired, so lifting its last
-  unique commits by cherry-pick and then deleting the branch doesn't create
-  a new twin).
+  The one sanctioned exception: lifting the last unique commits of a branch
+  that is retired immediately afterward, so no second lineage survives.
 - **Twin-killer 2:** never delete a branch until `git merge-base
   --is-ancestor <tip> origin/main` confirms its commits are on main.
-- `git branch -f main <tip>` and force-pushes to main are anti-patterns now
+- `git branch -f main <tip>` and force-pushes to main are anti-patterns
   (section 1b asks before either).
 - A session doing sustained code work still gets a LONG-LIVED worktree slot
   for the workstream, acquired off a verified tip (the playbook's step-0
   base-verification guard) with gitignored fixtures copied in; per-session
   worktrees pay the cargo cold-build tax and are not the pattern. Acquire
   through `scripts/agent-worktree.py` (section 2c) — the ONLY sanctioned source
-  (raw `git worktree add` is hook-denied since the 2026-07-15 455 GB
-  incident). It reuses an idle warm slot before it ever creates a cold one.
+  (raw `git worktree add` is hook-denied since the 455 GB disk incident). It
+  reuses an idle warm slot before it ever creates a cold one.
 - The main checkout is the only place merges to main happen. Sessions in
   worktrees never run bare git/cargo (always `-C` / `--manifest-path`,
   absolute, quoted — the repo path contains a space).
-- **Workers never land.** Only the orchestrating session (or Peter) merges
-  into main.
 - **Never use the Agent tool's built-in `isolation: "worktree"` for repo
   work** — it bases the worktree off the default branch, not your tip, and
-  bypasses the slot ring's cap. Hook-denied, as is raw `git worktree add`
-  (`preToolUseBash.py`). Worktrees come from `scripts/agent-worktree.py
-  acquire` only, with the step-0 base-verification guard in the brief.
+  bypasses the slot ring's cap. Hook-denied (`agent-worktree-isolation-guard.py`),
+  as is raw `git worktree add` (`preToolUseBash.py` `worktree_add_guard`).
+  Worktrees come from `scripts/agent-worktree.py acquire` only, with the
+  step-0 base-verification guard in the brief.
 
-## 2c. Build-speed rules (added 2026-07-10 — orchestration wall-clock pass)
+## 2c. Build-speed rules
 
 Obsolete when: the build system changes (sccache removed, workspace split, non-cargo builds) — re-measure before carrying any rule over.
 
-Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
-2026-07-03); by 2026-07-10 ten live worktrees carried 5–41 GB of cold-built
-`target/` each. Three rules:
+Measured basis: ~80% of a phase's wall-clock is cargo compile/test, and ten
+live worktrees once carried 5–41 GB of cold-built `target/` each.
 
-1. **Reuse warm slots — the pool is a capped ring (reworked 2026-07-15
-   after 19 per-task worktrees × 15–60 GB targets = 455 GB filled the
-   disk).** `scripts/agent-worktree.py acquire <task-label> <branch>
+1. **Reuse warm slots — the pool is a capped ring** (19 per-task worktrees ×
+   15–60 GB targets = 455 GB once filled the disk).
+   `scripts/agent-worktree.py acquire <task-label> <branch>
    [--tip REF] [--owner TEXT]` re-points the warmest idle slot with
    `checkout -B`; slots are anonymous (`slot-0`…`slot-9`, task label lives
-   in the lease), capped at 10 with no override (raised from 6 on
-   2026-07-17; worst case ~270 GB fully warm) — all-busy is a loud `POOL
-   FULL` error to surface to Peter, never to work around. A slot's
+   in the lease), capped at 10 with no override (worst case ~270 GB fully
+   warm) — all-busy is a loud `POOL FULL` error to surface to Peter, never to
+   work around. A slot's
    `target/` past 25 GB is wiped at acquire. Idle = clean status + HEAD
    is-ancestor of origin/main + no lease. A lease holds its slot until
    `release`, whatever the git state; it never expires (an agent between
@@ -258,7 +211,7 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    (`deps/<target>-<16 hex>`, the bulk of a warm slot at ~55 MB per test
    binary); build-script `out/` products are kept because Cargo would not
    rerun the script if they vanished. The landing gate's storage admission
-   (50 GiB reserve) runs `agent-worktree.py reclaim` before refusing — it
+   (`storage_budget.MAINTENANCE_GOAL_BYTES`, 30 GiB of raw free space) runs `agent-worktree.py reclaim` before refusing — it
    frees landed, clean, lease-free, process-free slots only, LRU first,
    until the reserve is met; dirty, unlanded and main caches are never
    touched by it. The script
@@ -275,16 +228,15 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    If sccache misbehaves, comment out the `rustc-wrapper` line — plain rustc
    is the unchanged fallback.
 3. **Batch landings.** Commits stay per-phase on the branch (durability
-   unchanged); the fetch → merge origin/main → gate → merge --no-ff → push
-   loop runs once per 2–3 phases per design, not per phase. Each landing
-   skipped saves a gate rerun here and a push-rejection retry for every other
-   concurrent session.
+   unchanged); `land_branch.py` runs once per 2–3 phases per design, not per
+   phase. Each landing skipped saves a gate rerun here and a lock wait for
+   every other concurrent session.
 4. **Prewarm during briefing.** The moment a worktree is acquired for a code
    wave, kick the phase's primary build (`cargo build -p <crate> [--features
    …] --manifest-path "<wt>/Cargo.toml"`) in the background, then write the
    worker briefs — the build runs while the worker reads its docs. Free
    overlap on every cold or profile-invalidated start.
-5. **Test runner + cache size (added 2026-07-11).** CPU-focused gates run
+5. **Test runner + cache size.** CPU-focused gates run
    `cargo nextest` with filtersets for changed modules and mapped integration
    binaries; GPU-proofs suites STAY on
    `cargo test` — the in-process `test_device` lock is the device serializer
@@ -294,31 +246,8 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    (The dev profile is already build-speed-tuned — `debug =
    "line-tables-only"` + `split-debuginfo = "unpacked"`, root Cargo.toml —
    don't re-add those.) `cargo deny check bans` (<1s) is part of the landing
-   sweep as of 2026-07-11 — `deny.toml` is the actual enforcement of the
-   wgpu/metal dependency bans.
-
-## 2b. Pending cleanup (2026-07-04 twin-commit remediation)
-
-1. **Land automation P4** — the only content genuinely missing from main.
-   Cherry-pick the six P4 commits from `feat/timeline-ui-redesign` (`f03c8a31`,
-   `05b48436`, `ed252abd`, `3b851c61`, `51a5cb52`, `ebbf5f1d`) in a fresh
-   worktree off current origin/main; evaluate whether the `983a3837`
-   design-token-guard fixup is still needed against main's own motion
-   copies. Conflicts against main's motion twins (`bfc1ebd4`/`18b82ab4`) are
-   expected and bounded. Full workspace sweep (P4 touches manifold-ui +
-   renderer broadly), then merge to main, push. This is twin-killer 1's
-   sanctioned exception (see section 2) — feat is being retired right after.
-2. **Prune retired branches** — after `is-ancestor` confirms content is on
-   main: delete `feat/timeline-ui-redesign`, `lane/automation-lanes`,
-   `lane/timeline-p0`, `lane/ui-motion` (local + remote + their
-   `.claude/worktrees/` dirs if any remain).
-3. **Lower-priority remote sweep** (not blocking, do when a session is
-   quiet): several remote-only branches under `origin/` (`gig-resilience-p1/2`,
-   `session-mode-p1/2/3`, `multi-display-p1`, `vocab-apply`,
-   `feat/multi-selection-ux`, `feat/ui-design-system-plan`,
-   `feat/input-widget-identity`, `feat/effect-digital-drift`, several
-   `wave/*`) look stale relative to current main. Verify each with
-   `is-ancestor` before deleting — don't assume from the name.
+   gate — `deny.toml` is the actual enforcement of the wgpu/metal dependency
+   bans.
 
 ## 3. Already in force (no work)
 
@@ -327,44 +256,32 @@ or agents run; read the branch off the commit OUTPUT, not session start; diff
 resurrected files against their new-path versions before deleting (a merge,
 not an agent, may have restored them).
 
-## 3b. Shared-checkout commit mechanics (added 2026-07-07 — four sessions hit these in one day)
+## 3b. Shared-checkout commit mechanics
 
 Obsolete when: sessions stop sharing the main checkout's index (all work in per-session worktrees) — the pathspec discipline exists only because the index is shared.
 
-- **Untracked-file exception to the pathspec-commit rule.** `git commit -m …
-  -- <path>` fails with "pathspec did not match" for a NEW file — git cannot
-  pathspec-commit what it isn't tracking. The correct move: `git add --
-  <exactly the new paths>` then the pathspec commit as usual. The targeted
-  add plus the commit's own pathspec still fences out other sessions' staged
-  work, preserving the rule's intent. Never `add -A`, never `add .`, never a
-  bare commit. (Sessions 2b15501e, 0f503e2e, 85d2348e, 0f5b70ea — all
-  improvised this independently; now it's written down.)
+- **Commit with a pathspec.** `git commit -m '…' -- <paths>`, never the
+  index (hook-denied: `index_add_guard`). A pathspec commit fails with
+  "pathspec did not match" for a NEW file — git cannot pathspec-commit what
+  it isn't tracking. The correct move: `git add -- <exactly the new paths>`
+  then the pathspec commit as usual. The targeted add plus the commit's own
+  pathspec still fences out other sessions' staged work. Never `add -A`,
+  never `add .`, never a bare commit.
 - **Inverse-sweep hazard.** The known hazard is YOUR add-then-commit sweeping
   THEIR staged work. The inverse also happens: another session's landing loop
-  can commit files sitting unstaged/untracked in YOUR working tree (observed
-  2026-07-06: a concurrent session landed this session's three working-tree
-  docs minutes before its own commit — the commit then failed with "nothing
-  added"). If your pathspec commit reports nothing to commit, diff your files
-  against HEAD before assuming an error: byte-identity means another session
-  landed them, and the landing is yours to verify, not redo.
-- **Landing merges are standalone commands.** Never run the landing `git
-  merge --no-ff` inside a compound chain — HEAD can change between a chain's
-  steps in a shared checkout (observed 2026-07-07: a fetch→merge→push chain
-  landed a merge on another session's branch). Re-verify
-  `git branch --show-current` immediately before the merge step, as its own
-  command.
+  can commit files sitting unstaged/untracked in YOUR working tree. If your
+  pathspec commit reports nothing to commit, diff your files against HEAD
+  before assuming an error: byte-identity means another session landed them,
+  and the landing is yours to verify, not redo.
+- **Landing merges are standalone commands.** `land_branch.py` is the
+  landing path. A manual landing merge never runs inside a compound chain —
+  HEAD can change between a chain's steps in a shared checkout (a
+  fetch→merge→push chain once landed a merge on another session's branch).
+  Re-verify `git branch --show-current` immediately before the merge step,
+  as its own command (hook-denied otherwise:
+  `detect_unverified_compound_landing_merge`).
 - **Worktree handoff files.** A session stopping mid-work in a worktree
   (compaction, budget, interruption) writes its handoff to
   `<worktree>/WORKTREE_HANDOFF.md` — branch state, uncommitted diagnostics,
   the finding in flight — not only to its final chat message. A successor
-  session can find a file; it cannot find a transcript message (observed
-  2026-07-07: a successor only avoided duplicating a stopped session's work
-  because `git worktree add` happened to collide on the branch name).
-
-## Acceptance
-
-section 1 test cases (unchanged) pass. section 1b: `branch -f main` and force-push-to-main
-ask unconditionally in the main tree, are unaffected in a worktree; a
-non-force push/merge landing on main carries the reminder; all cases fail
-open on exception. Clippy-clean is N/A (hook is Python). Commit by path and
-push.
+  session can find a file; it cannot find a transcript message.

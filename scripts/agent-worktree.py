@@ -26,7 +26,8 @@ warm). Build admission also
 maintains the admitting slot between builds. MANIFOLD_SLOT_TARGET_CAP_GIB sets
 the per-slot budget (default 25 GiB); stale means untouched for 60 minutes.
 Open target files and unknown process state protect caches. Protected data may
-exceed the budget, but builds still require the 50 GiB free-space reserve.
+exceed the budget, but builds still require the storage_budget.MAINTENANCE_GOAL_BYTES
+free-space reserve.
 Successful landings release their slot. Fixture copying prunes hidden and target
 subtrees so old quarantine fixtures cannot multiply across the pool.
 

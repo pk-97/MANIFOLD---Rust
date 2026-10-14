@@ -79,6 +79,28 @@ class StorageGateTests(unittest.TestCase):
         self.assertIn("unmanaged", refusal)
         reclaim.assert_not_called()
 
+    def test_flow_gate_needs_space_only_when_it_selects_flows(self):
+        cmd = ["python3", "scripts/run_ui_flows.py", "--touched", "a...b"]
+        admission = BuildCheck(False, self.repo / "target", 0, reason="low space")
+        with patch("storage_budget.check_build", return_value=admission) as check, \
+                patch("landing_gate.touched_flow_filters", return_value=[]) as select:
+            self.assertEqual(landing_gate.build_environment(cmd, self.repo), (None, None))
+        select.assert_called_once_with(self.repo, "a...b")
+        check.assert_not_called()
+        with patch("storage_budget.check_build", return_value=admission) as check, \
+                patch("landing_gate.touched_flow_filters", return_value=["drag-clip"]):
+            _, refusal = landing_gate.build_environment([*cmd, "--build-only"], self.repo)
+        self.assertIn("low space", refusal)
+        check.assert_called_once()
+
+    def test_flow_gate_selection_error_still_requires_space(self):
+        cmd = ["python3", "scripts/run_ui_flows.py", "--touched", "a...b"]
+        admission = BuildCheck(False, self.repo / "target", 0, reason="low space")
+        with patch("storage_budget.check_build", return_value=admission), \
+                patch("landing_gate.touched_flow_filters", side_effect=SystemExit(2)):
+            _, refusal = landing_gate.build_environment(cmd, self.repo)
+        self.assertIn("low space", refusal)
+
     def test_read_only_commands_do_not_require_space(self):
         with patch("storage_budget.check_build") as check:
             self.assertEqual(landing_gate.build_environment(

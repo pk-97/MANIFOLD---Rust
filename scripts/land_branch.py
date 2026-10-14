@@ -26,7 +26,7 @@ Before merging it records the gated tree as a land pass in the git common dir
 (land-passes-v1/<tree>.json); the Bash hook denies a manual merge or push to
 main of any tree without one (preToolUseBash.py land_pass_guard).
 Before any fetch it refuses a slot that is not the named branch's tip, is
-dirty, or is not quiet (a busy Codex job or a write in the last 120s), and
+dirty, or has a busy Codex job, and
 exits 0 with no row when the tip is already on origin/main.
 Every attempt past argument parsing, refused and cancelled ones included,
 appends one row to .claude/orchestration/landing-runs.jsonl in the main checkout.
@@ -35,7 +35,7 @@ Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
       [--named-red BUG-xxxx --reason '<why safe>'] \
       [--close-bead BUG-xxxx ...] [--close-reason '<closing note>'] \
-      [--lead 'k3 (lead)']
+      [--lead 'Claude lead']
 
 Obsolete when: the landing protocol itself changes shape (edit both).
 """
@@ -62,7 +62,6 @@ RUNS_LOG = ".claude/orchestration/landing-runs.jsonl"
 LAND_PASS_DIR = "land-passes-v1"  # reader: land_pass_guard in .claude/hooks/preToolUseBash.py
 ATTEMPT = None  # this attempt's landing-runs.jsonl row, set by main()
 
-
 def step(name, cmd, cwd, check=True, cleanup=False):
     print(f"[land] {name}: {' '.join(cmd)}", flush=True)
     try:
@@ -84,7 +83,6 @@ def step(name, cmd, cwd, check=True, cleanup=False):
         print(f"[land] FAILED at {name}:\n{r.stdout}\n{r.stderr}", file=sys.stderr)
         sys.exit(1)
     return r
-
 
 def run_landing_gate(cmd, cwd, log_path):
     """Expose check progress immediately and preserve the complete gate log."""
@@ -109,20 +107,16 @@ def run_landing_gate(cmd, cwd, log_path):
         finally:
             proc.stdout.close()
 
-
 def git_out(name, cmd, cwd):
     return step(name, cmd, cwd).stdout.strip()
-
 
 def red_labels(gate_text):
     """Check labels the gate summary printed as FAIL (never nextest's 'FAIL [')."""
     return frozenset(m[1] for m in re.finditer(r'^FAIL (?!\[)(\S+)', gate_text, re.M))
 
-
 def gpu_wait_seconds(gate_text):
     waits = [float(m[1]) for m in re.finditer(r'^gpu-queue wait: ([0-9.]+)s', gate_text, re.M)]
     return sum(waits) if waits else None
-
 
 def carry_over_allowed(named_reds, code, reds):
     """A named red covers a moved-main re-gate only when nothing new went red.
@@ -130,7 +124,6 @@ def carry_over_allowed(named_reds, code, reds):
     The gate must have run every check (CHECKS_RED) and the red set must be
     exactly the one the lead reviewed: a vanished red is also a changed tree."""
     return bool(named_reds) and code == CHECKS_RED and reds == named_reds
-
 
 def gate(gate_cmd, worktree, gate_log):
     """One gate run, counted in the attempt row. Returns (exit code, red labels)."""
@@ -145,12 +138,10 @@ def gate(gate_cmd, worktree, gate_log):
         ATTEMPT['gpu_wait_s'] = round((ATTEMPT['gpu_wait_s'] or 0) + wait, 1)
     return code, red_labels(text)
 
-
 def lock_path():
     """In the git common dir, so every worktree of this repo shares one lock."""
     common = git_out('git common dir', ['git', 'rev-parse', '--git-common-dir'], MAIN)
     return (MAIN / common).resolve() / LOCK_NAME
-
 
 @contextlib.contextmanager
 def landing_lock(path, holder):
@@ -178,7 +169,6 @@ def landing_lock(path, holder):
             handle.flush()
             fcntl.flock(handle, fcntl.LOCK_UN)
 
-
 def record_land_pass(tree, commit, branch, named_red):
     """Record that `tree` passed the landing gate, in the git common dir next to
     gate-passes-v1. The bash hook denies a manual merge or push of any other
@@ -193,12 +183,10 @@ def record_land_pass(tree, commit, branch, named_red):
     tmp.write_text(json.dumps(record) + '\n')
     os.replace(tmp, directory / f'{tree}.json')
 
-
 def stop(outcome, message):
     ATTEMPT['outcome'] = outcome
     print(f'[land] {message}', file=sys.stderr)
     sys.exit(1)
-
 
 def land_gated(a, worktree, base, gated_commit, verdict):
     """The critical section, run under the landing lock. Returns the new
@@ -244,7 +232,6 @@ def land_gated(a, worktree, base, gated_commit, verdict):
     step("push main", ["git", "push", "origin", "main"], MAIN)
     return None
 
-
 def regate_moved_main(worktree, gate_cmd, gate_log):
     """Outside the lock: bring the branch onto the new origin/main and gate it."""
     step('merge moved main into branch', ['git', 'merge', 'origin/main', '--no-edit'], worktree)
@@ -253,12 +240,10 @@ def regate_moved_main(worktree, gate_cmd, gate_log):
     code, reds = gate(gate_cmd, worktree, gate_log)
     return gated_commit, code, reds
 
-
 def new_attempt(branch):
     return {'branch': branch, 'start': datetime.now(timezone.utc).isoformat(), 'end': None,
             'outcome': None, 'gate_runs': 0, 'moved_main_regates': 0,
             'lock_wait_s': 0.0, 'gpu_wait_s': None}
-
 
 def write_attempt(attempt):
     attempt['end'] = datetime.now(timezone.utc).isoformat()
@@ -271,34 +256,13 @@ def write_attempt(attempt):
     except OSError as error:
         print(f'[land] WARN: landing log not written: {error}', file=sys.stderr)
 
-
-QUIET_S = 120  # a file written this recently means a writer may still be at work
-QUIET_SKIP = {'.git', 'target', '__pycache__'}  # bytecode writes come from running tests, not authors
-
-
 class Refused(Exception):
     """A start check failed; the message names the reason and the rerun."""
-
 
 def probe(args, cwd):
     """Read-only git query for the start checks: (exit code, stripped stdout)."""
     r = subprocess.run(['git', *args], cwd=str(cwd), capture_output=True, text=True)
     return r.returncode, r.stdout.strip()
-
-
-def recent_write(wt, now, window=QUIET_S):
-    """A file under the worktree, outside target/ and .git, modified in the window."""
-    for root, dirs, files in os.walk(wt):
-        dirs[:] = [d for d in dirs if d not in QUIET_SKIP]
-        for name in (f for f in files if f not in QUIET_SKIP and not f.endswith('.pyc')):
-            path = Path(root) / name
-            try:
-                if now - path.lstat().st_mtime < window:
-                    return path
-            except OSError:
-                continue
-    return None
-
 
 def codex_busy(wt):
     """Why a Codex job may still be writing in this slot (codex_brokers.busy_reason), or None."""
@@ -309,12 +273,11 @@ def codex_busy(wt):
             return why
     return None
 
-
-def start_checks(branch, wt, now=None):
-    """Before any fetch or gate: is this slot really the named branch, done and quiet?
+def start_checks(branch, wt):
+    """Before any fetch or gate: is this slot really the named branch, clean and free of Codex jobs?
 
     Returns True when the branch's own commits are already on origin/main,
-    checked only after the slot proves clean and quiet. Raises Refused
+    checked only after the slot proves clean. Raises Refused
     otherwise-unsafe. A lease or a live holder pid is never evidence either
     way: a subagent's holder is its lead's process."""
     q = f'git -C "{wt}"'
@@ -334,10 +297,6 @@ def start_checks(branch, wt, now=None):
     if why:
         raise Refused(f'a Codex job may still be writing in this slot ({why}). '
                       f'Check: scripts/codex_brokers.py --dry-run "{wt}"')
-    fresh = recent_write(wt, time.time() if now is None else now)
-    if fresh:
-        raise Refused(f'{fresh} was modified in the last {QUIET_S}s; a writer may still be at work. '
-                      f'Wait until the slot is quiet, then rerun the land command.')
     if probe(['merge-base', '--is-ancestor', tip, 'origin/main'], wt)[0] != 0:
         return False
     # On main's first-parent line means the branch never had commits of its own;
@@ -347,7 +306,6 @@ def start_checks(branch, wt, now=None):
         raise Refused(f'nothing to land: {branch} has no commits beyond origin/main. '
                       f'Check: {q} log --oneline origin/main..{branch}')
     return True
-
 
 def parse_args(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -360,9 +318,8 @@ def parse_args(argv):
                    help="defer GPU proofs with a recorded reason; all other gates must pass")
     p.add_argument("--close-bead", action="append", default=[])
     p.add_argument("--close-reason", default="")
-    p.add_argument("--lead", default="k3 (lead)")
+    p.add_argument("--lead", default="Claude lead")
     return p.parse_args(argv)
-
 
 def main():
     global ATTEMPT
@@ -403,7 +360,6 @@ def main():
         raise
     finally:
         write_attempt(ATTEMPT)
-
 
 def _main(a):
     wt = Path(a.worktree)
@@ -472,7 +428,6 @@ def _main(a):
         print(f"[land] NOTE: {a.branch} tip is not an ancestor of origin/main — left undeleted.")
 
     print(f"[land] DONE: {a.branch} landed. {a.lead}", flush=True)
-
 
 if __name__ == "__main__":
     sys.exit(main())

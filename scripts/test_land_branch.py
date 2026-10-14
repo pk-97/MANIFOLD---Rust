@@ -6,7 +6,6 @@ import contextlib
 import fcntl
 import io
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -251,7 +250,7 @@ def git(cwd, *args):
 
 class StartCheckTests(unittest.TestCase):
     """A real throwaway repo: the slot must hold the named branch's tip, clean
-    and quiet, before land_branch fetches or gates anything."""
+    with no Codex job running, before land_branch fetches or gates anything."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -269,16 +268,9 @@ class StartCheckTests(unittest.TestCase):
         (self.wt / 'work.txt').write_text('work\n')
         git(self.wt, 'add', '--', 'work.txt')
         git(self.wt, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'work', '--', 'work.txt')
-        self.age_files()
         self.later = time.time()
         self.busy_patch = patch.object(land_branch, 'codex_busy', return_value=None)
         self.busy = self.enterContext(self.busy_patch)
-
-    def age_files(self):
-        old = time.time() - 3600
-        for path in self.wt.rglob('*'):
-            if '.git' not in path.parts:
-                os.utime(path, (old, old), follow_symlinks=False)
 
     def land(self, *extra, branch='lane/x'):
         """main() with the gate and git steps faked; returns (exit, rows, stderr, fakes)."""
@@ -318,7 +310,7 @@ class StartCheckTests(unittest.TestCase):
                     land_branch.main()
             self.assertFalse((self.root / land_branch.RUNS_LOG).exists())
 
-    def test_clean_quiet_tip_passes_start_checks(self):
+    def test_clean_tip_passes_start_checks(self):
         self.assertFalse(land_branch.start_checks('lane/x', self.wt))
 
     def test_refuses_missing_branch(self):
@@ -335,21 +327,11 @@ class StartCheckTests(unittest.TestCase):
 
     def test_refuses_dirty_tree(self):
         (self.wt / 'work.txt').write_text('changed\n')
-        self.age_files()
         self.assert_refused('not clean')
 
     def test_refuses_busy_codex_job(self):
         self.busy.return_value = 'job j1 is running'
         self.assert_refused('job j1 is running')
-
-    def test_refuses_recent_write_outside_target(self):
-        (self.wt / 'work.txt').touch()
-        self.assert_refused('modified in the last')
-
-    def test_writes_under_target_and_git_do_not_count(self):
-        (self.wt / 'target').mkdir()
-        (self.wt / 'target' / 'build.log').write_text('x\n')
-        self.assertIsNone(land_branch.recent_write(self.wt, time.time()))
 
     def test_codex_busy_reuses_broker_state(self):
         real = self.busy_patch.temp_original
@@ -363,12 +345,10 @@ class StartCheckTests(unittest.TestCase):
     def fresh_branch(self):
         """A lane branch cut from main with no commits of its own."""
         git(self.wt, 'switch', '-q', '-c', 'lane/fresh', 'main')
-        self.age_files()
 
     def test_uncommitted_work_on_a_fresh_branch_refuses_as_dirty(self):
         self.fresh_branch()
         (self.wt / 'forgot.txt').write_text('uncommitted\n')
-        self.age_files()
         code, rows, text, step, gate = self.land(branch='lane/fresh')
         self.assertEqual(code, 1)
         self.assertIn('not clean', text)
@@ -392,13 +372,6 @@ class StartCheckTests(unittest.TestCase):
         self.assertIn('broker state unreadable', text)
         self.assertEqual([r['outcome'] for r in rows], ['error'])
         self.assertFalse(step.called or gate.called)
-
-    def test_recent_pyc_write_does_not_refuse(self):
-        cache = self.wt / 'scripts' / '__pycache__'
-        cache.mkdir(parents=True)
-        (cache / 'x.cpython-312.pyc').write_bytes(b'x')
-        (self.wt / 'loose.pyc').write_bytes(b'x')
-        self.assertIsNone(land_branch.recent_write(self.wt, time.time()))
 
     def test_already_landed_exits_zero_without_a_row(self):
         git(self.repo, '-c', 'commit.gpgsign=false', 'merge', '-q', '--no-ff', '-m', 'land', 'lane/x')

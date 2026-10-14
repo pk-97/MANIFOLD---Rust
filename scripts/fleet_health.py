@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Fleet health: the stalls and blockers a lead otherwise finds by hand.
 
-The lead's lane-health cron runs this every 15 minutes and acts on each line.
-It exits 1 when anything needs the lead, else 0. Checks:
+The lead's cron runs this every 15 minutes and acts on each line. It exits 1
+when anything needs the lead, else 0. It does not see Claude lanes (Agent-tool
+subagents); their stalls show only as orphaned slot edits. Checks:
 
 - disk: free space below the cargo build guard's floor stops every lane, so
   it fails there and warns within DISK_WARN_MARGIN of it.
@@ -12,7 +13,6 @@ It exits 1 when anything needs the lead, else 0. Checks:
   finished since the last run, so it needs review, flagged louder when its
   final output names a blocker (disk guard, no Metal device, sandbox or
   permission refusal).
-- seats: fewer running Astra jobs than SEATS.
 - slots: uncommitted edits untouched for ORPHAN_MINUTES that no running job
   or process names, which is finished work nobody picked up.
 - GPU lock: held by a live pid for over 30 minutes (a hung proof).
@@ -31,6 +31,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from storage_budget import GIB, MAINTENANCE_GOAL_BYTES as DISK_FLOOR  # noqa: E402  the build guard refuses below it
+
 REPO = Path(__file__).resolve().parent.parent
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 WORKTREES = MAIN_CHECKOUT / ".claude/worktrees"
@@ -39,10 +42,7 @@ CODEX_SESSIONS = Path.home() / ".codex/sessions"
 CACHE = Path.home() / ".cache/manifold"
 SEEN_FILE = CACHE / "fleet-health.json"
 
-GIB = 2 ** 30
-DISK_FLOOR = 50 * GIB  # storage_budget.MAINTENANCE_GOAL_BYTES; the build guard refuses below it
 DISK_WARN_MARGIN = 15 * GIB
-SEATS = 6
 STALL_MINUTES = 20
 ORPHAN_MINUTES = 30
 LATE_WRITE_SECONDS = 60
@@ -272,8 +272,6 @@ def check_jobs(jobs, seen, now, problems):
             problems.append(("FAIL", f"{jid}: {status}, needs unblocking ({', '.join(found) or 'job failed'}). Read: codex-companion.mjs result {jid}"))
         elif status == "completed":
             problems.append(("ACT", f"{jid}: completed, needs review and commit. Read: codex-companion.mjs result {jid}"))
-    if running < SEATS:
-        problems.append(("ACT", f"seats: {running}/{SEATS} Astra jobs running; fill free seats from the ledger."))
     return running
 
 
