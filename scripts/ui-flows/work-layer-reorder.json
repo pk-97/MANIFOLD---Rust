@@ -18,5 +18,6 @@
       "selector": { "Query": { "text": "FLOWERS", "under_name": "layer_headers" } },
       "check": { "Above": { "text": "TEXT BOT L", "under_name": "layer_headers" } }
     }
-  }
+  },
+  "AssertFresh"
 ]

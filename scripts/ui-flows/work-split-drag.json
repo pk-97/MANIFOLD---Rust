@@ -1,5 +1,6 @@
 [
   "ResetWork",
   { "ResizeDrag": { "handle": "TimelineSplit", "from": 560.0, "to": 460.0, "steps": 60 } },
-  { "AssertWork": { "window": "split_1s" } }
+  { "AssertWork": { "window": "split_1s" } },
+  "AssertFresh"
 ]
