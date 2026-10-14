@@ -633,27 +633,16 @@ use manifold_node_engine::runtime::*;
         );
     }
 
-    /// BUG-078 regression (fixed). Post-PARAM_STORAGE_BOUNDARIES-P2 (D4/D12),
-    /// a calibration writes ONLY `PresetInstance.params[id].spec` — the graph's
-    /// `preset_metadata.params` shadow is left stale until save (D12 derives
-    /// it at serialize time, not before). A structural graph edit rebuilds
-    /// the generator's `PresetRuntime` through EXACTLY this constructor
-    /// (`registry.create_with_override` -> `PresetRuntime::from_def_with_device`;
-    /// `from_def` here is the mock-backend equivalent).
+    /// BUG-078 (stale reshape after a calibration). A calibration writes only
+    /// the live manifest; the graph's `preset_metadata.params` entry stays
+    /// stale. A structural edit rebuilds the generator through this
+    /// constructor (`from_def_with_device` in production), and the rebuild
+    /// must honor the user's live curve and invert, not the stale entry.
     ///
-    /// The fix threads the live per-instance `ParamManifest` into `from_def`,
-    /// which overlays each param's reshape (range/curve/invert) from the
-    /// manifest `spec` over the graph's shadow — so a post-calibration rebuild
-    /// honors the fresh range. This test passes `Some(&values)` (the fresh
-    /// manifest) and asserts the reshape follows it, not the stale shadow.
-    ///
-    /// The manifest built below stands in for what `EditParamMappingCommand`
-    /// (`manifold-editing/src/commands/effects.rs`, `apply_to_manifest_spec`)
-    /// actually writes into `PresetInstance.params["amt"].spec` on a real
-    /// calibration: only `max` widens, 1.0 -> 2.0, curve stays Exponential so
-    /// the note actually engages (`apply_card_reshape` only consults min/max
-    /// when `invert || curve != Linear` — a min/max-only edit on an
-    /// otherwise-identity binding can't be observed this way).
+    /// The range half changed on purpose: the reshape normalises over the
+    /// declared slider range, never the user's slider range
+    /// (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)), so a
+    /// widened calibration range must NOT reach the node.
     #[test]
     fn generator_rebuild_reshape_honors_live_manifest_over_stale_shadow() {
         let json = r#"{
@@ -685,42 +674,32 @@ use manifold_node_engine::runtime::*;
             ]
         }"#;
 
-        // The def exactly as it sits in memory right after a calibration:
-        // P2 writes ONLY the manifest, so this shadow still carries the
-        // ORIGINAL (pre-calibration) range — with the curve engaged so
-        // min/max actually enters the transform.
-        let mut def: manifold_core::effect_graph_def::EffectGraphDef =
+        // The def as it sits in memory right after a calibration: the
+        // graph's entry still carries the stale linear, non-inverted shape.
+        let def: manifold_core::effect_graph_def::EffectGraphDef =
             serde_json::from_str(json).expect("parse StaleReshapeTest def");
-        {
-            let meta = def
-                .preset_metadata
-                .as_mut()
-                .expect("StaleReshapeTest carries presetMetadata");
-            let p = meta
-                .params
-                .iter_mut()
-                .find(|p| p.id == "amt")
-                .expect("amt param spec");
-            p.curve = manifold_core::macro_bank::MacroCurve::Exponential;
-            p.min = 0.0;
-            p.max = 1.0; // STALE — pre-calibration range
-        }
+        let declared = manifold_core::param_lookup::Declared::new(&def)
+            .and_then(|mut d| d.spec("amt"))
+            .expect("amt is declared");
+        let (lo, hi) = (declared.min, declared.max);
+        let user_range = (lo - 1.0, hi + 3.0);
+        assert!(hi > lo, "amt needs a non-empty declared range");
 
-        // The freshly-calibrated manifest a rebuild SHOULD honor: same
-        // curve, widened range 0..2 — exactly what `EditParamMappingCommand`
-        // would have just written into `PresetInstance.params["amt"].spec`.
-        let mut values = manifest(&[("amt", 1.0)]);
+        // The live manifest after the calibration: the user's curve and
+        // invert, and a widened slider range that must stay display-only.
+        let amt = lo + 0.25 * (hi - lo);
+        let mut values = manifest(&[("amt", amt)]);
         {
             let p = values.get_mut("amt").expect("amt manifest entry");
             p.spec.curve = manifold_core::macro_bank::MacroCurve::Exponential;
-            p.spec.min = 0.0;
-            p.spec.max = 2.0; // FRESH — post-calibration
+            p.spec.invert = true;
+            p.spec.min = user_range.0;
+            p.spec.max = user_range.1;
         }
 
-        // This IS the production rebuild path (mock-backend form of
-        // `PresetRuntime::from_def_with_device`). The fix threads the live
-        // manifest as the reshape authority; the generator_renderer rebuild
-        // path passes `layer.gen_params().params` here.
+        // The production rebuild path (mock-backend form of
+        // `PresetRuntime::from_def_with_device`); the generator_renderer
+        // rebuild passes the layer's live manifest here.
         let mut g = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), Some(&values))
             .expect("StaleReshapeTest def loads");
         g.apply_param_values(&values);
@@ -736,17 +715,20 @@ use manifold_node_engine::runtime::*;
             other => panic!("expected float, got {other:?}"),
         };
 
-        // Post-fix behavior: amt=1.0 normalized against the FRESH 0..2 range
-        // is 0.5 -> curved (Exponential, n^2) to 0.25 -> re-scaled to 0..2 ->
-        // 0.5. The pre-fix (stale-shadow) output was 1.0 (normalized against
-        // the STALE 0..1 range: 1.0 clamped to n=1.0, curved to 1.0, no
-        // reshape at all). 0.5 proves the manifest's widened range won.
+        let reshape = |(min, max): (f32, f32), invert, curve| {
+            manifold_core::effects::apply_card_reshape(amt, min, max, invert, curve, 1.0, 0.0)
+        };
+        let exp = manifold_core::macro_bank::MacroCurve::Exponential;
+        let expected = reshape((lo, hi), true, exp);
+        let stale = reshape((lo, hi), false, manifold_core::macro_bank::MacroCurve::Linear);
+        let over_user_range = reshape(user_range, true, exp);
+        assert!((expected - stale).abs() > 1e-3 && (expected - over_user_range).abs() > 1e-3);
         assert!(
-            (offset - 0.5).abs() < 1e-5,
-            "a structural rebuild must resolve `amt`'s reshape from the live \
-             manifest spec (min=0,max=2), not the graph's stale \
-             `preset_metadata.params` shadow (min=0,max=1) — got {offset} \
-             (1.0 would be the STALE 0..1 range's output)",
+            (offset - expected).abs() < 1e-5,
+            "a structural rebuild must take curve and invert from the live manifest \
+             and normalise over the declared range {lo}..{hi}: want {expected}, got \
+             {offset} (stale shape gives {stale}, the user's slider range gives \
+             {over_user_range})",
         );
     }
 

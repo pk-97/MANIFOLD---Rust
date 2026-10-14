@@ -237,6 +237,11 @@ impl<'a> Join<'a> {
                 section: (saved.section != spec.section).then(|| saved.section.clone()),
                 ..ParamChoices::default()
             };
+            // The default is the instance's own stamp (a material's authored
+            // factor, re-seeded from the node), not the template's, as on the
+            // node path.
+            let (min, max) = widen_to(&spec, saved.default_value);
+            let spec = ParamSpecDef { default_value: saved.default_value, min, max, ..spec };
             return (spec, SpecSource::Lookup, choices);
         }
         // A fan-out (several bindings under one id) is described by its first
@@ -317,6 +322,15 @@ impl<'a> Declared<'a> {
     }
 }
 
+/// The declared slider range, widened so a seeded default outside the band
+/// stays reachable, as the stamp does (a 300-unit camera distance).
+fn widen_to(d: &ParamSpecDef, default: f32) -> (f32, f32) {
+    if d.whole_numbers || d.is_toggle || d.is_trigger {
+        return (d.min, d.max);
+    }
+    (d.min.min(default), d.max.max(default))
+}
+
 /// A node or modifier description laid over the saved control. The lookup
 /// owns range and flags. Identity, default and the fields that become lookup
 /// outputs or user choices in later phases (name, section, card visibility,
@@ -324,14 +338,7 @@ impl<'a> Declared<'a> {
 /// for the label rules, so recipe and importer labels (a look's "Size") are
 /// not renamed before then; an empty saved name takes the lookup's.
 fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32) -> ParamSpecDef {
-    // Keep a seeded value outside the declared band reachable, as the stamp
-    // does (a 300-unit camera distance).
-    let widen = !d.whole_numbers && !d.is_toggle && !d.is_trigger;
-    let (min, max) = if widen {
-        (d.min.min(binding_default), d.max.max(binding_default))
-    } else {
-        (d.min, d.max)
-    };
+    let (min, max) = widen_to(&d, binding_default);
     ParamSpecDef {
         name: if saved.name.is_empty() { d.name } else { saved.name.clone() },
         min,
