@@ -13,19 +13,15 @@
     }
   },
   {
-    "Pointer": {
-      "target": {
+    "Assert": {
+      "selector": {
         "Query": {
-          "text": "\u25b6",
+          "text": "\u25bc",
           "type": "Button",
           "under_text": "AUDIO TRIGGERS"
         }
       },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
+      "check": "Exists"
     }
   },
   {
@@ -112,7 +108,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25bc Mid \u2192 Transients",
+          "text": "\u25bc Mid \u2192 Snare",
           "type": "Button"
         }
       },
