@@ -506,7 +506,7 @@ impl BitmapSlider {
         normalized_value: f32,
         value_text: &str,
     ) {
-        if ids.track.index() >= tree.count() {
+        if !tree.is_live(ids.track) {
             return;
         }
 

@@ -237,28 +237,30 @@ impl Default for Color32 {
 
 // ── Node identity ────────────────────────────────────────────────────
 
-/// Stable identity of a node in [`crate::tree::UITree`] — an array index plus a
-/// generation.
+/// Stable identity of a node in [`crate::tree::UITree`]: its region, its slot
+/// in that region's arena, and a generation.
 ///
-/// The `index` locates the node in the tree's SoA storage; the `generation`
-/// stamps *which* node has lived at that slot. The tree bumps a counter on every
-/// node it mints, so a slot reused after a `truncate_from`/`clear`+rebuild gets a
-/// fresh generation. An id minted against the old occupant therefore no longer
-/// matches the slot's current generation, and the tree's accessors treat it as
-/// "no such node" (read → zero/false/None, write → no-op) instead of silently
-/// touching whatever node now sits at that index. This is the storage-layer
-/// backstop for the stale-id bug class: a panel that keeps an id across a rebuild
-/// and forgets to re-capture it can no longer mutate the wrong node.
+/// The region and slot locate the node in the tree's per-region storage; the
+/// `generation` stamps *which* node has lived at that slot. The tree bumps a
+/// counter on every node it mints, so a slot reused after a `clear_region` or
+/// `clear` and a rebuild gets a fresh generation. An id minted against the old
+/// occupant therefore no longer matches the slot's current generation, and the
+/// tree's accessors treat it as "no such node" (read → zero/false/None, write →
+/// no-op) instead of touching whatever node now sits there. A panel that keeps
+/// an id across a rebuild and forgets to re-capture it can no longer mutate the
+/// wrong node.
 ///
 /// Generation `0` is reserved: the tree never mints it (its counter starts at 1),
 /// so any id with generation 0 — including [`NodeId::PLACEHOLDER`] — never matches
-/// a live node. That makes a stray placeholder safe by construction.
+/// a live node.
 ///
 /// `Option<NodeId>` remains the one "no node" type for fields; `PLACEHOLDER` is
 /// only for the rare non-`Option` slot that needs an inert default.
 ///
-/// Layout: `index` in the low 32 bits, `generation` in the high 32 bits of one
-/// `u64`, so the id stays a cheap `Copy` scalar with derived `Eq`/`Hash`/`Ord`.
+/// Layout: `generation << 32 | region << 24 | slot` in one `u64`, so the id
+/// stays a cheap `Copy` scalar with derived `Eq`/`Hash`/`Ord`. Slots are
+/// region-local: comparing the slots of two nodes in different regions means
+/// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u64);
 
@@ -267,18 +269,27 @@ impl NodeId {
     /// rare non-`Option` field that needs an inert default; prefer `Option<NodeId>`.
     pub const PLACEHOLDER: NodeId = NodeId(0);
 
+    /// Slots per region arena: the low 24 bits.
+    pub(crate) const SLOT_BITS: u32 = 24;
+
     /// Mint an id from its parts. Crate-private: only [`crate::tree::UITree`]
     /// assigns generations, so ids can't be forged elsewhere (external code that
-    /// needs an id for an index goes through [`crate::tree::UITree::id_at`]).
+    /// needs an id for a slot goes through [`crate::tree::UITree::id_in`]).
     #[inline]
-    pub(crate) const fn from_parts(index: u32, generation: u32) -> Self {
-        NodeId(((generation as u64) << 32) | index as u64)
+    pub(crate) const fn from_parts(region: u8, slot: u32, generation: u32) -> Self {
+        NodeId(((generation as u64) << 32) | ((region as u64) << Self::SLOT_BITS) | slot as u64)
     }
 
-    /// Array index of this node in the tree's SoA storage.
+    /// The region whose arena holds this node.
     #[inline]
-    pub fn index(self) -> usize {
-        (self.0 & 0xFFFF_FFFF) as usize
+    pub fn region(self) -> u8 {
+        ((self.0 >> Self::SLOT_BITS) & 0xFF) as u8
+    }
+
+    /// Slot of this node inside its region's arena.
+    #[inline]
+    pub fn slot(self) -> usize {
+        (self.0 & ((1 << Self::SLOT_BITS) - 1)) as usize
     }
 
     /// Generation stamp — which occupant of the slot this id refers to. `0` means

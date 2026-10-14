@@ -15,9 +15,9 @@
 //! trips it (the count changes):
 //!   - `tree_passes.rs` (2 calls): the shared pass itself — the one place
 //!     these primitives are meant to be used directly.
-//!   - `editor_frame.rs` (1 call): the editor's narrowed base-content scan,
-//!     `[0, overlay_region_start)` (D2) — everything past that boundary must
-//!     go through the shared pass, never a second raw call here.
+//!   - `editor_frame.rs` (1 call): the editor's base-content scan over the
+//!     default arena (D2) — overlays live in their own arena and must go
+//!     through the shared pass, never a second raw call here.
 //!   - `ui_snapshot/mod.rs` (2 calls): the BUG-097 traversal-semantics proof
 //!     (`overlay_fidelity_proof`), which needs raw calls to demonstrate the
 //!     root-scan-vs-flat-scan distinction the shared pass depends on.

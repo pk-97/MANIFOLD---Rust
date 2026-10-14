@@ -273,6 +273,8 @@ struct BrowserLayout {
     /// Parallel to action rows that have a secondary action.
     secondary_ids: Vec<(NodeId, usize)>,
     paste_id: Option<NodeId>,
+    /// Slots in `region`'s arena.
+    region: u8,
     first_node: usize,
     node_count: usize,
 }
@@ -297,6 +299,7 @@ impl BrowserLayout {
             cell_ids: Vec::new(),
             secondary_ids: Vec::new(),
             paste_id: None,
+            region: crate::tree::DEFAULT_REGION,
             first_node: 0,
             node_count: 0,
         }
@@ -536,6 +539,7 @@ impl BrowserPopupPanel {
         };
 
         session.layout.first_node = tree.count();
+        session.layout.region = tree.building_region();
         session.layout.cell_ids.clear();
         session.layout.secondary_ids.clear();
         session.layout.chip_ids.clear();
@@ -777,7 +781,7 @@ impl BrowserPopupPanel {
         // The grid's own clip handles cell overflow against the viewport;
         // rooting it under the container also ties the grid to the popup's
         // structural containment, same as every other content node.
-        tree.reparent_root_nodes(clip_id.index(), 1, shell.container);
+        tree.reparent_root_nodes(clip_id.slot(), 1, shell.container);
         let clip_parent = Some(clip_id);
 
         // Empty state (F9): a filtered-out grid reads as a row, not a
@@ -1253,8 +1257,9 @@ impl BrowserPopupPanel {
         let Some(session) = self.session.as_ref() else {
             return false;
         };
-        let id = node_id.index();
-        id >= session.layout.first_node && id < session.layout.first_node + session.layout.node_count
+        let id = node_id.slot();
+        let layout = &session.layout;
+        node_id.region() == layout.region && id >= layout.first_node && id < layout.first_node + layout.node_count
     }
 
     /// Get search bar rect for text input anchoring.

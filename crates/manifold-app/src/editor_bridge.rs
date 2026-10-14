@@ -1834,11 +1834,11 @@ impl Application {
         );
 
         // Overlays (node picker + any other top-level overlay open on this
-        // window's `UIRoot`) build at the tail of the tree via the SAME
+        // window's `UIRoot`) build into the Overlays arena via the SAME
         // driver the main window uses — `build_overlays_for_screen`
         // sets `screen_width`/`screen_height` (this `UIRoot` never gets
         // `resize()`) then runs `build_overlays()`, which records
-        // `overlay_draw`/`overlay_region_start` for real.
+        // `overlay_draw`.
         // Built last, same as before, so its nodes sit on top of
         // palette/sidebar/preview column.
         ws.ui_root.build_overlays_for_screen(logical_w as f32, logical_h as f32);
@@ -2438,7 +2438,7 @@ mod binding_reroute_tests {
             project.settings.master_effects[0]
                 .params.get_mut("amount").unwrap().value = value;
             super::rebuild_editor_inspector(&mut ui, &project, None, viewport);
-            assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(expected)),
+            assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some(expected)),
                 "rebuilt inspector must show live value {expected}");
         }
     }

@@ -15,6 +15,8 @@ mod input_matrix;
 mod interact;
 #[cfg(test)]
 mod lookup_coverage;
+#[cfg(test)]
+mod order_golden;
 mod readback;
 mod render;
 mod script;
@@ -1139,7 +1141,7 @@ mod footer_leak_probe {
             .iter()
             .find(|i| i.slot == PanelSlot::Inspector)
             .expect("inspector panel in cache info");
-        let (start, end) = (insp_info.node_start, insp_info.node_end);
+        let (region, start, end) = (insp_info.region, insp_info.start, insp_info.end);
         let eps = 0.5_f32;
 
         // Sanity: the scroll must have pushed content so that some node's RAW
@@ -1147,7 +1149,7 @@ mod footer_leak_probe {
         // vacuous (nothing to clip). Mirrors the P1 tab-strip test's `any_above`.
         let straddling = (start..end)
             .filter(|&i| {
-                let n = ui.tree.get_node(ui.tree.id_at(i)).unwrap();
+                let n = ui.tree.get_node(ui.tree.id_in(region, i)).unwrap();
                 n.flags.contains(UIFlags::VISIBLE)
                     && n.bounds.width > 0.0
                     && n.bounds.height > 0.0
@@ -1167,7 +1169,7 @@ mod footer_leak_probe {
         // whose clipped paint crosses below the footer's top edge.
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut leaks: Vec<(usize, Rect, Option<Rect>, String)> = Vec::new();
-        ui.tree.traverse_flat_range(start, end, false, |ev| match ev {
+        ui.tree.traverse_flat_range(region, start, end, false, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
                 clip_stack.push(clipped);
@@ -1197,7 +1199,7 @@ mod footer_leak_probe {
                 };
                 if painted_bottom > footer_top + eps {
                     let text = n.text.clone().unwrap_or_default();
-                    leaks.push((n.id.index(), b, clip_stack.last().copied(), text));
+                    leaks.push((n.id.slot(), b, clip_stack.last().copied(), text));
                 }
             }
         });
@@ -1317,8 +1319,8 @@ mod cache_path_full_render {
     /// `scroll_dirty` is always `ScrollDirty::default()` here: this driver
     /// scrolls via `try_inspector_scroll` + `scrolled_in_place`, never the
     /// live app's `scroll_dirty` bitflag path, exactly as P0's `apply_
-    /// decision` never called `rebuild_scroll_panels` either — omitting it
-    /// changes nothing observable.
+    /// decision` never ran a scroll rebuild either — omitting it changes
+    /// nothing observable.
     fn apply_decision(ui: &mut UIRoot, cache: &mut UICacheManager, signals: &mut UiFrameSignals) {
         apply_ui_frame_invalidations(ui, Some(cache), signals);
     }
@@ -1489,7 +1491,7 @@ mod cache_path_full_render {
         let cog_pos =
             resolve_button_center(&ui, &cog_text).expect("compact-toggle (cog) button must resolve");
         if click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
-            signals.needs_structural_sync = true;
+            signals.needs_rebuild = true;
         }
         apply_decision(&mut ui, &mut cache, &mut signals);
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
@@ -1536,7 +1538,7 @@ mod cache_path_full_render {
             match resolve_button_center(&ui, tab_text) {
                 Some(pos) => {
                     if click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
-                        signals.needs_structural_sync = true;
+                        signals.needs_rebuild = true;
                     }
                 }
                 None => {
@@ -1550,7 +1552,7 @@ mod cache_path_full_render {
                         &[manifold_ui::InspectorTab::Layer, manifold_ui::InspectorTab::Master],
                         tab,
                     );
-                    signals.needs_structural_sync = true;
+                    signals.needs_rebuild = true;
                 }
             }
             apply_decision(&mut ui, &mut cache, &mut signals);
@@ -1746,8 +1748,8 @@ mod editor_window_harness {
 
         // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: same driver the live
         // window and `render_graph_editor_to_png` use — no overlay is open
-        // here, so this only records `overlay_region_start == tree.count()`
-        // (D2's narrowed base render below still covers the whole tree).
+        // here, so this only records an empty `overlay_draw`
+        // (the base render below covers the default arena).
         ui_root.build_overlays_for_screen(logical_w, logical_h);
 
         composite_editor_frame(
@@ -1914,6 +1916,7 @@ mod overlay_fidelity_proof {
             "opening the Perf HUD must record an overlay range (build_overlays)"
         );
         let (start, end) = ui.overlay_draw[0];
+        let overlays = crate::frame_plan::MainRegion::Overlays.id();
         assert!(end > start, "overlay range must be non-empty ({start}..{end})");
         // The mechanism under test: the region root is at `start - 1`, outside
         // the recorded range. If this ever stops holding, the whole premise of
@@ -1941,9 +1944,9 @@ mod overlay_fidelity_proof {
             let before = readback(&device, &res.offscreen, w, h);
             renderer.begin_frame();
             if sub_region {
-                renderer.render_sub_region(&ui.tree, start, end, false);
+                renderer.render_sub_region(&ui.tree, overlays, start, end, false);
             } else {
-                renderer.render_tree_range(&ui.tree, start, end);
+                renderer.render_tree_range(&ui.tree, overlays, start, end);
             }
             if renderer.prepare(&device, w, h, 1.0) {
                 let mut enc = device.create_encoder("bug097-overlay-range");

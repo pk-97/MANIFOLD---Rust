@@ -117,11 +117,7 @@ impl ScenePanel {
     }
 
     pub(crate) fn force_card_index_for_node(&self, node_id: NodeId) -> Option<usize> {
-        let index = node_id.index();
-        self.force_cards.iter().position(|card| {
-            let first = card.first_node();
-            card.node_count() > 0 && index >= first && index < first + card.node_count()
-        })
+        self.force_cards.iter().position(|card| card.owns_node(node_id))
     }
 
     pub(crate) fn force_card_click(
@@ -387,8 +383,7 @@ mod tests {
                 if layer.as_str() == "layer-a" && id.as_str() == "force")
         );
         let named_node = |name: &str| {
-            tree.nodes()
-                .iter()
+            tree.all_nodes()
                 .find(|node| tree.name_of(node.id) == Some(name))
                 .unwrap()
                 .id

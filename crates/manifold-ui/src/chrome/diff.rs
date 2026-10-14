@@ -287,7 +287,7 @@ impl ChromeHost {
 
     /// Return the retained click intent for a materialised node.
     pub fn click_action(&self, node: NodeId) -> Option<&PanelAction> {
-        let i = node.index().checked_sub(self.first_node)?;
+        let i = node.slot().checked_sub(self.first_node)?;
         (self.ids.get(i) == Some(&node))
             .then(|| self.laid.get(i)?.intent.click.as_ref())
             .flatten()
@@ -425,8 +425,8 @@ mod tests {
 
         assert_eq!(host.first_node(), 1);
         assert_eq!(host.node_count(), 3); // column, label, button
-        assert_eq!(host.node_id(0).map(|n| n.index()), Some(1));
-        assert_eq!(host.node_id(2).map(|n| n.index()), Some(3));
+        assert_eq!(host.node_id(0).map(|n| n.slot()), Some(1));
+        assert_eq!(host.node_id(2).map(|n| n.slot()), Some(3));
         assert_eq!(t.count(), 4);
     }
 
@@ -499,14 +499,13 @@ mod tests {
     }
 
     #[test]
-    fn intents_reject_node_id_after_partial_rebuild() {
+    fn intents_reject_node_id_after_region_rebuild() {
         let mut t = tree();
         let mut host = ChromeHost::new();
         host.build(&mut t, &card("1.0"), rect());
         let old_button = host.node_id(2).unwrap();
-        let start = host.first_node();
 
-        t.truncate_from(start);
+        t.clear_region(old_button.region());
         host.build(&mut t, &card("2.0"), rect());
 
         let mut reg = IntentRegistry::new();

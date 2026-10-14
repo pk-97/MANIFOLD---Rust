@@ -246,8 +246,7 @@ impl Application {
         let tree = &self.ws.ui_root.tree;
         let filter = contains.map(str::to_lowercase);
         let nodes: Vec<_> = tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| {
                 let useful = tree.name_of(n.id).is_some()
                     || n.text.is_some()
@@ -466,7 +465,7 @@ fn validate_widget(
 ) -> Result<(), String> {
     let mut ancestor = Some(node);
     while let Some(id) = ancestor {
-        let n = &tree.nodes()[id.index()];
+        let n = tree.get_node(id).unwrap();
         if !n.flags.contains(UIFlags::VISIBLE)
             || n.flags.contains(UIFlags::DISABLED)
             || (n.flags.contains(UIFlags::CLIPS_CHILDREN) && !n.bounds.contains(point))

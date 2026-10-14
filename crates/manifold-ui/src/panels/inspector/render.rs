@@ -711,6 +711,7 @@ impl InspectorCompositePanel {
     /// wrapper that passes `layout.inspector()`.
     pub fn build_in_rect(&mut self, tree: &mut UITree, rect: Rect) {
         self.cache_first_node = tree.count();
+        self.cache_region = tree.building_region();
 
         // Add-effect button ids are reassigned by node index every rebuild, but
         // each is only *set* inside its `!collapsed` build branch. Clear them up

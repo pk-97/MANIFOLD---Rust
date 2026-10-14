@@ -727,6 +727,7 @@ impl ParamCardPanel {
 
     fn build_effect(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
+        self.region = tree.building_region();
         // Stacking/hit-test position stays at the UNSCALED rect — only the
         // drawn geometry below pops; a card mid-pop must not jitter its
         // neighbors' reflow or its own drag-reorder hit test.
@@ -1700,6 +1701,7 @@ impl ParamCardPanel {
 
     fn build_generator(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
+        self.region = tree.building_region();
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.toggle_cache.iter_mut().for_each(|v| *v = false);
         self.label_cache.iter_mut().for_each(|v| *v = None);

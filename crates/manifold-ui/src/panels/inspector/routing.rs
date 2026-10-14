@@ -426,7 +426,12 @@ impl InspectorCompositePanel {
     }
 
     pub(super) fn find_target_for_node(&self, node_id: NodeId) -> Option<PressedTarget> {
-        let idx = node_id.index();
+        // Every press target below is an inspector node; slots compare only
+        // inside the inspector's own arena.
+        if node_id.region() != self.cache_region {
+            return None;
+        }
+        let idx = node_id.slot();
         // Macros panel (above both columns)
         if self.macros_panel.owns_node(node_id) {
             return Some(PressedTarget::Macros);

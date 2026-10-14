@@ -237,11 +237,7 @@ impl ScenePanel {
     }
 
     fn card_index_for_node(&self, node_id: NodeId) -> Option<usize> {
-        let index = node_id.index();
-        self.object_modifier_cards.iter().position(|card| {
-            let first = card.first_node();
-            card.node_count() > 0 && index >= first && index < first + card.node_count()
-        })
+        self.object_modifier_cards.iter().position(|card| card.owns_node(node_id))
     }
 
     pub(crate) fn object_modifier_card_click(

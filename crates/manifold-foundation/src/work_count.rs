@@ -17,10 +17,9 @@ use std::sync::OnceLock;
 pub enum WorkKind {
     /// `UIRoot::build`: the whole main-window tree.
     FullBuild,
-    /// A partial rebuild of one or more regions (`rebuild_scroll_panels`, the
-    /// overlay-only rebuild).
+    /// One region cleared and rebuilt alone in its own arena (D7).
     RegionRebuild,
-    /// A region moved without rebuilding. No site until per-region storage (P4e).
+    /// A region moved in place without rebuilding (D7).
     RegionTranslate,
     /// Existing nodes updated in place (scroll and similar).
     InPlaceUpdate,

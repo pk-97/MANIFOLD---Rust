@@ -18,24 +18,21 @@ fn build_scene_tree(ui: &mut crate::ui_root::UIRoot) -> manifold_ui::UITree {
 }
 
 fn tree_texts(tree: &manifold_ui::UITree) -> Vec<String> {
-    tree.nodes()
-        .iter()
+    tree.all_nodes()
         .filter_map(|node| node.text.clone())
         .collect()
 }
 
 /// The Scene tab tree's row names.
 fn tree_rows(tree: &manifold_ui::UITree) -> Vec<String> {
-    tree.nodes()
-        .iter()
+    tree.all_nodes()
         .filter(|node| tree.name_of(node.id) == Some("scene_tree.item"))
         .filter_map(|node| node.text.clone())
         .collect()
 }
 
 fn tree_row(tree: &manifold_ui::UITree, name: &str) -> manifold_ui::NodeId {
-    tree.nodes()
-        .iter()
+    tree.all_nodes()
         .find(|node| tree.name_of(node.id) == Some("scene_tree.item") && node.text.as_deref() == Some(name))
         .unwrap()
         .id
@@ -66,8 +63,7 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
 
     let mut collapsed_tree = build_scene_tree(&mut ui);
     let toggle_id = collapsed_tree
-        .nodes()
-        .iter()
+        .all_nodes()
         .find_map(|node| {
             (collapsed_tree.name_of(node.id) == Some("scene_setup.objects.group_toggle"))
                 .then_some(node.id)
@@ -156,13 +152,13 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
         }, &mut tree);
         assert!(consumed);
         let tree = build_scene_tree(&mut ui);
-        let header = tree.nodes().iter().find(|node| tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap();
+        let header = tree.all_nodes().find(|node| tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap();
         assert_eq!(header.text.as_deref(), Some(name));
         let suffix = format!("{size_id}.value");
-        let value = tree.nodes().iter().find(|node| tree.name_of(node.id).is_some_and(|id| id.ends_with(&suffix)))
+        let value = tree.all_nodes().find(|node| tree.name_of(node.id).is_some_and(|id| id.ends_with(&suffix)))
             .expect("selected look renders its manifest-backed Size in Properties");
         if name == "Foam" { assert_eq!(value.text.as_deref(), Some("0.01")); }
-        assert!(tree.nodes().iter().any(|node| node.text.as_deref() == Some("Size")));
-        assert!(!tree.nodes().iter().any(|node| node.text.as_deref() == Some("Whitewater Amount")));
+        assert!(tree.all_nodes().any(|node| node.text.as_deref() == Some("Size")));
+        assert!(!tree.all_nodes().any(|node| node.text.as_deref() == Some("Whitewater Amount")));
     }
 }
