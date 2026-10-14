@@ -613,6 +613,17 @@ fn run_work_idle(project_path_str: &str, seconds: f64, start_beats: Option<f64>)
         if summary.is_empty() { "" } else { ": " },
         summary.join(" "),
     );
+    // Idle pool textures still count as device allocation, which is what a
+    // chain's memory admission reads.
+    let memory = ct.content_pipeline.native_device().and_then(|d| d.modifier_memory_snapshot());
+    if let (Some(m), Some((count, bytes))) = (memory, ct.content_pipeline.cached_texture_memory()) {
+        eprintln!(
+            "perf-soak --work-idle: device {} MB allocated of {} MB recommended; free texture pool {count} textures, {} MB",
+            m.current_allocated_bytes >> 20,
+            m.recommended_max_working_set_bytes >> 20,
+            bytes >> 20,
+        );
+    }
     Ok(busy == 0)
 }
 

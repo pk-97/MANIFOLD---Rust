@@ -366,7 +366,16 @@ pub struct ContentState {
     /// automation_armed()` exactly like `automation_latched_params` above.
     /// Drives the transport-bar arm button's lit/unlit state (P4).
     pub automation_armed: bool,
+
+    /// Effect chains whose last build failed, with the reason the inspector
+    /// shows. Rebuilt only when the set changes; `runtime.chain_failures`
+    /// moves with it.
+    pub chain_failures: ChainFailures,
 }
+
+/// Failed effect-chain builds by owner layer (`None` = master), each with the
+/// performer-facing reason.
+pub type ChainFailures = Arc<[(Option<LayerId>, Arc<str>)]>;
 
 /// Lightweight snapshot of modulated param values.
 /// Captures only `param_values` from effects and generator params,
@@ -410,6 +419,7 @@ pub struct RuntimeSeqs {
     pub ableton_session: u64,
     pub sdr_preview: u64,
     pub export_progress: u64,
+    pub chain_failures: u64,
 }
 
 /// Identifies the owner of one param block in a [`ModulationSnapshot`], so
@@ -640,6 +650,7 @@ impl Default for ContentState {
             clip_atlas_layout: Arc::from([]),
             automation_latched_params: Vec::new(),
             automation_armed: false,
+            chain_failures: Arc::from([]),
         }
     }
 }

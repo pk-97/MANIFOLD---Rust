@@ -1504,6 +1504,7 @@ impl ContentThread {
                 .collect(),
             automation_armed: self.engine.automation_armed(),
             sync_offsets: self.calibration.offsets(),
+            chain_failures: self.reactions.chain_failures.clone(),
         };
 
         state_tx.publish(state);

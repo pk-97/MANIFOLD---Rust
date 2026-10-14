@@ -346,6 +346,10 @@ pub trait Compositor: Send {
         Default::default()
     }
 
+    /// Visit every screen effect chain whose last build failed, with its owner
+    /// (`None` for the master chain) and the performer-facing reason.
+    fn visit_chain_failures(&self, _visit: &mut dyn FnMut(Option<&manifold_core::LayerId>, &std::sync::Arc<str>)) {}
+
     /// SCENE_FX P4a — the compositor's layer-skin registry: previous-frame
     /// composited output per layer, published at end of frame. The host
     /// hands this to the generator renderer so `node.layer_source` can
