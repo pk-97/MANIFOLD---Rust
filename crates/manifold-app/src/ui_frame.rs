@@ -282,12 +282,30 @@ fn rebuild_regions(ui_root: &mut UIRoot, mut cache: Option<&mut UICacheManager>,
     true
 }
 
+/// The inspector projection onto the graph editor's own column, the same on
+/// the window's open and on every main-window inspector sync. The column
+/// hosts no scene panel (SCENE_SURFACES D16); its card lane rebuilds on the
+/// projection, in the editor's own frame (D17).
+pub(crate) fn project_editor_inspector(
+    ed: &mut UIRoot,
+    project: &manifold_core::project::Project,
+    active_layer: Option<usize>,
+    selection: &crate::app::SelectionState,
+    latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    led_preview: Option<&crate::content_state::LedPreview>,
+) {
+    crate::ui_bridge::sync_inspector_data(ed, project, active_layer, selection, latched, led_preview);
+    ed.inspector.drop_scene_tab();
+    ed.scene_setup_panel.close();
+    ed.note_inspector_projected();
+}
+
 /// The Ghosts region (D7) holds only the live card drag's ghost: the drag
 /// start mints it, the drag moves it in place, and this clears it once the
 /// drag ends or refills it when it holds anything else (a ghost from an
 /// earlier drag in the same frame). No work while a drag lives or none does.
 /// It has no atlas slot.
-fn settle_ghosts(ui_root: &mut UIRoot) {
+pub(crate) fn settle_ghosts(ui_root: &mut UIRoot) {
     let ghosts = MainRegion::Ghosts.id();
     let live = ui_root.inspector.card_drag_ghost_root();
     let len = ui_root.tree.region_len(ghosts);
@@ -469,10 +487,7 @@ pub(crate) fn apply_frame_plan(
     // transient card state) fires only when it does for the main window.
     if inspector_sync && let Some(ed) = editor_ui_root.as_deref_mut() {
         let idx = active_idx(project, active_layer);
-        crate::ui_bridge::sync_inspector_data(ed, project, idx, selection, latched, led_preview);
-        // The editor column hosts no scene panel (SCENE_SURFACES D16).
-        ed.inspector.drop_scene_tab();
-        ed.scene_setup_panel.close();
+        project_editor_inspector(ed, project, idx, selection, latched, led_preview);
     }
 
     let clip_drag = between(ui_root, project, selection, active_layer, redraw);

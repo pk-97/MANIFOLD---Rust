@@ -216,22 +216,18 @@
       }
     },
     "work-editor-idle": {
-      "idle_2s": {
-        "EditorTreeBuild": 120,
-        "FrameAlloc": 87848
-      }
+      "idle_2s": {}
     },
     "work-editor-open": {
-      "after_open_half_second": {
-        "EditorTreeBuild": 30,
-        "FrameAlloc": 21969
-      },
+      "after_open_half_second": {},
       "open_click": {
-        "EditorTreeBuild": 2,
-        "FrameAlloc": 2807,
+        "ChromeLayout": 1,
+        "EditorTreeBuild": 3,
+        "FrameAlloc": 2252,
         "InspectorSync": 1,
         "ProjectSync": 1,
-        "TextMeasureMiss": 7
+        "TextMeasureMiss": 8,
+        "ValuePush": 1
       }
     },
     "work-envelope-drag": {
@@ -279,9 +275,7 @@
       }
     },
     "work-idle": {
-      "idle_2s": {
-        "FrameAlloc": 8
-      }
+      "idle_2s": {}
     },
     "work-inspector-resize": {
       "resize_1s": {
@@ -331,13 +325,11 @@
     },
     "work-mapping-drawer": {
       "open_drawer": {
-        "EditorTreeBuild": 1,
-        "FrameAlloc": 906
+        "FrameAlloc": 163
       },
       "type_range_max": {
-        "EditorTreeBuild": 4,
-        "FrameAlloc": 3958,
-        "ValuePush": 2
+        "FrameAlloc": 818,
+        "ValuePush": 4
       }
     },
     "work-marquee": {
@@ -369,9 +361,8 @@
     },
     "work-node-param-drag": {
       "card_lane_drag": {
-        "EditorTreeBuild": 11,
-        "FrameAlloc": 9669,
-        "ValuePush": 10
+        "FrameAlloc": 656,
+        "ValuePush": 20
       }
     },
     "work-paused-cursor": {
@@ -397,10 +388,7 @@
       }
     },
     "work-perform-idle": {
-      "idle_2s": {
-        "FrameAlloc": 19994,
-        "PerformHudBuild": 120
-      }
+      "idle_2s": {}
     },
     "work-playback": {
       "play_2s": {

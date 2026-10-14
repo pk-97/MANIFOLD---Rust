@@ -55,7 +55,7 @@ pub use automation::{
 };
 pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
-pub use dock::{Dock, DockEdge};
+pub use dock::{Dock, DockDrawKey, DockEdge};
 pub use mini_timeline::{MiniClip, MiniLayerLabel, MiniTimeline};
 pub use draw::{Depth, Painter};
 pub use graph_canvas::{GraphCanvas, MappingPopover};

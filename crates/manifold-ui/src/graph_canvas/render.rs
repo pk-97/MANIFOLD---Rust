@@ -11,7 +11,27 @@ use crate::slider::BitmapSlider;
 impl GraphCanvas {
     // ── Render ──────────────────────────────────────────────────────
 
+    /// The whole canvas in one pass: its lane, then its floating editors.
     pub fn render(&self, ui: &mut dyn Painter, viewport: Rect) {
+        self.render_lane(ui, viewport);
+        self.render_floaters(ui);
+    }
+
+    /// The floating editors (mapping popover, enum dropdown, colour/vec and
+    /// table editors), unclipped at POPOVER depth. They may run past the
+    /// canvas lane, so a window that draws panels over the lane draws these
+    /// after its panels.
+    pub fn render_floaters(&self, ui: &mut dyn Painter) {
+        ui.push_depth(Depth::POPOVER);
+        self.mapping_popover.render(ui);
+        self.render_enum_dropdown(ui);
+        self.render_vec_editor(ui);
+        self.render_table_editor(ui);
+        ui.pop_depth();
+    }
+
+    /// Everything the canvas draws inside its own lane, clipped to it.
+    pub fn render_lane(&self, ui: &mut dyn Painter, viewport: Rect) {
         // Clip every node, wire, and label this canvas draws to its own lane so
         // nothing bleeds under the left palette or right sidebar. The panels
         // build their own scissored batches on top via `render_tree_range`.
@@ -247,20 +267,6 @@ impl GraphCanvas {
             self.draw_error_shake(ui);
             ui.pop_depth();
         }
-
-        // Mapping popover floats above the nodes so its handles and buttons are
-        // never buried under a node it overlaps — and above the CONTENT-depth
-        // node text, so that text can't bleed through its face. It draws
-        // unclipped (it may extend past the canvas lane) at POPOVER depth; the
-        // lane clip is re-armed afterwards.
-        ui.pop_immediate_clip();
-        ui.push_depth(Depth::POPOVER);
-        self.mapping_popover.render(ui);
-        self.render_enum_dropdown(ui);
-        self.render_vec_editor(ui);
-        self.render_table_editor(ui);
-        ui.pop_depth();
-        ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
         // Debug overlay last, on top of everything — it's a diagnostic HUD.
         if self.debug_overlay {

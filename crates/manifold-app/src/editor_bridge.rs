@@ -7,21 +7,6 @@ use crate::app::Application;
 use crate::content_command::ContentCommand;
 use manifold_editing::commands::effects::BindingMappingEdit;
 
-/// Apply live values after rebuilding: construction seeds rows from the last
-/// structural configuration and would otherwise overwrite the current readouts.
-pub(crate) fn rebuild_editor_inspector(
-    ui: &mut crate::ui_root::UIRoot,
-    project: &manifold_core::project::Project,
-    active_layer: Option<usize>,
-    viewport: manifold_ui::Rect,
-) {
-    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorTreeBuild);
-    ui.tree.clear();
-    ui.build_inspector_in_rect(viewport);
-    crate::ui_bridge::sync_card_values(ui, project, active_layer);
-    crate::ui_bridge::sync_scene_row_values(ui, project);
-}
-
 /// Build the reshape-edit command for the watched graph target — one
 /// [`manifold_editing::commands::effects::EditParamMappingCommand`] for
 /// both effects and generators. The reshape lives in the preset's
@@ -1551,8 +1536,10 @@ impl Application {
         let mini_current_beat = self.content_state.current_beat.as_f32();
         let mini_is_playing = self.content_state.is_playing;
         let parts = self.ui_edits.stamps.parts();
+        self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
+        let mini_key = self.mini_timeline.key();
         let &(ref mini_clips, ref mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, ref mini_readout) =
-            self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
+            self.mini_timeline.data();
 
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
@@ -1572,16 +1559,9 @@ impl Application {
             return;
         };
 
-        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the same aggregate the
-        // main window ORs into its own `offscreen_dirty` above (tick_and_
-        // render's step 6·motion) — one predicate, both windows, no per-
-        // window keepalive list. This window's own `UIRoot` never opens the
-        // toast today (only `self.ws.ui_root.toast.show()` is ever called),
-        // so this is currently a no-op read, kept for when it does — and
-        // this window recomposites every vsync pulse regardless (D5,
-        // cacheless), so `offscreen_dirty` isn't a redraw gate here the way
-        // it is on the main window; this OR keeps the two windows' policy
-        // identical rather than special-casing the editor's redraw path.
+        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the same keepalive the
+        // main window ORs into its own `offscreen_dirty`, one predicate for
+        // both windows.
         if ws.ui_root.overlay_redraw_needed() {
             ws.offscreen_dirty = true;
         }
@@ -1634,10 +1614,8 @@ impl Application {
             .map(|(w, h)| w as f32 / h as f32);
         let layout = crate::editor_frame::EditorLayout::compute(&ws.dock, logical_w, logical_h, output_aspect);
         let monitor_aspect = layout.monitor_aspect;
-        let editor_area = layout.area;
         let canvas_x = layout.canvas.x;
         let canvas_width = layout.canvas.width;
-        let canvas_height = layout.canvas.height;
         let (preview_x, preview_w, preview_h) = (layout.preview_x, layout.preview_w, layout.preview_h);
         let (node_img_y, master_img_y) = (layout.node_img_y, layout.master_img_y);
         // The node pane's body shows the selected node's image, or its value
@@ -1825,19 +1803,24 @@ impl Application {
             .active_layer_id
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        self.editor_smart_preview_toggle_id = crate::editor_frame::build_editor_tree(
+        let editor_out = crate::editor_frame::run_editor_frame(
             &mut ws.ui_root,
+            &mut ws.editor_frame,
             &self.graph_editor_panel,
             self.graph_canvas.as_mut(),
             &layout,
-            crate::editor_frame::EditorTreeInputs {
+            crate::editor_frame::EditorFrameInputs {
                 project: &self.local_project,
+                content_state: &self.content_state,
                 active_layer: editor_active_idx,
-                fire_meters: &self.content_state.fire_meters,
+                live: self.frame_planner.last.live(),
                 dt,
                 show_image,
             },
+            false,
         );
+        self.editor_smart_preview_toggle_id = editor_out.smart_preview_toggle;
+        ws.offscreen_dirty |= editor_out.canvas_moved;
 
         // ── Node output previews (BUG-027): register the current atlas front
         // under a fixed handle and hand each visible node its cell UV, so the
@@ -1848,7 +1831,9 @@ impl Application {
         // BUG-xaw4: bridge read leases taken below at each front read;
         // all retired on the final present encoder's completion (or a
         // marker buffer on the early returns).
-
+        // Node previews change with every content frame, so the canvas draws
+        // each frame while any shows (D17).
+        let mut previews_visible = false;
         #[cfg(target_os = "macos")]
         {
             let atlas_handle =
@@ -1898,6 +1883,7 @@ impl Application {
                 None
             };
             if let Some((atlas_tex, map)) = prepared {
+                previews_visible = !map.is_empty();
                 if let Some(ui) = self.ui_renderer.as_mut() {
                     ui.register_external_texture(atlas_handle, atlas_tex);
                 }
@@ -1907,44 +1893,74 @@ impl Application {
             }
         }
 
-        // ── Build frame: clear, then draw the canvas + sidebar ──
-        // Shared with the headless editor harness — see `editor_frame.rs`
-        // module doc (P3). `composite_editor_frame` owns the encoder
-        // create+commit internally, mirroring `ui_frame::composite_main_ui_frame`.
-        crate::editor_frame::composite_editor_frame(
-            &gpu.device,
-            self.ui_renderer.as_mut(),
-            &mut ws.ui_root,
-            &ws.dock,
-            editor_area,
-            self.graph_canvas.as_ref(),
-            crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height),
-            crate::editor_frame::EditorMiniTimelineInputs {
-                bottom_rect: layout.bottom,
-                show_bottom: ws.dock.show_bottom,
-                total_beats: mini_total_beats,
-                beats_per_bar: mini_beats_per_bar,
-                current_beat: mini_current_beat,
-                row_count: mini_rows,
-                clips: mini_clips,
-                layer_labels: mini_layer_labels,
-                readout: mini_readout,
-                is_playing: mini_is_playing,
+        // ── Composite the offscreen, only when something on it moved ──
+        // Shared with the headless editor harness (`editor_frame.rs`). The
+        // drawable still gets the offscreen and the monitors every pulse.
+        let viewport_image = ws.viewport_session.as_ref()
+            .and_then(|session| session.displayed.as_ref())
+            .is_some_and(|frame| frame.has_image());
+        let key = crate::editor_frame::CompositeKey {
+            size: [logical_w, logical_h],
+            dock: ws.dock.draw_key(),
+            mini: mini_key,
+            playhead: mini_current_beat.to_bits(),
+            playing: mini_is_playing,
+            live: crate::editor_frame::LiveSurfaces {
+                node_previews: previews_visible,
+                viewport_image,
+                popover: self.editor_mapping_popover.is_open(),
+                text_input: self.text_input.is_owned_by_editor(),
             },
-            &mut self.editor_mapping_popover,
-            popover_live_value,
-            &self.text_input,
-            &self.frame_timer,
-            offscreen,
-            logical_w,
-            logical_h,
-            scale,
-            ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
-                .filter(|frame| frame.has_image())
-                .zip(ws.viewport_rect)
-                .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint { rect, frame, lines: &ws.viewport_overlay_lines }),
-        );
-        ws.offscreen_dirty = false;
+        };
+        let redraw = crate::editor_frame::needs_composite(&mut ws.editor_frame, &ws.ui_root, ws.offscreen_dirty, key);
+        let cache = ws.editor_frame.cache.get_or_insert_with(|| {
+            manifold_ui_paint::ui_cache_manager::UICacheManager::with_slots(
+                manifold_compositor::presentation::UI_FORMAT,
+                scale,
+                manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS,
+            )
+        });
+        if redraw
+            && let (Some(atlas_pipeline), Some(atlas_sampler)) = (&self.atlas_pipeline, &self.atlas_sampler)
+        {
+            crate::editor_frame::composite_editor_frame(
+                &gpu.device,
+                self.ui_renderer.as_mut(),
+                &mut ws.ui_root,
+                &layout,
+                &ws.dock,
+                self.graph_canvas.as_ref(),
+                crate::editor_frame::EditorAtlas {
+                    cache,
+                    pipeline: atlas_pipeline,
+                    sampler: atlas_sampler,
+                    scale_factor: scale,
+                },
+                crate::editor_frame::EditorMiniTimelineInputs {
+                    bottom_rect: layout.bottom,
+                    show_bottom: ws.dock.show_bottom,
+                    total_beats: mini_total_beats,
+                    beats_per_bar: mini_beats_per_bar,
+                    current_beat: mini_current_beat,
+                    row_count: mini_rows,
+                    clips: mini_clips,
+                    layer_labels: mini_layer_labels,
+                    readout: mini_readout,
+                    is_playing: mini_is_playing,
+                },
+                &mut self.editor_mapping_popover,
+                popover_live_value,
+                &self.text_input,
+                &self.frame_timer,
+                offscreen,
+                scale,
+                ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
+                    .filter(|frame| frame.has_image())
+                    .zip(ws.viewport_rect)
+                    .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint { rect, frame, lines: &ws.viewport_overlay_lines }),
+            );
+            ws.offscreen_dirty = false;
+        }
 
         // Skip drawable acquisition on the resize frame — drawable pool
         // may still be reconfiguring.
@@ -2385,7 +2401,8 @@ mod binding_reroute_tests {
     }
 
     #[test]
-    fn editor_inspector_rebuild_preserves_live_parameter_readouts() {
+    fn editor_card_lane_shows_live_values_without_rebuilding() {
+        use manifold_ui::panels::Panel;
         // Effect cards require a registered preset definition. Keep the real
         // Bloom identity and add a parameter, as the projection tests do.
         let mut project = manifold_core::project::Project::default();
@@ -2400,15 +2417,54 @@ mod binding_reroute_tests {
             &mut ui, &project, None,
             &crate::app::SelectionState::default(), &[], None,
         );
-        let viewport = manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0);
-        // Structural configuration stays unchanged while snapshots update values.
-        // Repeat a value to also cover an unchanged snapshot on the next frame.
-        for (value, expected) in [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")] {
+        let mut state = crate::editor_frame::EditorFrameState::default();
+        let panel = manifold_ui::panels::graph_editor::GraphEditorPanel::new();
+        let layout = crate::editor_frame::EditorLayout::compute(&manifold_ui::Dock::editor(), 1600, 2000, None);
+        let content_state = crate::content_state::ContentState::default();
+        let mut live = crate::frame_plan::LiveInputs::default();
+        let mut run = |ui: &mut crate::ui_root::UIRoot, project: &manifold_core::project::Project, live| {
+            let start = manifold_core::work_count::thread_work_snapshot();
+            crate::editor_frame::run_editor_frame(
+                ui,
+                &mut state,
+                &panel,
+                None,
+                &layout,
+                crate::editor_frame::EditorFrameInputs {
+                    project,
+                    content_state: &content_state,
+                    active_layer: None,
+                    live,
+                    dt: 1.0 / 60.0,
+                    show_image: false,
+                },
+                false,
+            );
+            manifold_core::work_count::thread_work_snapshot()
+                .since(&start)
+                .get(manifold_core::work_count::WorkKind::EditorTreeBuild)
+        };
+        // The card lane is built on the first frame; once its spawn tweens
+        // settle, values reach it through the live push alone. A repeated
+        // value is an unchanged frame.
+        let mut last = None;
+        for (frame, (value, expected)) in [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")].into_iter().enumerate() {
             project.settings.master_effects[0]
                 .params.get_mut("amount").unwrap().value = value;
-            super::rebuild_editor_inspector(&mut ui, &project, None, viewport);
+            if last != Some(value) {
+                live.values += 1;
+            }
+            last = Some(value);
+            let built_before = ui.inspector.first_node();
+            let rebuilt = run(&mut ui, &project, live);
+            assert_eq!(rebuilt > 0, frame == 0);
+            assert!(frame == 0 || built_before == ui.inspector.first_node());
             assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some(expected)),
-                "rebuilt inspector must show live value {expected}");
+                "the card lane must show live value {expected}");
+            if frame == 0 {
+                ui.inspector.skip_to_settled(&mut ui.tree);
+                run(&mut ui, &project, live);
+            }
         }
     }
 
