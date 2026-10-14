@@ -97,6 +97,16 @@ const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
 /// position sync is suppressed. Covers the OSC → Ableton → MIDI Clock round trip.
 const SEEK_COOLDOWN: f64 = 0.3;
 
+/// Rig log (C0): a transport change that passed the gate, with its source.
+fn log_transport(source: ClockAuthority, kind: crate::rig_log::TransportKind, value: f64) {
+    crate::rig_log::emit(crate::rig_log::RigRecord::Transport {
+        at_ns: crate::rig_log::now_ns(),
+        source: crate::rig_log::TransportSource::from_authority(source),
+        kind,
+        value,
+    });
+}
+
 impl SyncArbiter {
     pub fn new() -> Self {
         Self {
@@ -159,6 +169,7 @@ impl SyncArbiter {
             return false;
         }
         self.suppress_next_transport = true;
+        log_transport(source, crate::rig_log::TransportKind::Play, f64::NAN);
         target.play();
         true
     }
@@ -174,6 +185,7 @@ impl SyncArbiter {
             return false;
         }
         self.suppress_next_transport = true;
+        log_transport(source, crate::rig_log::TransportKind::Pause, f64::NAN);
         target.pause(clear_recording);
         true
     }
@@ -205,6 +217,7 @@ impl SyncArbiter {
         // NOTE: Unity's Seek() does NOT set SuppressNextTransport.
         // Only Play() and Pause() suppress echo. Seeks during playback are
         // detected by OscPositionSender via beat-delta comparison instead.
+        log_transport(source, crate::rig_log::TransportKind::Seek, time.0);
         target.seek(time);
         true
     }

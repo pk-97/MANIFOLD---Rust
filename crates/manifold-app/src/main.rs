@@ -140,6 +140,7 @@ mod bridge_probe;
 mod export_repro;
 mod project_io;
 mod session_log;
+mod sync_rig_log;
 #[cfg(target_os = "macos")]
 mod shared_texture;
 #[cfg(target_os = "macos")]
@@ -344,6 +345,7 @@ fn main() {
     let _instance_lock = acquire_instance_lock();
 
     session_log::init();
+    sync_rig_log::start();
     log::info!("MANIFOLD starting...");
 
     // --- Unclean-exit detection (GIG_RESILIENCE_DESIGN section 6, G10) ---
