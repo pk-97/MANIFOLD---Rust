@@ -49,14 +49,14 @@ impl Command for SetSliderRangeCommand {
         ChangeSet::of(&[Part::Effects, Part::Shapes])
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let before = self.write(project, self.range);
         if self.previous.is_none() {
             self.previous = before;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(previous) = self.previous {
             self.write(project, previous);
         }

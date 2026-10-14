@@ -28,11 +28,11 @@ impl CopyViewportCameraCommand {
 }
 
 impl Command for CopyViewportCameraCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.writes.execute(project);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.writes.undo(project);
     }
 

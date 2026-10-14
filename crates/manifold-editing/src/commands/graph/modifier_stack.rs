@@ -5,6 +5,7 @@
 //! parameter state reversible.
 
 use std::fmt;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
@@ -141,14 +142,15 @@ impl InsertSceneModifierCommand {
 }
 
 impl Command for InsertSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -195,14 +197,15 @@ impl DeleteSceneModifierCommand {
 }
 
 impl Command for DeleteSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -249,13 +252,14 @@ impl ReorderSceneModifiersCommand {
 }
 
 impl Command for ReorderSceneModifiersCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -303,13 +307,14 @@ impl DuplicateSceneModifiersCommand {
 }
 
 impl Command for DuplicateSceneModifiersCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -356,13 +361,14 @@ impl RemoveSceneModifiersCommand {
 }
 
 impl Command for RemoveSceneModifiersCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -410,14 +416,15 @@ impl MoveSceneModifierCommand {
 }
 
 impl Command for MoveSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -467,14 +474,15 @@ impl RetargetSceneModifierCommand {
 }
 
 impl Command for RetargetSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -526,14 +534,15 @@ impl SetSceneModifierPreparationParamCommand {
 }
 
 impl Command for SetSceneModifierPreparationParamCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -1302,6 +1311,22 @@ mod tests {
                 .len(),
             2
         );
+
+        let mut reorder = ReorderSceneModifiersCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            vec![NodeId::new("second"), NodeId::new("first")],
+        )
+        .unwrap();
+        reorder.execute(&mut project);
+        assert!(reorder.was_applied());
+        let first = |project: &Project| {
+            project.graph_for_target(&target, Some(&default)).unwrap().scene_modifiers[0].id.clone()
+        };
+        assert_eq!(first(&project), NodeId::new("second"));
+        reorder.undo(&mut project);
+        assert_eq!(first(&project), NodeId::new("first"));
     }
 
     #[test]

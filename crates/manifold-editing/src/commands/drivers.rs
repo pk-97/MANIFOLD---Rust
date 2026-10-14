@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::project::Project;
@@ -37,14 +38,15 @@ impl AddDriverCommand {
 }
 
 impl Command for AddDriverCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let driver = self.driver.clone();
         with_drivers_mut(project, &self.target, |drivers| {
             drivers.push(driver);
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let param_id = self.driver.param_id.clone();
         with_drivers_mut(project, &self.target, |drivers| {
             if let Some(pos) = drivers.iter().position(|d| d.param_id == param_id) {
@@ -84,7 +86,8 @@ impl ToggleDriverEnabledCommand {
 }
 
 impl Command for ToggleDriverEnabledCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_enabled;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -94,7 +97,7 @@ impl Command for ToggleDriverEnabledCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_enabled;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -141,7 +144,8 @@ impl ChangeDriverBeatDivCommand {
 }
 
 impl Command for ChangeDriverBeatDivCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_div;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -152,7 +156,7 @@ impl Command for ChangeDriverBeatDivCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_div;
         let free = self.old_free;
@@ -197,7 +201,8 @@ impl SetDriverFreePeriodCommand {
 }
 
 impl Command for SetDriverFreePeriodCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_free;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -207,7 +212,7 @@ impl Command for SetDriverFreePeriodCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_free;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -248,7 +253,8 @@ impl ChangeDriverWaveformCommand {
 }
 
 impl Command for ChangeDriverWaveformCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_waveform;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -258,7 +264,7 @@ impl Command for ChangeDriverWaveformCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_waveform;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -299,7 +305,8 @@ impl ToggleDriverReversedCommand {
 }
 
 impl Command for ToggleDriverReversedCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_reversed;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -309,7 +316,7 @@ impl Command for ToggleDriverReversedCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_reversed;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -357,10 +364,9 @@ impl ChangeTrimCommand {
 
 impl Command for ChangeTrimCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let (min, max) = (self.new_min, self.new_max);
         with_drivers_mut(project, &self.target, |drivers| {
@@ -371,7 +377,7 @@ impl Command for ChangeTrimCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let (min, max) = (self.old_min, self.old_max);
         with_drivers_mut(project, &self.target, |drivers| {
@@ -413,7 +419,8 @@ impl ToggleDriverFrameAlignedCommand {
 }
 
 impl Command for ToggleDriverFrameAlignedCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_aligned;
         with_drivers_mut(project, &self.target, |drivers| {
@@ -423,7 +430,7 @@ impl Command for ToggleDriverFrameAlignedCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_aligned;
         with_drivers_mut(project, &self.target, |drivers| {

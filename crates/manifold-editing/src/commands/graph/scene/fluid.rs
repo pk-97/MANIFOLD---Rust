@@ -1,6 +1,7 @@
 //! Add-a-fluid scene command.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
@@ -226,11 +227,12 @@ fn renumber_nested(
 }
 
 impl Command for AddSceneFluidCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
 
@@ -497,7 +499,7 @@ impl Command for AddSceneFluidCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

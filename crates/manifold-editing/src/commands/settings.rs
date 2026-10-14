@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::commands::clip::{
     build_audio_dependent_edits, TrimClipCommand,
 };
@@ -399,7 +400,8 @@ impl ChangeBpmCommand {
 }
 
 impl Command for ChangeBpmCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings, Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if self.rejection.is_some() {
             return;
         }
@@ -421,7 +423,7 @@ impl Command for ChangeBpmCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -480,14 +482,15 @@ impl ChangeResolutionCommand {
 }
 
 impl Command for ChangeResolutionCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.new_preset;
         let (w, h) = self.new_preset.dimensions();
         project.settings.output_width = w;
         project.settings.output_height = h;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.old_preset;
         let (w, h) = self.old_preset.dimensions();
         project.settings.output_width = w;
@@ -513,11 +516,12 @@ impl ChangeQuantizeModeCommand {
 }
 
 impl Command for ChangeQuantizeModeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.quantize_mode = self.new_mode;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.quantize_mode = self.old_mode;
     }
 
@@ -540,11 +544,12 @@ impl ChangeFrameRateCommand {
 }
 
 impl Command for ChangeFrameRateCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.frame_rate = self.new_rate;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.frame_rate = self.old_rate;
     }
 
@@ -572,13 +577,14 @@ impl ChangeLayerMidiNoteCommand {
 }
 
 impl Command for ChangeLayerMidiNoteCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_note = self.new_note;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_note = self.old_note;
         }
@@ -608,13 +614,14 @@ impl ChangeLayerBlendModeCommand {
 }
 
 impl Command for ChangeLayerBlendModeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.default_blend_mode = self.new_mode;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.default_blend_mode = self.old_mode;
         }
@@ -648,13 +655,13 @@ impl Command for ChangeLayerOpacityCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Values])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.opacity = self.new_opacity;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.opacity = self.old_opacity;
         }
@@ -707,7 +714,8 @@ impl ChangeGeneratorTypeCommand {
 }
 
 impl Command for ChangeGeneratorTypeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             if !self.captured_old_graph {
                 self.old_graph = layer.generator_graph().cloned();
@@ -717,7 +725,7 @@ impl Command for ChangeGeneratorTypeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.restore_generator_state(
                 self.old_type.clone(),
@@ -790,7 +798,8 @@ impl PasteGeneratorCommand {
 }
 
 impl Command for PasteGeneratorCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             if !self.captured_old_graph {
                 self.old_graph = layer.generator_graph().cloned();
@@ -813,7 +822,7 @@ impl Command for PasteGeneratorCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.restore_generator_state(
                 self.old_type.clone(),
@@ -853,11 +862,11 @@ impl Command for ChangeMasterOpacityCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Values])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.master_opacity = self.new_opacity;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.master_opacity = self.old_opacity;
     }
 
@@ -887,11 +896,11 @@ impl Command for ChangeLedBrightnessCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Values])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.led_brightness = self.new_brightness;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.led_brightness = self.old_brightness;
     }
 
@@ -913,11 +922,12 @@ impl ToggleExportHdrCommand {
 }
 
 impl Command for ToggleExportHdrCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.export_hdr = !self.old_hdr;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.export_hdr = self.old_hdr;
     }
 
@@ -940,11 +950,12 @@ impl ToggleSplitSectionsCommand {
 }
 
 impl Command for ToggleSplitSectionsCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.split_at_markers = !self.old_split;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.split_at_markers = self.old_split;
     }
 
@@ -972,13 +983,14 @@ impl ChangeLayerMidiChannelCommand {
 }
 
 impl Command for ChangeLayerMidiChannelCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_channel = self.new_channel;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_channel = self.old_channel;
         }
@@ -1008,13 +1020,14 @@ impl ChangeLayerMidiDeviceCommand {
 }
 
 impl Command for ChangeLayerMidiDeviceCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.set_midi_device(self.new_device.clone());
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.set_midi_device(self.old_device.clone());
         }
@@ -1044,13 +1057,14 @@ impl ChangeLayerMidiTriggerModeCommand {
 }
 
 impl Command for ChangeLayerMidiTriggerModeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.set_midi_trigger_mode(self.new_mode);
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.set_midi_trigger_mode(self.old_mode);
         }
@@ -1082,12 +1096,13 @@ impl SetDisplayDimensionsCommand {
 }
 
 impl Command for SetDisplayDimensionsCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.output_width = self.new_width;
         project.settings.output_height = self.new_height;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.output_width = self.old_width;
         project.settings.output_height = self.old_height;
     }
@@ -1114,11 +1129,12 @@ impl ChangeRenderScaleCommand {
 }
 
 impl Command for ChangeRenderScaleCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.render_scale = self.new_scale;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.render_scale = self.old_scale;
     }
 
@@ -1153,12 +1169,13 @@ impl ChangeTonemapCurveCommand {
 }
 
 impl Command for ChangeTonemapCurveCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.tonemap_curve = self.new_curve;
         project.settings.tonemap_enabled = self.new_enabled;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.tonemap_curve = self.old_curve;
         project.settings.tonemap_enabled = self.old_enabled;
     }
@@ -1193,11 +1210,12 @@ impl RestoreRecordedTempoLaneCommand {
 }
 
 impl Command for RestoreRecordedTempoLaneCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
 
@@ -1232,11 +1250,12 @@ impl ClearTempoMapCommand {
 }
 
 impl Command for ClearTempoMapCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
 
@@ -1291,7 +1310,8 @@ impl RescaleBeatsForBpmChangeCommand {
 }
 
 impl Command for RescaleBeatsForBpmChangeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         for &(li, ci, _, new_beat) in &self.clip_moves {
             if let Some(layer) = project.timeline.layers.get_mut(li)
                 && let Some(clip) = layer.clips.get_mut(ci)
@@ -1301,7 +1321,7 @@ impl Command for RescaleBeatsForBpmChangeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         for &(li, ci, old_beat, _) in &self.clip_moves {
             if let Some(layer) = project.timeline.layers.get_mut(li)
                 && let Some(clip) = layer.clips.get_mut(ci)
@@ -1339,11 +1359,11 @@ impl Command for ChangeMacroCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Values])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         manifold_core::macro_bank::MacroBank::apply_macro(project, self.index, self.new_value);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         manifold_core::macro_bank::MacroBank::apply_macro(project, self.index, self.old_value);
     }
 
@@ -1377,11 +1397,12 @@ impl RenameMacroLabelCommand {
 }
 
 impl Command for RenameMacroLabelCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn do_execute(&mut self, project: &mut Project) {
         Self::apply_label(project, self.index, &self.new_label);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         Self::apply_label(project, self.index, &self.old_label);
     }
 
@@ -1408,11 +1429,12 @@ impl ChangeRtQualityCommand {
 }
 
 impl Command for ChangeRtQualityCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.settings.rt_quality = self.new_settings;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.settings.rt_quality = self.old_settings;
     }
 
@@ -1433,8 +1455,9 @@ impl ChangeSimRateCommand {
     }
 }
 impl Command for ChangeSimRateCommand {
-    fn execute(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.new_rate; }
-    fn undo(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.old_rate; }
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.new_rate; }
+    fn do_undo(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.old_rate; }
     fn description(&self) -> &str { "Change Sim Rate" }
 }
 
@@ -1814,6 +1837,12 @@ mod tests {
                 .generator_type(),
             &TEST_PASTE_GEN_B,
             "paste must assign the pasted generator onto an LED lane"
+        );
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.timeline.layers[0].gen_params().unwrap().generator_type(),
+            &TEST_PASTE_GEN_A,
+            "undo restores the LED lane's generator"
         );
     }
 

@@ -21,6 +21,7 @@
 //!   clips instead of one.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::service::EditingService;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::OverlapAction;
@@ -49,12 +50,13 @@ impl AddSceneCommand {
 }
 
 impl Command for AddSceneCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.insert_index.min(project.session.scenes.len());
         project.session.scenes.insert(idx, self.scene.clone());
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(pos) = project
             .session
             .scenes
@@ -95,7 +97,8 @@ impl RemoveSceneCommand {
 }
 
 impl Command for RemoveSceneCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
+    fn do_execute(&mut self, project: &mut Project) {
         self.removed_scene = None;
         self.removed_slots.clear();
 
@@ -121,7 +124,7 @@ impl Command for RemoveSceneCommand {
         project.session.mark_slot_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(scene) = self.removed_scene.take() {
             let idx = self.removed_at_index.min(project.session.scenes.len());
             project.session.scenes.insert(idx, scene);
@@ -156,7 +159,8 @@ impl RenameSceneCommand {
 }
 
 impl Command for RenameSceneCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(scene) = project
             .session
             .scenes
@@ -167,7 +171,7 @@ impl Command for RenameSceneCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(scene) = project
             .session
             .scenes
@@ -201,11 +205,12 @@ impl ReorderSceneCommand {
 }
 
 impl Command for ReorderSceneCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.session.scenes = self.new_order.clone();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.session.scenes = self.old_order.clone();
     }
 
@@ -238,7 +243,8 @@ impl SetSlotCommand {
 }
 
 impl Command for SetSlotCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let pos = project
             .session
             .slots
@@ -252,7 +258,7 @@ impl Command for SetSlotCommand {
         project.session.mark_slot_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if self.new_slot.is_some()
             && let Some(i) = project
                 .session
@@ -325,7 +331,8 @@ impl CaptureRangeToSceneCommand {
 }
 
 impl Command for CaptureRangeToSceneCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
+    fn do_execute(&mut self, project: &mut Project) {
         self.created_scene_id = None;
         self.touched_slots.clear();
 
@@ -414,7 +421,7 @@ impl Command for CaptureRangeToSceneCommand {
         project.session.mark_slot_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         for (layer_id, scene_id, prior) in self.touched_slots.drain(..).rev() {
             if let Some(i) = project
                 .session
@@ -474,7 +481,8 @@ impl PasteSlotToTimelineCommand {
 }
 
 impl Command for PasteSlotToTimelineCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         self.pasted.clear();
         let clock = manifold_core::tempo::SourceClock::new(
             &project.tempo_map,
@@ -507,7 +515,7 @@ impl Command for PasteSlotToTimelineCommand {
         project.timeline.mark_clip_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(li) = project.timeline.layer_index_for_id(&self.layer_id) else {
             return;
         };

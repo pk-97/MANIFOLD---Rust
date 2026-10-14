@@ -55,8 +55,8 @@ impl<'a> ProjectRef<'a> {
     /// after execute, so a command can learn its parts from the project), and
     /// send it to the content thread.
     pub fn execute(&mut self, mut cmd: Box<dyn Command>) {
-        cmd.execute(self.project);
-        self.edits.stamps.bump(cmd.touches());
+        let wrote = cmd.execute(self.project);
+        self.edits.stamps.bump(wrote);
         ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
     }
 
@@ -64,8 +64,7 @@ impl<'a> ProjectRef<'a> {
     pub fn execute_batch(&mut self, mut cmds: Vec<Box<dyn Command>>, label: String) {
         let mut touches = ChangeSet::NONE;
         for cmd in &mut cmds {
-            cmd.execute(self.project);
-            touches = touches.union(cmd.touches());
+            touches = touches.union(cmd.execute(self.project));
         }
         self.edits.stamps.bump(touches);
         ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
@@ -73,13 +72,15 @@ impl<'a> ProjectRef<'a> {
 
     /// For factories that build a command and execute it on the project they
     /// are handed (`EditingService::create_clip_at_position` and kin): stamp
-    /// what the returned command touches and send it.
+    /// what the returned command wrote and send it.
     pub fn executed_by<R>(
         &mut self,
         f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>,
     ) -> Option<R> {
+        let instances = manifold_editing::command::generator_instances(self.project);
         let (cmd, out) = f(self.project)?;
-        self.edits.stamps.bump(cmd.touches());
+        let wrote = cmd.touches().union(manifold_editing::command::lifted(instances, self.project));
+        self.edits.stamps.bump(wrote);
         ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
         Some(out)
     }

@@ -4,6 +4,7 @@
 //! `graph/mod.rs` and is reached here via `super`.
 
 use manifold_core::GraphTarget;
+use manifold_core::change::ChangeSet;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::project::Project;
@@ -65,11 +66,12 @@ impl PasteNodesCommand {
     }
 }
 impl Command for PasteNodesCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let added = manifold_core::effect_graph_def::render_scene_count(&self.src_nodes);
         if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
@@ -138,7 +140,7 @@ impl Command for PasteNodesCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(remap) = self.remap.clone() else {
             return;
         };

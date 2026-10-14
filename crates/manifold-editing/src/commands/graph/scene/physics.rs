@@ -1,6 +1,7 @@
 //! Physics scene command helpers extracted from `scene.rs`.
 
 use super::*;
+use manifold_core::change::ChangeSet;
 
 pub(super) fn append_physics_scene_object(
     nodes: &mut Vec<EffectGraphNode>,
@@ -1180,11 +1181,12 @@ impl EnableSceneObjectPhysicsCommand {
 }
 
 impl Command for EnableSceneObjectPhysicsCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
@@ -1367,7 +1369,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((nodes, wires, metadata)) = self.prev.take() else {
             return;
         };
@@ -1426,10 +1428,11 @@ impl DisableSceneObjectPhysicsCommand {
 }
 
 impl Command for DisableSceneObjectPhysicsCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
@@ -1531,7 +1534,7 @@ impl Command for DisableSceneObjectPhysicsCommand {
                 Some("Physics edit requires an unmodified scene object graph".into());
         }
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((nodes, wires, metadata)) = self.prev.take() else {
             return;
         };

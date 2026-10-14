@@ -1,6 +1,7 @@
 //! Assign an existing grouped scene object to a fluid domain.
 
 use std::collections::{BTreeMap, HashSet};
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
@@ -97,11 +98,12 @@ impl AssignSceneFluidRoleCommand {
 }
 
 impl Command for AssignSceneFluidRoleCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
 
@@ -174,7 +176,7 @@ impl Command for AssignSceneFluidRoleCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

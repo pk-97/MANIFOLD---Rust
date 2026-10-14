@@ -6,6 +6,7 @@
 //! modulation and runtime authored state in one operation.
 
 use manifold_core::effects::PresetInstance;
+use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, NodeId, PresetTypeId};
 use manifold_editing::command::Command;
@@ -175,7 +176,8 @@ impl ReplaceGeneratorStateCommand {
 }
 
 impl Command for ReplaceGeneratorStateCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { manifold_editing::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let expected = if self.applied {
             &self.after
@@ -197,7 +199,7 @@ impl Command for ReplaceGeneratorStateCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

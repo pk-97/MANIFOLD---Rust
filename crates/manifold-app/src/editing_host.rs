@@ -330,8 +330,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 EditingService::create_clip_at_position(project, beat, layer, duration)?;
             {
                 let mut cmd = cmd;
-                cmd.execute(project);
-                self.edits.stamps.bump(cmd.touches());
+                let wrote = cmd.execute(project);
+                self.edits.stamps.bump(wrote);
                 crate::content_command::ContentCommand::send(
                     self.content_tx,
                     crate::content_command::ContentCommand::Execute(cmd),
@@ -754,8 +754,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             shape: to_segment_shape(shape),
         };
         let mut cmd = AddAutomationPointCommand::new(target, param_id.as_ref(), point);
-        cmd.execute(self.project);
-        self.edits.stamps.bump(cmd.touches());
+        let wrote = cmd.execute(self.project);
+        self.edits.stamps.bump(wrote);
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
@@ -787,11 +787,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             param_id_str,
             beat,
         );
-        local_cmd.execute(self.project);
+        let wrote = local_cmd.execute(self.project);
         if !local_cmd.was_applied() {
             return None;
         }
-        self.edits.stamps.bump(local_cmd.touches());
+        self.edits.stamps.bump(wrote);
         let value = self
             .project
             .preset_instance(&graph_target)
@@ -880,8 +880,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             return;
         };
         let mut cmd = RemoveAutomationPointCommand::new(graph_target, param_id.as_ref(), index);
-        cmd.execute(self.project);
-        self.edits.stamps.bump(cmd.touches());
+        let wrote = cmd.execute(self.project);
+        self.edits.stamps.bump(wrote);
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),

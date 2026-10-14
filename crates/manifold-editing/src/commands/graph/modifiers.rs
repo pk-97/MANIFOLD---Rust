@@ -4,6 +4,7 @@
 //! stay in `graph/mod.rs` and are reached via `super`.
 
 use std::collections::BTreeMap;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
@@ -395,11 +396,12 @@ fn modifier_section_label(type_id: &str) -> String {
 }
 
 impl Command for InsertMeshModifierCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.prev_graph = None;
         self.prev_instance = None;
@@ -492,7 +494,7 @@ impl Command for InsertMeshModifierCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -560,11 +562,12 @@ impl RemoveMeshModifierCommand {
 }
 
 impl Command for RemoveMeshModifierCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let previous_instance = project
@@ -620,7 +623,7 @@ impl Command for RemoveMeshModifierCommand {
         self.prev = Some((previous_nodes, previous_wires, base.preset_metadata.clone(), previous_graph, previous_instance, removed_params));
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta, pgraph, snapshot, _removed)) = self.prev.take() else {
             return;
         };
@@ -690,11 +693,12 @@ impl MoveMeshModifierCommand {
 }
 
 impl Command for MoveMeshModifierCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(base) = project.graph_for_target(&self.target, None).cloned() else {
@@ -730,7 +734,7 @@ impl Command for MoveMeshModifierCommand {
         self.prev = Some(previous);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };

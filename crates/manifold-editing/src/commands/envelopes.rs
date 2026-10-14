@@ -7,6 +7,7 @@
 //! envelope pool anymore.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::GraphTarget;
 use manifold_core::audio_mod::TriggerAction;
 use manifold_core::effects::ParamEnvelope;
@@ -26,14 +27,15 @@ impl AddEnvelopeCommand {
 }
 
 impl Command for AddEnvelopeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let envelope = self.envelope.clone();
         project.with_preset_graph_mut(&self.target, |inst| {
             inst.envelopes_mut().push(envelope);
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.with_preset_graph_mut(&self.target, |inst| {
             if let Some(envs) = inst.envelopes.as_mut() {
                 envs.pop();
@@ -65,7 +67,8 @@ impl RemoveEnvelopeCommand {
 }
 
 impl Command for RemoveEnvelopeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.removed_index;
         let removed = project.with_preset_graph_mut(&self.target, |inst| {
             inst.envelopes
@@ -78,7 +81,7 @@ impl Command for RemoveEnvelopeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(envelope) = self.envelope.clone() else {
             return;
         };
@@ -118,7 +121,8 @@ impl ToggleEnvelopeEnabledCommand {
 }
 
 impl Command for ToggleEnvelopeEnabledCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let idx = self.env_index;
         let val = self.new_enabled;
         project.with_preset_graph_mut(&self.target, |inst| {
@@ -128,7 +132,7 @@ impl Command for ToggleEnvelopeEnabledCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let idx = self.env_index;
         let val = self.old_enabled;
         project.with_preset_graph_mut(&self.target, |inst| {
@@ -173,14 +177,13 @@ impl ChangeEnvelopeDecayCommand {
 
 impl Command for ChangeEnvelopeDecayCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.new_decay);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.old_decay);
     }
 
@@ -219,14 +222,13 @@ impl ChangeEnvelopeTargetCommand {
 
 impl Command for ChangeEnvelopeTargetCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.new_target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.old_target);
     }
 
@@ -273,11 +275,14 @@ impl SetEnvelopeActionCommand {
 }
 
 impl Command for SetEnvelopeActionCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet {
+        crate::commands::audio_mod::action_touches(self.old_action, self.new_action)
+    }
+    fn do_execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.new_action);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.old_action);
     }
 

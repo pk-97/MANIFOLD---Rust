@@ -610,7 +610,18 @@ struct FrameChange {
 }
 
 impl Command for AdmittedGraphCommand {
-    fn execute(&mut self, project: &mut Project) {
+    /// The admitted edit's parts, plus the owner graph when admission moved a
+    /// modifier's mesh reference frames.
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        let frames = if self.frame_changes.is_empty() {
+            ChangeSet::NONE
+        } else {
+            ChangeSet::of(&[Part::Effects])
+        };
+        self.command.touches().union(frames)
+    }
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let mut candidate = project.clone();
@@ -716,7 +727,7 @@ impl Command for AdmittedGraphCommand {
         *project = candidate;
         self.applied = true;
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if self.applied {
             restore_frame_changes(project, &self.frame_changes);
             self.command.undo(project);

@@ -182,16 +182,11 @@
     "work-drawer-tween": {
       "drawer_change_click": {
         "ChromeLayout": 6,
-        "ClipProjection": 2,
-        "FrameAlloc": 1254,
-        "GridBitmapRepaint": 2,
+        "FrameAlloc": 1092,
         "InspectorSync": 2,
-        "LaneProjection": 4,
-        "OverviewRepaint": 2,
-        "PresetListProjection": 2,
-        "ProjectSync": 2,
-        "RegionRebuild": 8,
-        "SlotInvalidate": 8,
+        "LaneProjection": 2,
+        "RegionRebuild": 4,
+        "SlotInvalidate": 4,
         "ValuePush": 2
       },
       "drawer_change_half_second": {

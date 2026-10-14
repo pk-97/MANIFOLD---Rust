@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use manifold_core::change::ChangeSet;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
 use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
@@ -77,6 +78,7 @@ pub(crate) struct SceneGraphTransaction {
     removed_param_ids: Vec<String>,
     parameter_id_remaps: Vec<(String, String)>,
     previous_layer: Option<InstanceLayerSnapshot>,
+    touches: ChangeSet,
     applied: bool,
     last_error: Option<SceneGraphRejection>,
     pub(crate) description: &'static str,
@@ -110,6 +112,15 @@ impl SceneGraphTransaction {
             .ok_or_else(|| error("Owner graph does not resolve"))?
             .clone();
         let result = edit(&before_resolved)?;
+        // Removed or remapped params carry their controls, lanes included; a
+        // metadata change alone rebuilds the card manifest.
+        let touches = if !result.removed_param_ids.is_empty() || !result.parameter_id_remaps.is_empty() {
+            crate::commands::WHOLE_INSTANCES
+        } else if before_resolved.preset_metadata != result.graph.preset_metadata {
+            crate::commands::GRAPH_AND_MANIFEST
+        } else {
+            crate::commands::GRAPH_EDIT
+        };
         Ok(Self {
             owner,
             expected_graph: host.graph.clone(),
@@ -119,10 +130,16 @@ impl SceneGraphTransaction {
             removed_param_ids: result.removed_param_ids,
             parameter_id_remaps: result.parameter_id_remaps,
             previous_layer: None,
+            touches,
             applied: false,
             last_error: None,
             description,
         })
+    }
+
+    /// The parts execute and undo write, fixed when the edit is prepared.
+    pub(crate) fn touches(&self) -> ChangeSet {
+        self.touches
     }
 
     pub(crate) fn prepared_graph(&self) -> &EffectGraphDef {

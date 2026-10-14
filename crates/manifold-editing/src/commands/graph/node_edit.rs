@@ -4,6 +4,7 @@
 //! `descend_level` stay in `graph/mod.rs` and are used here via `super`.
 
 use std::collections::BTreeMap;
+use manifold_core::change::{ChangeSet, Part};
 
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
@@ -82,11 +83,12 @@ impl AddGraphNodeCommand {
 }
 
 impl Command for AddGraphNodeCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let added = usize::from(self.node_type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID);
         if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
@@ -139,7 +141,7 @@ impl Command for AddGraphNodeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(id) = self.minted_id else { return };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
@@ -240,11 +242,15 @@ impl RemoveGraphNodeCommand {
 }
 
 impl Command for RemoveGraphNodeCommand {
+    /// Removing a node drops the card params bound to it with their controls.
+    fn touches(&self) -> ChangeSet {
+        crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_CONTROLS)
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
@@ -304,7 +310,7 @@ impl Command for RemoveGraphNodeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(state) = self.modifier_removed.as_ref()
             && self.applied
         {
@@ -431,11 +437,12 @@ impl ConnectPortsCommand {
 }
 
 impl Command for ConnectPortsCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let from_node = self.from_node;
         let from_port = self.from_port.clone();
         let to_node = self.to_node;
@@ -460,7 +467,7 @@ impl Command for ConnectPortsCommand {
         self.displaced = displaced;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let from_node = self.from_node;
         let from_port = self.from_port.clone();
         let to_node = self.to_node;
@@ -534,11 +541,12 @@ impl DisconnectPortsCommand {
 }
 
 impl Command for DisconnectPortsCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
         let scope = self.scope_path.clone();
@@ -554,7 +562,7 @@ impl Command for DisconnectPortsCommand {
         self.removed = removed;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(wire) = self.removed.take() else {
             return;
         };
@@ -615,7 +623,8 @@ impl MoveGraphNodeCommand {
 }
 
 impl Command for MoveGraphNodeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
+    fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
         let new_pos = self.new_pos;
         let prev_already_captured = self.previous_pos.is_some();
@@ -634,7 +643,7 @@ impl Command for MoveGraphNodeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous) = self.previous_pos else {
             return;
         };
@@ -702,7 +711,8 @@ impl LayoutGraphNodesCommand {
 }
 
 impl Command for LayoutGraphNodesCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
+    fn do_execute(&mut self, project: &mut Project) {
         let prev_already_captured = self.previous.is_some();
         let scope = self.scope_path.clone();
         let positions = self.positions.clone();
@@ -724,7 +734,7 @@ impl Command for LayoutGraphNodesCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous) = self.previous.clone() else {
             return;
         };
@@ -965,14 +975,13 @@ impl Command for SetGraphNodeParamCommand {
     /// Only valid after `execute` or `undo`, which read the row rule from
     /// the project.
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         if self.sets_rows {
             ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values, Part::Effects])
         } else {
             ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
         }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         self.note_sets_rows(project);
@@ -1032,7 +1041,7 @@ impl Command for SetGraphNodeParamCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.note_sets_rows(project);
         if let Some((outer_id, previous)) = self.card_redirect.take() {
             let target = self.target.clone();
@@ -1129,11 +1138,12 @@ impl SetWgslSourceCommand {
 }
 
 impl Command for SetWgslSourceCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
         // Empty buffer clears the override back to the primitive's built-in
         // kernel rather than compiling an empty shader.
@@ -1158,7 +1168,7 @@ impl Command for SetWgslSourceCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.previous.take() else {
             return;
         };
@@ -1239,11 +1249,12 @@ impl RevertEffectGraphCommand {
 }
 
 impl Command for RevertEffectGraphCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             if let Some(delegate) = self.modifier_delegate.as_mut() {
                 delegate.execute(project);
@@ -1298,7 +1309,7 @@ impl Command for RevertEffectGraphCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             if let Some(delegate) = self.modifier_delegate.as_mut() {
                 delegate.undo(project);
