@@ -629,12 +629,13 @@ pub struct ParamSpecDef {
 }
 
 impl ParamSpecDef {
-    /// The value modulation and automation may write
-    /// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)). A
-    /// periodic param wraps over the declared range — `rem_euclid`, so a
-    /// downward saw lands in range — so a saw or a ramp past the end keeps
-    /// spinning (BUG-039). Anything else clamps to the hard limit, `Slider`
-    /// being the declared range. A degenerate range (`max <= min`) clamps.
+    /// The declared-range clamp under `Param::driven_value` when the user has
+    /// no slider range (SCENE_SURFACES_DESIGN.md D15 (slider range and hard
+    /// limit)). A periodic param wraps over the declared range — `rem_euclid`,
+    /// so a downward saw lands in range — so a saw or a ramp past the end
+    /// keeps spinning (BUG-039). Anything else clamps to the hard limit,
+    /// `Slider` being the declared range. A degenerate range (`max <= min`)
+    /// clamps.
     #[inline]
     pub fn clamp_value(&self, v: f32) -> f32 {
         if self.wraps && self.max > self.min {

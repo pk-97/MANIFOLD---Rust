@@ -196,14 +196,14 @@ FLIP Fluids' own terms stay (Sheet Fill Rate). Re-derivation for any row: `rg -n
 
 **D15 — Slider range and hard limit are two facts.** Today one min/max both sets the slider span and caps the value (`constrain_to_range`, `params.rs:167`), so ranges are either huge or limiting. Following Blender (soft and hard limits), Houdini and TouchDesigner (slider range vs clamp), every control's description in the lookup carries:
 - a **slider range**: what the slider spans. Today's min/max, and today's scene-scaled bands, widened to include the control's default as the stamp rule does now.
-- a **hard limit**: what the value may never pass. `HardLimit::{Slider, Unlimited, AtLeast(x), AtMost(x), Between(a, b)}`. `Slider` is the default for every param the tables do not mention: drags, automation and modulation stop at the declared slider range as they do today, and typed and OSC values stay free, since a range hint never restricts what a user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)). Toggles, triggers, enums and whole-number indices are always `Slider`.
+- a **hard limit**: what the value may never pass. `HardLimit::{Slider, Unlimited, AtLeast(x), AtMost(x), Between(a, b)}`. `Slider` is the default for every param the tables do not mention: drags stop at the declared range, and typed and OSC values stay free, since a range hint never restricts what a user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)). Toggles, triggers, enums and whole-number indices are always `Slider`.
 
 The scene table declares limits for scene params, for example positions `Unlimited`, distances and intensities `AtLeast(0)`, field of view `Between(1, 179)`. Preset JSON can declare `limit` for template params.
 
 Behaviour:
 - Typing a value clamps only to a declared limit (`Unlimited`, `AtLeast`, `AtMost`, `Between`); under `Slider` it is unclamped.
 - Dragging is relative to where the press started, so it carries on past the slider end until the hard limit. The slider shows its thumb pinned at the end with an overflow mark, and the readout shows the true value.
-- Automation and modulation clamp to the hard limit. Modulation depth is measured over the slider range.
+- Automation and modulation (LFOs, drivers, envelopes, audio) stay inside the slider range: the user's when one is set, else the declared range, and never past a declared limit. Only a hand drag or a typed value goes past the slider's ends. Modulation depth is measured over the slider range.
 - OSC and MIDI 0–1 values map over the slider range (the user's, if set), as calibration does today, and clamp only to a declared limit; an OSC value outside 0–1 on an exact 0–1 range passes through raw as it does today.
 - Wrapping params wrap over the declared slider range, never the user's.
 - The card-to-node reshape (invert and curve) normalises over the declared slider range, never the user's, so a user's slider range never changes what reaches the node.
@@ -417,8 +417,8 @@ Every reader below either already reads the joined manifest (no change) or reads
 | Card projection | `projection/cards.rs:432-495` | `Param.spec` name, range, section, card_visible, material role | none (the join) |
 | Scene panel | `projection/scene.rs:211` | `spec.section` | none; ownership moves to items (P4) |
 | Automation lane names | `projection/timeline.rs:363`, `:386` | `spec.name` | none |
-| Automation playback | `manifold-playback/src/automation.rs:267`, `:361`, `:454` | `spec.min/max` clamp | clamp to hard limit (P8) |
-| Modulation | `manifold-playback/src/modulation/composition.rs:214` | `spec.min/max` clamp | hard limit; depth over slider range (P8) |
+| Automation playback | `manifold-playback/src/automation.rs:267`, `:361`, `:454` | `spec.min/max` clamp | slider range, else declared; wraps on declared (P8) |
+| Modulation | `manifold-playback/src/modulation/composition.rs:214` | `spec.min/max` clamp | slider range, else declared; depth over slider range (P8) |
 | OSC router | `osc_param_router.rs:137`, `:187`, `:213` (ranges); `:91`, `:150`, `:258` (routing by id) | `spec.min/max` | 0–1 over slider range, clamp to hard limit (P8) |
 | OSC addresses | `preset_definition_registry.rs:401-422` | type `osc_prefix`, layer id, param id | none — no label in any address |
 | Value formatting | `preset_definition_registry.rs:377` `format_value` | template spec | none (already the template) |
@@ -465,7 +465,7 @@ Every reader below either already reads the joined manifest (no change) or reads
 | `SceneVm.camera_controls`, `world_controls`, `object_controls` | `SceneItem.owned_nodes` | `rg -n 'camera_controls|world_controls|object_controls' crates/` |
 | `property_selection_for_row` section matching, `reveal_clip_response` | `reveal_param` by item ownership | `rg -n 'reveal_clip_response|property_selection_for_row' crates/` |
 | `SceneSelection::Rendering`, `OutlinerFold("Motion & Physics")`, `"Lighting & Environment"` | D8 groups | `rg -n 'Rendering|Motion & Physics|Lighting & Environment' crates/manifold-ui/src/panels/scene_setup_panel*` |
-| `constrain_to_range(v, spec.min, spec.max, wraps)` | `spec.clamp_value(v)` (hard limit; wraps over the declared slider range) | `rg -n 'constrain_to_range\(' crates/ -g '*.rs'` (4 non-test sites) |
+| `constrain_to_range(v, spec.min, spec.max, wraps)` | `param.driven_value(v)` (slider range, else declared; never past a declared limit; wraps over the declared range) | `rg -n 'constrain_to_range\(' crates/ -g '*.rs'` (4 non-test sites) |
 
 Compiler-driven: delete the old symbol first; the errors are the checklist. Re-run each command at execution time; if the count differs from what the phase brief recorded, stop and list the new sites first.
 
@@ -498,7 +498,7 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 | INV-S15 Unresolved controls survive | `instance_serde::tests::unresolved_control_round_trips_verbatim` — lookup missing a type: load, save, bytes of that entry unchanged; install it, reload, the control resolves with its value and choices (P1) |
 | INV-S16 No reader goes around the join | negative gate: `rg -n 'binding\.label|b\.label\b' crates/manifold-node-engine/src crates/manifold-app/src/content_thread.rs crates/manifold-app/src/ui_snapshot crates/manifold-core/src/effects/instance.rs` → 0 outside `Composite` arms (P2) |
 | INV-S17 A rename never moves an OSC address | `osc_param_router::tests::rename_keeps_address` — rename a control via `choices.rename` and via a `ParamDef.label` change; address and routing unchanged (P2) |
-| INV-S18 Values pass the slider end, never the hard limit | `params::tests::{typed_value_clamps_to_limit_not_slider, drag_past_slider_end_reaches_limit, automation_clamps_to_limit, wraps_use_declared_range}`; `reshape_ignores_user_slider_range` (P8) |
+| INV-S18 Values pass the slider end, never the hard limit | `params::tests::{typed_value_clamps_to_limit_not_slider, drag_past_slider_end_reaches_limit, automation_respects_the_slider_range, wraps_use_declared_range}`; `lfo_stays_inside_the_user_slider_range`; `reshape_ignores_user_slider_range` (P8) |
 
 ---
 

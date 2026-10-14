@@ -219,6 +219,21 @@ impl Param {
         self.choices.slider.unwrap_or((self.spec.min, self.spec.max))
     }
 
+    /// The value automation and modulation may write (SCENE_SURFACES_DESIGN.md
+    /// D15 (slider range and hard limit)). A periodic param wraps over the
+    /// declared range. Otherwise the output stays inside the user's slider
+    /// range when one is set, else the declared range: only a hand drag or a
+    /// typed value goes past the slider's ends.
+    #[inline]
+    pub fn driven_value(&self, v: f32) -> f32 {
+        match self.choices.slider {
+            Some((a, b)) if !(self.spec.wraps && self.spec.max > self.spec.min) => {
+                self.spec.clamp_input(v.clamp(a.min(b), a.max(b)))
+            }
+            _ => self.spec.clamp_value(v),
+        }
+    }
+
     /// The hard limit with `Slider` read as the declared range: what a drag
     /// may reach past the slider's end.
     pub fn drag_limit(&self) -> manifold_foundation::param_range::HardLimit {
@@ -584,15 +599,19 @@ mod tests {
     /// INV-S18: modulation and automation clamp to the hard limit, never the
     /// user's slider range.
     #[test]
-    fn automation_clamps_to_limit() {
+    fn automation_respects_the_slider_range() {
         let mut p = Param::bundled(ranged(0.0, 1.0, false, HardLimit::Between(0.0, 4.0)));
+        assert_eq!(p.driven_value(3.0), 3.0, "no user range: the hard limit");
+        assert_eq!(p.driven_value(6.0), 4.0);
         p.choices.slider = Some((0.0, 0.5));
-        assert_eq!(p.spec.clamp_value(3.0), 3.0);
-        assert_eq!(p.spec.clamp_value(6.0), 4.0);
-        let mut hint = Param::bundled(ranged(0.0, 1.0, false, HardLimit::Slider));
-        hint.choices.slider = Some((0.0, 0.5));
-        assert_eq!(hint.spec.clamp_value(0.8), 0.8, "the user's slider end is not a limit");
-        assert_eq!(hint.spec.clamp_value(1.5), 1.0, "the declared range is");
+        assert_eq!(p.driven_value(0.8), 0.5, "the user's slider range caps a driven value");
+        assert_eq!(p.driven_value(-1.0), 0.0);
+        let mut wide = Param::bundled(ranged(0.0, 1.0, false, HardLimit::AtMost(2.0)));
+        wide.choices.slider = Some((0.0, 3.0));
+        assert_eq!(wide.driven_value(5.0), 2.0, "a declared limit still wins over a wider slider");
+        let mut spin = Param::bundled(ranged(0.0, 360.0, true, HardLimit::Slider));
+        spin.choices.slider = Some((0.0, 90.0));
+        assert_eq!(spin.driven_value(370.0), 10.0, "wraps stay on the declared range");
     }
 
     /// INV-S18: wraps use the declared range, never the user's slider.

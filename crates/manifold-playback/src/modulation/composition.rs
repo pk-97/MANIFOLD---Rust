@@ -210,7 +210,7 @@ fn compose_dynamic(
                     param.slider_span().0,
                     param.slider_span().1,
                 );
-                value = param.spec.clamp_value(raw);
+                value = param.driven_value(raw);
                 written = true;
             }
         }
@@ -356,6 +356,32 @@ mod tests {
             AudioSendId::new("send"),
             AudioFeature::default(),
         )
+    }
+
+    /// D15: an LFO on a param with a user slider range of 0 to 0.5 never
+    /// goes past 0.5, though the declared range is 0 to 1.
+    #[test]
+    fn lfo_stays_inside_the_user_slider_range() {
+        let mut p = param("value", 0.0, 1.0, 0.25);
+        p.choices.slider = Some((0.0, 0.5));
+        let mut params = ParamManifest::from_params(vec![p]);
+        let mut peak = f32::MIN;
+        for waveform in [DriverWaveform::Sine, DriverWaveform::Sawtooth, DriverWaveform::Square] {
+            let drivers = [ParameterDriver::new("value", BeatDivision::Quarter, waveform)];
+            for step in 0..64 {
+                let beat = Beats(step as f64 / 16.0);
+                compose_controls(
+                    &mut params,
+                    ControlSources { enabled: true, drivers: &drivers, envelopes: &[], audio_mods: &[] },
+                    |_| ControlSample { beat, ..sample(None) },
+                    |_, m| AudioControlState::current(m),
+                );
+                let v = params.get("value").unwrap().value;
+                assert!((0.0..=0.5).contains(&v), "{waveform:?} at {beat:?} gave {v}");
+                peak = peak.max(v);
+            }
+        }
+        assert!(peak > 0.45, "the LFO reaches the top of the user's range, peak {peak}");
     }
 
     #[test]
