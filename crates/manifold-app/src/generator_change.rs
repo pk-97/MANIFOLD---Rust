@@ -177,7 +177,7 @@ impl ReplaceGeneratorStateCommand {
 
 impl Command for ReplaceGeneratorStateCommand {
     fn touches(&self) -> ChangeSet { manifold_editing::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let expected = if self.applied {
             &self.after
@@ -199,7 +199,7 @@ impl Command for ReplaceGeneratorStateCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

@@ -184,7 +184,7 @@ impl SetParamClipTriggerSourceCommand {
 
 impl Command for SetParamClipTriggerSourceCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]).union(self.response.as_ref().map_or(ChangeSet::NONE, |r| r.touches())) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         if self.validate_scope && !project.can_assign_clip_trigger_source(
@@ -224,7 +224,7 @@ impl Command for SetParamClipTriggerSourceCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

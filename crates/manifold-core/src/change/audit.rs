@@ -376,10 +376,7 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     fp.put(Part::Overrides, &inst.graph.is_some());
     if let Some(graph) = &inst.graph {
         let mut structural = graph.clone();
-        for node in &mut structural.nodes {
-            fp.put(Part::Shapes, &node.params);
-            node.params.clear();
-        }
+        strip_node_params(fp, &mut structural.nodes);
         // Binding reshape values (range, curve, invert, scale, offset) are
         // live scalars; which bindings and params exist, and where they point,
         // is membership and stays with the graph contents.
@@ -416,6 +413,18 @@ fn action_rows(action: crate::audio_mod::TriggerAction) -> (u8, Option<crate::au
         TriggerAction::Continuous => (0, None),
         TriggerAction::Step { wrap, .. } => (1, Some(wrap)),
         TriggerAction::Random => (2, None),
+    }
+}
+
+/// Unbound node param values are Shapes at every depth (D21): group bodies
+/// hold nodes too. What is left is the graph's structure.
+fn strip_node_params(fp: &mut Fp, nodes: &mut [crate::effect_graph_def::EffectGraphNode]) {
+    for node in nodes {
+        fp.put(Part::Shapes, &node.params);
+        node.params.clear();
+        if let Some(body) = node.group.as_deref_mut() {
+            strip_node_params(fp, &mut body.nodes);
+        }
     }
 }
 

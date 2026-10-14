@@ -74,7 +74,7 @@ impl Command for DuplicateSceneObjectCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         let scope = self.scope_path.clone();
@@ -529,7 +529,7 @@ impl Command for DuplicateSceneObjectCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous_graph) = self.prev_graph.clone() else {
             return;
         };

@@ -509,7 +509,7 @@ impl Command for ChangeMaterialParamsCommand {
         }
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         self.old_values = None;
@@ -558,7 +558,7 @@ impl Command for ChangeMaterialParamsCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

@@ -621,7 +621,7 @@ impl Command for AdmittedGraphCommand {
         };
         self.command.touches().union(frames)
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let mut candidate = project.clone();
@@ -727,7 +727,7 @@ impl Command for AdmittedGraphCommand {
         *project = candidate;
         self.applied = true;
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if self.applied {
             restore_frame_changes(project, &self.frame_changes);
             self.command.undo(project);

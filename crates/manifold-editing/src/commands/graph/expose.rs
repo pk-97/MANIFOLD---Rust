@@ -320,7 +320,7 @@ impl Command for ToggleNodeParamExposeCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::execute(self, project);
             return;
@@ -429,7 +429,7 @@ impl Command for ToggleNodeParamExposeCommand {
         };
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::undo(self, project);
             return;

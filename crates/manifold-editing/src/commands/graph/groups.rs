@@ -60,7 +60,7 @@ impl Command for GroupNodesCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let selected: std::collections::BTreeSet<u32> = self.selected.iter().copied().collect();
         let handle = self.handle.clone();
@@ -90,7 +90,7 @@ impl Command for GroupNodesCommand {
         self.prev = result.flatten();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -142,7 +142,7 @@ impl Command for UngroupNodeCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let group_node_id = self.group_node_id;
         let result =
@@ -168,7 +168,7 @@ impl Command for UngroupNodeCommand {
         self.prev = result.flatten();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -226,7 +226,7 @@ impl SetGroupTintCommand {
 
 impl Command for SetGroupTintCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let id = self.group_node_id;
         let tint = self.tint;
@@ -246,7 +246,7 @@ impl Command for SetGroupTintCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.prev else {
             return;
         };
@@ -319,7 +319,7 @@ impl RenameGroupCommand {
 }
 impl Command for RenameGroupCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let id = self.group_node_id;
         let new_handle = self.new_handle.clone();
@@ -422,7 +422,7 @@ impl Command for RenameGroupCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.swept.is_empty()
             && let Some(inst) = resolve_target_instance(&self.target, project)
         {

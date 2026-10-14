@@ -20,11 +20,11 @@ impl AddMarkerCommand {
 
 impl Command for AddMarkerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         project.timeline.add_marker(self.marker.clone());
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.timeline.remove_marker(&self.marker.id);
     }
 
@@ -52,11 +52,11 @@ impl DeleteMarkerCommand {
 
 impl Command for DeleteMarkerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.removed = project.timeline.remove_marker(&self.marker_id);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(marker) = self.removed.take() {
             project.timeline.add_marker(marker);
         }
@@ -88,14 +88,14 @@ impl MoveMarkerCommand {
 
 impl Command for MoveMarkerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
             marker.beat = self.new_beat;
         }
         project.timeline.sort_markers();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
             marker.beat = self.old_beat;
         }
@@ -128,13 +128,13 @@ impl RenameMarkerCommand {
 
 impl Command for RenameMarkerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
             marker.name = self.new_name.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
             marker.name = self.old_name.clone();
         }

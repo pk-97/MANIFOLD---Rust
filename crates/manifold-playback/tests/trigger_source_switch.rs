@@ -660,6 +660,6 @@ fn run(engine: &mut PlaybackEngine, command: &mut dyn Command, undo: bool) {
     let touches = command.touches();
     let edit = engine.project_edit().expect("project");
     manifold_editing::service::EditingService::new().mutate(touches, edit, |p| {
-        if undo { command.undo(p) } else { command.execute(p) }
+        if undo { command.undo(p); } else { command.execute(p); }
     });
 }

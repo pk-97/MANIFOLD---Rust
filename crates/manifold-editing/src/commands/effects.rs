@@ -69,7 +69,7 @@ impl AddEffectCommand {
 
 impl Command for AddEffectCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         with_effects_mut(project, &self.target, |effects, groups| {
@@ -94,7 +94,7 @@ impl Command for AddEffectCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -149,7 +149,7 @@ impl RemoveEffectCommand {
 
 impl Command for RemoveEffectCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         self.cleared_mask_groups.clear();
@@ -176,7 +176,7 @@ impl Command for RemoveEffectCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -238,7 +238,7 @@ impl ReorderEffectCommand {
 
 impl Command for ReorderEffectCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let from = self.from_index;
@@ -302,7 +302,7 @@ impl Command for ReorderEffectCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -347,13 +347,13 @@ impl ToggleEffectCommand {
 
 impl Command for ToggleEffectCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             effect.enabled = self.new_enabled;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             effect.enabled = self.old_enabled;
         }
@@ -395,7 +395,7 @@ impl ReorderEffectGroupCommand {
 
 impl Command for ReorderEffectGroupCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         if self.old_effects.len() != self.new_effects.len() {
@@ -444,7 +444,7 @@ impl Command for ReorderEffectGroupCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -539,7 +539,7 @@ impl Command for ChangeGraphParamCommand {
             ChangeSet::of(&[Part::Values])
         }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.note_sets_rows(project);
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
@@ -556,7 +556,7 @@ impl Command for ChangeGraphParamCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.note_sets_rows(project);
         let id = self.param_id.clone();
         let val = self.old_value;
@@ -611,14 +611,14 @@ impl ToggleRelightCommand {
 
 impl Command for ToggleRelightCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight = self.new_relight;
             inst.bump_graph_structure_version();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight = self.old_relight;
             inst.bump_graph_structure_version();
@@ -669,7 +669,7 @@ impl Command for SetRelightParamCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.new_value);
             // D8/P7: float knobs are live uniforms — no structure bump. The
@@ -677,7 +677,7 @@ impl Command for SetRelightParamCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.old_value);
         }
@@ -712,14 +712,14 @@ impl SetRelightHeightFromCommand {
 
 impl Command for SetRelightHeightFromCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight_params.height_from = self.new_value;
             inst.bump_graph_structure_version();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight_params.height_from = self.old_value;
             inst.bump_graph_structure_version();
@@ -894,7 +894,7 @@ impl ToggleEffectParamExposeCommand {
 
 impl Command for ToggleEffectParamExposeCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id.clone();
         let node_handle = self.node_handle.clone();
         let inner_param = self.inner_param.clone();
@@ -1032,7 +1032,7 @@ impl Command for ToggleEffectParamExposeCommand {
         self.reverse = reverse_out.unwrap_or_default();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let reverse = std::mem::take(&mut self.reverse);
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             match reverse {
@@ -1120,7 +1120,7 @@ impl ToggleParamExposeCommand {
 
 impl Command for ToggleParamExposeCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let id = self.param_id.as_ref();
         let new_v = self.new_exposed;
         self.prev_exposed = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
@@ -1136,7 +1136,7 @@ impl Command for ToggleParamExposeCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.prev_exposed else {
             return;
         };
@@ -1454,7 +1454,7 @@ impl Command for EditParamMappingCommand {
             live
         }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         let new = self.new.clone();
         let seed_def = self.seed_def.clone();
@@ -1537,7 +1537,7 @@ impl Command for EditParamMappingCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         // Drag-commit: apply the explicit pre-drag reverse edit (partial — only
         // the fields the drag moved), landing on the true pre-drag values.

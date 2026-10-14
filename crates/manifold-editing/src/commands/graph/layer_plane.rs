@@ -126,7 +126,7 @@ impl Command for AddSceneLayerPlaneCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let scope = self.scope_path.clone();
@@ -370,7 +370,7 @@ impl Command for AddSceneLayerPlaneCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };

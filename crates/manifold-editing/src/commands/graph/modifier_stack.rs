@@ -147,10 +147,10 @@ impl Command for InsertSceneModifierCommand {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -202,10 +202,10 @@ impl Command for DeleteSceneModifierCommand {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -256,10 +256,10 @@ impl Command for ReorderSceneModifiersCommand {
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -311,10 +311,10 @@ impl Command for DuplicateSceneModifiersCommand {
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -365,10 +365,10 @@ impl Command for RemoveSceneModifiersCommand {
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -421,10 +421,10 @@ impl Command for MoveSceneModifierCommand {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -479,10 +479,10 @@ impl Command for RetargetSceneModifierCommand {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -539,10 +539,10 @@ impl Command for SetSceneModifierPreparationParamCommand {
         targets.push(self.transaction.owner.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.transaction.undo(project);
     }
     fn description(&self) -> &str {
@@ -1311,6 +1311,22 @@ mod tests {
                 .len(),
             2
         );
+
+        let mut reorder = ReorderSceneModifiersCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            vec![NodeId::new("second"), NodeId::new("first")],
+        )
+        .unwrap();
+        reorder.execute(&mut project);
+        assert!(reorder.was_applied());
+        let first = |project: &Project| {
+            project.graph_for_target(&target, Some(&default)).unwrap().scene_modifiers[0].id.clone()
+        };
+        assert_eq!(first(&project), NodeId::new("second"));
+        reorder.undo(&mut project);
+        assert_eq!(first(&project), NodeId::new("first"));
     }
 
     #[test]

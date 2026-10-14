@@ -1186,7 +1186,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
@@ -1369,7 +1369,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((nodes, wires, metadata)) = self.prev.take() else {
             return;
         };
@@ -1432,7 +1432,7 @@ impl Command for DisableSceneObjectPhysicsCommand {
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
@@ -1534,7 +1534,7 @@ impl Command for DisableSceneObjectPhysicsCommand {
                 Some("Physics edit requires an unmodified scene object graph".into());
         }
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((nodes, wires, metadata)) = self.prev.take() else {
             return;
         };

@@ -40,14 +40,14 @@ impl Command for SetCardPinCommand {
         manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Effects])
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let before = self.write(project, self.pin);
         if self.previous.is_none() {
             self.previous = before;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(previous) = self.previous {
             self.write(project, previous);
         }

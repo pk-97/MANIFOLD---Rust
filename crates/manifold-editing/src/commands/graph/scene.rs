@@ -350,7 +350,7 @@ impl Command for AddSceneObjectCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((nodes, wires, metadata)) = self.after.as_ref() {
             self.rejection = None;
             let unchanged = project.graph_for_target(&self.target, Some(&self.catalog_default))
@@ -620,7 +620,7 @@ impl Command for AddSceneObjectCommand {
         self.capture_after(project);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -776,7 +776,7 @@ impl Command for AddSceneLightCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.next_index;
@@ -903,7 +903,7 @@ impl Command for AddSceneLightCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -1035,7 +1035,7 @@ impl Command for RemoveSceneObjectCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         if let Some(snapshot) = &self.prev {
@@ -1281,7 +1281,7 @@ impl Command for RemoveSceneObjectCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -1564,7 +1564,7 @@ impl Command for RemoveSceneSubmeshCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) { targets.push(self.target.clone()); }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
@@ -1634,7 +1634,7 @@ impl Command for RemoveSceneSubmeshCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(snapshot) = self.prev.take() else { return; };
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             def.preset_metadata = snapshot.metadata;
@@ -1679,7 +1679,7 @@ impl Command for DuplicateSceneSubmeshCommand {
     fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) { targets.push(self.target.clone()); }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
@@ -1771,7 +1771,7 @@ impl Command for DuplicateSceneSubmeshCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(snapshot) = self.prev.take() else { return; };
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             def.preset_metadata = snapshot.metadata;
@@ -1876,7 +1876,7 @@ impl Command for RemoveSceneLightCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.light_index;
@@ -1917,7 +1917,7 @@ impl Command for RemoveSceneLightCommand {
         self.prev = result.flatten();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -2231,7 +2231,7 @@ impl Command for AddSceneEnvironmentCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let pos = self.pos;
@@ -2318,7 +2318,7 @@ impl Command for AddSceneEnvironmentCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -2390,7 +2390,7 @@ impl Command for AddSceneFogCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let pos = self.pos;
@@ -2491,7 +2491,7 @@ impl Command for AddSceneFogCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -2591,7 +2591,7 @@ impl Command for AddObjectTransformCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let object_id = self.scene_object_node_id;
         let pos = self.pos;
@@ -2627,7 +2627,7 @@ impl Command for AddObjectTransformCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -2730,7 +2730,7 @@ impl Command for ImportModelIntoSceneCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let new_nodes = self.new_nodes.clone();
@@ -2808,7 +2808,7 @@ impl Command for ImportModelIntoSceneCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -2944,7 +2944,7 @@ impl RenameSceneObjectCommand {
 
 impl Command for RenameSceneObjectCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let producer_id = self.object_node_id;
         let new_handle = self.new_handle.clone();
@@ -3138,7 +3138,7 @@ impl Command for RenameSceneObjectCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = resolve_target_instance(&self.target, project)
             && let Some(meta) = inst.graph.as_mut().and_then(|graph| graph.preset_metadata.as_mut())
         {
@@ -3237,7 +3237,7 @@ impl SetNodeHandleCommand {
 
 impl Command for SetNodeHandleCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let id = self.node_doc_id;
         let new_handle = self.new_handle.clone();
@@ -3264,7 +3264,7 @@ impl Command for SetNodeHandleCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.prev.clone() else {
             return;
         };

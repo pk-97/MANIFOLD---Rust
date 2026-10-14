@@ -88,7 +88,7 @@ impl Command for AddGraphNodeCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let added = usize::from(self.node_type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID);
         if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
@@ -141,7 +141,7 @@ impl Command for AddGraphNodeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(id) = self.minted_id else { return };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
@@ -250,7 +250,7 @@ impl Command for RemoveGraphNodeCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
@@ -310,7 +310,7 @@ impl Command for RemoveGraphNodeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(state) = self.modifier_removed.as_ref()
             && self.applied
         {
@@ -442,7 +442,7 @@ impl Command for ConnectPortsCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let from_node = self.from_node;
         let from_port = self.from_port.clone();
         let to_node = self.to_node;
@@ -467,7 +467,7 @@ impl Command for ConnectPortsCommand {
         self.displaced = displaced;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let from_node = self.from_node;
         let from_port = self.from_port.clone();
         let to_node = self.to_node;
@@ -546,7 +546,7 @@ impl Command for DisconnectPortsCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
         let scope = self.scope_path.clone();
@@ -562,7 +562,7 @@ impl Command for DisconnectPortsCommand {
         self.removed = removed;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(wire) = self.removed.take() else {
             return;
         };
@@ -624,7 +624,7 @@ impl MoveGraphNodeCommand {
 
 impl Command for MoveGraphNodeCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
         let new_pos = self.new_pos;
         let prev_already_captured = self.previous_pos.is_some();
@@ -643,7 +643,7 @@ impl Command for MoveGraphNodeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous) = self.previous_pos else {
             return;
         };
@@ -712,7 +712,7 @@ impl LayoutGraphNodesCommand {
 
 impl Command for LayoutGraphNodesCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let prev_already_captured = self.previous.is_some();
         let scope = self.scope_path.clone();
         let positions = self.positions.clone();
@@ -734,7 +734,7 @@ impl Command for LayoutGraphNodesCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous) = self.previous.clone() else {
             return;
         };
@@ -981,7 +981,7 @@ impl Command for SetGraphNodeParamCommand {
             ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
         }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         self.note_sets_rows(project);
@@ -1041,7 +1041,7 @@ impl Command for SetGraphNodeParamCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.note_sets_rows(project);
         if let Some((outer_id, previous)) = self.card_redirect.take() {
             let target = self.target.clone();
@@ -1143,7 +1143,7 @@ impl Command for SetWgslSourceCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
         // Empty buffer clears the override back to the primitive's built-in
         // kernel rather than compiling an empty shader.
@@ -1168,7 +1168,7 @@ impl Command for SetWgslSourceCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.previous.take() else {
             return;
         };
@@ -1254,7 +1254,7 @@ impl Command for RevertEffectGraphCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             if let Some(delegate) = self.modifier_delegate.as_mut() {
                 delegate.execute(project);
@@ -1309,7 +1309,7 @@ impl Command for RevertEffectGraphCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             if let Some(delegate) = self.modifier_delegate.as_mut() {
                 delegate.undo(project);

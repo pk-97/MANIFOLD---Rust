@@ -109,7 +109,7 @@ impl Command for AddAutomationPointCommand {
     fn touches(&self) -> ChangeSet {
         ChangeSet::of(&[Part::Automation, Part::Values])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.previous_lane = None;
         self.previous_lane_index = None;
         self.previous_lanes_were_none = false;
@@ -195,7 +195,7 @@ impl Command for AddAutomationPointCommand {
         self.applied = applied == Some(true);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied { return; }
         let param_id = self.param_id.clone();
         let previous_lane = self.previous_lane.clone();
@@ -302,7 +302,7 @@ impl Command for MoveAutomationPointCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
         ChangeSet::of(&[Part::Automation])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.previous_lane = None;
         self.previous_lane_index = None;
         let Some(inst) = project.preset_instance(&self.target) else {
@@ -327,7 +327,7 @@ impl Command for MoveAutomationPointCommand {
         );
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous_lane) = self.previous_lane.clone() else {
             return;
         };
@@ -383,7 +383,7 @@ impl Command for RemoveAutomationPointCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
         ChangeSet::of(&[Part::Automation])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let idx = self.point_index;
         let removed = project.with_preset_graph_mut(&self.target, |inst| {
@@ -398,7 +398,7 @@ impl Command for RemoveAutomationPointCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(point) = self.removed_point else {
             return;
         };
@@ -448,7 +448,7 @@ impl SetLaneEnabledCommand {
 
 impl Command for SetLaneEnabledCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let val = self.new_enabled;
         project.with_preset_graph_mut(&self.target, |inst| {
@@ -462,7 +462,7 @@ impl Command for SetLaneEnabledCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let val = self.old_enabled;
         project.with_preset_graph_mut(&self.target, |inst| {
@@ -502,7 +502,7 @@ impl ClearLaneCommand {
 
 impl Command for ClearLaneCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let taken = project.with_preset_graph_mut(&self.target, |inst| {
             inst.automation_lanes
@@ -515,7 +515,7 @@ impl Command for ClearLaneCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let points = self.removed_points.clone();
         project.with_preset_graph_mut(&self.target, |inst| {
@@ -562,7 +562,7 @@ impl RemoveLaneCommand {
 
 impl Command for RemoveLaneCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.removed_lane = None;
         let param_id = self.param_id.clone();
         let removed = project.with_preset_graph_mut(&self.target, |inst| {
@@ -579,7 +579,7 @@ impl Command for RemoveLaneCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(lane) = self.removed_lane.clone() else {
             return;
         };
@@ -638,7 +638,7 @@ impl CommitRecordedGestureCommand {
 
 impl Command for CommitRecordedGestureCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation, Part::Values]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let points = self.new_points.clone();
         project.with_preset_graph_mut(&self.target, |inst| {
@@ -659,7 +659,7 @@ impl Command for CommitRecordedGestureCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         match self.old_points.clone() {
             None => {

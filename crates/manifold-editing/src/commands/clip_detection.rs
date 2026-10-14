@@ -33,7 +33,7 @@ impl SetClipDetectionConfigCommand {
 
 impl Command for SetClipDetectionConfigCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) else {
             return;
         };
@@ -57,7 +57,7 @@ impl Command for SetClipDetectionConfigCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) else {
             return;
         };

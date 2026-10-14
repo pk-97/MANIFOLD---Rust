@@ -56,7 +56,7 @@ impl GroupEffectsCommand {
 
 impl Command for GroupEffectsCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let indices = self.effect_indices.clone();
@@ -163,7 +163,7 @@ impl Command for GroupEffectsCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -217,7 +217,7 @@ impl UngroupEffectsCommand {
 
 impl Command for UngroupEffectsCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
 
         with_effects_mut(project, &self.target, |effects, groups| {
@@ -245,7 +245,7 @@ impl Command for UngroupEffectsCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -311,7 +311,7 @@ impl AddGroupMaskCommand {
 
 impl Command for AddGroupMaskCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let mut indices = self.effect_indices.clone();
@@ -443,7 +443,7 @@ impl Command for AddGroupMaskCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -501,7 +501,7 @@ impl RemoveGroupMaskCommand {
 
 impl Command for RemoveGroupMaskCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let group_id = self.group_id.clone();
@@ -533,7 +533,7 @@ impl Command for RemoveGroupMaskCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -590,7 +590,7 @@ impl ToggleGroupCommand {
 
 impl Command for ToggleGroupCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let val = self.new_enabled;
         with_effects_mut(project, &self.target, |_effects, groups| {
@@ -600,7 +600,7 @@ impl Command for ToggleGroupCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let val = self.old_enabled;
         with_effects_mut(project, &self.target, |_effects, groups| {
@@ -641,7 +641,7 @@ impl SetGroupCollapsedCommand {
 
 impl Command for SetGroupCollapsedCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         self.old_collapsed = None;
@@ -664,7 +664,7 @@ impl Command for SetGroupCollapsedCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -720,7 +720,7 @@ impl RenameGroupCommand {
 
 impl Command for RenameGroupCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let name = self.new_name.clone();
         with_effects_mut(project, &self.target, |_effects, groups| {
@@ -730,7 +730,7 @@ impl Command for RenameGroupCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let name = self.old_name.clone();
         with_effects_mut(project, &self.target, |_effects, groups| {
@@ -772,7 +772,7 @@ impl ChangeGroupWetDryCommand {
 
 impl Command for ChangeGroupWetDryCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let val = self.new_wet_dry;
         with_effects_mut(project, &self.target, |_effects, groups| {
@@ -782,7 +782,7 @@ impl Command for ChangeGroupWetDryCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let val = self.old_wet_dry;
         with_effects_mut(project, &self.target, |_effects, groups| {
@@ -821,7 +821,7 @@ impl ReorderRackCommand {
 
 impl Command for ReorderRackCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let target_idx = self.target_insert_index;
 
@@ -864,7 +864,7 @@ impl Command for ReorderRackCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let original_indices = self.original_indices.clone();
 
@@ -939,7 +939,7 @@ impl MoveEffectsToGroupCommand {
 
 impl Command for MoveEffectsToGroupCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let ids = self.ids.clone();
@@ -1088,7 +1088,7 @@ impl Command for MoveEffectsToGroupCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -1156,7 +1156,7 @@ impl PasteEffectsCommand {
 
 impl Command for PasteEffectsCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let payload_effects = self.effects.clone();
@@ -1277,7 +1277,7 @@ impl Command for PasteEffectsCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

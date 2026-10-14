@@ -108,7 +108,7 @@ impl AddLayerCommand {
 
 impl Command for AddLayerCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
 
@@ -149,7 +149,7 @@ impl Command for AddLayerCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -233,7 +233,7 @@ impl ImportModelLayerCommand {
 
 impl Command for ImportModelLayerCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::EmbeddedPresets])) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         // Register (idempotent by id) the model's graph as a project-embedded
         // preset, so its id resolves through the catalog overlay just like a
         // bundled generator. Registering here — instead of stashing an
@@ -267,7 +267,7 @@ impl Command for ImportModelLayerCommand {
         project.timeline.insert_layer(self.insert_index, layer);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(layer) = &self.layer
             && let Some(idx) = project
                 .timeline
@@ -338,7 +338,7 @@ impl DeleteLayerCommand {
 
 impl Command for DeleteLayerCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session])) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(idx) = project.timeline.find_layer_index_by_id(&self.layer_id) {
             self.deleted_at_index = idx;
 
@@ -414,7 +414,7 @@ impl Command for DeleteLayerCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(layer) = self.layer.take() {
             let restored_owner = layer.clone();
             let mut restored_layers = vec![(self.deleted_at_index, layer)];
@@ -535,7 +535,7 @@ impl ReorderLayerCommand {
 
 impl Command for ReorderLayerCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         if let Err(reason) = Self::validate_membership(&project.timeline.layers, &self.new_order) {
@@ -554,7 +554,7 @@ impl Command for ReorderLayerCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -615,7 +615,7 @@ impl GroupLayersCommand {
 
 impl Command for GroupLayersCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         if self.selected_layer_ids.is_empty()
@@ -690,7 +690,7 @@ impl Command for GroupLayersCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -736,13 +736,13 @@ impl RenameLayerCommand {
 
 impl Command for RenameLayerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.name = self.new_name.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.name = self.old_name.clone();
         }
@@ -779,7 +779,7 @@ impl UngroupLayersCommand {
 
 impl Command for UngroupLayersCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session])) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(group) = &self.group_layer {
             if self.delete_command.is_none() {
                 self.delete_command = Some(DeleteLayerCommand::for_ungroup(
@@ -793,7 +793,7 @@ impl Command for UngroupLayersCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(delete) = &mut self.delete_command {
             delete.undo(project);
         }
@@ -827,7 +827,7 @@ impl DuplicateLayersCommand {
 
 impl Command for DuplicateLayersCommand {
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         for (i, layer) in self.new_layers.iter().cloned().enumerate() {
             project
                 .timeline
@@ -835,7 +835,7 @@ impl Command for DuplicateLayersCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         // Remove in reverse insertion order (highest index first) by ID for robustness.
         for layer in self.new_layers.iter().rev() {
             if let Some(idx) = project.timeline.find_layer_index_by_id(&layer.layer_id) {
@@ -869,7 +869,7 @@ impl Command for SetLayerAudioGainCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
             .layers
@@ -880,7 +880,7 @@ impl Command for SetLayerAudioGainCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
             .layers
@@ -914,7 +914,7 @@ impl SetLayerAnalysisOnlyCommand {
 
 impl Command for SetLayerAnalysisOnlyCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
             .layers
@@ -926,7 +926,7 @@ impl Command for SetLayerAnalysisOnlyCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
             .layers
@@ -975,14 +975,14 @@ impl AddLayerClipTriggerCommand {
 
 impl Command for AddLayerClipTriggerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             self.len_before = layer.clip_triggers.len();
             layer.clip_triggers.push(self.trigger.clone());
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.clip_triggers.truncate(self.len_before);
         }
@@ -1010,7 +1010,7 @@ impl RemoveLayerClipTriggerCommand {
 
 impl Command for RemoveLayerClipTriggerCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
             && self.index < layer.clip_triggers.len()
         {
@@ -1018,7 +1018,7 @@ impl Command for RemoveLayerClipTriggerCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(trigger) = self.removed.take()
             && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
         {
@@ -1065,7 +1065,7 @@ impl Command for SetLayerClipTriggerCommand {
             ChangeSet::of(&[Part::Effects, Part::Shapes])
         }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
             && let Some(slot) = layer.clip_triggers.get_mut(self.index)
         {
@@ -1073,7 +1073,7 @@ impl Command for SetLayerClipTriggerCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
             && let Some(slot) = layer.clip_triggers.get_mut(self.index)
         {

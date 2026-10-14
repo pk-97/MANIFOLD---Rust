@@ -99,7 +99,7 @@ impl Command for ForkPresetCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::fork_execute(self, project);
             return;
@@ -143,7 +143,7 @@ impl Command for ForkPresetCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::fork_undo(self, project);
             return;
@@ -210,7 +210,7 @@ impl SaveToProjectCommand {
 
 impl Command for SaveToProjectCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if self.saved.is_none() {
             let base = self
                 .source_def
@@ -236,7 +236,7 @@ impl Command for SaveToProjectCommand {
         project.upsert_embedded_preset(sp);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(id) = self.saved.as_ref().and_then(|p| p.id().cloned()) {
             project.remove_embedded_preset(&id);
         }
@@ -314,7 +314,7 @@ impl Command for RevertToLibraryCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::revert_execute(self, project);
             return;
@@ -336,7 +336,7 @@ impl Command for RevertToLibraryCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::revert_undo(self, project);
             return;
@@ -390,7 +390,7 @@ impl RenameEmbeddedPresetCommand {
 
 impl Command for RenameEmbeddedPresetCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let Some(mut ep) = project.embedded_preset(&self.id).cloned() else {
             return;
         };
@@ -404,7 +404,7 @@ impl Command for RenameEmbeddedPresetCommand {
         project.upsert_embedded_preset(ep);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(old_name) = self.old_name.clone() else {
             return;
         };
@@ -451,14 +451,14 @@ impl DeleteEmbeddedPresetCommand {
 
 impl Command for DeleteEmbeddedPresetCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let removed = project.remove_embedded_preset(&self.id);
         if self.removed.is_none() {
             self.removed = removed;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(ep) = self.removed.clone() {
             project.upsert_embedded_preset(ep);
         }

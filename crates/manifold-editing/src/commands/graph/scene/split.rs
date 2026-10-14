@@ -108,7 +108,7 @@ impl Command for SplitSceneObjectCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
@@ -553,7 +553,7 @@ impl Command for SplitSceneObjectCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((nodes, wires, metadata)) = self.prev.take() else {
             return;
         };

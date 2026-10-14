@@ -71,7 +71,7 @@ impl Command for PasteNodesCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let added = manifold_core::effect_graph_def::render_scene_count(&self.src_nodes);
         if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
@@ -140,7 +140,7 @@ impl Command for PasteNodesCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(remap) = self.remap.clone() else {
             return;
         };

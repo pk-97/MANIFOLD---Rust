@@ -401,7 +401,7 @@ impl Command for InsertMeshModifierCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.prev_graph = None;
         self.prev_instance = None;
@@ -494,7 +494,7 @@ impl Command for InsertMeshModifierCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
@@ -567,7 +567,7 @@ impl Command for RemoveMeshModifierCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let previous_instance = project
@@ -623,7 +623,7 @@ impl Command for RemoveMeshModifierCommand {
         self.prev = Some((previous_nodes, previous_wires, base.preset_metadata.clone(), previous_graph, previous_instance, removed_params));
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta, pgraph, snapshot, _removed)) = self.prev.take() else {
             return;
         };
@@ -698,7 +698,7 @@ impl Command for MoveMeshModifierCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(base) = project.graph_for_target(&self.target, None).cloned() else {
@@ -734,7 +734,7 @@ impl Command for MoveMeshModifierCommand {
         self.prev = Some(previous);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };

@@ -2801,6 +2801,32 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
             build: |p| Box::new(ClearLaneCommand::new(bloom_with_lane(p), "amount")),
             applied: |p| !p.settings.master_effects[0].automation_lanes.as_ref().is_some_and(|l| l.iter().any(|l| !l.points.is_empty())),
         },
+        SetterCase {
+            name: "rename macro label",
+            build: |p| Box::new(RenameMacroLabelCommand::new(0, p.settings.macro_bank.slots[0].label.clone(), "Wobble".into())),
+            applied: |p| p.settings.macro_bank.slots[0].label == "Wobble",
+        },
+        SetterCase {
+            name: "rescale beats for bpm",
+            build: |p| Box::new(RescaleBeatsForBpmChangeCommand::build(p, Bpm(120.0), Bpm(60.0)).expect("clips to rescale")),
+            applied: |p| p.timeline.layers[0].clips.iter().any(|c| c.start_beat == Beats(2.0)),
+        },
+        SetterCase {
+            name: "toggle param expose",
+            build: |p| Box::new(ToggleParamExposeCommand::new(push_master_bloom(p), "amount".into(), false)),
+            applied: |_| true,
+        },
+        SetterCase {
+            name: "reorder rack",
+            build: |p| {
+                push_master_bloom(p);
+                push_master_bloom(p);
+                GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Rack".into()).execute(p);
+                let group_id = master_group(p).id.clone();
+                Box::new(ReorderRackCommand::new(EffectTarget::Master, group_id, 2))
+            },
+            applied: |p| p.settings.master_effects[1].group_id.is_some(),
+        },
     ]);
 }
 

@@ -4,10 +4,39 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use std::fmt::Debug;
 
-/// Trait for undoable commands. Port of C# ICommand.
+/// An undoable edit. Implement `do_execute` and `do_undo`; everyone calls
+/// `execute` and `undo`, which under test and `change-audit` hold every write
+/// to `touches` (docs/UI_INVALIDATION_DESIGN.md D10). Never override them and
+/// never call the `do_` methods directly: that is how a command escapes the
+/// audit (`command_runs_only_through_the_audit` enforces both).
 pub trait Command: Debug + Send {
-    fn execute(&mut self, project: &mut Project);
-    fn undo(&mut self, project: &mut Project);
+    /// The edit itself. Callers use `execute`.
+    fn do_execute(&mut self, project: &mut Project);
+    /// The inverse edit. Callers use `undo`.
+    fn do_undo(&mut self, project: &mut Project);
+    /// Run the edit. Returns the parts it wrote: `touches`, plus whole
+    /// instances when it created a generator layer's instance on first edit
+    /// (`Project::with_preset_graph_mut` does that lazily). Stamp this set,
+    /// not `touches`.
+    fn execute(&mut self, project: &mut Project) -> ChangeSet {
+        let window = crate::audit::open(project);
+        let instances = generator_instances(project);
+        self.do_execute(project);
+        // Read after execute: a set that depends on the data is recorded there.
+        let wrote = self.touches().union(lifted(instances, project));
+        crate::audit::close(window, project, wrote, self.description());
+        wrote
+    }
+    /// Run the inverse edit. Returns the parts it wrote, as `execute` does.
+    fn undo(&mut self, project: &mut Project) -> ChangeSet {
+        let window = crate::audit::open(project);
+        let instances = generator_instances(project);
+        let declared = self.touches();
+        self.do_undo(project);
+        let wrote = declared.union(lifted(instances, project));
+        crate::audit::close(window, project, wrote, self.description());
+        wrote
+    }
     fn description(&self) -> &str;
     /// Append graph owners whose structural edits require canonical admission.
     /// Live value writes intentionally leave this empty.
@@ -29,6 +58,21 @@ pub trait Command: Debug + Send {
     /// under-declaring is a stale-UI bug the change audit catches. A set that
     /// depends on the data is read after execute, so execute may record it.
     fn touches(&self) -> ChangeSet;
+}
+
+/// Generator layers that own an instance. Counted around each edit: a rise
+/// means the edit created one, which writes a whole instance.
+pub fn generator_instances(project: &Project) -> usize {
+    project.timeline.layers.iter().filter(|layer| layer.gen_params().is_some()).count()
+}
+
+/// Whole instances when the generator instance count moved from `before`.
+pub fn lifted(before: usize, project: &Project) -> ChangeSet {
+    if generator_instances(project) == before {
+        ChangeSet::NONE
+    } else {
+        crate::commands::WHOLE_INSTANCES
+    }
 }
 
 /// Callbacks for layer lifecycle events (add/remove).
@@ -60,7 +104,7 @@ impl CompositeCommand {
 }
 
 impl Command for CompositeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         for index in 0..self.commands.len() {
             self.commands[index].execute(project);
@@ -78,7 +122,7 @@ impl Command for CompositeCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if self.rejection.is_some() {
             return;
         }
@@ -128,13 +172,51 @@ mod tests {
     use super::*;
     use manifold_core::change::Part;
 
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n != "target") {
+                    rust_files(&path, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Every command runs through the audited `execute` and `undo`: no impl
+    /// overrides them and nothing outside this file calls the `do_` bodies.
+    #[test]
+    fn command_runs_only_through_the_audit() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        rust_files(&crates, &mut files);
+        assert!(files.len() > 100, "the scan found no sources under {}", crates.display());
+        let this = std::path::Path::new(file!()).file_name().unwrap();
+        let mut escapes = Vec::new();
+        for path in files.iter().filter(|p| !p.ends_with(std::path::Path::new("manifold-editing/src").join(this))) {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            for (n, line) in text.lines().enumerate() {
+                let code = line.trim_start();
+                let overrides = (code.starts_with("fn execute(&mut self,") || code.starts_with("fn undo(&mut self,"))
+                    && code.contains("&mut Project)");
+                let bypasses = code.contains(".do_execute(") || code.contains(".do_undo(");
+                if overrides || bypasses {
+                    escapes.push(format!("{}:{}: {}", path.display(), n + 1, code));
+                }
+            }
+        }
+        assert!(escapes.is_empty(), "commands escaping the change audit:\n{}", escapes.join("\n"));
+    }
+
     #[derive(Debug)]
     struct TargetCommand(GraphTarget);
 
     impl Command for TargetCommand {
         fn touches(&self) -> ChangeSet { ChangeSet::NONE }
-        fn execute(&mut self, _project: &mut Project) {}
-        fn undo(&mut self, _project: &mut Project) {}
+        fn do_execute(&mut self, _project: &mut Project) {}
+        fn do_undo(&mut self, _project: &mut Project) {}
         fn description(&self) -> &str {
             "Target"
         }
@@ -148,8 +230,8 @@ mod tests {
 
     impl Command for ReasonCommand {
         fn touches(&self) -> ChangeSet { ChangeSet::NONE }
-        fn execute(&mut self, _project: &mut Project) {}
-        fn undo(&mut self, _project: &mut Project) {}
+        fn do_execute(&mut self, _project: &mut Project) {}
+        fn do_undo(&mut self, _project: &mut Project) {}
         fn description(&self) -> &str {
             "Reason"
         }
@@ -170,13 +252,13 @@ mod tests {
 
     impl Command for AppendCommand {
         fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Media]) }
-        fn execute(&mut self, project: &mut Project) {
+        fn do_execute(&mut self, project: &mut Project) {
             project
                 .settings
                 .video_library_paths
                 .push(self.to_append.clone());
         }
-        fn undo(&mut self, project: &mut Project) {
+        fn do_undo(&mut self, project: &mut Project) {
             project.settings.video_library_paths.pop();
         }
         fn description(&self) -> &str {
@@ -260,6 +342,14 @@ mod tests {
         let mut targets = Vec::new();
         command.graph_admission_targets(&mut targets);
         assert_eq!(targets, vec![first, second]);
+        // Neither helper writes; the audit holds them to that.
+        let mut project = Project::default();
+        let mut command = command;
+        command.execute(&mut project);
+        command.undo(&mut project);
+        let mut reason = ReasonCommand("none");
+        reason.execute(&mut project);
+        reason.undo(&mut project);
     }
 
     #[test]

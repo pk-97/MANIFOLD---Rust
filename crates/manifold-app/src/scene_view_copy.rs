@@ -82,8 +82,8 @@ pub(crate) fn run(
         Ok(command) if command.is_empty() => {}
         Ok(command) => {
             let mut command: Box<dyn Command> = Box::new(command);
-            command.execute(project);
-            stamps.bump(command.touches());
+            let wrote = command.execute(project);
+            stamps.bump(wrote);
             ContentCommand::send(content_tx, ContentCommand::Execute(command));
         }
         Err(reason) => ui.toast.show(reason),

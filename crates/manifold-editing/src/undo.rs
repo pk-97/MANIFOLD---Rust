@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use std::collections::VecDeque;
 
@@ -10,6 +11,8 @@ pub struct UndoRedoManager {
     undo_stack: VecDeque<Box<dyn Command>>,
     redo_stack: Vec<Box<dyn Command>>,
     last_rejection: Option<String>,
+    /// The parts the last execute, undo or redo wrote (`Command::execute`).
+    last_written: ChangeSet,
 }
 
 impl UndoRedoManager {
@@ -18,6 +21,7 @@ impl UndoRedoManager {
             undo_stack: VecDeque::with_capacity(MAX_UNDO_HISTORY),
             redo_stack: Vec::with_capacity(32),
             last_rejection: None,
+            last_written: ChangeSet::NONE,
         }
     }
 
@@ -40,7 +44,7 @@ impl UndoRedoManager {
         F: FnMut(&Project) -> Result<(), String>,
     {
         self.last_rejection = None;
-        command.execute(project);
+        self.last_written = command.execute(project);
         if !command.was_applied() {
             self.last_rejection = command.rejection_reason().map(str::to_string);
             return false;
@@ -80,7 +84,7 @@ impl UndoRedoManager {
     {
         self.last_rejection = None;
         if let Some(mut cmd) = self.undo_stack.pop_back() {
-            cmd.undo(project);
+            self.last_written = cmd.undo(project);
             if let Err(message) = validate(project) {
                 cmd.execute(project);
                 self.undo_stack.push_back(cmd);
@@ -110,7 +114,7 @@ impl UndoRedoManager {
     {
         self.last_rejection = None;
         if let Some(mut cmd) = self.redo_stack.pop() {
-            cmd.execute(project);
+            self.last_written = cmd.execute(project);
             if !cmd.was_applied() {
                 self.last_rejection = cmd.rejection_reason().map(str::to_string);
                 self.redo_stack.push(cmd);
@@ -160,6 +164,10 @@ impl UndoRedoManager {
     pub fn peek_redo_description(&self) -> Option<&str> {
         self.redo_stack.last().map(|c| c.description())
     }
+    /// The parts the last successful execute, undo or redo wrote. Stamp this.
+    pub fn last_written(&self) -> ChangeSet {
+        self.last_written
+    }
     /// Parts the next `undo()` writes. Undo touches what execute touched (D2).
     pub fn peek_undo_touches(&self) -> manifold_core::change::ChangeSet {
         self.undo_stack.back().map_or(manifold_core::change::ChangeSet::NONE, |c| c.touches())
@@ -208,11 +216,11 @@ mod tests {
         fn touches(&self) -> manifold_core::change::ChangeSet {
             manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Settings])
         }
-        fn execute(&mut self, project: &mut Project) {
+        fn do_execute(&mut self, project: &mut Project) {
             self.old_bpm = project.settings.bpm;
             project.settings.bpm = self.new_bpm;
         }
-        fn undo(&mut self, project: &mut Project) {
+        fn do_undo(&mut self, project: &mut Project) {
             project.settings.bpm = self.old_bpm;
         }
         fn description(&self) -> &str {

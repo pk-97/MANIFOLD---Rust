@@ -199,7 +199,7 @@ impl Command for RemoveSceneFluidRoleCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         execute_lifecycle(
             project,
             &self.target,
@@ -215,7 +215,7 @@ impl Command for RemoveSceneFluidRoleCommand {
         );
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         undo_lifecycle(
             project,
             &self.target,
@@ -242,7 +242,7 @@ impl Command for RetargetSceneFluidRoleCommand {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let source = self.source.clone();
         let domain = self.domain.clone();
         execute_lifecycle(
@@ -260,7 +260,7 @@ impl Command for RetargetSceneFluidRoleCommand {
         );
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         undo_lifecycle(
             project,
             &self.target,

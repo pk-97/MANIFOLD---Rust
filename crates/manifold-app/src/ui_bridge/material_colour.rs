@@ -75,7 +75,7 @@ pub(super) fn rollback_preview(
 }
 
 impl Command for ChangeMaterialColourCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejected =
             !project.preset_instance(&self.target).is_some_and(|inst| {
                 inst.effect_type() == &self.preset
@@ -97,7 +97,7 @@ impl Command for ChangeMaterialColourCommand {
             self.expected = self.baseline;
         }
     }
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.inner.undo(project);
     }
     fn description(&self) -> &str {

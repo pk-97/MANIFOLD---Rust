@@ -32,7 +32,7 @@ impl AddDisplayPlacementCommand {
 
 impl Command for AddDisplayPlacementCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         project
             .settings
             .stage_layout
@@ -40,7 +40,7 @@ impl Command for AddDisplayPlacementCommand {
             .push(self.placement.clone());
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let id = self.placement.id;
         project
             .settings
@@ -70,7 +70,7 @@ impl RemoveDisplayPlacementCommand {
 
 impl Command for RemoveDisplayPlacementCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let placements = &mut project.settings.stage_layout.placements;
         if let Some(pos) = placements.iter().position(|p| p.id == self.id) {
             let removed = placements.remove(pos);
@@ -78,7 +78,7 @@ impl Command for RemoveDisplayPlacementCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((pos, placement)) = self.removed.take() {
             let placements = &mut project.settings.stage_layout.placements;
             let at = pos.min(placements.len());
@@ -111,13 +111,13 @@ impl RenameDisplayPlacementCommand {
 
 impl Command for RenameDisplayPlacementCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.name = self.new_name.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.name = self.old_name.clone();
         }
@@ -159,14 +159,14 @@ impl SetDisplayPlacementTransformCommand {
 
 impl Command for SetDisplayPlacementTransformCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.position_mm = self.new_position_mm;
             p.rotation = self.new_rotation;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.position_mm = self.old_position_mm;
             p.rotation = self.old_rotation;
@@ -199,13 +199,13 @@ impl SetDisplayPhysicalSizeCommand {
 
 impl Command for SetDisplayPhysicalSizeCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.physical_size_mm = self.new_size_mm;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.physical_size_mm = self.old_size_mm;
         }
@@ -236,13 +236,13 @@ impl SetDisplayNativeResolutionCommand {
 
 impl Command for SetDisplayNativeResolutionCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.native_resolution = self.new_resolution;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.native_resolution = self.old_resolution;
         }
@@ -274,13 +274,13 @@ impl SetDisplayEnabledCommand {
 
 impl Command for SetDisplayEnabledCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.enabled = self.new_enabled;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.enabled = self.old_enabled;
         }
@@ -316,13 +316,13 @@ impl SetDisplayIdentityCommand {
 
 impl Command for SetDisplayIdentityCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.identity = self.new_identity.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.identity = self.old_identity.clone();
         }
@@ -351,13 +351,13 @@ impl SetDisplayAdvancedCommand {
 
 impl Command for SetDisplayAdvancedCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.advanced = self.new.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.advanced = self.old.clone();
         }
