@@ -57440,6 +57440,76 @@
           "name": "Look Y"
         },
         {
+          "default": "1",
+          "id": "32_intensity",
+          "max": "4",
+          "min": "0",
+          "name": "Intensity"
+        },
+        {
+          "default": "0",
+          "id": "32_fill",
+          "max": "2",
+          "min": "0",
+          "name": "Fill Light"
+        },
+        {
+          "default": "-2",
+          "id": "63_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "2",
+          "id": "63_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "5",
+          "id": "63_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "1",
+          "id": "63_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "1",
+          "id": "63_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "1",
+          "id": "63_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "0",
+          "id": "63_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "63_shadow_softness",
+          "max": "3",
+          "min": "0",
+          "name": "Shadow Softness"
+        },
+        {
           "default": "512",
           "id": "32_width",
           "max": "4096",
@@ -57466,13 +57536,6 @@
           "max": "1",
           "min": "0",
           "name": "Azimuth Variation"
-        },
-        {
-          "default": "1",
-          "id": "32_intensity",
-          "max": "4",
-          "min": "0",
-          "name": "Intensity"
         },
         {
           "default": "0",
@@ -57543,13 +57606,6 @@
           "max": "1",
           "min": "0",
           "name": "Sun Disc Size"
-        },
-        {
-          "default": "0",
-          "id": "32_fill",
-          "max": "2",
-          "min": "0",
-          "name": "Fill Light"
         },
         {
           "default": "0",
@@ -59638,27 +59694,6 @@
           "name": "Mode"
         },
         {
-          "default": "-2",
-          "id": "63_pos_x",
-          "max": "100",
-          "min": "-100",
-          "name": "Position X"
-        },
-        {
-          "default": "2",
-          "id": "63_pos_y",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Y"
-        },
-        {
-          "default": "5",
-          "id": "63_pos_z",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Z"
-        },
-        {
           "default": "0",
           "id": "63_aim_x",
           "max": "100",
@@ -59678,27 +59713,6 @@
           "max": "100",
           "min": "-100",
           "name": "Aim Z"
-        },
-        {
-          "default": "1",
-          "id": "63_color_r",
-          "max": "1",
-          "min": "0",
-          "name": "Colour R"
-        },
-        {
-          "default": "1",
-          "id": "63_color_g",
-          "max": "1",
-          "min": "0",
-          "name": "Colour G"
-        },
-        {
-          "default": "1",
-          "id": "63_color_b",
-          "max": "1",
-          "min": "0",
-          "name": "Colour B"
         },
         {
           "default": "30",
@@ -59727,20 +59741,6 @@
           "max": "1.5707964",
           "min": "0",
           "name": "Outer Cone Angle"
-        },
-        {
-          "default": "0",
-          "id": "63_cast_shadows",
-          "max": "1",
-          "min": "0",
-          "name": "Cast Shadows"
-        },
-        {
-          "default": "1",
-          "id": "63_shadow_softness",
-          "max": "3",
-          "min": "0",
-          "name": "Shadow Softness"
         },
         {
           "default": "0.003",

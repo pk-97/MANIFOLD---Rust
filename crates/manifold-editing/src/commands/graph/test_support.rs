@@ -283,7 +283,7 @@ pub(super) fn project_with_one_generator_layer() -> (Project, LayerId) {
     (project, lid)
 }
 
-/// A single-param `SceneParamMetadata` fixture — stands in for what
+/// A single-param `NodeParamMetadata` fixture — stands in for what
 /// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type`
 /// would compute from a real primitive's `ParamDef` (this crate can't
 /// depend on the renderer, so the app-side caller is the real source —
@@ -292,8 +292,8 @@ pub(super) fn project_with_one_generator_layer() -> (Project, LayerId) {
 pub(super) fn scene_param_meta(
     name: &str,
     label: &str,
-) -> manifold_core::scene_exposure::SceneParamMetadata {
-    manifold_core::scene_exposure::SceneParamMetadata {
+) -> manifold_core::scene_exposure::NodeParamMetadata {
+    manifold_core::scene_exposure::NodeParamMetadata {
         name: name.to_string(),
         label: label.to_string(),
         min: 0.0,
@@ -307,5 +307,8 @@ pub(super) fn scene_param_meta(
         value_labels: Vec::new(),
         convert: manifold_core::effects::ParamConvert::Float,
         material_role: None,
+        scene: None,
+        unit: None,
+        limit: Default::default(),
     }
 }

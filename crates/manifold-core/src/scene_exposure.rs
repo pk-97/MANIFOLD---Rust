@@ -19,7 +19,7 @@ use crate::effects::ParamConvert;
 /// Metadata for one inner-node parameter, produced from the primitive's own
 /// `ParamDef` by the renderer-side provider.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SceneParamMetadata {
+pub struct NodeParamMetadata {
     pub name: String,
     pub label: String,
     pub min: f32,
@@ -36,78 +36,28 @@ pub struct SceneParamMetadata {
     /// Optional material-inspector semantic role supplied by the renderer's
     /// classifier and copied into the persisted manifest descriptor.
     pub material_role: Option<crate::material_inspector::MaterialParamRole>,
+    /// Where the param lives on the scene surfaces, from the scene table
+    /// (SCENE_SURFACES_DESIGN.md section 3.3 (the scene table)). `None` for a
+    /// type outside the scene vocabulary.
+    pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
+    pub limit: manifold_foundation::param_range::HardLimit,
 }
 
 /// Source of per-type param metadata used by the creation-site commands and the
-/// load-time migration. Implemented by `manifold_nodes` using
+/// load-time migration. Implemented by `manifold_nodes_scene` using
 /// `PrimitiveRegistry`.
-pub trait SceneExposureMetadataProvider: Send + Sync {
-    /// Return the full param manifest for `type_id`, in the order it should
-    /// appear on the card. Empty when the type is unknown or has no exposed
-    /// params.
-    fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata>;
+pub trait NodeParamProvider: Send + Sync {
+    /// The params `type_id` stamps, in card order: every param except those
+    /// the scene table marks Hidden. Empty when the type is unknown.
+    fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata>;
 }
 
-/// Card-visibility curation for the P1 scene-vocabulary auto-stamping path
-/// (`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` — card-visibility
-/// convergence follow-up). P1 stamps EVERY param on a scene-vocabulary node
-/// as a scene-panel exposure — the scene panel keeps all of them (its own
-/// section query never filters, `sections_for_doc_ids` in
-/// `manifold_app::ui_bridge::projection::scene`), but the generator's outer
-/// CARD only wants a curated performance subset. This is a pure lookup: the
-/// param stays a real, fully addressable exposure either way (OSC, Ableton,
-/// macros, drivers) — `card_visible` only gates the CARD row builder.
-///
-/// Visible iff explicitly listed here; every other vocab type/param is
-/// hidden from the card. Hand-curated explicit card params stamped OUTSIDE
-/// this path (env_mode, scene_ambient, the Animation section, a user-added
-/// graph-editor expose, …) never call this function, so they default `true`
-/// unaffected.
-pub fn card_visible_for(type_id: &str, param: &str) -> bool {
-    let visible: &[&str] = match type_id {
-        "node.physics_world" => &["copy_count", "reset"],
-        // The performance subset under FLIP's names (D17); a domain without
-        // one of these params simply has no such row.
-        domain if crate::liquid_domain::is_liquid_domain(domain) => {
-            &["emission", "inflow_speed", "speed", "reset"]
-        }
-        "node.fluid_role_source" => &["enabled", "velocity_x", "velocity_y", "velocity_z"],
-        // `fov_y` lives on `node.orbit_camera` (not `node.camera_lens` —
-        // that primitive's real params are focus_distance/f_stop/
-        // shutter_angle/exposure_ev, all correctly hidden by the
-        // default-deny below).
-        "node.orbit_camera" => &["orbit", "tilt", "distance", "look_y", "fov_y"],
-        "node.light" => &[
-            "pos_x",
-            "pos_y",
-            "pos_z",
-            "intensity",
-            "color_r",
-            "color_g",
-            "color_b",
-            "cast_shadows",
-            "shadow_softness",
-        ],
-        "node.transform_3d" => &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z"],
-        "node.scene_object" => &["cast_shadows"],
-        "node.bake_environment" => &["intensity", "fill"],
-        // RAYTRACING_DESIGN.md D14/section 5.2/section 9 RD9: the auto-stamp already curates the
-        // root to exactly these three (RENDER_SCENE_STAMPED_PARAMS), and the
-        // Scene Setup panel's World "Rendering" section renders through the
-        // card-filtered surface — hidden here means the section shows zero
-        // rows anywhere.
-        "node.render_scene" => &[
-            "rt_enabled",
-            "temporal_upscale",
-            "rt_reflections",
-            "rt_denoise_feed",
-            "rt_shadows",
-            "rt_ao",
-            "rt_gi",
-        ],
-        _ => &[],
-    };
-    visible.contains(&param)
+/// A stamped control is on the curated card only when the scene table gives
+/// its param the performance role; a type outside the vocabulary stays off.
+fn stamped_card_visible(meta: &NodeParamMetadata) -> bool {
+    meta.scene
+        .is_some_and(|s| s.role == manifold_foundation::scene_surface::SurfaceRole::Performance)
 }
 
 /// Stamp card exposures for every param in `params_metadata` onto the node with
@@ -119,13 +69,12 @@ pub fn stamp_scene_node_exposures(
     def: &mut EffectGraphDef,
     node_doc_id: u32,
     section: &str,
-    params_metadata: &[SceneParamMetadata],
+    params_metadata: &[NodeParamMetadata],
 ) -> bool {
     let Some(node) = def.nodes.iter().find(|n| n.id == node_doc_id) else {
         return false;
     };
     let node_id = node.node_id.clone();
-    let type_id = node.type_id.clone();
     // Cloned rather than borrowed: `meta` below needs a mutable borrow of
     // `def.preset_metadata`, and the node's `params` map is small
     // (edit-time only, never on a hot path).
@@ -140,7 +89,6 @@ pub fn stamp_scene_node_exposures(
         &mut meta.bindings,
         node_doc_id,
         &node_id,
-        &type_id,
         section,
         params_metadata,
         &node_params,
@@ -183,18 +131,13 @@ fn empty_scene_preset_metadata() -> PresetMetadata {
 /// this is what keeps an importer-placed object's position/material/framing
 /// from being clobbered back to the generic primitive default at bind time
 /// (`apply_binding_defaults`, BUG-303).
-///
-/// `type_id` selects the stamped spec's `card_visible` flag via
-/// [`card_visible_for`] — the CARD-curation table, orthogonal to `node_id`
-/// (the exposure's addressing target) and `section` (its card grouping).
 pub fn stamp_scene_node_exposures_into(
     params: &mut Vec<ParamSpecDef>,
     bindings: &mut Vec<BindingDef>,
     node_doc_id: u32,
     node_id: &NodeId,
-    type_id: &str,
     section: &str,
-    params_metadata: &[SceneParamMetadata],
+    params_metadata: &[NodeParamMetadata],
     node_params: &BTreeMap<String, SerializedParamValue>,
 ) -> bool {
     if params_metadata.is_empty() {
@@ -286,7 +229,7 @@ pub fn stamp_scene_node_exposures_into(
             is_trigger_gate: false,
             wraps: meta.wraps,
             section: Some(section.to_string()),
-            card_visible: card_visible_for(type_id, &meta.name),
+            card_visible: stamped_card_visible(meta),
             material_role: meta.material_role,
             limit: Default::default(),
             unit: None,
@@ -436,7 +379,7 @@ pub fn migrate_scene_exposures<F>(
     def: &mut EffectGraphDef,
     vocabulary: &[&str],
     mut section_name: F,
-    provider: &dyn SceneExposureMetadataProvider,
+    provider: &dyn NodeParamProvider,
 ) -> bool
 where
     F: FnMut(&EffectGraphNode) -> String,
@@ -459,7 +402,7 @@ where
 
     let mut changed = false;
     for (node_doc_id, node_id, type_id, section, node_params, wired_inputs) in &found {
-        let metadata = provider.metadata_for_type(type_id);
+        let metadata = provider.params_for_type(type_id);
         let fresh_metadata: Vec<_> = metadata
             .into_iter()
             .filter(|entry| {
@@ -476,7 +419,6 @@ where
             &mut meta.bindings,
             *node_doc_id,
             node_id,
-            type_id,
             section,
             &fresh_metadata,
             node_params,
@@ -491,7 +433,7 @@ where
     // because a binding already targets `(node_id, param)` — re-seed those in
     // place whenever the node still has a stamped value that disagrees.
     for (_, node_id, type_id, _, node_params, _) in &found {
-        let metadata = provider.metadata_for_type(type_id);
+        let metadata = provider.params_for_type(type_id);
         for meta_entry in &metadata {
             let Some(stamped) = node_params.get(&meta_entry.name) else {
                 // No stamped value for this param — nothing to repair against.
@@ -543,7 +485,7 @@ where
     // exposure on the same node authored. Idempotent: a second run
     // re-derives `true` and writes nothing.
     for (_, node_id, type_id, _, _, _) in &found {
-        let metadata = provider.metadata_for_type(type_id);
+        let metadata = provider.params_for_type(type_id);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter_mut().find(|b| {
                 !b.user_added
@@ -626,8 +568,8 @@ mod tests {
         }
     }
 
-    fn float_meta(name: &str, label: &str) -> SceneParamMetadata {
-        SceneParamMetadata {
+    fn float_meta(name: &str, label: &str) -> NodeParamMetadata {
+        NodeParamMetadata {
             name: name.to_string(),
             label: label.to_string(),
             min: 0.0,
@@ -641,6 +583,9 @@ mod tests {
             value_labels: Vec::new(),
             convert: ParamConvert::Float,
             material_role: None,
+            scene: None,
+            unit: None,
+            limit: Default::default(),
         }
     }
 
@@ -775,8 +720,8 @@ mod tests {
     #[test]
     fn migrate_skips_unknown_nodes_and_is_idempotent() {
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.light" {
                     vec![float_meta("intensity", "Intensity")]
                 } else {
@@ -849,7 +794,7 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: Some("Light".to_string()),
-            card_visible: card_visible_for("node.light", param),
+            card_visible: true,
             material_role: None,
             limit: Default::default(),
             unit: None,
@@ -873,8 +818,8 @@ mod tests {
     }
 
     struct LightProvider;
-    impl SceneExposureMetadataProvider for LightProvider {
-        fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+    impl NodeParamProvider for LightProvider {
+        fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
             if type_id == "node.light" {
                 vec![float_meta("intensity", "Intensity")]
             } else {
@@ -984,8 +929,8 @@ mod tests {
         use crate::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface};
 
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.transform_3d" {
                     vec![float_meta("pos_x", "X")]
                 } else {
@@ -1060,8 +1005,8 @@ mod tests {
         use crate::effect_graph_def::{EffectGraphWire, GroupDef, GroupInterface};
 
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.light" {
                     vec![float_meta("intensity", "Intensity")]
                 } else {
@@ -1320,8 +1265,8 @@ mod tests {
     #[test]
     fn migrate_repairs_pre_fix_binding_default_from_stamped_node_value() {
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.transform_3d" {
                     vec![float_meta("pos_x", "X")]
                 } else {
@@ -1446,47 +1391,28 @@ mod tests {
         assert_eq!(def, after_repair);
     }
 
-    // ── Card-visibility curation (card_visible_for) ────────────────────
+    // ── Card visibility follows the scene table's role ──────────────────
 
-    #[test]
-    fn card_visible_for_transform_shows_pos_and_rot_hides_scale() {
-        assert!(card_visible_for("node.transform_3d", "pos_x"));
-        assert!(card_visible_for("node.transform_3d", "pos_y"));
-        assert!(card_visible_for("node.transform_3d", "pos_z"));
-        assert!(card_visible_for("node.transform_3d", "rot_x"));
-        assert!(card_visible_for("node.transform_3d", "rot_y"));
-        assert!(card_visible_for("node.transform_3d", "rot_z"));
-        assert!(!card_visible_for("node.transform_3d", "scale_x"));
-        assert!(!card_visible_for("node.transform_3d", "scale_y"));
-        assert!(!card_visible_for("node.transform_3d", "scale_z"));
+    fn with_role(mut meta: NodeParamMetadata, role: manifold_foundation::scene_surface::SurfaceRole) -> NodeParamMetadata {
+        use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, SceneParamDesc, SurfaceRole};
+        meta.scene = Some(SceneParamDesc {
+            role,
+            group: ControlGroup::Transform,
+            band: (role == SurfaceRole::Performance).then_some(CardBand::Scene),
+            card_order: 0,
+            card_label: CardLabel::Param,
+            gate: None,
+            switch: None,
+        });
+        meta
     }
 
+    /// A stamped control is card-visible exactly when its param has the
+    /// performance role; Setup and unclassified params stay off the card.
+    /// Every stamp is a real binding either way.
     #[test]
-    fn card_visible_for_render_scene_shows_all_rt_toggles() {
-        // RAYTRACING_DESIGN.md D14 / section 5.2 / section 17 DN4 / hybrid-split
-        // levers: all seven stamped RT toggles must surface on the curated card.
-        assert!(card_visible_for("node.render_scene", "rt_enabled"));
-        assert!(card_visible_for("node.render_scene", "temporal_upscale"));
-        assert!(card_visible_for("node.render_scene", "rt_reflections"));
-        assert!(card_visible_for("node.render_scene", "rt_denoise_feed"));
-        assert!(card_visible_for("node.render_scene", "rt_shadows"));
-        assert!(card_visible_for("node.render_scene", "rt_ao"));
-        assert!(card_visible_for("node.render_scene", "rt_gi"));
-    }
-
-    #[test]
-    fn card_visible_for_material_hides_everything() {
-        assert!(!card_visible_for("node.pbr_material", "color_r"));
-        assert!(!card_visible_for("node.pbr_material", "roughness"));
-        assert!(!card_visible_for("node.cel_material", "color_r"));
-    }
-
-    /// Stamping a transform node exposes `pos_x` (card-visible) and
-    /// `scale_x` (card-hidden) — both are real, fully addressable
-    /// exposures (the binding + spec both exist), `card_visible` only gates
-    /// which one becomes a CARD row.
-    #[test]
-    fn stamp_sets_card_visible_true_for_pos_false_for_scale() {
+    fn stamp_card_visible_follows_the_role() {
+        use manifold_foundation::scene_surface::SurfaceRole;
         let mut def = EffectGraphDef {
             version: 1,
             name: None,
@@ -1501,48 +1427,19 @@ mod tests {
             &mut def,
             7,
             "Transform",
-            &[float_meta("pos_x", "X"), float_meta("scale_x", "Scale X")],
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let pos_spec = meta.params.iter().find(|p| p.name == "X").unwrap();
-        assert!(pos_spec.card_visible, "pos_x stays visible on the card");
-        let scale_spec = meta.params.iter().find(|p| p.name == "Scale X").unwrap();
-        assert!(!scale_spec.card_visible, "scale_x is hidden from the card");
-
-        // Both are still real bindings — card_visible never affects addressing.
-        assert_eq!(meta.bindings.len(), 2);
-    }
-
-    /// Stamping a material node hides every param — `card_visible_for`
-    /// returns `false` for the entire vocab type.
-    #[test]
-    fn stamp_material_node_hides_all_params_from_card() {
-        let mut def = EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            scene_modifiers: Vec::new(),
-            nodes: vec![make_node(3, "node.pbr_material")],
-            wires: vec![],
-        };
-
-        assert!(stamp_scene_node_exposures(
-            &mut def,
-            3,
-            "Material",
             &[
-                float_meta("color_r", "Colour R"),
-                float_meta("roughness", "Roughness")
+                with_role(float_meta("pos_x", "X"), SurfaceRole::Performance),
+                with_role(float_meta("scale_x", "Scale X"), SurfaceRole::Setup),
+                float_meta("loose", "Loose"),
             ],
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
-        assert!(
-            meta.params.iter().all(|p| !p.card_visible),
-            "no material param shows on the card"
-        );
+        let visible = |name: &str| meta.params.iter().find(|p| p.name == name).unwrap().card_visible;
+        assert!(visible("X"));
+        assert!(!visible("Scale X"));
+        assert!(!visible("Loose"), "a param outside the table stays off the card");
+        assert_eq!(meta.bindings.len(), 3);
     }
 
     fn float_spec_default(id: &str, name: &str, section: &str) -> ParamSpecDef {

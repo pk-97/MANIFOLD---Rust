@@ -391,8 +391,10 @@ fn gather_known_params(
     // user-added tail from the graph's `user_added` bindings.
     let mut out = Vec::new();
     if let Some(def) = crate::preset_definition_registry::try_get(effect_type) {
-        for pd in def.param_defs.iter() {
-            out.push((pd.spec.clone(), ParamOrigin::Bundled, SpecSource::Lookup, ParamChoices::default()));
+        let mut specs: Vec<_> = def.param_defs.iter().map(|pd| pd.spec.clone()).collect();
+        crate::param_lookup::fill_template_scene_facts(effect_type, &mut specs);
+        for spec in specs {
+            out.push((spec, ParamOrigin::Bundled, SpecSource::Lookup, ParamChoices::default()));
         }
     }
     if let Some(meta) = meta {

@@ -10,7 +10,7 @@ use manifold_core::effect_graph_def::{
     InterfacePortDef, ParamSpecDef, PresetMetadata, StringBindingDef,
 };
 use manifold_core::layer::Layer;
-use manifold_core::scene_exposure::SceneParamMetadata;
+use manifold_core::scene_exposure::NodeParamMetadata;
 use manifold_core::types::LayerType;
 
 mod force_targets;
@@ -661,7 +661,7 @@ fn compound_parent_rename_keeps_each_child_name_and_duplicate_fans_out_parent_vi
     assert!(visible_bindings.iter().all(|binding| binding.id == "compound_parent_visible"));
 }
 
-fn body_params() -> Vec<SceneParamMetadata> {
+fn body_params() -> Vec<NodeParamMetadata> {
     vec![scene_param_meta("density", "Density"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
 }
 
@@ -891,7 +891,7 @@ fn enable_physics_writes_no_mass() {
 fn imported_physics_split_sets_matching_source_and_body_fragments() {
     let mut graph = imported_group_scene_graph();
     let meta = graph.preset_metadata.as_mut().unwrap();
-    manifold_core::scene_exposure::stamp_scene_node_exposures_into(&mut meta.params, &mut meta.bindings, 11, &NodeId::new("import_transform"), "node.transform_3d", "Imported — Transform", &[scene_param_meta("pos_y", "Position Y")], &BTreeMap::new());
+    manifold_core::scene_exposure::stamp_scene_node_exposures_into(&mut meta.params, &mut meta.bindings, 11, &NodeId::new("import_transform"), "Imported — Transform", &[scene_param_meta("pos_y", "Position Y")], &BTreeMap::new());
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
     let mut enable = EnableSceneObjectPhysicsCommand::new(target.clone(), 0, 0, body_params(), graph.clone());

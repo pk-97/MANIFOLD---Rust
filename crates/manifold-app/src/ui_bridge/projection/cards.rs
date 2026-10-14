@@ -410,7 +410,7 @@ fn param_surface(
     // Which params become rows is the caller's explicit `visibility` choice
     // (scene-panel exposure convergence, card-visibility follow-up).
     // `CuratedCard` hides a scene-vocabulary auto-stamped param the curated
-    // table marks `card_visible: false` (`scene_exposure::card_visible_for`) —
+    // table marks `card_visible: false` (any role but performance) —
     // it stays a real, fully addressable manifest entry (OSC, Ableton, macros,
     // drivers all still resolve it by id), it just never becomes a CARD row.
     // `All` keeps every param (the Scene Setup dock's full generator surface).

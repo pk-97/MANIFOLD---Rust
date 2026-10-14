@@ -20,7 +20,7 @@ use crate::PresetTypeId;
 use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef};
 use crate::params::{ParamChoices, SpecSource};
 use crate::scene_exposure::{
-    SceneParamMetadata, scene_radius_from_bounds, scene_scaled_range, serialized_default_as_f32,
+    NodeParamMetadata, scene_radius_from_bounds, scene_scaled_range, serialized_default_as_f32,
 };
 
 /// One control's lookup key.
@@ -35,7 +35,7 @@ pub enum ParamKey<'a> {
 /// Registered once at link time by the crate that owns `PrimitiveRegistry`
 /// (`manifold-nodes-scene`); read-only, no lock.
 pub struct NodeParamSource {
-    pub params_for_type: fn(&str) -> Vec<SceneParamMetadata>,
+    pub params_for_type: fn(&str) -> Vec<NodeParamMetadata>,
 }
 inventory::collect!(NodeParamSource);
 
@@ -63,7 +63,7 @@ pub fn describe(key: ParamKey<'_>) -> Option<ParamSpecDef> {
 /// not once per control.
 #[derive(Default)]
 struct Resolver {
-    node_params: AHashMap<String, Vec<SceneParamMetadata>>,
+    node_params: AHashMap<String, Vec<NodeParamMetadata>>,
 }
 
 impl Resolver {
@@ -94,6 +94,9 @@ impl Resolver {
                     is_angle: meta.is_angle,
                     wraps: meta.wraps,
                     material_role: meta.material_role,
+                    limit: meta.limit,
+                    unit: meta.unit,
+                    scene: meta.scene,
                     ..ParamSpecDef::default()
                 })
             }
@@ -123,7 +126,57 @@ impl Resolver {
         spec.value_labels = d.value_labels;
         spec.min = min;
         spec.max = max;
+        spec.scene = d.scene;
+        spec.unit = d.unit;
+        spec.limit = d.limit;
         spec
+    }
+
+    /// D23 (scene facts follow the bound node): a template control bound to
+    /// exactly one node target takes that target's scene placement, unit and
+    /// limit wherever the template declares none.
+    fn scene_overlay(
+        &mut self,
+        mut spec: ParamSpecDef,
+        bindings: &[BindingDef],
+        nodes: &NodeTypes,
+        scene_radius: Option<f32>,
+    ) -> ParamSpecDef {
+        let mut bound = bindings.iter().filter(|b| b.id == spec.id);
+        let (Some(binding), None) = (bound.next(), bound.next()) else {
+            return spec;
+        };
+        if binding.user_added {
+            return spec;
+        }
+        let BindingTarget::Node { node_id, param } = &binding.target else {
+            return spec;
+        };
+        let Some(type_id) = nodes.nodes.get(node_id.as_str()) else {
+            return spec;
+        };
+        let Some(d) = self.describe(ParamKey::Node { type_id, param, scene_radius }) else {
+            return spec;
+        };
+        spec.scene = spec.scene.or(d.scene);
+        spec.unit = spec.unit.or(d.unit);
+        if spec.limit.is_slider() {
+            spec.limit = d.limit;
+        }
+        spec
+    }
+
+    /// A template control as the lookup declares it: its node's declaration
+    /// for an exact auto-stamp, then the bound node's scene facts.
+    fn template_overlay(
+        &mut self,
+        spec: ParamSpecDef,
+        bindings: &[BindingDef],
+        nodes: &NodeTypes,
+        scene_radius: Option<f32>,
+    ) -> ParamSpecDef {
+        let spec = self.stamp_overlay(spec, bindings, nodes, scene_radius);
+        self.scene_overlay(spec, bindings, nodes, scene_radius)
     }
 }
 
@@ -147,7 +200,7 @@ fn exact_stamp<'n>(id: &str, bindings: &'n [BindingDef], nodes: &'n NodeTypes) -
 
 /// A preset's controls as the lookup declares them, for readers of the
 /// template itself (the node catalog): each exact auto-stamp takes its node's
-/// declaration, as the join does.
+/// declaration and each node-bound control its scene facts, as the join does.
 pub fn template_params(def: &EffectGraphDef) -> Vec<ParamSpecDef> {
     let Some(meta) = def.preset_metadata.as_ref() else {
         return Vec::new();
@@ -157,8 +210,29 @@ pub fn template_params(def: &EffectGraphDef) -> Vec<ParamSpecDef> {
     let mut resolver = Resolver::default();
     meta.params
         .iter()
-        .map(|p| resolver.stamp_overlay(p.clone(), &meta.bindings, &nodes, radius))
+        .map(|p| resolver.template_overlay(p.clone(), &meta.bindings, &nodes, radius))
         .collect()
+}
+
+/// A graph-less instance reads its template's specs straight from the
+/// registry; each takes its bound node's scene facts here (D23 (scene facts
+/// follow the bound node)), as a per-instance graph's join gives them.
+pub(crate) fn fill_template_scene_facts(preset: &PresetTypeId, specs: &mut [ParamSpecDef]) {
+    let Some(template) = inventory::iter::<TemplateGraphSource>
+        .into_iter()
+        .find_map(|s| (s.graph_for)(preset))
+    else {
+        return;
+    };
+    let Some(meta) = template.preset_metadata.as_ref() else {
+        return;
+    };
+    let nodes = NodeTypes::from_graph(&template);
+    let radius = meta.scene_bounds.map(scene_radius_from_bounds);
+    let mut resolver = Resolver::default();
+    for spec in specs {
+        *spec = resolver.scene_overlay(std::mem::take(spec), &meta.bindings, &nodes, radius);
+    }
 }
 
 fn template_spec(preset: &PresetTypeId, id: &str) -> Option<ParamSpecDef> {
@@ -300,7 +374,7 @@ impl<'a> Join<'a> {
             // node path.
             let (min, max) = widen_to(&template, saved.default_value);
             let base = ParamSpecDef { default_value: saved.default_value, min, max, ..template.clone() };
-            let spec = self.resolver.stamp_overlay(base, self.bindings, &self.nodes, self.scene_radius);
+            let spec = self.resolver.template_overlay(base, self.bindings, &self.nodes, self.scene_radius);
             // A saved name or section that differs is an old copy, ignored,
             // never converted into a choice: a later label fix must not read
             // as a user rename (D2 (one live lookup), old projects).
@@ -459,11 +533,24 @@ mod tests {
     use crate::effect_graph_def::{PresetMetadata, SerializedParamValue};
     use crate::effects::ParamConvert;
 
-    fn test_params(type_id: &str) -> Vec<SceneParamMetadata> {
+    fn lamp_scene() -> manifold_foundation::scene_surface::SceneParamDesc {
+        use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, SceneParamDesc, SurfaceRole};
+        SceneParamDesc {
+            role: SurfaceRole::Performance,
+            group: ControlGroup::Light,
+            band: Some(CardBand::Lighting),
+            card_order: 0,
+            card_label: CardLabel::ItemName,
+            gate: None,
+            switch: None,
+        }
+    }
+
+    fn test_params(type_id: &str) -> Vec<NodeParamMetadata> {
         if type_id != "node.test_lamp" {
             return Vec::new();
         }
-        vec![SceneParamMetadata {
+        vec![NodeParamMetadata {
             name: "intensity".into(),
             label: "Intensity".into(),
             min: 0.0,
@@ -477,6 +564,9 @@ mod tests {
             value_labels: Vec::new(),
             convert: ParamConvert::Float,
             material_role: None,
+            scene: Some(lamp_scene()),
+            unit: Some(manifold_foundation::scene_surface::Unit::Ev),
+            limit: manifold_foundation::param_range::HardLimit::AtLeast(0.0),
         }]
     }
 
@@ -611,7 +701,18 @@ mod tests {
         assert_eq!(params[0].name, "Intensity");
         assert_eq!((params[0].min, params[0].max), (0.0, 12.0), "widened to the default");
         assert_eq!((params[0].default_value, params[0].section.as_deref()), (12.0, Some("Key Light")));
-        assert_eq!(params[1], saved("key"), "a curated id stays authored");
+        assert_eq!(params[0].scene, Some(lamp_scene()), "an auto-stamp takes its node's scene facts");
+        // D23: a curated id keeps its authored name and range, and takes the
+        // bound node's scene facts because the template declares none.
+        let key = &params[1];
+        assert_eq!((key.name.as_str(), key.min, key.max), ("Stale Copy", 0.0, 1.0));
+        assert_eq!(key.scene, Some(lamp_scene()));
+        assert_eq!(key.unit, Some(manifold_foundation::scene_surface::Unit::Ev));
+        assert_eq!(key.limit, manifold_foundation::param_range::HardLimit::AtLeast(0.0));
+        // Scene facts the template declares stand.
+        let mut declared = def.clone();
+        declared.preset_metadata.as_mut().unwrap().params[1].unit = Some(manifold_foundation::scene_surface::Unit::Metres);
+        assert_eq!(template_params(&declared)[1].unit, Some(manifold_foundation::scene_surface::Unit::Metres));
 
         def.preset_metadata.as_mut().unwrap().bindings = vec![user];
         assert_eq!(template_params(&def)[0], saved("1_intensity"), "a user exposure stays authored");

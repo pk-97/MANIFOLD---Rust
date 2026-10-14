@@ -235,6 +235,8 @@ Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene p
 
 **D22 — A fan-out is described by its first binding.** A control with several bindings under one id takes range, flags and scene scaling from its first binding's target in authored order, as the import range stamp did; everything else stays authored. If that target cannot be described, the control stays authored. Lead ruling, 2026-10-14.
 
+**D23 — Scene facts follow the bound node.** A template control bound to exactly one node target takes that target's scene placement, unit and limit from the scene table wherever the template declares none. Section 3.3's defaults apply only when neither declares. Fan-outs and user-added controls keep their own. Lead ruling, 2026-10-14.
+
 **D24 — Who owns a control's name.** The lookup names a control only when it is a template control or an exact auto-stamp (id `{doc_id}_{param}`, not user-added, targeting that node's param); those save without a name. Every other node-bound control (curated ids, fan-outs, `user.*`) owns its name: authored, saved, never replaced by the node's label. Range, flags and scaling still come from the lookup (D22).
 
 **Consequences, stated honestly:**
@@ -607,6 +609,10 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
   - Force rows from recipe `scene` fields (Kick, Kick Size); light rows named per D11; camera rows per camera type; Look switches; no-physics dim.
   - The card header title truncates with an ellipsis before the Opacity control, fixing BUG-pmbd3.16 (card header name/Opacity collision) (INV-S13).
   - The water preset builder (`manifold-nodes-water/src/presets/gpu_flip.rs`) gives its mesher controls an authored Setup `scene` field, and the water presets are regenerated.
+  - Matter's stiffness, cohesion and liveliness become Performance in the scene table (asserted by `matter_card_bands`).
+  - Bokeh `max_radius` gets a role so D4's depth of field Max Blur row builds (the table marks it Hidden, after the stamp filter).
+  - Open question, decided before rows are built: the GPU FLIP card controls the table marks Hidden (`solve_level`, `max_iterations`, `sheet_fill_rate`, `particle_capacity`). Under D5 they would also build no row in the Scene tab.
+  - The physics-world item owns its copy body and that body's transform (PhysicsBoxes), and Matter's `initial_column` transform gets an owner, emptying `OWNERLESS_UNTIL_P4` in `projection/scene.rs`.
   - `oceanscene` fixture (`physics_scene("Ocean", "Ocean")` in `fixtures.rs`).
 - **Gate:** positive — INV-S4, S5, S7, S8, S13 tests; `scene_card::tests::{orbit_card_order, free_camera_card_order, physics_card_bands, water_card_bands, matter_card_bands, three_lights_three_named_rows, absent_dof_builds_no_row}`. Negative — INV-S3, INV-S11; `rg -n '"node\.|"orbit"|"intensity"' crates/manifold-app/src/ui_bridge/projection/scene_card.rs` → 0.
 - **Demo:** L3 — `scripts/ui-flows/scene-card-bands.json` on physicsscene (assert section titles Camera, Physics, Lighting, Look in order, a "Count" row, no "Main Light"), `scene-card-free-camera.json` on oceanscene (Pan, Tilt present; no Distance), `scene-card-dof-switch.json` on gltfscene (click Depth of Field on, assert F-Stop appears; off, assert gone). Performer gesture: drag Orbit and Field of View, then fire a force's Kick.
@@ -616,7 +622,7 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
 ### P5 — The naming pass (labels and units)
 - **Entry:** P4 landed. Re-derive each D9 row with its command and record the hit count.
 - **Read-back:** D1, D9; INV-S8, INV-S9. Restate: labels change where declared, nowhere else, and no rung is needed.
-- **Deliverables:** every D9 label edit in `ParamDef`s, recipe JSON and bundled scene presets; units moved to `unit` (in the table for primitives, in the authored spec for JSON); "Max Iterations" kept; INV-S9 test; regenerate water presets (no water rungs, D13). For BUG-pmbd3.17 (naming pass).
+- **Deliverables:** every D9 label edit in `ParamDef`s, recipe JSON and bundled scene presets; units moved to `unit` (in the table for primitives, in the authored spec for JSON); "Max Iterations" kept; INV-S9 test; regenerate water presets (no water rungs, D13); White Furnace (`bake_environment` `uniform`) and RT Denoise Feed become Hidden in the scene table (their D9 role). For BUG-pmbd3.17 (naming pass).
 - **Gate:** positive — INV-S8, INV-S9; Liveschool tests unchanged. Negative — `rg -n '"(FOV Y|Look Y|Exposure \(EV\)|Light Size|Copy Count|Simulation Speed|Initial Fill Height|Particle Capacity|RT Enabled|Appearance Gain|Azimuth Variation)"' crates/ -g '*.rs' -g '*.json'` → 0 outside `migrations/` history rungs.
 - **Round trip:** a gltfscene project saved before P5 loads with new labels on card, panel and automation lane, with no migration; its OSC address and Ableton mapping still resolve.
 - **Demo:** L3 — `scene-naming.json` on gltfscene: assert "Field of View", "Target Height", "Exposure" and value text ending " EV". Performer gesture: read the card at arm's length — no truncated label on a default-width card.

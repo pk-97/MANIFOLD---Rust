@@ -1458,11 +1458,9 @@ impl PresetInstance {
             self.effect_type = gen_type;
             // Seed the manifest whole from the registry template; each bundled
             // Param seeds base = value = default.
-            let entries = def
-                .param_defs
-                .iter()
-                .map(|pd| crate::params::Param::bundled(pd.spec.clone()))
-                .collect();
+            let mut specs: Vec<_> = def.param_defs.iter().map(|pd| pd.spec.clone()).collect();
+            crate::param_lookup::fill_template_scene_facts(&self.effect_type, &mut specs);
+            let entries = specs.into_iter().map(crate::params::Param::bundled).collect();
             self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
         }

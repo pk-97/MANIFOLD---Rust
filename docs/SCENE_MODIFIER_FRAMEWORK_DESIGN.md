@@ -323,7 +323,7 @@ pub struct PortRepoint { pub target_node_id: u32, pub target_port: String,
                          pub new_producer_doc_id: u32, pub restore_types: &'static [&'static str] }
 pub struct NodeExposure { pub node_doc_id: u32, pub node_id: NodeId, pub type_id: String,
                           pub params: BTreeMap<String, SerializedParamValue>,
-                          pub metadata: Vec<SceneParamMetadata> }
+                          pub metadata: Vec<NodeParamMetadata> }
 pub struct EnablePlan { pub toggle: ToggleDecl, pub extra_nodes: Vec<EffectGraphNode>,
                          pub extra_wires: Vec<EffectGraphWire> }
 pub enum ToggleDecl {

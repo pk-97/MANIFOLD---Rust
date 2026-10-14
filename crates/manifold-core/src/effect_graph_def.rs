@@ -602,7 +602,7 @@ pub struct ParamSpecDef {
     /// flag and always keeps every stamped param — this only gates the CARD
     /// row builder (`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`).
     /// `true` by default (every hand-curated card param stays visible);
-    /// scene-vocabulary stamping (`scene_exposure::card_visible_for`) is the
+    /// scene-vocabulary stamping (from the scene table's role) is the
     /// one place that sets this `false` for the params a card shouldn't
     /// clutter with (scale, materials, atmosphere, …). Skipped on serialize
     /// when `true` so every existing preset/project stays byte-identical.

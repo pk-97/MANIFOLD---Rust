@@ -1,5 +1,6 @@
 pub mod material_inspector;
 pub mod scene_exposure;
+pub mod scene_surface;
 pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
