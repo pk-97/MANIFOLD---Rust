@@ -629,6 +629,30 @@ pub struct ParamSpecDef {
 }
 
 impl ParamSpecDef {
+    /// What this param's base value decides about which inspector rows exist,
+    /// or `None` when it decides nothing (UI_INVALIDATION D21, D22). A scene
+    /// feature switch is on above 0.5. A material feature mode shows, hides
+    /// or textures the feature by its whole value. A material feature's own
+    /// value counts the feature as authored once it leaves the default.
+    pub fn row_fact(&self, base: f32) -> Option<i32> {
+        use crate::material_inspector::{MaterialGroup::Feature, MaterialParamRole as Role};
+        if self.scene.is_some_and(|scene| scene.switch.is_some()) {
+            return Some(i32::from(base > 0.5));
+        }
+        match self.material_role {
+            Some(Role::FeatureMode(_)) => Some(base.round() as i32),
+            Some(Role::Scalar(Feature(_)) | Role::Colour(Feature(_), ..)) => {
+                Some(i32::from((base - self.default_value).abs() > f32::EPSILON))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a write to this param can change which rows exist.
+    pub fn decides_rows(&self) -> bool {
+        self.row_fact(self.default_value).is_some()
+    }
+
     /// The declared-range clamp under `Param::driven_value` when the user has
     /// no slider range (SCENE_SURFACES_DESIGN.md D15 (slider range and hard
     /// limit)). A periodic param wraps over the declared range — `rem_euclid`,

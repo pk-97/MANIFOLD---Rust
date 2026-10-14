@@ -515,16 +515,15 @@ impl ChangeGraphParamCommand {
     }
 }
 
-/// Whether the card param turns a scene feature on or off, so its base value
-/// decides which card and Scene tab rows exist (SCENE_SURFACES D12 (row sets
-/// follow authored values)). Every command that writes a card param, directly
-/// or through a node binding, asks this.
+/// Whether the card param's base value decides which card, Scene tab or
+/// material inspector rows exist (`ParamSpecDef::row_fact`; SCENE_SURFACES D12
+/// (row sets follow authored values)). Every command that writes a card param,
+/// directly or through a node binding, asks this.
 pub(crate) fn card_param_sets_rows(project: &Project, target: &GraphTarget, param_id: &str) -> bool {
     project
         .preset_instance(target)
         .and_then(|inst| inst.params.get(param_id))
-        .and_then(|param| param.spec.scene)
-        .is_some_and(|scene| scene.switch.is_some())
+        .is_some_and(|param| param.spec.decides_rows())
 }
 
 impl Command for ChangeGraphParamCommand {

@@ -825,6 +825,40 @@ mod tests {
         );
     }
 
+    /// A feature's own value leaving its default shows the feature in the
+    /// inspector, so the edit decides rows: it declares Effects, and the
+    /// change audit sees the row fact move. Missing either left "+ Add Coat"
+    /// and look rows unbuilt on stage.
+    #[test]
+    fn material_feature_value_leaving_default_decides_rows() {
+        use manifold_core::change::{Part, audit};
+        use manifold_core::material_inspector::MaterialFeature;
+        let (mut project, target, context) = fixture();
+        project.with_preset_graph_mut(&target, |inst| {
+            inst.params.get_mut("material_roughness").unwrap().spec.material_role =
+                Some(MaterialParamRole::Scalar(MaterialGroup::Feature(MaterialFeature::Coat)));
+        });
+        let before = audit::fingerprint(&project);
+        let mut command = ChangeMaterialParamsCommand::new(
+            target,
+            context,
+            vec![MaterialParamChange {
+                param_id: ParamId::from("material_roughness"),
+                expected: 0.5,
+                value: 0.8,
+            }],
+            "Set coat".to_string(),
+            None,
+        );
+        let wrote = command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
+        assert!(wrote.contains(Part::Effects), "the edit declares its row change");
+        assert!(
+            audit::changed(&before, &audit::fingerprint(&project)).contains(Part::Effects),
+            "the audit counts the row fact as membership"
+        );
+    }
+
     #[test]
     fn material_inspector_accepts_unlabelled_int_round_controls() {
         let (mut project, target, context) = fixture();

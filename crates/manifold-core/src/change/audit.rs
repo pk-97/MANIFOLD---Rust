@@ -352,6 +352,12 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
         // A runtime cache the tick re-derives from Clips and Effects.
         unowned(&p.clip_control_digest);
         fp.put(Part::Values, &(p.value, p.base, p.touched));
+        // Values are in-place, but a value that decides which rows exist is
+        // membership too (D21): only its row fact, so a drag that keeps the
+        // same rows stays a value.
+        if let Some(fact) = p.spec.row_fact(p.base) {
+            fp.put(Part::Effects, &(&p.spec.id, fact));
+        }
     }
     for d in inst.drivers.iter().flatten() {
         fp.put(Part::Effects, &d.param_id);
