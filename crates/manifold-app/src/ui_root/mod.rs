@@ -132,6 +132,8 @@ pub struct UIRoot {
     pub tree: UITree,
     /// Read-only content-clock BPM for the frame-aligned driver readout.
     pub driver_bpm: Option<manifold_core::Bpm>,
+    /// Failed effect-chain builds from the content thread, for the inspector.
+    pub chain_failures: crate::content_state::ChainFailures,
     pub input: UIInputSystem,
     pub layout: ScreenLayout,
     /// Node-intent dispatch: maps a gesture on a node to a `PanelAction`,
@@ -508,6 +510,7 @@ impl UIRoot {
                 tree
             },
             driver_bpm: None,
+            chain_failures: std::sync::Arc::from([]),
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
             intents: manifold_ui::intent::IntentRegistry::new(),

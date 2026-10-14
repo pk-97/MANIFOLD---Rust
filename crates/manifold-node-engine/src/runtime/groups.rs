@@ -66,19 +66,22 @@ pub(super) fn chain_active_effects<'a>(
     effects
         .iter()
         .enumerate()
-        .filter(|(_, fx)| {
-            if !fx.enabled {
-                return false;
-            }
-            if let Some(gid) = fx.group_id.as_deref()
-                && let Some(group) = groups.iter().find(|g| g.id.as_str() == gid)
-                && !group.enabled
-            {
-                return false;
-            }
-            true
-        })
+        .filter(|(_, fx)| is_chain_active(fx, groups))
         .collect()
+}
+
+/// Whether [`chain_active_effects`] would be non-empty, without collecting.
+pub(super) fn has_chain_active_effects(effects: &[PresetInstance], groups: &[EffectGroup]) -> bool {
+    effects.iter().any(|fx| is_chain_active(fx, groups))
+}
+
+fn is_chain_active(fx: &PresetInstance, groups: &[EffectGroup]) -> bool {
+    if !fx.enabled {
+        return false;
+    }
+    !fx.group_id.as_deref().is_some_and(|gid| {
+        groups.iter().find(|g| g.id.as_str() == gid).is_some_and(|g| !g.enabled)
+    })
 }
 
 /// Validate mask membership and contiguity before assembling the chain graph.

@@ -137,11 +137,9 @@ impl std::fmt::Display for ChainError {
                     inner_param,
                 )
             }
-            Self::PreAllocationFailed { reason } => write!(
-                f,
-                "resource pre-allocation failed: {reason}. Chain build returned None; \
-                 operator will see the affected layer go black"
-            ),
+            Self::PreAllocationFailed { reason } => {
+                write!(f, "The effects could not get their GPU memory, so they are bypassed. {reason}")
+            }
             Self::TriggerShadowsContinuousBinding {
                 node_id,
                 port,

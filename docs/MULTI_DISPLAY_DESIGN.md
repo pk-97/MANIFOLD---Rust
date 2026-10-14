@@ -351,9 +351,9 @@ table (B3).
 
 | Old (field : line) | New |
 |---|---|
-| `effect_chains: AHashMap<LayerId, Option<PresetRuntime>>` (`:362`) | `AHashMap<(LayerId, IslandId), Option<PresetRuntime>>` |
-| `group_effect_chains: AHashMap<LayerId, Option<PresetRuntime>>` (`:431`) | `AHashMap<(LayerId, IslandId), Option<PresetRuntime>>` |
-| `master_effect_chain: Option<PresetRuntime>` (`:385`) | `AHashMap<IslandId, Option<PresetRuntime>>` (legacy = one `IslandId::LEGACY` entry) |
+| `effect_chains: AHashMap<LayerId, ChainSlot>` (`:362`) | `AHashMap<(LayerId, IslandId), ChainSlot>` |
+| `group_effect_chains: AHashMap<LayerId, ChainSlot>` (`:431`) | `AHashMap<(LayerId, IslandId), ChainSlot>` |
+| `master_effect_chain: ChainSlot` (`:385`) | `AHashMap<IslandId, ChainSlot>` (legacy = one `IslandId::LEGACY` entry) |
 | `layer_bufs: AHashMap<LayerId, PingPong>` (`:345`) | `AHashMap<(LayerId, IslandId), PingPong>`, allocated at **island** resolution |
 
 Layer buffers widen with the chains because they are the chains' canvases: a chain
@@ -381,7 +381,7 @@ crates/manifold-compositor/src/layer_compositor.rs` — re-run at execution time
 field set differs from this table, stop and list before touching. Compiler-driven:
 change the field types first; red is the checklist. **Negative gate:** after P2, no
 chain map keyed by bare `LayerId` remains on the screen path — `rg -n
-'AHashMap<LayerId, Option<PresetRuntime>>' crates/manifold-nodes/` returns only
+'AHashMap<LayerId, ChainSlot>' crates/manifold-compositor/` returns only
 the two `led_group_*` fields.
 
 ### Consequences, stated honestly

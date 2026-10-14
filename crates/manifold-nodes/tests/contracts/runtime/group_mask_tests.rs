@@ -107,7 +107,7 @@ fn group_mask_layer_source_reaches_dispatch_and_survives_reload() {
     let input = RenderTarget::new(&device, 16, 16, GRAPH_FORMAT, "mask-dry");
     let feed = RenderTarget::new(&device, 16, 16, GRAPH_FORMAT, "mask-sidechain");
     let mut registry = manifold_node_engine::runtime::layer_skin::LayerSkinRegistry::new(&device, GRAPH_FORMAT);
-    let mut cache = None;
+    let mut cache = manifold_node_engine::runtime::chain_dispatch::ChainSlot::default();
     let ctx = PresetContext { time: 0.0, beat: 0.0, dt: 1.0 / 60.0,
         width: 16, height: 16, output_width: 16, output_height: 16,
         aspect: 1.0, owner_key: 0, is_clip_level: false, frame_count: 0,

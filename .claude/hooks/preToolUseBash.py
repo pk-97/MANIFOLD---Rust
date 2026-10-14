@@ -1448,9 +1448,11 @@ def inline_python_guard(cmd):
 # blocks the session for the whole wait and shows nothing while it runs. The
 # same command with run_in_background passes; `main` checks that flag.
 WAIT_LOOP_REASON = (
-    "Foreground wait ({what}) blocks this session until it ends. Run it with "
-    "run_in_background: true, and follow a landing with scripts/watch_land.py "
-    "or anything else with the Monitor tool."
+    "Foreground wait ({what}) polls instead of waiting on the work. In a lane, "
+    "run the command itself in the foreground (Bash timeout up to 600000), or "
+    "follow a longer background run with scripts/watch_land.py in the "
+    "foreground. In the lead, run it with run_in_background: true and follow "
+    "it with scripts/watch_land.py or the Monitor tool."
 )
 # A sleep up to this long is settle time or a timeout window (let a server
 # bind, `cmd & sleep 6; kill $!`). Longer is waiting on work whose end is a

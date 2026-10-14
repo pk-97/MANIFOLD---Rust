@@ -1,25 +1,18 @@
 //! Per-layer / per-group [`PresetRuntime`] caching + dispatch.
 //!
-//! Replaces the old [`EffectChain`](removed) shim with a free-function
-//! interface that operates on an `Option<PresetRuntime>` slot. The slot
-//! lives on the owner (e.g., [`LayerCompositor`]'s per-layer
-//! [`AHashMap`]); this module owns:
+//! Free functions over a [`ChainSlot`], which lives on the owner (e.g.,
+//! [`LayerCompositor`]'s per-layer [`AHashMap`]); this module owns:
 //!
 //! - **Dispatch counters** — atomic stats fed by every chain run, read
 //!   via [`take_chain_dispatch_stats`] for the periodic chain-rate log.
 //! - **`dispatch_chain`** — the entry point the compositor calls per
 //!   frame. Builds the graph on first call / topology change, runs it,
 //!   returns the output texture. Returns `None` for empty chains or
-//!   build failures (which should be unreachable in production — see
-//!   `docs/archive/AUDIT_NEXT_STEPS.md`).
+//!   failed builds; a failed build stays remembered in the slot and is
+//!   tried again only when one of its inputs moves.
 //! - **`clear_chain_state`** — reset transient state (mip pyramids,
 //!   feedback, `StateStore`) across the cached graph. Fired on seek /
 //!   project load.
-//!
-//! No struct wrapper. The old `EffectChain` carried exactly one
-//! `Option<PresetRuntime>` plus a debug-only topology dump field — moving
-//! the dump into a local in [`dispatch_chain`] dropped the wrapper to
-//! a no-op around `Option`. section 6.6 #31.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -119,6 +112,116 @@ fn topology_dump(
 }
 
 // ---------------------------------------------------------------------------
+// Chain slot
+// ---------------------------------------------------------------------------
+
+/// Device memory that must come free before a build that failed with the same
+/// inputs is tried again. A full rebuild costs thousands of allocations, so a
+/// few MB of allocator jitter is not a reason to repeat it.
+const RETRY_FREED_BYTES: u64 = 64 << 20;
+
+/// One owner's chain: the built runtime, or the build that failed and the
+/// inputs it failed with. A failed build is a result, not an empty slot, so the
+/// dispatcher does not rebuild it every frame.
+#[derive(Default)]
+pub struct ChainSlot {
+    runtime: Option<PresetRuntime>,
+    failure: Option<ChainBuildFailure>,
+}
+
+/// A remembered failed build: what it was built from and why it failed.
+pub struct ChainBuildFailure {
+    inputs: u64,
+    memory: Option<manifold_gpu::GpuMemorySnapshot>,
+    message: std::sync::Arc<str>,
+}
+
+/// Everything a chain build reads apart from device memory: the topology
+/// (graph structure, resolution, preview target), each card's graph version
+/// (value-only node edits size buffers at build), the preset catalog and the
+/// installed fused compiles. Computed only for chains whose build failed.
+fn failed_build_inputs(
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    width: u32,
+    height: u32,
+    preview_effect: Option<&EffectId>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    crate::runtime::chain_topology_hash(effects, groups, width, height, preview_effect).hash(&mut h);
+    for fx in effects {
+        fx.graph_version.hash(&mut h);
+    }
+    crate::load::preset_loader::catalog_generation().hash(&mut h);
+    crate::freeze::install::segment_generation().hash(&mut h);
+    crate::freeze::install::fused_effect_generation().hash(&mut h);
+    h.finish()
+}
+
+impl ChainBuildFailure {
+    fn new(
+        inputs: u64,
+        memory: Option<manifold_gpu::GpuMemorySnapshot>,
+        errors: &[crate::runtime::ChainError],
+    ) -> Self {
+        let message = errors
+            .iter()
+            .rev()
+            .find(|e| matches!(e, crate::runtime::ChainError::PreAllocationFailed { .. }))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "The effects could not be built, so they are bypassed. The log names the cause.".into());
+        Self { inputs, memory, message: message.into() }
+    }
+
+    /// The same build would fail the same way: no build input moved and the
+    /// device has not freed room since.
+    fn still_holds(&self, inputs: u64, memory: Option<manifold_gpu::GpuMemorySnapshot>) -> bool {
+        let room_freed = match (self.memory, memory) {
+            (Some(then), Some(now)) => {
+                now.recommended_max_working_set_bytes != then.recommended_max_working_set_bytes
+                    || now.current_allocated_bytes + RETRY_FREED_BYTES <= then.current_allocated_bytes
+            }
+            (then, now) => then.is_some() != now.is_some(),
+        };
+        self.inputs == inputs && !room_freed
+    }
+
+    /// One line for the performer: why this chain is bypassed.
+    pub fn message(&self) -> &std::sync::Arc<str> {
+        &self.message
+    }
+}
+
+impl ChainSlot {
+    pub fn as_ref(&self) -> Option<&PresetRuntime> {
+        self.runtime.as_ref()
+    }
+
+    pub fn as_mut(&mut self) -> Option<&mut PresetRuntime> {
+        self.runtime.as_mut()
+    }
+
+    pub fn is_some(&self) -> bool {
+        self.runtime.is_some()
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.runtime.is_none()
+    }
+
+    /// Drop the runtime and any remembered failure: the next dispatch builds.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// The failed build this slot remembers, if its last build failed.
+    pub fn failure(&self) -> Option<&ChainBuildFailure> {
+        self.failure.as_ref()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -141,14 +244,13 @@ fn topology_dump(
 ///
 /// - The chain has no enabled effects (caller should use the original
 ///   input).
-/// - [`PresetRuntime::try_build`] failed for this topology — unreachable
-///   in production with every shipped effect mapped to a primitive.
+/// - The build failed for these inputs ([`ChainSlot::failure`] names why).
 ///
 /// The cache survives "no enabled effects" frames so its `RenderTarget`
 /// pool and primitive state aren't thrown away on transient ducks.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_chain<'a>(
-    cache: &'a mut Option<PresetRuntime>,
+    cache: &'a mut ChainSlot,
     gpu: &mut GpuEncoder<'_>,
     input_texture: &'a GpuTexture,
     effects: &[PresetInstance],
@@ -190,7 +292,7 @@ pub fn dispatch_chain<'a>(
 /// only invalidates the captured frame in that case.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_chain_with_scene_viewport<'a>(
-    cache: &'a mut Option<PresetRuntime>,
+    cache: &'a mut ChainSlot,
     gpu: &mut GpuEncoder<'_>,
     input_texture: &'a GpuTexture,
     effects: &[PresetInstance],
@@ -212,6 +314,8 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     project_tempo: Option<&ProjectTempo>,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
+        // Nothing left to build, so nothing has failed.
+        cache.failure = None;
         return None;
     }
 
@@ -233,7 +337,16 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     crate::freeze::install::pump_segment_results();
 
     let catalog_generation = crate::load::preset_loader::catalog_generation();
-    let (needs_rebuild, reason) = match cache.as_ref() {
+    if cache.runtime.is_none()
+        && let Some(failure) = &cache.failure
+    {
+        let inputs = failed_build_inputs(effects, groups, ctx.width, ctx.height, preview_effect);
+        if failure.still_holds(inputs, gpu.device.modifier_memory_snapshot()) {
+            CHAIN_DISPATCH_NS.fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            return None;
+        }
+    }
+    let (needs_rebuild, reason) = match cache.runtime.as_ref() {
         None => (true, "cache-miss"),
         Some(cg) => {
             if cg.built_generation() != catalog_generation {
@@ -264,9 +377,9 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
         // Hand the outgoing runtime to the build as the state-harvest donor:
         // unchanged cards carry their sims / trails / workers across the
         // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md section 5).
-        let mut prior = cache.take();
+        let mut prior = cache.runtime.take();
         record_cold_touch(ColdTouchKind::ChainConstruction);
-        *cache = PresetRuntime::try_build(
+        let built = PresetRuntime::build(
             ChainBuildInputs {
                 effects,
                 groups,
@@ -279,11 +392,27 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
             },
             prior.as_mut(),
         );
+        drop(prior);
+        match built {
+            Ok(runtime) => {
+                cache.runtime = runtime;
+                cache.failure = None;
+            }
+            Err(errors) => {
+                // Inputs and memory are read after the failed build released
+                // what it took, so the next frame compares like with like.
+                cache.failure = Some(ChainBuildFailure::new(
+                    failed_build_inputs(effects, groups, ctx.width, ctx.height, preview_effect),
+                    gpu.device.modifier_memory_snapshot(),
+                    &errors,
+                ));
+            }
+        }
         CHAIN_REBUILD_COUNT.fetch_add(1, Ordering::Relaxed);
         CHAIN_REBUILD_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
 
-    let Some(cg) = cache.as_mut() else {
+    let Some(cg) = cache.runtime.as_mut() else {
         CHAIN_DISPATCH_NS.fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         return None;
     };
@@ -326,7 +455,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
 /// Reset per-effect transient state on the cached chain (mip pyramids,
 /// feedback buffers, [`StateStore`](crate::node_graph::StateStore)
 /// entries). No-op when the cache is empty.
-pub fn clear_chain_state(cache: &mut Option<PresetRuntime>) {
+pub fn clear_chain_state(cache: &mut ChainSlot) {
     if let Some(cg) = cache.as_mut() {
         cg.clear_state();
     }
@@ -338,4 +467,35 @@ pub fn clear_chain_state(cache: &mut Option<PresetRuntime>) {
 fn primitive_registry() -> &'static PrimitiveRegistry {
     static CELL: OnceLock<PrimitiveRegistry> = OnceLock::new();
     CELL.get_or_init(PrimitiveRegistry::with_builtin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::ChainError;
+    use manifold_gpu::GpuMemorySnapshot;
+
+    fn in_use(bytes: u64) -> Option<GpuMemorySnapshot> {
+        Some(GpuMemorySnapshot { current_allocated_bytes: bytes, recommended_max_working_set_bytes: 30 << 30 })
+    }
+
+    #[test]
+    fn failed_build_holds_until_an_input_moves() {
+        let mut effects = vec![PresetInstance::new(manifold_core::PresetTypeId::COLOR_GRADE)];
+        let inputs = |fx: &[PresetInstance], w, h| failed_build_inputs(fx, &[], w, h, None);
+        let full = 22 << 30;
+        let errors = [ChainError::PreAllocationFailed { reason: "The scene needs 900 MB.".into() }];
+        let failure = ChainBuildFailure::new(inputs(&effects, 1920, 1080), in_use(full), &errors);
+
+        assert!(failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)), "next frame, nothing moved");
+        assert!(failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - (1 << 20))), "allocator jitter");
+        assert!(!failure.still_holds(inputs(&effects, 1280, 720), in_use(full)), "resolution changed");
+        assert!(!failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - RETRY_FREED_BYTES)), "device freed room");
+        assert!(failure.message().contains("The scene needs 900 MB."));
+
+        // A value-only node edit (a smaller sim count) sizes buffers at build.
+        effects[0].graph_version += 1;
+        assert_eq!(effects[0].graph_structure_version, 0, "structure unchanged");
+        assert!(!failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)), "graph value edit retries");
+    }
 }
