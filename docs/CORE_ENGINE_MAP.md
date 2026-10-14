@@ -118,7 +118,7 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
 3c. derive_external_beat                  (CLK: beat := clock beat unless seek-cooldown;
                                            Link: beat := link beat − cached offset unless manifold owns)
     update_recording_session_state / apply_resolved_tempo
-                                          (recording: append tempo points; else beat-0 point when Internal)
+                                          (recording: append tempo points; nothing else writes the map)
 3d. audio_mod_runtime.update              (fill engine.audio_snapshot)
 4. engine.tick(ctx)
      — fire_meters reset (ONE per tick, BEFORE the branch — BUG-109 P5: a
@@ -166,10 +166,10 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
   map. It is a display/rate convenience, not an undoable edit.
 - Recording: `TempoRecorder` appends map points while armed (recording +
   playing + authority ≠ OSC) with ≥0.125-beat spacing and ≥0.05 BPM delta; on
-  disarm it snapshots the whole lane into `RecordingProvenance`. Non-recording
-  + Internal authority + trivial map: external tempo writes the beat-0 point
-  as a "global master tempo". After any map change the beat is re-derived from
-  time.
+  disarm it snapshots the whole lane into `RecordingProvenance`. Outside a
+  recording session nothing writes the map, and live external tempo lasts one
+  tick (FRAME_EXACT_TRANSPORT_DESIGN D21). After any map change the beat is
+  re-derived from time.
 
 **For the instrument:** beats are the contract. A clip drawn at bar 33 plays at
 bar 33 under any tempo automation; a BPM change rescales the timeline through

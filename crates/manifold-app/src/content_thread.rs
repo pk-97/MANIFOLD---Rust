@@ -8,7 +8,6 @@ use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 
 use manifold_core::change::{ChangeSet, Part};
-use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_core::work_count::{record_work, WorkKind};
@@ -128,6 +127,10 @@ pub struct ContentThread {
     /// Link's cumulative beat counter keeps the offset valid across BPM changes.
     /// Port of C# PlaybackController.linkBeatOffset field (line 74).
     pub link_beat_offset: f64,
+    /// A tempo source for tests that stand in for Link or MIDI clock: it
+    /// delivers this tempo every tick, where a real source would (D21).
+    #[cfg(test)]
+    pub(crate) test_tempo_source: Option<(Bpm, TempoPointSource)>,
 
     // ── LED output ──
     /// LED/ArtNet output controller. None when not initialized.
@@ -1741,6 +1744,14 @@ impl ContentThread {
     /// then pass &mut engine for transport commands via SyncArbiter.
     fn tick_sync_controllers(&mut self) {
         let now = self.time_since_start;
+        // Live tempo lasts one tick: only a source that delivers a tempo this
+        // tick sets it (D21), so it can never outlive its source.
+        self.engine
+            .set_live_external_tempo(false, Bpm::DEFAULT, TempoPointSource::Unknown);
+        #[cfg(test)]
+        if let Some((bpm, source)) = self.test_tempo_source {
+            self.engine.set_live_external_tempo(true, bpm, source);
+        }
 
         // Auto-determine clock authority BEFORE sync controllers run.
         // Uses previous frame's receiving/peer state (updated by sync controllers
@@ -2125,28 +2136,9 @@ impl ContentThread {
                     recorder.append_tempo_change(&mut p.recording_provenance, current_time, current_beat, bpm, source);
                 });
             }
-        } else if authority == ClockAuthority::Internal {
-            // No automation lane authored and no external position source:
-            // treat tempo as a global master value. Compare quantized values
-            // so raw float jitter doesn't trigger writes.
-            // Port of C# ApplyResolvedTempo lines 1127-1134.
-            //
-            // When MidiClock or Link is active, do NOT write to the tempo map —
-            // the project BPM is updated via sync_project_bpm_from_current_beat()
-            // for display only. Writing the tempo map causes beat re-derivation
-            // from stale time values, which makes the timeline stutter.
-            let differs = self.engine.project().is_some_and(|p| {
-                let map_bpm = p.tempo_map.get_bpm_at_beat_immut(Beats::ZERO, p.settings.bpm);
-                p.tempo_map.point_count() <= 1
-                    && (map_bpm.0 - BeatQuantizer::quantize_bpm(bpm)).abs() >= TempoRecorder::BPM_THRESHOLD
-            });
-            if differs && let Some(edit) = self.engine.project_edit() {
-                tick_write(TickField::BaseTempo, edit, |p| {
-                    p.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), source, 0.001);
-                });
-                tempo_map_changed = true;
-            }
         }
+        // Outside a recording session nothing writes the map: under Internal
+        // the map is the truth (FRAME_EXACT_TRANSPORT_DESIGN D8, D21).
 
         if tempo_map_changed {
             // Time is kept; the frame's beat comes from the new map.
@@ -2288,6 +2280,45 @@ mod tests {
 
     fn last_snapshot(rx: &crossbeam_channel::Receiver<crate::content_state::ContentState>) -> Option<std::sync::Arc<Project>> {
         rx.try_iter().filter_map(|s| s.project_snapshot).last()
+    }
+
+    /// BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo
+    /// point), FRAME_EXACT_TRANSPORT_DESIGN P3 test 10: Link plays at 128
+    /// over a one-point map at 120; when its peers vanish, authority falls to
+    /// Internal and the map must be untouched (D21).
+    #[test]
+    fn peers_vanishing_keeps_the_beat_and_the_map() {
+        use manifold_core::types::{ClockAuthority, TempoPointSource};
+        use manifold_core::{Beats, Bpm};
+        use manifold_playback::link_sync::{LinkSyncController, SimulatedLink};
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Unknown, 0.001);
+        let mut thread = headless_content_thread(project, 64, 64);
+        thread.timer.set_frame_clocked(true);
+        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let mut link = LinkSyncController::new();
+        let session = SimulatedLink { at: std::time::Instant::now(), beat: 0.0, tempo: 128.0, peers: 1, playing: false };
+        link.simulate(session);
+        thread.transport_controller.link_sync = Some(link);
+        thread.handle_command(ContentCommand::Play);
+        for _ in 0..300 {
+            thread.tick_frame(&state_tx);
+        }
+        assert_eq!(thread.engine.project().unwrap().settings.clock_authority, ClockAuthority::Link);
+
+        thread.transport_controller.link_sync.as_mut().unwrap().simulate(SimulatedLink { peers: 0, ..session });
+        for _ in 0..60 {
+            thread.tick_frame(&state_tx);
+        }
+        let p = thread.engine.project().unwrap();
+        assert_eq!(p.settings.clock_authority, ClockAuthority::Internal);
+        assert_eq!(p.tempo_map.point_count(), 1, "peers vanishing must not add tempo points");
+        assert_eq!(
+            p.tempo_map.get_bpm_at_beat_immut(Beats::ZERO, Bpm(0.0)),
+            Bpm(120.0),
+            "the stale Link tempo must not be written into the beat-0 point"
+        );
     }
 
     /// BUG-mmct0.5 (MIDI recording commits bypass EditingService): a recorded

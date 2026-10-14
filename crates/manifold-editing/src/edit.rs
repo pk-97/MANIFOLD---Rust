@@ -35,14 +35,13 @@ impl<'a> From<&'a mut Project> for ProjectEdit<'a> {
     }
 }
 
-/// The five fields the tick may write (D24).
+/// The four fields the tick may write (D24).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TickField {
     Bpm,
     ClockAuthority,
     SessionTempoPoints,
     RecordingProvenance,
-    BaseTempo,
 }
 
 /// An audited tick write: moves no stamp, publishes nothing, runs no
@@ -56,7 +55,7 @@ pub fn tick_write(field: TickField, project: ProjectEdit<'_>, f: impl FnOnce(&mu
 
 /// The change audit around the content tick (D10, D24, INV-22): inside the
 /// window only Values and the `TickField`s opened through `tick_write` may
-/// change, and the tempo map only through `SessionTempoPoints` or `BaseTempo`.
+/// change, and the tempo map only through `SessionTempoPoints`.
 #[cfg(any(test, feature = "change-audit"))]
 pub mod tick_audit {
     use super::TickField;
@@ -99,7 +98,7 @@ pub mod tick_audit {
             let allowed = match slot {
                 TickSlot::Bpm => has(TickField::Bpm),
                 TickSlot::ClockAuthority => has(TickField::ClockAuthority),
-                TickSlot::TempoMap => has(TickField::SessionTempoPoints) || has(TickField::BaseTempo),
+                TickSlot::TempoMap => has(TickField::SessionTempoPoints),
                 TickSlot::RecordingProvenance => has(TickField::RecordingProvenance),
             };
             assert!(allowed, "tick audit: {slot:?} changed without an audited tick write");

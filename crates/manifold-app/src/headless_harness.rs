@@ -100,6 +100,8 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
         tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
         link_beat_offset: f64::NAN,
+        #[cfg(test)]
+        test_tempo_source: None,
         led_controller: None,
         led_preview: crate::content_state::LedPreview::None,
         led_preview_version: 0,

@@ -2574,6 +2574,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_beat_offset: f64::NAN,
+                #[cfg(test)]
+                test_tempo_source: None,
                 led_controller: None,
                 led_preview: crate::content_state::LedPreview::None,
                 led_preview_version: 0,
