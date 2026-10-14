@@ -496,6 +496,8 @@ pub struct Application {
     /// opens at the previous directory with the previous filename.
     pub(crate) last_export_path: Option<std::path::PathBuf>,
     pub(crate) user_prefs: UserPrefs,
+    /// Stored and learned sync calibration (D19).
+    pub(crate) sync_prefs: crate::sync_prefs::SyncPrefs,
     pub(crate) project_io: ProjectIOService,
 
     // Text input
@@ -736,6 +738,7 @@ impl Application {
                 ProjectIOService::new(&prefs)
             },
             user_prefs: UserPrefs::load(),
+            sync_prefs: crate::sync_prefs::SyncPrefs::default(),
             text_input: crate::text_input::TextInputState::new(),
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
@@ -2575,6 +2578,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_offset: manifold_playback::external_sync::LinkOffset::new(),
                 tempo_guard: manifold_playback::external_sync::LinkTempoGuard::new(),
+                calibration: manifold_playback::sync_calibration::SyncCalibration::new(),
+                frame_deadline: std::time::Instant::now(),
+                issued_presents: crate::content_thread::IssuedPresents::default(),
                 #[cfg(test)]
                 test_tempo_source: None,
                 rig_probe: crate::sync_rig_log::TickProbe::default(),
@@ -2605,6 +2611,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
+
+            // Before the content thread's first tick: the presented handler
+            // and the stored calibration (D19).
+            crate::present_feedback::install(&cmd_tx);
+            ContentCommand::send(&cmd_tx, self.sync_prefs.stored(&self.user_prefs));
 
             let cmd_tx_clone = cmd_tx.clone();
             let handle = std::thread::Builder::new()

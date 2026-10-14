@@ -101,6 +101,9 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
         link_offset: manifold_playback::external_sync::LinkOffset::new(),
         tempo_guard: manifold_playback::external_sync::LinkTempoGuard::new(),
+        calibration: manifold_playback::sync_calibration::SyncCalibration::new(),
+        frame_deadline: std::time::Instant::now(),
+        issued_presents: crate::content_thread::IssuedPresents::default(),
         #[cfg(test)]
         test_tempo_source: None,
         rig_probe: crate::sync_rig_log::TickProbe::default(),

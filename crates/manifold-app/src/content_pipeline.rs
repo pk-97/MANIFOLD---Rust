@@ -745,6 +745,8 @@ fn restore_clip_atlas(
 /// this allows 2 content frames in flight without starving the UI thread.
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
+    /// The stage output drawable this frame presented, for the screen delay (D19).
+    issued_present: Option<u64>,
     /// Content-thread owner of independent destination policies.
     pub presentation: DisplayPresentationState,
     /// Optional project SDR rendering curve. HDR destinations never apply it.
@@ -1137,6 +1139,7 @@ impl ContentPipeline {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
+            issued_present: None,
             presentation: DisplayPresentationState::default(),
             sdr_curve: None,
             sdr_preview: false,
@@ -1705,6 +1708,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// 2 frames ago when the content thread woke up — a sign of GPU saturation.
     pub fn last_fence_wait_ms(&self) -> f64 {
         self.last_fence_wait_ms
+    }
+
+    /// The stage output drawable the last render presented, once.
+    pub fn take_issued_present(&mut self) -> Option<u64> {
+        self.issued_present.take()
     }
 
     /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
@@ -3357,6 +3365,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     manifold_gpu::GpuLoadAction::Clear,
                 );
                 if let Some(drawable_id) = drawable.observe_presented() {
+                    self.issued_present = Some(drawable_id);
                     use manifold_playback::rig_log;
                     rig_log::emit(rig_log::RigRecord::PresentIssued {
                         frame: frame_count,

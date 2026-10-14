@@ -15,6 +15,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::Beats;
+use manifold_playback::sync_calibration::CalibratedSource;
 use support::sync_sources::*;
 
 const WARM: f64 = 5.0;
@@ -454,20 +455,26 @@ fn settle_after(live: &Live, mut reader: impl Reader, at: f64) -> (f64, f64, Met
 /// against Link is learned; the hidden extra delay adds on.
 #[test]
 fn read_instant_follows_the_measured_latency() {
-    // Frames reach the screen 25 ms after their deadline (±3 ms).
+    // Frames reach the screen 25 ms after their deadline (±3 ms): the read
+    // instant leaves the 17 ms default and settles on 25 ms within 3 s.
     let live = Live::new(Tempo::constant(128.0));
     let mut link = LinkReader::new(live.clone(), 161);
     let mut driver = Driver::new(engine_with_map(120.0, None), 18);
     driver.screen_delay = 0.025;
     driver.present_jitter = 0.003;
-    let m = run_measured(&mut driver, &mut link, &live, 30.0, 3.0);
+    let (m, read) = run_measured(&mut driver, &mut link, &live, 30.0, 6.0);
+    assert!(read.settled_by <= 3.0 && (read.last - 0.025).abs() <= 0.001, "read instant settles on 25 ms: {read:?}");
     assert!(m.max_phase_ms <= 1.0 && m.seeks.is_empty(), "read at the measured screen instant: {}", m.report());
 
     // MIDI clock arrives 7 ms late against Link: the learned offset closes it.
     let live = Live::new(Tempo::constant(128.0));
     let mut clk = ClkReader::new(clock_arrivals(&live, 120.0, 162, &[], 0.007)).with_link(LinkReader::new(live.clone(), 163));
     let mut driver = Driver::new(engine_with_map(120.0, None), 19);
-    let m = run_measured(&mut driver, &mut clk, &live, 120.0, 40.0);
+    driver.screen_delay = 0.025;
+    driver.present_jitter = 0.003;
+    let (m, _) = run_measured(&mut driver, &mut clk, &live, 120.0, 40.0);
+    let offset = driver.calibration.offset(CalibratedSource::MidiClock);
+    assert!((offset - 0.007).abs() <= 0.001, "CLK offset learned: {:.2} ms", offset * 1000.0);
     assert!(m.max_phase_ms <= 1.0 && m.seeks.is_empty(), "CLK 7 ms late, offset learned: {}", m.report());
 
     // The display adds 10 ms nobody reports; the hidden override covers it.
@@ -477,18 +484,32 @@ fn read_instant_follows_the_measured_latency() {
     driver.screen_delay = 0.035;
     driver.present_jitter = 0.003;
     driver.extra_delay = 0.010;
-    let m = run_measured(&mut driver, &mut link, &live, 30.0, 3.0);
-    assert!(m.max_phase_ms <= 1.0 && m.seeks.is_empty(), "measured 25 ms plus 10 ms extra: {}", m.report());
+    driver.calibration.set_extra_delay_ms(10.0);
+    let (m, read) = run_measured(&mut driver, &mut link, &live, 30.0, 6.0);
+    assert!(read.settled_by <= 3.0 && (read.last - 0.035).abs() <= 0.001, "measured 25 ms plus 10 ms extra: {read:?}");
+    assert!(m.max_phase_ms <= 1.0 && m.seeks.is_empty(), "read at 35 ms: {}", m.report());
 }
 
-fn run_measured(driver: &mut Driver, reader: &mut dyn Reader, live: &Live, secs: f64, warm: f64) -> Meter {
+/// The read delay's last value and the last wall second it moved.
+#[derive(Debug, Default)]
+struct ReadDelay {
+    last: f64,
+    settled_by: f64,
+}
+
+fn run_measured(driver: &mut Driver, reader: &mut dyn Reader, live: &Live, secs: f64, warm: f64) -> (Meter, ReadDelay) {
     set_authority(&mut driver.engine, Some(reader.kind()));
     driver.engine.play();
     let mut meter = Meter::default();
+    let mut read = ReadDelay { last: driver.calibration.read_delay(), settled_by: 0.0 };
     while driver.wall() < secs {
         let shown = driver.step(Some(reader), 0);
+        let delay = driver.calibration.read_delay();
+        if delay != read.last {
+            read = ReadDelay { last: delay, settled_by: shown.deadline };
+        }
         let r = shown.deadline + driver.screen_delay;
         meter.observe(shown, live.beat(r), live.bpm(r), shown.deadline >= warm);
     }
-    meter
+    (meter, read)
 }

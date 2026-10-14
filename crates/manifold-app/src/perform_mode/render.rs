@@ -45,6 +45,7 @@ impl Application {
                 self.content_state = state;
             }
         }
+        self.tick_sync_calibration();
 
         // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1) — this is the
         // path that matters most: perform mode IS the live show. Unlike

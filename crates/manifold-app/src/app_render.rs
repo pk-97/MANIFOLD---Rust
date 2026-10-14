@@ -418,6 +418,7 @@ impl Application {
                 };
             }
         }
+        self.tick_sync_calibration();
 
         if crate::edit_selection::apply_update(
             &mut self.ws.ui_root, &self.local_project,

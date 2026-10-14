@@ -874,6 +874,21 @@ impl ContentThread {
             // loop re-checks is_surface_ready() after handling.
             #[cfg(target_os = "macos")]
             ContentCommand::SurfaceReady => {}
+            ContentCommand::FramePresented { drawable_id, at } => {
+                if let Some(deadline) = self.issued_presents.take(drawable_id) {
+                    let delay = manifold_playback::sync_projection::seconds_between(deadline, at);
+                    self.calibration.presented(delay, self.time_since_start.0);
+                }
+            }
+
+            // ── Sync calibration (D19) ─────────────────────────────
+            ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms } => {
+                self.calibration.set_extra_delay_ms(extra_delay_ms);
+                for (source, ms) in manifold_playback::sync_calibration::CalibratedSource::ALL.into_iter().zip(offsets_ms) {
+                    self.calibration.restore_offset(source, ms / 1000.0);
+                }
+            }
+            ContentCommand::SetDisplayDelay(delay) => self.calibration.set_display_delay(delay),
 
             // ── Transport ──────────────────────────────────────────
             ContentCommand::Play => {

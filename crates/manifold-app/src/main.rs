@@ -140,6 +140,8 @@ mod bridge_probe;
 mod export_repro;
 mod project_io;
 mod session_log;
+mod present_feedback;
+mod sync_prefs;
 mod sync_rig_log;
 #[cfg(target_os = "macos")]
 mod shared_texture;

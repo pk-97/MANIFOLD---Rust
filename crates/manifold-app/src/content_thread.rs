@@ -16,6 +16,7 @@ use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::external_follow::{ExternalSample, FollowProfile};
 use manifold_playback::external_sync::{live_tempo, LinkOffset, LinkTempoGuard, OffsetTake};
+use manifold_playback::sync_calibration::{difference_seconds, CalibratedSource, SyncCalibration};
 use manifold_playback::midi_input::MidiInputController;
 use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
@@ -44,6 +45,28 @@ fn follow_profile(authority: ClockAuthority) -> Option<FollowProfile> {
         ClockAuthority::Internal => None,
         ClockAuthority::Link | ClockAuthority::MidiClock => Some(FollowProfile::FAST),
         ClockAuthority::Osc => Some(FollowProfile::SLOW),
+    }
+}
+
+/// Stage presents the content thread issued, each with the deadline of the
+/// frame it carries, until Metal reports when it went on screen (D19). A
+/// handful covers the frames in flight.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct IssuedPresents {
+    ring: [Option<(u64, std::time::Instant)>; 8],
+    next: usize,
+}
+
+impl IssuedPresents {
+    pub(crate) fn record(&mut self, drawable_id: u64, deadline: std::time::Instant) {
+        self.ring[self.next] = Some((drawable_id, deadline));
+        self.next = (self.next + 1) % self.ring.len();
+    }
+
+    /// The deadline of the frame `drawable_id` carried, once.
+    pub(crate) fn take(&mut self, drawable_id: u64) -> Option<std::time::Instant> {
+        let slot = self.ring.iter_mut().find(|e| e.is_some_and(|(id, _)| id == drawable_id))?;
+        slot.take().map(|(_, deadline)| deadline)
     }
 }
 
@@ -139,6 +162,12 @@ pub struct ContentThread {
     pub link_offset: LinkOffset,
     /// Whether Link's tempo stands in for MIDI clock's or AbletonOSC's (D21).
     pub tempo_guard: LinkTempoGuard,
+    /// The read instant's output latency and the source offsets (D19).
+    pub calibration: SyncCalibration,
+    /// The deadline of the frame this tick shows.
+    pub(crate) frame_deadline: std::time::Instant,
+    /// Stage presents waiting for their presented time.
+    pub(crate) issued_presents: IssuedPresents,
     /// A tempo source for tests that stand in for Link or MIDI clock: it
     /// delivers this tempo every tick, where a real source would (D21).
     #[cfg(test)]
@@ -603,7 +632,9 @@ impl ContentThread {
         // headless harness); a no-op when the drain already reacted.
         self.run_reactions();
         let frames = self.timer.consume_frames_at(now).frames;
-        self.link_sample_at = self.timer.tick_deadline().unwrap_or(now);
+        // Sources are read for the moment this frame reaches the screen (D19).
+        self.frame_deadline = self.timer.tick_deadline().unwrap_or(now);
+        self.link_sample_at = self.frame_deadline + std::time::Duration::from_secs_f64(self.calibration.read_delay());
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
@@ -671,6 +702,7 @@ impl ContentThread {
             .project()
             .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
         self.hand_external_sample(authority);
+        self.learn_source_offsets();
         self.update_recording_session_state(authority);
         self.apply_resolved_tempo(authority);
 
@@ -842,6 +874,9 @@ impl ContentThread {
             self.editing_service.stamps(),
             Some(self.audio_mod_runtime.visuals()),
         );
+        if let Some(id) = self.content_pipeline.take_issued_present() {
+            self.issued_presents.record(id, self.frame_deadline);
+        }
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
         self.content_pipeline.set_last_render_work_ms(render_work_ms);
@@ -1562,6 +1597,7 @@ impl ContentThread {
                 .cloned()
                 .collect(),
             automation_armed: self.engine.automation_armed(),
+            sync_offsets: self.calibration.offsets(),
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.
@@ -2129,60 +2165,98 @@ impl ContentThread {
                 // Suppressed during the seek cooldown (user scrub, M4L path)
                 // AND while an AbletonOSC transport command awaits its ack
                 // (ABLETON_TRANSPORT_SYNC_DESIGN D5): what Ableton's clock
-                // reports then is the old position. The tick filter's beat at
-                // this frame's read instant (D20).
+                // reports then is the old position.
                 if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
                     && !self.ableton_bridge.transport_sync_pending()
-                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                    && clk.is_midi_clock_enabled()
-                    && clk.is_receiving_clock()
                 {
-                    clk.sample_at(self.link_sample_at)
-                        .map(|s| ExternalSample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
+                    self.clk_sample(self.source_read_at(CalibratedSource::MidiClock))
                 } else {
                     None
                 }
             }
-            ClockAuthority::Osc => {
-                let latched_link = self.latched_link_tempo();
-                // The latest report projected from its arrival to the read
-                // instant, every tick while the source is live, as for CLK
-                // (D6: one sample per tick; D7).
-                let r = self.link_sample_at;
-                match self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode) {
-                    // M4L timecode: song seconds through the map, at the
-                    // map's tempo over the next frame.
-                    OscSyncMode::M4L => self.osc_sync.timecode_report().map(|tc| {
-                        let s = timecode_seconds_at(tc.seconds, seconds_between(tc.at, r), tc.frame);
-                        let step = 1.0 / f64::from(self.engine.frame_rate());
-                        let engine = &mut self.engine;
-                        let (beat, bpm) = map_sample(s, step, |s| engine.time_to_timeline_beat(Seconds(s)).0);
-                        ExternalSample { beat, bpm, fresh: true, exact: false }
-                    }),
-                    // The relay's song time at Live's tempo in force. No
-                    // one-way delay: the relay's round trip measures command
-                    // to acknowledgement, not the wire; the constant is the
-                    // calibration's to learn (D19).
-                    OscSyncMode::AbletonOsc => {
-                        self.ableton_bridge.follower_song_time(self.time_since_start.0).map(|(report, tempo)| {
-                            let beat = song_time_beat_at(
-                                report.beat,
-                                seconds_between(report.at, r),
-                                tempo.before,
-                                tempo.bpm,
-                                seconds_between(tempo.at, r),
-                            );
-                            // Link's session tempo while the guard is latched (D21).
-                            let bpm = latched_link.unwrap_or(tempo.bpm);
-                            ExternalSample { beat, bpm, fresh: true, exact: false }
-                        })
-                    }
-                }
-            }
+            ClockAuthority::Osc => match self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode) {
+                OscSyncMode::M4L => self.timecode_sample(self.source_read_at(CalibratedSource::Timecode)),
+                OscSyncMode::AbletonOsc => self.ableton_osc_sample(self.source_read_at(CalibratedSource::AbletonOsc)),
+            },
             ClockAuthority::Internal => None,
         };
         if let Some(sample) = sample {
             self.engine.set_external_sample(sample);
+        }
+    }
+
+    /// A non-Link source is read at the read instant plus the offset it
+    /// showed against Link (D19).
+    fn source_read_at(&self, source: CalibratedSource) -> std::time::Instant {
+        let offset = self.calibration.offset(source);
+        let magnitude = std::time::Duration::from_secs_f64(offset.abs());
+        if offset >= 0.0 { self.link_sample_at + magnitude } else { self.link_sample_at - magnitude }
+    }
+
+    /// The tick filter's beat at `r` (D20), while the clock is live.
+    fn clk_sample(&self, r: std::time::Instant) -> Option<ExternalSample> {
+        let clk = self
+            .transport_controller
+            .midi_clock_sync
+            .as_ref()
+            .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock())?;
+        clk.sample_at(r).map(|s| ExternalSample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
+    }
+
+    /// M4L timecode: the latest message's song seconds projected from its
+    /// arrival to `r`, through the map, at the map's tempo over the next frame
+    /// (D7). Every tick while timecode arrives (D6: one sample per tick).
+    fn timecode_sample(&mut self, r: std::time::Instant) -> Option<ExternalSample> {
+        let tc = self.osc_sync.timecode_report()?;
+        let s = timecode_seconds_at(tc.seconds, seconds_between(tc.at, r), tc.frame);
+        let step = 1.0 / f64::from(self.engine.frame_rate());
+        let engine = &mut self.engine;
+        let (beat, bpm) = map_sample(s, step, |s| engine.time_to_timeline_beat(Seconds(s)).0);
+        Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+    }
+
+    /// The relay's song time projected to `r` at Live's tempo in force (D7).
+    /// No one-way delay: the relay's round trip measures command to
+    /// acknowledgement, not the wire; a constant is the calibration's to
+    /// learn (D19). The tempo is Link's while the guard is latched (D21).
+    fn ableton_osc_sample(&self, r: std::time::Instant) -> Option<ExternalSample> {
+        let (report, tempo) = self.ableton_bridge.follower_song_time(self.time_since_start.0)?;
+        let beat = song_time_beat_at(report.beat, seconds_between(report.at, r), tempo.before, tempo.bpm, seconds_between(tempo.at, r));
+        let bpm = self.latched_link_tempo().unwrap_or(tempo.bpm);
+        Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+    }
+
+    /// While Link and another source both deliver, each source's offset
+    /// against Link is learned from the two reads at the same read instant
+    /// (D19). Steady play only: playing, no catch-up window open.
+    fn learn_source_offsets(&mut self) {
+        if !self.engine.is_playing() {
+            return;
+        }
+        let Some((link_beat, bpm, quantum)) = self
+            .transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| l.is_link_enabled() && l.has_active_peers())
+            .map(|l| (l.current_beat.0, l.link_tempo, l.quantum()))
+        else {
+            return;
+        };
+        let steady = !self.engine.follower().catch_up_open();
+        let now = self.time_since_start.0;
+        let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+        for source in CalibratedSource::ALL {
+            let r = self.source_read_at(source);
+            let sample = match (source, mode) {
+                (CalibratedSource::MidiClock, _) => self.clk_sample(r),
+                (CalibratedSource::AbletonOsc, OscSyncMode::AbletonOsc) => self.ableton_osc_sample(r),
+                (CalibratedSource::Timecode, OscSyncMode::M4L) => self.timecode_sample(r),
+                _ => None,
+            };
+            if let Some(sample) = sample {
+                let difference = difference_seconds(link_beat, sample.beat, bpm, quantum);
+                self.calibration.observe_offset(source, now, difference, steady);
+            }
         }
     }
 

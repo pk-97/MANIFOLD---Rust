@@ -19,6 +19,7 @@ use manifold_playback::external_sync::LinkTempoGuard;
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::midi_clock_sync::tick_filter::{ClockKind, ClockTracker};
 use manifold_playback::renderer::StubRenderer;
+use manifold_playback::sync_calibration::{difference_seconds, CalibratedSource, SyncCalibration};
 use manifold_playback::sync_projection::{map_sample, song_time_beat_at, timecode_seconds_at};
 
 pub const FPS: f32 = 60.0;
@@ -184,6 +185,11 @@ pub enum Kind {
 pub trait Reader {
     fn kind(&self) -> Kind;
     fn read(&mut self, r: f64, now: f64) -> Option<Sample>;
+    /// Link's beat and tempo at `r`, when the reader also has Link to
+    /// learn its offset against (D19).
+    fn link_at(&self, _r: f64) -> Option<(f64, f64)> {
+        None
+    }
 }
 
 /// Link: Live's beat at any instant, plus ±0.2 ms timeline steps every 30 s.
@@ -278,6 +284,9 @@ impl ClkReader {
 impl Reader for ClkReader {
     fn kind(&self) -> Kind {
         Kind::Clk
+    }
+    fn link_at(&self, r: f64) -> Option<(f64, f64)> {
+        self.link.as_ref().map(|l| (l.beat_at(r), l.tempo_at(r)))
     }
     fn read(&mut self, r: f64, now: f64) -> Option<Sample> {
         while self.next < self.arrivals.len() && self.arrivals[self.next].0 <= now {
@@ -489,15 +498,21 @@ pub struct Driver {
     pub read_delay: f64,
     /// The true delay from deadline to screen, where the music is measured.
     pub screen_delay: f64,
-    /// Presented-time jitter and the hidden extra delay the calibration sees (D19).
+    /// Presented-time jitter, and the display's delay nobody reports: the
+    /// presents land at `screen_delay - extra_delay`.
     pub present_jitter: f64,
     pub extra_delay: f64,
+    /// The app's calibration (D19). In use while the test models the screen
+    /// (`screen_delay > 0`): the read instant is `deadline + read_delay()`,
+    /// and the source is read at that plus its learned offset.
+    pub calibration: SyncCalibration,
+    present_rng: Rng,
 }
 
 impl Driver {
     pub fn new(engine: PlaybackEngine, seed: u64) -> Self {
         let anchor = Instant::now();
-        Self { engine, grid: FrameGrid::new(FPS, anchor), anchor, rng: Rng(seed | 1), tick: 0, frame_count: 0, read_delay: 0.0, screen_delay: 0.0, present_jitter: 0.0, extra_delay: 0.0 }
+        Self { engine, grid: FrameGrid::new(FPS, anchor), anchor, rng: Rng(seed | 1), tick: 0, frame_count: 0, read_delay: 0.0, screen_delay: 0.0, present_jitter: 0.0, extra_delay: 0.0, calibration: SyncCalibration::new(), present_rng: Rng(seed.rotate_left(17) | 1) }
     }
 
     pub fn wall(&self) -> f64 {
@@ -512,10 +527,23 @@ impl Driver {
         let now = self.anchor + Duration::from_secs_f64(wake);
         let frames = self.grid.consume_at(now);
         let deadline = self.grid.consumed_deadline().saturating_duration_since(self.anchor).as_secs_f64();
-        if let Some(reader) = reader
-            && let Some(sample) = reader.read(deadline + self.read_delay, wake)
-        {
-            feed(&mut self.engine, sample);
+        let calibrated = self.screen_delay > 0.0;
+        let r = deadline + if calibrated { self.calibration.read_delay() } else { self.read_delay };
+        if let Some(reader) = reader {
+            let source = match reader.kind() {
+                Kind::Link => None,
+                Kind::Clk => Some(CalibratedSource::MidiClock),
+                Kind::Osc => Some(CalibratedSource::AbletonOsc),
+                Kind::Timecode => Some(CalibratedSource::Timecode),
+            };
+            let offset = source.filter(|_| calibrated).map_or(0.0, |s| self.calibration.offset(s));
+            if let Some(sample) = reader.read(r + offset, wake) {
+                if let (true, Some(source), Some((link_beat, bpm))) = (calibrated && self.engine.is_playing(), source, reader.link_at(r)) {
+                    let steady = !self.engine.follower().catch_up_open();
+                    self.calibration.observe_offset(source, wake, difference_seconds(link_beat, sample.beat, bpm, 4.0), steady);
+                }
+                feed(&mut self.engine, sample);
+            }
         }
         let playing = self.engine.is_playing();
         let before = self.engine.transport_frame();
@@ -527,6 +555,10 @@ impl Driver {
         });
         self.engine.reclaim_tick_result(result);
         self.frame_count += 1;
+        if self.screen_delay > 0.0 {
+            let jitter = self.present_rng.range(-self.present_jitter, self.present_jitter);
+            self.calibration.presented(self.screen_delay - self.extra_delay + jitter, wake);
+        }
         let index = self.engine.transport_frame();
         Shown {
             deadline,
