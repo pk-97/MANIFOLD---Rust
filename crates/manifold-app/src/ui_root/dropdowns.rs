@@ -827,6 +827,30 @@ impl UIRoot {
         };
 
         match action {
+            PanelAction::Root(RootAction::OpenColourMenu { target, param_ids, value }) => {
+                // The hex item edits over the swatch; the grid writes the
+                // picked colour as one RGB edit (`dropdown_color_to_action`).
+                let items = vec![DropdownItem::new("Hex\u{2026}").with_action(PanelAction::Root(
+                    RootAction::BeginColourTextInput {
+                        target: target.clone(),
+                        param_ids: param_ids.clone(),
+                        anchor: trigger,
+                        value: *value,
+                    },
+                ))];
+                self.dropdown_context = Some(DropdownContext::Colour {
+                    target: target.clone(),
+                    param_ids: param_ids.clone(),
+                });
+                self.dropdown.open_context_with_colors(
+                    items,
+                    manifold_ui::color::COLOR_GRID.to_vec(),
+                    manifold_ui::color::COLOR_GRID_COLS,
+                    Vec2::new(trigger.x, trigger.y + trigger.height),
+                    &mut self.tree,
+                );
+                true
+            }
             PanelAction::Layer(LayerAction::BlendModeClicked(idx)) => {
                 use manifold_core::types::BlendMode;
                 // Typed dropdown (2b.11): each item carries its own SetBlendMode
@@ -2233,17 +2257,26 @@ impl UIRoot {
         }
     }
 
-    /// Convert a color swatch selection into the appropriate PanelAction.
+    /// Convert a color swatch selection into the actions it fires.
     pub(crate) fn dropdown_color_to_action(
         &self,
         ctx: DropdownContext,
         color_idx: usize,
-    ) -> Option<PanelAction> {
+    ) -> Vec<PanelAction> {
+        let Some(color) = manifold_ui::color::COLOR_GRID.get(color_idx) else {
+            return Vec::new();
+        };
         match ctx {
             DropdownContext::LayerContext(layer_id) => {
-                let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
-                Some(PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color)))
+                vec![PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color))]
             }
+            // The same Begin, Move, Commit transaction the hex entry commits:
+            // one undoable write to all three channels.
+            DropdownContext::Colour { target, param_ids } => crate::text_input::material_colour_scrub_actions(
+                crate::text_input::MaterialColourCtx { target, param_ids },
+                [color.r, color.g, color.b].map(|channel| f32::from(channel) / 255.0),
+            )
+            .into(),
         }
     }
 }

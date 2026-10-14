@@ -555,6 +555,8 @@ pub(crate) struct ParamRowIds {
     /// when fewer than two configs are active (no strip drawn). The caller stores
     /// these to route tab clicks to the active-tab switch.
     pub(crate) mod_tabs: Vec<(NodeId, ModTab)>,
+    /// The colour swatch in the label lane, when the row has `rgb_members`.
+    pub(crate) swatch: Option<(NodeId, crate::param_surface::ColourGroup)>,
     /// `y` after this row's slider + its modulation config drawer — the caller
     /// continues the next row from here.
     pub(crate) new_cy: f32,

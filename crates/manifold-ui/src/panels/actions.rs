@@ -1090,10 +1090,17 @@ pub enum RootAction {
         whole_numbers: bool,
         degrees: bool,
     },
-    /// Click on a material colour swatch opens the shared inline hex editor.
-    /// The three channel ids remain the authoritative scalar storage and are
-    /// committed through the existing atomic `ParamRgb` scrub path.
-    BeginMaterialColourTextInput {
+    /// Click on a row's colour swatch: open the colour menu (a hex entry
+    /// item over the colour grid) at the swatch. Picking a colour is one
+    /// atomic `ParamRgb` write to the three channel ids.
+    OpenColourMenu {
+        target: GraphParamTarget,
+        param_ids: [ParamId; 3],
+        value: [f32; 3],
+    },
+    /// The colour menu's hex item: open the inline hex editor over the
+    /// swatch. The commit rides the same atomic `ParamRgb` write.
+    BeginColourTextInput {
         target: GraphParamTarget,
         param_ids: [ParamId; 3],
         anchor: Rect,

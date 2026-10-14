@@ -1415,7 +1415,7 @@ impl Application {
                     crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
                     continue;
                 }
-                PanelAction::Root(RootAction::BeginMaterialColourTextInput {
+                PanelAction::Root(RootAction::BeginColourTextInput {
                     target,
                     param_ids,
                     anchor,

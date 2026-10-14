@@ -569,6 +569,7 @@ impl DropdownPanel {
                 if !visible {
                     tree.set_visible(id, false);
                 }
+                tree.set_name(id, format!("dropdown.colour.{i}"));
                 self.color_swatch_ids.push(id);
             }
         }

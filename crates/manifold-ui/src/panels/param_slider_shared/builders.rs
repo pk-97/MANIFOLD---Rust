@@ -1041,6 +1041,49 @@ pub(crate) const ROW_ROLE_TOGGLE_LABEL: u64 = 14 << 4;
 /// A scene card section header's clickable title.
 pub(crate) const ROW_ROLE_SECTION_TITLE: u64 = 15 << 4;
 
+/// The row's colour swatch. Role nibble 0 is free; sub-tag 1 keeps the
+/// key the material swatch had before it moved here.
+pub(crate) const ROW_ROLE_SWATCH: u64 = 1;
+
+/// Side of the square colour swatch at the left of a row's label lane.
+pub(crate) const SWATCH_SIZE: f32 = 14.0;
+const SWATCH_GAP: f32 = 4.0;
+
+/// The swatch's fill for an `[r, g, b]` in 0–1.
+pub(crate) fn swatch_colour(rgb: [f32; 3]) -> Color32 {
+    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Color32::new(r, g, b, 255) // design-token-exempt: shows the authored colour, not a theme colour
+}
+
+/// A row's colour swatch: a square chip showing the colour its
+/// `rgb_members` hold, at the left of the label lane. A click opens the
+/// colour menu (`RowRole::ColourSwatch`).
+fn build_colour_swatch(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    cy: f32,
+    info: &ParamRow,
+    row_key_base: Option<u64>,
+) -> Option<(NodeId, crate::param_surface::ColourGroup)> {
+    let members = info.rgb_members.as_ref()?;
+    let rect = Rect::new(x, cy + (ROW_HEIGHT - SWATCH_SIZE) * 0.5, SWATCH_SIZE, SWATCH_SIZE);
+    let style = UIStyle {
+        bg_color: swatch_colour(members.values),
+        border_color: color::BORDER,
+        border_width: 1.0,
+        corner_radius: color::SMALL_RADIUS,
+        ..UIStyle::default()
+    };
+    let flags = UIFlags::VISIBLE | UIFlags::INTERACTIVE;
+    let id = match row_key_base {
+        Some(base) => tree.add_node_keyed(parent, rect, UINodeType::Button, style, None, flags, base | ROW_ROLE_SWATCH),
+        None => tree.add_node(parent, rect, UINodeType::Button, style, None, flags),
+    };
+    tree.set_name(id, format!("param_row.{}.swatch", info.id));
+    Some((id, members.group))
+}
+
 /// A row's identity-derived key base (D4): every interactive node the row
 /// builds flat-parented (siblings of every other row's controls, under the
 /// card's shared inner-bg panel) derives its explicit `WidgetId` key from
@@ -1953,6 +1996,7 @@ pub(crate) fn build_param_row(
         ableton_config: None,
         audio_config: None,
         mod_tabs: Vec::new(),
+        swatch: None,
         new_cy: cy,
     };
     let mut cy = cy;
@@ -2059,6 +2103,9 @@ pub(crate) fn build_param_row(
         ),
     };
 
+    // A swatch sits at the right end of the label lane, beside the name; the
+    // track stays where every other row has it.
+    ids.swatch = build_colour_swatch(tree, parent, x + label_width - SWATCH_SIZE, cy, info, row_key_base);
     let slider = build_row_slider(
         tree,
         parent,
@@ -2079,6 +2126,12 @@ pub(crate) fn build_param_row(
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
     if let Some(label_id) = slider.label {
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
+        // The right-aligned name ends just before the swatch.
+        if ids.swatch.is_some() {
+            let mut lane = tree.get_bounds(label_id);
+            lane.width = (lane.width - SWATCH_SIZE - SWATCH_GAP).max(0.0);
+            tree.set_bounds(label_id, lane);
+        }
     }
 
     // "Automated" indicator (P4 section 7 last bullet, Live's red dot): a small,

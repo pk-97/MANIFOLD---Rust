@@ -845,6 +845,7 @@ fn change_graph_param_switch_declares_effects() {
         card_label: CardLabel::Param,
         gate: None,
         switch: Some(Feature::DepthOfField),
+        colour: None,
     });
     fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true), switch]);
     fx.base_tracked = true;
