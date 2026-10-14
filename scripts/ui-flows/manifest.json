@@ -294,6 +294,7 @@
     "automation-placeholder-first-click": "automationplaceholder",
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
+    "drag-survives-rebuild": "inspector",
     "led-layer-create": "timeline",
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",

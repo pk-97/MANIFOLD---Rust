@@ -210,7 +210,6 @@ pub struct ContentState {
     pub osc_sender_enabled: bool,
 
     // ── Percussion status ─────────────────────────────────────────
-    pub percussion_importing: bool,
     pub percussion_status_message: Arc<str>,
     pub percussion_progress: f32,
     pub percussion_show_progress: bool,
@@ -588,7 +587,6 @@ impl Default for ContentState {
             spectrogram_mid_hz: manifold_core::audio_setup::DEFAULT_MID_HZ,
             spectrogram_features: None,
             osc_sender_enabled: false,
-            percussion_importing: false,
             percussion_status_message: Arc::from(""),
             percussion_progress: 0.0,
             percussion_show_progress: false,

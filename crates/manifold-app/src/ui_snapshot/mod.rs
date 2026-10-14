@@ -1316,13 +1316,10 @@ mod cache_path_full_render {
     /// model with. `Signals`/`apply_decision`/`composite_frame` (P0's own
     /// transcriptions of app_render.rs) are gone — see the P1 phase report.
     ///
-    /// `scroll_dirty` is always `ScrollDirty::default()` here: this driver
-    /// scrolls via `try_inspector_scroll` + `scrolled_in_place`, never the
-    /// live app's `scroll_dirty` bitflag path, exactly as P0's `apply_
-    /// decision` never ran a scroll rebuild either — omitting it changes
-    /// nothing observable.
+    /// The signals are one frame's: they reset after each apply.
     fn apply_decision(ui: &mut UIRoot, cache: &mut UICacheManager, signals: &mut UiFrameSignals) {
         apply_ui_frame_invalidations(ui, Some(cache), signals);
+        *signals = UiFrameSignals::default();
     }
 
     // `CompositeResources` (the offscreen target + atlas/blit pipelines
@@ -1398,7 +1395,7 @@ mod cache_path_full_render {
         content_state: &ContentState,
         user_prefs: &mut UserPrefs,
         frame: &mut PlannedFrame,
-    ) -> bool {
+    ) -> crate::frame_plan::RegionMask {
         ui.pointer_event(pos, PointerAction::Down, clock);
         ui.pointer_event(pos, PointerAction::Up, clock);
         let actions = ui.process_events();
@@ -1429,14 +1426,14 @@ mod cache_path_full_render {
     }
 
     impl PlannedFrame {
-        /// Plan against the last frame's inputs; true when a region rebuilds.
+        /// Plan against the last frame's inputs; the regions the plan rebuilds.
         fn rebuilds(
             &mut self,
             ui: &UIRoot,
             data: &mut fixtures::SceneData,
             active_layer: &Option<LayerId>,
             content_state: &ContentState,
-        ) -> bool {
+        ) -> crate::frame_plan::RegionMask {
             let automation_draw_mode = data.selection.automation_draw_mode;
             let inputs = crate::ui_frame::gather_frame_inputs(
                 &mut self.planner,
@@ -1452,7 +1449,7 @@ mod cache_path_full_render {
                     automation_draw_mode,
                 },
             );
-            !self.planner.plan(inputs).rebuild.is_empty()
+            self.planner.plan(inputs).rebuild
         }
     }
 
@@ -1518,9 +1515,7 @@ mod cache_path_full_render {
         let cog_text = manifold_ui::icons::Icon::Cog.text();
         let cog_pos =
             resolve_button_center(&ui, &cog_text).expect("compact-toggle (cog) button must resolve");
-        if click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame) {
-            signals.needs_rebuild = true;
-        }
+        signals.rebuild = click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame);
         apply_decision(&mut ui, &mut cache, &mut signals);
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
         filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
@@ -1537,9 +1532,7 @@ mod cache_path_full_render {
             clock += 25.0 / 1000.0;
             ui.update();
             let still_active = ui.inspector.drawer_anim_active();
-            if still_active {
-                signals.needs_rebuild = true;
-            }
+            signals.rebuild = frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
             apply_decision(&mut ui, &mut cache, &mut signals);
             composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
             filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
@@ -1565,9 +1558,7 @@ mod cache_path_full_render {
         for tab_text in ["Master", "Layer"] {
             match resolve_button_center(&ui, tab_text) {
                 Some(pos) => {
-                    if click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame) {
-                        signals.needs_rebuild = true;
-                    }
+                    signals.rebuild = click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame);
                 }
                 None => {
                     tab_swap_fallback_used = true;
@@ -1580,9 +1571,7 @@ mod cache_path_full_render {
                         &[manifold_ui::InspectorTab::Layer, manifold_ui::InspectorTab::Master],
                         tab,
                     );
-                    if frame.rebuilds(&ui, &mut data, &active_layer, &content_state) {
-                        signals.needs_rebuild = true;
-                    }
+                    signals.rebuild = frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
                 }
             }
             apply_decision(&mut ui, &mut cache, &mut signals);

@@ -1589,6 +1589,19 @@ impl LayerHeaderPanel {
 
     // ── Drag visual helpers ─────────────────────────────────────────
 
+    /// A rebuild mid reorder drag re-mints the rows: dim the source row and
+    /// place the insert line again, so the drag carries on (D18). The drag
+    /// itself is held by row index, never by node id.
+    fn reapply_drag_visuals(&self, tree: &mut UITree, mapper: &CoordinateMapper) {
+        let Ok(source) = usize::try_from(self.drag_source) else { return };
+        if let Some(bg_id) = self.rows.get(source).and_then(|row| row.id(LayerControl::Background)) {
+            tree.set_style(bg_id, UIStyle { bg_color: DRAG_SOURCE_DIM, ..UIStyle::default() });
+        }
+        if self.drag_target >= 0 && (self.drag_target as usize) < self.layers.len() {
+            self.update_insert_indicator(tree, mapper);
+        }
+    }
+
     fn update_insert_indicator(&self, tree: &mut UITree, mapper: &CoordinateMapper) {
         let Some(indicator_id) = self.insert_indicator_id else {
             return;
@@ -2419,7 +2432,12 @@ impl LayerHeaderPanel {
         self.rows.clear();
         self.rows.resize(layer_count, LayerRowIds::default());
         // Gain slider node IDs are invalidated by the rebuild; reset and
-        // re-populate per audio row in build_layer_row.
+        // re-populate per audio row in build_layer_row. A live gain drag
+        // keeps its state and takes the rebuilt slider ids (D18).
+        let held_gain_drag = usize::try_from(self.active_gain_drag)
+            .ok()
+            .filter(|_| self.gain_sliders.len() == layer_count)
+            .map(|i| (i, self.gain_sliders[i].clone()));
         self.active_gain_drag = -1;
         self.gain_sliders.clear();
         self.gain_sliders
@@ -2503,6 +2521,15 @@ impl LayerHeaderPanel {
 
         // No "+ Add Layer" button — layers are added via right-click context menu
         self.add_layer_btn = None;
+
+        if let Some((i, mut held)) = held_gain_drag
+            && let Some(ids) = self.gain_sliders[i].ids().cloned()
+        {
+            held.set_ids(ids);
+            self.gain_sliders[i] = held;
+            self.active_gain_drag = i as i32;
+        }
+        self.reapply_drag_visuals(tree, mapper);
 
         self.cache_node_count = tree.count() - self.cache_first_node;
     }

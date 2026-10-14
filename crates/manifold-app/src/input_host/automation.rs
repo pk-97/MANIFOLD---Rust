@@ -363,7 +363,6 @@ fn flatten_time_selection(
     project: &mut manifold_core::project::Project,
     selection: &UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
-    needs_rebuild: &mut bool,
 ) -> bool {
     let Some(time) = selection.automation_time_selection.as_ref() else {
         return false;
@@ -412,7 +411,6 @@ fn flatten_time_selection(
         content_tx,
         ContentCommand::ExecuteBatch(commands, "Flatten Automation Range".to_string()),
     );
-    *needs_rebuild = true;
     true
 }
 
@@ -422,10 +420,9 @@ pub(crate) fn delete_selected(
     project: &mut manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
-    needs_rebuild: &mut bool,
 ) {
     if selection.automation_time_selection.is_some() {
-        flatten_time_selection(project, selection, content_tx, needs_rebuild);
+        flatten_time_selection(project, selection, content_tx);
         selection.automation_insert_beat = selection.automation_time_selection.as_ref().map(|range| range.start);
         selection.automation_time_selection = None;
         selection.selected_automation_point = None;
@@ -478,7 +475,6 @@ pub(crate) fn delete_selected(
         }
     }
     if commands.is_empty() {
-        *needs_rebuild = true;
         return;
     }
     for command in &mut commands {
@@ -488,18 +484,16 @@ pub(crate) fn delete_selected(
         content_tx,
         ContentCommand::ExecuteBatch(commands, "Delete Automation Points".to_string()),
     );
-    *needs_rebuild = true;
 }
 
 pub(crate) fn cut_selected(
     project: &mut manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
-    needs_rebuild: &mut bool,
 ) {
     if selection.automation_time_selection.is_some() {
         if copy_selected(project, selection) {
-            flatten_time_selection(project, selection, content_tx, needs_rebuild);
+            flatten_time_selection(project, selection, content_tx);
         }
         selection.automation_insert_beat = selection.automation_time_selection.as_ref().map(|range| range.start);
         selection.automation_time_selection = None;
@@ -514,7 +508,7 @@ pub(crate) fn cut_selected(
     copy_selected(project, selection);
     selection.selected_automation_point = None;
     selection.selected_automation_points = refs;
-    delete_selected(project, selection, content_tx, needs_rebuild);
+    delete_selected(project, selection, content_tx);
     if let Some(point) = selection
         .automation_clipboard
         .as_ref()
@@ -529,7 +523,6 @@ pub(crate) fn paste(
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     target_beat: Beats,
-    needs_rebuild: &mut bool,
 ) {
     let Some(clipboard) = selection.automation_clipboard.clone() else {
         return;
@@ -654,7 +647,6 @@ pub(crate) fn paste(
             lanes: pasted_lanes,
         });
     }
-    *needs_rebuild = true;
 }
 
 pub(crate) fn duplicate_selected(
@@ -662,7 +654,6 @@ pub(crate) fn duplicate_selected(
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     grid_step: f32,
-    needs_rebuild: &mut bool,
 ) {
     let (start, end) = if let Some(time) = &selection.automation_time_selection {
         (time.start.min(time.end), time.start.max(time.end))
@@ -683,7 +674,7 @@ pub(crate) fn duplicate_selected(
         selection.automation_paste_context = saved_context;
         return;
     }
-    paste(project, selection, content_tx, destination, needs_rebuild);
+    paste(project, selection, content_tx, destination);
     selection.automation_clipboard = saved_clipboard;
     selection.automation_paste_context = saved_context;
 }
@@ -781,7 +772,6 @@ pub(crate) fn insert_shape(
     param_id: &manifold_core::effects::ParamId,
     click_beat: Beats,
     shape: AutomationShape,
-    needs_rebuild: &mut bool,
 ) {
     set_lane_context(selection, target, param_id);
     let graph_target = graph_target(target);
@@ -839,7 +829,6 @@ pub(crate) fn insert_shape(
         })
         .collect();
     selection.selected_automation_point = selection.selected_automation_points.first().cloned();
-    *needs_rebuild = true;
 }
 
 #[cfg(test)]

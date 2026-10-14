@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn shape_change_reports_needs_rebuild_without_mutating() {
+    fn shape_change_reports_a_rebuild_without_mutating() {
         let mut t = tree();
         let mut host = ChromeHost::new();
         host.build(&mut t, &card("1.0"), rect());

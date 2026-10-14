@@ -342,8 +342,6 @@ impl Application {
                                 .last()
                                 .map(|l| l.layer_id.clone());
                         }
-
-                        self.needs_rebuild = true;
                     }
                 }
                 // Apply lightweight modulation snapshot (param_values only)
@@ -400,13 +398,12 @@ impl Application {
             }
         }
 
-        if crate::edit_selection::apply_update(
+        // The applied selection moves its own versions.
+        crate::edit_selection::apply_update(
             &mut self.ws.ui_root, &self.local_project,
             self.content_state.edit_selection_update.as_deref(),
             &mut self.selection, &mut self.active_layer_id,
-        ) {
-            self.needs_rebuild = true;
-        }
+        );
 
         // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Runs
         // after the drain so it sees the latest data_version + dirty flag;
@@ -520,10 +517,6 @@ impl Application {
             }
         }
 
-        // 1d. Percussion import runs on content thread — read status from content_state.
-        let is_importing = !self.ws.ui_root.export_progress.is_open()
-            && self.content_state.percussion_importing;
-
         // 1e. Sync percussion pipeline status to header panel
         // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
         {
@@ -543,11 +536,8 @@ impl Application {
                 },
                 show,
             );
-            // The progress bar redraws while the pipeline runs. Its new clips and
-            // layers arrive as an edit snapshot, whose stamps re-project them.
-            if is_importing {
-                self.needs_rebuild = true;
-            }
+            // The progress bar is a chrome input; the imported clips and layers
+            // arrive as an edit snapshot, whose stamps re-project them.
         }
 
         // Export owns its progress surface. Do not redraw a stale loading
@@ -560,7 +550,7 @@ impl Application {
             };
             if self.ws.ui_root.warmup != warmup {
                 self.ws.ui_root.warmup = warmup;
-                self.needs_rebuild = true;
+                self.ws.ui_root.mark_overlay_dirty();
             }
         }
 
@@ -672,15 +662,10 @@ impl Application {
             self.ws.ui_root.mark_overlay_dirty();
         }
 
-        // An in-place inspector scroll (wheel in window_input, or a scrollbar
-        // drag handled inside process_events) offset the content nodes without a
-        // rebuild — re-render just the inspector's atlas slot. A full rebuild
-        // later this frame (needs_rebuild → invalidate_all) supersedes it
-        // harmlessly. One drain point for both scroll inputs. The actual
-        // `invalidate_inspector()` call now lives in
-        // `ui_frame::apply_ui_frame_invalidations` (P1, D3) — captured here as
-        // a signal so it fires in the same relative order as before (ahead of
-        // the rebuild/structural decision later this frame).
+        // An in-place inspector scroll (the wheel, or a scrollbar drag inside
+        // process_events) offset the content nodes without a rebuild; the
+        // frame seam re-renders just the inspector's atlas slot. One drain
+        // point for both scroll inputs.
         let scrolled_in_place = self.ws.ui_root.inspector.take_scrolled_in_place();
         // Graph-editor edits (canvas + sidebar) accumulate here and dispatch
         // through their own command vocabulary (`GraphEditCommand`), separately
@@ -874,10 +859,7 @@ impl Application {
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
-                    &mut self.needs_rebuild,
-                    &mut self.automation_lanes_dirty,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate_layers,
+                    &mut self.ws.offscreen_dirty,
                     &mut self.ui_edits,
                 );
                 for event in &viewport_events {
@@ -1318,7 +1300,6 @@ impl Application {
                 }
                 PanelAction::Transport(TransportAction::ResetBpm) => {
                     self.send_content_cmd(ContentCommand::ResetBpm);
-                    self.needs_rebuild = true;
                     continue;
                 }
                 // ── Selection-follows ──────────────────────────────────────
@@ -2565,9 +2546,12 @@ impl Application {
         }
 
         // 2-4. Plan the frame, then apply it (`ui_frame::apply_frame_plan`,
-        // shared with the script runner) beside the old flags: projections,
-        // drag polling, auto-scroll, the rebuild, the `push_state` pieces,
-        // then the drag-time clip and lane re-projection.
+        // shared with the script runner): projections, drag polling, the
+        // planned region work, the `push_state` pieces, then the drag-time
+        // clip and lane re-projection. The overlay intake and playhead follow
+        // run first, so the plan sees what they move as inputs.
+        crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
+        crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state, &self.local_project);
         let automation_draw_mode = self.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(
             &mut self.frame_planner,
@@ -2608,12 +2592,7 @@ impl Application {
             &mut self.local_project,
             &mut self.selection,
             &mut self.active_layer_id,
-            crate::ui_frame::FrameFlagsMut {
-                needs_rebuild: &mut self.needs_rebuild,
-                automation_lanes_dirty: &mut self.automation_lanes_dirty,
-                scroll_dirty: &mut self.scroll_dirty,
-                invalidate_layers: &mut self.invalidate_layers,
-            },
+            &mut self.ws.offscreen_dirty,
             &plan,
             changes,
             crate::ui_frame::PushInputs {
@@ -2622,7 +2601,7 @@ impl Application {
                 project_path: self.current_project_path.as_deref(),
                 transport_cache: &mut self.transport_cache,
             },
-            |ui_root, project, selection, active_layer, flags| {
+            |ui_root, project, selection, active_layer, redraw| {
                 // Per-frame drag polling with auto-scroll (move/trim/rubber-band).
                 // Continues edge autoscroll when the mouse is stationary; also
                 // drives the live readout, which must reflect the post-poll
@@ -2639,10 +2618,7 @@ impl Application {
                         content_state,
                         cursor_manager,
                         active_layer,
-                        &mut *flags.needs_rebuild,
-                        &mut *flags.automation_lanes_dirty,
-                        &mut *flags.scroll_dirty,
-                        &mut *flags.invalidate_layers,
+                        redraw,
                         ui_edits,
                     );
                     overlay.poll_drag(cursor_pos, &mut host, selection, &mut ui_root.viewport);
@@ -2702,30 +2678,12 @@ impl Application {
 
         // 6·drag-motion. P2 drag-visual tweens (`UI_CRAFT_AND_MOTION_PLAN.md`
         // D15/D17: grab lift, duplicate ghost, grid settle, landing-line
-        // flash, error shake). The GPU clip-body pass (Pass 4b below) already
-        // re-emits every frame unconditionally, so ticking here is enough —
-        // no `needs_rebuild` flag to set, unlike the UITree-driven panels.
-        self.overlay.tick((dt * 1000.0) as f32);
-
-        // 6·motion. P1 drawer open/close tween: while any inspector drawer-height
-        // tween is in flight, force a rebuild each frame so the interpolated height
-        // re-lays-out and the content below reflows. Mirrors the is_dragging()
-        // rebuild poll above (a panel bool read after update → needs_rebuild). The
-        // forced rebuild's own invalidate_all repaints the inspector, so no
-        // separate invalidate is needed here. Reduced motion settles instantly, so
-        // this is false at once — no per-frame rebuild churn.
-        if self.ws.ui_root.inspector.drawer_anim_active()
-            || self.ws.ui_root.scene_setup_panel.object_cards_animating()
-        {
-            self.needs_rebuild = true;
-        }
-
-        // P2 "panel-split snap-back" (D15): while a double-click-reset tween
-        // on either main split is in flight, force a rebuild each frame so
-        // every panel re-lays-out from the eased ratio/width — same poll
-        // shape as `drawer_anim_active` just above.
-        if self.ws.ui_root.layout.is_split_reset_animating() {
-            self.needs_rebuild = true;
+        // flash, error shake). The clip-body pass draws them at paint time, so
+        // a live tween only asks for a repaint (D8). The drawer, object-card
+        // and split tweens need nothing here: each moves its panel's view
+        // version or the layout rects, and the next plan rebuilds from that.
+        if self.overlay.tick((dt * 1000.0) as f32) {
+            self.ws.offscreen_dirty = true;
         }
 
         // 6·motion. `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw

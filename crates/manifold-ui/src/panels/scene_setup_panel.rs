@@ -1017,6 +1017,9 @@ pub struct ScenePanel {
     /// drag.
     selection_version: u64,
     noted_selection: Option<(LayerId, Option<SceneSelection>)>,
+    /// Moves on a body scroll or a card tween frame: the planner rebuilds
+    /// the inspector region the docked body lives in (UI_INVALIDATION D6).
+    view_version: u64,
     focus_cleared: bool,
     /// Every outliner row's click target this frame — `(node_id, what
     /// selecting it means)`.
@@ -1162,6 +1165,7 @@ impl Default for ScenePanel {
             selection: std::collections::HashMap::new(),
             selection_version: 0,
             noted_selection: None,
+            view_version: 0,
             focus_cleared: false,
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
@@ -1546,6 +1550,7 @@ impl ScenePanel {
         let (layer_id, selection) = (vm.layer_id.clone(), selection.clone());
         self.clear_item_focus();
         self.selection.insert(layer_id, selection);
+        self.view_version += 1;
         true
     }
 
@@ -1847,7 +1852,16 @@ impl ScenePanel {
 
     /// Mouse-wheel scroll for the docked body.
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        self.scroll.apply_scroll_delta(delta)
+        let moved = self.scroll.apply_scroll_delta(delta);
+        if moved {
+            self.view_version += 1;
+        }
+        moved
+    }
+
+    /// The docked body's view version: scroll and card tween frames.
+    pub fn view_version(&self) -> u64 {
+        self.view_version
     }
 
     /// Whether a point lands inside the panel's own rect — for the app's
@@ -2272,10 +2286,8 @@ impl ScenePanel {
             // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
             // `window_input` already gated on `layout.scene_setup().contains(pos)`
             // before emitting this, so no further position check is needed here.
-            // `window_input.rs`'s dock-scroll branch also sets
-            // `needs_rebuild` so the next frame actually re-applies the
-            // new offset (BUG-223: it used to assume this happened for
-            // free every frame — it doesn't).
+            // The scroll moves the panel's view version, so the planner
+            // rebuilds the inspector region that hosts the body.
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 (true, Vec::new())

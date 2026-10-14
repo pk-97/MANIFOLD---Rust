@@ -6,9 +6,8 @@
 //! picks work. Section 4 of the design is the table this encodes, and the
 //! unit tests below pin one test per row of both tables.
 //!
-//! The planner alone decides projections (P4d). The rebuild flags that remain
-//! (`needs_rebuild`, `ScrollDirty`) stay live beside it until P5a and can only
-//! add work.
+//! The planner alone decides projections (P4d) and tree work (P5a): no hand-set
+//! flag remains beside it.
 
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 
@@ -151,7 +150,6 @@ impl RegionRects {
         self.0[region as usize]
     }
 
-    #[cfg(test)]
     pub(crate) fn set(&mut self, region: MainRegion, rect: [i32; 4]) {
         self.0[region as usize] = rect;
     }
@@ -288,6 +286,9 @@ pub(crate) struct FrameInputs {
     pub dock_view: u64,
     pub dock_scroll_px: i32,
     pub overlays: u64,
+    /// Any overlay is open: the project projection rewrites lists an open
+    /// overlay shows (the trigger target picker's ticks).
+    pub overlay_open: bool,
     pub audio_directory: u64,
     /// D15: `ContentState.values_seq`.
     pub values: u64,
@@ -358,8 +359,6 @@ pub(crate) struct FramePlan {
     pub rebuild: RegionMask,
     /// Rect origin moved, size did not.
     pub translate: RegionMask,
-    /// How far each translated region's origin moved, in pixels.
-    pub translate_by: [(i32, i32); MAIN_REGION_COUNT],
     pub in_place: RegionMask,
     /// Atlas slots to repaint.
     pub repaint: RegionMask,
@@ -367,6 +366,9 @@ pub(crate) struct FramePlan {
     /// Which timeline view axes moved. Applied as the scroll-panel update, so
     /// a scroll or zoom from any input path needs no structural sync.
     pub viewport: ViewportMoves,
+    /// A region rect moved or resized: the atlas pixels it left behind belong
+    /// to no slot, so the atlas clears and every slot repaints.
+    pub rects_moved: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -374,6 +376,12 @@ pub(crate) struct ViewportMoves {
     pub scroll_x: bool,
     pub scroll_y: bool,
     pub zoom: bool,
+}
+
+impl ViewportMoves {
+    pub(crate) fn any(self) -> bool {
+        self.scroll_x || self.scroll_y || self.zoom
+    }
 }
 
 #[cfg(test)]
@@ -386,9 +394,15 @@ impl FramePlan {
 #[cfg(feature = "ui-snapshot")]
 impl FramePlan {
     /// `AssertFresh`'s reference frame (D10): this plan plus every
-    /// projection, so the full build reads the same inputs freshly projected.
+    /// projection and every region rebuilt, so the full build reads the same
+    /// inputs freshly projected.
     pub(crate) fn with_every_projection(mut self) -> Self {
         self.projections = ProjectionMask(u32::MAX);
+        for region in MainRegion::ALL {
+            self.rebuild.insert(region);
+        }
+        self.repaint = self.rebuild;
+        self.redraw = true;
         self
     }
 }
@@ -563,6 +577,14 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
 }
 
 /// The section 4 region table.
+///
+/// Translate is live for the regions whose panels take a new rect after a
+/// move: the three chrome bars (their host re-lays out at the rect it is
+/// handed, [`crate::ui_root::UIRoot::follow_translate`]) and the split
+/// handle (ids only). The inspector, dock, layer headers and viewport keep
+/// their rects inside the panel (scroll containers, hit rects, the
+/// coordinate mapper's origin), so any rect change rebuilds them until each
+/// re-anchors in place (P5b, with the in-place height column).
 #[allow(clippy::too_many_arguments)]
 fn plan_regions(
     plan: &mut FramePlan,
@@ -580,12 +602,11 @@ fn plan_regions(
         let (a, b) = (last.rects.get(r), next.rects.get(r));
         a[2] != b[2] || a[3] != b[3]
     };
-    let width = |r: MainRegion| last.rects.get(r)[2] != next.rects.get(r)[2];
-    let height = |r: MainRegion| last.rects.get(r)[3] != next.rects.get(r)[3];
     let origin = |r: MainRegion| {
         let (a, b) = (last.rects.get(r), next.rects.get(r));
         a[0] != b[0] || a[1] != b[1]
     };
+    let moved = |r: MainRegion| last.rects.get(r) != next.rects.get(r);
     let mut rebuild = RegionMask::NONE;
     let mut translate = RegionMask::NONE;
     let mut in_place = RegionMask::NONE;
@@ -606,26 +627,24 @@ fn plan_regions(
     }
 
     let inspector = MainRegion::Inspector;
-    if size(inspector)
+    if moved(inspector)
         || projections.contains(Projection::InspectorSync)
         || last.inspector_view != next.inspector_view
     {
         rebuild.insert(inspector);
-    } else if origin(inspector) {
-        translate.insert(inspector);
     }
     if last.inspector_scroll_px != next.inspector_scroll_px || live {
         in_place.insert(inspector);
     }
 
+    // The dock body's wheel scroll rebuilds it until it scrolls in place (P5b).
     let dock = MainRegion::AudioDock;
-    if size(dock) || projections.contains(Projection::AudioDevices) || last.dock_view != next.dock_view {
+    if moved(dock)
+        || projections.contains(Projection::AudioDevices)
+        || last.dock_view != next.dock_view
+        || last.dock_scroll_px != next.dock_scroll_px
+    {
         rebuild.insert(dock);
-    } else if origin(dock) {
-        translate.insert(dock);
-    }
-    if last.dock_scroll_px != next.dock_scroll_px {
-        in_place.insert(dock);
     }
 
     let handles = MainRegion::SplitHandles;
@@ -636,14 +655,11 @@ fn plan_regions(
     }
 
     let headers = MainRegion::LayerHeaders;
-    if width(headers) || timeline_shape {
+    if moved(headers) || timeline_shape {
         rebuild.insert(headers);
-    } else if origin(headers) {
-        translate.insert(headers);
     }
     if last.scroll_y_px != next.scroll_y_px
         || plan.viewport.scroll_y
-        || height(headers)
         || selection_visual
         || active_layer
         || automation_view
@@ -654,17 +670,14 @@ fn plan_regions(
     let viewport = MainRegion::Viewport;
     // Marker flags are tree nodes with no in-place path yet (P5b), so a marker
     // drag rebuilds the viewport like a committed marker edit.
-    if width(viewport) || timeline_shape || projections.contains(Projection::MarkerPreview) {
+    if moved(viewport) || timeline_shape || projections.contains(Projection::MarkerPreview) {
         rebuild.insert(viewport);
-    } else if origin(viewport) {
-        translate.insert(viewport);
     }
     if last.scroll_x_px != next.scroll_x_px
         || last.scroll_y_px != next.scroll_y_px
         || last.zoom_bits != next.zoom_bits
         || plan.viewport.scroll_x
         || plan.viewport.scroll_y
-        || height(viewport)
         || selection_visual
         || cursor
         || preview
@@ -674,7 +687,10 @@ fn plan_regions(
     }
 
     let overlays = MainRegion::Overlays;
-    if last.overlays != next.overlays {
+    if last.overlays != next.overlays
+        || moved(overlays)
+        || (projections.contains(Projection::ProjectSync) && next.overlay_open)
+    {
         rebuild.insert(overlays);
     }
     // Warmup and export progress are overlay in-place inputs too, but their
@@ -687,11 +703,8 @@ fn plan_regions(
     // Ghosts are refilled from input while a ghost exists; no input here.
     plan.rebuild = rebuild;
     plan.translate = translate;
-    for r in translate.iter() {
-        let (a, b) = (last.rects.get(r), next.rects.get(r));
-        plan.translate_by[r as usize] = (b[0] - a[0], b[1] - a[1]);
-    }
     plan.in_place = in_place;
+    plan.rects_moved = last.rects != next.rects;
     let mut repaint = rebuild.union(translate).union(in_place);
     repaint.0 &= !(1 << MainRegion::Ghosts as u8);
     plan.repaint = repaint;
@@ -1107,7 +1120,9 @@ mod tests {
         assert!(p.rebuild.contains(r));
         assert!(p.projections.contains(Projection::InspectorSync));
         assert!(!p.projections.contains(Projection::ProjectSync));
-        assert!(plan(moved(r)).translate.contains(r));
+        // The inspector keeps its rects inside its scroll containers: a move
+        // rebuilds it until it re-anchors in place (P5b).
+        assert!(plan(moved(r)).rebuild.contains(r));
         let mut next = base();
         next.inspector_scroll_px = 12;
         let p = plan(next);
@@ -1124,11 +1139,11 @@ mod tests {
         let mut next = base();
         next.dock_view = 1;
         assert!(plan(next).rebuild.contains(r));
-        assert!(plan(moved(r)).translate.contains(r));
+        assert!(plan(moved(r)).rebuild.contains(r));
+        // The dock body scrolls by rebuilding until it scrolls in place (P5b).
         let mut next = base();
         next.dock_scroll_px = 3;
-        let p = plan(next);
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r));
+        assert!(plan(next).rebuild.contains(r));
     }
 
     #[test]
@@ -1137,7 +1152,6 @@ mod tests {
         assert!(plan(resized(r)).rebuild.contains(r));
         let p = plan(moved(r));
         assert!(p.translate.contains(r) && !p.rebuild.contains(r));
-        assert_eq!(p.translate_by[r as usize], (0, 7), "the plan carries the move");
     }
 
     #[test]
@@ -1145,14 +1159,16 @@ mod tests {
         let r = MainRegion::LayerHeaders;
         assert!(plan(resized(r)).rebuild.contains(r), "width");
         assert!(plan(with_parts(&[Part::Layers])).rebuild.contains(r), "project projection ran");
-        assert!(plan(moved(r)).translate.contains(r));
-        let in_place: [fn(&mut FrameInputs); 5] = [
+        // The headers keep their rects inside the panel: any rect change
+        // rebuilds until the in-place height column lands (P5b).
+        assert!(plan(moved(r)).rebuild.contains(r));
+        let mut next = base();
+        let mut rect = next.rects.get(r);
+        rect[3] += 5;
+        next.rects.set(r, rect);
+        assert!(plan(next).rebuild.contains(r), "height");
+        let in_place: [fn(&mut FrameInputs); 4] = [
             |i| i.scroll_y_px = 9,
-            |i| {
-                let mut rect = i.rects.get(MainRegion::LayerHeaders);
-                rect[3] += 5;
-                i.rects.set(MainRegion::LayerHeaders, rect);
-            },
             |i| i.selection_visual = 1,
             |i| i.active_layer = 1,
             |i| i.automation_view = 1,
@@ -1173,7 +1189,7 @@ mod tests {
         assert!(plan(resized(r)).rebuild.contains(r), "width");
         assert!(plan(with_parts(&[Part::Clips])).rebuild.contains(r), "project projection ran");
         assert!(plan(with_parts(&[Part::Markers])).rebuild.contains(r), "markers");
-        assert!(plan(moved(r)).translate.contains(r));
+        assert!(plan(moved(r)).rebuild.contains(r), "the mapper keeps its origin");
         let in_place: [fn(&mut FrameInputs); 6] = [
             |i| i.scroll_x_px = 9,
             |i| i.zoom_bits = 2,
@@ -1236,6 +1252,11 @@ mod tests {
         let mut next = base();
         next.overlays = 1;
         assert!(plan(next).rebuild.contains(r));
+        // The project projection rewrites the lists an open overlay shows.
+        let mut next = with_parts(&[Part::Layers]);
+        assert!(!plan(next).rebuild.contains(r), "nothing open, nothing to rebuild");
+        next.overlay_open = true;
+        assert!(plan(next).rebuild.contains(r));
         let mut next = base();
         next.runtime.ableton_session = 1;
         let p = plan(next);
@@ -1246,6 +1267,35 @@ mod tests {
             edit(&mut next);
             assert!(!plan(next).in_place.contains(r));
         }
+    }
+
+    /// A split drag moves the chrome bar and the handle under it in place and
+    /// rebuilds the two timeline regions; every slot repaints because the
+    /// pixels a moved region leaves behind belong to no slot.
+    #[test]
+    fn a_rect_change_flags_the_atlas_and_rebuilds_only_what_caches_rects() {
+        assert!(!plan(base()).rects_moved);
+        let mut next = base();
+        for region in [MainRegion::Footer, MainRegion::SplitHandles] {
+            let mut rect = next.rects.get(region);
+            rect[1] += 4;
+            next.rects.set(region, rect);
+        }
+        for region in [MainRegion::LayerHeaders, MainRegion::Viewport] {
+            let mut rect = next.rects.get(region);
+            rect[3] += 4;
+            next.rects.set(region, rect);
+        }
+        let p = plan(next);
+        assert!(p.rects_moved);
+        assert!(p.translate.contains(MainRegion::Footer) && p.translate.contains(MainRegion::SplitHandles));
+        assert!(p.rebuild.contains(MainRegion::LayerHeaders) && p.rebuild.contains(MainRegion::Viewport));
+        for untouched in [MainRegion::Transport, MainRegion::Header, MainRegion::Inspector, MainRegion::AudioDock] {
+            assert!(!p.rebuild.contains(untouched) && !p.translate.contains(untouched), "{untouched:?}");
+        }
+        let mut next = base();
+        next.rects.set(MainRegion::Overlays, [0, 0, 9, 9]);
+        assert!(plan(next).rebuild.contains(MainRegion::Overlays), "a resized screen rebuilds the overlays");
     }
 
     #[test]
