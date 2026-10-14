@@ -303,6 +303,53 @@ pub(crate) struct FrameInputs {
     pub led_enabled: bool,
 }
 
+impl FrameInputs {
+    /// The live push's inputs, which the editor window's live push keys on
+    /// too (D17, D22).
+    pub(crate) fn live(&self) -> LiveInputs {
+        LiveInputs {
+            parts: self.parts,
+            values: self.values,
+            active_layer: self.active_layer,
+            led_enabled: self.led_enabled,
+            ableton_session: self.runtime.ableton_session,
+        }
+    }
+}
+
+/// What every display of a live scalar keys on, in either window (D22).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LiveInputs {
+    pub parts: PartStamps,
+    pub values: u64,
+    pub active_layer: u64,
+    pub led_enabled: bool,
+    pub ableton_session: u64,
+}
+
+/// The live-push rows of the projection table, shared by both windows'
+/// planners: Values displays follow the values sequence and the Values
+/// stamp, and also show the active layer's name and opacity, the LED
+/// controller state and the macro Ableton status (which follows the
+/// session); Shapes displays and range bands follow their own stamps.
+pub(crate) fn plan_live(last: &LiveInputs, next: &LiveInputs, p: &mut ProjectionMask) {
+    let moved = next.parts.moved_since(&last.parts);
+    if last.values != next.values
+        || moved.intersects(LIVE_VALUE_PARTS)
+        || last.active_layer != next.active_layer
+        || last.led_enabled != next.led_enabled
+        || last.ableton_session != next.ableton_session
+    {
+        p.insert(Projection::LiveValues);
+    }
+    if moved.contains(Part::Shapes) {
+        p.insert(Projection::LiveShapes);
+    }
+    if moved.contains(Part::MappingRanges) {
+        p.insert(Projection::LiveRanges);
+    }
+}
+
 /// Rows of the section 4 projection table, one bit each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -512,22 +559,7 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     if last.preview.markers != next.preview.markers {
         p.insert(Projection::MarkerPreview);
     }
-    // The live push also writes the active layer's name and opacity and the
-    // LED controller state, and the macro Ableton status follows the session.
-    if last.values != next.values
-        || moved.intersects(LIVE_VALUE_PARTS)
-        || active_layer
-        || last.led_enabled != next.led_enabled
-        || runtime.ableton_session != last.runtime.ableton_session
-    {
-        p.insert(Projection::LiveValues);
-    }
-    if moved.contains(Part::Shapes) {
-        p.insert(Projection::LiveShapes);
-    }
-    if moved.contains(Part::MappingRanges) {
-        p.insert(Projection::LiveRanges);
-    }
+    plan_live(&last.live(), &next.live(), p);
     if moved.intersects(SCENE_EYE_PARTS) {
         p.insert(Projection::SceneEyes);
     }

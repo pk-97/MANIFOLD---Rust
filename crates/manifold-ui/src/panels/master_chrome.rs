@@ -281,16 +281,7 @@ impl MasterChromePanel {
         self.host.build(tree, &view, rect);
         self.first_node = self.host.first_node();
 
-        // The host materialised the slider slots; wire their ids to the drag
-        // state (or clear when collapsed, where the slots aren't emitted).
-        match self.host.slider_ids(KEY_BRIGHTNESS_SLOT) {
-            Some(ids) => self.led_brightness.set_ids(ids),
-            None => self.led_brightness.clear(),
-        }
-        match self.host.slider_ids(KEY_OPACITY_SLOT) {
-            Some(ids) => self.opacity.set_ids(ids),
-            None => self.opacity.clear(),
-        }
+        self.wire_sliders();
 
         self.node_count = tree.count() - self.first_node;
     }
@@ -302,7 +293,23 @@ impl MasterChromePanel {
             return;
         }
         let view = self.chrome_view();
-        let _ = self.host.update(tree, &view, self.chrome_rect);
+        if self.host.update(tree, &view, self.chrome_rect) == crate::chrome::Reconcile::Updated {
+            self.wire_sliders();
+        }
+    }
+
+    /// The host materialised the slider slots; wire their ids, and their tracks
+    /// after an in-place move, to the drag state (or clear when collapsed,
+    /// where the slots aren't emitted).
+    fn wire_sliders(&mut self) {
+        match self.host.slider_ids(KEY_BRIGHTNESS_SLOT) {
+            Some(ids) => self.led_brightness.set_ids(ids),
+            None => self.led_brightness.clear(),
+        }
+        match self.host.slider_ids(KEY_OPACITY_SLOT) {
+            Some(ids) => self.opacity.set_ids(ids),
+            None => self.opacity.clear(),
+        }
     }
 
     // ── Sync methods (called by state_sync; preserved signatures) ──

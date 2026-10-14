@@ -2619,6 +2619,9 @@ impl Application {
             label: "UI Offscreen",
             mip_levels: 1,
         }));
+        // A new target holds nothing: the perform HUD, which keeps the frame
+        // it last drew while its inputs hold still, must draw again.
+        self.perform.shown = None;
     }
 
     /// (Re)create the graph editor's offscreen render target. Mirrors
@@ -2642,5 +2645,8 @@ impl Application {
             label: "Graph Editor Offscreen",
             mip_levels: 1,
         }));
+        // A new target holds nothing; the next pulse composites it whole.
+        ws.editor_frame.last_composite = None;
+        ws.offscreen_dirty = true;
     }
 }

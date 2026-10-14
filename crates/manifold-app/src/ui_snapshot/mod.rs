@@ -1623,23 +1623,20 @@ mod editor_window_harness {
     //! enumeration `render_graph_editor_to_png`'s `--dump` uses) and samples
     //! its center pixel against the window's clear color. A node whose
     //! declared rect doesn't actually paint — wrong topology, a dropped
-    //! render pass, a camera/viewport mismatch — fails this test; the atlas
-    //! differential (D4/D5) is deliberately not asked here, because there is
-    //! no cache path to have a stale pixel in.
+    //! render pass, a camera/viewport mismatch — fails this test. The panels
+    //! paint through the editor atlas on a first frame; the canvas does not.
 
     use manifold_gpu::{GpuDevice, GpuTextureFormat};
     use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_ui_paint::ui_renderer::UIRenderer;
-    use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets, Rect as CanvasRect};
+    use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets};
     use manifold_ui::hit_targets::HitTargets;
-    use manifold_ui::panels::graph_editor::{
-        GraphEditorPanel, EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH,
-    };
-    use manifold_ui::Rect as UiRect;
+    use manifold_ui::panels::graph_editor::GraphEditorPanel;
 
     use super::*;
     use crate::editor_frame::{
-        build_editor_preview_column, composite_editor_frame, EditorMiniTimelineInputs,
+        build_editor_preview_column, composite_editor_frame, EditorAtlas, EditorLayout, EditorMiniTimelineInputs,
+        EditorRegion,
     };
 
     const FORMAT: GpuTextureFormat = manifold_compositor::presentation::UI_FORMAT;
@@ -1661,13 +1658,9 @@ mod editor_window_harness {
         let logical_w = LOGICAL_W;
         let logical_h = LOGICAL_H;
 
-        // Same geometry `render_graph_editor_to_png` computes.
+        // The live editor's geometry, as `render_graph_editor_to_png` takes it.
         let dock = manifold_ui::Dock::editor();
-        let dock_rects = dock.rects(UiRect::new(0.0, 0.0, logical_w, logical_h));
-        let canvas_x = SIDEBAR_WIDTH;
-        let canvas_width = (logical_w - SIDEBAR_WIDTH - EDITOR_CARD_LANE_WIDTH).max(0.0);
-        let canvas_height = dock_rects.canvas.height;
-        let card_x = canvas_x + canvas_width;
+        let layout = EditorLayout::compute(&dock, logical_w as u32, logical_h as u32, None);
 
         let device = GpuDevice::new_queued("ui-snap");
         let mut renderer = UIRenderer::new(&device, FORMAT);
@@ -1686,48 +1679,23 @@ mod editor_window_harness {
         sync_project_data(&mut ui_root, &project, active_idx, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);
         crate::ui_bridge::sync_audio_dock(&mut ui_root, &project);
-        ui_root.build_inspector_in_rect(UiRect::new(
-            card_x,
-            0.0,
-            EDITOR_CARD_LANE_WIDTH,
-            canvas_height,
-        ));
-
-        let preview_pad = 8.0_f32;
-        let preview_title_h = 18.0_f32;
-        let monitor_aspect = 16.0_f32 / 9.0;
-        let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
-        let max_body_h =
-            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
-        let width_bound_h = avail_w / monitor_aspect;
-        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
-            (avail_w, width_bound_h)
-        } else {
-            (max_body_h * monitor_aspect, max_body_h)
-        };
-        let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
-        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
-        let node_title_y = pane_y;
-        let node_img_y = node_title_y + preview_title_h;
-        pane_y = node_img_y + preview_h + preview_pad;
-        let master_title_y = pane_y;
+        ui_root.build_inspector_in(EditorRegion::CardLane.id(), layout.card_viewport);
         let editor_panel = GraphEditorPanel::new();
         build_editor_preview_column(
             &mut ui_root.tree,
             &editor_panel,
-            SIDEBAR_WIDTH,
-            canvas_height,
-            preview_x,
-            preview_w,
-            preview_h,
-            node_title_y,
-            node_img_y,
-            master_title_y,
+            layout.preview_width,
+            layout.canvas.height,
+            layout.preview_x,
+            layout.preview_w,
+            layout.preview_h,
+            layout.node_title_y,
+            layout.node_img_y,
+            layout.master_title_y,
             false,
         );
 
-        let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, canvas_height);
+        let viewport = layout.canvas_rect();
         let mut canvas = GraphCanvas::new();
         canvas.set_default_expanded(true);
         canvas.set_snapshot(&gv_snap);
@@ -1752,7 +1720,6 @@ mod editor_window_harness {
             node_entry.rect.height,
         );
 
-        let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
         let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
             crate::app_render::mini_timeline_data(&project, 0.0);
         let mut popover = manifold_ui::graph_canvas::mapping_popover::MappingPopover::new();
@@ -1765,16 +1732,22 @@ mod editor_window_harness {
         // (the base render below covers the default arena).
         ui_root.build_overlays_for_screen(logical_w, logical_h);
 
+        let res = super::composite_resources::CompositeResources::new(&device, tex_w, tex_h);
+        let mut cache = manifold_ui_paint::ui_cache_manager::UICacheManager::with_slots(
+            FORMAT,
+            1.0,
+            manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS,
+        );
         composite_editor_frame(
             &device,
             Some(&mut renderer),
             &mut ui_root,
+            &layout,
             &dock,
-            editor_area,
             Some(&canvas),
-            viewport,
+            EditorAtlas { cache: &mut cache, pipeline: &res.atlas_pipeline, sampler: &res.atlas_sampler, scale_factor: 1.0 },
             EditorMiniTimelineInputs {
-                bottom_rect: dock_rects.bottom,
+                bottom_rect: layout.bottom,
                 show_bottom: dock.show_bottom,
                 total_beats: mini_total,
                 beats_per_bar: mini_bpb,
@@ -1790,8 +1763,6 @@ mod editor_window_harness {
             &text_input,
             &frame_timer,
             &target_tex.texture,
-            tex_w,
-            tex_h,
             1.0,
             None,
         );

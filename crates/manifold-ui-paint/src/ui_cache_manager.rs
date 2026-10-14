@@ -10,7 +10,7 @@ use crate::ui_renderer::UIRenderer;
 
 /// Identifies a cacheable panel slot: one per atlas-backed region
 /// (UI_INVALIDATION_DESIGN.md D7). Overlays and the card-drag ghost draw
-/// outside the atlas and have none.
+/// outside the atlas and have none. Each window's cache owns its own slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum PanelSlot {
@@ -22,9 +22,28 @@ pub enum PanelSlot {
     SplitHandles = 5,
     LayerHeaders = 6,
     Viewport = 7,
+    /// The graph editor's preview column.
+    EditorColumn = 8,
+    /// The graph editor's card lane.
+    EditorCards = 9,
 }
 
-const PANEL_SLOT_COUNT: usize = 8;
+const PANEL_SLOT_COUNT: usize = 10;
+
+/// The main window's slots.
+pub const MAIN_SLOTS: &[PanelSlot] = &[
+    PanelSlot::Transport,
+    PanelSlot::Header,
+    PanelSlot::Footer,
+    PanelSlot::Inspector,
+    PanelSlot::AudioDock,
+    PanelSlot::SplitHandles,
+    PanelSlot::LayerHeaders,
+    PanelSlot::Viewport,
+];
+
+/// The graph editor window's slots.
+pub const EDITOR_SLOTS: &[PanelSlot] = &[PanelSlot::EditorColumn, PanelSlot::EditorCards];
 
 /// Panel cache info provided by UIRoot each frame.
 pub struct PanelCacheInfo {
@@ -82,11 +101,20 @@ pub struct UICacheManager {
 
     format: GpuTextureFormat,
     scale_factor: f64,
+    /// The slots this window's atlas holds.
+    slots: &'static [PanelSlot],
 }
 
 impl UICacheManager {
+    /// The main window's cache.
     pub fn new(format: GpuTextureFormat, scale_factor: f64) -> Self {
+        Self::with_slots(format, scale_factor, MAIN_SLOTS)
+    }
+
+    /// A cache over `slots`, one window's atlas.
+    pub fn with_slots(format: GpuTextureFormat, scale_factor: f64, slots: &'static [PanelSlot]) -> Self {
         Self {
+            slots,
             atlas_texture: None,
             atlas_physical_w: 0,
             atlas_physical_h: 0,
@@ -110,7 +138,7 @@ impl UICacheManager {
     /// Invalidate all panel regions (first build, a moved region rect, a
     /// scale change).
     pub fn invalidate_all(&mut self) {
-        record_work_n(WorkKind::SlotInvalidate, PANEL_SLOT_COUNT as u64);
+        record_work_n(WorkKind::SlotInvalidate, self.slots.len() as u64);
         self.panel_valid = [false; PANEL_SLOT_COUNT];
         // Clear the atlas: a moved region leaves pixels that belong to no
         // slot, which would otherwise show as ghosting.

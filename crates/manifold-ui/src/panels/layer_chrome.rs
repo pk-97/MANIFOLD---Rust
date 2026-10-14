@@ -197,13 +197,18 @@ impl LayerChromePanel {
         self.host.build(tree, &view, rect);
         self.first_node = self.host.first_node();
 
-        // The host materialised the opacity slider (when shown); wire its ids.
+        self.wire_sliders();
+
+        self.node_count = tree.count() - self.first_node;
+    }
+
+    /// The host materialised the opacity slider (when shown); its ids, and its
+    /// track after an in-place move, drive the drag.
+    fn wire_sliders(&mut self) {
         match self.host.slider_ids(KEY_OPACITY_SLOT) {
             Some(ids) => self.opacity.set_ids(ids),
             None => self.opacity.clear(),
         }
-
-        self.node_count = tree.count() - self.first_node;
     }
 
     fn reconcile_chrome(&mut self, tree: &mut UITree) {
@@ -211,7 +216,9 @@ impl LayerChromePanel {
             return;
         }
         let view = self.chrome_view();
-        let _ = self.host.update(tree, &view, self.chrome_rect);
+        if self.host.update(tree, &view, self.chrome_rect) == crate::chrome::Reconcile::Updated {
+            self.wire_sliders();
+        }
     }
 
     // ── Sync methods ─────────────────────────────────────────────

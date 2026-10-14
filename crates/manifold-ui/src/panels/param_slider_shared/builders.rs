@@ -834,10 +834,39 @@ pub(crate) fn build_ableton_config(
 }
 
 
+/// The modulation configs active on one param, at most one of each tab. A
+/// fixed array: the drawer height is read on every inspector tick, which must
+/// not allocate.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ActiveModTabs {
+    tabs: [ModTab; 4],
+    len: usize,
+}
+
+impl Default for ActiveModTabs {
+    fn default() -> Self {
+        Self { tabs: [ModTab::Driver; 4], len: 0 }
+    }
+}
+
+impl ActiveModTabs {
+    fn push(&mut self, tab: ModTab) {
+        self.tabs[self.len] = tab;
+        self.len += 1;
+    }
+}
+
+impl std::ops::Deref for ActiveModTabs {
+    type Target = [ModTab];
+    fn deref(&self) -> &[ModTab] {
+        &self.tabs[..self.len]
+    }
+}
+
 /// The modulation configs active on param `i`, in tab display order (E, →, A,
 /// ABL). Drives both the build and the height calc, so they can't drift.
-pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usize) -> Vec<ModTab> {
-    let mut v = Vec::new();
+pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usize) -> ActiveModTabs {
+    let mut v = ActiveModTabs::default();
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
         v.push(ModTab::Envelope);
     }
@@ -2050,7 +2079,7 @@ pub(crate) fn build_param_row(
     let active_tabs = if show_drawer {
         active_mod_tabs(mod_state, info, i)
     } else {
-        Vec::new()
+        ActiveModTabs::default()
     };
     let shown_tab = resolve_active_tab(&active_tabs, active_tab);
 

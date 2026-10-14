@@ -128,6 +128,9 @@ pub struct Workspace {
     /// bounds preview without editing the graph; ordinary object transforms
     /// retain their existing live-write path.
     pub viewport_gizmo_drag: Option<GizmoDrag>,
+    /// The graph editor's frame planner state and atlas (P5c); unused by
+    /// the main window.
+    pub(crate) editor_frame: crate::editor_frame::EditorFrameState,
 }
 
 /// One active gizmo axis drag. Fluid setup edits remain a UI-only bounds
@@ -182,6 +185,7 @@ impl Workspace {
             viewport_overlay_lines: Vec::with_capacity(viewport_overlay_capacity),
             viewport_selected_object: None,
             viewport_gizmo_drag: None,
+            editor_frame: Default::default(),
         }
     }
 }

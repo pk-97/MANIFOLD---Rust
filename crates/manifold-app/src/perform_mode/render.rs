@@ -70,10 +70,16 @@ impl Application {
             logical_h,
         );
         let (lw, lh) = (logical_w as f32, logical_h as f32);
-        // The session Arc is snapshotted (a refcount bump) so the HUD's cue
-        // and track names borrow from it, not from `ui_root`.
-        let session_snapshot = self.ws.ui_root.ableton_session.clone();
-        let hud = PerformHud::derive(&self.content_state, session_snapshot.as_deref(), &self.local_project);
+        let pipeline_dims = self.content_pipeline_output.as_ref().map(|p| p.get_dimensions());
+        let session = self.ws.ui_root.ableton_session.as_deref();
+        let inputs = frame::PerformHudInputs::derive(
+            &self.perform,
+            &self.content_state,
+            session,
+            self.ui_edits.stamps.parts().key(frame::HUD_PROJECT_PARTS),
+            &layout,
+            frame::preview_aspect(pipeline_dims),
+        );
 
         // Skip drawable acquisition on resize frames (same rule as the
         // normal present path).
@@ -82,18 +88,28 @@ impl Application {
             return;
         }
 
+        // The offscreen keeps the HUD drawn last; it is redrawn only when
+        // what it shows moved. The preview blit below overwrites its own
+        // rect every frame.
         let mut encoder = gpu.device.create_encoder("Perform Frame");
-        frame::composite_perform_frame(
-            &gpu.device,
-            &mut encoder,
-            self.ui_renderer.as_mut(),
-            self.ws.ui_root.tree.measurer(),
-            &layout,
-            &hud,
-            self.perform.exit_button_hover,
-            offscreen,
-            scale,
-        );
+        if frame::hud_moved(&self.perform, &inputs, false) {
+            // The session Arc is snapshotted (a refcount bump) so the HUD's
+            // cue and track names borrow from it, not from `ui_root`.
+            let session_snapshot = self.ws.ui_root.ableton_session.clone();
+            let hud = PerformHud::derive(&self.content_state, session_snapshot.as_deref(), &self.local_project);
+            frame::composite_perform_frame(
+                &gpu.device,
+                &mut encoder,
+                self.ui_renderer.as_mut(),
+                self.ws.ui_root.tree.measurer(),
+                &layout,
+                &hud,
+                self.perform.exit_button_hover,
+                offscreen,
+                scale,
+            );
+            self.perform.shown = Some(inputs);
+        }
 
         // Blit compositor output preview into the right column, vertically
         // centered. Reads the latest frame from the preview IOSurface bridge
@@ -121,12 +137,7 @@ impl Application {
             let front = lease.slot();
             if let Some(source) = self.ui_preview_textures[front].as_ref() {
                 bridge_leases.push((bridge.clone(), lease));
-                let (comp_w, comp_h) = self
-                    .content_pipeline_output
-                    .as_ref()
-                    .map(|p| p.get_dimensions())
-                    .unwrap_or((1920, 1080));
-                let source_aspect = comp_w as f32 / comp_h as f32;
+                let source_aspect = frame::preview_aspect(pipeline_dims);
 
                 // Right column: mirror the macros column width on the left.
                 let preview_max_w = 320.0_f32;
@@ -498,6 +509,20 @@ pub(super) fn draw_exit_button(ui: &mut UIRenderer, tm: &dyn TextMeasure, button
     ui.draw_text(text_x, text_y, label, font_size_px as f32, text_color);
 }
 
+/// Track rows listed under each of NOW and NEXT.
+pub(crate) const MAX_SECTION_TRACKS: usize = 5;
+
+/// The section-progress bar's width for a window `lw` logical pixels wide.
+fn section_bar_width(lw: f32) -> f32 {
+    (lw * 0.32).clamp(220.0, 480.0)
+}
+
+/// The section-progress fill in whole logical pixels: what the bar draws and
+/// what the HUD's inputs compare.
+pub(crate) fn section_fill_px(lw: f32, progress: f64) -> u16 {
+    (section_bar_width(lw) * progress as f32).max(0.0).round() as u16
+}
+
 /// Draw the center column of the perform-mode HUD: NOW + NEXT + big
 /// countdown number + locator countdown bar + bar.beat readout, plus the
 /// slim status row at the bottom (BPM, transport, Ableton state — no
@@ -544,7 +569,7 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
     let now_size: u16 = 64;
     let track_size: u16 = 20;
     let track_line_h = track_size as f32 + 6.0;
-    const MAX_TRACKS: usize = 5;
+    const MAX_TRACKS: usize = MAX_SECTION_TRACKS;
     let label_dim = tm.measure_text(label_now, label_size, FontWeight::Medium);
     let now_dim = tm.measure_text(current_name, now_size, FontWeight::Medium);
     let now_top = lh * 0.06;
@@ -665,14 +690,15 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
     // the absence is meaningful. When present, fills left→right as the
     // playhead progresses through the current section.
     if let Some(p) = section_progress {
-        let bar_w = (lw * 0.32).clamp(220.0, 480.0);
+        let bar_w = section_bar_width(lw);
         let bar_h = 14.0_f32;
         let bar_x = (lw - bar_w) * 0.5;
         let bar_y = countdown_y + countdown_size as f32 + 18.0;
         // Background
         ui.draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, bar_bg, bar_h * 0.5);
-        // Fill — width proportional to progress through section
-        let fill_w = (bar_w * p as f32).max(0.0);
+        // Fill — width proportional to progress through section, in the
+        // whole pixels the HUD's inputs key on.
+        let fill_w = f32::from(section_fill_px(lw, p));
         if fill_w > 1.0 {
             ui.draw_rounded_rect(bar_x, bar_y, fill_w, bar_h, next_color_f, bar_h * 0.5);
         }
