@@ -18,7 +18,7 @@
     use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
     use manifold_core::effects::EffectContainer;
     use manifold_core::{BlendMode, LayerId, PresetTypeId};
-    use manifold_node_engine::runtime::PresetRuntime;
+    use manifold_node_engine::runtime::chain_dispatch::ChainSlot;
     use manifold_gpu::GpuTextureFormat;
 
     /// Build a minimal compositor. Tiny size keeps GPU costs low; tests
@@ -114,7 +114,7 @@
         assert!(comp
             .effect_chains
             .get(&layer.layer_id)
-            .and_then(Option::as_ref)
+            .and_then(ChainSlot::as_ref)
             .is_some());
     }
 
@@ -138,12 +138,12 @@
         assert!(comp
             .effect_chains
             .get(&removed.layer_id)
-            .is_some_and(Option::is_none));
+            .is_some_and(ChainSlot::is_none));
         assert!(comp.chain_last_used_frame.contains_key(&removed.layer_id));
         assert!(comp
             .effect_chains
             .get(&retained.layer_id)
-            .and_then(Option::as_ref)
+            .and_then(ChainSlot::as_ref)
             .is_some());
         assert!(comp.chain_last_used_frame.contains_key(&retained.layer_id));
     }
@@ -160,7 +160,7 @@
         assert!(comp
             .effect_chains
             .get(&layer.layer_id)
-            .and_then(Option::as_ref)
+            .and_then(ChainSlot::as_ref)
             .is_some());
 
         layer.effects_mut()[0].enabled = true;
@@ -175,7 +175,7 @@
         assert!(comp
             .effect_chains
             .get(&layer.layer_id)
-            .and_then(Option::as_ref)
+            .and_then(ChainSlot::as_ref)
             .is_some());
     }
 
@@ -244,8 +244,8 @@
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&a);
         comp.ensure_chain_for_layer(&b);
-        let a_ptr = comp.effect_chains.get(&a).unwrap() as *const Option<PresetRuntime>;
-        let b_ptr = comp.effect_chains.get(&b).unwrap() as *const Option<PresetRuntime>;
+        let a_ptr = comp.effect_chains.get(&a).unwrap() as *const ChainSlot;
+        let b_ptr = comp.effect_chains.get(&b).unwrap() as *const ChainSlot;
 
         // Frame 2: B + C active (A goes quiet, C new).
         comp.frame_counter = 2;
@@ -255,13 +255,13 @@
         // B is the same instance — its chain_graph, primitive state,
         // and all internal buffers are preserved.
         assert_eq!(
-            comp.effect_chains.get(&b).unwrap() as *const Option<PresetRuntime>,
+            comp.effect_chains.get(&b).unwrap() as *const ChainSlot,
             b_ptr,
             "B's chain instance must be identical across frame transition",
         );
         // A is still in the pool (within grace period).
         assert_eq!(
-            comp.effect_chains.get(&a).unwrap() as *const Option<PresetRuntime>,
+            comp.effect_chains.get(&a).unwrap() as *const ChainSlot,
             a_ptr,
             "A's chain instance must persist within CHAIN_GRACE_FRAMES",
         );
@@ -296,7 +296,7 @@
         let x = LayerId::from("X");
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&x);
-        let x_ptr = comp.effect_chains.get(&x).unwrap() as *const Option<PresetRuntime>;
+        let x_ptr = comp.effect_chains.get(&x).unwrap() as *const ChainSlot;
 
         // Simulate many frames of reorder activity: ensure many other
         // layers come/go but X stays present.
@@ -311,7 +311,7 @@
 
         // X's chain is still the same instance.
         assert_eq!(
-            comp.effect_chains.get(&x).unwrap() as *const Option<PresetRuntime>,
+            comp.effect_chains.get(&x).unwrap() as *const ChainSlot,
             x_ptr,
             "X's chain instance must survive arbitrary other-layer churn",
         );
@@ -330,8 +330,8 @@
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&any_layer);
 
-        let layer_chain_ptr = comp.effect_chains.get(&any_layer).unwrap() as *const Option<PresetRuntime>;
-        let master_chain_ptr: *const Option<PresetRuntime> = &comp.master_effect_chain;
+        let layer_chain_ptr = comp.effect_chains.get(&any_layer).unwrap() as *const ChainSlot;
+        let master_chain_ptr: *const ChainSlot = &comp.master_effect_chain;
 
         assert_ne!(
             layer_chain_ptr, master_chain_ptr,
@@ -428,7 +428,7 @@
 
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&idle);
-        let initial_ptr = comp.effect_chains.get(&idle).unwrap() as *const Option<PresetRuntime>;
+        let initial_ptr = comp.effect_chains.get(&idle).unwrap() as *const ChainSlot;
 
         // Many frames pass without `idle` being touched, but the layer
         // is still in the project (typical mute / clip-gap scenario).

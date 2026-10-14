@@ -1655,6 +1655,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.native_device.as_deref()
     }
 
+    /// Every screen effect chain whose last build failed, with its reason.
+    pub(crate) fn visit_chain_failures(
+        &self,
+        visit: &mut dyn FnMut(Option<&manifold_core::LayerId>, &Arc<str>),
+    ) {
+        self.compositor.visit_chain_failures(visit);
+    }
+
     /// Free pool payload only; excludes live targets and Metal alignment.
     #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub(crate) fn cached_texture_memory(&self) -> Option<(usize, u64)> {

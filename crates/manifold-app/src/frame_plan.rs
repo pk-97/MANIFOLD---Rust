@@ -539,6 +539,7 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         || last.inspector_reveal != next.inspector_reveal
         || runtime.automation_latches != last.runtime.automation_latches
         || runtime.led_preview_presence != last.runtime.led_preview_presence
+        || runtime.chain_failures != last.runtime.chain_failures
     {
         p.insert(Projection::InspectorSync);
     }
@@ -941,6 +942,9 @@ mod tests {
         assert!(runs(&plan(next), Projection::InspectorSync));
         let mut next = base();
         next.runtime.led_preview_presence = 1;
+        assert!(runs(&plan(next), Projection::InspectorSync));
+        let mut next = base();
+        next.runtime.chain_failures = 1;
         assert!(runs(&plan(next), Projection::InspectorSync));
         assert!(!runs(&plan(with_parts(&[Part::Markers])), Projection::InspectorSync));
     }
