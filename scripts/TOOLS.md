@@ -63,6 +63,7 @@ Render and measure:
   lab-preflight           detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)  [tools/audio_analysis/lab/preflight.py]  (cost: focused)
   lab-review              detector label review project: build OUT.manifold [--songs] [--fires-dir] [--dry-run] | fires DIR | read ORIGINAL EDITED (Peter's edits as per-family overlays)  [tools/audio_analysis/lab/review_project.py]  (cost: focused)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
+  sync-rig-report         read a sync rig log (sync-*.log): tick jitter, Link/CLK/AbletonOSC phase, present delay, display latency [LOG...|--latest]  [scripts/sync_rig_report.py]  (cost: unit)
 
 CPU reference oracles (f64, seconds, no GPU):
   mgpcg-ref               GPU FLIP pressure solve oracle  [scripts/mgpcg_reference.py]  (cost: unit)

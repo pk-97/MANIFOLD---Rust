@@ -30,6 +30,7 @@ pub mod percussion_planner;
 pub mod percussion_progress_parser;
 pub mod process_runner;
 pub mod renderer;
+pub mod rig_log;
 pub mod scheduler;
 pub mod session_state;
 pub mod sync;

@@ -128,6 +128,8 @@ pub struct ContentThread {
     /// Link's cumulative beat counter keeps the offset valid across BPM changes.
     /// Port of C# PlaybackController.linkBeatOffset field (line 74).
     pub link_beat_offset: f64,
+    /// Per-tick sync rig log state (FRAME_EXACT_TRANSPORT_DESIGN P3, C0).
+    pub rig_probe: crate::sync_rig_log::TickProbe,
 
     // ── LED output ──
     /// LED/ArtNet output controller. None when not initialized.
@@ -683,6 +685,7 @@ impl ContentThread {
             let gateway = self.editing_service.stamps().moved_since(&tick_stamps);
             manifold_editing::edit::tick_audit::close(window, p, gateway);
         }
+        self.rig_probe_tick(now, frames, authority);
         // The engine's clock follows the project rate (D10); the tick grid
         // follows the clock, so the two never run at different rates.
         let clock_fps = f64::from(self.engine.frame_rate());
@@ -1972,6 +1975,43 @@ impl ContentThread {
                 }
             }
         }
+    }
+
+    /// Sync rig log records for this tick; reads only, never steers playback.
+    fn rig_probe_tick(&mut self, wake: std::time::Instant, frames: u32, authority: ClockAuthority) {
+        if !manifold_playback::rig_log::enabled() {
+            return;
+        }
+        let link = self
+            .transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| l.is_link_enabled())
+            .map(|l| (l.current_beat.0, l.link_tempo, l.num_peers));
+        let clk = self
+            .transport_controller
+            .midi_clock_sync
+            .as_ref()
+            .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock())
+            .map(|c| (c.current_clock_beat(), c.current_clock_bpm()));
+        let osc = self.ableton_bridge.observed_song_time().map(|(beats, at)| {
+            (beats, self.time_since_start.0 - at, self.ableton_bridge.ableton_tempo())
+        });
+        let facts = crate::sync_rig_log::TickFacts {
+            frame: self.frame_count,
+            wake,
+            deadline: self.timer.tick_deadline(),
+            frames,
+            index: self.engine.transport_frame(),
+            beat: self.engine.current_beat_f64(),
+            authority,
+            playing: self.engine.is_playing(),
+            link,
+            link_offset: self.link_beat_offset,
+            clk,
+            osc,
+        };
+        self.rig_probe.after_tick(&facts);
     }
 
     // ═══════════════════════════════════════════════════════════════
