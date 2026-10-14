@@ -36,10 +36,9 @@ pub struct AppInputHost<'a> {
     pub selection: &'a mut UIState,
     pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
-    pub needs_structural_sync: &'a mut bool,
-    /// The UI's part stamps: a local write goes through [`Self::project_ref`],
-    /// which stamps what it touches (UI_INVALIDATION D5).
-    pub stamps: &'a mut crate::frame_plan::UiStamps,
+    /// The UI's stamps and gesture preview: a local write goes through
+    /// [`Self::project_ref`], which stamps what it touches (UI_INVALIDATION D5).
+    pub edits: &'a mut crate::gesture_preview::UiEdits,
     pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
     #[cfg_attr(not(feature = "profiling"), allow(dead_code))]
     pub current_project_path: &'a Option<std::path::PathBuf>,
@@ -1671,7 +1670,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 impl AppInputHost<'_> {
     /// The local project as a stamping writer (UI_INVALIDATION D5).
     fn project_ref(&mut self) -> crate::ui_bridge::ProjectRef<'_> {
-        crate::ui_bridge::ProjectRef::new(self.project, self.stamps, self.content_tx)
+        crate::ui_bridge::ProjectRef::new(self.project, self.edits, self.content_tx)
     }
 
     /// D4: record the general pasteboard's current changeCount as the
@@ -1838,8 +1837,7 @@ mod automation_clipboard_host_tests {
         selection: UIState,
         active_layer: Option<LayerId>,
         needs_rebuild: bool,
-        needs_structural_sync: bool,
-        stamps: crate::frame_plan::UiStamps,
+        edits: crate::gesture_preview::UiEdits,
         scroll_dirty: crate::ui_root::ScrollDirty,
         current_project_path: Option<std::path::PathBuf>,
         pending_close_output: bool,
@@ -1884,7 +1882,7 @@ mod automation_clipboard_host_tests {
             Self {
                 project, tx, rx, content_state: Default::default(), ui_root: UIRoot::new(),
                 selection: UIState::new(), active_layer: None, needs_rebuild: false,
-                needs_structural_sync: false, stamps: Default::default(), scroll_dirty: Default::default(),
+                edits: Default::default(), scroll_dirty: Default::default(),
                 current_project_path: None, pending_close_output: false, pending_export: false,
                 project_io: crate::project_io::ProjectIOService::new(&crate::user_prefs::UserPrefs::in_memory()),
                 #[cfg(target_os = "macos")]
@@ -1900,8 +1898,7 @@ mod automation_clipboard_host_tests {
                 content_state: &self.content_state, ui_root: &mut self.ui_root,
                 selection: &mut self.selection, active_layer: &mut self.active_layer,
                 needs_rebuild: &mut self.needs_rebuild,
-                needs_structural_sync: &mut self.needs_structural_sync,
-                stamps: &mut self.stamps,
+                edits: &mut self.edits,
                 scroll_dirty: &mut self.scroll_dirty,
                 current_project_path: &self.current_project_path, has_output_window: false,
                 pending_close_output: &mut self.pending_close_output,

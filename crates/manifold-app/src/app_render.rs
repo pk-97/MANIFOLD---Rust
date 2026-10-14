@@ -309,10 +309,9 @@ impl Application {
                     // Clear suppression once we've accepted a post-load snapshot
                     self.suppress_snapshot_until = 0;
 
-                    // Only trigger structural sync when data_version changed
-                    // (editing commands, undo/redo). Modulation-only snapshots
-                    // just update param_values — push_state() syncs sliders
-                    // every frame without needing a structural rebuild.
+                    // An edit snapshot: the stamp fold above already moved the
+                    // parts the planner re-projects (D5 source a). Here only
+                    // the selection drops references the edit removed.
                     if version_changed {
                         // Prune selection references to deleted clips/layers
                         let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
@@ -344,7 +343,6 @@ impl Application {
                                 .map(|l| l.layer_id.clone());
                         }
 
-                        self.needs_structural_sync = true;
                         self.needs_rebuild = true;
                     }
                 }
@@ -407,7 +405,6 @@ impl Application {
             self.content_state.edit_selection_update.as_deref(),
             &mut self.selection, &mut self.active_layer_id,
         ) {
-            self.needs_structural_sync = true;
             self.needs_rebuild = true;
         }
 
@@ -524,7 +521,6 @@ impl Application {
         }
 
         // 1d. Percussion import runs on content thread — read status from content_state.
-        let was_importing = false; // previous frame state not tracked here
         let is_importing = !self.ws.ui_root.export_progress.is_open()
             && self.content_state.percussion_importing;
 
@@ -547,14 +543,9 @@ impl Application {
                 },
                 show,
             );
-            // Force UI rebuild while pipeline is running (progress bar updates)
-            // and on completion (new clips/layers need to appear).
+            // The progress bar redraws while the pipeline runs. Its new clips and
+            // layers arrive as an edit snapshot, whose stamps re-project them.
             if is_importing {
-                self.needs_rebuild = true;
-            }
-            if was_importing && !is_importing {
-                // Pipeline just finished — structural sync to pick up new clips/layers.
-                self.needs_structural_sync = true;
                 self.needs_rebuild = true;
             }
         }
@@ -672,7 +663,6 @@ impl Application {
                 M::Open => actions.push(P::Project(ProjectAction::OpenProject)),
                 M::OpenRecentPath(path) => {
                     self.open_project_from_path(path);
-                    self.needs_structural_sync = true;
                 }
                 M::ClearRecentProjects => {
                     self.project_io.clear_recent_projects(&mut self.user_prefs);
@@ -940,7 +930,6 @@ impl Application {
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
                     &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
                     &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
@@ -1057,10 +1046,6 @@ impl Application {
             self.send_content_cmd(ContentCommand::AbletonRediscover);
         }
 
-        // Consume deferred structural sync flag (set by keyboard shortcuts)
-        let mut needs_structural_sync = self.needs_structural_sync;
-        self.needs_structural_sync = false;
-
         // Append the editor inspector's actions as a trailing segment, recording
         // where it starts. Actions at or past `editor_card_seg_start` were emitted
         // by the graph-editor window's inspector column and dispatch against the
@@ -1175,7 +1160,7 @@ impl Application {
                 PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id)) => {
                     let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id));
                     if let Some(content_tx) = self.content_tx.as_ref() {
-                        needs_structural_sync |= crate::scene_view_copy::run(
+                        crate::scene_view_copy::run(
                             &mut self.local_project, content_tx, &mut self.ws.ui_root,
                             &mut self.ui_edits.stamps, layer_id, view.as_ref(),
                         );
@@ -1296,22 +1281,18 @@ impl Application {
                 }
                 PanelAction::Project(ProjectAction::OpenProject) => {
                     self.open_project();
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Project(ProjectAction::OpenRecent) => {
                     self.open_recent_project();
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Params(ParamsAction::PasteEffects) => {
                     self.edit_inspector_cards(manifold_ui::panels::actions::CardEditAction::Paste);
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Params(ParamsAction::EditCards(action)) => {
                     self.edit_inspector_cards(*action);
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Params(ParamsAction::BrowserSearchClicked) => {
@@ -1698,7 +1679,6 @@ impl Application {
                 PanelAction::Project(ProjectAction::NewProject) => {
                     let action = self.project_io.new_project();
                     self.apply_project_io_action(action);
-                    needs_structural_sync = true;
                     continue;
                 }
                 // Transport controller actions — intercept here for Application-level access
@@ -1759,7 +1739,7 @@ impl Application {
             }
             let content_tx = self.content_tx.as_ref().unwrap();
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
+                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                 content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ws.ui_root,
@@ -1771,9 +1751,6 @@ impl Application {
                 dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
-            if result.structural_change {
-                needs_structural_sync = true;
-            }
             if let Some((kind, def, destination)) = result.begin_save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
@@ -1828,7 +1805,7 @@ impl Application {
                         _ => {}
                     }
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                         content_tx,
                         content_state: &self.content_state,
                         ui: &mut ed.ui_root,
@@ -1840,9 +1817,6 @@ impl Application {
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let result = crate::ui_bridge::dispatch(action, &mut dctx);
-                    if result.structural_change {
-                        needs_structural_sync = true;
-                    }
                     if result.begin_save_preset.is_some() {
                         pending_save_preset = result.begin_save_preset;
                     }
@@ -2607,7 +2581,7 @@ impl Application {
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                             content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -2993,10 +2967,7 @@ impl Application {
             },
         );
         let plan = self.frame_planner.plan(inputs);
-        let changes = crate::ui_frame::ProjectionChanges {
-            structural: needs_structural_sync,
-            scrolled_in_place,
-        };
+        let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
 
         // Deferred export (keyboard shortcut sets the flag, processed here
         // where Application has full access for the file dialog).
@@ -3010,7 +2981,6 @@ impl Application {
         let cursor_pos = self.cursor_pos;
         let content_state = &self.content_state;
         let cursor_manager = &mut self.cursor_manager;
-        let deferred_structural = &mut self.needs_structural_sync;
         let ui_edits = &mut self.ui_edits;
         let ui_profile = &mut self.ui_profile;
         let seg_ref = &mut seg;
@@ -3053,7 +3023,6 @@ impl Application {
                         cursor_manager,
                         active_layer,
                         &mut *flags.needs_rebuild,
-                        deferred_structural,
                         &mut *flags.automation_lanes_dirty,
                         &mut *flags.scroll_dirty,
                         &mut *flags.invalidate_layers,

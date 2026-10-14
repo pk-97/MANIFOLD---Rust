@@ -68,6 +68,40 @@ enum EyeSlot {
     Empty,
 }
 
+fn eye_glyph(value: f32) -> &'static str {
+    if value > 0.5 { "\u{1F441}" } else { "\u{2013}" }
+}
+
+impl ScenePanel {
+    /// The outliner eyes' in-place push (D22): each object's `visible` base
+    /// value, read at the row's write address, into the stored rows and the
+    /// built eyes. A later build reads the same rows.
+    pub fn sync_outliner_eyes(
+        &mut self,
+        tree: &mut UITree,
+        value_of: &mut dyn FnMut(&RowAddr) -> Option<f32>,
+    ) {
+        if !self.open {
+            return;
+        }
+        let SceneSetupState::Live(vm) = &mut self.state else { return };
+        for object in &mut vm.objects {
+            if let ObjectRowVm::Known(row) = object
+                && let Some(value) = value_of(&row.visible.addr)
+            {
+                row.visible.value = value;
+            }
+        }
+        for (eye_id, eye) in &mut self.outliner_eye_ids {
+            let Some(value) = value_of(&eye.addr) else { continue };
+            if (value > 0.5) != (eye.value > 0.5) {
+                tree.set_text(*eye_id, eye_glyph(value));
+            }
+            eye.value = value;
+        }
+    }
+}
+
 const OUTLINER_KEY_BASE: u64 = 90_000_000;
 const OUTLINER_EYE_KEY_BASE: u64 = 91_000_000;
 const GROUP_HEADER_KEY_BASE: u64 = 93_000_000;
@@ -363,7 +397,7 @@ impl ScenePanel {
                 STEP_W,
                 ROW_H,
                 if value.driven { driven_label_style() } else { btn_style() },
-                if value.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
+                eye_glyph(value.value),
                 OUTLINER_EYE_KEY_BASE + id as u64,
             );
             tree.set_name(eye_id, format!("scene_setup.object_eye.{}", value.addr.node_doc_id));

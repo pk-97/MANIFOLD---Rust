@@ -6,9 +6,9 @@
 //! picks work. Section 4 of the design is the table this encodes, and the
 //! unit tests below pin one test per row of both tables.
 //!
-//! P4b runs the planner first each frame beside the old flags
-//! (`needs_structural_sync`, `structural()`, `needs_rebuild`, `ScrollDirty`),
-//! which stay live and can only add work.
+//! The planner alone decides projections (P4d). The rebuild flags that remain
+//! (`needs_rebuild`, `ScrollDirty`) stay live beside it until P5a and can only
+//! add work.
 
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 
@@ -33,6 +33,12 @@ impl UiStamps {
     /// A UI-side write to the local project.
     pub(crate) fn bump(&mut self, touches: ChangeSet) {
         self.parts.bump(touches);
+    }
+
+    /// The local project was replaced wholesale (open, new, snapshot restore,
+    /// the content's save snapshot): a load moves every part (D1, INV-8).
+    pub(crate) fn project_replaced(&mut self) {
+        self.parts.bump(ChangeSet::ALL);
     }
 
     /// Fold an accepted snapshot's content stamps: the parts that moved since
@@ -257,6 +263,11 @@ pub(crate) struct FrameInputs {
     pub inspector_view: u64,
     /// The Scene panel's outliner selection (its Properties body).
     pub scene_selection: u64,
+    /// A queued Scene tab or trigger-response reveal; the inspector
+    /// projection takes it.
+    pub inspector_reveal: u64,
+    /// A queued timeline layer reveal; the project projection takes it.
+    pub layer_reveal: u64,
     pub inspector_scroll_px: i32,
     pub dock_view: u64,
     pub dock_scroll_px: i32,
@@ -289,12 +300,16 @@ pub(crate) enum Projection {
     LaneGeometry,
     /// The dragged lane only.
     LanePreview,
+    /// The dragged marker: the viewport's marker list.
+    MarkerPreview,
     /// Live push, Values displays.
     LiveValues,
     /// Live push, Shapes displays.
     LiveShapes,
     /// Live push, Ableton range bands.
     LiveRanges,
+    /// The Scene outliner eyes, in place.
+    SceneEyes,
     /// Insert cursor, selection band, layer highlight, selected clips.
     SelectionPush,
     /// Transport, sync, settings and macro label displays.
@@ -350,6 +365,16 @@ impl FramePlan {
     }
 }
 
+#[cfg(feature = "ui-snapshot")]
+impl FramePlan {
+    /// `AssertFresh`'s reference frame (D10): this plan plus every
+    /// projection, so the full build reads the same inputs freshly projected.
+    pub(crate) fn with_every_projection(mut self) -> Self {
+        self.projections = ProjectionMask(u32::MAX);
+        self
+    }
+}
+
 // Section 4 projection-table keys. Values, Shapes and MappingRanges are live
 // scalars and key only in-place pushes (D22).
 const PROJECT_SYNC_PARTS: ChangeSet =
@@ -379,6 +404,9 @@ const DRIVER_READOUT_PARTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
 const PRESET_LIST_PARTS: ChangeSet = ChangeSet::of(&[Part::EmbeddedPresets]);
 const OVERVIEW_PARTS: ChangeSet = ChangeSet::of(&[Part::Clips, Part::Layers]);
 const WAVEFORM_PARTS: ChangeSet = ChangeSet::of(&[Part::Clips]);
+// An eye shows a base value, which only an edit moves. Playback moves the
+// values sequence alone, so the eye push never runs per frame.
+const SCENE_EYE_PARTS: ChangeSet = ChangeSet::of(&[Part::Values, Part::Shapes]);
 
 /// Decide the frame's work from what moved (D6). Pure; equal inputs give an
 /// empty plan.
@@ -397,7 +425,12 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     let runtime = &next.runtime;
     let p = &mut plan.projections;
 
-    if moved.intersects(PROJECT_SYNC_PARTS) || selection_identity || active_layer || automation_view {
+    if moved.intersects(PROJECT_SYNC_PARTS)
+        || selection_identity
+        || active_layer
+        || automation_view
+        || last.layer_reveal != next.layer_reveal
+    {
         p.insert(Projection::ProjectSync);
     }
     if moved.intersects(INSPECTOR_SYNC_PARTS)
@@ -405,8 +438,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         || active_layer
         || automation_view
         // The scene projection fills the Properties card for the selected
-        // outliner item.
+        // outliner item, and takes a queued row reveal.
         || last.scene_selection != next.scene_selection
+        || last.inspector_reveal != next.inspector_reveal
         || runtime.automation_latches != last.runtime.automation_latches
         || runtime.led_preview_presence != last.runtime.led_preview_presence
     {
@@ -431,6 +465,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     if last.preview.lanes != next.preview.lanes {
         p.insert(Projection::LanePreview);
     }
+    if last.preview.markers != next.preview.markers {
+        p.insert(Projection::MarkerPreview);
+    }
     // The live push also writes the active layer's name and opacity and the
     // LED controller state, and the macro Ableton status follows the session.
     if last.values != next.values
@@ -446,6 +483,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     }
     if moved.contains(Part::MappingRanges) {
         p.insert(Projection::LiveRanges);
+    }
+    if moved.intersects(SCENE_EYE_PARTS) {
+        p.insert(Projection::SceneEyes);
     }
     // The push writes the active layer as well as the selection sets.
     if selection_visual || cursor || active_layer {
@@ -528,7 +568,8 @@ fn plan_regions(
     let mut in_place = RegionMask::NONE;
     let live = projections.contains(Projection::LiveValues)
         || projections.contains(Projection::LiveShapes)
-        || projections.contains(Projection::LiveRanges);
+        || projections.contains(Projection::LiveRanges)
+        || projections.contains(Projection::SceneEyes);
 
     for chrome in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
         if size(chrome) {
@@ -588,9 +629,12 @@ fn plan_regions(
     }
 
     let viewport = MainRegion::Viewport;
+    // Marker flags are tree nodes with no in-place path yet (P5b), so a marker
+    // drag rebuilds the viewport like a committed marker edit.
     if width(viewport)
         || projections.contains(Projection::ProjectSync)
         || next.parts.moved_since(&last.parts).contains(Part::Markers)
+        || projections.contains(Projection::MarkerPreview)
     {
         rebuild.insert(viewport);
     } else if origin(viewport) {
@@ -847,6 +891,12 @@ mod tests {
         assert!(runs(&plan(with_parts(&[Part::Values])), Projection::LiveValues));
         assert!(runs(&plan(with_parts(&[Part::Shapes])), Projection::LiveShapes));
         assert!(runs(&plan(with_parts(&[Part::MappingRanges])), Projection::LiveRanges));
+        // The eyes follow base-value edits, not the playback values sequence.
+        assert!(runs(&plan(with_parts(&[Part::Values])), Projection::SceneEyes));
+        assert!(runs(&plan(with_parts(&[Part::Shapes])), Projection::SceneEyes));
+        let mut playback = base();
+        playback.values = 1;
+        assert!(!runs(&plan(playback), Projection::SceneEyes));
         assert!(runs(&plan(with_parts(&[Part::Layers])), Projection::LiveValues));
         let mut next = base();
         next.active_layer = 1;
@@ -1117,6 +1167,11 @@ mod tests {
         let mut next = base();
         next.preview.clips = 1;
         assert!(!plan(next).rebuild.contains(r), "a drag preview never rebuilds");
+        let mut next = base();
+        next.preview.markers = 1;
+        let p = plan(next);
+        assert!(p.rebuild.contains(r), "marker flags have no in-place path yet");
+        assert!(!runs(&p, Projection::ProjectSync), "a marker drag projects only the markers");
     }
 
     #[test]
@@ -1198,6 +1253,58 @@ mod tests {
         assert_eq!(stamps.parts(), before);
         stamps.bump(ChangeSet::of(&[Part::Effects]));
         assert_eq!(stamps.parts().moved_since(&before), ChangeSet::of(&[Part::Effects]));
+    }
+
+    #[test]
+    fn row_queued_reveals() {
+        // A layer reveal is taken by the project projection, a Scene row
+        // reveal by the inspector projection, whatever else moved.
+        let mut next = base();
+        next.layer_reveal = 1;
+        assert!(runs(&plan(next), Projection::ProjectSync));
+        let mut next = base();
+        next.inspector_reveal = 1;
+        let p = plan(next);
+        assert!(runs(&p, Projection::InspectorSync));
+        assert!(!runs(&p, Projection::ProjectSync));
+        assert!(p.rebuild.contains(MainRegion::Inspector));
+    }
+
+    #[test]
+    fn row_marker_preview() {
+        let mut next = base();
+        next.preview.markers = 1;
+        let p = plan(next);
+        assert!(runs(&p, Projection::MarkerPreview));
+        assert!(!runs(&p, Projection::InspectorSync));
+        assert!(!runs(&p, Projection::ClipPreview));
+    }
+
+    #[test]
+    fn a_project_load_runs_every_part_keyed_projection() {
+        let mut stamps = UiStamps::default();
+        let mut next = base();
+        stamps.project_replaced();
+        next.parts = stamps.parts();
+        let p = plan(next);
+        for projection in [
+            Projection::ProjectSync,
+            Projection::InspectorSync,
+            Projection::AudioDevices,
+            Projection::ClipPositions,
+            Projection::LaneGeometry,
+            Projection::LiveValues,
+            Projection::LiveShapes,
+            Projection::LiveRanges,
+            Projection::SceneEyes,
+            Projection::SelectionPush,
+            Projection::ChromePush,
+            Projection::DriverReadout,
+            Projection::PresetList,
+        ] {
+            assert!(runs(&p, projection), "{projection:?}");
+        }
+        assert_eq!(p.rebuild.slot(), Some(crate::ui_root::RegionSlot::Full));
     }
 
     #[test]

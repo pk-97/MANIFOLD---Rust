@@ -1210,12 +1210,12 @@ pub fn sync_inspector_data(
             .clip_chrome_mut()
             .set_mode(false, false, false, false, false);
     }
-    if let Some((target, param)) = ui.pending_trigger_response_reveal.take()
+    if let Some((target, param)) = ui.take_trigger_response_reveal()
         && !ui.inspector.reveal_trigger_response(&target, &param)
     {
         ui.scene_setup_panel.reveal_param(&target, &param);
     }
-    if let Some((target, params)) = ui.pending_scene_reveal.take() {
+    if let Some((target, params)) = ui.take_scene_reveal() {
         ui.scene_setup_panel.reveal_section(&target, &params);
     }
 }

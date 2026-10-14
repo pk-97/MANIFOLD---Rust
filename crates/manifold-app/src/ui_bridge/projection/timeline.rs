@@ -133,7 +133,7 @@ pub fn sync_project_data(
         }).collect();
         ui.viewport.set_automation_lane_layout(&lane_heights);
         ui.viewport.rebuild_mapper_layout(&layout_layers);
-        if let Some(id) = ui.pending_layer_reveal.take()
+        if let Some(id) = ui.take_layer_reveal()
             && let Some(index) = project.timeline.find_layer_index_by_id(&id)
         {
             let top = ui.viewport.mapper().get_layer_y_offset(index);
@@ -531,6 +531,14 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     if ui.viewport.markers_stale(&ui_markers) {
         ui.viewport.set_markers(ui_markers);
     }
+}
+
+/// The viewport's marker list, from the live project: a marker drag preview
+/// moves a marker the clip sync's stale check can miss (it compares the
+/// count and the last marker only).
+pub fn sync_markers(ui: &mut UIRoot, project: &Project) {
+    ui.viewport
+        .set_markers(crate::ui_translate::markers_to_ui(&project.timeline.markers));
 }
 
 /// Re-projects `viewport`'s automation lane geometry from the live project:

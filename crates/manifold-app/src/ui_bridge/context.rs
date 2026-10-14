@@ -27,17 +27,17 @@ use super::scrub::ScrubState;
 /// (UI_INVALIDATION D5). There is no other way to write it.
 pub struct ProjectRef<'a> {
     project: &'a mut Project,
-    stamps: &'a mut crate::frame_plan::UiStamps,
+    edits: &'a mut crate::gesture_preview::UiEdits,
     content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
 }
 
 impl<'a> ProjectRef<'a> {
     pub fn new(
         project: &'a mut Project,
-        stamps: &'a mut crate::frame_plan::UiStamps,
+        edits: &'a mut crate::gesture_preview::UiEdits,
         content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
     ) -> Self {
-        Self { project, stamps, content_tx }
+        Self { project, edits, content_tx }
     }
 
     /// A non-undoable write: apply `f` locally, stamp `touches`, and send the
@@ -47,7 +47,7 @@ impl<'a> ProjectRef<'a> {
         F: FnOnce(&mut Project) + Clone + Send + 'static,
     {
         (f.clone())(self.project);
-        self.stamps.bump(touches);
+        self.edits.stamps.bump(touches);
         ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
     }
 
@@ -56,7 +56,7 @@ impl<'a> ProjectRef<'a> {
     /// send it to the content thread.
     pub fn execute(&mut self, mut cmd: Box<dyn Command>) {
         cmd.execute(self.project);
-        self.stamps.bump(cmd.touches());
+        self.edits.stamps.bump(cmd.touches());
         ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
     }
 
@@ -67,7 +67,7 @@ impl<'a> ProjectRef<'a> {
             cmd.execute(self.project);
             touches = touches.union(cmd.touches());
         }
-        self.stamps.bump(touches);
+        self.edits.stamps.bump(touches);
         ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
     }
 
@@ -79,7 +79,7 @@ impl<'a> ProjectRef<'a> {
         f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>,
     ) -> Option<R> {
         let (cmd, out) = f(self.project)?;
-        self.stamps.bump(cmd.touches());
+        self.edits.stamps.bump(cmd.touches());
         ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
         Some(out)
     }
@@ -88,7 +88,7 @@ impl<'a> ProjectRef<'a> {
     /// and send their own content command: stamp `touches` (what that command
     /// declares) around the call.
     pub fn with_sent<R>(&mut self, touches: ChangeSet, f: impl FnOnce(&mut Project) -> R) -> R {
-        self.stamps.bump(touches);
+        self.edits.stamps.bump(touches);
         f(self.project)
     }
 
@@ -98,12 +98,13 @@ impl<'a> ProjectRef<'a> {
         self.project.timeline.find_clip_by_id(clip_id)
     }
 
-    /// A gesture preview: a local-only write the content thread never sees and
-    /// that stamps nothing (D12). The gesture's commit stamps; until P4d moves
-    /// every preview onto `PreviewVersions`, the dispatch result's rebuild flag
-    /// carries the frame.
-    pub fn preview<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R {
-        f(self.project)
+    /// A marker drag preview: a local-only write the content thread never sees
+    /// and that stamps nothing (D12). It moves the marker preview version; the
+    /// gesture's commit stamps Markers.
+    pub fn preview_marker<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R {
+        let out = f(self.project);
+        self.edits.preview.record_marker();
+        out
     }
 }
 

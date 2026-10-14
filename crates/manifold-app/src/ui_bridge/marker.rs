@@ -60,7 +60,7 @@ pub(super) fn dispatch_marker(
         MarkerAction::MarkerDragMoved(marker_id_str, new_beat) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             let beat = Beats::from_f32(*new_beat);
-            project.preview(|p| {
+            project.preview_marker(|p| {
                 if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
                     marker.beat = beat;
                 }
@@ -69,7 +69,7 @@ pub(super) fn dispatch_marker(
             if let Some(ResolvedScrub::Marker { live, .. }) = &mut scrub.active {
                 *live = *new_beat;
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Drag end: commit MoveMarkerCommand ─────────────────
@@ -84,7 +84,7 @@ pub(super) fn dispatch_marker(
                 // Only commit if the marker actually moved
                 if (old_beat - *final_beat).abs() > 0.001 {
                     // Undo the live preview mutation first — the command will redo it
-                    project.preview(|p| {
+                    project.preview_marker(|p| {
                         if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
                             marker.beat = Beats::from_f32(old_beat);
                         }
@@ -174,5 +174,58 @@ mod tests {
             after, 5.0,
             "marker-drag stomp must be undone so the marker doesn't revert mid-gesture"
         );
+    }
+}
+
+#[cfg(test)]
+mod drag_preview_tests {
+    use crate::frame_plan::{plan_frame, FrameInputs, MainRegion, Projection};
+    use crate::gesture_preview::UiEdits;
+    use manifold_core::change::Part;
+    use manifold_core::marker::TimelineMarker;
+    use manifold_core::{Beats, project::Project};
+    use manifold_ui::MarkerAction;
+
+    fn inputs(edits: &UiEdits) -> FrameInputs {
+        FrameInputs { parts: edits.stamps.parts(), preview: edits.preview.version(), ..Default::default() }
+    }
+
+    /// A marker drag is a preview (D12): each move moves the marker preview
+    /// version and no stamp, so the plan re-projects the markers and the
+    /// viewport and nothing else; the drop commits and stamps Markers.
+    #[test]
+    fn marker_drag_moves_the_preview_and_the_drop_stamps_markers() {
+        let mut project = Project::default();
+        let marker = TimelineMarker::new(Beats::from_f32(0.0));
+        let id = marker.id.as_str().to_string();
+        project.timeline.markers.push(marker);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let mut edits = UiEdits::default();
+        let mut run = |action: MarkerAction, edits: &mut UiEdits, project: &mut Project| {
+            let mut project_ref = crate::ui_bridge::ProjectRef::new(project, edits, &tx);
+            super::dispatch_marker(&action, &mut project_ref, &tx, &mut ui, &mut selection, &mut scrub);
+        };
+
+        run(MarkerAction::MarkerDragStarted(id.clone()), &mut edits, &mut project);
+        let mut last = inputs(&edits);
+        for beat in [2.0, 4.0] {
+            run(MarkerAction::MarkerDragMoved(id.clone(), beat), &mut edits, &mut project);
+            let next = inputs(&edits);
+            assert_eq!(next.parts, last.parts, "a preview moves no stamp");
+            let plan = plan_frame(&last, &next);
+            assert!(plan.projections.contains(Projection::MarkerPreview));
+            assert!(!plan.projections.contains(Projection::ProjectSync));
+            assert!(!plan.projections.contains(Projection::InspectorSync));
+            assert!(plan.rebuild.contains(MainRegion::Viewport));
+            last = next;
+        }
+        assert!(rx.try_recv().is_err(), "the content thread never sees a preview");
+
+        run(MarkerAction::MarkerDragEnded(id.clone(), 4.0), &mut edits, &mut project);
+        assert!(inputs(&edits).parts.moved_since(&last.parts).contains(Part::Markers));
+        assert!(rx.try_recv().is_ok(), "the drop sends its command");
     }
 }

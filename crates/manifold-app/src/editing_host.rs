@@ -95,7 +95,6 @@ pub struct AppEditingHost<'a> {
     pub cursor_manager: &'a mut CursorManager,
     pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
-    pub needs_structural_sync: &'a mut bool,
     /// Lane geometry must be re-projected from the local project (a point
     /// preview or restore). Drained by app_render.rs's lanes-only resync.
     pub automation_lanes_dirty: &'a mut bool,
@@ -158,7 +157,6 @@ impl<'a> AppEditingHost<'a> {
         cursor_manager: &'a mut CursorManager,
         active_layer: &'a mut Option<LayerId>,
         needs_rebuild: &'a mut bool,
-        needs_structural_sync: &'a mut bool,
         automation_lanes_dirty: &'a mut bool,
         scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
         invalidate_layers: &'a mut Vec<usize>,
@@ -171,7 +169,6 @@ impl<'a> AppEditingHost<'a> {
             cursor_manager,
             active_layer,
             needs_rebuild,
-            needs_structural_sync,
             automation_lanes_dirty,
             scroll_dirty,
             invalidate_layers,
@@ -660,7 +657,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             cmd.execute(project);
             self.command_batch.push(cmd);
         }
-        *self.needs_structural_sync = true;
     }
 
     fn commit_command_batch(&mut self, description: &str) {
