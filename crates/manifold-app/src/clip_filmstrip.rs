@@ -130,9 +130,57 @@ pub fn grid_windows(
     }
 }
 
+/// The published atlas layout `(clip, filmstrip cell index, atlas cell)`.
+pub type AtlasLayout = std::sync::Arc<[(manifold_core::ClipId, u32, u32)]>;
+
+/// Each clip's captured cells as `(filmstrip cell index, atlas cell)`, indexed
+/// from the published atlas layout. The content thread publishes a new layout
+/// only when a cell is captured or restored, so the index is rebuilt only then
+/// and a redraw allocates nothing.
+#[derive(Default)]
+pub struct ClipStrips {
+    layout: Option<AtlasLayout>,
+    strips: ahash::AHashMap<manifold_core::ClipId, Vec<(u32, u32)>>,
+}
+
+impl ClipStrips {
+    pub fn refresh(&mut self, layout: &AtlasLayout) {
+        if self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
+            return;
+        }
+        self.strips.clear();
+        for (clip, idx, cell) in layout.iter() {
+            let cells = self.strips.entry(clip.clone()).or_default();
+            match cells.iter_mut().find(|(i, _)| i == idx) {
+                Some(entry) => entry.1 = *cell,
+                None => cells.push((*idx, *cell)),
+            }
+        }
+        self.layout = Some(layout.clone());
+    }
+
+    pub fn get(&self, clip: &manifold_core::ClipId) -> Option<&[(u32, u32)]> {
+        self.strips.get(clip).map(Vec::as_slice)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_strips_index_once_per_layout_and_last_cell_wins() {
+        let a = manifold_core::ClipId::new("a");
+        let layout: AtlasLayout = vec![(a.clone(), 0, 5), (a.clone(), 1, 6), (a.clone(), 0, 7)].into();
+        let mut strips = ClipStrips::default();
+        strips.refresh(&layout);
+        assert_eq!(strips.get(&a), Some(&[(0, 7), (1, 6)][..]));
+        strips.refresh(&layout);
+        assert_eq!(strips.get(&a), Some(&[(0, 7), (1, 6)][..]));
+        let empty: AtlasLayout = std::sync::Arc::from([]);
+        strips.refresh(&empty);
+        assert_eq!(strips.get(&a), None);
+    }
 
     const BPB: f64 = 4.0;
 

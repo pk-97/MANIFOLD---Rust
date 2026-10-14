@@ -113,8 +113,8 @@ no second, hand-mirrored write to drift. The stored id fields and the
 
 The API mutates the existing `UITree` through its existing public surface
 (`add_node`, `set_bounds`, `set_text`, `set_style`, `set_visible`,
-`truncate_from`). It introduces no new node storage and no new shared state. The
-contiguous append-only buffer, the panel-boundary `truncate_from` rebuild model,
+`clear_region`). It introduces no new node storage and no new shared state. The
+per-region arenas, each rebuilt alone (UI_INVALIDATION_DESIGN.md D7),
 and the `structure_version`-gated intent rebuild are all unchanged — the host is
 a panel-local realisation of the same model the app already runs globally. That
 is what makes per-panel migration in Phase 2b incremental and reversible: a

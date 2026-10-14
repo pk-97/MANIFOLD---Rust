@@ -135,3 +135,4 @@ pub use manifold_foundation::device_guard;
 pub use manifold_foundation::work_count;
 pub use manifold_foundation::param_range;
 pub use manifold_foundation::scene_surface;
+pub use manifold_foundation::scratch;

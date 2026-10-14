@@ -879,7 +879,9 @@ pub struct ContentPipeline {
     /// only ever promoted from `clip_atlas_pending_layout` once its pixels are
     /// confirmed on the GPU timeline (never written directly by a capture
     /// pass). See `clip_atlas_pending_layout`.
-    last_clip_atlas_layout: Vec<(manifold_core::ClipId, u32, u32)>,
+    /// Shared with every published `ContentState`, so a tick that keeps the
+    /// layout sends it without copying.
+    last_clip_atlas_layout: std::sync::Arc<[(manifold_core::ClipId, u32, u32)]>,
     /// A layout built by `fill_clip_atlas`/`restore_clip_atlas` this frame
     /// (or an earlier one still awaiting GPU completion), paired with the GPU
     /// signal value that will be reached once its pixels have actually landed
@@ -1013,6 +1015,10 @@ pub struct ContentPipeline {
     /// frame by the content pipeline and consumed by occlusion, render-skip,
     /// layer descriptor build, and the paused-idle gate via TickResult.
     hidden_layers_scratch: Vec<bool>,
+    /// The compositor's per-frame clip and layer descriptors, empty between
+    /// frames; only their allocations persist (`scratch::recycle_vec`).
+    clip_desc_scratch: Vec<CompositeClipDescriptor<'static>>,
+    layer_desc_scratch: Vec<CompositeLayerDescriptor<'static>>,
     /// Per-frame list of hidden layer indices, built from `hidden_layers_scratch`
     /// and passed to occlusion / render-skip as the hidden set.
     hidden_layer_indices_scratch: Vec<i32>,
@@ -1174,6 +1180,8 @@ impl ContentPipeline {
             scene_viewport_observations: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
+            clip_desc_scratch: Vec::new(),
+            layer_desc_scratch: Vec::new(),
             hidden_layer_indices_scratch: Vec::new(),
             occluded_layers_scratch: Vec::new(),
             render_skip_scratch: Vec::new(),
@@ -1201,7 +1209,7 @@ impl ContentPipeline {
             clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(CLIP_ATLAS_CELLS as u32),
             clip_atlas_last_snapshot: AHashMap::new(),
             clip_atlas_frame: 0,
-            last_clip_atlas_layout: Vec::new(),
+            last_clip_atlas_layout: std::sync::Arc::from([]),
             clip_atlas_pending_layout: None,
             clip_thumb_cache: crate::clip_thumb_cache::ClipThumbCache::new(
                 CLIP_ATLAS_CELL_W,
@@ -2002,7 +2010,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// The `(clip_id, filmstrip cell, atlas cell)` layout for the clip filmstrip atlas.
-    pub fn clip_atlas_layout(&self) -> &[(ClipId, u32, u32)] {
+    pub fn clip_atlas_layout(&self) -> &std::sync::Arc<[(ClipId, u32, u32)]> {
         &self.last_clip_atlas_layout
     }
 
@@ -2740,7 +2748,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let empty_groups: &[EffectGroup] = &[];
 
         let mut clip_descs: Vec<CompositeClipDescriptor> =
-            Vec::with_capacity(tick_result.ready_clips.len());
+            manifold_core::scratch::recycle_vec(std::mem::take(&mut self.clip_desc_scratch));
+        clip_descs.reserve(tick_result.ready_clips.len());
         for entry in &tick_result.ready_clips {
             let clip_texture = renderers.iter().find_map(|r| {
                 if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
@@ -2792,7 +2801,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .iter()
             .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
 
-        let layer_descs: Vec<CompositeLayerDescriptor> = layers
+        let mut layer_descs: Vec<CompositeLayerDescriptor> =
+            manifold_core::scratch::recycle_vec(std::mem::take(&mut self.layer_desc_scratch));
+        layer_descs.extend(layers
             .iter()
             // Audio and trigger lanes never contribute visual content.
             .filter(|layer| !layer.is_audio() && !layer.is_trigger())
@@ -2810,8 +2821,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 is_group: layer.is_group(),
                 trigger_count: gen_renderer_for_frame
                     .map_or(0, |gr| gr.effective_trigger_count_for_layer(&layer.layer_id)),
-            })
-            .collect();
+            }));
 
         let master_effects = project.map_or(empty_effects, |p| &p.settings.master_effects);
         let master_effect_groups = project
@@ -2909,6 +2919,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
 
         rtrace.mark("compositor_encode");
+        self.clip_desc_scratch = manifold_core::scratch::recycle_vec(clip_descs);
+        self.layer_desc_scratch = manifold_core::scratch::recycle_vec(layer_descs);
 
         // Promote a completed clip-atlas layout (BUG-119 item 3: layout never
         // leads pixels). `clip_atlas_pending_layout` may hold a layout from THIS
@@ -2923,7 +2935,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             && self.native_event.as_ref().is_some_and(|e| e.is_done(*sig))
         {
             let (layout, _) = self.clip_atlas_pending_layout.take().unwrap();
-            self.last_clip_atlas_layout = layout;
+            self.last_clip_atlas_layout = layout.into();
         }
 
         // ── Clip thumbnail atlas snapshot (section 24 5c) ──────────────────
@@ -3272,7 +3284,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                                 CLIP_ATLAS_H,
                             );
                             self.clip_atlas_persist_pending =
-                                Some((self.last_clip_atlas_layout.clone(), clip_hashes.clone()));
+                                Some((self.last_clip_atlas_layout.to_vec(), clip_hashes.clone()));
                         }
                     }
                 }

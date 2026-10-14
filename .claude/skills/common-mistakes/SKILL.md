@@ -127,8 +127,8 @@ times. Check this list BEFORE starting work in any of these areas.
 
 ## UI Actions / Dispatch
 
-### 22. DispatchResult::handled() when structural() is needed
-**Bug:** Button click does nothing — data toggles but UI doesn't update.
-**Why it happens:** Handler returns `DispatchResult::handled()` (no rebuild) instead of `DispatchResult::structural()`. The data changes on both UI and content threads, but the UI tree is never rebuilt, so visual state (button colors, styles set at build time) stays stale. The button *works* but *looks* broken.
-**Rule:** If a dispatch handler changes data that affects UI appearance set at `build()` time (button styles, visibility, layout), return `DispatchResult::structural()`. Only use `handled()` for changes that `sync_values()` can patch incrementally (slider positions, label text).
-**Check first:** When a UI button/toggle "doesn't work", verify the handler's `DispatchResult` before investigating click detection or data flow.
+### 22. A UI change the frame planner cannot see
+**Bug:** Button click does nothing — data toggles but the UI doesn't update.
+**Why it happens:** The frame planner decides every projection, rebuild and in-place push from its inputs (`FrameInputs`, `frame_plan.rs`). A value the UI shows that is not an input, or not derived from one, never triggers the work that draws it. `DispatchResult::structural()` and `needs_rebuild` are gone; there is no flag to set.
+**Rule:** Route the write through `DispatchCtx::mutate(touches, f)` or `execute(cmd)` so the part stamps move, or add the shown value to the planner's inputs. Never add an invalidation flag (docs/UI_INVALIDATION_DESIGN.md D6, D10). The input matrix (`ui_snapshot/input_matrix.rs`) and `AssertFresh` catch a missing input.
+**Check first:** When a UI button/toggle "doesn't work", check that its value reaches `gather_frame_inputs` before investigating click detection or data flow.

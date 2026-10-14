@@ -588,8 +588,14 @@ pub(crate) fn build_editor_preview_column(
 /// One entry per editor panel region with nodes, for its `UICacheManager`:
 /// each region's whole arena after its root, at its screen rect. The card
 /// lane carries the inspector's card sub-regions for incremental repaints.
-pub(crate) fn editor_panel_cache_info(ui_root: &UIRoot, layout: &EditorLayout) -> Vec<PanelCacheInfo> {
-    let mut info = Vec::with_capacity(2);
+/// `subs` is scratch the card lane's entry borrows.
+pub(crate) fn editor_panel_cache_info<'a>(
+    ui_root: &UIRoot,
+    layout: &EditorLayout,
+    subs: &'a mut Vec<(usize, usize)>,
+    info: &mut Vec<PanelCacheInfo<'a>>,
+) {
+    info.clear();
     let column = EditorRegion::PreviewColumn.id();
     let column_len = ui_root.tree.region_len(column);
     if column_len > 1 {
@@ -606,16 +612,16 @@ pub(crate) fn editor_panel_cache_info(ui_root: &UIRoot, layout: &EditorLayout) -
     let cards_len = ui_root.tree.region_len(cards);
     let first = ui_root.inspector.first_node();
     if first < cards_len {
+        ui_root.inspector.sub_region_ranges_into(subs);
         info.push(PanelCacheInfo {
             slot: PanelSlot::EditorCards,
             region: cards,
             start: first,
             end: cards_len,
             rect: layout.card_viewport,
-            sub_regions: Some(ui_root.inspector.sub_region_ranges()),
+            sub_regions: Some(subs),
         });
     }
-    info
 }
 
 /// Whether any editor panel region holds a node the atlas has not painted.
@@ -735,9 +741,13 @@ pub(crate) fn composite_editor_frame(
     // The panel regions paint into the atlas only where their nodes changed.
     cache.set_scale_factor(scale_factor);
     cache.ensure_atlas(device, logical_w, logical_h);
-    let panels = editor_panel_cache_info(ui_root, layout);
+    let mut subs = std::mem::take(&mut ui_root.panel_subs_scratch);
+    let mut panels = manifold_core::scratch::recycle_vec(std::mem::take(&mut ui_root.panel_info_scratch));
+    editor_panel_cache_info(ui_root, layout, &mut subs, &mut panels);
     let (_, painted) = cache.render_dirty_panels(device, ui_renderer, &ui_root.tree, &panels);
-    crate::ui_frame::clear_painted_dirt(ui_root, &painted);
+    crate::ui_frame::clear_painted_dirt(ui_root, painted);
+    ui_root.panel_info_scratch = manifold_core::scratch::recycle_vec(panels);
+    ui_root.panel_subs_scratch = subs;
 
     let mut encoder = device.create_encoder("Graph Editor Frame");
     encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);

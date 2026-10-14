@@ -318,6 +318,16 @@ pub fn run(args: &[String]) -> ! {
         usage_exit("--profile, --report-only, and --update-baseline are mutually exclusive");
     }
 
+    if args.iter().any(|a| a == "--work-idle") {
+        match run_work_idle(&project_path, seconds, start_beats) {
+            Ok(quiet) => std::process::exit(if quiet { 0 } else { 1 }),
+            Err(e) => {
+                eprintln!("perf-soak: {e}");
+                std::process::exit(3);
+            }
+        }
+    }
+
     let result = if profile_mode {
         run_profile(&project_path, seconds, start_beats)
     } else {
@@ -345,7 +355,7 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!("perf-soak: {msg}");
     eprintln!(
         "usage: cargo xtask perf-soak <project.manifold> --seconds N \
-         [--start <beats>] [--update-baseline] [--report-only] [--profile]"
+         [--start <beats>] [--update-baseline | --report-only | --profile | --work-idle]"
     );
     eprintln!(
         "   or: cargo xtask perf-soak <file.glb|.gltf> [--size WxH] [--frames N] [--profile] \
@@ -521,6 +531,89 @@ fn cold_touch_summary() -> serde_json::Value {
         "categories": categories,
         "total": manifold_core::cold_touch::total_cold_touches(),
     })
+}
+
+/// `--work-idle`: the content half of the live idle trace
+/// (UI_INVALIDATION_DESIGN.md INV-3). Loads the project, asks for thumbnails
+/// of the clips near the playhead, settles paused until their capture is
+/// done, then runs paced paused frames for `seconds` and counts the work
+/// each frame did on the content thread. Returns whether every frame was
+/// zero. `MANIFOLD_WORK_TRACE=1` prints each frame that did work.
+fn run_work_idle(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -> Result<bool, String> {
+    use manifold_core::work_count::{thread_work_snapshot, WorkTrace};
+    // Work counts do not depend on the output size, and a 4K show's
+    // simulation buffers can exceed what a headless device grants beside
+    // other lanes, so the run renders at 1080p.
+    let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, frame_rate, .. } =
+        prepare_project_edited(project_path_str, "work-idle", &mut |p| {
+            p.settings.output_width = p.settings.output_width.min(1920);
+            p.settings.output_height = p.settings.output_height.min(1080);
+        })?;
+    if let Some(beats) = start_beats {
+        ct.handle_command(ContentCommand::SeekToBeat(manifold_core::Beats(beats)));
+    }
+    // The App asks for thumbnails of the clips on screen; ask for the clips
+    // in the 32 beats after the playhead the same way.
+    let at = start_beats.unwrap_or(0.0);
+    let visible: Vec<manifold_core::ClipId> = ct
+        .engine
+        .project()
+        .ok_or("work-idle: no project loaded")?
+        .timeline
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_type.supports_clip_thumbnails())
+        .flat_map(|layer| layer.clips.iter())
+        .filter(|clip| clip.start_beat.0 < at + 32.0 && clip.end_beat().0 > at)
+        .map(|clip| clip.id.clone())
+        .collect();
+    ct.handle_command(ContentCommand::SetClipAtlasVisible(visible));
+    ct.timer.resume_after_load();
+    // Settle until thumbnail capture is done: one second with no new atlas
+    // layout, capped at 30 seconds.
+    let second = frame_rate.round().max(1.0) as u64;
+    let mut layout = ct.content_pipeline.clip_atlas_layout().clone();
+    let mut still = 0u64;
+    for _ in 0..30 * second {
+        if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+            return Err("shutdown during settle".into());
+        }
+        let now = ct.content_pipeline.clip_atlas_layout();
+        if std::sync::Arc::ptr_eq(&layout, now) {
+            still += 1;
+            if still >= second {
+                break;
+            }
+        } else {
+            layout = now.clone();
+            still = 0;
+        }
+    }
+    drop(layout);
+    let frames = (seconds * frame_rate).round().max(1.0) as u64;
+    let mut trace = WorkTrace::new();
+    let mut busy = 0u64;
+    let start = thread_work_snapshot();
+    for _ in 0..frames {
+        let before = thread_work_snapshot();
+        if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+            break;
+        }
+        if !thread_work_snapshot().since(&before).is_zero() {
+            busy += 1;
+        }
+        trace.frame("content");
+    }
+    let total = thread_work_snapshot().since(&start);
+    drop(state_tx);
+    drain.join().map_err(|_| "drain thread panicked".to_string())?;
+    let summary: Vec<String> = total.nonzero().map(|(k, n)| format!("{}={n}", k.name())).collect();
+    eprintln!(
+        "perf-soak --work-idle: {frames} paused frames, {busy} did work{}{}",
+        if summary.is_empty() { "" } else { ": " },
+        summary.join(" "),
+    );
+    Ok(busy == 0)
 }
 
 /// Returns `Ok(true)` if the gate passed, `Ok(false)` if it failed a

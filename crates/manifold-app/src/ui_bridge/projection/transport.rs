@@ -2,7 +2,6 @@
 //! playhead auto-scroll check. Moved from state_sync.rs (P-P,
 //! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
-use manifold_core::project::Project;
 use crate::ui_root::UIRoot;
 
 /// Cached transport display strings — avoids per-frame `format!` allocations
@@ -64,7 +63,11 @@ impl TransportDisplayCache {
             self.prev_bar = bar;
             self.prev_beat_in_bar = beat_in_bar;
             self.prev_sixteenth = sixteenth;
-            self.cached_display = format!(
+            // Rewritten in place: the clock moves several times a second.
+            use std::fmt::Write;
+            self.cached_display.clear();
+            let _ = write!(
+                self.cached_display,
                 "{:02}:{:02}.{}  |  {}.{}.{}",
                 mins, secs, tenths, bar, beat_in_bar, sixteenth,
             );
@@ -77,7 +80,9 @@ impl TransportDisplayCache {
         let bpm_tenths = (bpm * 10.0).round() as i32;
         if bpm_tenths != self.prev_bpm_tenths {
             self.prev_bpm_tenths = bpm_tenths;
-            self.cached_bpm = format!("{:.1}", bpm);
+            use std::fmt::Write;
+            self.cached_bpm.clear();
+            let _ = write!(self.cached_bpm, "{:.1}", bpm);
         }
         &self.cached_bpm
     }
@@ -109,7 +114,6 @@ const USER_SCROLL_GRACE: std::time::Duration = std::time::Duration::from_millis(
 pub fn check_auto_scroll(
     ui: &mut UIRoot,
     content_state: &crate::content_state::ContentState,
-    project: &Project,
 ) -> bool {
     if !content_state.is_playing {
         return false;
@@ -129,17 +133,6 @@ pub fn check_auto_scroll(
 
     let scroll_x_beats = ui.viewport.scroll_x_beats().as_f32();
     let playhead_px = (playhead_beat - scroll_x_beats) * ppb; // pixel offset from viewport left
-
-    // Content expansion: if playhead approaches end of content, grow it.
-    // From Unity ViewportManager.UpdatePlayheadPosition (lines 314-324).
-    let content_beats = project.timeline.duration_beats();
-    let content_w_px = content_beats.as_f32() * ppb;
-    let playhead_abs_px = playhead_beat * ppb;
-    if playhead_abs_px > content_w_px - 50.0 {
-        // Content would need to grow — handled by sync_project_data setting clips
-        // which automatically extends the viewport range. No explicit action needed here
-        // since the viewport always shows scroll_x..scroll_x + viewport_w.
-    }
 
     // Right edge margin: 50px. When playhead approaches right, scroll to 25% from left.
     let right_margin_px = 50.0;
@@ -190,10 +183,9 @@ mod bug159_auto_scroll_yield_tests {
     #[test]
     fn auto_scroll_moves_when_no_user_gesture_is_active() {
         let mut ui = wide_ui_root();
-        let project = Project::default();
         // Push the playhead far enough right to cross the right-edge margin.
         let state = playing_state(500.0);
-        let moved = check_auto_scroll(&mut ui, &state, &project);
+        let moved = check_auto_scroll(&mut ui, &state);
         assert!(moved, "auto-scroll must engage with no competing user gesture");
     }
 
@@ -201,9 +193,8 @@ mod bug159_auto_scroll_yield_tests {
     fn auto_scroll_yields_to_a_recent_user_scroll_gesture() {
         let mut ui = wide_ui_root();
         ui.viewport.note_user_scroll_x();
-        let project = Project::default();
         let state = playing_state(500.0);
-        let moved = check_auto_scroll(&mut ui, &state, &project);
+        let moved = check_auto_scroll(&mut ui, &state);
         assert!(
             !moved,
             "auto-scroll must yield while a user scroll gesture is recent — \

@@ -45,8 +45,9 @@ pub const MAIN_SLOTS: &[PanelSlot] = &[
 /// The graph editor window's slots.
 pub const EDITOR_SLOTS: &[PanelSlot] = &[PanelSlot::EditorColumn, PanelSlot::EditorCards];
 
-/// Panel cache info provided by UIRoot each frame.
-pub struct PanelCacheInfo {
+/// Panel cache info provided by UIRoot each frame. `sub_regions` borrows the
+/// caller's per-frame scratch, so building the list allocates nothing.
+pub struct PanelCacheInfo<'a> {
     pub slot: PanelSlot,
     /// The region whose arena holds the panel's nodes.
     pub region: u8,
@@ -57,7 +58,7 @@ pub struct PanelCacheInfo {
     /// Optional sub-regions for incremental re-rendering (e.g. effect cards
     /// within the inspector). When present and only a few are dirty, only
     /// those sub-regions are re-rendered via LoadOp::Load.
-    pub sub_regions: Option<Vec<(usize, usize)>>,
+    pub sub_regions: Option<&'a [(usize, usize)]>,
 }
 
 /// A slot range of one region that a frame painted, for the caller's dirty clear.
@@ -98,6 +99,9 @@ pub struct UICacheManager {
     // render (whose opaque background repaints the whole region) and a debug build
     // asserts. One slot per panel; only the inspector populates it today.
     last_sub_regions: [Vec<(usize, usize, Rect)>; PANEL_SLOT_COUNT],
+    /// The ranges the last `render_dirty_panels` painted, kept so a frame
+    /// reuses the allocation.
+    rendered_scratch: Vec<RenderedRange>,
 
     format: GpuTextureFormat,
     scale_factor: f64,
@@ -123,6 +127,7 @@ impl UICacheManager {
             panel_valid: [false; PANEL_SLOT_COUNT],
             needs_clear: true,
             last_sub_regions: std::array::from_fn(|_| Vec::new()),
+            rendered_scratch: Vec::new(),
             format,
             scale_factor,
         }
@@ -203,12 +208,14 @@ impl UICacheManager {
         device: &GpuDevice,
         ui_renderer: &mut UIRenderer,
         tree: &UITree,
-        panels: &[PanelCacheInfo],
-    ) -> (usize, Vec<RenderedRange>) {
-        let mut rendered_ranges: Vec<RenderedRange> = Vec::new();
+        panels: &[PanelCacheInfo<'_>],
+    ) -> (usize, &[RenderedRange]) {
+        let mut rendered_ranges = std::mem::take(&mut self.rendered_scratch);
+        rendered_ranges.clear();
 
         if self.atlas_texture.is_none() {
-            return (0, rendered_ranges);
+            self.rendered_scratch = rendered_ranges;
+            return (0, &self.rendered_scratch);
         }
 
         // Clear atlas if needed (resize, full rebuild).
@@ -241,22 +248,20 @@ impl UICacheManager {
             // there would survive. `incremental_path_safe` enforces both; either
             // failure drops to the full, self-clearing panel render below.
             if self.panel_valid[idx]
-                && let Some(ref subs) = info.sub_regions
+                && let Some(subs) = info.sub_regions
                 && Self::incremental_path_safe(&self.last_sub_regions[idx], subs, info, tree)
             {
-                let dirty: Vec<&(usize, usize)> = subs
-                    .iter()
-                    .filter(|(s, e)| tree.has_dirty_in_range(info.region, *s, *e))
-                    .collect();
+                let is_dirty = |&&(s, e): &&(usize, usize)| tree.has_dirty_in_range(info.region, s, e);
+                let dirty = subs.iter().filter(is_dirty).count();
 
-                if !dirty.is_empty() && dirty.len() <= INCREMENTAL_THRESHOLD {
-                    for &(s, e) in &dirty {
+                if dirty > 0 && dirty <= INCREMENTAL_THRESHOLD {
+                    for &(s, e) in subs.iter().filter(is_dirty) {
                         // Render all visible nodes in the sub-region (not dirty-only).
                         // dirty_only=true causes ghosting when slider backgrounds
                         // need to be redrawn under moved fill/thumb elements.
                         // The flat traversal fix already limits work to ~40 nodes
                         // per card instead of the entire inspector.
-                        ui_renderer.render_sub_region(tree, info.region, *s, *e, false);
+                        ui_renderer.render_sub_region(tree, info.region, s, e, false);
                     }
                     if self.prepare_and_draw(device, ui_renderer) {
                         rendered += 1;
@@ -292,25 +297,29 @@ impl UICacheManager {
             }
             // Record the sub-region extents this full render established, so the
             // next incremental frame can confirm nothing moved before trusting Load.
-            self.last_sub_regions[idx] = Self::sub_region_sig(info.region, info.sub_regions.as_deref(), tree);
+            Self::sub_region_sig(&mut self.last_sub_regions[idx], info.region, info.sub_regions, tree);
             rendered_ranges.push((info.region, info.start, info.end));
         }
 
-        (rendered, rendered_ranges)
+        self.rendered_scratch = rendered_ranges;
+        (rendered, &self.rendered_scratch)
     }
 
     /// Signature of a panel's sub-regions: each `(start, end, bounds-of-first-node)`.
     /// The first node of a sound sub-region is its opaque frame, so its bounds are
     /// the region's extent — what the incremental Load path must not let drift.
     fn sub_region_sig(
+        sig: &mut Vec<(usize, usize, Rect)>,
         region: u8,
         subs: Option<&[(usize, usize)]>,
         tree: &UITree,
-    ) -> Vec<(usize, usize, Rect)> {
-        subs.unwrap_or(&[])
-            .iter()
-            .map(|&(s, e)| (s, e, tree.get_bounds(tree.id_in(region, s))))
-            .collect()
+    ) {
+        sig.clear();
+        sig.extend(
+            subs.unwrap_or(&[])
+                .iter()
+                .map(|&(s, e)| (s, e, tree.get_bounds(tree.id_in(region, s)))),
+        );
     }
 
     /// Whether the incremental sub-region Load path is safe for a panel this
@@ -330,7 +339,7 @@ impl UICacheManager {
     fn incremental_path_safe(
         last: &[(usize, usize, Rect)],
         subs: &[(usize, usize)],
-        info: &PanelCacheInfo,
+        info: &PanelCacheInfo<'_>,
         tree: &UITree,
     ) -> bool {
         Self::extents_unchanged(info.region, last, subs, tree)
@@ -395,7 +404,13 @@ mod tests {
     use manifold_ui::node::{UIFlags, UIStyle};
     use manifold_ui::tree::{ZTier, DEFAULT_REGION};
 
-    fn info(start: usize, end: usize) -> PanelCacheInfo {
+    fn sig_of(region: u8, subs: Option<&[(usize, usize)]>, tree: &UITree) -> Vec<(usize, usize, Rect)> {
+        let mut sig = vec![(9, 9, Rect::new(0.0, 0.0, 1.0, 1.0))];
+        UICacheManager::sub_region_sig(&mut sig, region, subs, tree);
+        sig
+    }
+
+    fn info(start: usize, end: usize) -> PanelCacheInfo<'static> {
         PanelCacheInfo {
             slot: PanelSlot::Inspector,
             region: DEFAULT_REGION,
@@ -434,7 +449,7 @@ mod tests {
     #[test]
     fn extents_unchanged_when_bounds_stable() {
         let (tree, subs, _start) = tree_with_subregions();
-        let sig = UICacheManager::sub_region_sig(DEFAULT_REGION, Some(&subs), &tree);
+        let sig = sig_of(DEFAULT_REGION, Some(&subs), &tree);
         // In-place content change (no bounds change) is the incremental fast path.
         assert!(UICacheManager::extents_unchanged(DEFAULT_REGION, &sig, &subs, &tree));
     }
@@ -442,7 +457,7 @@ mod tests {
     #[test]
     fn extent_change_forces_fallback() {
         let (mut tree, subs, _start) = tree_with_subregions();
-        let sig = UICacheManager::sub_region_sig(DEFAULT_REGION, Some(&subs), &tree);
+        let sig = sig_of(DEFAULT_REGION, Some(&subs), &tree);
         // A sub-region's first node grows — Load would leave stale pixels below it,
         // so the guard must report the extent changed (caller falls back to full).
         tree.set_bounds(tree.id_at(subs[1].0), Rect::new(0.0, 60.0, 100.0, 80.0));
@@ -452,7 +467,7 @@ mod tests {
     #[test]
     fn partition_change_forces_fallback() {
         let (tree, subs, _start) = tree_with_subregions();
-        let sig = UICacheManager::sub_region_sig(DEFAULT_REGION, Some(&subs), &tree);
+        let sig = sig_of(DEFAULT_REGION, Some(&subs), &tree);
         // A different sub-region partition (count / ranges differ) is never safe to
         // trust against an older signature.
         let repartitioned = vec![(0, 3)];
@@ -462,7 +477,7 @@ mod tests {
     #[test]
     fn no_subregions_signature_is_empty() {
         let (tree, _subs, _start) = tree_with_subregions();
-        assert!(UICacheManager::sub_region_sig(DEFAULT_REGION, None, &tree).is_empty());
+        assert!(sig_of(DEFAULT_REGION, None, &tree).is_empty());
     }
 
     /// A panel shaped like the inspector, built inside one `begin_region`/`end_region`
@@ -491,7 +506,7 @@ mod tests {
     #[test]
     fn incremental_used_when_only_card_dirt() {
         let (mut tree, subs, start) = tree_with_chrome_and_card();
-        let sig = UICacheManager::sub_region_sig(DEFAULT_REGION, Some(&subs), &tree);
+        let sig = sig_of(DEFAULT_REGION, Some(&subs), &tree);
         tree.clear_dirty();
         let end = tree.count();
         // Dirt confined to a node INSIDE the card sub-region (the card content
@@ -504,7 +519,7 @@ mod tests {
     #[test]
     fn out_of_subregion_dirt_forces_full_render() {
         let (mut tree, subs, start) = tree_with_chrome_and_card();
-        let sig = UICacheManager::sub_region_sig(DEFAULT_REGION, Some(&subs), &tree);
+        let sig = sig_of(DEFAULT_REGION, Some(&subs), &tree);
         tree.clear_dirty();
         let end = tree.count();
         // Dirty a chrome node (the scrollbar, the panel's last node) that lies in

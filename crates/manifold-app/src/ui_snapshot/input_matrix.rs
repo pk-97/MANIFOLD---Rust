@@ -44,8 +44,8 @@ const REBUILD: [Projection; 5] = [
 ];
 /// `LiveShapes` stands for the live push's Shapes group, which the planner
 /// runs on the Shapes or the MappingRanges stamp.
-const PUSHES: [Projection; 5] =
-    [Projection::SelectionPush, Projection::ChromePush, Projection::LiveValues, Projection::LiveShapes, Projection::SceneEyes];
+const PUSHES: [Projection; 6] =
+    [Projection::SelectionPush, Projection::ChromePush, Projection::ClockPush, Projection::LiveValues, Projection::LiveShapes, Projection::SceneEyes];
 
 fn planned(plan: &crate::frame_plan::FramePlan, p: Projection) -> bool {
     plan.projections.contains(p)
@@ -106,9 +106,12 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
     let mut cache = TransportDisplayCache::new();
     match which {
         Projection::SelectionPush => crate::ui_bridge::push_selection(ui, &data.project, data.active, &data.selection),
+        // As `apply_frame_plan` runs it: the push, then the bars lay out.
         Projection::ChromePush => {
-            crate::ui_bridge::push_chrome(ui, &data.project, &data.content, &data.selection, false, None, &mut cache)
+            crate::ui_bridge::push_chrome(ui, &data.project, &data.content, &data.selection, false, None, &mut cache);
+            ui.lay_out_chrome();
         }
+        Projection::ClockPush => crate::ui_bridge::push_clock(ui, &data.project, &data.content, &mut cache),
         Projection::LiveValues => crate::ui_bridge::push_live(
             ui,
             &data.project,
@@ -328,6 +331,15 @@ fn perturbations() -> Vec<Perturbation> {
             parts: ChangeSet::NONE,
             apply: |d| d.selection.set_automation_mode_visible(false),
         },
+        // The playhead moved, as the content clock moves it while playing.
+        Perturbation {
+            name: "playhead",
+            parts: ChangeSet::NONE,
+            apply: |d| {
+                d.content.current_beat = Beats(9.5);
+                d.content.current_time = manifold_core::Seconds(4.75);
+            },
+        },
         // The transport's DRAW toggle, as dispatch and the shortcut apply it.
         Perturbation {
             name: "draw mode",
@@ -435,6 +447,10 @@ fn projection_input_matrix() {
     assert!(
         run.observed.contains(&(Kind::InPlace, "ChromePush".to_string(), "draw mode")),
         "the DRAW button repaints from the chrome push"
+    );
+    assert!(
+        run.observed.contains(&(Kind::InPlace, "ClockPush".to_string(), "playhead")),
+        "the header clock follows the playhead through the clock push"
     );
     for p in REBUILD.iter().chain(PUSHES.iter()) {
         if !run.seen_rows.contains(&format!("{p:?}")) {

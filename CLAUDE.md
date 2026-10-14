@@ -70,6 +70,7 @@ The crate table and the dependency graph live in `docs/DEVELOPMENT_REFERENCE.md`
 - Overlap is a write-time invariant on `Layer` (`enforce_non_overlap()`).
 - Phantom clips: created on NoteOn, committed on NoteOff. 5ms time guard, same-channel filter.
 - Reading the past never changes it. Time already simulated keeps the settings that were live then. Sampling, rendering, or re-rendering never consumes a delivery; one named operation does, exactly once, whatever the frame rate or stall.
+- UI work is decided by the frame planner; never add an invalidation flag — add an input. Spec: `docs/UI_INVALIDATION_DESIGN.md`.
 
 ## Hot-path discipline
 

@@ -1136,7 +1136,8 @@ mod footer_leak_probe {
 
         // The inspector panel's node range, EXACTLY as `panel_cache_info` reports
         // it to the cache manager.
-        let infos = ui.panel_cache_info();
+        let (mut subs, mut infos) = (Vec::new(), Vec::new());
+        ui.panel_cache_info_into(&mut subs, &mut infos);
         let insp_info = infos
             .iter()
             .find(|i| i.slot == PanelSlot::Inspector)

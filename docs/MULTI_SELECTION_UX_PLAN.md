@@ -36,7 +36,7 @@ This is the heart of the feature and splits into a display half and an apply hal
 
 **Files / types touched:**
 - `crates/manifold-app/src/ui_bridge/inspector.rs` — `dispatch_inspector`'s `ParamChanged` (1194) / `ParamCommit` (1224) arms call `resolve_graph_target` once **per selected object** to get a `Vec<GraphTarget>`, then:
-  - **Live drag:** loop `MutateProjectLive` + the local-mirror `with_preset_graph_mut` write over **all N targets, with NO unchanged-skip** — every selected object must get both writes each move or some snap back on the next snapshot. The unchanged-skip happens only at commit.
+  - **Live drag:** loop `MutateProject` (`touch::GRAPH_LIVE`) + the local-mirror `with_preset_graph_mut` write over **all N targets, with NO unchanged-skip** — every selected object must get both writes each move or some snap back on the next snapshot. The unchanged-skip happens only at commit.
   - **Commit:** build one `ChangeGraphParamCommand` per target, each capturing **its own** `old_value` (read per object at drag start — never a shared old value), skip unchanged objects, and send one `ContentCommand::ExecuteBatch`.
 - `crates/manifold-ui/src/panels/param_card/mod.rs` — store the per-object old values in `ActiveInspectorDrag::Param` (app.rs:69) by adding an `old_values: Vec<(GraphTarget, f32)>` field captured at `ParamSnapshot`. **Do NOT touch the shared `drag_snapshot: Option<f32>` (mod.rs:128)** — it is threaded into every drag type (macros/master/LED/layer opacity/clip slip/loop) and stays as-is for the unchanged-value short-circuit.
 - `GraphTarget::Generator(LayerId)` already addresses generators uniformly with effects, so N generators reached via the existing layer selection fan out the same way.

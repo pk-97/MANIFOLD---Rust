@@ -66,10 +66,12 @@ fn record(ui: &UIRoot) -> Vec<(&'static str, Vec<String>)> {
     tree.traverse(|ev| event(&mut paint, ev));
 
     let mut panels = Vec::new();
-    for info in ui.panel_cache_info() {
+    let (mut subs, mut infos) = (Vec::new(), Vec::new());
+    ui.panel_cache_info_into(&mut subs, &mut infos);
+    for info in &infos {
         panels.push(format!("slot {:?}", info.slot));
         tree.traverse_flat_range(info.region, info.start, info.end, false, |ev| event(&mut panels, ev));
-        for (s, e) in info.sub_regions.iter().flatten() {
+        for (s, e) in info.sub_regions.into_iter().flatten() {
             panels.push(format!("sub {}", e - s));
             tree.traverse_flat_range(info.region, *s, *e, false, |ev| event(&mut panels, ev));
         }
@@ -250,7 +252,8 @@ fn widget_ids_unique_across_main_regions() {
 #[test]
 fn atlas_ranges_cover_every_region_node() {
     let ui = stacked_ui();
-    let infos = ui.panel_cache_info();
+    let (mut subs, mut infos) = (Vec::new(), Vec::new());
+    ui.panel_cache_info_into(&mut subs, &mut infos);
     for region in MainRegion::ALL.into_iter().filter(|r| r.panel_slot().is_some()) {
         let id = region.id();
         for slot in 0..ui.tree.region_len(id) {

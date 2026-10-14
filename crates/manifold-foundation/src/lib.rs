@@ -24,6 +24,7 @@ pub mod hash;
 pub mod id;
 pub mod param_range;
 pub mod scene_surface;
+pub mod scratch;
 pub mod settings;
 pub mod units;
 pub mod uv_transform;
