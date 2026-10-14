@@ -786,7 +786,7 @@ mod tests {
             .collect();
         assert_eq!(clicks.len(), 1);
         if let UIEvent::Click { node_id, .. } = clicks[0] {
-            assert_eq!(node_id.index(), 1); // button id
+            assert_eq!(node_id.slot(), 1); // button id
         }
     }
 
@@ -1090,7 +1090,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, UIEvent::HoverEnter { node_id, .. } if node_id.index() == 1))
+                .any(|e| matches!(e, UIEvent::HoverEnter { node_id, .. } if node_id.slot() == 1))
         );
 
         // Move off button
@@ -1099,7 +1099,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, UIEvent::HoverExit { node_id } if node_id.index() == 1))
+                .any(|e| matches!(e, UIEvent::HoverExit { node_id } if node_id.slot() == 1))
         );
     }
 
@@ -1112,7 +1112,7 @@ mod tests {
         input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Up, 0.0);
         input.drain_events();
 
-        assert_eq!(input.focused_node(&tree).map(|n| n.index()), Some(1));
+        assert_eq!(input.focused_node(&tree).map(|n| n.slot()), Some(1));
 
         // Send key
         input.process_key(&tree, Key::Space, Modifiers::default());
@@ -1124,7 +1124,7 @@ mod tests {
                 node_id,
                 key: Key::Space,
                 ..
-            } if node_id.index() == 1
+            } if node_id.slot() == 1
         ));
     }
 
@@ -1145,7 +1145,7 @@ mod tests {
         let events = input.drain_events();
         assert_eq!(events.len(), 1);
         assert!(
-            matches!(events[0], UIEvent::RightClick { node_id: Some(n), .. } if n.index() == 1)
+            matches!(events[0], UIEvent::RightClick { node_id: Some(n), .. } if n.slot() == 1)
         );
     }
 

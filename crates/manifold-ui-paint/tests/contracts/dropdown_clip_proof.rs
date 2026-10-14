@@ -49,16 +49,17 @@ fn open_menu(
 }
 
 /// Rebuild through the same path the overlay driver uses — the eager
-/// `open_at` build's own container-sized region masks overflow, so drop it
-/// and re-mint under a full-screen region, exactly like `build_overlays`.
+/// `open_at` build's own container-sized region masks overflow, so clear the
+/// overlay region and re-mint under a full-screen region, exactly like the
+/// overlay region's rebuild.
 fn rebuild_emulating_overlay_driver(
     dd: &mut DropdownPanel,
     tree: &mut UITree,
     screen: Vec2,
 ) {
-    // saturating: on a fresh tree (no eager nodes to drop) this is a no-op.
-    tree.truncate_from(tree.count().saturating_sub(dd.node_count() + 1));
-    let region = tree.begin_region(
+    tree.clear_region(tree.overlay_region());
+    let region = tree.begin_region_in(
+        tree.overlay_region(),
         Rect::new(0.0, 0.0, screen.x, screen.y),
         ZTier::Overlay,
         "overlay",

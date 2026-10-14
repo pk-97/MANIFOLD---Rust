@@ -468,15 +468,16 @@ mod drag_capture_tests {
     // `request_immediate_drag_allows_one_pixel_move_to_begin_drag` there.
 
     /// One app frame's post-process rebuild: `overlay_dirty` (set whenever an
-    /// overlay consumes an event) drives a VISUAL `rebuild_scroll_panels` — the
-    /// exact path `app_render.rs` takes, which re-runs `build_overlays` and
+    /// overlay consumes an event) drives a VISUAL scroll rebuild through the
+    /// frame seam the app runs, which rebuilds the Overlays region and
     /// re-mints the Audio Setup chrome.
     fn settle(ui: &mut UIRoot) {
         if ui.take_overlay_dirty() {
-            ui.rebuild_scroll_panels(ScrollDirty {
-                visual: true,
-                ..ScrollDirty::default()
-            });
+            let mut signals = crate::ui_frame::UiFrameSignals {
+                scroll_dirty: ScrollDirty { visual: true, ..ScrollDirty::default() },
+                ..Default::default()
+            };
+            crate::ui_frame::apply_ui_frame_invalidations(ui, None, &mut signals);
         }
     }
 
@@ -513,7 +514,7 @@ mod drag_capture_tests {
     /// Root cause it guards: the Audio Setup panel is the only overlay that
     /// consumes `PointerDown` (BUG-059 leak stopgap), so a press on one of its
     /// buttons marks the overlay dirty and rebuilds the tree BETWEEN press and
-    /// release. `rebuild_scroll_panels` → `UITree::truncate_from` used to
+    /// release. A partial rebuild through `UITree::truncate_from` used to
     /// recompute `root_count` from the current root-parented survivors, which
     /// undercounts once a root has been reparented (the inspector wraps its
     /// subpanels under a ClipRegion) — so the rebuilt overlay chrome root got a

@@ -166,7 +166,7 @@
             panel.configure(live(vm));
             let mut tree = UITree::new();
             panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-            tree.nodes().iter().filter(|n| n.text.as_deref() == Some(notice)).count()
+            tree.all_nodes().filter(|n| n.text.as_deref() == Some(notice)).count()
         };
         assert_eq!(build(true), 1);
         assert_eq!(build(false), 0);
@@ -470,7 +470,7 @@
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        let texts: Vec<&str> = tree.all_nodes().filter_map(|node| node.text.as_deref()).collect();
         assert!(texts.contains(&"Physics"), "imported object should expose the Physics property");
         assert!(texts.contains(&"Enable"), "eligible object should expose an explicit Enable action");
         assert!(!texts.iter().any(|text| text.contains("Split into 8")), "legacy split action must stay out of the Physics property");
@@ -500,7 +500,7 @@
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        let texts: Vec<&str> = tree.all_nodes().filter_map(|node| node.text.as_deref()).collect();
         assert!(texts.contains(&"Physics"));
         assert!(texts.contains(&"Fluid role objects cannot be rigid bodies"));
         assert!(panel.object_enable_physics_ids.is_empty());
@@ -521,7 +521,7 @@
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        let texts: Vec<&str> = tree.all_nodes().filter_map(|node| node.text.as_deref()).collect();
         assert!(texts.contains(&"Lattice 64 × 32 × 64 · 6.2 cm cells · 131072 cells"), "{texts:?}");
     }
 

@@ -268,7 +268,7 @@ pub(crate) fn build_editor_tree(
         inputs.show_image,
     );
     // Overlays build last, through the main window's driver, so they sit on
-    // top and record `overlay_draw`/`overlay_region_start` for real.
+    // top in the Overlays arena and record `overlay_draw`.
     ui_root.build_overlays_for_screen(layout.logical_w as f32, layout.logical_h as f32);
     ui_root.tick_editor_perf_hud();
     // The rebuild cleared every node's flags; restore hover and press from the
@@ -418,9 +418,8 @@ pub(crate) struct EditorMiniTimelineInputs<'a> {
 
 /// Composites the graph-editor window for one frame into `offscreen`: clear,
 /// canvas immediate-mode draws, the merged sidebar/inspector `UITree`
-/// (narrowed to `[0, overlay_region_start)` — D2, now meaningful because the
-/// editor calls `UIRoot::build_overlays_for_screen` each frame, see the call
-/// site below), dock dividers, mini-timeline, the shared tree-overlay pass
+/// (the default arena only: overlays mint into their own arena, D2 and
+/// UI_INVALIDATION_DESIGN.md D7), dock dividers, mini-timeline, the shared tree-overlay pass
 /// (`tree_passes::render_tree_overlay_passes` —
 /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D1, P1), the mapping popover, and
 /// `prepare`/`render`. Does NOT acquire or present a drawable, and does
@@ -478,25 +477,11 @@ pub(crate) fn composite_editor_frame(
         // Layer the sidebar/inspector UITree on top of the canvas's
         // immediate-mode draws (the flush protocol covers them with their
         // own batches) — ONE tree, ONE call, matching the live paint order.
-        // D2, `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 fix-shape spec
-        // 2026-07-14: narrowed to `[0, overlay_region_start)`. The prior P1
-        // commit (9e3d710e) left this at the full range because
-        // `overlay_region_start`/`overlay_draw` were permanently empty for
-        // the editor — its `UIRoot` is built via plain `UIRoot::new()` and
-        // never `.build()`, so `build_overlays()` (the only place that
-        // populates those fields) never ran for it. That is now fixed at the
-        // call site in `app_render.rs`'s `present_graph_editor_window`,
-        // which calls `ui_root.build_overlays_for_screen(w, h)` every frame
-        // (the same driver the main window's `UIRoot::build()` uses,
-        // entered through an explicit-size wrapper instead of the
-        // main-window-only `build()`) — so `overlay_region_start` is real
-        // here too. When no overlay is open, `build_overlays` appends
-        // nothing and leaves `overlay_region_start == tree.count()`, so this
-        // narrowed range covers the whole tree exactly as before; when the
-        // node browser (or any other overlay) is open, this excludes it from
-        // the flat root-scan and the shared tree-overlay pass below draws it
-        // region-aware at OVERLAY depth instead — this is the BUG-151 fix.
-        ui_renderer.render_tree_range(&ui_root.tree, 0, ui_root.overlay_region_start);
+        // The editor builds its own panels into the default arena; open
+        // overlays (the node browser) and the card-drag ghost live in their
+        // own arenas, drawn region-aware at OVERLAY depth by the shared
+        // tree-overlay pass below, never by this root scan (D2).
+        ui_renderer.render_tree_range(&ui_root.tree, manifold_ui::tree::DEFAULT_REGION, 0, usize::MAX);
         if let Some(viewport) = viewport {
             viewport.draw(ui_renderer);
         }

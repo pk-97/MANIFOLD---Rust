@@ -80,17 +80,17 @@ impl<A> NodeIntent<A> {
     }
 }
 
-/// Dense, node-id-indexed intent store (`id == index`, parallel to the SoA
-/// tree). Cleared at build start and repopulated as panels create nodes.
-/// Generic over the action type (default [`PanelAction`]).
+/// Dense intent store indexed by region and slot, parallel to the tree's
+/// per-region arenas. Cleared at build start and repopulated as panels create
+/// nodes. Generic over the action type (default [`PanelAction`]).
 pub struct IntentRegistry<A = PanelAction> {
-    slots: Vec<Option<Box<NodeIntent<A>>>>,
+    slots: [Vec<Option<Box<NodeIntent<A>>>>; crate::tree::MAX_REGIONS],
 }
 
 // Hand-rolled to avoid a spurious `A: Default` bound (`Vec::new()` needs none).
 impl<A> Default for IntentRegistry<A> {
     fn default() -> Self {
-        Self { slots: Vec::new() }
+        Self { slots: std::array::from_fn(|_| Vec::new()) }
     }
 }
 
@@ -101,15 +101,18 @@ impl<A> IntentRegistry<A> {
 
     /// Drop all intent. Call once at the start of each tree build.
     pub fn clear(&mut self) {
-        self.slots.clear();
+        for region in &mut self.slots {
+            region.clear();
+        }
     }
 
     fn slot_mut(&mut self, node: NodeId) -> &mut NodeIntent<A> {
-        let idx = node.index();
-        if idx >= self.slots.len() {
-            self.slots.resize_with(idx + 1, || None);
+        let slots = &mut self.slots[node.region() as usize];
+        let idx = node.slot();
+        if idx >= slots.len() {
+            slots.resize_with(idx + 1, || None);
         }
-        self.slots[idx].get_or_insert_with(|| Box::new(NodeIntent::default()))
+        slots[idx].get_or_insert_with(|| Box::new(NodeIntent::default()))
     }
 
     /// Map a gesture on `node` to `action`.
@@ -129,7 +132,8 @@ impl<A> IntentRegistry<A> {
 
     fn get(&self, node: NodeId) -> Option<&NodeIntent<A>> {
         self.slots
-            .get(node.index())
+            .get(node.region() as usize)
+            .and_then(|r| r.get(node.slot()))
             .and_then(|s| s.as_deref())
             .filter(|i| !i.is_empty())
     }

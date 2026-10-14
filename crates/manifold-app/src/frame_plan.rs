@@ -13,7 +13,6 @@
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 
 use crate::content_state::RuntimeSeqs;
-use crate::ui_root::RegionSlot;
 
 /// The UI's own part stamps (D5), in the UI's counter space. Two sources move
 /// them: an accepted snapshot (every part that moved between the last
@@ -52,7 +51,8 @@ impl UiStamps {
 }
 
 /// The main window's regions, in build order (`UIRoot::build`), which is also
-/// the region rank of paint order (D7).
+/// the region rank of paint order (D7). The discriminant is the region's
+/// arena id in the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(crate) enum MainRegion {
@@ -71,7 +71,31 @@ pub(crate) enum MainRegion {
 
 pub(crate) const MAIN_REGION_COUNT: usize = 10;
 
+// Every region id must name an arena.
+const _: () = assert!(MAIN_REGION_COUNT <= manifold_ui::tree::DEFAULT_REGION as usize);
+
 impl MainRegion {
+    /// The region's arena id in the tree.
+    pub(crate) const fn id(self) -> u8 {
+        self as u8
+    }
+
+    /// The region's atlas slot; overlays and the ghost draw outside the atlas.
+    pub(crate) fn panel_slot(self) -> Option<manifold_ui_paint::ui_cache_manager::PanelSlot> {
+        use manifold_ui_paint::ui_cache_manager::PanelSlot;
+        match self {
+            MainRegion::Transport => Some(PanelSlot::Transport),
+            MainRegion::Header => Some(PanelSlot::Header),
+            MainRegion::Footer => Some(PanelSlot::Footer),
+            MainRegion::Inspector => Some(PanelSlot::Inspector),
+            MainRegion::AudioDock => Some(PanelSlot::AudioDock),
+            MainRegion::SplitHandles => Some(PanelSlot::SplitHandles),
+            MainRegion::LayerHeaders => Some(PanelSlot::LayerHeaders),
+            MainRegion::Viewport => Some(PanelSlot::Viewport),
+            MainRegion::Overlays | MainRegion::Ghosts => None,
+        }
+    }
+
     pub(crate) const ALL: [MainRegion; MAIN_REGION_COUNT] = [
         MainRegion::Transport,
         MainRegion::Header,
@@ -100,7 +124,10 @@ impl RegionMask {
         self.0 & (1 << region as u8) != 0
     }
 
-    #[cfg(test)]
+    pub(crate) fn remove(&mut self, region: MainRegion) {
+        self.0 &= !(1 << region as u8);
+    }
+
     pub(crate) fn is_empty(self) -> bool {
         self.0 == 0
     }
@@ -109,20 +136,9 @@ impl RegionMask {
         Self(self.0 | other.0)
     }
 
-    /// The first region in build order, which is where a suffix rebuild of
-    /// the flat tree has to start.
-    pub(crate) fn earliest(self) -> Option<MainRegion> {
-        MainRegion::ALL.into_iter().find(|&r| self.contains(r))
-    }
-
-    /// The flat-tree suffix that rebuilds these regions (P4b, until P4e).
-    pub(crate) fn slot(self) -> Option<RegionSlot> {
-        match self.earliest()? {
-            MainRegion::LayerHeaders => Some(RegionSlot::ScrollPanels),
-            MainRegion::Viewport | MainRegion::Overlays => Some(RegionSlot::ViewportPanels),
-            MainRegion::Ghosts => None,
-            _ => Some(RegionSlot::Full),
-        }
+    /// The regions in the mask, in build order.
+    pub(crate) fn iter(self) -> impl Iterator<Item = MainRegion> {
+        MainRegion::ALL.into_iter().filter(move |&r| self.contains(r))
     }
 }
 
@@ -342,6 +358,8 @@ pub(crate) struct FramePlan {
     pub rebuild: RegionMask,
     /// Rect origin moved, size did not.
     pub translate: RegionMask,
+    /// How far each translated region's origin moved, in pixels.
+    pub translate_by: [(i32, i32); MAIN_REGION_COUNT],
     pub in_place: RegionMask,
     /// Atlas slots to repaint.
     pub repaint: RegionMask,
@@ -535,7 +553,11 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         scroll_y: last.scroll_y_bits != next.scroll_y_bits,
         zoom: last.zoom_bits != next.zoom_bits,
     };
-    plan_regions(&mut plan, last, next, selection_visual, cursor, active_layer, automation_view, preview);
+    // The timeline lists change shape only when their project parts move or
+    // the lanes open or close; a selection or active-layer change re-projects
+    // them but repaints the same nodes in place (the selection push).
+    let timeline_shape = moved.intersects(PROJECT_SYNC_PARTS) || automation_view;
+    plan_regions(&mut plan, last, next, timeline_shape, selection_visual, cursor, active_layer, automation_view, preview);
     plan.redraw = true;
     plan
 }
@@ -546,6 +568,7 @@ fn plan_regions(
     plan: &mut FramePlan,
     last: &FrameInputs,
     next: &FrameInputs,
+    timeline_shape: bool,
     selection_visual: bool,
     cursor: bool,
     active_layer: bool,
@@ -613,7 +636,7 @@ fn plan_regions(
     }
 
     let headers = MainRegion::LayerHeaders;
-    if width(headers) || projections.contains(Projection::ProjectSync) {
+    if width(headers) || timeline_shape {
         rebuild.insert(headers);
     } else if origin(headers) {
         translate.insert(headers);
@@ -631,11 +654,7 @@ fn plan_regions(
     let viewport = MainRegion::Viewport;
     // Marker flags are tree nodes with no in-place path yet (P5b), so a marker
     // drag rebuilds the viewport like a committed marker edit.
-    if width(viewport)
-        || projections.contains(Projection::ProjectSync)
-        || next.parts.moved_since(&last.parts).contains(Part::Markers)
-        || projections.contains(Projection::MarkerPreview)
-    {
+    if width(viewport) || timeline_shape || projections.contains(Projection::MarkerPreview) {
         rebuild.insert(viewport);
     } else if origin(viewport) {
         translate.insert(viewport);
@@ -668,6 +687,10 @@ fn plan_regions(
     // Ghosts are refilled from input while a ghost exists; no input here.
     plan.rebuild = rebuild;
     plan.translate = translate;
+    for r in translate.iter() {
+        let (a, b) = (last.rects.get(r), next.rects.get(r));
+        plan.translate_by[r as usize] = (b[0] - a[0], b[1] - a[1]);
+    }
     plan.in_place = in_place;
     let mut repaint = rebuild.union(translate).union(in_place);
     repaint.0 &= !(1 << MainRegion::Ghosts as u8);
@@ -1114,6 +1137,7 @@ mod tests {
         assert!(plan(resized(r)).rebuild.contains(r));
         let p = plan(moved(r));
         assert!(p.translate.contains(r) && !p.rebuild.contains(r));
+        assert_eq!(p.translate_by[r as usize], (0, 7), "the plan carries the move");
     }
 
     #[test]
@@ -1233,11 +1257,13 @@ mod tests {
     }
 
     #[test]
-    fn earliest_rebuild_region_is_in_build_order() {
+    fn region_mask_iterates_in_build_order() {
         let mut mask = RegionMask::NONE;
         mask.insert(MainRegion::Viewport);
         mask.insert(MainRegion::Inspector);
-        assert_eq!(mask.earliest(), Some(MainRegion::Inspector));
+        assert_eq!(mask.iter().collect::<Vec<_>>(), [MainRegion::Inspector, MainRegion::Viewport]);
+        mask.remove(MainRegion::Inspector);
+        assert_eq!(mask.iter().collect::<Vec<_>>(), [MainRegion::Viewport]);
     }
 
     #[test]
@@ -1304,7 +1330,9 @@ mod tests {
         ] {
             assert!(runs(&p, projection), "{projection:?}");
         }
-        assert_eq!(p.rebuild.slot(), Some(crate::ui_root::RegionSlot::Full));
+        for region in [MainRegion::Inspector, MainRegion::AudioDock, MainRegion::LayerHeaders, MainRegion::Viewport] {
+            assert!(p.rebuild.contains(region), "{region:?}");
+        }
     }
 
     #[test]

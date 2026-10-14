@@ -7,8 +7,8 @@ use super::*;
 
 impl UIRoot {
     /// Clear and repopulate node-intent dispatch from every panel's currently
-    /// stored node ids. A full rebuild each call keeps the registry consistent
-    /// with partial tree rebuilds (truncate_from) without per-range bookkeeping
+    /// stored node ids. A full repopulate each call keeps the registry
+    /// consistent with single-region rebuilds without per-region bookkeeping
     /// — panels register against whatever ids they hold now.
     pub(crate) fn repopulate_intents(&mut self) {
         use manifold_ui::panels::Panel;

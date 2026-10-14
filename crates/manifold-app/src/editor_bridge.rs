@@ -2348,7 +2348,7 @@ mod binding_reroute_tests {
             project.settings.master_effects[0]
                 .params.get_mut("amount").unwrap().value = value;
             super::rebuild_editor_inspector(&mut ui, &project, None, viewport);
-            assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(expected)),
+            assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some(expected)),
                 "rebuilt inspector must show live value {expected}");
         }
     }

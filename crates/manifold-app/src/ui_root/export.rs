@@ -131,15 +131,14 @@ mod tests {
         });
         ui.export_progress.begin("show.mp4");
         ui.resize(1280.0, 720.0);
-        assert!(!ui.tree.nodes().iter().any(|node| {
+        assert!(!ui.tree.all_nodes().any(|node| {
             node.text
                 .as_deref()
                 .is_some_and(|text| text.contains("Warming project"))
         }));
         let button = ui
             .tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .find(|node| node.text.as_deref() == Some("Cancel export"))
             .expect("modal cancel button")
             .bounds;
