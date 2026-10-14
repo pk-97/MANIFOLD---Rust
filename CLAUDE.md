@@ -22,7 +22,7 @@ You don't persist between sessions. This file is what tomorrow's instance gets f
 - No inline python, read-only included: `python3 -c`, `python3 -` and heredocs are denied. Edit files with Edit/Write, read JSON with `jq`, run throwaway python as a scratchpad file (shebang, `chmod +x`) by its path.
 - No `cd`, not even as a prefix (`cd /tmp;`, `cd /dev/null;`). Use absolute paths, `git -C`, `--manifest-path`, or a subshell (`(cd X && cmd)`).
 - Never wait in the foreground. Long commands run with `run_in_background`; follow gates and landings with `scripts/watch_land.py` and anything else with the Monitor tool. No sleep loops, `kill -0` polls or sleep-then-tail.
-- Before a lane's one commit: clippy `--tests` on the touched crates, scoped nextest, and regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`). After the commit, lanes run `scripts/landing_gate.py --repo "$WT" --cheap`.
+- Before a lane's one commit: clippy `--tests` on the touched crates, scoped nextest, regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`), then `scripts/landing_gate.py --repo "$WT" --cheap` on the uncommitted tree. Its passes are reused at landing.
 - Never gate or land a slot whose agent may still be writing. A completed report does not prove it stopped; check first.
 
 ## Hard rules
