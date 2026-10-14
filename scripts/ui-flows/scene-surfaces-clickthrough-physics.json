@@ -69,7 +69,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "text": "💡 Sun"
         }
       },
       "gesture": {
@@ -95,7 +95,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 fill_light"
+          "text": "💡 Fill Light"
         }
       },
       "gesture": {
