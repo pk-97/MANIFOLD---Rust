@@ -220,11 +220,6 @@ impl LayerBitmapRenderer {
         }
     }
 
-    /// Force the next `repaint()` call to rebuild the texture.
-    pub fn invalidate(&mut self) {
-        self.force_dirty = true;
-    }
-
     pub fn layer_index(&self) -> usize {
         self.layer_index
     }
@@ -575,8 +570,7 @@ mod tests {
         renderer.repaint(0.0, 1.0, 2.0, 4, 100.0);
         assert!(renderer.tex_w() >= MIN_TEXTURE_WIDTH);
 
-        // Very wide viewport → clamped to MAX_TEXTURE_WIDTH
-        renderer.invalidate();
+        // Very wide viewport → clamped to MAX_TEXTURE_WIDTH (a new width repaints)
         renderer.repaint(0.0, 1.0, 10000.0, 4, 100.0);
         assert!(renderer.tex_w() <= MAX_TEXTURE_WIDTH);
     }

@@ -180,8 +180,6 @@ pub(crate) struct Button {
     /// A left press landed in the 3D viewport: try a gizmo grab or object
     /// pick there, and when nothing takes it, [`arm_viewport_drag`].
     pub viewport_press: Option<Vec2>,
-    /// A mini-timeline gutter click picked a layer.
-    pub selection_changed: bool,
 }
 
 /// A press in the 3D viewport that the gizmo did not take orbits (left) or
@@ -250,7 +248,6 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
                     let layer_id = layer.layer_id.clone();
                     *cx.active_layer = Some(layer_id.clone());
                     cx.selection.select_layer(layer_id);
-                    out.selection_changed = true;
                     cx.ws.offscreen_dirty = true;
                     return out;
                 }

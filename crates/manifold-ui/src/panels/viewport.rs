@@ -170,10 +170,6 @@ pub struct TimelineViewportPanel {
     /// sample-accurate scrubbing. Unity: `RulerScrubHandler.ShouldUseFreeScrub()`.
     scrub_free: bool,
 
-    // Dirty-checking fingerprint to skip unnecessary rebuilds.
-    // From Unity LayerBitmapRenderer dirty-checking (lines 99-186).
-    cached_fingerprint: u64,
-
     // Overview bitmap — CPU pixel buffer for the full-timeline minimap.
     // Replaces per-clip panel nodes with a single texture (no clip cap).
     // Two-layer design: cached clip layer + lightweight overlay compositing.
@@ -193,7 +189,6 @@ pub struct TimelineViewportPanel {
     overview_max_beat: f32,
     /// True when clip data changed and clip layer needs full repaint.
     overview_clips_dirty: bool,
-    overview_last_clip_fingerprint: u64,
     overview_last_playhead_px: i32,
     overview_last_scroll_x: f32,
     overview_last_ppb: f32,
@@ -382,7 +377,6 @@ impl TimelineViewportPanel {
             node_count: 0,
             drag: DragController::new(),
             scrub_free: false,
-            cached_fingerprint: 0,
             overview_pixels: Vec::new(),
             overview_clip_pixels: Vec::new(),
             overview_tex_w: 0,
@@ -391,7 +385,6 @@ impl TimelineViewportPanel {
             overview_upload: true,
             overview_max_beat: 0.0,
             overview_clips_dirty: true,
-            overview_last_clip_fingerprint: 0,
             overview_last_playhead_px: -1,
             overview_last_scroll_x: 0.0,
             overview_last_ppb: 0.0,
@@ -472,66 +465,6 @@ impl TimelineViewportPanel {
     /// Look up a LayerId by visual index.
     pub fn layer_id_at_index(&self, i: usize) -> Option<&LayerId> {
         self.layer_ids.get(i)
-    }
-
-    /// Compute a fingerprint of the current viewport state.
-    /// If unchanged from cached, the tree rebuild can be skipped.
-    /// From Unity LayerBitmapRenderer.ComputeClipFingerprint (lines 332-344).
-    pub fn compute_fingerprint(&self) -> u64 {
-        let (min_beat, max_beat) = self.visible_beat_range();
-        let mut hash = self.total_clip_count() as u64;
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.scroll_x_beats.as_f32().to_bits() as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.scroll_y_px.to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.tracks.len() as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.selected_clip_ids.len() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(
-            self.hovered_clip_id
-                .as_ref()
-                .map(|s| {
-                    let mut h = 0u64;
-                    for b in s.bytes() {
-                        h = h.wrapping_mul(31).wrapping_add(b as u64);
-                    }
-                    h
-                })
-                .unwrap_or(0),
-        );
-        // Per-visible-clip fingerprint
-        for clip in self.clips_by_layer.iter().flatten() {
-            let clip_end = (clip.start_beat + clip.duration_beats).as_f32();
-            if clip_end <= min_beat || clip.start_beat.as_f32() >= max_beat {
-                continue;
-            }
-            hash = hash
-                .wrapping_mul(31)
-                .wrapping_add(clip.start_beat.as_f32().to_bits() as u64);
-            hash = hash
-                .wrapping_mul(31)
-                .wrapping_add(clip_end.to_bits() as u64);
-            hash = hash.wrapping_mul(31).wrapping_add(clip.is_muted as u64);
-            hash = hash.wrapping_mul(31).wrapping_add(clip.is_locked as u64);
-        }
-        hash
-    }
-
-    /// Check if the viewport needs a full tree rebuild based on fingerprint.
-    /// Returns true if changed (needs rebuild), false if unchanged (skip).
-    pub fn needs_rebuild(&mut self) -> bool {
-        let fp = self.compute_fingerprint();
-        if fp == self.cached_fingerprint {
-            return false;
-        }
-        self.cached_fingerprint = fp;
-        true
     }
 
     // ── Configuration ─────────────────────────────────────────────
@@ -617,21 +550,9 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_clips(&mut self, clips: Vec<ViewportClip>) {
-        // Compute clip fingerprint for overview dirty-checking (O(N) but only on clip change)
-        let mut clip_fp: u64 = clips.len() as u64;
-        for c in &clips {
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.start_beat.as_f32().to_bits() as u64);
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.duration_beats.as_f32().to_bits() as u64);
-            clip_fp = clip_fp.wrapping_mul(31).wrapping_add(c.layer_index as u64);
-        }
-        if clip_fp != self.overview_last_clip_fingerprint {
-            self.overview_clips_dirty = true;
-        }
-        self.overview_last_clip_fingerprint = clip_fp;
+        // Clip data moved (the frame plan projects clips only then): the
+        // overview repaints its clip layer.
+        self.overview_clips_dirty = true;
         self.overview_repaint = true;
 
         // Bucket clips by layer — clear inner vecs (preserving capacity)
@@ -774,14 +695,6 @@ impl TimelineViewportPanel {
             current_scroll.clamp(min_scroll, max_scroll)
         };
         self.set_scroll(self.scroll_x_beats.as_f32(), desired_scroll)
-    }
-
-    /// Force a specific layer's bitmap to repaint on the next frame.
-    /// Used for per-layer invalidation from editing operations.
-    pub fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
-        if let Some(Some(r)) = self.bitmap_renderers.get_mut(layer_index) {
-            r.invalidate();
-        }
     }
 
     pub fn set_render_scale(&mut self, scale: f32) {

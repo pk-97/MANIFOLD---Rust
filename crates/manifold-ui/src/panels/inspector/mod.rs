@@ -548,11 +548,9 @@ impl InspectorCompositePanel {
         }
     }
 
-    /// True while any inspector card's drawer open/close tween needs another
-    /// rebuild to advance (P1 motion). The app polls this after `ui_root.update()`
-    /// and forces `needs_rebuild` while true — mirrors the `is_dragging()` rebuild
-    /// poll. Reduced motion settles tweens instantly, so this returns false at
-    /// once (no per-frame rebuild churn).
+    /// True while any inspector card's drawer open/close tween is in flight
+    /// (P1 motion). Each such frame moves the view version, so the planner
+    /// rebuilds the region. Reduced motion settles tweens instantly.
     pub fn drawer_anim_active(&self) -> bool {
         self.drawer_anim_active
     }
@@ -578,6 +576,7 @@ impl InspectorCompositePanel {
         }
         if any {
             self.drawer_anim_active = false;
+            self.view_version += 1;
         }
         any
     }
@@ -1162,8 +1161,8 @@ impl InspectorCompositePanel {
     ///
     /// Takes `&mut UITree` so the card's `is_selected` flag and the tree's
     /// border style stay in lockstep. Decoupling them (set the flag now,
-    /// hope a rebuild lands later) silently breaks any caller that doesn't
-    /// trigger `needs_rebuild` — the cards keep their highlighted borders
+    /// hope a rebuild lands later) silently breaks any caller whose frame
+    /// rebuilds nothing — the cards keep their highlighted borders
     /// even though the selection set is empty, and the early-return in
     /// `update_selection_visual` then prevents future repaints from
     /// noticing the mismatch.
@@ -1220,6 +1219,7 @@ impl InspectorCompositePanel {
                 .is_some_and(|info| modifier_selection.contains(&info.instance_id));
             card.update_selection_visual(tree, selected);
         }
+        self.dim_dragged_cards(tree);
     }
 
 
@@ -1330,8 +1330,8 @@ impl Panel for InspectorCompositePanel {
 
         // P1 drawer motion: advance every card's drawer-height tween. This only
         // moves the tween *values*; the reflow they drive happens on the next
-        // build() (which the app's drawer_anim_active poll forces while a tween is
-        // live). No tree mutation here — build reads the advanced values.
+        // build(), which the view version bump below asks the planner for.
+        // No tree mutation here — build reads the advanced values.
         let dt_ms = self
             .motion_last_tick
             .map(|t| (t.elapsed().as_secs_f32() * 1000.0).min(100.0))
@@ -1385,6 +1385,10 @@ impl Panel for InspectorCompositePanel {
         // but its new value hasn't reached the screen yet.
         self.drawer_anim_active = any || self.drawer_anim_prev;
         self.drawer_anim_prev = any;
+        // A tween frame moved card heights: the planner rebuilds the region.
+        if self.drawer_anim_active {
+            self.view_version += 1;
+        }
     }
 
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction> {

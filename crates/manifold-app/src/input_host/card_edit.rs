@@ -14,9 +14,8 @@ impl crate::app::Application {
             ui_root: &mut self.ws.ui_root,
             selection: &mut self.selection,
             active_layer: &mut self.active_layer_id,
-            needs_rebuild: &mut self.needs_rebuild,
+            redraw: &mut self.ws.offscreen_dirty,
             edits: &mut self.ui_edits,
-            scroll_dirty: &mut self.scroll_dirty,
             current_project_path: &self.current_project_path,
             has_output_window: self.window_registry.has_output_window(),
             pending_close_output: &mut self.pending_close_output,
@@ -31,7 +30,7 @@ impl crate::app::Application {
 
 impl<'a> AppInputHost<'a> {
     /// A host with no output window, pending export or saved project path, its
-    /// flags landing in `flags` (the script runner's card edits).
+    /// repaint request landing in `redraw` (the script runner's card edits).
     #[cfg(feature = "ui-snapshot")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn detached(
@@ -41,7 +40,7 @@ impl<'a> AppInputHost<'a> {
         ui_root: &'a mut UIRoot,
         selection: &'a mut UIState,
         active_layer: &'a mut Option<LayerId>,
-        flags: &'a mut crate::ui_frame::UiFrameFlags,
+        redraw: &'a mut bool,
         edits: &'a mut crate::gesture_preview::UiEdits,
         scratch: &'a mut [bool; 2],
         project_io: &'a mut crate::project_io::ProjectIOService,
@@ -55,9 +54,8 @@ impl<'a> AppInputHost<'a> {
             ui_root,
             selection,
             active_layer,
-            needs_rebuild: &mut flags.rebuild,
+            redraw,
             edits,
-            scroll_dirty: &mut flags.scroll,
             current_project_path: &None,
             has_output_window: false,
             pending_close_output,
@@ -121,7 +119,6 @@ impl<'a> AppInputHost<'a> {
             Box::new(PasteEffectsCommand::new(target.clone(), pasted, groups, before, destination_group)),
             crate::edit_selection::SelectAfterEdit::Effects { target, ids },
         ));
-        *self.needs_rebuild = true;
         true
     }
 }

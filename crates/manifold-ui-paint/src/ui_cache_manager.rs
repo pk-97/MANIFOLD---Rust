@@ -107,18 +107,13 @@ impl UICacheManager {
         }
     }
 
-    /// Invalidate all panel regions (full rebuild, resize).
+    /// Invalidate all panel regions (first build, a moved region rect, a
+    /// scale change).
     pub fn invalidate_all(&mut self) {
         record_work_n(WorkKind::SlotInvalidate, PANEL_SLOT_COUNT as u64);
         self.panel_valid = [false; PANEL_SLOT_COUNT];
-        // Clear atlas: panel positions may have changed (split handle drag,
-        // inspector resize, window resize). Without clearing, old-position
-        // content persists and gets blitted alongside new-position content
-        // → visible ghosting. Scroll panels (LayerHeaders, Viewport) bypass
-        // the amortization cap so they always render immediately. Static
-        // panels (Transport, Header, Footer) are the first 3 rendered.
-        // Inspector/SplitHandles may be deferred 1 frame — the black
-        // background shows through briefly, imperceptible at 120Hz.
+        // Clear the atlas: a moved region leaves pixels that belong to no
+        // slot, which would otherwise show as ghosting.
         self.needs_clear = true;
     }
 
@@ -128,22 +123,6 @@ impl UICacheManager {
     pub fn invalidate_slot(&mut self, slot: PanelSlot) {
         record_work(WorkKind::SlotInvalidate);
         self.panel_valid[slot as usize] = false;
-    }
-
-    /// Invalidate only scroll-panel regions.
-    pub fn invalidate_scroll_panels(&mut self) {
-        self.invalidate_slot(PanelSlot::LayerHeaders);
-        self.invalidate_slot(PanelSlot::Viewport);
-    }
-
-    /// Invalidate only the inspector region — for an in-place inspector scroll
-    /// that offset the content nodes without rebuilding the tree. No atlas clear
-    /// is needed: the inspector's opaque full-rect background re-paints over the
-    /// old content when the slot re-renders. Avoids the full-screen
-    /// `invalidate_all` (whole-atlas clear + all panels) that a `needs_rebuild`
-    /// scroll would otherwise force every frame.
-    pub fn invalidate_inspector(&mut self) {
-        self.invalidate_slot(PanelSlot::Inspector);
     }
 
     /// Ensure atlas texture matches the screen size.

@@ -332,29 +332,25 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextAutomationCut(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
-                automation::cut_selected(p, selection, content_tx, &mut needs_rebuild)
+                automation::cut_selected(p, selection, content_tx)
             });
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationPaste(target, param_id, beat) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
-                automation::paste(p, selection, content_tx, *beat, &mut needs_rebuild)
+                automation::paste(p, selection, content_tx, *beat)
             });
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::duplicate_selected(
                 p,
                 selection,
                 content_tx,
                 ui.viewport.grid_step(),
-                &mut needs_rebuild,
             ));
             DispatchResult::handled()
         }
@@ -364,14 +360,12 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
-                automation::delete_selected(p, selection, content_tx, &mut needs_rebuild)
+                automation::delete_selected(p, selection, content_tx)
             });
             DispatchResult::handled()
         }
         EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
-            let mut needs_rebuild = false;
             project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::insert_shape(
                 p,
                 selection,
@@ -380,7 +374,6 @@ pub(super) fn dispatch_editing(
                 param_id,
                 *beat,
                 *shape,
-                &mut needs_rebuild,
             ));
             DispatchResult::handled()
         }

@@ -23,9 +23,6 @@ pub trait TimelineInputHost {
     /// Close the monitor output window.
     fn close_output_window(&mut self);
 
-    /// Request a full UI rebuild (structural change).
-    fn request_rebuild(&mut self);
-
     /// Called after undo/redo to refresh UI state.
     fn on_undo_redo(&mut self);
 
@@ -34,9 +31,6 @@ pub trait TimelineInputHost {
 
     /// Mark the compositor as dirty (needs re-render).
     fn mark_compositor_dirty(&mut self);
-
-    /// Invalidate all layer bitmaps (forces full repaint).
-    fn invalidate_all_layer_bitmaps(&mut self);
 
     /// Update the zoom label display in the header.
     fn update_zoom_label(&mut self);

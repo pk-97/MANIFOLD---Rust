@@ -223,38 +223,42 @@ impl InspectorCompositePanel {
             self.card_drag_label = name;
             self.last_effect_tab = tab;
 
-            // Dim source card(s) border (Unity: SetDragDimmed(true))
-            // If dragged card is part of a multi-selection, dim all selected
-            match stack {
-                CardDragStack::Effects(tab) => {
-                    let dragged_id = self.cards_for_tab(tab).get(card_idx).map(|c| c.effect_id().clone());
-                    let sel = self.selection_set_mut(tab);
-                    let is_multi = dragged_id.as_ref().is_some_and(|id| sel.len() > 1 && sel.contains(id));
-                    let sel_ids = sel.clone();
-                    for (i, card) in self.cards_for_tab(tab).iter().enumerate() {
-                        if (is_multi && sel_ids.contains(card.effect_id())) || (!is_multi && i == card_idx) {
-                            card.set_drag_dimmed(tree, true);
-                        }
-                    }
-                }
-                CardDragStack::Modifiers => {
-                    let dragged_id = self.modifier_cards.get(card_idx).and_then(ParamCardPanel::modifier_info).map(|m| m.instance_id.clone());
-                    let is_multi = dragged_id.as_ref().is_some_and(|id| self.selected_modifier_ids.len() > 1 && self.selected_modifier_ids.contains(id));
-                    let selected = self.selected_modifier_ids.clone();
-                    for (i, card) in self.modifier_cards.iter().enumerate() {
-                        let selected_card = card.modifier_info().is_some_and(|m| selected.contains(&m.instance_id));
-                        if (is_multi && selected_card) || (!is_multi && i == card_idx) {
-                            card.set_drag_dimmed(tree, true);
-                        }
-                    }
-                }
-            }
-
+            self.dim_dragged_cards(tree);
             self.rebuild_card_drag_overlay(tree);
 
             return true;
         }
         false
+    }
+
+    /// Dim the dragged card(s) border (Unity: SetDragDimmed(true)); a card in
+    /// a multi-selection drags the whole selection. Called at the drag start
+    /// and after an inspector rebuild mid-drag re-mints the cards (D18): the
+    /// drag is held by card index and effect id, never by node id.
+    pub fn dim_dragged_cards(&self, tree: &mut UITree) {
+        if !self.card_drag_active {
+            return;
+        }
+        let card_idx = self.card_drag_source_index;
+        match self.card_drag_stack {
+            CardDragStack::Effects(tab) => {
+                for card in self.cards_for_tab(tab) {
+                    if self.card_drag_effect_ids.contains(card.effect_id()) {
+                        card.set_drag_dimmed(tree, true);
+                    }
+                }
+            }
+            CardDragStack::Modifiers => {
+                let dragged_id = self.modifier_cards.get(card_idx).and_then(ParamCardPanel::modifier_info).map(|m| m.instance_id.clone());
+                let is_multi = dragged_id.as_ref().is_some_and(|id| self.selected_modifier_ids.len() > 1 && self.selected_modifier_ids.contains(id));
+                for (i, card) in self.modifier_cards.iter().enumerate() {
+                    let selected_card = card.modifier_info().is_some_and(|m| self.selected_modifier_ids.contains(&m.instance_id));
+                    if (is_multi && selected_card) || (!is_multi && i == card_idx) {
+                        card.set_drag_dimmed(tree, true);
+                    }
+                }
+            }
+        }
     }
 
     /// Tree rebuilds replace every widget id, including the active drag overlay.

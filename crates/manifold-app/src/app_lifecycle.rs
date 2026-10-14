@@ -329,7 +329,6 @@ impl Application {
             path.file_name().map(|name| name.to_string_lossy()).as_deref().unwrap_or("Video"),
         );
         self.ws.ui_root.mark_overlay_dirty();
-        self.needs_rebuild = true;
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
 
@@ -971,7 +970,6 @@ impl Application {
                 .layers
                 .first()
                 .map(|l| l.layer_id.clone());
-            self.needs_rebuild = true;
 
             // Content thread renders at project FPS; UI always runs at display rate.
             // Don't sync UI frame timer to project FPS — that couples UI to render cadence.
@@ -1006,6 +1004,12 @@ impl Application {
         // Send record_commands to content thread so clips exist on both sides.
         // Without this, clips added directly to local_project (e.g. MIDI import)
         // are invisible to the content thread and vanish on next sync.
+        // They already ran on local_project, so stamp what they touch.
+        let touches = action
+            .record_commands
+            .iter()
+            .fold(manifold_core::change::ChangeSet::NONE, |t, cmd| t.union(cmd.touches()));
+        self.ui_edits.stamps.bump(touches);
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();
@@ -1016,11 +1020,6 @@ impl Application {
                     "Drop clips".to_string(),
                 ));
             }
-        }
-
-        // Clip sync
-        if action.needs_clip_sync {
-            self.needs_rebuild = true;
         }
 
         // A load/save may have changed the recent-projects list — refresh the

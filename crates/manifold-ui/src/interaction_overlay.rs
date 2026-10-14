@@ -915,7 +915,6 @@ impl InteractionOverlay {
         };
         host.restore_automation_lane_preview(&draft.target, &draft.param_id, draft.old_points.as_deref());
         host.clear_automation_previews();
-        host.request_automation_lane_resync();
     }
 
     fn commit_pending_automation_press(&mut self, host: &mut dyn TimelineEditingHost, ui_state: &mut UIState) {
@@ -947,7 +946,6 @@ impl InteractionOverlay {
         } else {
             host.add_automation_point(&draft.target, &draft.param_id, draft.beat, draft.value, draft.shape);
         }
-        host.mark_dirty();
     }
 
     /// Arm a point candidate on a bare strip or curve segment. This mutates
@@ -1011,7 +1009,6 @@ impl InteractionOverlay {
         let mut working = old_points.clone().unwrap_or_default();
         insert_preview_point(&mut working, beat, value, shape, resolved_segment_left_beat, segment_t);
         host.set_automation_lane_preview(&lane.target, &lane.param_id, &working);
-        host.request_automation_lane_resync();
         ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
         self.automation_press = Some(AutomationPressDraft {
             target: lane.target.clone(),
@@ -1738,7 +1735,7 @@ impl InteractionOverlay {
                 ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
                 self.drag.start(TimelineDrag::AutomationMarquee, press_pos);
                 self.update_automation_time_selection(press_pos, press_pos, ui_state, viewport);
-                host.request_redraw();
+                host.redraw();
                 true
             }
         }
@@ -1780,7 +1777,6 @@ impl InteractionOverlay {
         let mut working = old_points.clone();
         working[point_index].2 = new_shape;
         host.set_automation_lane_preview(&lane.target, &lane.param_id, &working);
-        host.request_automation_lane_resync();
         host.clear_automation_previews();
         host.commit_automation_point_move(
             &lane.target,
@@ -1985,7 +1981,6 @@ impl InteractionOverlay {
             &state.sweep_scratch,
         );
         host.set_automation_lane_preview(&target, &param_id, &state.working);
-        host.request_automation_lane_resync();
     }
 
     /// Commit a finished draw stroke as one undo entry — no-op if the
@@ -2109,7 +2104,6 @@ impl InteractionOverlay {
                 insert_moved_point(&mut drag.working, drag.original.0, drag.original.1, to_beat, to_value, drag.original.2);
             }
             host.set_automation_lane_preview(&target, &param_id, &drag.working);
-            host.request_automation_lane_resync();
             drag.last_beat = to_beat;
             drag.last_value = to_value;
         }
@@ -2180,7 +2174,6 @@ impl InteractionOverlay {
                     };
                 }
                 host.set_automation_lane_preview(&target, &param_id, &state.working);
-                host.request_automation_lane_resync();
         }
         if let Some(TimelineDrag::AutomationSegmentBend(state)) = self.drag.payload_mut() {
             state.last_pointer_y = pos.y;
@@ -2251,7 +2244,6 @@ impl InteractionOverlay {
             state.last_right_value,
             right_value,
         );
-        host.request_automation_lane_resync();
         if let Some(TimelineDrag::AutomationSegmentDrag(s)) = self.drag.payload_mut() {
             s.last_left_value = left_value;
             s.last_right_value = right_value;
@@ -2468,7 +2460,6 @@ impl InteractionOverlay {
             // duplicate beats that the user has not moved.
             if unchanged {
                 host.set_automation_lane_preview(&lane.target, &lane.param_id, &lane.working);
-                host.request_automation_lane_resync();
                 continue;
             }
 
@@ -2502,7 +2493,6 @@ impl InteractionOverlay {
                 }
             }
             host.set_automation_lane_preview(&lane.target, &lane.param_id, &lane.working);
-            host.request_automation_lane_resync();
         }
         ui_state.selected_automation_points.clear();
         ui_state.selected_automation_points.extend(state.points.iter().map(|point| UiAutomationPointRef {
@@ -2554,23 +2544,15 @@ impl InteractionOverlay {
         // Feedback is re-resolved and painted every frame (frame/present.rs);
         // a move only needs that frame to happen, never a rebuild.
         if ui_state.automation_feedback.is_some() || viewport.tracks_rect().contains(pos) {
-            host.request_redraw();
+            host.redraw();
         }
         let new_hover_id = hit.as_ref().map(|h| h.clip_id.clone());
 
+        // The hovered clip is drawn by the immediate clip pass; the grid
+        // bitmaps do not depend on it.
         if new_hover_id != ui_state.hovered_clip_id {
-            // Unity lines 230-244: invalidate affected layers on hover change
-            if let Some(ref old_id) = ui_state.hovered_clip_id
-                && let Some(old_clip) = host.find_clip_by_id(old_id)
-            {
-                host.invalidate_layer_bitmap(old_clip.layer_index);
-            }
-
             ui_state.hovered_clip_id = new_hover_id;
-
-            if let Some(ref hit) = hit {
-                host.invalidate_layer_bitmap(hit.layer_index);
-            }
+            host.redraw();
         }
 
         // Unity lines 248-256: cursor feedback (only when not dragging)
@@ -2596,15 +2578,8 @@ impl InteractionOverlay {
 
     /// Port of Unity InteractionOverlay.OnPointerExit (lines 259-272).
     pub fn on_pointer_exit(&mut self, host: &mut dyn TimelineEditingHost, ui_state: &mut UIState) {
-        if let Some(ref old_id) = ui_state.hovered_clip_id {
-            if let Some(old_clip) = host.find_clip_by_id(old_id) {
-                host.invalidate_layer_bitmap(old_clip.layer_index);
-            } else {
-                host.invalidate_all_layer_bitmaps();
-            }
-        }
-        ui_state.hovered_clip_id = None;
-        if ui_state.automation_feedback.take().is_some() { host.request_redraw(); }
+        let had_hover = ui_state.hovered_clip_id.take().is_some();
+        if ui_state.automation_feedback.take().is_some() || had_hover { host.redraw(); }
         host.set_cursor(TimelineCursor::Default);
     }
 
@@ -2767,7 +2742,7 @@ impl InteractionOverlay {
             }
             DragMode::AutomationMarquee => {
                 self.handle_automation_marquee_drag(pos, ui_state, viewport);
-                host.request_redraw();
+                host.redraw();
             }
             DragMode::AutomationGroupMove => {
                 self.handle_automation_group_drag(pos, host, ui_state, viewport);
@@ -2779,7 +2754,6 @@ impl InteractionOverlay {
                 if let Some(TimelineDrag::AutomationLaneResize(state)) = self.drag.payload() {
                     let height = (state.start_height + pos.y - state.start_y).clamp(64.0, 240.0);
                     ui_state.set_automation_lane_height(state.target.clone(), state.param_id.clone(), height);
-                    host.mark_dirty();
                 }
             }
             DragMode::None => {}
@@ -2808,7 +2782,7 @@ impl InteractionOverlay {
         match self.drag.release() {
             // Unity lines 358-363: region select → finalize
             Some(TimelineDrag::RegionSelect(_)) => {
-                host.invalidate_all_layer_bitmaps();
+                host.redraw();
                 return;
             }
             // P4 Unit A: automation point drag → commit one undo entry.
@@ -2841,7 +2815,7 @@ impl InteractionOverlay {
             // tracking and redraw (the selected set itself stays in
             // `UIState`, already written live during `on_drag`).
             Some(TimelineDrag::AutomationMarquee) => {
-                host.invalidate_all_layer_bitmaps();
+                host.redraw();
                 self.reset_drag_state(host);
                 return;
             }
@@ -2996,10 +2970,9 @@ impl InteractionOverlay {
         if matches!(self.drag_mode(), DragMode::AutomationPoint | DragMode::AutomationSegmentBend | DragMode::AutomationSegmentDrag | DragMode::AutomationGroupMove | DragMode::AutomationDraw | DragMode::AutomationMarquee) {
             for snapshot in &self.automation_lane_snapshots {
                 host.restore_automation_lane_preview(&snapshot.target, &snapshot.param_id, snapshot.points.as_deref());
-                host.request_automation_lane_resync();
             }
             host.clear_automation_previews();
-            host.invalidate_all_layer_bitmaps();
+            host.redraw();
             self.reset_drag_state(host);
             return;
         }
@@ -3031,7 +3004,7 @@ impl InteractionOverlay {
         // no-op (see doc comment above), not a commit-then-undo.
         host.begin_command_batch();
         host.commit_command_batch("cancelled");
-        host.invalidate_all_layer_bitmaps();
+        host.redraw();
         self.reset_drag_state(host);
     }
 
@@ -3046,7 +3019,6 @@ impl InteractionOverlay {
         self.automation_lane_snapshots.clear();
         self.automation_press = None;
         self.forced_automation_hit = None;
-        host.mark_dirty();
         host.set_cursor(TimelineCursor::Default);
     }
 
@@ -3179,8 +3151,6 @@ impl InteractionOverlay {
             let new_start = (snapshot.start_beat + beat_delta).max(Beats::ZERO);
             host.set_clip_start_beat(&snapshot.clip_id, new_start);
         }
-
-        host.invalidate_all_layer_bitmaps();
     }
 
     /// D5 — the shared snap+clamp math for a move drag. Given a candidate
@@ -3270,7 +3240,6 @@ impl InteractionOverlay {
             // Unity lines 554-557: direct mutation during drag
             host.set_clip_trim(&orig.clip_id, new_start, new_duration, new_in_point);
         }
-        host.invalidate_all_layer_bitmaps();
     }
 
     /// Port of Unity InteractionOverlay.HandleTrimRightDrag (lines 562-582).
@@ -3320,7 +3289,6 @@ impl InteractionOverlay {
             // Unity line 580: trimClip.DurationBeats = newDurationBeats
             host.set_clip_trim(&orig.clip_id, orig.start_beat, new_duration, orig.in_point);
         }
-        host.invalidate_all_layer_bitmaps();
     }
 
     // ────────────────────────────────────────────────────────────
@@ -3795,11 +3763,7 @@ mod b4_group_move_tests {
         ) {
         }
         fn inspect_layer(&mut self, _layer_index: usize) {}
-        fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
-        fn invalidate_all_layer_bitmaps(&mut self) {}
-        fn mark_dirty(&mut self) {}
-        fn request_redraw(&mut self) {}
-        fn request_automation_lane_resync(&mut self) {}
+        fn redraw(&mut self) {}
         fn set_cursor(&mut self, _cursor: TimelineCursor) {}
         fn scrub_to_time(&mut self, _time: Seconds) {}
         fn enforce_non_overlap(&mut self, _clip_id: &str, _ignore_ids: &HashSet<ClipId>) {}
@@ -4133,9 +4097,7 @@ mod p1_4_gesture_integrity_tests {
         // records every `on_automation_lane_right_click` call.
         automation_lane_right_clicks: Vec<(UiGraphTarget, ParamId)>,
         // Invalidation signals, counted so tests can pin rebuild-vs-redraw.
-        mark_dirty_calls: usize,
         redraw_requests: usize,
-        lane_resync_requests: usize,
     }
 
     impl GestureTestHost {
@@ -4168,9 +4130,7 @@ mod p1_4_gesture_integrity_tests {
                 automation_group_move_commits: Vec::new(),
                 automation_draw_commits: Vec::new(),
                 automation_lane_right_clicks: Vec::new(),
-                mark_dirty_calls: 0,
                 redraw_requests: 0,
-                lane_resync_requests: 0,
             }
         }
 
@@ -4304,16 +4264,8 @@ mod p1_4_gesture_integrity_tests {
             self.automation_lane_right_clicks.push((target.clone(), param_id.clone()));
         }
         fn inspect_layer(&mut self, _layer_index: usize) {}
-        fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
-        fn invalidate_all_layer_bitmaps(&mut self) {}
-        fn mark_dirty(&mut self) {
-            self.mark_dirty_calls += 1;
-        }
-        fn request_redraw(&mut self) {
+        fn redraw(&mut self) {
             self.redraw_requests += 1;
-        }
-        fn request_automation_lane_resync(&mut self) {
-            self.lane_resync_requests += 1;
         }
         fn set_cursor(&mut self, _cursor: TimelineCursor) {}
         fn scrub_to_time(&mut self, _time: Seconds) {}
@@ -4735,7 +4687,6 @@ mod p1_4_gesture_integrity_tests {
             overlay.refresh_automation_feedback(pos, lanes, &mut state, &panel);
         }
         overlay.on_pointer_move(Vec2::new(curve.x + 20.0, panel.tracks_rect().y_max() + 50.0), &mut host, &mut state, &panel);
-        assert_eq!(host.mark_dirty_calls, 0);
         assert!(host.redraw_requests >= 40);
     }
 

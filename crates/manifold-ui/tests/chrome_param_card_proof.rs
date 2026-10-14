@@ -293,7 +293,7 @@ fn badge_toggle_is_in_place() {
 }
 
 #[test]
-fn opening_drawer_needs_rebuild_then_grows() {
+fn opening_drawer_rebuilds_then_grows() {
     let mut t = tree();
     let mut card = fixture(false);
     card.build(&mut t, rect());

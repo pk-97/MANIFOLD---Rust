@@ -45,7 +45,8 @@ impl Application {
         }
 
         if super::frame::take_pending_exit(&mut self.perform, &mut self.ws.ui_root, self.ui_cache_manager.as_mut()) {
-            self.needs_rebuild = true;
+            // The planner compares against the last normal frame's inputs,
+            // so whatever moved during the set re-projects on the first frame back.
             self.ws.offscreen_dirty = true;
             log::info!("[Perform] Exited performance mode");
         }

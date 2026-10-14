@@ -438,7 +438,7 @@ pub(crate) fn main_window_key(
         TextKey::Other => {}
     }
     if text_input.field == TextInputField::SearchFilter {
-        ui_root.browser_popup.set_filter(text_input.text().trim().to_string());
+        ui_root.set_browser_filter(text_input.text().trim().to_string());
         return KeyOutcome::Filtered;
     }
     KeyOutcome::Consumed
@@ -566,7 +566,6 @@ pub(crate) fn commit(
     field: TextInputField,
     text: &str,
     cx: &mut crate::ui_bridge::DispatchCtx<'_>,
-    needs_rebuild: &mut bool,
 ) -> bool {
     match field {
         TextInputField::Bpm => {
@@ -576,7 +575,6 @@ pub(crate) fn commit(
                     let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(&cx.project, new_bpm);
                     ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
-                *needs_rebuild = true;
             }
         }
         TextInputField::Fps => {
@@ -588,7 +586,6 @@ pub(crate) fn commit(
                 )));
                 // The content thread renders at project FPS; the UI runs at display rate.
                 ContentCommand::send(cx.content_tx, ContentCommand::SetFrameRate(fps as f64));
-                *needs_rebuild = true;
             }
         }
         TextInputField::SliderRange | TextInputField::EditorSliderRange => {
@@ -601,7 +598,6 @@ pub(crate) fn commit(
                 });
                 let action = PanelAction::Params(ParamsAction::SetSliderRange(ctx.target, ctx.param_id, range));
                 let _ = crate::ui_bridge::dispatch(&action, cx);
-                *needs_rebuild = true;
             }
         }
         TextInputField::InspectorParam | TextInputField::EditorInspectorParam => {
@@ -626,7 +622,6 @@ pub(crate) fn commit(
                 ] {
                     let _ = crate::ui_bridge::dispatch(&act, cx);
                 }
-                *needs_rebuild = true;
             }
         }
         TextInputField::MaterialColour => {
@@ -637,7 +632,6 @@ pub(crate) fn commit(
                 for action in crate::text_input::material_colour_scrub_actions(ctx, values) {
                     let _ = crate::ui_bridge::dispatch(&action, cx);
                 }
-                *needs_rebuild = true;
             }
         }
         TextInputField::SceneNumericParam(node_doc_id) => {
@@ -655,7 +649,6 @@ pub(crate) fn commit(
                     value,
                 ));
                 let _ = crate::ui_bridge::dispatch(&act, cx);
-                *needs_rebuild = true;
             }
         }
         TextInputField::AudioSendGainParam => {
@@ -664,7 +657,6 @@ pub(crate) fn commit(
             {
                 let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(ctx.send_id, parsed));
                 let _ = crate::ui_bridge::dispatch(&act, cx);
-                *needs_rebuild = true;
             }
         }
         TextInputField::DriverFreePeriod => {
@@ -681,7 +673,6 @@ pub(crate) fn commit(
                     DriverConfigAction::SetFreePeriod(parsed),
                 ));
                 let _ = crate::ui_bridge::dispatch(&act, cx);
-                *needs_rebuild = true;
             }
         }
         TextInputField::LayerName => {
@@ -698,7 +689,6 @@ pub(crate) fn commit(
                     text.to_string(),
                 )));
             }
-            *needs_rebuild = true;
         }
         TextInputField::ClipBpm => {
             // Empty or "auto" is 0: follow the project BPM. Unparseable text
@@ -724,7 +714,6 @@ pub(crate) fn commit(
                     ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::MacroLabel(idx) => {
             let new_label = text.trim().to_string();
@@ -736,7 +725,6 @@ pub(crate) fn commit(
                     idx, old_label, new_label,
                 )));
             }
-            *needs_rebuild = true;
         }
         TextInputField::EffectParam(effect_idx, param_idx) => {
             if let Ok(parsed) = text.parse::<f32>() {
@@ -774,7 +762,6 @@ pub(crate) fn commit(
                     )));
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::GenParam(param_idx) => {
             if let Ok(parsed) = text.parse::<f32>()
@@ -796,7 +783,6 @@ pub(crate) fn commit(
                     )));
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::GenStringParam(sp_idx) => {
             // The key comes from the generator's definition; the old value
@@ -825,7 +811,6 @@ pub(crate) fn commit(
                     )));
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::GroupRename(group_idx) => {
             let new_name = text.trim().to_string();
@@ -867,12 +852,10 @@ pub(crate) fn commit(
                     )));
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::SearchFilter => {
             // The browser filter only; no undo command.
-            cx.ui.browser_popup.set_filter(text.trim().to_string());
-            *needs_rebuild = true;
+            cx.ui.set_browser_filter(text.trim().to_string());
         }
         TextInputField::MarkerName => {
             if let Some(marker_id) = text_input.marker_id.take() {
@@ -885,7 +868,6 @@ pub(crate) fn commit(
                     )));
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::AudioSendLabel => {
             if let Some(send_id) = text_input.audio_send_id.take() {
@@ -898,7 +880,6 @@ pub(crate) fn commit(
                     )));
                 }
             }
-            *needs_rebuild = true;
         }
         // The Scene tab addresses the layer directly, so it resolves its own
         // catalog default; no graph editor needs to be open.
@@ -908,18 +889,16 @@ pub(crate) fn commit(
             let new_handle = text.trim().to_string();
             if !new_handle.is_empty()
                 && let Some(layer_id) = text_input.scene_object_layer_id.take()
+                && let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id)
             {
-                if let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id) {
-                    let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        Vec::new(),
-                        object_node_id,
-                        new_handle,
-                        default,
-                    );
-                    ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                }
-                *needs_rebuild = true;
+                let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id),
+                    Vec::new(),
+                    object_node_id,
+                    new_handle,
+                    default,
+                );
+                ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
         }
         TextInputField::SceneLightRename(light_node_id) => {
@@ -927,18 +906,16 @@ pub(crate) fn commit(
             let new_handle = text.trim().to_string();
             if !new_handle.is_empty()
                 && let Some(layer_id) = text_input.scene_object_layer_id.take()
+                && let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id)
             {
-                if let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id) {
-                    let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        Vec::new(),
-                        light_node_id,
-                        new_handle,
-                        default,
-                    );
-                    ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                }
-                *needs_rebuild = true;
+                let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id),
+                    Vec::new(),
+                    light_node_id,
+                    new_handle,
+                    default,
+                );
+                ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
         }
         TextInputField::RenamePreset => {
@@ -967,7 +944,6 @@ pub(crate) fn commit(
                     }
                 }
             }
-            *needs_rebuild = true;
         }
         TextInputField::AutomationPointValue
         | TextInputField::AutomationPointTime
@@ -1026,9 +1002,7 @@ mod tests {
             scrub: &mut scrub,
             dialogs: Default::default(),
         };
-        let mut rebuild = false;
-        assert!(commit(&mut text_input, field, &text, &mut cx, &mut rebuild));
-        assert!(rebuild);
+        assert!(commit(&mut text_input, field, &text, &mut cx));
         assert!(matches!(rx.try_recv(), Ok(ContentCommand::ExecuteOnContent(_))));
     }
 
@@ -1081,8 +1055,6 @@ mod tests {
             scrub: &mut scrub,
             dialogs: Default::default(),
         };
-        let mut rebuild = false;
-        assert!(!commit(&mut text_input, TextInputField::GraphWgsl(3), "x", &mut cx, &mut rebuild));
-        assert!(!rebuild);
+        assert!(!commit(&mut text_input, TextInputField::GraphWgsl(3), "x", &mut cx));
     }
 }

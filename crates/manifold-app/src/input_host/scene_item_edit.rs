@@ -86,7 +86,6 @@ impl AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_rebuild = true;
         true
     }
 
@@ -122,7 +121,6 @@ impl AppInputHost<'_> {
             // The panel's selection version rebuilds Properties.
             self.ui_root.pending_keyboard_actions.push(action);
         }
-        *self.needs_rebuild = true;
         true
     }
 
@@ -144,7 +142,6 @@ impl AppInputHost<'_> {
         if let Some(action) = action {
             self.ui_root.pending_keyboard_actions.push(action);
         }
-        *self.needs_rebuild = true;
         true
     }
 }
