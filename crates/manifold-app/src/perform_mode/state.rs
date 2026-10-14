@@ -27,7 +27,7 @@ pub(crate) struct PerformModeState {
     /// Set by the Perform header button — handled in `about_to_wait`.
     pub(crate) pending_enter: bool,
 
-    /// Set by the exit button, Escape key, or output-window-closed
+    /// Set by the exit button or output-window-closed
     /// detection — handled in `about_to_wait`.
     pub(crate) pending_exit: bool,
 

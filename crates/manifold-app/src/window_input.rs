@@ -24,7 +24,6 @@
 //! `offscreen_dirty` marking (the editor has no idle repaint loop) are preserved
 //! exactly — losing either would mis-hit-test or freeze the editor.
 
-use manifold_ui::{ParamsAction, ProjectAction};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::keyboard::{Key, NamedKey};
@@ -140,112 +139,51 @@ impl Application {
     }
 
     // ── Text-edit session pointer routing (UI_WIDGET_UNIFICATION P5b/D16) ──
-    // A single `TextInputState` is shared by both windows (`begin_owned`
-    // tags which one), so one gate here covers both — mirrors the keyboard
-    // gate's shape (`self.text_input.active`) rather than duplicating a
-    // second one per window.
+    // One `TextInputState` serves both windows, so one gate covers both. The
+    // main tree measures for both (every tree carries an identical
+    // `CachedTextMeasure`); nothing measures before a renderer exists. The
+    // mechanics are the shared seam in `text_session.rs`.
 
-    /// Runs `f` on the text session with the main tree's measurer. Every
-    /// window's tree carries an identical `CachedTextMeasure`, so pointer and
-    /// arrow mapping match what the overlay draws. `None` before a renderer
-    /// exists (a session can't be visible then).
-    pub(crate) fn with_text_measure<R>(
-        &mut self,
-        f: impl FnOnce(&mut crate::text_input::TextInputState, &mut dyn FnMut(&str) -> f32) -> R,
-    ) -> Option<R> {
-        self.ui_renderer.as_ref()?;
-        let fs = self.text_input.font_size as u16;
-        let tree = &self.ws.ui_root.tree;
-        Some(f(&mut self.text_input, &mut |s| {
-            tree.text_width(s, fs, manifold_ui::FontWeight::Medium)
-        }))
-    }
-
-    /// Arrow keys in a text session, both windows. Left/Right step a char
-    /// (Option: a word); Cmd+Left/Right go to the visual line's start/end;
-    /// Up/Down move a visual line; Cmd+Up/Down go to the text's start/end.
-    /// Shift extends the selection throughout.
+    /// Arrow keys in a text session, both windows.
     pub(crate) fn text_input_arrow(&mut self, key: winit::keyboard::NamedKey) {
+        use crate::text_session::Arrow;
         use winit::keyboard::NamedKey;
-        let (select, word, cmd) = (self.modifiers.shift, self.modifiers.alt, self.modifiers.command);
-        match (key, cmd) {
-            (NamedKey::ArrowLeft, false) => self.text_input.move_left(select, word),
-            (NamedKey::ArrowRight, false) => self.text_input.move_right(select, word),
-            (NamedKey::ArrowUp, true) => self.text_input.move_home(select),
-            (NamedKey::ArrowDown, true) => self.text_input.move_end(select),
-            (NamedKey::ArrowLeft | NamedKey::ArrowRight, true) => {
-                let end = key == NamedKey::ArrowRight;
-                self.with_text_measure(|ti, m| ti.move_line_edge(end, select, m));
-            }
-            (NamedKey::ArrowUp | NamedKey::ArrowDown, false) => {
-                let down = key == NamedKey::ArrowDown;
-                self.with_text_measure(|ti, m| ti.move_vertical(down, select, m));
-            }
-            _ => {}
-        }
+        let arrow = match key {
+            NamedKey::ArrowLeft => Arrow::Left,
+            NamedKey::ArrowRight => Arrow::Right,
+            NamedKey::ArrowUp => Arrow::Up,
+            NamedKey::ArrowDown => Arrow::Down,
+            _ => return,
+        };
+        let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
+        crate::text_session::arrow(&mut self.text_input, tree, arrow, self.modifiers);
     }
 
-    /// Byte offset under `pos`, mapped through the overlay's shared layout.
-    fn text_input_byte_at(&mut self, pos: Vec2) -> usize {
-        let len = self.text_input.text().len();
-        self.with_text_measure(|ti, m| ti.byte_at_point(pos.x, pos.y, m))
-            .unwrap_or(len)
-    }
-
-    /// A left-press anywhere while a text session is active. Inside the
-    /// field: places the caret (shift-click extends; a second press within
-    /// the double-click window/radius, I8, selects the word) and starts a
-    /// drag session — returns `true` (consumed, no further dispatch).
-    /// Outside the field: commits the session first (D16 blur-commit), then
-    /// returns `false` so the ORIGINAL press still reaches its normal
-    /// target — a click that both closes a rename box and clicks whatever
-    /// is under it.
+    /// A left press while a session may be up. True when the field consumed
+    /// it; a press outside commits first and returns false, so it still
+    /// reaches its normal target.
     pub(crate) fn text_input_pointer_down(&mut self, pos: Vec2) -> bool {
-        if !self.text_input.active {
-            return false;
+        use crate::text_session::PointerDown;
+        let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
+        match crate::text_session::pointer_down(&mut self.text_input, tree, pos, self.time_since_start, self.modifiers.shift) {
+            PointerDown::Idle => false,
+            PointerDown::Inside => true,
+            PointerDown::Committed(field, text) => {
+                self.handle_text_input_commit(field, &text);
+                false
+            }
         }
-        let inside = self
-            .with_text_measure(|ti, m| ti.overlay_geometry(&mut Vec::new(), m).contains(pos.x, pos.y))
-            .unwrap_or(false);
-        if !inside {
-            let (field, text) = self.text_input.commit();
-            self.handle_text_input_commit(field, &text);
-            return false;
-        }
-        let byte = self.text_input_byte_at(pos);
-        let now = self.time_since_start;
-        let is_double_click = self.text_input.last_press.is_some_and(|(t, px, py)| {
-            (now - t) < manifold_ui::color::DOUBLE_CLICK_TIME_SEC
-                && (pos.x - px).powi(2) + (pos.y - py).powi(2)
-                    < manifold_ui::color::DOUBLE_CLICK_RADIUS_PX.powi(2)
-        });
-        self.text_input.last_press = Some((now, pos.x, pos.y));
-        if is_double_click {
-            self.text_input.select_word_at(byte);
-        } else {
-            self.text_input.caret_to(byte, self.modifiers.shift);
-        }
-        self.text_input.dragging = true;
-        true
     }
 
-    /// Pointer motion while a text session's drag is armed — extends the
-    /// selection toward the cursor (`drag_to`, anchor held at the press
-    /// position). A no-op (returns `false`) when no drag is in progress, so
-    /// the caller can fall through to normal hover handling.
+    /// Pointer motion extends an armed text drag; false when none is armed.
     pub(crate) fn text_input_pointer_move(&mut self, pos: Vec2) -> bool {
-        if !self.text_input.active || !self.text_input.dragging {
-            return false;
-        }
-        let byte = self.text_input_byte_at(pos);
-        self.text_input.drag_to(byte);
-        true
+        let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
+        crate::text_session::pointer_move(&mut self.text_input, tree, pos)
     }
 
-    /// Ends a text-session drag on release. Idempotent — a no-op if no drag
-    /// was in progress (e.g. the button went up outside a session).
+    /// A release ends a text drag.
     pub(crate) fn text_input_pointer_up(&mut self) {
-        self.text_input.dragging = false;
+        crate::text_session::pointer_up(&mut self.text_input);
     }
 
     // ── Dispatchers: the single owner entry per winit input event ──────────
@@ -2082,7 +2020,7 @@ impl Application {
             if filter_changed {
                 let filter = self.text_input.text().trim().to_string();
                 if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.ui_root.browser_popup.set_filter(filter);
+                    ed.ui_root.set_browser_filter(filter);
                 }
             }
             if let Some(ed) = self.graph_editor.as_mut() {
@@ -2522,56 +2460,6 @@ impl Application {
         let _ = scale_factor;
     }
 
-    /// Convert a `BrowserPopupAction::Selected` from the MAIN window's
-    /// browser popup (Effect/Generator only — Node mode is editor-only and
-    /// never reaches this path) into the equivalent `PanelAction` and stash
-    /// it on `pending_keyboard_actions` for `process_events` to dispatch next
-    /// frame. Mirrors the click-arm translation in `browser_popup.rs`'s
-    /// `Overlay::on_event` impl, just reached from a keyboard pick
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 5 P2 arrow/Enter nav)
-    /// instead of a mouse click.
-    fn stash_browser_popup_pick(
-        &mut self,
-        action: manifold_ui::panels::browser_popup::BrowserPopupAction,
-    ) {
-        use manifold_ui::panels::PanelAction;
-        use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
-        let action = match action {
-            BrowserPopupAction::ActionSelected(action) => {
-                self.ws.ui_root.pending_keyboard_actions.push(action);
-                return;
-            }
-            action => action,
-        };
-        if let BrowserPopupAction::Selected {
-            type_id,
-            mode,
-            tab,
-            layer_id,
-        } = action
-        {
-            let panel_action = match mode {
-                BrowserPopupMode::Effect => {
-                    PanelAction::Params(ParamsAction::AddEffect {
-                        tab,
-                        // The session's layer_id — captured at open from the
-                        // invoking button — rides the pick atomically
-                        // (PRESET_BROWSER_AUDITION D2); dispatch builds
-                        // EffectTarget from it.
-                        layer_id,
-                        preset: manifold_ui::types::PresetTypeId::from_string(type_id),
-                    })
-                }
-                BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
-                    layer_id,
-                    manifold_ui::types::PresetTypeId::from_string(type_id),
-                )),
-                BrowserPopupMode::Node | BrowserPopupMode::Actions => return,
-            };
-            self.ws.ui_root.pending_keyboard_actions.push(panel_action);
-        }
-    }
-
     /// `KeyboardInput` (a `Pressed` key) for any window. This is the one keyboard
     /// owner: perform-mode handoff, then the editor's keyboard ([`Self::
     /// editor_keyboard_input`], called unconditionally because its leading
@@ -2667,118 +2555,18 @@ impl Application {
                 return;
             }
 
-            // Text input mode: intercept all keys for text editing
-            if self.text_input.active {
-                let is_search_filter =
-                    self.text_input.field == crate::text_input::TextInputField::SearchFilter;
-                match &logical_key {
-                    Key::Named(NamedKey::Escape) => {
-                        self.text_input.cancel();
-                        // BUG-022: cancelling the search field alone left the
-                        // browser popup open (a second Escape was needed).
-                        // Close it here too, mirroring the editor window's
-                        // node-picker Escape branch, so one press dismisses
-                        // both. The closed-overlay pump then reconciles the
-                        // (already-cancelled) text session next frame.
-                        if is_search_filter {
-                            self.ws.ui_root.browser_popup.handle_escape();
-                        }
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Enter) => {
-                        if self.text_input.multiline && self.modifiers.shift {
-                            self.text_input.insert_char('\n');
-                        } else if is_search_filter {
-                            // Type-and-enter fast path (P2): pick straight
-                            // from the picker instead of just committing
-                            // filter text (the reactive-search block below
-                            // already keeps that live on every keystroke).
-                            // If the popup closed as a result (a pick, or an
-                            // empty-filtered-list Escape-equivalent), the
-                            // closed-overlay pump cleans up this text
-                            // session next `process_events` — no manual
-                            // cancel needed here.
-                            if let Some(action) =
-                                self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Enter)
-                            {
-                                self.stash_browser_popup_pick(action);
-                            }
-                        } else {
-                            let (field, text) = self.text_input.commit();
-                            self.handle_text_input_commit(field, &text);
-                        }
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Backspace) => {
-                        self.text_input.backspace();
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Delete) => {
-                        self.text_input.delete();
-                        consumed = true;
-                    }
-                    // Picker keyboard nav (P2) — while the browser search
-                    // field owns the session, up/down move the pick.
-                    Key::Named(NamedKey::ArrowUp) if is_search_filter => {
-                        self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Up);
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::ArrowDown) if is_search_filter => {
-                        self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Down);
-                        consumed = true;
-                    }
-                    Key::Named(
-                        k @ (NamedKey::ArrowLeft
-                        | NamedKey::ArrowRight
-                        | NamedKey::ArrowUp
-                        | NamedKey::ArrowDown),
-                    ) => {
-                        self.text_input_arrow(*k);
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Space) => {
-                        self.text_input.insert_char(' ');
-                        consumed = true;
-                    }
-                    Key::Character(c) => {
-                        // Cmd+A / Ctrl+A → select all
-                        if c == "a" && self.modifiers.command {
-                            self.text_input.select_all_text();
-                        } else if c == "z" && self.modifiers.command {
-                            self.text_input.undo_to_seed();
-                        } else if c == "c" && self.modifiers.command {
-                            let s = self.text_input.copy_selection();
-                            if !s.is_empty() {
-                                crate::macos_pasteboard::set_general_pasteboard_string(&s);
-                            }
-                        } else if c == "x" && self.modifiers.command {
-                            let s = self.text_input.cut_selection();
-                            if !s.is_empty() {
-                                crate::macos_pasteboard::set_general_pasteboard_string(&s);
-                            }
-                        } else if c == "v" && self.modifiers.command {
-                            if let Some(s) = crate::macos_pasteboard::general_pasteboard_string() {
-                                self.text_input.paste(&s);
-                            }
-                        } else {
-                            for ch in c.chars() {
-                                self.text_input.insert_char(ch);
-                            }
-                        }
-                        consumed = true;
-                    }
-                    _ => {
-                        consumed = true;
-                    } // Suppress all other keys
-                }
-                // Reactive search: push filter on every keystroke
-                if consumed
-                    && self.text_input.field == crate::text_input::TextInputField::SearchFilter
-                {
-                    self.ws.ui_root.set_browser_filter(self.text_input.text().trim().to_string());
-                }
-                // Skip normal shortcut processing when text input consumed the key
-                if consumed {
+            // An active text session takes every key (`text_session.rs`).
+            match crate::text_session::main_window_key(
+                &mut self.text_input,
+                &mut self.ws.ui_root,
+                crate::text_session::TextKey::from_winit(&logical_key),
+                self.modifiers,
+                self.ui_renderer.is_some(),
+            ) {
+                crate::text_session::KeyOutcome::NotTyping => {}
+                crate::text_session::KeyOutcome::Consumed | crate::text_session::KeyOutcome::Filtered => return,
+                crate::text_session::KeyOutcome::Committed(field, text) => {
+                    self.handle_text_input_commit(field, &text);
                     return;
                 }
             }
@@ -2886,7 +2674,7 @@ mod tests {
         let mut app = Application::new();
         let labels: Vec<String> = (0..100).map(|i| format!("Font {i:03}")).collect();
         let actions = labels.iter().map(|label| {
-            manifold_ui::PanelAction::Params(ParamsAction::GenStringParamSelected(0, label.clone()))
+            manifold_ui::PanelAction::Params(manifold_ui::ParamsAction::GenStringParamSelected(0, label.clone()))
         }).collect();
         app.ws.ui_root.open_action_list(
             labels,

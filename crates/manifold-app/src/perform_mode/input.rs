@@ -1,12 +1,14 @@
 //! Perform-mode input gating. Called from `app.rs` event handlers when
 //! `perform.active` is true. Each handler returns `true` if perform mode
 //! consumed the event, in which case the caller should `return` early
-//! and skip all normal UI input processing.
+//! and skip all normal UI input processing. The handling itself is the shared
+//! seam in `frame.rs`.
 
 use manifold_ui::node::Vec2;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::Key;
 
+use super::frame;
 use crate::app::Application;
 
 impl Application {
@@ -16,10 +18,7 @@ impl Application {
         if !self.perform.active {
             return false;
         }
-        let was_hover = self.perform.exit_button_hover;
-        let is_hover = self.perform.exit_button_rect.contains(cursor_pos);
-        if was_hover != is_hover {
-            self.perform.exit_button_hover = is_hover;
+        if frame::pointer_moved(&mut self.perform, cursor_pos) {
             self.ws.offscreen_dirty = true;
         }
         true
@@ -35,24 +34,15 @@ impl Application {
         if !self.perform.active {
             return false;
         }
-        if button == MouseButton::Left
-            && state == ElementState::Released
-            && self.perform.exit_button_rect.contains(self.cursor_pos)
-        {
-            self.perform.pending_exit = true;
+        if button == MouseButton::Left && state == ElementState::Released {
+            frame::pointer_released(&mut self.perform, self.cursor_pos);
         }
         true
     }
 
-    /// Keyboard handler. All keys are dropped — hardware controllers /
-    /// OSC drive playback during a live show. Exit only via the on-screen
-    /// button so an accidental key press can't kill the HUD mid-show.
-    pub(crate) fn perform_handle_key(&mut self, logical_key: &Key) -> bool {
-        if !self.perform.active {
-            return false;
-        }
-        let _ = logical_key;
-        true
+    /// Keyboard handler: every key is dropped (`frame::takes_keys`).
+    pub(crate) fn perform_handle_key(&mut self, _logical_key: &Key) -> bool {
+        frame::takes_keys(&self.perform)
     }
 
     /// Cursor-left handler. Clears the exit button hover state.
@@ -60,8 +50,7 @@ impl Application {
         if !self.perform.active {
             return false;
         }
-        if self.perform.exit_button_hover {
-            self.perform.exit_button_hover = false;
+        if frame::pointer_left(&mut self.perform) {
             self.ws.offscreen_dirty = true;
         }
         true

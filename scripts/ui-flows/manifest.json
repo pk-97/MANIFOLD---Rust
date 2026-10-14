@@ -121,15 +121,15 @@
       "water-family-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
-    "scene-card-bands",
-    "scene-card-free-camera",
-    "scene-card-dof-switch",
-    "scene-naming",
-    "scene-pin-roundtrip",
-    "scene-card-to-tab",
-    "render-mode-solid"
-  ],
-  "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
+      "scene-card-bands",
+      "scene-card-free-camera",
+      "scene-card-dof-switch",
+      "scene-naming",
+      "scene-pin-roundtrip",
+      "scene-card-to-tab",
+      "render-mode-solid"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
       "scene-fluid-role-lifecycle",
       "scene-fluid-dam-break-controls",
@@ -231,6 +231,14 @@
     "crates/manifold-app/src/editor_frame.rs": [
       "work-editor-open",
       "work-editor-idle"
+    ],
+    "crates/manifold-app/src/perform_mode/": [
+      "work-perform-idle",
+      "work-perform-exit"
+    ],
+    "crates/manifold-app/src/text_session.rs": [
+      "work-browser-search",
+      "work-text-commit"
     ]
   },
   "flows": {
@@ -342,6 +350,7 @@
     "scene-light-swatch": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
+    "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
@@ -353,9 +362,11 @@
     "gltf-import-card-sections": "gltfscene",
     "physics-box-count": "physicsboxes",
     "audio-clip-trigger-add": "inspector",
-    "rt-dynamic-modifier": "mushroomscene"
+    "rt-dynamic-modifier": "mushroomscene",
+    "work-browser-search": "inspector",
+    "work-text-commit": "inspector",
+    "work-perform-exit": "timeline"
   },
-  "expected_fail": {
-  },
+  "expected_fail": {},
   "unresolved": {}
 }

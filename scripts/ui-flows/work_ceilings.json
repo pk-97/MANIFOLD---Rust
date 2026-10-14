@@ -108,6 +108,14 @@
         "ValuePush": 62
       }
     },
+    "work-browser-search": {
+      "type_query": {
+        "ChromeLayout": 3,
+        "FrameAlloc": 472,
+        "RegionRebuild": 1,
+        "ValuePush": 1
+      }
+    },
     "work-clip-drag": {
       "drag_2s": {
         "ChromeLayout": 369,
@@ -360,6 +368,19 @@
         "ValuePush": 4
       }
     },
+    "work-perform-exit": {
+      "exit_and_settle": {
+        "ChromeLayout": 93,
+        "FrameAlloc": 2851,
+        "SlotInvalidate": 8
+      }
+    },
+    "work-perform-idle": {
+      "idle_2s": {
+        "FrameAlloc": 19994,
+        "PerformHudBuild": 120
+      }
+    },
     "work-playback": {
       "play_2s": {
         "ChromeLayout": 360,
@@ -459,6 +480,13 @@
         "RegionTranslate": 120,
         "SlotInvalidate": 480,
         "ValuePush": 60
+      }
+    },
+    "work-text-commit": {
+      "type_and_commit": {
+        "ChromeLayout": 6,
+        "FrameAlloc": 241,
+        "ValuePush": 1
       }
     },
     "work-trigger-shape": {
