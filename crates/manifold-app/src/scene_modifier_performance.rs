@@ -28,7 +28,7 @@ use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use serde::Serialize;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::StateTx;
 use crate::headless_harness::headless_content_thread;
 use crate::scene_modifier_edit::SceneModifierAction;
 
@@ -398,7 +398,7 @@ fn output_failure(metrics: &CaseMetrics) -> Option<String> {
 
 fn measure_case(
     ct: &mut crate::content_thread::ContentThread,
-    state_tx: &crossbeam_channel::Sender<ContentState>,
+    state_tx: &StateTx,
     fixture: Fixture,
     variant: &str,
 ) -> Result<CaseMetrics, MeasureFailure> {
@@ -555,7 +555,7 @@ fn f8_photoscan_modifier_performance_240_frames() {
         .native_device()
         .expect("native performance device")
         .device_name();
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     let mut cases: Vec<CaseRecord> = Vec::new();
 
     // Each fixture is loaded and measured sequentially on this one content

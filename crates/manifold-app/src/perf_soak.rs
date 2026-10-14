@@ -18,7 +18,7 @@ use manifold_profiler::FrameRecord;
 use sha2::{Digest, Sha256};
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::StateTx;
 use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
 
@@ -379,7 +379,7 @@ pub(crate) struct PreparedProject {
     pub(crate) ct: ContentThread,
     pub(crate) cmd_tx: crossbeam_channel::Sender<ContentCommand>,
     pub(crate) cmd_rx: crossbeam_channel::Receiver<ContentCommand>,
-    pub(crate) state_tx: crossbeam_channel::Sender<ContentState>,
+    pub(crate) state_tx: StateTx,
     pub(crate) drain: std::thread::JoinHandle<()>,
     pub(crate) project_path: PathBuf,
     pub(crate) width: u32,
@@ -424,7 +424,7 @@ pub(crate) fn prepare_project_edited(
 
     // Set up the progress channel before entering the shared warmup. The
     // drain keeps the unbounded state queue bounded during long fixture loads.
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let drain = std::thread::Builder::new()
         .name("perf-soak-load-drain".into())
         .spawn(move || while state_rx.recv().is_ok() {})

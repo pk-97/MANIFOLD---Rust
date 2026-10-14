@@ -53,7 +53,7 @@ fn imported_object_card_deformation_undo_remove_and_reopen() {
     let out = Path::new("target/journey-proofs/object-card-ux");
     std::fs::create_dir_all(out).unwrap();
     let mut ct = headless_content_thread(Project::default(), 320, 180);
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
     ct.timer.set_frame_clocked(true);
     warm_project(&mut ct, &tx);
