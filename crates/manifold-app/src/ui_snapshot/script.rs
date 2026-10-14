@@ -797,7 +797,8 @@ impl Runner {
                 show_image: false,
             },
             fresh,
-        );
+        )
+        .smart_preview_toggle;
     }
 
     #[allow(clippy::too_many_arguments)]

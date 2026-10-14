@@ -2801,6 +2801,17 @@ impl MiniTimelineCache {
         }
         &self.data
     }
+
+    /// What the cached strip was built from: the clip, layer and settings
+    /// stamps and the shown bar and beat. A window keys its redraw on it.
+    pub(crate) fn key(&self) -> Option<(u64, i64, i64)> {
+        self.key
+    }
+
+    /// The strip as the last [`Self::get`] left it.
+    pub(crate) fn data(&self) -> &(Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+        &self.data
+    }
 }
 
 pub(crate) fn mini_timeline_data(

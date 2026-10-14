@@ -270,9 +270,8 @@ pub(crate) struct EditorFrameState {
     pub(crate) canvas: CanvasFeed,
     /// The window's atlas; created by the first composite with a device.
     pub(crate) cache: Option<UICacheManager>,
-    /// What the last composite drew outside the tree and the canvas: the
-    /// window size and the mini-timeline playhead.
-    pub(crate) last_composite: Option<[u32; 3]>,
+    /// What the last composite drew outside the tree and the canvas.
+    pub(crate) last_composite: Option<CompositeKey>,
 }
 
 impl EditorFrameState {
@@ -299,8 +298,7 @@ pub(crate) struct EditorFrameInputs<'a> {
 /// One editor frame's tree work: tick the column's tweens and fire meters,
 /// plan, rebuild the planned regions alone, run the live push, and lay out
 /// the canvas's pending focus and fit. `panel` is configured by the caller.
-/// `fresh` forces the full reference frame (`AssertFresh`). Returns the
-/// smart-preview toggle's id.
+/// `fresh` forces the full reference frame (`AssertFresh`).
 pub(crate) fn run_editor_frame(
     ui_root: &mut UIRoot,
     state: &mut EditorFrameState,
@@ -309,7 +307,7 @@ pub(crate) fn run_editor_frame(
     layout: &EditorLayout,
     frame: EditorFrameInputs<'_>,
     fresh: bool,
-) -> Option<NodeId> {
+) -> EditorFrameOut {
     // Drawer tweens and the value flash move their nodes in place; a
     // structural tween moves the column's view version, read below.
     ui_root.tick_inspector();
@@ -402,15 +400,24 @@ pub(crate) fn run_editor_frame(
         ui_root.input.refresh_hover(&mut ui_root.tree);
     }
 
+    let mut canvas_moved = false;
     if let Some(canvas) = canvas {
         let vp = layout.canvas_rect();
-        canvas.resolve_pending_focus(vp);
-        canvas.apply_pending_fit(vp);
+        canvas_moved |= canvas.resolve_pending_focus(vp);
+        canvas_moved |= canvas.apply_pending_fit(vp);
         // Wire-to-port magnetize needs port screen positions, so it ticks
         // here beside the draw rather than in the main canvas tick.
-        canvas.tick_wire_magnet(vp);
+        canvas_moved |= canvas.tick_wire_magnet(vp);
     }
-    state.smart_preview_toggle
+    EditorFrameOut { smart_preview_toggle: state.smart_preview_toggle, canvas_moved }
+}
+
+/// What one editor frame hands back to its caller.
+pub(crate) struct EditorFrameOut {
+    /// The smart-preview toggle's id, as the preview column drew it.
+    pub smart_preview_toggle: Option<NodeId>,
+    /// The canvas view or its ghost wire moved this frame, so it must draw.
+    pub canvas_moved: bool,
 }
 
 /// What the canvas was last fed, kept so a frame feeds only what moved.
@@ -618,23 +625,48 @@ pub(crate) fn editor_atlas_dirty(ui_root: &UIRoot) -> bool {
         .any(|r| ui_root.tree.has_dirty_in_region(r.id()))
 }
 
-/// Whether the editor's offscreen must composite this frame: `live` is the
-/// caller's per-frame reasons (a dirty mark from input or the canvas feed,
-/// node previews or the 3D viewport on screen, the mapping popover or an
-/// editor text field open, playback moving the mini-timeline); otherwise an
-/// unpainted panel node, a dirty overlay, a resize or a moved playhead. An
-/// idle editor composites nothing and re-presents its last frame.
-pub(crate) fn needs_composite(
-    state: &mut EditorFrameState,
-    ui_root: &UIRoot,
-    live: bool,
-    logical: [u32; 2],
-    playhead: f32,
-) -> bool {
-    let key = [logical[0], logical[1], playhead.to_bits()];
+/// What the composite paints outside the tree and the canvas lane, each by
+/// its owner's own key: the window size, the dock dividers, the
+/// mini-timeline strip (its cache key, the playhead, the play state), and
+/// the per-frame surfaces' presence (node previews, the 3D viewport image,
+/// the popover, an editor text field), so the frame after one leaves draws
+/// it gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CompositeKey {
+    pub size: [u32; 2],
+    pub dock: manifold_ui::DockDrawKey,
+    pub mini: Option<(u64, i64, i64)>,
+    pub playhead: u32,
+    pub playing: bool,
+    pub live: LiveSurfaces,
+}
+
+/// The surfaces that change every frame while shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LiveSurfaces {
+    pub node_previews: bool,
+    pub viewport_image: bool,
+    pub popover: bool,
+    pub text_input: bool,
+}
+
+impl LiveSurfaces {
+    fn any(self) -> bool {
+        self.node_previews || self.viewport_image || self.popover || self.text_input
+    }
+}
+
+/// Whether the editor's offscreen must composite this frame: a dirty mark
+/// from input or the canvas (`dirty`), a live surface on screen or playback
+/// running, a moved [`CompositeKey`], an unpainted panel node or a dirty
+/// overlay. An idle editor composites nothing and re-presents its last frame.
+pub(crate) fn needs_composite(state: &mut EditorFrameState, ui_root: &UIRoot, dirty: bool, key: CompositeKey) -> bool {
     let moved = state.last_composite != Some(key);
     state.last_composite = Some(key);
-    live || moved
+    dirty
+        || moved
+        || key.live.any()
+        || key.playing
         || editor_atlas_dirty(ui_root)
         || ui_root.tree.has_dirty_in_region(MainRegion::Overlays.id())
         || ui_root.tree.has_dirty_in_region(MainRegion::Ghosts.id())
@@ -666,10 +698,11 @@ pub(crate) struct EditorAtlas<'a> {
 
 /// Composites the graph-editor window for one frame into `offscreen`: the
 /// dirty panel slots painted into the window's atlas first, then on one
-/// encoder: clear, the canvas's immediate-mode draws, the atlas blit (the
-/// preview column and card lane), the 3D viewport, dock dividers, the
-/// mini-timeline, the shared tree-overlay pass (`tree_passes`, the same
-/// function the main window calls), and the mapping popover. Does not
+/// encoder: clear, the canvas lane, the atlas blit (the preview column and
+/// card lane), the 3D viewport, dock dividers, the mini-timeline, the shared
+/// tree-overlay pass (`tree_passes`, the same function the main window
+/// calls), then the canvas's floating editors and the mapping popover over
+/// all of it. Does not
 /// acquire or present a drawable, and does not draw the node-output monitor
 /// blits, which target the drawable.
 #[allow(clippy::too_many_arguments)]
@@ -710,7 +743,7 @@ pub(crate) fn composite_editor_frame(
     encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
     if let Some(canvas) = canvas {
         ui_renderer.begin_frame();
-        canvas.render(ui_renderer, layout.canvas_rect());
+        canvas.render_lane(ui_renderer, layout.canvas_rect());
         if ui_renderer.prepare(device, logical_w, logical_h, scale) {
             ui_renderer.render(&mut encoder, offscreen, GpuLoadAction::Load);
         }
@@ -765,8 +798,13 @@ pub(crate) fn composite_editor_frame(
             frame_timer,
         },
     );
-    // The mapping drawer floats over everything at POPOVER depth (above the
-    // overlay tier, below tooltips), unclipped.
+    // The canvas's floating editors (enum dropdown, colour/vec and table
+    // editors, its mapping popover) and the window's mapping drawer float
+    // over the panels at POPOVER depth (above the overlay tier, below
+    // tooltips), unclipped: they may run past the canvas lane.
+    if let Some(canvas) = canvas {
+        canvas.render_floaters(ui_renderer);
+    }
     if popover.is_open() {
         ui_renderer.push_depth(Depth::POPOVER);
         popover.set_live_value(popover_live_value);
@@ -845,5 +883,35 @@ mod tests {
             let plan = plan_editor_frame(&base(), &next);
             assert!(plan.overlays && !plan.cards && !plan.column, "{plan:?}");
         }
+    }
+
+    #[test]
+    fn the_composite_follows_everything_the_second_pass_paints() {
+        let ui = UIRoot::new();
+        let mut state = EditorFrameState::default();
+        let key = CompositeKey {
+            size: [800, 600],
+            dock: manifold_ui::Dock::editor().draw_key(),
+            mini: Some((1, 1, 1)),
+            playhead: 0,
+            playing: false,
+            live: LiveSurfaces::default(),
+        };
+        let idle = |state: &mut EditorFrameState, key| {
+            let drew = needs_composite(state, &ui, false, key);
+            let again = needs_composite(state, &ui, false, key);
+            (drew, again)
+        };
+        assert_eq!(idle(&mut state, key), (true, false), "the first frame draws, an idle one does not");
+        // A clip or layer edit moves the strip's own cache key.
+        assert_eq!(idle(&mut state, CompositeKey { mini: Some((2, 1, 1)), ..key }), (true, false));
+        // Playback draws every frame; the pause draws the stopped strip once.
+        let playing = CompositeKey { playing: true, ..key };
+        assert_eq!(idle(&mut state, playing), (true, true));
+        assert_eq!(idle(&mut state, key), (true, false));
+        // The frame after the last node preview leaves draws it gone.
+        let previews = CompositeKey { live: LiveSurfaces { node_previews: true, ..LiveSurfaces::default() }, ..key };
+        assert_eq!(idle(&mut state, previews), (true, true));
+        assert_eq!(idle(&mut state, key), (true, false));
     }
 }

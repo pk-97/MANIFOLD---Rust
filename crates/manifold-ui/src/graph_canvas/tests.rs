@@ -2905,3 +2905,45 @@ fn double_click_outside_the_value_cell_still_scrubs() {
         "no type-in command from a double-click outside the value cell"
     );
 }
+
+/// A window that draws panels over the canvas lane draws the floating editors
+/// after them; the lane pass must therefore hold none of them, or the panels
+/// would cover a dropdown or popover that runs past the lane.
+#[test]
+fn the_lane_pass_draws_no_floating_editor() {
+    use crate::draw::{Depth, Painter};
+    use crate::node::Color32;
+    #[derive(Default)]
+    struct PopoverSeen(bool, Vec<Depth>);
+    impl Painter for PopoverSeen {
+        fn draw_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32) {}
+        fn draw_rounded_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32, _: f32) {}
+        fn draw_bordered_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32, _: f32, _: f32, _: Color32) {}
+        fn draw_line(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Color32) {}
+        fn draw_text(&mut self, _: f32, _: f32, _: &str, _: f32, _: [u8; 4]) {}
+        fn draw_image_uv(&mut self, _: f32, _: f32, _: f32, _: f32, _: crate::node::TextureHandle, _: [f32; 4], _: f32) {}
+        fn push_immediate_clip(&mut self, _: f32, _: f32, _: f32, _: f32) {}
+        fn pop_immediate_clip(&mut self) {}
+        fn push_depth(&mut self, depth: Depth) {
+            self.0 |= depth == Depth::POPOVER;
+            self.1.push(depth);
+        }
+        fn pop_depth(&mut self) {
+            self.1.pop();
+        }
+        fn push_transform(&mut self, _: crate::transform2d::Affine2) {}
+        fn pop_transform(&mut self) {}
+    }
+    let snap = GraphSnapshot {
+        nodes: vec![node(0, "a", Some("na")), node(1, "b", Some("nb"))],
+        wires: vec![wire(0, "out", 1, "in")],
+        outer_routings: Vec::new(),
+    };
+    let (canvas, viewport) = expanded_canvas_from(snap);
+    let mut lane = PopoverSeen::default();
+    canvas.render_lane(&mut lane, viewport);
+    assert!(!lane.0, "the lane pass drew at popover depth");
+    let mut floaters = PopoverSeen::default();
+    canvas.render_floaters(&mut floaters);
+    assert!(floaters.0);
+}

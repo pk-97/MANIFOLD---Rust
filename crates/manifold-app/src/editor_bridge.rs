@@ -1536,8 +1536,10 @@ impl Application {
         let mini_current_beat = self.content_state.current_beat.as_f32();
         let mini_is_playing = self.content_state.is_playing;
         let parts = self.ui_edits.stamps.parts();
+        self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
+        let mini_key = self.mini_timeline.key();
         let &(ref mini_clips, ref mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, ref mini_readout) =
-            self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
+            self.mini_timeline.data();
 
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
@@ -1801,7 +1803,7 @@ impl Application {
             .active_layer_id
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        self.editor_smart_preview_toggle_id = crate::editor_frame::run_editor_frame(
+        let editor_out = crate::editor_frame::run_editor_frame(
             &mut ws.ui_root,
             &mut ws.editor_frame,
             &self.graph_editor_panel,
@@ -1817,6 +1819,8 @@ impl Application {
             },
             false,
         );
+        self.editor_smart_preview_toggle_id = editor_out.smart_preview_toggle;
+        ws.offscreen_dirty |= editor_out.canvas_moved;
 
         // ── Node output previews (BUG-027): register the current atlas front
         // under a fixed handle and hand each visible node its cell UV, so the
@@ -1895,19 +1899,20 @@ impl Application {
         let viewport_image = ws.viewport_session.as_ref()
             .and_then(|session| session.displayed.as_ref())
             .is_some_and(|frame| frame.has_image());
-        let live_redraw = ws.offscreen_dirty
-            || previews_visible
-            || viewport_image
-            || mini_is_playing
-            || self.editor_mapping_popover.is_open()
-            || self.text_input.is_owned_by_editor();
-        let redraw = crate::editor_frame::needs_composite(
-            &mut ws.editor_frame,
-            &ws.ui_root,
-            live_redraw,
-            [logical_w, logical_h],
-            mini_current_beat,
-        );
+        let key = crate::editor_frame::CompositeKey {
+            size: [logical_w, logical_h],
+            dock: ws.dock.draw_key(),
+            mini: mini_key,
+            playhead: mini_current_beat.to_bits(),
+            playing: mini_is_playing,
+            live: crate::editor_frame::LiveSurfaces {
+                node_previews: previews_visible,
+                viewport_image,
+                popover: self.editor_mapping_popover.is_open(),
+                text_input: self.text_input.is_owned_by_editor(),
+            },
+        };
+        let redraw = crate::editor_frame::needs_composite(&mut ws.editor_frame, &ws.ui_root, ws.offscreen_dirty, key);
         let cache = ws.editor_frame.cache.get_or_insert_with(|| {
             manifold_ui_paint::ui_cache_manager::UICacheManager::with_slots(
                 manifold_compositor::presentation::UI_FORMAT,
