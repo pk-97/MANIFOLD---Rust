@@ -2321,7 +2321,11 @@ impl ParamCardPanel {
     }
 
     pub fn sync_effect_name(&mut self, tree: &mut UITree, name: &str) {
-        self.name = name.into();
+        // Runs on every live push, so the stored name is replaced only on change.
+        if self.name != name {
+            self.name.clear();
+            self.name.push_str(name);
+        }
         if let Some(name_label_id) = self.name_label_id
             && !self.item_hosted
         {
@@ -2345,7 +2349,11 @@ impl ParamCardPanel {
     }
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {
-        self.name = name.into();
+        // Runs on every live push, so the stored name is replaced only on change.
+        if self.name != name {
+            self.name.clear();
+            self.name.push_str(name);
+        }
         if let Some(name_label_id) = self.name_label_id {
             tree.set_text(name_label_id, name);
         }

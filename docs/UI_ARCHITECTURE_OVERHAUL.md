@@ -90,7 +90,7 @@ and how we get there."
 > Three pure layers: `view` (builders + per-axis `Sizing` + intent-at-build + `validate`
 > loud-fail), `layout` (pure mini-flexbox `solve`, headless-tested), `diff` (`ChromeHost`:
 > in-place update when the structural signature matches → ids/intents survive; `NeedsRebuild`
-> otherwise → app re-runs `build()`, mirroring the existing `truncate_from` model). 22 unit
+> otherwise → app re-runs `build()`, mirroring the tree's rebuild model). 22 unit
 > tests + a 6-case golden `param_card`-shape proof (`tests/chrome_param_card_proof.rs`):
 > value change in-place, badge toggle in-place, drawer-open → NeedsRebuild → rebuild grows,
 > intents fold up, validation catches an unwired control. Design + 2b contract:
@@ -168,8 +168,9 @@ Do not chase it.
 ## 2. Current architecture (condensed)
 
 ### Build layers
-- **Tree** (`tree.rs`/`node.rs`) — flat SoA, `id == index`, parent/child/sibling
-  arrays, per-node dirty flags, partial rebuild via `truncate_from`,
+- **Tree** (`tree.rs`/`node.rs`) — flat SoA per region arena, `NodeId` = region + slot,
+  parent/child/sibling arrays, per-node dirty flags, a region rebuilt alone via
+  `clear_region` (UI_INVALIDATION_DESIGN.md D7),
   `structure_version` counter. The spine. Clean.
 - **Top-level layout** (`ScreenLayout`) — declarative computed rects for screen
   regions. Good.

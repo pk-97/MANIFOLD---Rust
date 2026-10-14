@@ -2375,7 +2375,7 @@ impl Application {
         // clip and lane re-projection. The overlay intake and playhead follow
         // run first, so the plan sees what they move as inputs.
         crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
-        crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state, &self.local_project);
+        crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state);
         let automation_draw_mode = self.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(
             &mut self.frame_planner,

@@ -823,7 +823,14 @@ impl UITree {
         if node.text.as_deref() == Some(text) {
             return;
         }
-        node.text = Some(text.to_string());
+        // In-place updates (a clock, a readout) reuse the node's buffer.
+        match &mut node.text {
+            Some(t) => {
+                t.clear();
+                t.push_str(text);
+            }
+            None => node.text = Some(text.to_owned()),
+        }
         node.flags |= UIFlags::DIRTY;
         arena.has_dirty = true;
     }

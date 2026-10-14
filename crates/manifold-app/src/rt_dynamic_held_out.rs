@@ -142,7 +142,7 @@ fn set_generator_param(
     }
     ct.graph_edit_diagnostic
         .take()
-        .map_or(Ok(()), |diagnostic| Err(diagnostic.message))
+        .map_or(Ok(()), |diagnostic| Err(diagnostic.message.clone()))
 }
 
 fn ensure_surface_waves_driver(

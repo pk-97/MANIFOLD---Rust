@@ -247,6 +247,12 @@ pub struct Application {
     /// Reused per-frame scratch for the thumbnail quad list — no per-frame heap on
     /// the render hot path.
     pub(crate) clip_thumb_quad_scratch: Vec<manifold_ui_paint::clip_thumb_gpu::ThumbQuad>,
+    /// Each clip's captured filmstrip cells, re-indexed only when the layout moves.
+    pub(crate) clip_thumb_strips: crate::clip_filmstrip::ClipStrips,
+    /// Per-clip scratch for the thumbnail pass: captured cells with their x, and
+    /// the aspect-locked windows laid over the body.
+    pub(crate) clip_thumb_cells_scratch: Vec<(u32, f32)>,
+    pub(crate) clip_thumb_windows_scratch: Vec<(u32, f32, f32)>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     /// Audio Setup spectrogram waterfall renderer + its target texture, created
@@ -614,6 +620,9 @@ impl Application {
             last_clip_atlas_visible_sent: Vec::new(),
             clip_thumb_gpu: None,
             clip_thumb_quad_scratch: Vec::new(),
+            clip_thumb_strips: Default::default(),
+            clip_thumb_cells_scratch: Vec::new(),
+            clip_thumb_windows_scratch: Vec::new(),
             blit_pipeline: None,
             blit_sampler: None,
             spectrogram: None,

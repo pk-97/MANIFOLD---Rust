@@ -15,17 +15,12 @@ impl PresetRuntime {
         if let Some(events) = &mut self.modifier_events {
             events.clear();
         }
-        // Collect node ids first so we can release the &self borrow
-        // before calling get_node_mut on each.
-        let mut nodes_to_clear: Vec<NodeInstanceId> = Vec::new();
+        // Runs every frame for each idle chain, so it must not allocate.
         for slot in &self.effect_nodes {
             for (_, id) in &slot.handles {
-                nodes_to_clear.push(*id);
-            }
-        }
-        for node_id in nodes_to_clear {
-            if let Some(inst) = self.graph.get_node_mut(node_id) {
-                inst.node.clear_state();
+                if let Some(inst) = self.graph.get_node_mut(*id) {
+                    inst.node.clear_state();
+                }
             }
         }
         self.state_store.cleanup_all();

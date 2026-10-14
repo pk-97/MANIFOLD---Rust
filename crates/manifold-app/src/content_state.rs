@@ -273,14 +273,14 @@ pub struct ContentState {
     pub undo_redo_event: Option<UndoRedoEvent>,
     /// Most recent rejected graph-edit diagnostic. Persistent across snapshots
     /// so the UI can observe it once without relying on `data_version`.
-    pub graph_edit_diagnostic: Option<GraphEditDiagnostic>,
+    pub graph_edit_diagnostic: Option<Arc<GraphEditDiagnostic>>,
     /// Latched trigger delivery failure; Stop, seek or project load resets it.
     pub trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     /// Most recent authoritative selection update for newly created scene
     /// modifier cards. Persistent across snapshots for sequence-gated UI use.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
-    pub modifier_selection_update: Option<ModifierSelectionUpdate>,
-    pub object_modifier_selection_update: Option<ObjectModifierSelectionUpdate>,
+    pub modifier_selection_update: Option<Arc<ModifierSelectionUpdate>>,
+    pub object_modifier_selection_update: Option<Arc<ObjectModifierSelectionUpdate>>,
 
     // ── Ableton bridge ──────────────────────────────────────────
     /// Ableton session data for UI dropdown population.
@@ -334,7 +334,7 @@ pub struct ContentState {
     /// clip-thumbnail **filmstrip** atlas (section 24 5c-2). Each clip owns one entry per
     /// captured filmstrip cell (bar / bar-group); the timeline tiles them across the
     /// clip body. Empty when no clips currently hold a thumbnail.
-    pub clip_atlas_layout: Vec<(manifold_core::ClipId, u32, u32)>,
+    pub clip_atlas_layout: Arc<[(manifold_core::ClipId, u32, u32)]>,
 
     /// Automation-lane override latches active this frame — runtime-only
     /// state (`manifold_playback::automation::AutomationLatches`, owned by
@@ -624,7 +624,7 @@ impl Default for ContentState {
             scene_viewport_frames: std::array::from_fn(|_| None),
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
-            clip_atlas_layout: Vec::new(),
+            clip_atlas_layout: Arc::from([]),
             automation_latched_params: Vec::new(),
             automation_armed: false,
         }

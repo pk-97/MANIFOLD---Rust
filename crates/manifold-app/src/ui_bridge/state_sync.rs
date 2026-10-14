@@ -64,6 +64,7 @@ pub fn push_state(
     intake_overlay_state(ui, content_state);
     drain_events(ui, content_state);
     push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
+    push_clock(ui, project, content_state, transport_cache);
     push_selection(ui, project, active_layer, selection);
     push_frame(ui, project, content_state, active_layer);
     push_live(ui, project, content_state, active_layer, LiveGroups { values: true, shapes: true });
@@ -95,7 +96,7 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
     // snapshot and show each sequence exactly once.
     if let Some((sequence, message)) = graph_edit_diagnostic_toast(
         ui.last_graph_edit_diagnostic_sequence,
-        content_state.graph_edit_diagnostic.as_ref(),
+        content_state.graph_edit_diagnostic.as_deref(),
     ) {
         ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
         ui.last_graph_edit_diagnostic_sequence = Some(sequence);
@@ -164,6 +165,28 @@ pub fn intake_overlay_state(ui: &mut UIRoot, content_state: &crate::content_stat
     }
 }
 
+/// The header clock: time first, then bar.beat.sixteenth. Writes its label in
+/// place without allocating while the shown digits move; the digits are
+/// `frame_plan::clock_digits`, the planner's key for this push.
+pub fn push_clock(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    transport_cache: &mut TransportDisplayCache,
+) {
+    let beat = content_state.current_beat.as_f32();
+    let t = content_state.current_time.0;
+    let mins = (t / 60.0).floor() as i32;
+    let secs = (t % 60.0).floor() as i32;
+    let tenths = ((t * 10.0) % 10.0).floor() as i32;
+    let bpb = (project.settings.time_signature_numerator.max(1)) as f32;
+    let bar = (beat / bpb).floor() as i32 + 1;
+    let beat_in_bar = (beat % bpb).floor() as i32 + 1;
+    let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
+    let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
+    ui.header.set_time_display(&mut ui.tree, display);
+}
+
 /// Transport, sync, header, footer, settings and layer-header chrome.
 #[allow(clippy::too_many_arguments)]
 pub fn push_chrome(
@@ -190,10 +213,6 @@ pub fn push_chrome(
     };
     ui.transport.set_play_state(play_text, play_color);
 
-    // Time display + BPM
-    let beat = content_state.current_beat.as_f32();
-    let time = content_state.current_time;
-
     {
         // When clock authority is Internal, use project.settings.bpm (the local
         // project) — it's updated immediately by handle_text_input_commit, so
@@ -207,20 +226,6 @@ pub fn push_chrome(
             content_state.bpm as f32
         };
 
-        // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
-        // Time first, then bar.beat.sixteenth — matches Unity exactly
-        let t = time.0;
-        let mins = (t / 60.0).floor() as i32;
-        let secs = (t % 60.0).floor() as i32;
-        let tenths = ((t * 10.0) % 10.0).floor() as i32;
-        // Beat display uses time_signature_numerator (not hardcoded 4)
-        let bpb = (project.settings.time_signature_numerator.max(1)) as f32;
-        let bar = (beat / bpb).floor() as i32 + 1;
-        let beat_in_bar = (beat % bpb).floor() as i32 + 1;
-        let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
-
-        let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
-        ui.header.set_time_display(display);
         let bpm_str = transport_cache.bpm_display(bpm);
         ui.transport.set_bpm_text(bpm_str);
 

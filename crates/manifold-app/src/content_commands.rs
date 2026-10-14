@@ -726,7 +726,7 @@ impl ContentThread {
     fn report_graph_edit_rejection(&mut self, message: String) {
         log::warn!("{message}");
         let sequence = self.graph_edit_diagnostic.as_ref().map_or(1, |event| event.sequence.wrapping_add(1));
-        self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+        self.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
     }
 
     fn publish_modifier_selection(&mut self, layer_id: LayerId, ids: Vec<NodeId>) {
@@ -734,12 +734,12 @@ impl ContentThread {
             .modifier_selection_update
             .as_ref()
             .map_or(1, |event| event.sequence.wrapping_add(1));
-        self.modifier_selection_update = Some(
+        self.modifier_selection_update = Some(std::sync::Arc::new(
             crate::content_state::ModifierSelectionUpdate {
                 sequence,
                 layer_id,
                 ids,
-            },
+            }),
         );
     }
 
@@ -753,13 +753,13 @@ impl ContentThread {
             .object_modifier_selection_update
             .as_ref()
             .map_or(1, |event| event.sequence.wrapping_add(1));
-        self.object_modifier_selection_update = Some(
+        self.object_modifier_selection_update = Some(std::sync::Arc::new(
             crate::content_state::ObjectModifierSelectionUpdate {
                 sequence,
                 layer_id,
                 owner_id,
                 node_doc_id,
-            },
+            }),
         );
     }
 

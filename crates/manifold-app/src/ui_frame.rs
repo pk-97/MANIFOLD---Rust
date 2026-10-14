@@ -401,6 +401,10 @@ pub(crate) fn gather_frame_inputs(
         runtime: content_state.runtime,
         driver_period_key: content_state.bpm.to_bits(),
         led_enabled: content_state.led_enabled,
+        clock_digits: crate::frame_plan::clock_digits(
+            content_state,
+            chrome.project.settings.time_signature_numerator,
+        ),
         ..Default::default()
     }
 }
@@ -529,6 +533,11 @@ pub(crate) fn apply_frame_plan(
     if replaced || projections.contains(Projection::SelectionPush) {
         crate::ui_bridge::push_selection(ui_root, project, idx, selection);
     }
+    // The clock writes its label in place; a chrome layout below re-reads
+    // the same text.
+    if replaced || projections.contains(Projection::ChromePush) || projections.contains(Projection::ClockPush) {
+        crate::ui_bridge::push_clock(ui_root, project, push.content_state, push.transport_cache);
+    }
     // The bars show what the two pushes above wrote; they lay out only then.
     if replaced
         || [MainRegion::Transport, MainRegion::Header, MainRegion::Footer]
@@ -626,10 +635,14 @@ pub(crate) fn composite_main_ui_frame(
     // ── Panel cache update: paint only dirty panels into the persistent
     // atlas via LoadOp::Load. The cache manager doesn't own the UITree, so
     // this is the sole place atlas dirt is cleared.
-    let panel_infos = ui_root.panel_cache_info();
+    let mut subs = std::mem::take(&mut ui_root.panel_subs_scratch);
+    let mut panels = manifold_core::scratch::recycle_vec(std::mem::take(&mut ui_root.panel_info_scratch));
+    ui_root.panel_cache_info_into(&mut subs, &mut panels);
     let (_, rendered_ranges) =
-        cache.render_dirty_panels(device, ui_renderer, &ui_root.tree, &panel_infos);
-    clear_painted_dirt(ui_root, &rendered_ranges);
+        cache.render_dirty_panels(device, ui_renderer, &ui_root.tree, &panels);
+    clear_painted_dirt(ui_root, rendered_ranges);
+    ui_root.panel_info_scratch = manifold_core::scratch::recycle_vec(panels);
+    ui_root.panel_subs_scratch = subs;
 
     let sf = scale_factor as f32;
     let mut encoder = device.create_encoder("Frame");
@@ -1208,7 +1221,9 @@ mod tests {
         let mut ui = UIRoot::new();
         ui.resize(1280.0, 800.0);
         assert!(ui.atlas_dirty(), "a fresh build is dirty");
-        let painted: Vec<_> = ui.panel_cache_info().iter().map(|p| (p.region, p.start, p.end)).collect();
+        let (mut subs, mut infos) = (Vec::new(), Vec::new());
+        ui.panel_cache_info_into(&mut subs, &mut infos);
+        let painted: Vec<_> = infos.iter().map(|p| (p.region, p.start, p.end)).collect();
         clear_painted_dirt(&mut ui, &painted);
         assert!(!ui.atlas_dirty(), "an idle frame after a paint has nothing to repaint");
     }

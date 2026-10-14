@@ -169,6 +169,10 @@ pub struct UIRoot {
     /// Last undo/redo data version shown in the transient status toast.
     pub last_undo_redo_toast_key: Option<u64>,
 
+    /// Scratch for the panel list handed to a window's cache manager each
+    /// painted frame (`panel_cache_info_into`), kept so painting allocates nothing.
+    pub(crate) panel_subs_scratch: Vec<(usize, usize)>,
+    pub(crate) panel_info_scratch: Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo<'static>>,
     /// Last rejected graph-edit diagnostic shown by the UI. Rejections do not
     /// bump `data_version`, so this guard keys directly on the content event's
     /// sequence and remains stable across repeated snapshots.
@@ -535,6 +539,8 @@ impl UIRoot {
             toast: manifold_ui::panels::toast::ToastPanel::new(),
             export_progress: manifold_ui::panels::export_progress::ExportProgressPanel::new(),
             last_undo_redo_toast_key: None,
+            panel_subs_scratch: Vec::new(),
+            panel_info_scratch: Vec::new(),
             last_graph_edit_diagnostic_sequence: None,
             last_trigger_delivery_failure: None,
             last_edit_selection_sequence: None,
@@ -627,8 +633,19 @@ impl UIRoot {
     /// after its region root, as the cache's ancestor-aware scan expects;
     /// the inspector's runs to its arena's end so the docked Scene panel built
     /// after it paints in the same slot.
-    pub fn panel_cache_info(&self) -> Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo> {
+    ///
+    /// `subs` is scratch that holds the inspector's sub-regions for the
+    /// entries to borrow; both vectors keep their allocation across frames.
+    pub fn panel_cache_info_into<'a>(
+        &self,
+        subs: &'a mut Vec<(usize, usize)>,
+        info: &mut Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo<'a>>,
+    ) {
         use manifold_ui_paint::ui_cache_manager::{PanelCacheInfo, PanelSlot};
+
+        self.inspector.sub_region_ranges_into(subs);
+        let subs: &'a [(usize, usize)] = subs;
+        info.clear();
 
         let len = |r: MainRegion| self.tree.region_len(r.id());
         let entries = [
@@ -646,7 +663,6 @@ impl UIRoot {
             (PanelSlot::LayerHeaders, MainRegion::LayerHeaders, self.layer_headers.node_range(), self.layout.layer_controls()),
             (PanelSlot::Viewport, MainRegion::Viewport, self.viewport.node_range(), self.layout.timeline_body()),
         ];
-        let mut info = Vec::with_capacity(entries.len());
         for (slot, region, (start, end), rect) in entries {
             if start < end && end <= len(region) {
                 info.push(PanelCacheInfo {
@@ -655,11 +671,10 @@ impl UIRoot {
                     start,
                     end,
                     rect,
-                    sub_regions: (slot == PanelSlot::Inspector).then(|| self.inspector.sub_region_ranges()),
+                    sub_regions: (slot == PanelSlot::Inspector).then_some(subs),
                 });
             }
         }
-        info
     }
 
     /// Each main region's rect, pixel-quantized: a frame-plan input (D7). A

@@ -1427,21 +1427,11 @@ impl PresetInstance {
             return;
         }
         self.ensure_base_values();
-        // Collect the ids of params with an active driver or envelope first
-        // (disjoint from the `self.params` mutation below).
-        let mut ids: Vec<String> = Vec::new();
-        for d in self.drivers.iter().flatten() {
-            if d.enabled {
-                ids.push(d.param_id.to_string());
-            }
-        }
-        for e in self.envelopes.iter().flatten() {
-            if e.enabled {
-                ids.push(e.param_id.to_string());
-            }
-        }
-        for id in ids {
-            if let Some(p) = self.params.get_mut(&id) {
+        // Every frame, for every generator: no allocation.
+        let driven = self.drivers.iter().flatten().filter(|d| d.enabled).map(|d| &d.param_id);
+        let enveloped = self.envelopes.iter().flatten().filter(|e| e.enabled).map(|e| &e.param_id);
+        for id in driven.chain(enveloped) {
+            if let Some(p) = self.params.get_mut(id) {
                 p.value = p.base;
             }
         }

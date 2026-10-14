@@ -339,6 +339,33 @@ impl ChromeHost {
             .and_then(|i| self.ids.get(i).copied())
     }
 
+    /// Write the text of the node built under `key` in place, without laying
+    /// the panel out: a live value in a fixed-size slot, like a slider's
+    /// value. The panel keeps the value its next description shows, so a
+    /// later update or rebuild writes the same text. No-op before the build
+    /// or for an unknown key. Allocates nothing once the text has its
+    /// length.
+    pub fn set_text_by_key(&mut self, tree: &mut UITree, key: u64, text: &str) {
+        if !self.built {
+            return;
+        }
+        let Some(i) = self.laid.iter().position(|n| n.key == Some(key)) else {
+            return;
+        };
+        let laid = &mut self.laid[i].text;
+        if laid.as_deref() == Some(text) {
+            return;
+        }
+        match laid {
+            Some(t) => {
+                t.clear();
+                t.push_str(text);
+            }
+            None => *laid = Some(text.to_owned()),
+        }
+        tree.set_text(self.ids[i], text);
+    }
+
     /// The materialised [`BitmapSlider`] ids for the slot built under `key`
     /// (set on the [`View::slider_row`]). A panel hands these to its
     /// `SliderDragState` to drive the value + drag.

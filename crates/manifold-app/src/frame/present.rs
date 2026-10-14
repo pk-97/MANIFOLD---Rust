@@ -407,17 +407,25 @@ impl Application {
         // snapshots those clips' live output into the shared atlas.
         {
             const MIN_THUMB_W: f32 = 24.0;
-            let thumb_clips: Vec<manifold_core::ClipId> = self
+            let layers = &self.local_project.timeline.layers;
+            let wants_thumb = |cr: &&manifold_ui::panels::viewport::ClipScreenRect| {
+                cr.rect.width >= MIN_THUMB_W
+                    && layers.get(cr.layer_index)
+                        .is_some_and(|layer| layer.layer_type.supports_clip_thumbnails())
+            };
+            let unchanged = self
                 .clip_rect_scratch
                 .iter()
-                .filter(|cr| {
-                    cr.rect.width >= MIN_THUMB_W
-                        && self.local_project.timeline.layers.get(cr.layer_index)
-                            .is_some_and(|layer| layer.layer_type.supports_clip_thumbnails())
-                })
-                .map(|cr| cr.clip_id.clone())
-                .collect();
-            if thumb_clips != self.last_clip_atlas_visible_sent {
+                .filter(wants_thumb)
+                .map(|cr| &cr.clip_id)
+                .eq(self.last_clip_atlas_visible_sent.iter());
+            if !unchanged {
+                let thumb_clips: Vec<manifold_core::ClipId> = self
+                    .clip_rect_scratch
+                    .iter()
+                    .filter(wants_thumb)
+                    .map(|cr| cr.clip_id.clone())
+                    .collect();
                 self.send_content_cmd(
                     crate::content_command::ContentCommand::SetClipAtlasVisible(thumb_clips.clone()),
                 );
@@ -478,23 +486,18 @@ impl Application {
             // cell blits directly (no clear after init, so at worst a cell mid-blit
             // this frame shows valid-old or valid-new pixels, never blank).
             if let Some(atlas) = self.ui_clip_atlas_texture.as_ref() {
-                // clip → (filmstrip cell index → atlas cell), from the published
-                // layout. Each clip tiles its captured bar cells across its body.
-                let mut strips_of: ahash::AHashMap<&str, ahash::AHashMap<u32, u32>> =
-                    ahash::AHashMap::new();
-                for (cid, idx, cell) in &self.content_state.clip_atlas_layout {
-                    strips_of.entry(cid.as_str()).or_default().insert(*idx, *cell);
-                }
+                // clip → its captured cells, from the published layout. Each clip
+                // tiles its captured bar cells across its body.
+                self.clip_thumb_strips.refresh(&self.content_state.clip_atlas_layout);
                 let cell_aspect = crate::content_pipeline::CLIP_ATLAS_CELL_W as f32
                     / crate::content_pipeline::CLIP_ATLAS_CELL_H as f32;
                 let inv_cols = 1.0 / crate::content_pipeline::CLIP_ATLAS_COLS as f32;
                 let inv_rows = 1.0 / crate::content_pipeline::CLIP_ATLAS_ROWS as f32;
                 let bpb = self.ws.ui_root.viewport.beats_per_bar() as f64;
                 self.clip_thumb_quad_scratch.clear();
-                // section F aspect-locked window scratch — reused across clips this frame
-                // (cleared per clip; grows once), like `strips_of` above.
-                let mut thumb_cells: Vec<(u32, f32)> = Vec::new();
-                let mut thumb_windows: Vec<(u32, f32, f32)> = Vec::new();
+                // section F aspect-locked window scratch, reused across clips and frames.
+                let mut thumb_cells = std::mem::take(&mut self.clip_thumb_cells_scratch);
+                let mut thumb_windows = std::mem::take(&mut self.clip_thumb_windows_scratch);
                 for cr in &self.clip_rect_scratch {
                     // Match the SetClipAtlasVisible filter so a clip too narrow to
                     // have requested a cell never draws one.
@@ -504,7 +507,7 @@ impl Application {
                     {
                         continue;
                     }
-                    let Some(strip) = strips_of.get(cr.clip_id.as_str()) else {
+                    let Some(strip) = self.clip_thumb_strips.get(&cr.clip_id) else {
                         continue;
                     };
                     // Reserve the bottom name-strip band: the thumbnail tiles only
@@ -535,7 +538,7 @@ impl Application {
                     // each filled by the nearest captured frame — gapless and regularly
                     // spaced even when only some bars have been swept/captured.
                     thumb_cells.clear();
-                    for (&idx, &cell) in strip {
+                    for &(idx, cell) in strip {
                         if idx >= count {
                             continue; // stale layout entry (clip shortened since capture)
                         }
@@ -586,6 +589,8 @@ impl Application {
                         );
                     }
                 }
+                self.clip_thumb_cells_scratch = thumb_cells;
+                self.clip_thumb_windows_scratch = thumb_windows;
                 if !self.clip_thumb_quad_scratch.is_empty()
                     && let Some(thumb) = self.clip_thumb_gpu.as_mut()
                 {

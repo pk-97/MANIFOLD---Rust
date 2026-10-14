@@ -33,6 +33,8 @@ const ZOOM_LABEL_W: f32 = 70.0;
 const ZOOM_CLUSTER_W: f32 = ZOOM_BUTTON_W * 2.0 + ZOOM_LABEL_W;
 
 const TIME_DISPLAY_W: f32 = 260.0;
+/// The clock label's host key, for its in-place text writes.
+const CLOCK_KEY: u64 = 1;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
@@ -52,6 +54,9 @@ pub struct HeaderPanel {
     import_progress: f32,
     import_progress_visible: bool,
     time_display: String,
+    /// The clock slot's width at the last layout, which picks how much of
+    /// `time_display` it shows.
+    clock_w: f32,
     zoom_label: String,
     /// Whether the Audio Setup dock is open — drives its button's highlight.
     audio_setup_open: bool,
@@ -78,6 +83,7 @@ impl HeaderPanel {
             import_progress: 0.0,
             import_progress_visible: false,
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
+            clock_w: 0.0,
             zoom_label: "120 px/beat".into(),
             audio_setup_open: false,
         }
@@ -89,14 +95,27 @@ impl HeaderPanel {
         self.project_name = name.into();
     }
 
+    /// Called every frame; reuses the held string.
     pub fn set_import_status(&mut self, status: &str, progress: f32, show: bool) {
-        self.import_status = status.into();
+        if self.import_status != status {
+            self.import_status.clear();
+            self.import_status.push_str(status);
+        }
         self.import_progress = progress.clamp(0.0, 1.0);
         self.import_progress_visible = show;
     }
 
-    pub fn set_time_display(&mut self, text: &str) {
-        self.time_display = text.into();
+    /// The clock moves several times a second while playing, so it writes its
+    /// fixed-width label in place instead of waiting for the chrome layout,
+    /// reusing the strings it already holds.
+    pub fn set_time_display(&mut self, tree: &mut UITree, text: &str) {
+        if self.time_display == text {
+            return;
+        }
+        self.time_display.clear();
+        self.time_display.push_str(text);
+        let shown = Self::clock_text(&self.time_display, self.clock_w);
+        self.host.set_text_by_key(tree, CLOCK_KEY, shown);
     }
 
     pub fn set_zoom_label(&mut self, text: &str) {
@@ -191,24 +210,21 @@ impl HeaderPanel {
         )
     }
 
-    fn center_group(&self, available_w: f32, left_w: f32, right_w: f32) -> View {
-        let center_w = TIME_DISPLAY_W.min(
-            (available_w - 2.0 * left_w)
-                .min(available_w - 2.0 * right_w)
-                .max(0.0),
-        );
-        let time_text = if center_w < 72.0 {
+    /// What the clock slot shows of the full time display at its width.
+    fn clock_text(full: &str, clock_w: f32) -> &str {
+        if clock_w < 72.0 {
             ""
-        } else if center_w < TIME_DISPLAY_W {
-            self.time_display
-                .split(" / ")
-                .next()
-                .unwrap_or(self.time_display.as_str())
+        } else if clock_w < TIME_DISPLAY_W {
+            full.split(" / ").next().unwrap_or(full)
         } else {
-            self.time_display.as_str()
-        };
+            full
+        }
+    }
+
+    fn center_group(&self, center_w: f32) -> View {
         View::row(0.0).fill().main_align(Align::Center).child(
-            View::label(time_text)
+            View::label(Self::clock_text(&self.time_display, center_w))
+                .key(CLOCK_KEY)
                 .w(Sizing::Fixed(center_w))
                 .fill_h()
                 .font(color::FONT_HEADING)
@@ -276,7 +292,8 @@ impl HeaderPanel {
         )
     }
 
-    fn view(&self) -> View {
+    /// The description, and the clock slot's width in it.
+    fn view(&self) -> (View, f32) {
         let available_w = (self.rect.width - 2.0 * INSET).max(0.0);
         // The clock has first claim on width: it is the one thing read on stage.
         // Reserve its centred slot, then each side group compacts into what is
@@ -284,14 +301,20 @@ impl HeaderPanel {
         let side_room = ((available_w - TIME_DISPLAY_W) * 0.5 - GROUP_SPACING).max(0.0);
         let (right, right_w) = self.right_group(side_room);
         let (left, left_w) = self.left_group(side_room);
-        View::stack()
+        let clock_w = TIME_DISPLAY_W.min(
+            (available_w - 2.0 * left_w)
+                .min(available_w - 2.0 * right_w)
+                .max(0.0),
+        );
+        let view = View::stack()
             .fill()
             .bg(color::PANEL_BG_DARK)
             .border(color::BORDER, 1.0)
             .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
             .child(left)
-            .child(self.center_group(available_w, left_w, right_w))
-            .child(right)
+            .child(self.center_group(clock_w))
+            .child(right);
+        (view, clock_w)
     }
 }
 
@@ -304,7 +327,8 @@ impl Default for HeaderPanel {
 impl Panel for HeaderPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         self.rect = layout.header();
-        let view = self.view();
+        let (view, clock_w) = self.view();
+        self.clock_w = clock_w;
         self.host.build(tree, &view, self.rect);
     }
 
@@ -312,7 +336,8 @@ impl Panel for HeaderPanel {
         if !self.host.is_built() {
             return;
         }
-        let view = self.view();
+        let (view, clock_w) = self.view();
+        self.clock_w = clock_w;
         let reconcile = self.host.update(tree, &view, self.rect);
         debug_assert_eq!(
             reconcile,
@@ -378,7 +403,7 @@ mod tests {
         let count = tree.count();
         let sv = tree.structure_version();
 
-        panel.set_time_display("01:30.50  |  4.2.3");
+        panel.set_time_display(&mut tree, "01:30.50  |  4.2.3");
         panel.set_project_name("Live Set");
         panel.update(&mut tree);
 
@@ -388,6 +413,26 @@ mod tests {
             node_with_text(&tree, "01:30.50  |  4.2.3").text.as_deref(),
             Some("01:30.50  |  4.2.3")
         );
+    }
+
+    /// The clock writes its label without a layout, and an update after it
+    /// shows the same text the write did.
+    #[test]
+    fn clock_writes_in_place_without_layout() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = HeaderPanel::new();
+        panel.build(&mut tree, &layout);
+        let sv = tree.structure_version();
+        let before = node_with_text(&tree, "00:00.00 / 00:00.00  |  1.1.1").bounds;
+
+        panel.set_time_display(&mut tree, "00:04.7  |  3.2.1");
+        let clock = node_with_text(&tree, "00:04.7  |  3.2.1");
+        assert_eq!(clock.bounds, before, "the slot keeps its rect");
+        assert_eq!(tree.structure_version(), sv);
+
+        panel.update(&mut tree);
+        assert_eq!(node_with_text(&tree, "00:04.7  |  3.2.1").bounds, before);
     }
 
     #[test]
@@ -419,7 +464,7 @@ mod tests {
             }
             let mut panel = HeaderPanel::new();
             panel.build(&mut tree, &layout);
-            panel.set_time_display("01:30.50 / 04:00.00  |  4.2.3");
+            panel.set_time_display(&mut tree, "01:30.50 / 04:00.00  |  4.2.3");
             panel.update(&mut tree);
             let clock = node_with_text(&tree, "01:30.50 / 04:00.00  |  4.2.3");
             assert_eq!(clock.bounds.width, TIME_DISPLAY_W, "clock keeps its full slot");

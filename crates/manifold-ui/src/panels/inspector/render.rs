@@ -296,7 +296,7 @@ impl InspectorCompositePanel {
     }
 
     /// Sub-region node ranges for incremental cache re-rendering.
-    /// Returns (node_start, node_end) for each sub-panel: chrome panels,
+    /// Fills `ranges` with (node_start, node_end) for each sub-panel: chrome panels,
     /// effect cards, gen params. Used by the cache manager to detect which
     /// parts of the inspector changed and only re-render those.
     ///
@@ -305,50 +305,51 @@ impl InspectorCompositePanel {
     /// `build`, and `push` drops `(usize::MAX, 0)` — so the cache is fed exactly
     /// what was actually built. No `*_visible()` gate; the node range is the
     /// single source of truth for "live this frame".
-    pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
-        let mut ranges = Vec::with_capacity(
-            4 + self.effects[Self::SCOPE_MASTER].len()
-                + self.effects[Self::SCOPE_LAYER].len()
-                + self.modifier_cards.len()
-                + 1,
-        );
+    pub fn sub_region_ranges_into(&self, ranges: &mut Vec<(usize, usize)>) {
+        ranges.clear();
         let push = |ranges: &mut Vec<(usize, usize)>, first: usize, count: usize| {
             if first != usize::MAX && count > 0 {
                 ranges.push((first, first + count));
             }
         };
         push(
-            &mut ranges,
+            ranges,
             self.macros_panel.first_node(),
             self.macros_panel.node_count(),
         );
         push(
-            &mut ranges,
+            ranges,
             self.master_chrome.first_node(),
             self.master_chrome.node_count(),
         );
         for card in &self.effects[Self::SCOPE_MASTER] {
-            push(&mut ranges, card.first_node(), card.node_count());
+            push(ranges, card.first_node(), card.node_count());
         }
         push(
-            &mut ranges,
+            ranges,
             self.layer_chrome.first_node(),
             self.layer_chrome.node_count(),
         );
         if let Some(ref gp) = self.gen_params {
-            push(&mut ranges, gp.first_node(), gp.node_count());
+            push(ranges, gp.first_node(), gp.node_count());
         }
         for card in &self.modifier_cards {
-            push(&mut ranges, card.first_node(), card.node_count());
+            push(ranges, card.first_node(), card.node_count());
         }
         for card in &self.effects[Self::SCOPE_LAYER] {
-            push(&mut ranges, card.first_node(), card.node_count());
+            push(ranges, card.first_node(), card.node_count());
         }
         push(
-            &mut ranges,
+            ranges,
             self.clip_chrome.first_node(),
             self.clip_chrome.node_count(),
         );
+    }
+
+    #[cfg(test)]
+    pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        self.sub_region_ranges_into(&mut ranges);
         ranges
     }
 

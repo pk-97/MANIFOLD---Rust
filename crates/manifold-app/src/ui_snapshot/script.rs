@@ -1056,13 +1056,12 @@ impl Runner {
             }
             AutomationAction::PlayingStep { frames, bpm, wobble } => {
                 self.playing_step(ui, data, *frames, *bpm, *wobble, render);
-                StepResult {
-                    index,
-                    action: action_desc,
-                    status: "ok",
-                    detail: format!("{frames} playing frame(s) at {bpm} bpm, beat -> {:.3}", data.content.current_beat.0),
-                    artifact: None,
-                }
+                // The step's own label is harness work, as `action_desc` is.
+                let beat = data.content.current_beat.0;
+                let detail = harness_work(&mut self.work.excluded, || {
+                    format!("{frames} playing frame(s) at {bpm} bpm, beat -> {beat:.3}")
+                });
+                StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
             }
             AutomationAction::Modifiers { modifiers } => {
                 // `window_input::input_modifiers`: store and forward.
@@ -1233,7 +1232,7 @@ impl Runner {
             }
         }
         crate::ui_bridge::intake_overlay_state(ui, &data.content);
-        crate::ui_bridge::check_auto_scroll(ui, &data.content, &data.project);
+        crate::ui_bridge::check_auto_scroll(ui, &data.content);
         let automation_draw_mode = data.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(
             &mut self.planner,
@@ -2145,7 +2144,7 @@ impl Runner {
                     changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                     } else if applied && let Some(selection) = pending.resolve(&data.project) {
                         let sequence = data.content.edit_selection_update.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
                         data.content.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
@@ -2162,13 +2161,13 @@ impl Runner {
                     };
                     if let Some(message) = error {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                         changed = true;
                     }
                 }
                 ContentCommand::GraphEditRejected(message) => {
                     let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                    data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                    data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                     changed = true;
                 }
                 // The App gets these back as a snapshot with a new data
@@ -2187,7 +2186,7 @@ impl Runner {
                     changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                         changed = true;
                     }
                 }

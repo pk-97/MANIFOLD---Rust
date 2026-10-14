@@ -175,8 +175,6 @@ pub(crate) struct ChromeInputs {
     pub clock_authority: u8,
     /// The shown BPM, in tenths.
     pub bpm_tenths: i32,
-    /// Minutes, seconds, tenths, bar, beat and sixteenth, packed.
-    pub time_digits: u64,
     /// Detect progress in tenths of a percent, and whether it shows.
     pub detect_permille: u16,
     pub detect_show: bool,
@@ -232,8 +230,8 @@ impl ChromeText {
     }
 }
 
-/// Pack the transport time readout exactly as `push_chrome` computes it.
-fn time_digits(content: &crate::content_state::ContentState, beats_per_bar: i32) -> u64 {
+/// Pack the header clock exactly as `push_clock` computes it.
+pub(crate) fn clock_digits(content: &crate::content_state::ContentState, beats_per_bar: i32) -> u64 {
     let beat = content.current_beat.as_f32();
     let t = content.current_time.0;
     let mins = (t / 60.0).floor() as i32;
@@ -297,6 +295,10 @@ pub(crate) struct FrameInputs {
     /// D15: `ContentState.values_seq`.
     pub values: u64,
     pub runtime: RuntimeSeqs,
+    /// The header clock's shown minutes, seconds, tenths, bar, beat and
+    /// sixteenth, packed. It moves several times a second while playing, so
+    /// it has its own push and never lays the chrome out.
+    pub clock_digits: u64,
     /// D20: the frame-quantized driver period of the content bpm.
     pub driver_period_key: u64,
     /// The LED controller state the master chrome shows (live push).
@@ -385,6 +387,9 @@ pub(crate) enum Projection {
     SelectionPush,
     /// Transport, sync, settings and macro label displays.
     ChromePush,
+    /// The header clock's text, in place: its label has a fixed width, so a
+    /// new digit never moves the chrome layout.
+    ClockPush,
     /// `sync_driver_bpm`, in place.
     DriverReadout,
     /// `dropdowns.rs` `sync_embedded_presets`.
@@ -576,6 +581,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         || last.zoom_bits != next.zoom_bits
     {
         p.insert(Projection::ChromePush);
+    }
+    if last.clock_digits != next.clock_digits {
+        p.insert(Projection::ClockPush);
     }
     if moved.intersects(DRIVER_READOUT_PARTS) || last.driver_period_key != next.driver_period_key {
         p.insert(Projection::DriverReadout);
@@ -822,7 +830,6 @@ impl FramePlanner {
             ableton_sync: content.ableton_sync_status as u8,
             clock_authority: content.clock_authority as u8,
             bpm_tenths: (bpm * 10.0).round() as i32,
-            time_digits: time_digits(content, source.project.settings.time_signature_numerator),
             detect_permille: (progress * 1000.0).round() as u16,
             detect_show: content.percussion_show_progress,
             // The gatherer, which holds the UI, fills this in.
@@ -1090,9 +1097,20 @@ mod tests {
         let mut next = base();
         next.chrome.bpm_tenths = 1205;
         assert!(runs(&plan(next), Projection::ChromePush));
+    }
+
+    #[test]
+    fn row_clock_push() {
+        // A new clock digit pushes the clock alone: no chrome push, so no
+        // chrome bar lays out.
         let mut next = base();
-        next.chrome.time_digits = 7;
-        assert!(runs(&plan(next), Projection::ChromePush));
+        next.clock_digits = 7;
+        let p = plan(next);
+        assert!(runs(&p, Projection::ClockPush));
+        assert!(!runs(&p, Projection::ChromePush));
+        for bar in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+            assert!(!p.in_place.contains(bar), "{bar:?}");
+        }
     }
 
     #[test]

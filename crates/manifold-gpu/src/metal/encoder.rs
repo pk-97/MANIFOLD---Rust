@@ -2784,17 +2784,22 @@ impl GpuEncoder {
         use block2::RcBlock;
         use objc2_metal::MTLCommandBufferStatus;
 
-        let label = unsafe { self.cmd_buf.label() }
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| String::from("(unlabeled)"));
+        // Every commit runs this, so the label is read only on a fault.
+        fn buffer_label(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> String {
+            unsafe { cb.label() }
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| String::from("(unlabeled)"))
+        }
         let scopes = std::mem::take(&mut self.scopes);
         if super::gpu_fault::diagnostics_enabled() {
+            let label = buffer_label(&self.cmd_buf);
             log::info!("[GPU-DIAG] submitting buffer={label} scopes={scopes:?}");
         }
         let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             let cb = unsafe { buf.as_ref() };
             let status = unsafe { cb.status() };
             if status == MTLCommandBufferStatus::Error {
+                let label = buffer_label(cb);
                 let err = unsafe { cb.error() };
                 let (code, desc) = match err {
                     None => (-1i64, String::from("(nil)")),

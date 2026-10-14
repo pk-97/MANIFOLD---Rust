@@ -190,13 +190,13 @@ pub struct ContentThread {
     pub pending_undo_redo_event: Option<crate::content_state::UndoRedoEvent>,
     /// Most recent rejected graph edit, retained until a newer rejection so
     /// every regular snapshot carries the diagnostic to the UI.
-    pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
+    pub graph_edit_diagnostic: Option<Arc<crate::content_state::GraphEditDiagnostic>>,
     /// Most recent content-authoritative selection update for newly created
     /// scene modifiers, retained until a newer update.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
-    pub modifier_selection_update: Option<crate::content_state::ModifierSelectionUpdate>,
+    pub modifier_selection_update: Option<Arc<crate::content_state::ModifierSelectionUpdate>>,
     pub object_modifier_selection_update:
-        Option<crate::content_state::ObjectModifierSelectionUpdate>,
+        Option<Arc<crate::content_state::ObjectModifierSelectionUpdate>>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -1419,7 +1419,11 @@ impl ContentThread {
             // progress, so these are always the "not exporting" values.
             is_exporting: false,
             export_progress: 0.0,
-            export_status: Arc::from(""),
+            export_status: {
+                // One shared empty status: building it per tick allocated.
+                static EMPTY: std::sync::LazyLock<Arc<str>> = std::sync::LazyLock::new(|| Arc::from(""));
+                EMPTY.clone()
+            },
             export_finished: None,
             export_run_finished: false,
             warmup: None,
@@ -1445,7 +1449,7 @@ impl ContentThread {
             scene_viewport_frames: self.content_pipeline.scene_viewport_frames().clone(),
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
-            clip_atlas_layout: self.content_pipeline.clip_atlas_layout().to_vec(),
+            clip_atlas_layout: self.content_pipeline.clip_atlas_layout().clone(),
             automation_latched_params: self
                 .engine
                 .automation_latches()
