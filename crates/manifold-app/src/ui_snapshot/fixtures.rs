@@ -76,6 +76,8 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
         "waterdambreak" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
         "waterdambreakmatter" => Some(physics_scene("WaterDamBreakMatter", "Water — Dam Break (Live GPU)")),
+        // The free-camera scene: Ocean drives a free camera through a lens.
+        "oceanscene" => Some(physics_scene("Ocean", "Ocean")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {

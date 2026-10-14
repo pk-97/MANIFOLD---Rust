@@ -481,6 +481,10 @@ pub struct ChangeGraphParamCommand {
     old_value: f32,
     new_value: f32,
     rejection: Option<&'static str>,
+    /// The param switches a scene feature on or off, so
+    /// its base value decides which card rows exist (SCENE_SURFACES D12 (row
+    /// sets follow authored values)).
+    sets_rows: bool,
 }
 
 impl ChangeGraphParamCommand {
@@ -496,15 +500,35 @@ impl ChangeGraphParamCommand {
             old_value,
             new_value,
             rejection: None,
+            sets_rows: false,
         }
+    }
+
+    /// [`Self::new`], reading from `project` whether the edit can change
+    /// which scene card rows exist.
+    pub fn for_project(
+        project: &Project,
+        target: GraphTarget,
+        param_id: impl Into<ParamId>,
+        old_value: f32,
+        new_value: f32,
+    ) -> Self {
+        let mut command = Self::new(target, param_id, old_value, new_value);
+        command.sets_rows = project
+            .preset_instance(&command.target)
+            .and_then(|inst| inst.params.get(command.param_id.as_ref()))
+            .and_then(|param| param.spec.scene)
+            .is_some_and(|scene| scene.switch.is_some());
+        command
     }
 }
 
 impl Command for ChangeGraphParamCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
         use manifold_core::change::{ChangeSet, Part};
-        // A scene-modifier param lives inside the owner's graph definition.
-        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+        // A scene-modifier param lives inside the owner's graph definition;
+        // a scene switch decides the card's rows.
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) || self.sets_rows {
             ChangeSet::of(&[Part::Values, Part::Effects])
         } else {
             ChangeSet::of(&[Part::Values])

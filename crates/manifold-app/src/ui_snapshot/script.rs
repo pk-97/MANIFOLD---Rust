@@ -227,6 +227,7 @@ fn run_flow(
         || scene == "scene-setup"
         || scene == "waterdambreak"
         || scene == "waterdambreakmatter"
+        || scene == "oceanscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"

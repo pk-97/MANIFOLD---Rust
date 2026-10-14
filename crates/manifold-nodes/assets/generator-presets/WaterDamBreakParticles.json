@@ -3124,6 +3124,15 @@
         "max": 250000.0,
         "min": 1000.0,
         "name": "Whitewater Budget",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "whitewater",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "wholeNumbers": true
       },

@@ -106,7 +106,12 @@
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": [
       "water-family-preset"
     ],
-    "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
+    "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
+    "scene-card-bands",
+    "scene-card-free-camera",
+    "scene-card-dof-switch"
+  ],
+  "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
       "scene-fluid-role-lifecycle",
       "scene-fluid-dam-break-controls",
@@ -285,6 +290,9 @@
     "drag-clip-release-over-inspector": "timeline",
     "effect-browser-open": "inspector",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
+    "scene-card-bands": "physicsscene",
+    "scene-card-free-camera": "oceanscene",
+    "scene-card-dof-switch": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
     "scene-modifier-preset": "mushroomscene",
     "material-inspector-groups": "gltfscene",

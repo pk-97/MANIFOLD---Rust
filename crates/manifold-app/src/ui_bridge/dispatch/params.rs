@@ -471,7 +471,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), *new_val);
                     });
-                    let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, *new_val);
+                    let cmd = ChangeGraphParamCommand::for_project(ctx.project, target, param_id.clone(), old_val, *new_val);
                     ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
@@ -930,7 +930,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), new_val);
                     });
-                    let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
+                    let cmd = ChangeGraphParamCommand::for_project(ctx.project, target, param_id.clone(), old_val, new_val);
                     ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }

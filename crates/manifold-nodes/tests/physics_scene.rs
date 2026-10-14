@@ -219,8 +219,8 @@ fn physics_solids_compiles_and_scene_objects_resolve_editable_sources() {
     let world = def.nodes.iter().find(|node| node.id == 40).expect("world node 40");
     assert_eq!(world.type_id, "node.physics_world");
     assert!(
-        vm.world_controls.contains(&world.node_id),
-        "all six bodies share world node 40, and World owns its controls"
+        manifold_nodes_scene::node_graph::scene_items::scene_items(&def, &vm).iter().any(|item| item.kind == manifold_core::scene_surface::SceneItemKind::Physics && item.owned_nodes.contains(&world.node_id)),
+        "all six bodies share world node 40, and its physics item owns its controls"
     );
     for (object, body_id) in vm.objects.iter().zip([101, 111, 121, 131, 141, 151]) {
         let SceneObjectVm::Known(row) = object else { unreachable!("checked above") };

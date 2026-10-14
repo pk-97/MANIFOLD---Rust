@@ -465,6 +465,7 @@ pub(crate) fn format_param_value(
     whole_numbers: bool,
     is_angle: bool,
     value_labels: Option<&[String]>,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
 ) -> String {
     if let Some(labels) = value_labels {
         let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
@@ -472,11 +473,13 @@ pub(crate) fn format_param_value(
     }
     if is_angle {
         // `val` is radians; the user always sees and edits degrees.
-        format!("{:.0}°", val.to_degrees())
-    } else if whole_numbers {
-        format!("{}", val.round() as i32)
+        return format!("{:.0}°", val.to_degrees());
+    }
+    let suffix = unit.map_or("", |unit| unit.suffix());
+    if whole_numbers {
+        format!("{}{suffix}", val.round() as i32)
     } else {
-        format!("{:.2}", val)
+        format!("{:.2}{suffix}", val)
     }
 }
 

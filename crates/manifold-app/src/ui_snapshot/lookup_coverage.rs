@@ -16,6 +16,7 @@ const SCENE_FIXTURES: &[&str] = &[
     "fluidauthoring",
     "waterdambreak",
     "waterdambreakmatter",
+    "oceanscene",
     "inspector",
     "timeline",
 ];

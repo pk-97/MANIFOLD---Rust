@@ -1,0 +1,9 @@
+[
+  {"Assert": {"selector": {"Query": {"text": "Yaw"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Pitch"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Pos X"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Distance"}}, "check": {"Count": 0}}},
+  {"Assert": {"selector": {"Query": {"text": "Orbit"}}, "check": {"Count": 0}}},
+  {"Assert": {"selector": {"Query": {"text": "Camera"}}, "check": {"Above": {"text": "Wind Speed"}}}},
+  "Snapshot"
+]

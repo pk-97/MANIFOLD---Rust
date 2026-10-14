@@ -155,9 +155,11 @@ pub struct RowSpec {
     pub is_trigger_gate: bool,
     /// Named value labels for discrete params; shown instead of the number.
     pub value_labels: Option<Vec<String>>,
+    /// Shown after the number in the value readout (" m", " EV").
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
     /// Card-bundling section name; contiguous `Some(name)` runs share one
-    /// collapsible header. Usually from the manifest; scene performance
-    /// projection uses stable role-based categories without changing IDs.
+    /// collapsible header. Usually from the manifest; the scene card titles
+    /// sections by band and item without changing ids.
     pub section: Option<String>,
     /// `None` = the row is interactive. `Some(reason)` = the row renders
     /// greyed with the reason appended to its label (the modifier-picker

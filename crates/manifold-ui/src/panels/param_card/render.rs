@@ -285,6 +285,7 @@ impl ParamCardPanel {
                     continue;
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
+                h += self.inactive_reason_height(i);
                 // A plain toggle never gets a drawer (nothing to modulate) — zero
                 // lane, zero height, unconditionally. `is_trigger` and ordinary
                 // sliders both go through the general `active_mod_tabs`-driven
@@ -346,6 +347,7 @@ impl ParamCardPanel {
                 }
                 for i in start..start + len {
                     h += ROW_HEIGHT + ROW_SPACING;
+                    h += self.inactive_reason_height(i);
                     // Same rule as `effect_body_natural_height`: only a plain
                     // toggle forces zero drawer height. `is_trigger` reaches the
                     // audio-mod drawer (D5b), `is_trigger_gate` reaches the
@@ -364,6 +366,12 @@ impl ParamCardPanel {
             h += PADDING;
         }
         h + CARD_BOTTOM_MARGIN
+    }
+
+    /// The dimmed reason line a row draws under itself when it does nothing
+    /// right now (`build_inactive_reason`).
+    fn inactive_reason_height(&self, i: usize) -> f32 {
+        if self.rows[i].spec.inactive_reason.is_some() { ROW_HEIGHT + ROW_SPACING } else { 0.0 }
     }
 
     /// section 6b — set compact mode (hide all modulation config drawers on this card).

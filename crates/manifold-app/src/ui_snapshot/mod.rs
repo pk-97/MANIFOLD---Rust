@@ -9,7 +9,7 @@
 mod compare;
 mod composite_resources;
 mod dump;
-mod fixtures;
+pub(crate) mod fixtures;
 mod interact;
 #[cfg(test)]
 mod lookup_coverage;

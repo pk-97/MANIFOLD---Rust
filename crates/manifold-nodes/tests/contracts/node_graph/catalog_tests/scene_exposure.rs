@@ -220,13 +220,16 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
         .unwrap();
         assert!(migrate_scene_exposures(&mut def));
         let metadata = def.preset_metadata.as_ref().unwrap();
-        for name in ["enabled", "aperture", "quality"] {
+        // Max Radius is the depth of field Max Blur row (SCENE_SURFACES D4).
+        for name in ["enabled", "aperture", "quality", "max_radius"] {
             assert!(metadata.bindings.iter().any(|b| matches!(&b.target,
                 manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
                 if node_id.as_str() == "bokeh" && param == name)));
         }
-        assert!(!metadata.bindings.iter().any(|b| matches!(&b.target,
-            manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "max_radius")));
+        assert_eq!(
+            def.nodes[0].params["max_radius"],
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: 16.0 }
+        );
         assert_eq!(
             def.nodes[0].params["enabled"],
             manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false }

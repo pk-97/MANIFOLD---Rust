@@ -292,6 +292,9 @@ pub fn sync_inspector_data(
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
+                            let items = def.as_ref().map(|def| {
+                                manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm)
+                            }).unwrap_or_default();
                             let fluid_domains = super::scene::fluid_domains(&vm);
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
@@ -604,7 +607,9 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        let owned = super::scene::object_controls(def.as_ref(), known, &vm.objects);
+                                        let owned = super::scene::owned_nodes(
+                                            &items, &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(known.object.clone()),
+                                        ).to_vec();
                                         let sections = sections_for_nodes(def.as_ref(), &owned);
                                         let mut parameter_ids = super::scene::parameter_ids_for_nodes(
                                             def.as_ref(), &owned,
@@ -913,13 +918,18 @@ pub fn sync_inspector_data(
                             // section with an atom the panel doesn't drive,
                             // so they show exactly the lens and tail's own
                             // controls.
-                            let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
+                            let camera_nodes = super::scene::owned_nodes(
+                                &items, &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Camera,
+                            );
+                            let camera_sections = sections_for_nodes(def.as_ref(), camera_nodes);
                             let camera_parameter_ids = Some(super::scene::parameter_ids_for_nodes(
-                                def.as_ref(), &vm.camera_controls,
+                                def.as_ref(), camera_nodes,
                             ));
                             let camera_setup_needed = def.as_ref().is_some_and(|graph|
                                 crate::scene_camera_edit::needs_setup(graph, vm.scene_root_node_id));
-                            let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
+                            let world_sections = sections_for_nodes(
+                                def.as_ref(), &super::scene::world_and_physics_nodes(&items),
+                            );
                             let environment = match vm.environment {
                                 manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -2019,7 +2029,8 @@ fn object_modifier_rows(
 #[cfg(test)]
 mod modifier_card_ownership_tests {
     use super::object_modifier_rows;
-    use crate::ui_bridge::projection::scene::{object_controls, parameter_ids_for_nodes};
+    use crate::ui_bridge::projection::scene::{owned_nodes, parameter_ids_for_nodes};
+    use manifold_nodes_scene::node_graph::scene_items::{SceneItemId, scene_items};
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     use std::collections::BTreeSet;
@@ -2064,11 +2075,12 @@ mod modifier_card_ownership_tests {
 
         let assert_cards = |def: &EffectGraphDef, expected_owner| {
             let vm = SceneVm::from_def(def).unwrap();
+            let items = scene_items(def, &vm);
             let mut before = BTreeSet::new();
             let mut after = BTreeSet::new();
             for object in &vm.objects {
                 let SceneObjectVm::Known(row) = object else { panic!("known object"); };
-                let owned = object_controls(Some(def), row, &vm.objects);
+                let owned = owned_nodes(&items, &SceneItemId::Object(row.object.clone())).to_vec();
                 let cards = object_modifier_rows(Some(def), &row.modifier_chain, &owned);
                 assert_eq!(cards.len(), 1);
                 let card = &cards[0];

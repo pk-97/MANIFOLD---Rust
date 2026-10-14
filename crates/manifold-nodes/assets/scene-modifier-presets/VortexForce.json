@@ -10,6 +10,7 @@
     "params": [
       {
         "id": "enabled",
+        "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 0, "cardLabel": "param"},
         "name": "Enabled",
         "min": 0.0,
         "max": 1.0,
@@ -18,6 +19,7 @@
       },
       {
         "id": "center_x",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Center X",
         "min": -100.0,
         "max": 100.0,
@@ -25,6 +27,7 @@
       },
       {
         "id": "center_y",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Center Y",
         "min": -100.0,
         "max": 100.0,
@@ -32,6 +35,7 @@
       },
       {
         "id": "center_z",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Center Z",
         "min": -100.0,
         "max": 100.0,
@@ -39,6 +43,7 @@
       },
       {
         "id": "axis_x",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Axis X",
         "min": -1.0,
         "max": 1.0,
@@ -46,6 +51,7 @@
       },
       {
         "id": "axis_y",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Axis Y",
         "min": -1.0,
         "max": 1.0,
@@ -53,6 +59,7 @@
       },
       {
         "id": "axis_z",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Axis Z",
         "min": -1.0,
         "max": 1.0,
@@ -60,6 +67,7 @@
       },
       {
         "id": "radius",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Radius",
         "min": 0.01,
         "max": 100.0,
@@ -67,6 +75,7 @@
       },
       {
         "id": "falloff",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
         "name": "Falloff",
         "min": 0.0,
         "max": 8.0,
@@ -74,6 +83,7 @@
       },
       {
         "id": "strength",
+        "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 1, "cardLabel": "param"},
         "name": "Strength (m/s\u00b2)",
         "min": -20.0,
         "max": 20.0,
@@ -81,6 +91,7 @@
       },
       {
         "id": "impulse_strength",
+        "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 3, "cardLabel": "param"},
         "name": "Impulse (m/s)",
         "min": -20.0,
         "max": 20.0,
@@ -88,6 +99,7 @@
       },
       {
         "id": "fire",
+        "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 2, "cardLabel": "param"},
         "name": "Fire",
         "min": 0.0,
         "max": 16777216.0,

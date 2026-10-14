@@ -125,6 +125,14 @@ pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> 
     }
 }
 
+/// The placement an author gives a control that drives several nodes: the
+/// one its first target would have alone. A fan-out keeps its own scene
+/// facts (SCENE_SURFACES_DESIGN.md D23 (scene facts follow the bound node)),
+/// so the importer writes this into the control when it builds it.
+pub(crate) fn fan_out_scene(type_id: &str, param: &str) -> Option<SceneParamDesc> {
+    scene_param_facts(type_id, param).map(|facts| facts.desc)
+}
+
 fn rigid_body(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Body;
     Some(match param {
@@ -210,9 +218,10 @@ fn cel_material(param: &str) -> Option<SceneParamFacts> {
 fn light(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::{Light, Shadows};
     Some(match param {
-        // One fader per light, named after the light (D4).
+        // One fader per light, named after the light, after Exposure and
+        // Environment (D4).
         "intensity" => {
-            card(Light, CardBand::Lighting, 0).label(CardLabel::ItemName).limit(AT_LEAST_ZERO)
+            card(Light, CardBand::Lighting, 2).label(CardLabel::ItemName).limit(AT_LEAST_ZERO)
         }
         "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z" => {
             setup(Light).unit(Unit::Metres).limit(HardLimit::Unlimited)
@@ -294,7 +303,11 @@ fn bokeh_gather(param: &str) -> Option<SceneParamFacts> {
     Some(match param {
         "enabled" => card(DepthOfField, CardBand::Look, 0).switch(Feature::DepthOfField),
         "aperture" | "quality" => setup(DepthOfField),
-        "max_radius" => hidden(DepthOfField).unit(Unit::Pixels),
+        // D4's depth of field Max Blur, shown while depth of field is on.
+        "max_radius" => card(DepthOfField, CardBand::Look, 2)
+            .gate(Gate::Fold(Feature::DepthOfField))
+            .unit(Unit::Pixels)
+            .limit(AT_LEAST_ZERO),
         "blur_alpha" => hidden(DepthOfField),
         _ => return None,
     })
@@ -388,10 +401,12 @@ fn whitewater(param: &str) -> Option<SceneParamFacts> {
 fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Simulation;
     let dial = liquid_dial_params(type_id).is_some_and(|dials| dials.contains(&param));
-    let hidden_param = type_id == GPU_FLIP_DOMAIN_TYPE_ID
+    // The GPU FLIP solver controls the water preset authors on its card are
+    // set up once per scene: they show in the Scene tab, never on the card.
+    let flip_solver = type_id == GPU_FLIP_DOMAIN_TYPE_ID
         && matches!(param, "solve_level" | "max_iterations" | "sheet_fill_rate" | "particle_capacity");
-    if hidden_param {
-        return Some(hidden(Simulation));
+    if flip_solver {
+        return Some(setup(Simulation));
     }
     if !dial {
         return None;
@@ -399,12 +414,14 @@ fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
     Some(match param {
         "speed" => card(Simulation, CardBand::Scene, 2).limit(AT_LEAST_ZERO),
         "reset" => card(Simulation, CardBand::Scene, 3),
+        "cohesion" => card(Simulation, CardBand::Scene, 4).limit(AT_LEAST_ZERO),
+        "stiffness" => card(Simulation, CardBand::Scene, 5).limit(AT_LEAST_ZERO),
+        "liveliness" => card(Simulation, CardBand::Scene, 6),
         "domain_size" | "fill_height" => setup(Simulation).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "gravity_x" | "gravity" | "gravity_z" => {
             setup(Simulation).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
         }
         "grid_budget_mcells" => setup(Simulation).unit(Unit::MillionCells),
-        // Matter's stiffness, cohesion and liveliness join the card in P4.
         _ => setup(Simulation),
     })
 }
