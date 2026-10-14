@@ -285,7 +285,7 @@ pub(crate) fn arm_capture() {
 
 fn tick_frame_cpu_ms(
     ct: &mut crate::content_thread::ContentThread,
-    state_tx: &crossbeam_channel::Sender<crate::content_state::ContentState>,
+    state_tx: &crate::content_state::StateTx,
     profile_cpu: bool,
 ) -> Option<f64> {
     let start = profile_cpu.then(std::time::Instant::now);
@@ -486,7 +486,7 @@ pub fn run(args: &[String]) -> ! {
     ct.timer.set_frame_clocked(frame_clock);
     ct.timer.ensure_thread_policy();
 
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let drain = std::thread::Builder::new()
         .name("rt-capture-drain".into())
         .spawn(move || while state_rx.recv().is_ok() {})

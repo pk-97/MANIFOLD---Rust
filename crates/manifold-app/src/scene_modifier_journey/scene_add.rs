@@ -36,7 +36,7 @@ fn scene_additions_render_while_paused_and_roundtrip_undo() {
     let default = layer.generator_graph().unwrap().clone();
     project.timeline.layers.push(layer);
     let mut ct = headless_content_thread(Project::default(), 320, 180);
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
     ct.timer.set_frame_clocked(true);
     warm_project(&mut ct, &tx);

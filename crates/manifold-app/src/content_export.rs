@@ -7,13 +7,13 @@ use std::sync::Arc;
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 use std::cell::{Cell, RefCell};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 
 use manifold_core::{Beats, Seconds};
 use manifold_playback::engine::PlaybackEngine;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::{ContentState, ExportFinishedEvent};
+use crate::content_state::{ContentState, ExportFinishedEvent, StateTx};
 use crate::content_thread::ContentThread;
 
 use manifold_gpu::gpu_fault::{FaultKind, FaultKinds};
@@ -76,7 +76,7 @@ pub(crate) enum ExportTestFault {
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 thread_local! {
-    static EXPORT_OBSERVER: RefCell<Option<Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
+    static EXPORT_OBSERVER: RefCell<Option<crossbeam_channel::Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
     /// The export frame whose SDR output is read back.
     static EXPORT_SDR_READBACK: Cell<Option<u32>> = const { Cell::new(None) };
     static EXPORT_HDR_READBACK: Cell<bool> = const { Cell::new(false) };
@@ -99,7 +99,7 @@ pub(crate) struct ExportObservationGuard;
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 pub(crate) fn install_export_observer(
-    sender: Sender<ExportFrameObservation>,
+    sender: crossbeam_channel::Sender<ExportFrameObservation>,
     fail_before_encode_frame: Option<(u32, ExportTestFault)>,
 ) -> ExportObservationGuard {
     install_export_observer_with_export_readbacks(sender, fail_before_encode_frame, false, false)
@@ -110,7 +110,7 @@ pub(crate) fn install_export_observer(
 /// readback and no production allocation.
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 pub(crate) fn install_export_observer_with_export_readbacks(
-    sender: Sender<ExportFrameObservation>,
+    sender: crossbeam_channel::Sender<ExportFrameObservation>,
     fail_before_encode_frame: Option<(u32, ExportTestFault)>,
     capture_first_sdr_frame: bool,
     capture_first_hdr_frame: bool,
@@ -398,7 +398,7 @@ impl ContentThread {
         &mut self,
         config: manifold_media::export_config::ExportConfig,
         cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) {
         self.send_export_phase(state_tx, true, 0.0, "Preparing export...", false);
         self.run_export_inner(config, cmd_rx, state_tx);
@@ -412,7 +412,7 @@ impl ContentThread {
         &mut self,
         config: manifold_media::export_config::ExportConfig,
         cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) {
         log::info!("[ContentThread] Starting export: {:?}", config);
 
@@ -554,7 +554,7 @@ impl ContentThread {
     #[cfg(target_os = "macos")]
     fn send_export_phase(
         &self,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
         is_exporting: bool,
         export_progress: f32,
         status: &str,
@@ -570,9 +570,7 @@ impl ContentThread {
             is_playing: self.engine.is_playing(),
             ..ContentState::default()
         };
-        if let Err(e) = state_tx.send(state) {
-            log::error!("[ContentThread] Export phase channel disconnected: {e}");
-        }
+        state_tx.publish(state);
     }
 
     /// Run one export pass for a single (possibly section) range — the original
@@ -587,7 +585,7 @@ impl ContentThread {
         bpm: manifold_core::Bpm,
         progress_prefix: Option<&str>,
         cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         use manifold_core::tempo::TempoMapConverter;
         use manifold_media::audio_muxer::AudioMuxer;
@@ -982,7 +980,7 @@ impl ContentThread {
         frame_idx: u32,
         _total_frames: u32,
         frame_dt: f64,
-        state_tx: &crossbeam_channel::Sender<ContentState>,
+        state_tx: &StateTx,
         progress_prefix: Option<&str>,
         generator_only: bool,
         mut offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
@@ -1267,7 +1265,7 @@ impl ContentThread {
     #[cfg(target_os = "macos")]
     fn send_export_progress(
         &self,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
         session: &manifold_media::export_session::ExportSession,
         progress_prefix: Option<&str>,
     ) {
@@ -1284,9 +1282,7 @@ impl ContentThread {
             is_playing: self.engine.is_playing(),
             ..ContentState::default()
         };
-        if let Err(e) = state_tx.send(state) {
-            log::error!("[ContentThread] Export progress channel disconnected: {e}");
-        }
+        state_tx.publish(state);
     }
 
     /// Submit a pending still-frame export's GPU readback, if one is waiting and
@@ -1311,7 +1307,7 @@ impl ContentThread {
     /// thread). The finished event is sent from that thread. No-op until the
     /// readback has been submitted (`dims` set) and the GPU copy is readable.
     #[cfg(target_os = "macos")]
-    pub(crate) fn poll_still_export(&mut self, state_tx: &Sender<ContentState>) {
+    pub(crate) fn poll_still_export(&mut self, state_tx: &StateTx) {
         let Some(job) = self.still_export.as_mut() else {
             return;
         };
@@ -1369,14 +1365,14 @@ impl ContentThread {
                     }
                 };
                 let state = ContentState {
-                    export_finished: Some(ExportFinishedEvent {
+                    export_finished: vec![ExportFinishedEvent {
                         success,
                         message,
                         output_path: path,
-                    }),
+                    }],
                     ..ContentState::default()
                 };
-                let _ = tx.send(state);
+                tx.publish(state);
             })
             .expect("failed to spawn still-export thread");
     }
@@ -1384,22 +1380,20 @@ impl ContentThread {
     /// Send export finished event to the UI thread.
     pub(crate) fn send_export_finished(
         &self,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
         success: bool,
         message: String,
         output_path: &str,
     ) {
         let state = ContentState {
-            export_finished: Some(ExportFinishedEvent {
+            export_finished: vec![ExportFinishedEvent {
                 success,
                 message,
                 output_path: output_path.to_string(),
-            }),
+            }],
             ..ContentState::default()
         };
-        if let Err(e) = state_tx.send(state) {
-            log::error!("[ContentThread] Export finished channel disconnected: {e}");
-        }
+        state_tx.publish(state);
     }
 
     /// BUG-130: decide whether an export can proceed to frame 0.

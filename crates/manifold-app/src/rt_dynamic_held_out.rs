@@ -25,7 +25,6 @@ use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use serde_json::{Value, json};
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
 use crate::headless_harness::headless_content_thread;
 use crate::scene_modifier_edit::SceneModifierAction;
 
@@ -310,7 +309,7 @@ fn measure_project(
         .ok()
         .and_then(source_triangles);
     let mut ct = headless_content_thread(project, WIDTH, HEIGHT);
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let drain = std::thread::Builder::new()
         .name("rt-dynamic-content-drain".into())
         .spawn(move || while state_rx.recv().is_ok() {})

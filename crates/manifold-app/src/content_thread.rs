@@ -28,12 +28,8 @@ use manifold_node_engine::gpu::context::GpuContext;
 
 use crate::content_command::ContentCommand;
 use crate::content_pipeline::ContentPipeline;
-use crate::content_state::ContentState;
+use crate::content_state::{ContentState, StateTx};
 use crate::frame_timer::FrameTimer;
-
-/// Undrained states past which the UI counts as stalled (about half a second
-/// at 60 fps). A healthy UI keeps the queue at one or two.
-const UI_STATE_BACKLOG: usize = 32;
 
 /// An in-flight "export current frame" request. Captured across two content
 /// ticks so the live render never stalls: tick N submits the GPU readback (and
@@ -211,7 +207,7 @@ impl ContentThread {
         cmd: ContentCommand,
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         match cmd {
             ContentCommand::LoadProject(project) =>
@@ -225,7 +221,7 @@ impl ContentThread {
         mut self,
         cmd_tx: crossbeam_channel::Sender<ContentCommand>,
         cmd_rx: Receiver<ContentCommand>,
-        state_tx: Sender<ContentState>,
+        state_tx: StateTx,
     ) {
         log::info!("[ContentThread] started");
 
@@ -324,7 +320,7 @@ impl ContentThread {
         &mut self,
         cmd_tx: &Sender<ContentCommand>,
         cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         // Wait for GPU surface, draining commands while waiting.
         // In the common case (99%+) this returns immediately — the GPU
@@ -372,7 +368,7 @@ impl ContentThread {
         &mut self,
         cmd_tx: &crossbeam_channel::Sender<ContentCommand>,
         cmd_rx: &crossbeam_channel::Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         // Fast path: surface already ready (99%+ of frames).
         if self.content_pipeline.is_surface_ready(self.frame_count) {
@@ -482,7 +478,7 @@ impl ContentThread {
     /// `self.timer.wait_for_deadline()` between calls, same as `run()`'s own
     /// loop) instead of going through the command channel — no behavior
     /// change to this function itself.
-    pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
+    pub(crate) fn tick_frame(&mut self, state_tx: &StateTx) {
         self.tick_frame_at(std::time::Instant::now(), state_tx);
     }
 
@@ -490,7 +486,7 @@ impl ContentThread {
     /// real content thread through a chosen press phase, jitter and stalls
     /// (docs/FRAME_EXACT_TRANSPORT_DESIGN.md section 3.4). Only the timer's
     /// tick reads `now`; wall telemetry stays on the real clock (D13).
-    pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &Sender<ContentState>) {
+    pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &StateTx) {
         let _frame_start = std::time::Instant::now();
         // Reactions to commands handled outside a drain loop (tests, the
         // headless harness); a no-op when the drain already reacted.
@@ -1121,25 +1117,11 @@ impl ContentThread {
     /// Build and send a `ContentState` snapshot to the UI. Gated by
     /// `data_version` for the heavy `Arc<Project>` clone; lightweight
     /// modulation/transport fields are sent every call.
-    fn send_state(&mut self, state_tx: &Sender<ContentState>) {
+    fn send_state(&mut self, state_tx: &StateTx) {
         let version = self.editing_service.data_version();
         // D23: today's rule (every edit, undo, redo, record, load) plus a
         // content-originated write outside the live scalars.
         let version_changed = version != self.last_data_version || self.reactions.publish_pending;
-        // The UI drains to the latest state every frame. When it stops — a
-        // native dialog or alert holds the main thread for as long as the
-        // user leaves it open — per-tick states would queue without limit and
-        // be replayed one by one on return. Past a short backlog, send only
-        // states that carry something the UI must not miss: a project edit or
-        // an undo/redo event. Everything else is superseded by the next tick.
-        if state_tx.len() >= UI_STATE_BACKLOG
-            && !version_changed
-            && self.pending_undo_redo_event.is_none()
-        {
-            self.audio_mod_runtime.drain_spectrogram_columns(|_| {});
-            self.audio_mod_runtime.drain_spectrogram_scalars(|_| {});
-            return;
-        }
         if version_changed {
             self.last_data_version = version;
             self.reactions.publish_pending = false;
@@ -1318,6 +1300,7 @@ impl ContentThread {
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator),
             sdr_preview: Some(self.content_pipeline.sdr_preview()),
+            body: true,
             rt_quality: self
                 .engine
                 .project()
@@ -1424,7 +1407,7 @@ impl ContentThread {
                 static EMPTY: std::sync::LazyLock<Arc<str>> = std::sync::LazyLock::new(|| Arc::from(""));
                 EMPTY.clone()
             },
-            export_finished: None,
+            export_finished: Vec::new(),
             export_run_finished: false,
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
@@ -1459,16 +1442,13 @@ impl ContentThread {
             automation_armed: self.engine.automation_armed(),
         };
 
-        // Send state to UI. Unbounded channel — never drops snapshots.
-        if let Err(e) = state_tx.send(state) {
-            log::error!("[ContentThread] State channel disconnected: {e}");
-        }
+        state_tx.publish(state);
     }
 
     /// Send a `ContentState` snapshot only if the project has mutated since
     /// the last publish. Used outside the render tick so the UI confirms
     /// edits while the GPU is behind. Coalesces: one publish per drain pass.
-    fn publish_snapshot_if_dirty(&mut self, state_tx: &Sender<ContentState>) {
+    fn publish_snapshot_if_dirty(&mut self, state_tx: &StateTx) {
         // The drain pass is over: react once to everything it moved (D4).
         self.run_reactions();
         if self.editing_service.data_version() != self.last_data_version
@@ -2078,7 +2058,7 @@ mod tests {
         use manifold_playback::midi_input::{MidiNoteEvent, MidiNoteEventType};
         let mut thread = headless_content_thread(one_layer(manifold_core::types::LayerType::Trigger), 64, 64);
         thread.timer.set_frame_clocked(true);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         thread.handle_command(ContentCommand::SetRecording(true));
         thread.handle_command(ContentCommand::Play);
         let note = |event_type, sequence| MidiNoteEvent {
@@ -2114,7 +2094,7 @@ mod tests {
         trigger.layer_id = project.timeline.layers[0].layer_id.clone();
         project.timeline.layers[0].clips.push(trigger);
         let mut thread = headless_content_thread(project, 64, 64);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         thread.tick_frame(&state_tx);
         let _ = last_snapshot(&state_rx);
         let before = thread.editing_service.stamps();
@@ -2131,7 +2111,7 @@ mod tests {
     #[test]
     fn mutation_publishes_snapshot_without_a_tick() {
         let mut thread = headless_content_thread(Project::default(), 1280, 720);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         assert!(!thread.handle_command(ContentCommand::SetProject));
         thread.publish_snapshot_if_dirty(&state_tx);
         let state = state_rx.try_recv().expect("snapshot published");
@@ -2141,33 +2121,13 @@ mod tests {
     #[test]
     fn sdr_preview_publishes_runtime_snapshot_without_a_tick() {
         let mut thread = headless_content_thread(Project::default(), 64, 64);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         assert!(!thread.handle_command(ContentCommand::SetSdrPreview(true)));
         thread.publish_snapshot_if_dirty(&state_tx);
         let state = state_rx.try_recv().expect("runtime preview snapshot published");
         assert_eq!(state.sdr_preview, Some(true));
         assert_eq!(state.data_version, 0, "preview must not create an edit");
         assert!(!state.editing_is_dirty, "preview must not dirty the project");
-    }
-
-    #[test]
-    fn stalled_ui_gets_only_states_it_must_not_miss() {
-        let mut thread = headless_content_thread(Project::default(), 64, 64);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
-        for _ in 0..super::UI_STATE_BACKLOG {
-            state_tx.send(crate::content_state::ContentState::default()).unwrap();
-        }
-        thread.send_state(&state_tx);
-        assert_eq!(state_rx.len(), super::UI_STATE_BACKLOG, "per-tick state queued behind a stalled UI");
-
-        assert!(!thread.handle_command(ContentCommand::SetProject));
-        thread.send_state(&state_tx);
-        assert_eq!(state_rx.len(), super::UI_STATE_BACKLOG + 1, "project edit dropped behind a stalled UI");
-        let edit = state_rx.try_iter().last().expect("queued");
-        assert!(edit.project_snapshot.is_some());
-
-        thread.send_state(&state_tx);
-        assert_eq!(state_rx.len(), 1, "drained UI gets per-tick states again");
     }
 
     /// FRAME_EXACT_TRANSPORT_DESIGN D10: the project setting is the only fps.
@@ -2177,7 +2137,7 @@ mod tests {
     fn timer_and_clock_follow_project_fps() {
         use manifold_editing::commands::settings::ChangeFrameRateCommand;
         let mut thread = headless_content_thread(Project::default(), 64, 64);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         let tick_and_check = |thread: &mut super::ContentThread, fps: f32, after: &str| {
             let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !thread.content_pipeline.is_surface_ready(thread.frame_count) {

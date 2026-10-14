@@ -7,10 +7,10 @@
 ))]
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::{ContentState, StateTx};
 use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use manifold_core::clip::TimelineClip;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::effects::PresetInstance;
@@ -372,7 +372,7 @@ fn inspect_output(ct: &ContentThread) -> (bool, usize, f32) {
 }
 fn measure_case(
     ct: &mut ContentThread,
-    state_tx: &Sender<ContentState>,
+    state_tx: &StateTx,
     state_rx: &Receiver<ContentState>,
     spec: CaseSpec,
 ) -> CaseMetrics {
@@ -633,7 +633,7 @@ fn blob_v2_performance_proof_60_warmup_600_measured() {
         .native_device()
         .expect("native performance device")
         .device_name();
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let mut cases = Vec::with_capacity(CASES.len());
     for spec in CASES {
         cases.push(measure_case(&mut ct, &state_tx, &state_rx, spec));
