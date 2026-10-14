@@ -12,6 +12,7 @@ use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
 use crate::scheduler::{ActiveClipRef, ClipScheduler};
 use crate::session_state::SessionRuntime;
+use crate::external_follow::ExternalFollower;
 use crate::transport_clock::TransportClock;
 
 use ahash::{AHashMap, AHashSet};
@@ -117,6 +118,27 @@ pub struct TickResult {
     pub pending_structural_commits: Vec<Box<dyn manifold_editing::command::Command>>,
 }
 
+/// The engine's one beat converter (FRAME_EXACT_TRANSPORT_DESIGN D8).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TempoSource {
+    /// Under Internal: `beat(t) = map(t) + beat_offset`. The offset is 0
+    /// except after a hand-back from an external source.
+    Map { beat_offset: f64 },
+    /// Under an external authority: the engine's follower, the follow
+    /// segment, exact only near now.
+    Follow,
+}
+
+/// A clip's start time for video elapsed time: `None` reads the map live
+/// (under the map a past beat converts exactly); `Some` is latched on the
+/// activation frame under a follower, so it never rescales (D8).
+fn clip_start_latch(tempo: TempoSource, follower: &ExternalFollower, time: Seconds, frame_beat: f64, start: Beats) -> Option<Seconds> {
+    match tempo {
+        TempoSource::Map { .. } => None,
+        TempoSource::Follow => Some(time - follower.duration(start, Beats(frame_beat))),
+    }
+}
+
 // ─── Playback Engine ───
 
 /// Engine-agnostic playback logic. No platform dependencies.
@@ -140,6 +162,14 @@ pub struct PlaybackEngine {
     frame_beat: f64,
     /// `TickContext::frames` of the current tick; `tick_dt` is this many steps.
     tick_frames: u32,
+    /// The beat converter: the map, or the follow segment (D8).
+    tempo: TempoSource,
+    /// The follow segment while `tempo` is `Follow`; kept inline so an
+    /// authority change never allocates.
+    follower: ExternalFollower,
+    /// Active clips' start beats and latched start times (D8). Reserved at
+    /// load to the clip count; inserts only at activation.
+    clip_starts: AHashMap<ClipId, (Beats, Option<Seconds>)>,
     is_recording: bool,
     // STOPGAP(frame-exact P3): while set, live ticks don't advance the clock
     // and the external source places it. P3 replaces this with corrections.
@@ -321,6 +351,14 @@ impl PlaybackEngine {
             current_beat: 0.0,
             frame_beat: 0.0,
             tick_frames: 0,
+            tempo: TempoSource::Map { beat_offset: 0.0 },
+            follower: ExternalFollower::starting_at(
+                crate::external_follow::FollowProfile::FAST,
+                Seconds::ZERO,
+                Beats::ZERO,
+                Bpm(120.0),
+            ),
+            clip_starts: AHashMap::with_capacity(32),
             is_recording: false,
             external_time_sync: false,
             project: None,
@@ -647,6 +685,9 @@ impl PlaybackEngine {
         // LoadProject goes through the loader which already calls this, but NewProject
         // or programmatic construction may not. Redundant calls are safe (idempotent).
         project.on_after_deserialize();
+        let clip_count: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
+        self.clip_starts.reserve(clip_count);
+        self.tempo = TempoSource::Map { beat_offset: 0.0 };
         self.project = Some(project);
         // Runtime session state never survives a project swap (it is never
         // serialized) — a fresh/loaded project always starts arrangement-only.
@@ -777,6 +818,7 @@ impl PlaybackEngine {
         self.reconcile_clip_control_bindings();
         self.clock.locate(t);
         self.refresh_beat();
+        self.relatch_clip_starts();
     }
 
     /// STOPGAP(frame-exact P3): an external source (Link, MIDI clock) places
@@ -836,6 +878,7 @@ impl PlaybackEngine {
         let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
         self.clock.locate(Seconds(t.0.max(0.0)));
         self.refresh_beat();
+        self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
     }
 
@@ -983,6 +1026,7 @@ impl PlaybackEngine {
             self.clock.locate(time);
         }
         self.refresh_beat();
+        self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
 
         // Session slots are beat-anchored and stateless, so a seek never
@@ -1012,6 +1056,7 @@ impl PlaybackEngine {
                     self.renderers[renderer_idx].stop_clip(id);
                 }
                 self.active_clip_ids.remove(id);
+                self.clip_starts.remove(id.as_str());
                 self.stopped_this_tick.push(id.clone());
             }
         }
@@ -1610,6 +1655,8 @@ impl PlaybackEngine {
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
+                let latch = clip_start_latch(self.tempo, &self.follower, self.clock.time(), self.frame_beat, clip.start_beat);
+                self.clip_starts.insert(clip.id.clone(), (clip.start_beat, latch));
                 // The realized layer is the layer the clip was started ON
                 // (authoritative container), never `clip.layer_id` — a dragged
                 // clip's own field is exactly what may be stale (P3).
@@ -1641,6 +1688,7 @@ impl PlaybackEngine {
         }
         self.active_clip_ids.remove(clip_id);
         self.active_clip_layers.remove(clip_id);
+        self.clip_starts.remove(clip_id);
         self.preparing_clips.remove(clip_id);
         self.pending_pauses.remove(clip_id);
         self.looping_clip_ids.remove(clip_id);
@@ -1674,6 +1722,7 @@ impl PlaybackEngine {
             .extend(self.stop_buffer.iter().cloned());
         self.active_clip_ids.clear();
         self.active_clip_layers.clear();
+        self.clip_starts.clear();
         self.preparing_clips.clear();
         self.pending_pauses.clear();
         self.looping_clip_ids.clear();
@@ -2349,11 +2398,68 @@ impl PlaybackEngine {
     /// an edge exactly on the frame counts as reached on it, and its exact
     /// beat for recording actions (D14).
     fn refresh_beat(&mut self) {
-        if let Some(project) = &mut self.project {
-            let bpm = project.settings.bpm;
-            self.current_beat =
-                TempoMapConverter::seconds_to_beat_f64(&mut project.tempo_map, self.clock.beat_sample_time().0, bpm);
-            self.frame_beat = TempoMapConverter::seconds_to_beat_f64(&mut project.tempo_map, self.clock.time().0, bpm);
+        if self.project.is_some() {
+            self.current_beat = self.converter_beat_at(self.clock.beat_sample_time());
+            self.frame_beat = self.converter_beat_at(self.clock.time());
+        }
+    }
+
+    /// The converter's beat at `t` (D8).
+    fn converter_beat_at(&mut self, t: Seconds) -> f64 {
+        match &self.tempo {
+            TempoSource::Follow => self.follower.beat_at(t).0,
+            TempoSource::Map { beat_offset } => {
+                let offset = *beat_offset;
+                self.project.as_mut().map_or(0.0, |p| {
+                    TempoMapConverter::seconds_to_beat_f64(&mut p.tempo_map, t.0, p.settings.bpm)
+                }) + offset
+            }
+        }
+    }
+
+    /// The converter's time of `beat`. Under the follower only near now (D8).
+    fn converter_time_at(&mut self, beat: Beats) -> Seconds {
+        match &self.tempo {
+            TempoSource::Follow => self.follower.time_at(beat),
+            TempoSource::Map { beat_offset } => {
+                let b = Beats(beat.0 - *beat_offset);
+                match &mut self.project {
+                    Some(p) => TempoMapConverter::beat_to_seconds(&mut p.tempo_map, b, p.settings.bpm),
+                    None => Seconds(b.0 * 0.5),
+                }
+            }
+        }
+    }
+
+    /// `converter_time_at` for readers holding `&self` (the map must already
+    /// be sorted, as it is after load).
+    fn converter_time_at_immut(&self, beat: Beats) -> Seconds {
+        match &self.tempo {
+            TempoSource::Follow => self.follower.time_at(beat),
+            TempoSource::Map { beat_offset } => {
+                let b = Beats(beat.0 - *beat_offset);
+                match &self.project {
+                    Some(p) => TempoMapConverter::beat_to_seconds_immut(&p.tempo_map, b, p.settings.bpm),
+                    None => Seconds(b.0 * 0.5),
+                }
+            }
+        }
+    }
+
+    /// Seconds from `b0` to `b1`, from the beat difference (D8): never two
+    /// absolute times through the segment.
+    fn converter_duration(&mut self, b0: Beats, b1: Beats) -> Seconds {
+        match &self.tempo {
+            TempoSource::Follow => self.follower.duration(b0, b1),
+            TempoSource::Map { .. } => self.converter_time_at(b1) - self.converter_time_at(b0),
+        }
+    }
+
+    /// Every placement re-latches the active clips on its frame (D8).
+    fn relatch_clip_starts(&mut self) {
+        let (time, frame_beat) = (self.clock.time(), self.frame_beat);
+        for (start, latch) in self.clip_starts.values_mut() {
+            *latch = clip_start_latch(self.tempo, &self.follower, time, frame_beat, *start);
         }
     }
 
@@ -2669,33 +2775,35 @@ impl PlaybackEngine {
     /// Get clip start time in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipStartTimeSeconds (lines 1449-1453).
     pub fn get_clip_start_time_seconds(&mut self, clip: &TimelineClip) -> Seconds {
-        self.beat_to_timeline_time(clip.start_beat)
+        if let Some((_, Some(latched))) = self.clip_starts.get(clip.id.as_str()) {
+            return *latched;
+        }
+        self.converter_time_at(clip.start_beat)
     }
 
     /// Get clip end time in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipEndTimeSeconds (lines 1456-1460).
     pub fn get_clip_end_time_seconds(&mut self, clip: &TimelineClip) -> Seconds {
-        self.beat_to_timeline_time(clip.end_beat())
+        self.converter_time_at(clip.end_beat())
     }
 
-    /// Get clip duration in timeline seconds.
+    /// Get clip duration in timeline seconds, from the beat difference (D8).
     /// Port of C# PlaybackEngine.GetClipDurationSeconds (lines 1463-1468).
     pub fn get_clip_duration_seconds(&mut self, clip: &TimelineClip) -> Seconds {
-        let duration =
-            self.get_clip_end_time_seconds(clip) - self.get_clip_start_time_seconds(clip);
-        duration.max(Seconds::ZERO)
+        self.converter_duration(clip.start_beat, clip.end_beat()).max(Seconds::ZERO)
     }
 
-    /// Get clip loop duration in timeline seconds.
+    /// Get clip loop duration in timeline seconds, from the beat difference (D8).
     /// Port of C# PlaybackEngine.GetClipLoopDurationSeconds (lines 1471-1477).
     pub fn get_clip_loop_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
         if clip.loop_duration_beats <= Beats::ZERO {
             return 0.0;
         }
-        let loop_end = self
-            .beat_to_timeline_time(clip.start_beat + clip.loop_duration_beats)
-            .as_f32();
-        let loop_start = self.get_clip_start_time_seconds(clip).as_f32();
+        if self.tempo == TempoSource::Follow {
+            return self.follower.duration(clip.start_beat, clip.start_beat + clip.loop_duration_beats).as_f32().max(0.0);
+        }
+        let loop_end = self.converter_time_at(clip.start_beat + clip.loop_duration_beats).as_f32();
+        let loop_start = self.converter_time_at(clip.start_beat).as_f32();
         (loop_end - loop_start).max(0.0)
     }
 
@@ -3208,16 +3316,7 @@ impl PlaybackEngine {
                     .live_clip_manager
                     .as_ref()
                     .is_some_and(|mgr| mgr.is_live_slot_clip(&entry.clip_id));
-                // Inline beat_to_timeline_time to avoid &mut self borrow
-                let clip_end_time = if let Some(project) = &self.project {
-                    TempoMapConverter::beat_to_seconds_immut(
-                        &project.tempo_map,
-                        entry.end_beat(),
-                        project.settings.bpm,
-                    )
-                } else {
-                    Seconds(entry.end_beat().0 * 0.5)
-                };
+                let clip_end_time = self.converter_time_at_immut(entry.end_beat());
                 if self.should_exclude_recently_started(&entry.clip_id, clip_end_time, is_live_clip)
                 {
                     continue;
