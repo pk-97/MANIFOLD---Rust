@@ -1622,6 +1622,7 @@ impl ContentThread {
                             &d.nodes,
                             &mut handle_by_id,
                         );
+                        let mut declared = manifold_core::param_lookup::Declared::new(&d);
                         snap.outer_routings = meta
                             .bindings
                             .iter()
@@ -1629,7 +1630,12 @@ impl ContentThread {
                                 BindingTarget::Node { node_id, param } => {
                                     let handle = handle_by_id.get(node_id.as_str())?;
                                     Some(OuterParamRouting {
-                                        outer_label: b.label.clone(),
+                                        outer_label: layer
+                                            .gen_params()
+                                            .and_then(|gp| gp.params.get(&b.id))
+                                            .map(|p| p.spec.name.clone())
+                                            .or_else(|| declared.as_mut().map(|x| x.name(&b.id)))
+                                            .unwrap_or_default(),
                                         outer_param_id: b.id.clone(),
                                         node_handle: handle.to_string(),
                                         inner_param: param.clone(),
@@ -1666,7 +1672,8 @@ impl ContentThread {
                 snap.outer_routings = metadata.bindings.iter().filter_map(|binding| {
                     let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } = &binding.target else { return None; };
                     Some(manifold_node_engine::snapshot::OuterParamRouting {
-                        outer_label: binding.label.clone(), outer_param_id: binding.id.clone(),
+                        outer_label: owner.params.get(&binding.id).map(|p| p.spec.name.clone()).unwrap_or_default(),
+                        outer_param_id: binding.id.clone(),
                         node_handle: handles.get(node_id.as_str())?.to_string(), inner_param:param.clone(),
                         source: if binding.user_added { manifold_node_engine::snapshot::OuterParamSource::User }
                             else { manifold_node_engine::snapshot::OuterParamSource::Static },

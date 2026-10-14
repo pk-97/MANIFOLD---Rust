@@ -239,19 +239,24 @@ impl<'a> Join<'a> {
             };
             return (spec, SpecSource::Lookup, choices);
         }
-        // A fan-out (several bindings under one id) has no single primary
-        // target, so its spec is authored.
-        let Some(binding) = single else {
+        // A fan-out (several bindings under one id) is described by its first
+        // binding's target, in authored order (D22).
+        let Some(binding) = single.or_else(|| self.bindings.iter().find(|b| b.id == saved.id)) else {
             return (saved.clone(), SpecSource::Authored, none);
         };
+        if single.is_none() && !matches!(binding.target, BindingTarget::Node { .. }) {
+            return (saved.clone(), SpecSource::Authored, none);
+        }
+        let fan_out = single.is_none();
+        let unresolved = if fan_out { SpecSource::Authored } else { SpecSource::Unresolved };
         let Some(key) = key_for(self.preset, binding, &self.nodes, self.scene_radius) else {
             return match binding.target {
                 BindingTarget::Composite { .. } => (saved.clone(), SpecSource::Authored, none),
-                _ => (saved.clone(), SpecSource::Unresolved, none),
+                _ => (saved.clone(), unresolved, none),
             };
         };
         let Some(described) = self.resolver.describe(key) else {
-            return (saved.clone(), SpecSource::Unresolved, none);
+            return (saved.clone(), unresolved, none);
         };
         (overlay(saved, described, binding.default_value), SpecSource::Lookup, none)
     }
@@ -279,6 +284,36 @@ impl<'a> Join<'a> {
                 .map(|_| (saved.min, saved.max)),
             ..ParamChoices::default()
         }
+    }
+}
+
+/// What each control of one graph declares, before any user choice: its
+/// `meta.params` entry joined with the lookup, as the manifest build joins
+/// it. User-added and authored controls keep their saved spec. Readers with
+/// no manifest at hand (a standalone runtime build, editor routings) read
+/// this, so they agree with a build that has one.
+pub struct Declared<'a> {
+    join: Join<'a>,
+    params: &'a [ParamSpecDef],
+}
+
+impl<'a> Declared<'a> {
+    pub fn new(def: &'a EffectGraphDef) -> Option<Self> {
+        let meta = def.preset_metadata.as_ref()?;
+        Some(Self { join: Join::new(&meta.id, def), params: &meta.params })
+    }
+
+    pub fn spec(&mut self, id: &str) -> Option<ParamSpecDef> {
+        let saved = self.params.iter().find(|p| p.id == id)?;
+        if self.join.bindings.iter().any(|b| b.user_added && b.id == id) {
+            return Some(saved.clone());
+        }
+        Some(self.join.join_control(saved).0)
+    }
+
+    /// The control's display name, or empty when the graph has no entry.
+    pub fn name(&mut self, id: &str) -> String {
+        self.spec(id).map(|s| s.name).unwrap_or_default()
     }
 }
 
@@ -444,14 +479,22 @@ mod tests {
     }
 
     #[test]
-    fn fan_out_and_composite_stay_authored() {
+    fn fan_out_reads_its_first_target_and_composite_stays_authored() {
         let fan_out = graph(vec![
             binding("sun", lamp("intensity"), 1.0),
             binding("sun", lamp("intensity"), 1.0),
         ]);
         let preset = fan_out.preset_metadata.as_ref().unwrap().id.clone();
         let (spec, source, _) = Join::new(&preset, &fan_out).join_control(&saved("sun"));
-        assert_eq!((source, spec.name.as_str()), (SpecSource::Authored, "Stale Copy"));
+        // D22: the first binding's target describes range and flags; the rest stays authored.
+        assert_eq!((source, spec.name.as_str()), (SpecSource::Lookup, "Stale Copy"));
+        assert_eq!((spec.min, spec.max), (0.0, 10.0));
+        let ghost = graph(vec![
+            binding("sun", BindingTarget::Node { node_id: NodeId::new("ghost"), param: "x".into() }, 1.0),
+            binding("sun", lamp("intensity"), 1.0),
+        ]);
+        let (spec, source, _) = Join::new(&preset, &ghost).join_control(&saved("sun"));
+        assert_eq!((source, spec), (SpecSource::Authored, saved("sun")));
 
         let composite = graph(vec![binding(
             "mix",
@@ -657,5 +700,50 @@ mod tests {
         assert_eq!(lamp.label, "Key", "a load names the binding from the join");
         fx.folded_sections.clear();
         assert!(!save(&fx).contains("foldedSections"));
+    }
+
+    /// INV-S16 (no reader goes around the join): the runtime, the editor
+    /// routings and the instance fallbacks never read a saved binding label.
+    /// Mirrors the design doc's gate, `binding.label` / `b.label`, outside
+    /// `Composite` arms.
+    #[test]
+    fn no_reader_goes_around_the_join() {
+        fn scan(path: &std::path::Path, hits: &mut Vec<String>) {
+            if path.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    scan(&entry.unwrap().path(), hits);
+                }
+                return;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                return;
+            }
+            let text = std::fs::read_to_string(path).unwrap();
+            for (n, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") || line.contains("Composite") {
+                    continue;
+                }
+                let hit = ["binding.label", "b.label"].iter().any(|pat| {
+                    line.match_indices(pat).any(|(i, m)| {
+                        let next = line[i + m.len()..].chars().next();
+                        !next.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                    })
+                });
+                if hit {
+                    hits.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut hits = Vec::new();
+        for rel in [
+            "manifold-node-engine/src",
+            "manifold-app/src/content_thread.rs",
+            "manifold-app/src/ui_snapshot",
+            "manifold-core/src/effects/instance.rs",
+        ] {
+            scan(&crates.join(rel), &mut hits);
+        }
+        assert!(hits.is_empty(), "readers around the join:\n{}", hits.join("\n"));
     }
 }

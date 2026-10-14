@@ -2409,16 +2409,17 @@ fn scene_import_with_half_extent(half_extent: f32) -> (manifold_core::effect_gra
     build_import_graph(&summary, path).expect("build scene-scale import graph")
 }
 
-/// Find the stamped card param for `node_id`+`param` on an import def.
-fn stamped_card_param<'a>(
-    meta: &'a manifold_core::effect_graph_def::PresetMetadata,
+/// The card param for `node_id`+`param` on an import def, as the live
+/// lookup joins it (ranges scale from the saved `scene_bounds`).
+fn stamped_card_param(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
     node_id: u32,
     param: &str,
-) -> &'a manifold_core::effect_graph_def::ParamSpecDef {
+) -> manifold_core::effect_graph_def::ParamSpecDef {
     let id = format!("{node_id}_{param}");
-    meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| {
-        panic!("no stamped card param `{id}`; have: {:?}", meta.params.iter().map(|p| &p.id).collect::<Vec<_>>())
-    })
+    manifold_core::param_lookup::Declared::new(def)
+        .and_then(|mut d| d.spec(&id))
+        .unwrap_or_else(|| panic!("no card param `{id}`"))
 }
 
 /// BUG-upfq P1: an import's light / focus / light-range slider ranges must
@@ -2436,8 +2437,8 @@ fn scene_derived_range_ratio_matches_bbox(small_half: f32, large_half: f32) -> b
     let (small_def, _) = scene_import_with_half_extent(small_half);
     let (large_def, _) = scene_import_with_half_extent(large_half);
 
-    let small_meta = small_def.preset_metadata.as_ref().unwrap();
-    let large_meta = large_def.preset_metadata.as_ref().unwrap();
+    let small_meta = &small_def;
+    let large_meta = &large_def;
 
     let small_sun_id = small_def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
     let large_sun_id = large_def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
@@ -2504,7 +2505,7 @@ fn scene_ssao_radius_default_tracks_scene_scale() {
 #[test]
 fn scene_range_override_never_moves_defaults() {
     let (def, _) = scene_import_with_half_extent(5.0);
-    let meta = def.preset_metadata.as_ref().unwrap();
+    let meta = &def;
     let sun_id = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
     let sun_node = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
 
@@ -2523,7 +2524,7 @@ fn scene_range_override_never_moves_defaults() {
 #[test]
 fn scene_light_range_scales_and_keeps_zero_one_floor() {
     let (def, _) = scene_import_with_half_extent(2.0);
-    let meta = def.preset_metadata.as_ref().unwrap();
+    let meta = &def;
     let sun_id = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
     let range_spec = stamped_card_param(meta, sun_id, "range");
 
@@ -2582,7 +2583,7 @@ fn import_stamps_world_to_mm_and_scene_f_stop_range() {
     // f_stop card range is scene-derived, one-sided top.
     let lens_list: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.camera_lens").collect();
     let lens_id = lens_list[0].id;
-    let fstop = stamped_card_param(meta, lens_id, "f_stop");
+    let fstop = stamped_card_param(&def, lens_id, "f_stop");
     assert_eq!(fstop.min, 0.5, "f_stop band keeps the photographic 0.5 floor");
     assert!(
         (fstop.max - (32.0f32).max(64.0 * r)).abs() < 1e-3,
@@ -2606,12 +2607,13 @@ fn merged_pos_x(
         .find_map(|n| n.group.as_ref())
         .and_then(|g| g.nodes.iter().find(|n| n.type_id == "node.transform_3d"))
         .expect("merged object has a transform_3d");
-    let pos = plan
-        .new_card_params
-        .iter()
-        .find(|p| p.id == format!("{}_pos_x", transformed.id))
-        .expect("merged object's transform pos_x card param")
-        .clone();
+    let mut merged = target.clone();
+    merged.nodes.extend(plan.new_nodes.iter().cloned());
+    let meta = merged.preset_metadata.as_mut().expect("target has metadata");
+    meta.params.extend(plan.new_card_params.iter().cloned());
+    meta.bindings.extend(plan.new_card_bindings.iter().cloned());
+    meta.scene_bounds = Some(plan.scene_bounds);
+    let pos = stamped_card_param(&merged, transformed.id, "pos_x");
     (plan, pos)
 }
 
@@ -2649,8 +2651,8 @@ fn orbit_camera_ranges_scale_with_bbox_radius() {
     let (small_def, _) = scene_import_with_half_extent(0.137);
     let (large_def, _) = scene_import_with_half_extent(50.0);
 
-    let small_meta = small_def.preset_metadata.as_ref().unwrap();
-    let large_meta = large_def.preset_metadata.as_ref().unwrap();
+    let small_meta = &small_def;
+    let large_meta = &large_def;
 
     let small_cam_id = small_def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap().id;
     let large_cam_id = large_def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap().id;
@@ -2689,7 +2691,7 @@ fn orbit_camera_ranges_scale_with_bbox_radius() {
 #[test]
 fn orbit_camera_range_override_never_moves_defaults() {
     let (def, _) = scene_import_with_half_extent(0.137);
-    let meta = def.preset_metadata.as_ref().unwrap();
+    let meta = &def;
     let cam_id = def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap();
     let cam_node = &cam_id;
     let cam_id = cam_id.id;

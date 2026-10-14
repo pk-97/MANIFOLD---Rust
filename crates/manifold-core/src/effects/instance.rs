@@ -751,7 +751,13 @@ impl PresetInstance {
         let spec = param.map(|p| &p.spec);
         Some(UserParamBinding {
             id: b.id.clone(),
-            label: spec.map(|s| s.name.clone()).unwrap_or_else(|| b.label.clone()),
+            label: spec.map(|s| s.name.clone()).unwrap_or_else(|| {
+                self.graph
+                    .as_ref()
+                    .and_then(crate::param_lookup::Declared::new)
+                    .map(|mut d| d.name(&b.id))
+                    .unwrap_or_default()
+            }),
             node_id,
             legacy_node_handle: None,
             inner_param,
@@ -888,7 +894,7 @@ impl PresetInstance {
     /// sibling user bindings keep their slot indices.
     pub fn restore_user_binding_at(
         &mut self,
-        binding: UserParamBinding,
+        removed: UserParamBinding,
         position: usize,
         param: crate::params::Param,
     ) {
@@ -936,23 +942,23 @@ impl PresetInstance {
             .map(|(i, _)| i)
             .unwrap_or(meta.bindings.len());
         let whole_numbers = matches!(
-            binding.convert,
+            removed.convert,
             ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
         );
         meta.bindings.insert(
             abs_binding_idx,
             BindingDef {
-                id: binding.id.clone(),
-                label: binding.label.clone(),
-                default_value: binding.default_value,
+                id: removed.id.clone(),
+                label: removed.label.clone(),
+                default_value: removed.default_value,
                 target: BindingTarget::Node {
-                    node_id: binding.node_id.clone(),
-                    param: binding.inner_param.clone(),
+                    node_id: removed.node_id.clone(),
+                    param: removed.inner_param.clone(),
                 },
-                convert: binding.convert,
+                convert: removed.convert,
                 user_added: true,
-                scale: binding.scale,
-                offset: binding.offset,
+                scale: removed.scale,
+                offset: removed.offset,
                 default_mirrors_node_param: false,
             },
         );
@@ -961,22 +967,22 @@ impl PresetInstance {
         // is keyed by id).
         meta.params.push(ParamSpecDef {
             tooltip: None,
-            id: binding.id.clone(),
-            name: binding.label.clone(),
-            min: binding.min,
-            max: binding.max,
-            default_value: binding.default_value,
+            id: removed.id.clone(),
+            name: removed.label.clone(),
+            min: removed.min,
+            max: removed.max,
+            default_value: removed.default_value,
             whole_numbers,
-            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
-            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: binding.value_labels.clone(),
+            is_toggle: matches!(removed.convert, ParamConvert::BoolThreshold),
+            is_trigger: matches!(removed.convert, ParamConvert::Trigger),
+            value_labels: removed.value_labels.clone(),
             format_string: None,
             osc_suffix: String::new(),
-            curve: binding.curve,
-            invert: binding.invert,
+            curve: removed.curve,
+            invert: removed.invert,
             // Position-aware reinstate (undo of an unexpose): preserve the
             // angle flag off the captured binding, same as `append_user_binding`.
-            is_angle: binding.is_angle,
+            is_angle: removed.is_angle,
             is_trigger_gate: false,
             wraps: false,
             // Same carry-through as `append_user_binding` — this shadow entry
@@ -984,7 +990,7 @@ impl PresetInstance {
             // manifest at serialize time), but keeping it consistent avoids a
             // misleading `None` sitting next to a real section value on the
             // manifest entry `self.params.insert_at` restores below.
-            section: binding.section.clone(),
+            section: removed.section.clone(),
             card_visible: true,
             material_role: None,
             limit: Default::default(),

@@ -186,6 +186,7 @@ FLIP Fluids' own terms stay (Sheet Fill Rate). Re-derivation for any row: `rg -n
 - `migrate_scene_exposures` keeps pass 1 (stamp missing exposures: binding id and target) and pass 3 (`default_mirrors_node_param`).
 - It loses pass 2 and pass 4, because the join replaces them. The stamp stops writing specs beyond an id stub.
 - It gains the light-title rung (D11).
+- The default re-seed pass (BUG-303 stamped-default repair) stays until P3 moves defaults into the scene table.
 - It never writes `ParamChoices`, `folded_sections` or user-added bindings.
 - Section strings no longer decide anything on scene surfaces, so the predecessor's "named collapsed sections per scene item" become display data the projections ignore.
 - Water graphs follow the decision-log rule ("Water changes need no old-project upgrades"): water presets are regenerated, no water rungs.
@@ -231,6 +232,8 @@ Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene p
 **D20 — Stubs bump the project version to 1.21.0.** An older build reads a stub as a nameless 0..0 control and could save that back; refusing the newer file is the safe failure. The rung is a structural no-op. One radius per graph: an import or merge saves `meta.scene_bounds` (the target's own win, else the incoming asset's) and the lookup scales node ranges by it.
 
 **D21 — Names stay as saved until P5.** Until the naming pass (P5) brings the label rules, the lookup supplies range and flags only; names come from the lookup from P5.
+
+**D22 — A fan-out is described by its first binding.** A control with several bindings under one id takes range, flags and scene scaling from its first binding's target in authored order, as the import range stamp did; everything else stays authored. If that target cannot be described, the control stays authored. Lead ruling, 2026-10-14.
 
 **Consequences, stated honestly:**
 1. Scene projects get smaller on disk: no names or ranges per control. A file saved after P1 shows placeholders in an older build (format version bump, P1).

@@ -331,10 +331,10 @@ impl ResolvedBinding {
     /// a preset-authored curve / a widened range (via a per-instance graph
     /// override or a fork) takes effect through this same path.
     pub fn from_static(
-        b: &ParamBinding,
+        decl: &ParamBinding,
         node_map: &[(NodeId, NodeInstanceId)],
     ) -> Option<Self> {
-        let target = match &b.target {
+        let target = match &decl.target {
             ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
                 outer_name: outer_name.clone(),
             },
@@ -345,18 +345,18 @@ impl ResolvedBinding {
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
         let reshape =
-            Reshape::from_preset_response(b.min, b.max, b.curve, b.invert, b.scale, b.offset);
+            Reshape::from_preset_response(decl.min, decl.max, decl.curve, decl.invert, decl.scale, decl.offset);
         Some(Self::assemble(
-            b.id.clone(),
-            b.label.clone(),
-            b.default_value,
+            decl.id.clone(),
+            decl.label.clone(),
+            decl.default_value,
             target,
-            b.convert,
+            decl.convert,
             BindingSource::Static,
-            b.id.clone(),
+            decl.id.clone(),
             reshape,
             false,
-            b.default_mirrors_node_param,
+            decl.default_mirrors_node_param,
         ))
     }
 
@@ -799,8 +799,8 @@ pub fn outer_routings_from_bindings(
         .map(|(h, id)| (id.0, h.to_string()))
         .collect();
     let mut out = Vec::with_capacity(bindings.len());
-    for b in bindings {
-        let (node_id, inner_param) = match &b.target {
+    for resolved in bindings {
+        let (node_id, inner_param) = match &resolved.target {
             ResolvedTarget::Composite { outer_name } => {
                 let Some(h) = handle else {
                     // Composite-target binding on an effect that
@@ -823,11 +823,11 @@ pub fn outer_routings_from_bindings(
             continue;
         };
         out.push(crate::snapshot::OuterParamRouting {
-            outer_label: b.label.to_string(),
-            outer_param_id: b.id.to_string(),
+            outer_label: resolved.label.to_string(),
+            outer_param_id: resolved.id.to_string(),
             node_handle: handle_str.clone(),
             inner_param: inner_param.to_string(),
-            source: match b.source {
+            source: match resolved.source {
                 BindingSource::Static => crate::snapshot::OuterParamSource::Static,
                 BindingSource::User => crate::snapshot::OuterParamSource::User,
             },
@@ -1092,21 +1092,21 @@ mod tests {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
         let feedback = add_feedback_node(&mut g);
-        let mut binding = static_amount_binding();
-        binding.label = Cow::Owned("Catalog amount".to_string());
-        let rb = ResolvedBinding::from_static(&binding, &node_map_for(feedback))
+        let mut decl = static_amount_binding();
+        decl.label = Cow::Owned("Catalog amount".to_string());
+        let resolved = ResolvedBinding::from_static(&decl, &node_map_for(feedback))
             .expect("node id present");
-        drop(binding);
-        assert_eq!(rb.label, "Catalog amount");
-        match rb.target {
+        drop(decl);
+        assert_eq!(resolved.label, "Catalog amount");
+        match resolved.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
                 assert_eq!(param.as_ref(), "scale");
             }
             _ => panic!("expected Node target after resolution"),
         }
-        assert_eq!(rb.source, BindingSource::Static);
-        assert_eq!(rb.default_value, 0.5);
+        assert_eq!(resolved.source, BindingSource::Static);
+        assert_eq!(resolved.default_value, 0.5);
     }
 
     #[test]

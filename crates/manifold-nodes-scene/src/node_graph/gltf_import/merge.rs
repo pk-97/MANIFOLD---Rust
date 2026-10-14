@@ -351,23 +351,13 @@ pub(super) fn merge_import_into_graph(
         ));
     }
 
-    // BUG-upfq P1+P2: scene-derived slider ranges on the merged objects'
-    // transform cards (same display-only override as `build_import_graph`).
     // One radius per graph: the scene's saved bounds win, and a scene with
-    // none takes the incoming asset's, so the live lookup that re-derives
-    // these ranges on load reads the same radius.
+    // none takes the incoming asset's; the lookup scales ranges by it.
     let scene_bounds = def
         .preset_metadata
         .as_ref()
         .and_then(|meta| meta.scene_bounds)
         .unwrap_or((summary.bbox_min, summary.bbox_max));
-    let scene_scale = super::scene_scale::SceneScale::from_bbox(scene_bounds.0, scene_bounds.1);
-    super::scene_scale::apply_scene_ranges(
-        &mut new_card_params,
-        &new_card_bindings,
-        &super::scene_scale::node_types_by_id(&new_nodes),
-        scene_scale,
-    );
 
     Ok(MergePlan {
         render_scene_node_id,

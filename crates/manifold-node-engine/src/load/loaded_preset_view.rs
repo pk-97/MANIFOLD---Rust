@@ -140,7 +140,7 @@ fn binding_def_to_runtime(
         .unwrap_or((0.0, 1.0, Default::default(), false));
     Some(ParamBinding {
         id: ParamId::Owned(def.id.clone()),
-        label: Cow::Owned(def.label.clone()),
+        label: Cow::Owned(param.map(|p| p.name.clone()).unwrap_or_default()),
         default_value: def.default_value,
         target,
         convert: def.convert,
@@ -208,8 +208,8 @@ pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRoutin
         std::collections::HashMap::new();
     collect_node_handles(&view.canonical_def.nodes, &mut handle_by_id);
     let mut out = Vec::with_capacity(view.bindings.len());
-    for binding in &view.bindings {
-        let (node_id, inner_param) = match &binding.target {
+    for decl in &view.bindings {
+        let (node_id, inner_param) = match &decl.target {
             ParamTarget::Node { node_id, param } => (node_id, param.clone()),
             _ => continue,
         };
@@ -217,8 +217,8 @@ pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRoutin
             continue;
         };
         out.push(OuterParamRouting {
-            outer_label: binding.label.to_string(),
-            outer_param_id: binding.id.to_string(),
+            outer_label: decl.label.to_string(),
+            outer_param_id: decl.id.to_string(),
             node_handle: handle.to_string(),
             inner_param: inner_param.to_string(),
             source: OuterParamSource::Static,

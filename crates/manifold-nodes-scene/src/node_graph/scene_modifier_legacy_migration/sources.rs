@@ -243,6 +243,8 @@ fn metadata(
     local.string_params.clear();
     local.string_bindings.clear();
     local.scene_modifier = None;
+    // Old-file consistency check across fan-out siblings; the label is
+    // compared, never displayed (SCENE_SURFACES_DESIGN.md section 3.8).
     let mut first = BTreeMap::new();
     for b in &local_bindings {
         if let Some(old) = first.insert(b.id.clone(), b)
