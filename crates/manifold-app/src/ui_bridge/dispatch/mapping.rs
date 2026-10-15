@@ -42,8 +42,14 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                     legacy_param_index: None,
                     legacy_effect_addr: None,
                 };
+                // Mapping keeps the control on the Layer-tab card (D6); like
+                // the mapping itself, the pin is not undoable.
+                let keep = matches!(target, manifold_core::GraphTarget::Generator(_)).then(|| (target.clone(), param_id.clone()));
                 ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
                     p.settings.macro_bank.slots[macro_idx].mappings.push(mapping);
+                    if let Some((target, param_id)) = keep {
+                        p.with_preset_graph_mut(&target, |host| host.keep_on_card(&param_id));
+                    }
                 });
             }
             DispatchResult::handled()

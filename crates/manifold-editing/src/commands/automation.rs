@@ -22,6 +22,7 @@
 //! the last point in its stable equal-beat order.
 
 use crate::command::Command;
+use crate::commands::graph::KeepOnCard;
 use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
 use manifold_core::project::Project;
@@ -56,6 +57,7 @@ pub struct AddAutomationPointCommand {
     previous_lane_index: Option<usize>,
     previous_lanes_were_none: bool,
     applied: bool,
+    keep: KeepOnCard,
 }
 
 impl AddAutomationPointCommand {
@@ -69,6 +71,7 @@ impl AddAutomationPointCommand {
             previous_lane_index: None,
             previous_lanes_were_none: false,
             applied: false,
+            keep: KeepOnCard::default(),
         }
     }
 
@@ -94,6 +97,7 @@ impl AddAutomationPointCommand {
             previous_lane_index: None,
             previous_lanes_were_none: false,
             applied: false,
+            keep: KeepOnCard::default(),
         }
     }
 }
@@ -107,7 +111,7 @@ impl AddAutomationPointCommand {
 impl Command for AddAutomationPointCommand {
     /// A param's first lane clears its slider touch, a Values field.
     fn touches(&self) -> ChangeSet {
-        ChangeSet::of(&[Part::Automation, Part::Values])
+        ChangeSet::of(&[Part::Automation, Part::Values]).union(self.keep.touches())
     }
     fn do_execute(&mut self, project: &mut Project) {
         self.previous_lane = None;
@@ -193,6 +197,9 @@ impl Command for AddAutomationPointCommand {
         self.previous_lane_index = prior_index;
         self.previous_lanes_were_none = lanes_were_none;
         self.applied = applied == Some(true);
+        if self.applied {
+            self.keep.attach(project, &self.target, &self.param_id);
+        }
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -222,6 +229,7 @@ impl Command for AddAutomationPointCommand {
                 }
             }
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -428,6 +436,7 @@ pub struct SetLaneEnabledCommand {
     param_id: String,
     old_enabled: bool,
     new_enabled: bool,
+    keep: KeepOnCard,
 }
 
 impl SetLaneEnabledCommand {
@@ -442,12 +451,13 @@ impl SetLaneEnabledCommand {
             param_id: param_id.into(),
             old_enabled,
             new_enabled,
+            keep: KeepOnCard::default(),
         }
     }
 }
 
 impl Command for SetLaneEnabledCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]).union(self.keep.touches()) }
     fn do_execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let val = self.new_enabled;
@@ -460,6 +470,9 @@ impl Command for SetLaneEnabledCommand {
                 lane.enabled = val;
             }
         });
+        if val {
+            self.keep.attach(project, &self.target, &self.param_id);
+        }
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -474,6 +487,7 @@ impl Command for SetLaneEnabledCommand {
                 lane.enabled = val;
             }
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -617,6 +631,7 @@ pub struct CommitRecordedGestureCommand {
     /// `Some(points)` carries the pre-gesture point set to restore exactly.
     old_points: Option<Vec<AutomationPoint>>,
     previous_lanes_were_none: bool,
+    keep: KeepOnCard,
 }
 
 impl CommitRecordedGestureCommand {
@@ -632,12 +647,13 @@ impl CommitRecordedGestureCommand {
             new_points,
             old_points,
             previous_lanes_were_none: false,
+            keep: KeepOnCard::default(),
         }
     }
 }
 
 impl Command for CommitRecordedGestureCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation, Part::Values]) }
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation, Part::Values]).union(self.keep.touches()) }
     fn do_execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let points = self.new_points.clone();
@@ -657,6 +673,7 @@ impl Command for CommitRecordedGestureCommand {
                 }),
             }
         });
+        self.keep.attach(project, &self.target, &self.param_id);
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -680,6 +697,7 @@ impl Command for CommitRecordedGestureCommand {
                 });
             }
         }
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {

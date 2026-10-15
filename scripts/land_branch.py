@@ -369,7 +369,9 @@ def _main(a):
     gated_commit = git_out('pin gate commit', ['git', 'rev-parse', 'HEAD'], wt)
     gate_returncode, named_reds = gate(gate_cmd, wt, gate_log)
     if gate_returncode != 0:
-        if a.skip_gpu or not (a.named_red and a.reason):
+        # A recorded --skip-gpu is a reviewed scope call, not missing coverage:
+        # the gate still exits CHECKS_RED only when every other check ran.
+        if not (a.named_red and a.reason):
             stop('red', "gate red and no --named-red/--reason given — stopping. "
                  "Review the failure; land over it only with an explicit named red.")
         if gate_returncode != CHECKS_RED:
