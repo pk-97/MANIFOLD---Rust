@@ -585,7 +585,7 @@ pub const EXIT_PATH_HOVER: Color32 = Color32::new(58, 58, 63, 255);
 pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
 
 // ── Overview strip ──────────────────────────────────────────────────
-pub const OVERVIEW_BG: Color32 = Color32::new(15, 15, 17, 255);
+pub const OVERVIEW_BG: Color32 = Color32::new(34, 34, 40, 255);
 pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 120);
 pub const OVERVIEW_VIEWPORT_BORDER: Color32 = Color32::new(120, 170, 245, 200);
 pub const OVERVIEW_PLAYHEAD: Color32 = RED_ACTIVE;
