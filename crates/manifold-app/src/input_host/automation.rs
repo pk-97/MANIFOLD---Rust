@@ -503,10 +503,13 @@ fn nudged_value(value: f32, value_steps: f32, min: f32, max: f32, whole_numbers:
 }
 
 /// Arrow-key nudge of the selected breakpoints as ONE undo entry. `beat_delta`
-/// moves them along the timeline (the whole group stops at beat 0 together,
-/// keeping its shape); `value_steps` is signed percent-of-range steps, 1.0 for
-/// a normal press and 0.1 for a fine one. Returns whether any point was
-/// selected, so the key is consumed even when a limit leaves nothing to move.
+/// moves them along the timeline (the whole group stops at beat 0 and at the
+/// nearest unselected point together, keeping its shape); `value_steps` is
+/// signed percent-of-range steps, 1.0 for a normal press and 0.1 for a fine
+/// one. Nothing is ever deleted: landing on an exact twin keeps both points.
+/// Returns whether any selected point resolved, so the key is consumed even
+/// when a limit leaves nothing to move; a stale selection returns false and
+/// the arrow nudges clips instead.
 pub(crate) fn nudge_selected(
     project: &mut manifold_core::project::Project,
     selection: &mut UIState,
@@ -526,9 +529,13 @@ pub(crate) fn nudge_selected(
         min: f32,
         max: f32,
         whole: bool,
+        /// Beats to the nearest unselected point on each side of this one on
+        /// its lane (infinite when there is none): the nudge stops there.
+        room_right: f64,
+        room_left: f64,
     }
     let mut resolved: Vec<Resolved> = Vec::with_capacity(refs.len());
-    for point_ref in refs {
+    for point_ref in &refs {
         let target = graph_target(&point_ref.target);
         let Some(inst) = project.preset_instance(&target) else { continue };
         let Some(param) = inst.params.get(point_ref.param_id.as_ref()) else { continue };
@@ -540,16 +547,51 @@ pub(crate) fn nudge_selected(
             continue;
         };
         let (min, max) = param.slider_span();
-        let Some(old) = lane.points.iter().find(|p| point_matches_ref(p, &point_ref, min, max)).copied() else {
+        let Some(index) = lane.points.iter().position(|p| point_matches_ref(p, point_ref, min, max)) else {
             continue;
         };
-        resolved.push(Resolved { point_ref, old, min, max, whole: param.whole_numbers() });
+        let old = lane.points[index];
+        let mut room_right = f64::INFINITY;
+        let mut room_left = f64::INFINITY;
+        for (other_index, other) in lane.points.iter().enumerate() {
+            if refs.iter().any(|selected| {
+                selected.target == point_ref.target
+                    && selected.param_id == point_ref.param_id
+                    && point_matches_ref(other, selected, min, max)
+            }) {
+                continue;
+            }
+            // A point sharing the beat keeps its place in the lane order: it
+            // is a neighbour on the side it already sits on, with no room.
+            let gap = other.beat.0 - old.beat.0;
+            if gap > 0.0 || (gap == 0.0 && other_index > index) {
+                room_right = room_right.min(gap);
+            } else {
+                room_left = room_left.min(-gap);
+            }
+        }
+        resolved.push(Resolved {
+            point_ref: point_ref.clone(),
+            old,
+            min,
+            max,
+            whole: param.whole_numbers(),
+            room_right,
+            room_left,
+        });
     }
+    // Nothing resolved: the selection is stale, so the arrow falls through to
+    // the clip nudge instead of being swallowed.
     if resolved.is_empty() {
-        return true;
+        return false;
     }
+    // One shared delta keeps the group's shape. It stops at beat zero and at
+    // the nearest unselected point on any lane, so a nudge never crosses (and
+    // never overwrites) a point it was not asked to move.
     let min_beat = resolved.iter().map(|r| r.old.beat.0).fold(f64::INFINITY, f64::min);
-    let beat_delta = Beats(beat_delta.0.max(-min_beat));
+    let room_right = resolved.iter().map(|r| r.room_right).fold(f64::INFINITY, f64::min);
+    let room_left = resolved.iter().map(|r| r.room_left).fold(f64::INFINITY, f64::min);
+    let beat_delta = Beats(beat_delta.0.clamp(-min_beat.min(room_left), room_right));
 
     type LaneMoves = (GraphTarget, String, Vec<(AutomationPoint, AutomationPoint)>);
     let mut lanes: Vec<LaneMoves> = Vec::new();
@@ -584,7 +626,7 @@ pub(crate) fn nudge_selected(
     let mut commands: Vec<Box<dyn Command>> = lanes
         .into_iter()
         .map(|(target, param_id, moves)| {
-            Box::new(MoveAutomationPointCommand::for_group(target, param_id, moves)) as Box<dyn Command>
+            Box::new(MoveAutomationPointCommand::for_group_keeping_twins(target, param_id, moves)) as Box<dyn Command>
         })
         .collect();
     for command in &mut commands {
@@ -1171,5 +1213,95 @@ mod tests {
         // No selection: the key is not consumed.
         selection.selected_automation_points.clear();
         assert!(!nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
+    }
+
+    /// A Mirror effect whose "amount" lane holds `points`, plus the lane's
+    /// UI target and slider span.
+    fn project_with_amount_lane(
+        points: Vec<AutomationPoint>,
+    ) -> (manifold_core::project::Project, UiGraphTarget, f32, f32) {
+        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+        fx.init_defaults();
+        let ui_target = UiGraphTarget::Effect(fx.id.clone());
+        let (min, max) = fx.params.get("amount").unwrap().slider_span();
+        fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points }]);
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(fx);
+        (project, ui_target, min, max)
+    }
+
+    fn lane_points(project: &manifold_core::project::Project) -> Vec<(f64, f32)> {
+        project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0]
+            .points
+            .iter()
+            .map(|p| (p.beat.0, p.value))
+            .collect()
+    }
+
+    #[test]
+    fn nudge_with_a_stale_selection_is_not_consumed() {
+        let (mut project, ui_target, min, max) =
+            project_with_amount_lane(vec![point(4.0, 0.6, SegmentShape::Linear)]);
+        let before = serde_json::to_value(&project).unwrap();
+        let mut selection = UIState::new();
+        selection.selected_automation_points = vec![UiAutomationPointRef {
+            target: ui_target,
+            param_id: "amount".into(),
+            beat: Beats(99.0),
+            value_norm: normalized_value(0.3, min, max),
+        }];
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert!(!nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 1.0));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn horizontal_nudge_stops_at_the_nearest_unselected_point() {
+        let (mut project, ui_target, min, max) = project_with_amount_lane(vec![
+            point(0.0, 0.2, SegmentShape::Linear),
+            point(4.0, 0.6, SegmentShape::Linear),
+            point(4.1, 0.9, SegmentShape::Linear),
+        ]);
+        let mut selection = UIState::new();
+        selection.selected_automation_points = vec![UiAutomationPointRef {
+            target: ui_target,
+            param_id: "amount".into(),
+            beat: Beats(4.0),
+            value_norm: normalized_value(0.6, min, max),
+        }];
+        let (tx, _rx) = crossbeam_channel::unbounded();
+
+        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
+        let points = lane_points(&project);
+        assert_eq!(points.len(), 3, "a nudge never deletes a point");
+        assert!((points[1].0 - 4.1).abs() < 1e-9, "stops on the neighbour's beat, got {points:?}");
+        assert_eq!(selection.selected_automation_points[0].beat, Beats(points[1].0));
+
+        // Already against the neighbour: further presses move nothing.
+        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
+        assert_eq!(lane_points(&project), points);
+    }
+
+    #[test]
+    fn value_nudge_onto_an_exact_twin_keeps_both_points() {
+        let (mut project, ui_target, lane_min, lane_max) =
+            project_with_amount_lane(vec![point(4.0, 0.5, SegmentShape::Linear)]);
+        let twin = nudged_value(0.5, 1.0, lane_min, lane_max, false);
+        project.settings.master_effects[0].automation_lanes.as_mut().unwrap()[0]
+            .points
+            .push(point(4.0, twin, SegmentShape::Linear));
+        let mut selection = UIState::new();
+        selection.selected_automation_points = vec![UiAutomationPointRef {
+            target: ui_target,
+            param_id: "amount".into(),
+            beat: Beats(4.0),
+            value_norm: normalized_value(0.5, lane_min, lane_max),
+        }];
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.0), 1.0));
+        let points = lane_points(&project);
+        assert_eq!(points.len(), 2, "the twin survives the move: {points:?}");
+        assert!(points.iter().all(|p| p.1 == twin));
     }
 }

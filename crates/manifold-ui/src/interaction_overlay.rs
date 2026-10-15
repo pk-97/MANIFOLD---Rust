@@ -8,7 +8,9 @@
 //! `TimelineEditingHost` trait for operations that need engine/editing access.
 
 use manifold_foundation::{Beats, ClipId, ParamId, Seconds};
+use ahash::AHashSet;
 use std::collections::HashSet;
+use std::time::Instant;
 
 use crate::anim::{AnimF32, Transient};
 use crate::automation_hit_tester::{self, AutomationFeedback, AutomationHit, AutomationOperation};
@@ -423,6 +425,12 @@ fn segment_value_at_beat(
     let left_value = lane.param_min + left.value_norm * (lane.param_max - lane.param_min);
     let right_value = lane.param_min + right.value_norm * (lane.param_max - lane.param_min);
     Some((left_value + (right_value - left_value) * left.shape.sample(t), t, left.beat))
+}
+
+/// Stepped (whole-number) parameters step from their minimum, so a range such
+/// as 0.5..4.5 lands on 0.5, 1.5, ... and never outside `[min, max]`.
+fn snap_to_whole_steps(value: f32, param_min: f32, param_max: f32) -> f32 {
+    (param_min + (value - param_min).round()).clamp(param_min, param_max)
 }
 
 /// Split a preview lane at `beat`, preserving the curve on both outer tails.
@@ -881,9 +889,26 @@ pub struct InteractionOverlay {
     /// finished, so a Click routed after it must not insert again.
     /// Cleared by the next pointer-down.
     suppress_next_automation_click: bool,
-    /// The last left click deleted an automation dot, so the second click of
-    /// a double-click must not re-add a point on the strip it exposed.
-    deleted_dot_on_last_click: bool,
+    /// Where and when the last left click deleted an automation dot. The
+    /// second press and clicks of a double-click on that spot land on the
+    /// strip the dot exposed and must not re-add a point. Held until the
+    /// double-click window passes or the double-click's own event arrives.
+    last_dot_delete: Option<(Vec2, Instant)>,
+    /// Pointer, scroll, zoom and modifiers the last automation drag frame
+    /// was applied with. An identical frame re-derives the same preview, so
+    /// the per-frame poll skips it. Cleared when the gesture ends.
+    last_automation_drag_frame: Option<AutomationDragFrameKey>,
+}
+
+/// Everything an automation drag frame is derived from besides the gesture's
+/// own state.
+#[derive(Clone, Copy, PartialEq)]
+struct AutomationDragFrameKey {
+    pos: Vec2,
+    scroll_x: Beats,
+    scroll_y: f32,
+    pixels_per_beat: f32,
+    modifiers: Modifiers,
 }
 
 impl InteractionOverlay {
@@ -905,7 +930,8 @@ impl InteractionOverlay {
             automation_press: None,
             forced_automation_hit: None,
             suppress_next_automation_click: false,
-            deleted_dot_on_last_click: false,
+            last_dot_delete: None,
+            last_automation_drag_frame: None,
         }
     }
 
@@ -978,6 +1004,15 @@ impl InteractionOverlay {
         }
     }
 
+    /// True when `pos` is inside the double-click time and radius of the dot
+    /// the last click deleted.
+    fn within_dot_delete_window(&self, pos: Vec2) -> bool {
+        self.last_dot_delete.is_some_and(|(at, when)| {
+            when.elapsed().as_secs_f32() < color::DOUBLE_CLICK_TIME_SEC
+                && at.distance(pos) < color::DOUBLE_CLICK_RADIUS_PX
+        })
+    }
+
     /// Arm a point candidate on a bare strip or curve segment. This mutates
     /// only the host's live preview; the undoable insert happens at release.
     pub fn on_pointer_down(
@@ -989,6 +1024,12 @@ impl InteractionOverlay {
     ) {
         self.suppress_next_automation_click = false;
         self.restore_pending_automation_press(host);
+        // The second press of a double-click that just deleted a dot lands on
+        // the strip the dot exposed; arming a draft there would re-add it.
+        // The guard stays armed so the routed Click/DoubleClick are swallowed.
+        if self.within_dot_delete_window(pos) {
+            return;
+        }
         let lanes = viewport.automation_lane_screens();
         if automation_hit_tester::resolve_feedback(
             pos,
@@ -1337,6 +1378,21 @@ impl InteractionOverlay {
         }
     }
 
+    /// Whether the running drag has moved (or at this pointer will move) along
+    /// the beat axis. Point and group drags are vertical-only inside the
+    /// `AUTOMATION_AXIS_LOCK_PX` dead zone and must not scroll the view then.
+    fn drag_moves_in_time(&self, mode: DragMode, pos: Vec2) -> bool {
+        match (mode, self.drag.payload()) {
+            (DragMode::AutomationPoint, Some(TimelineDrag::AutomationPoint(d))) => {
+                d.x_unlocked || (pos.x - d.grab_x).abs() > AUTOMATION_AXIS_LOCK_PX
+            }
+            (DragMode::AutomationGroupMove, Some(TimelineDrag::AutomationGroupMove(s))) => {
+                s.x_unlocked || (pos.x - s.grab_x).abs() > AUTOMATION_AXIS_LOCK_PX
+            }
+            _ => true,
+        }
+    }
+
     /// Automation gestures that follow the pointer across the timeline and so
     /// ride the same edge autoscroll as clip drags. Bend and lane resize do
     /// not move along the beat axis.
@@ -1344,7 +1400,6 @@ impl InteractionOverlay {
         matches!(
             mode,
             DragMode::AutomationPoint
-                | DragMode::AutomationSegmentDrag
                 | DragMode::AutomationMarquee
                 | DragMode::AutomationGroupMove
                 | DragMode::AutomationDraw
@@ -1552,7 +1607,12 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) -> bool {
-        let after_delete = std::mem::take(&mut self.deleted_dot_on_last_click) && click_count >= 2;
+        // The platform sends a plain Click and then the DoubleClick for the
+        // second press, so both are swallowed; the DoubleClick ends the guard.
+        let after_delete = self.within_dot_delete_window(pos);
+        if !after_delete || click_count >= 2 {
+            self.last_dot_delete = None;
+        }
         let lanes = viewport.automation_lane_screens();
         if automation_hit_tester::resolve_feedback(pos, lanes, self.modifiers.alt, ui_state.automation_draw_mode)
             .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Title | AutomationOperation::Resize | AutomationOperation::Blocked)) {
@@ -1585,7 +1645,7 @@ impl InteractionOverlay {
                     ui_state.automation_time_selection = None;
                     ui_state.automation_insert_beat = Some(dot.beat);
                     ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
-                    self.deleted_dot_on_last_click = true;
+                    self.last_dot_delete = Some((pos, Instant::now()));
                 } else {
                     self.select_automation_dot(lane, dot, ui_state);
                 }
@@ -2210,7 +2270,7 @@ impl InteractionOverlay {
         let mut to_value = (d.original.1 + delta * fine * (lane.param_max - lane.param_min))
             .clamp(lane.param_min, lane.param_max);
         if lane.whole_numbers {
-            to_value = to_value.round();
+            to_value = snap_to_whole_steps(to_value, lane.param_min, lane.param_max);
         }
 
         if let Some(TimelineDrag::AutomationPoint(drag)) = self.drag.payload_mut() {
@@ -2350,8 +2410,8 @@ impl InteractionOverlay {
         let mut left_value = lane.param_min + left_norm * range;
         let mut right_value = lane.param_min + right_norm * range;
         if lane.whole_numbers && delta_norm != 0.0 {
-            left_value = left_value.round();
-            right_value = right_value.round();
+            left_value = snap_to_whole_steps(left_value, lane.param_min, lane.param_max);
+            right_value = snap_to_whole_steps(right_value, lane.param_min, lane.param_max);
         }
 
         host.set_automation_segment_drag_preview(
@@ -2486,18 +2546,25 @@ impl InteractionOverlay {
                 {
                     continue;
                 }
+                // Identity within a lane is (beat, normalized value); a set
+                // keeps the dedupe linear in the number of lane points.
+                let mut seen: AHashSet<(u64, u32)> = ui_state
+                    .selected_automation_points
+                    .iter()
+                    .filter(|p| p.target == lane.target && p.param_id == lane.param_id)
+                    .map(|p| (p.beat.0.to_bits(), p.value_norm.to_bits()))
+                    .collect();
                 let mut add = |beat: Beats, value_norm: f32| {
                     if beat < selection.start || beat > selection.end {
                         return;
                     }
-                    let point = UiAutomationPointRef {
-                        target: lane.target.clone(),
-                        param_id: lane.param_id.clone(),
-                        beat,
-                        value_norm,
-                    };
-                    if !ui_state.selected_automation_points.contains(&point) {
-                        ui_state.selected_automation_points.push(point);
+                    if seen.insert((beat.0.to_bits(), value_norm.to_bits())) {
+                        ui_state.selected_automation_points.push(UiAutomationPointRef {
+                            target: lane.target.clone(),
+                            param_id: lane.param_id.clone(),
+                            beat,
+                            value_norm,
+                        });
                     }
                 };
                 match host.automation_lane_points(&lane.target, &lane.param_id) {
@@ -2601,7 +2668,7 @@ impl InteractionOverlay {
                 point.param_min + (orig_norm + delta_norm) * range
             };
             if point.whole_numbers && !unchanged && delta_norm != 0.0 {
-                new_value = new_value.round();
+                new_value = snap_to_whole_steps(new_value, point.param_min, point.param_max);
             }
             point.last_beat = point.original_beat + beat_delta;
             point.last_value = new_value;
@@ -2758,6 +2825,7 @@ impl InteractionOverlay {
         // A provisional click candidate must not survive promotion to a drag:
         // restore the pre-press lane before marquee, segment, or pencil
         // routing captures its own gesture snapshot.
+        self.last_automation_drag_frame = None;
         let pending_hit = self.automation_press.as_ref().map(|draft| draft.hit);
         self.restore_pending_automation_press(host);
         self.forced_automation_hit = pending_hit;
@@ -2881,9 +2949,31 @@ impl InteractionOverlay {
         // pointer keeps advancing the gesture as the content moves under it.
         // Horizontal only: the pointer's height sets the value being edited,
         // so a lane near the top or bottom edge must not scroll away mid-drag.
-        if Self::autoscrolls_at_edge(self.drag_mode()) {
+        // Point and group drags stay put until the pointer has moved in time,
+        // so a vertical-only value drag near the edge never scrolls.
+        let mode = self.drag_mode();
+        if Self::autoscrolls_at_edge(mode) && self.drag_moves_in_time(mode, pos) {
             let rect = viewport.tracks_rect();
             viewport.autoscroll_edge(Vec2::new(pos.x, rect.y + rect.height * 0.5));
+        }
+        if matches!(
+            mode,
+            DragMode::AutomationPoint
+                | DragMode::AutomationSegmentDrag
+                | DragMode::AutomationMarquee
+                | DragMode::AutomationGroupMove
+        ) {
+            let key = AutomationDragFrameKey {
+                pos,
+                scroll_x: viewport.scroll_x_beats(),
+                scroll_y: viewport.scroll_y_px(),
+                pixels_per_beat: viewport.pixels_per_beat(),
+                modifiers: self.modifiers,
+            };
+            if self.last_automation_drag_frame == Some(key) {
+                return;
+            }
+            self.last_automation_drag_frame = Some(key);
         }
         match self.drag_mode() {
             DragMode::Move => {
@@ -3186,6 +3276,7 @@ impl InteractionOverlay {
         self.automation_lane_snapshots.clear();
         self.automation_press = None;
         self.forced_automation_hit = None;
+        self.last_automation_drag_frame = None;
         host.set_cursor(TimelineCursor::Default);
     }
 
@@ -4866,19 +4957,46 @@ mod p1_4_gesture_integrity_tests {
             target, param_id, beat: dot0.beat, value_norm: dot0.value_norm,
         }];
 
-        overlay.handle_automation_click(dot_pos(&panel, 0), 1, &mut host, &mut state, &panel);
+        let click_pos = dot_pos(&panel, 0);
+        let click = |overlay: &mut InteractionOverlay,
+                     host: &mut GestureTestHost,
+                     state: &mut UIState,
+                     panel: &TimelineViewportPanel,
+                     count: u32| {
+            overlay.on_pointer_click(click_pos, false, false, count, false, host, state, panel);
+        };
+
+        // First click: the pointer entry points, as the app routes them.
+        overlay.on_pointer_down(click_pos, &mut host, &mut state, &panel);
+        assert!(!overlay.has_pending_automation_press(), "a press on a dot arms no draft");
+        overlay.on_pointer_up(&mut host, &mut state);
+        click(&mut overlay, &mut host, &mut state, &panel, 1);
         assert_eq!(host.automation_removed, vec![(Beats(4.0), 0.5)]);
         assert!(state.selected_automation_points.is_empty(), "the deleted point leaves the selection");
 
-        // The second click of the double-click lands on the strip the dot left
-        // behind; it must not insert a replacement point.
-        let strip = Vec2::new(panel.beat_to_pixel(Beats(6.0)), panel.automation_lane_screens()[0].y_at_norm(0.1));
-        overlay.handle_automation_click(strip, 2, &mut host, &mut state, &panel);
-        assert!(host.automation_added.is_empty());
-        assert_eq!(host.automation_removed.len(), 1);
+        // The lane now has only the beat-8 point: the second press of the
+        // double-click lands on the bare strip the dot left behind. The app
+        // sends Click (count 1) then DoubleClick (count 2) for it.
+        let panel = build_viewport_with_lane(
+            vec![crate::view::UiAutomationPoint {
+                beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false,
+            }],
+            false,
+        );
+        overlay.on_pointer_down(click_pos, &mut host, &mut state, &panel);
+        assert!(!overlay.has_pending_automation_press(), "the second press must not arm an insert draft");
+        assert!(host.automation_lane_preview.is_empty());
+        overlay.on_pointer_up(&mut host, &mut state);
+        click(&mut overlay, &mut host, &mut state, &panel, 1);
+        click(&mut overlay, &mut host, &mut state, &panel, 2);
+        assert!(host.automation_added.is_empty(), "no point is re-added");
+        assert_eq!(host.automation_removed.len(), 1, "one delete, one undo entry");
 
-        // A later, separate click on bare strip still adds a point.
-        overlay.handle_automation_click(strip, 1, &mut host, &mut state, &panel);
+        // A later, separate press and click on the bare strip adds a point.
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        overlay.on_pointer_down(click_pos, &mut host, &mut state, &panel);
+        assert!(overlay.has_pending_automation_press());
+        overlay.on_pointer_up(&mut host, &mut state);
         assert_eq!(host.automation_added.len(), 1);
     }
 
@@ -4923,6 +5041,39 @@ mod p1_4_gesture_integrity_tests {
         }
     }
 
+    /// A value-only drag of a point parked in the edge zone must not scroll
+    /// the view; scrolling starts once the drag has moved in time.
+    #[test]
+    fn vertical_point_drag_near_the_edge_does_not_autoscroll() {
+        let mut panel = build_viewport_with_automation();
+        let rect = panel.tracks_rect();
+        // Put the beat-8 point 5 px inside the right edge.
+        let dx = panel.beat_to_pixel(Beats(8.0)) - rect.x;
+        panel.set_zoom(panel.pixels_per_beat() * (rect.width - 5.0) / dx);
+        let press = dot_pos(&panel, 1);
+        assert!(press.x > rect.x_max() - 32.0 && press.x < rect.x_max(), "setup: dot in the edge zone");
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.on_begin_drag(press, &mut host, &mut state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationPoint);
+
+        let scroll = panel.scroll_x_beats();
+        let up = Vec2::new(press.x + 1.0, press.y - 20.0);
+        overlay.on_drag(up, &mut host, &mut state, &mut panel);
+        for _ in 0..8 {
+            overlay.poll_drag(up, &mut host, &mut state, &mut panel);
+        }
+        assert_eq!(panel.scroll_x_beats(), scroll, "a vertical drag must not scroll");
+        assert_ne!(host.automation_lane_preview[1].1, 0.8, "the value still follows the pointer");
+
+        let right = Vec2::new(press.x + 10.0, press.y - 20.0);
+        for _ in 0..8 {
+            overlay.poll_drag(right, &mut host, &mut state, &mut panel);
+        }
+        assert!(panel.scroll_x_beats() > scroll, "a drag that moves in time scrolls at the edge");
+    }
+
     /// Edge autoscroll must advance a parked automation point drag through
     /// `poll_drag`, with the dragged point following the scrolled view.
     #[test]
@@ -4931,7 +5082,8 @@ mod p1_4_gesture_integrity_tests {
         let mut host = GestureTestHost::new(&["layer-0"]);
         let mut state = UIState::new();
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
-        let press = dot_pos(&panel, 0);
+        // The last point has no right neighbour to clamp it, so it follows the view.
+        let press = dot_pos(&panel, 1);
         overlay.on_begin_drag(press, &mut host, &mut state, &panel);
         assert_eq!(overlay.drag_mode(), DragMode::AutomationPoint);
         assert!(InteractionOverlay::autoscrolls_at_edge(overlay.drag_mode()));
@@ -5796,8 +5948,6 @@ mod p1_4_gesture_integrity_tests {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
         layout.timeline_split_ratio = 0.70;
         panel.build(&mut tree, &layout);
-        // Keep the drag targets clear of the autoscroll edge zone.
-        panel.set_zoom(panel.pixels_per_beat() * 0.5);
 
         let mut host = GestureTestHost::new(&["layer-0", "layer-1", "layer-2", "layer-3"]);
         let mut state = UIState::new();
@@ -5835,15 +5985,15 @@ mod p1_4_gesture_integrity_tests {
         );
         overlay.on_begin_drag(press, &mut host, &mut state, &panel);
         assert_eq!(overlay.drag_mode(), DragMode::AutomationGroupMove);
-        let destination = Vec2::new(panel.beat_to_pixel(Beats(12.0)), press.y);
+        let destination = Vec2::new(panel.beat_to_pixel(Beats(8.0)), press.y);
         overlay.on_drag(destination, &mut host, &mut state, &mut panel);
         overlay.on_end_drag(&mut host);
 
         assert_eq!(host.automation_group_move_commits.len(), 1, "one batched commit");
         let moves = &host.automation_group_move_commits[0];
         assert_eq!(moves.len(), 2, "the scrolled-off lane's point must move too");
-        assert!(moves.iter().any(|m| m.param_id == ParamId::Borrowed("amount") && m.old.0 == Beats(4.0) && m.new.0 == Beats(12.0)));
-        assert!(moves.iter().any(|m| m.param_id == ParamId::Borrowed("blend") && m.old.0 == Beats(4.0) && m.new.0 == Beats(12.0)));
+        assert!(moves.iter().any(|m| m.param_id == ParamId::Borrowed("amount") && m.old.0 == Beats(4.0) && m.new.0 == Beats(8.0)));
+        assert!(moves.iter().any(|m| m.param_id == ParamId::Borrowed("blend") && m.old.0 == Beats(4.0) && m.new.0 == Beats(8.0)));
         assert_eq!(
             state.selected_automation_points.len(),
             2,
@@ -5921,8 +6071,6 @@ mod p1_4_gesture_integrity_tests {
     #[test]
     fn automation_phrase_moves_offscreen_selection_and_restores_crossed_points() {
         let mut panel = build_viewport_with_automation();
-        // Keep the drag targets clear of the autoscroll edge zone.
-        panel.set_zoom(panel.pixels_per_beat() * 0.5);
         let mut host = GestureTestHost::new(&["layer-0"]);
         let original = vec![
             (Beats(4.0), 0.5, UiSegmentShape::Linear),
@@ -5943,14 +6091,14 @@ mod p1_4_gesture_integrity_tests {
         overlay.set_modifiers(Modifiers { command: true, ..Modifiers::NONE });
         let press = dot_pos(&panel, 0);
         overlay.on_begin_drag(press, &mut host, &mut state, &panel);
-        for (destination, expected) in [(8.0, vec![8.0, 12.0, 12.0, 244.0]), (16.0, vec![12.0, 16.0, 20.0, 252.0])] {
+        for (destination, expected) in [(8.0, vec![8.0, 12.0, 12.0, 244.0]), (9.0, vec![9.0, 12.0, 13.0, 245.0])] {
             let pos = Vec2::new(panel.beat_to_pixel(Beats(destination)), press.y);
             overlay.on_drag(pos, &mut host, &mut state, &mut panel);
             assert_eq!(host.automation_lane_preview.iter().map(|p| p.0.0).collect::<Vec<_>>(), expected);
             assert_eq!(host.automation_lane_preview.last().unwrap().1, 1.2);
             assert_eq!(state.selected_automation_points.len(), 3);
         }
-        assert_eq!(host.automation_lane_preview[0], original[2]);
+        assert_eq!(host.automation_lane_preview[1], original[2]);
         overlay.cancel_drag(&mut host);
         assert_eq!(host.automation_lane_restores[0].points.as_ref().unwrap(), &original);
         assert!(host.automation_group_move_commits.is_empty());

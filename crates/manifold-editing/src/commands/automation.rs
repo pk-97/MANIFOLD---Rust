@@ -247,9 +247,10 @@ pub struct MoveAutomationPointCommand {
     target: GraphTarget,
     param_id: String,
     moves: Vec<(AutomationPoint, AutomationPoint)>,
-    /// A single-point move never deletes anything: only the first stored point
-    /// matching the source changes, so landing on an exact `(beat, value)`
-    /// twin leaves the twin in place. Group moves keep replacing collisions.
+    /// A move that keeps twins never deletes anything: only the first stored
+    /// point matching each source changes, so landing on an exact
+    /// `(beat, value)` twin leaves the twin in place. Plain group moves keep
+    /// replacing collisions.
     keep_destination_twins: bool,
     previous_lane: Option<AutomationLane>,
     previous_lane_index: Option<usize>,
@@ -280,6 +281,19 @@ impl MoveAutomationPointCommand {
         }
     }
 
+    /// Like [`Self::for_group`], but a destination that lands on an exact
+    /// `(beat, value)` twin of a point outside the group leaves that twin in
+    /// place. Keyboard nudges use it so a move never deletes a point.
+    pub fn for_group_keeping_twins(
+        target: GraphTarget,
+        param_id: impl Into<String>,
+        moves: Vec<(AutomationPoint, AutomationPoint)>,
+    ) -> Self {
+        let mut command = Self::for_group(target, param_id, moves);
+        command.keep_destination_twins = true;
+        command
+    }
+
     fn apply(
         project: &mut Project,
         target: &GraphTarget,
@@ -299,8 +313,16 @@ impl MoveAutomationPointCommand {
                     return false;
                 }
                 if keep_destination_twins {
-                    if let Some(point) = lane.points.iter_mut().find(|p| same_point(p, &moves[0].0)) {
-                        *point = moves[0].1;
+                    // Each move rewrites the first not-yet-moved stored point
+                    // matching its source; nothing else is removed.
+                    let mut moved = vec![false; lane.points.len()];
+                    for (from, to) in moves {
+                        if let Some(index) = (0..lane.points.len())
+                            .find(|&i| !moved[i] && same_point(&lane.points[i], from))
+                        {
+                            lane.points[index] = *to;
+                            moved[index] = true;
+                        }
                     }
                     lane.points.sort_by(|a, b| a.beat.0.total_cmp(&b.beat.0));
                     return true;
