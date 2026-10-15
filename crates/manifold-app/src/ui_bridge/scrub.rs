@@ -709,6 +709,17 @@ pub(crate) fn dispatch_scrub(
                                 param_id.clone(),
                             );
                         }
+                        // The slider is under the pointer until Commit: armed
+                        // Touch recording keeps writing it while still and
+                        // ends the take on release.
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::AutomationHold {
+                                target: target.clone(),
+                                param_id: param_id.clone(),
+                                held: true,
+                            },
+                        );
                         ctx.scrub.active = Some(ResolvedScrub::Param {
                             target: target.clone(),
                             param_id: param_id.clone(),
@@ -794,6 +805,12 @@ pub(crate) fn dispatch_scrub(
                             ContentCommand::Execute(Box::new(cmd)),
                         );
                     }
+                }
+                if let Some(ResolvedScrub::Param { target, param_id, .. }) = ctx.scrub.active.take() {
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::AutomationHold { target, param_id, held: false },
+                    );
                 }
                 ctx.scrub.active = None;
                 DispatchResult::handled()

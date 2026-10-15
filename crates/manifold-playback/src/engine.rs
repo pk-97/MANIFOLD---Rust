@@ -302,6 +302,8 @@ pub struct PlaybackEngine {
     /// `Project`, never serialized — same lifetime rule as
     /// `automation_latches`. Off by default.
     automation_armed: bool,
+    /// Params a pointer is holding down (a mouse on a slider). Runtime-only.
+    automation_holds: crate::automation::AutomationHolds,
     /// In-flight recording gestures (section 5). Runtime-only, owned by the
     /// playback side alongside `automation_latches`/`automation_armed`.
     automation_gestures: crate::automation::AutomationGestures,
@@ -416,6 +418,7 @@ impl PlaybackEngine {
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
             automation_latches: crate::automation::AutomationLatches::default(),
             automation_armed: false,
+            automation_holds: Vec::with_capacity(2),
             automation_gestures: crate::automation::AutomationGestures::default(),
             finished_automation: Vec::new(),
             export_param_values: Vec::new(),
@@ -694,6 +697,7 @@ impl PlaybackEngine {
         self.finished_automation.clear();
         self.automation_latches.clear();
         self.automation_armed = false;
+        self.automation_holds.clear();
         self.export_param_values.clear();
         // BUG-256: a project swap is a hard boundary for ALL runtime state
         // keyed by project-local identity. Renderers cache by `LayerId` /
@@ -1429,7 +1433,10 @@ impl PlaybackEngine {
                 Beats(self.current_beat),
                 Beats(self.frame_beat),
                 &mut self.automation_latches,
-                self.automation_armed,
+                crate::automation::AutomationWrite {
+                    armed: self.automation_armed,
+                    holds: &self.automation_holds,
+                },
                 &mut self.automation_gestures,
                 if self.is_export_mode { crate::automation::AutomationSamplingMode::Export }
                 else { crate::automation::AutomationSamplingMode::Playback },
@@ -2492,9 +2499,10 @@ impl PlaybackEngine {
         if self.is_playing() && self.automation_armed && !self.is_export_mode
             && let Some(project) = &mut self.project
         {
+            let write = crate::automation::AutomationWrite { armed: true, holds: &self.automation_holds };
             let (_, expired) = crate::automation::evaluate_all_automation_at(
                 project, Beats(self.current_beat), Beats(self.frame_beat), &mut self.automation_latches,
-                true, &mut self.automation_gestures, crate::automation::AutomationSamplingMode::Playback,
+                write, &mut self.automation_gestures, crate::automation::AutomationSamplingMode::Playback,
             );
             commands.extend(expired);
         }
@@ -2524,6 +2532,27 @@ impl PlaybackEngine {
     /// transport-bar arm button's lit/unlit state — P4).
     pub fn automation_armed(&self) -> bool {
         self.automation_armed
+    }
+
+    /// A pointer pressed (`held`) or let go of a param. There is one pointer,
+    /// so a new hold releases any other. A release ends that param's open
+    /// take on the next tick.
+    pub fn set_automation_hold(
+        &mut self,
+        target: GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        held: bool,
+    ) {
+        for (other_target, other_param) in self.automation_holds.drain(..) {
+            if !(held && other_target == target && other_param == param_id) {
+                crate::automation::release_hold(&mut self.automation_gestures, &other_target, &other_param);
+            }
+        }
+        if held {
+            self.automation_holds.push((target, param_id));
+        } else {
+            crate::automation::release_hold(&mut self.automation_gestures, &target, &param_id);
+        }
     }
 
     // ─── Time/Tempo math ───
