@@ -2513,6 +2513,9 @@ mod binding_reroute_tests {
                 match command {
                     ContentCommand::MutateProject { f: edit, .. } => edit(&mut project),
                     ContentCommand::Execute(command) => { undo.execute(command, &mut project); }
+                    // Typed entry runs the slider gesture, so it holds and releases the
+                    // param for armed recording; holds never touch the project.
+                    ContentCommand::AutomationHold { .. } => {}
                     _ => panic!("unexpected numeric-entry command"),
                 }
             }
