@@ -214,7 +214,10 @@ live worktrees once carried 5–41 GB of cold-built `target/` each.
    (`deps/<target>-<16 hex>`, the bulk of a warm slot at ~55 MB per test
    binary); build-script `out/` products are kept because Cargo would not
    rerun the script if they vanished. The landing gate's storage admission
-   (`storage_budget.MAINTENANCE_GOAL_BYTES`, 30 GiB of raw free space) runs `agent-worktree.py reclaim` before refusing — it
+   (`storage_budget.MAINTENANCE_GOAL_BYTES`, 30 GiB of raw free space) maintains
+   caches on a gate's first build leg only (the walk costs 25-30 s on a full
+   pool), checks the raw reserve on every leg, maintains again when it falls
+   short, and runs `agent-worktree.py reclaim` before refusing — it
    frees landed, clean, lease-free, process-free slots only, LRU first,
    until the reserve is met; dirty, unlanded and main caches are never
    touched by it. The script

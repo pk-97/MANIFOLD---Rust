@@ -50,6 +50,8 @@ SLOW_TESTS = contextvars.ContextVar('slow_tests', default=None)
 # deadline before asking a child to handle SIGTERM.  Keeping this in context
 # avoids changing run_cmd's established return shape or call signature.
 ACTIVE_CHECK = contextvars.ContextVar('active_check', default=None)
+# Cargo targets this gate run has already admitted with full cache maintenance.
+MAINTAINED_TARGETS = contextvars.ContextVar('maintained_targets', default=None)
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -86,8 +88,18 @@ def build_environment(cmd, cwd):
     if len(targets) > 1:
         return None, "Storage admission refused: conflicting Cargo target overrides"
     target = next(iter(targets), repo / "target")
+    maintained = MAINTAINED_TARGETS.get()
     try:
-        admission = check_build(target, repo)
+        admission = None
+        if maintained is not None and target in maintained:
+            # Cache maintenance walks every idle slot's target, 25-30 s on a
+            # full pool, so it runs once per gate. Later legs check the raw
+            # free-space reserve only and maintain again when it falls short.
+            from storage_budget import disk_free
+            admission = check_build(target, repo, free_bytes=disk_free(
+                target.parent if target.parent.exists() else repo))
+        if not admission:
+            admission = check_build(target, repo)
         note = ""
         if not admission and admission.reclaimable:
             note = reclaim_landed_caches(admission.reserve_bytes)
@@ -96,6 +108,8 @@ def build_environment(cmd, cwd):
         return None, f"Storage admission refused: cannot inspect disk: {error}"
     if not admission:
         return None, "Storage admission refused: " + admission.reason + note
+    if maintained is not None:
+        maintained.add(target)
     environment["CARGO_TARGET_DIR"] = str(admission.target)
     return environment, None
 
@@ -530,6 +544,7 @@ def main():
     ran = RAN_EVERY_CHECK.set(False)
     wait = GPU_WAIT.set(None)
     slow = SLOW_TESTS.set({})
+    maintained = MAINTAINED_TARGETS.set(set())
     try:
         with cancellation_signals(), contextlib.ExitStack() as stack:
             stack.enter_context(gate_passes.session())
@@ -539,6 +554,7 @@ def main():
         repo = Path(sys.argv[sys.argv.index('--repo') + 1]) if '--repo' in sys.argv else Path.cwd()
         return record_incomplete(repo, error)
     finally:
+        MAINTAINED_TARGETS.reset(maintained)
         SLOW_TESTS.reset(slow)
         GPU_WAIT.reset(wait)
         RAN_EVERY_CHECK.reset(ran)
