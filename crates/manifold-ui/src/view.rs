@@ -281,6 +281,53 @@ pub enum UiClipTriggerSource {
     Lane(LayerId),
 }
 
+/// How a lane names and prints its parameter: the inspector row's own display
+/// facts, so the lane title, the drag readout and the point editor show the
+/// same text the slider shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiLaneDisplay {
+    /// The parameter's display name, without the effect prefix `label` has.
+    pub param_name: String,
+    /// The owning layer's colour; transparent when unknown.
+    pub layer_color: crate::node::Color32,
+    pub is_angle: bool,
+    pub value_labels: Option<std::sync::Arc<[String]>>,
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
+}
+
+impl Default for UiLaneDisplay {
+    fn default() -> Self {
+        Self {
+            param_name: String::new(),
+            layer_color: crate::node::Color32::TRANSPARENT,
+            is_angle: false,
+            value_labels: None,
+            unit: None,
+        }
+    }
+}
+
+impl UiLaneDisplay {
+    /// `value` (param units) as the inspector slider prints it.
+    pub fn format_value<'a>(
+        &'a self,
+        buf: &'a mut crate::panels::param_slider_shared::ParamValueText,
+        value: f32,
+        min: f32,
+        whole_numbers: bool,
+    ) -> &'a str {
+        crate::panels::param_slider_shared::param_value_text(
+            buf,
+            value,
+            min,
+            whole_numbers,
+            self.is_angle,
+            self.value_labels.as_deref(),
+            self.unit,
+        )
+    }
+}
+
 /// One lane strip's read-only render data: which param, whether it draws
 /// grayed (overridden), and the breakpoints the viewport samples into a
 /// screen-space polyline. `effect_id` + `param_id` are the identity key that
@@ -325,6 +372,7 @@ pub struct UiAutomationLane {
     /// first click actually creates one. Real (core-backed) lanes are always
     /// `false`.
     pub placeholder: bool,
+    pub display: UiLaneDisplay,
 }
 
 impl UiAutomationLane {
@@ -426,6 +474,7 @@ mod automation_lane_tests {
             param_max: 1.0,
             whole_numbers: false,
             placeholder: false,
+            display: UiLaneDisplay::default(),
         }
     }
 

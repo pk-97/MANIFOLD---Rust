@@ -999,7 +999,7 @@ impl InteractionOverlay {
         .is_some_and(|(_, op, _)| {
             matches!(
                 op,
-                AutomationOperation::Header
+                AutomationOperation::Title
                     | AutomationOperation::Resize
                     | AutomationOperation::Blocked
             )
@@ -1235,7 +1235,7 @@ impl InteractionOverlay {
                         AutomationOperation::Insert => "Click: add point · Drag: select · Shift-click: deselect",
                         AutomationOperation::Draw => "Drag to draw points · Cmd: unsnap",
                         AutomationOperation::Resize => "Drag to resize lane",
-                        AutomationOperation::Header => "Layer arrangement automation · Right-click for lane options",
+                        AutomationOperation::Title => "Lane title · Right-click: lane options",
                         AutomationOperation::Blocked => "Cannot edit: parameter has no editable range",
                         AutomationOperation::Marquee => "Drag to select points",
                     };
@@ -1555,7 +1555,7 @@ impl InteractionOverlay {
         let after_delete = std::mem::take(&mut self.deleted_dot_on_last_click) && click_count >= 2;
         let lanes = viewport.automation_lane_screens();
         if automation_hit_tester::resolve_feedback(pos, lanes, self.modifiers.alt, ui_state.automation_draw_mode)
-            .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Header | AutomationOperation::Resize | AutomationOperation::Blocked)) {
+            .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Title | AutomationOperation::Resize | AutomationOperation::Blocked)) {
             return true;
         }
         let Some(hit) = automation_hit_tester::hit_test_automation(pos, lanes) else {
@@ -1699,7 +1699,7 @@ impl InteractionOverlay {
     ) -> bool {
         let mut lanes = std::borrow::Cow::Borrowed(viewport.automation_lane_screens());
         if automation_hit_tester::resolve_feedback(press_pos, &lanes, self.modifiers.alt, ui_state.automation_draw_mode)
-            .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Header | AutomationOperation::Resize | AutomationOperation::Blocked)) {
+            .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Title | AutomationOperation::Resize | AutomationOperation::Blocked)) {
             return true;
         }
         let forced_hit = self.forced_automation_hit.take();
@@ -2919,7 +2919,7 @@ impl InteractionOverlay {
             }
             DragMode::AutomationLaneResize => {
                 if let Some(TimelineDrag::AutomationLaneResize(state)) = self.drag.payload() {
-                    let height = (state.start_height + pos.y - state.start_y).clamp(64.0, 240.0);
+                    let height = (state.start_height + pos.y - state.start_y).clamp(crate::color::AUTOMATION_LANE_MIN_HEIGHT, crate::color::AUTOMATION_LANE_MAX_HEIGHT);
                     ui_state.set_automation_lane_height(state.target.clone(), state.param_id.clone(), height);
                 }
             }
@@ -4695,7 +4695,7 @@ mod p1_4_gesture_integrity_tests {
         overlay.on_drag(press + Vec2::new(0.0, 1000.0), &mut host, &mut state, &mut panel);
         assert_eq!(state.automation_lane_height(&target, &param), 240.0);
         overlay.on_drag(press - Vec2::new(0.0, 1000.0), &mut host, &mut state, &mut panel);
-        assert_eq!(state.automation_lane_height(&target, &param), 64.0);
+        assert_eq!(state.automation_lane_height(&target, &param), color::AUTOMATION_LANE_MIN_HEIGHT);
         overlay.on_end_drag(&mut host);
         assert!(host.automation_point_moves.is_empty());
         assert!(host.automation_lane_preview.is_empty());
@@ -4753,6 +4753,7 @@ mod p1_4_gesture_integrity_tests {
                 param_max,
                 whole_numbers,
                 placeholder,
+                display: crate::view::UiLaneDisplay::default(),
             },
         }]);
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
@@ -4806,6 +4807,7 @@ mod p1_4_gesture_integrity_tests {
                 param_max,
                 whole_numbers: false,
                 placeholder: false,
+                display: crate::view::UiLaneDisplay::default(),
             },
         }]);
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
@@ -5047,9 +5049,9 @@ mod p1_4_gesture_integrity_tests {
         assert_eq!(feedback.beat, panel.snap_to_grid(panel.pixel_to_beat(pos.x)));
         overlay.handle_automation_click(pos, 1, &mut host, &mut state, &panel);
         assert_eq!(host.automation_added, vec![(feedback.beat, feedback.value)]);
-        let chrome = Vec2::new(pos.x, lane.header_rect().y + 3.0);
+        let chrome = Vec2::new(lane.title_rect.x + lane.title_rect.width * 0.5, lane.title_rect.y + lane.title_rect.height * 0.5);
         overlay.refresh_automation_feedback(chrome, lanes, &mut state, &panel);
-        assert_eq!(state.automation_feedback.as_ref().unwrap().operation, AutomationOperation::Header);
+        assert_eq!(state.automation_feedback.as_ref().unwrap().operation, AutomationOperation::Title);
         overlay.handle_automation_click(chrome, 2, &mut host, &mut state, &panel);
         overlay.on_begin_drag(chrome, &mut host, &mut state, &panel);
         assert_eq!(overlay.drag_mode(), DragMode::None);
@@ -5603,6 +5605,31 @@ mod p1_4_gesture_integrity_tests {
     }
 
     #[test]
+    fn automation_drag_from_any_height_in_the_lane_selects_time() {
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let lane = panel.automation_lane_screens()[0].clone();
+        let strip = lane.strip_rect;
+        // Clear of the resize grip at the left and the title at the right.
+        let x0 = lane.resize_rect().x_max() + 20.0;
+        let x1 = x0 + 120.0;
+        assert!(x1 < lane.title_rect.x);
+        for y in [strip.y + 0.5, strip.y + strip.height * 0.5, strip.y_max() - 0.5] {
+            let mut state = UIState::new();
+            let (start, end) = (Vec2::new(x0, y), Vec2::new(x1, y));
+            overlay.on_pointer_down(start, &mut host, &mut state, &panel);
+            overlay.on_begin_drag(start, &mut host, &mut state, &panel);
+            overlay.on_drag(end, &mut host, &mut state, &mut panel);
+            overlay.on_end_drag(&mut host);
+            let range = state.automation_time_selection.as_ref()
+                .unwrap_or_else(|| panic!("a drag at y {y} made no time selection"));
+            assert!(range.start < range.end, "y {y}");
+        }
+        assert!(host.automation_added.is_empty());
+    }
+
+    #[test]
     fn automation_cancelled_press_does_not_reinsert_on_release() {
         let panel = build_viewport_with_automation();
         let mut host = GestureTestHost::new(&["layer-0"]);
@@ -5759,6 +5786,7 @@ mod p1_4_gesture_integrity_tests {
                 param_max: 1.0,
                 whole_numbers: false,
                 placeholder: false,
+                display: crate::view::UiLaneDisplay::default(),
             },
         };
         panel.set_automation_lanes(vec![

@@ -493,7 +493,7 @@ impl ParamModState {
 }
 
 
-pub(crate) fn format_param_value(
+pub fn format_param_value(
     val: f32,
     min: f32,
     whole_numbers: bool,
@@ -507,11 +507,11 @@ pub(crate) fn format_param_value(
 
 /// A formatted number as a param readout shows it: long enough for any `f32`
 /// with two decimals and a unit suffix.
-pub(crate) type ParamValueText = manifold_foundation::scratch::StackText<64>;
+pub type ParamValueText = manifold_foundation::scratch::StackText<64>;
 
 /// [`format_param_value`] without allocating: a value label is borrowed, a
 /// number is written into `buf`.
-pub(crate) fn param_value_text<'a>(
+pub fn param_value_text<'a>(
     buf: &'a mut ParamValueText,
     val: f32,
     min: f32,

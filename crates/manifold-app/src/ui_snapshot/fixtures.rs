@@ -132,6 +132,7 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         "hairlineclips" => Some(hairline_clips_scene()),
         "automation" => Some(automation_scene()),
         "automationplaceholder" => Some(automation_placeholder_scene()),
+        "automationenum" => Some(automation_enum_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
         // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
@@ -580,6 +581,34 @@ fn automation_scene() -> SceneData {
     flowers.effects = Some(vec![mirror, bloom]);
 
     data.content.automation_latched_params = vec![(bloom_id, bloom_param.into())];
+    data
+}
+
+/// `automation` plus a stepped enum lane (Mirror Mode), so lane titles and
+/// readouts show enum names next to plain numbers. A separate scene keeps
+/// the `automation` flows' pixel positions untouched.
+fn automation_enum_scene() -> SceneData {
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    let mut data = automation_scene();
+    let mirror = data
+        .project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|l| l.layer_id == lid("flowers"))
+        .and_then(|l| l.effects.as_mut())
+        .and_then(|fx| fx.first_mut())
+        .expect("automation_scene puts Mirror first on flowers");
+    let lanes = mirror.automation_lanes.get_or_insert_with(Vec::new);
+    lanes.push(AutomationLane {
+        param_id: "mode".into(),
+        enabled: true,
+        points: vec![
+            AutomationPoint { beat: Beats(0.0), value: 1.0, shape: SegmentShape::Hold },
+            AutomationPoint { beat: Beats(6.0), value: 5.0, shape: SegmentShape::Hold },
+            AutomationPoint { beat: Beats(10.0), value: 7.0, shape: SegmentShape::Hold },
+        ],
+    });
     data
 }
 

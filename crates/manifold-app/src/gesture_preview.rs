@@ -395,6 +395,7 @@ mod tests {
                     param_max: 1.0,
                     whole_numbers: false,
                     placeholder: false,
+                    display: manifold_ui::view::UiLaneDisplay::default(),
                 },
             }],
         );
