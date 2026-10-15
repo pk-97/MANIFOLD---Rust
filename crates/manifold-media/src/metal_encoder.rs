@@ -408,6 +408,65 @@ mod srgb_shader_parity_tests {
             assert!(shader < 1.0 + 1e-6, "rolloff must stay at or below white, got {shader} at {x}");
         }
     }
+
+    /// BT.709 limited-range Y'CbCr reference (ITU-R BT.709 / BT.601 8-bit
+    /// quantization), from encoded R'G'B' in [0, 1] to unrounded code values.
+    fn bt709_limited_ycbcr_reference([r, g, b]: [f64; 3]) -> [f64; 3] {
+        let (kr, kb) = (0.2126, 0.0722);
+        let y = kr * r + (1.0 - kr - kb) * g + kb * b;
+        [
+            16.0 + 219.0 * y,
+            128.0 + 224.0 * (b - y) / (2.0 * (1.0 - kb)),
+            128.0 + 224.0 * (r - y) / (2.0 * (1.0 - kr)),
+        ]
+    }
+
+    /// Literal transliteration of `manifold_bt709_limited_ycbcr` in
+    /// `native/ColorTransferFunctions.h`, in f32 like the shader.
+    fn shader_bt709_limited_ycbcr([r, g, b]: [f32; 3]) -> [f32; 3] {
+        let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+        [16.0 + 219.0 * y, 128.0 + 224.0 * (b - y) / 1.8556, 128.0 + 224.0 * (r - y) / 1.5748]
+    }
+
+    #[test]
+    fn shader_ycbcr_matches_bt709_limited_range_reference() {
+        let header = include_str!("../native/ColorTransferFunctions.h");
+        for line in [
+            "return dot(rgb, float3(0.2126, 0.7152, 0.0722));",
+            "return float3(16.0 + 219.0 * y,",
+            "128.0 + 224.0 * (rgb.b - y) / 1.8556,",
+            "128.0 + 224.0 * (rgb.r - y) / 1.5748);",
+        ] {
+            assert!(header.contains(line), "ColorTransferFunctions.h no longer contains {line:?}");
+        }
+        let round = |v: [f32; 3]| v.map(|c| c.round() as u8);
+        // Known 8-bit code values; exact black and white must land on the
+        // range ends with neutral chroma or the export crushes or lifts them.
+        for (rgb, want) in [
+            ([0.0, 0.0, 0.0], [16, 128, 128]),
+            ([1.0, 1.0, 1.0], [235, 128, 128]),
+            ([1.0, 0.0, 0.0], [63, 102, 240]),
+        ] {
+            assert_eq!(round(shader_bt709_limited_ycbcr(rgb)), want, "rgb={rgb:?}");
+        }
+        let steps = [0.0_f32, 0.05, 0.18, 0.5, 0.73, 0.99, 1.0];
+        for &r in &steps {
+            for &g in &steps {
+                for &b in &steps {
+                    let shader = shader_bt709_limited_ycbcr([r, g, b]);
+                    let reference = bt709_limited_ycbcr_reference([r, g, b].map(f64::from));
+                    for c in 0..3 {
+                        assert!(
+                            (f64::from(shader[c]) - reference[c]).abs() < 1e-3,
+                            "ycbcr diverges at rgb=({r},{g},{b}) channel {c}: \
+                             shader={shader:?}, reference={reference:?}"
+                        );
+                        assert!((16.0..=240.0).contains(&shader[c]), "out of limited range: {shader:?}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
