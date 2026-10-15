@@ -402,6 +402,23 @@ impl InputHandler {
                 | Key::Named(NamedKey::ArrowDown)
         ) && !m.alt
         {
+            // Selected automation points take the arrows before clips do:
+            // Left/Right one grid step, Up/Down 1% of the range (Shift 0.1%).
+            let automation_nudge = match logical_key {
+                Key::Named(NamedKey::ArrowLeft) if m.is_none() => Some((-host.grid_step(), 0.0)),
+                Key::Named(NamedKey::ArrowRight) if m.is_none() => Some((host.grid_step(), 0.0)),
+                Key::Named(NamedKey::ArrowUp) if m.is_none() => Some((0.0, 1.0)),
+                Key::Named(NamedKey::ArrowDown) if m.is_none() => Some((0.0, -1.0)),
+                Key::Named(NamedKey::ArrowUp) if m.is_shift_only() => Some((0.0, 0.1)),
+                Key::Named(NamedKey::ArrowDown) if m.is_shift_only() => Some((0.0, -0.1)),
+                _ => None,
+            };
+            if let Some((beat_delta, value_steps)) = automation_nudge
+                && host.nudge_selected_automation(beat_delta, value_steps)
+            {
+                return true;
+            }
+
             let has_selected = host.selection_count() > 0;
 
             if has_selected {
@@ -540,6 +557,7 @@ mod b14_keyboard_layer_tests {
         automation_paste_target: bool,
         automation_paste_calls: Vec<f32>,
         automation_duplicate_calls: u32,
+        automation_nudge_calls: Vec<(f32, f32)>,
         effect_cut_result: bool,
         effect_cut_calls: u32,
         effect_duplicate_result: bool,
@@ -743,6 +761,11 @@ mod b14_keyboard_layer_tests {
         }
         fn duplicate_selected_automation(&mut self) {
             self.automation_duplicate_calls += 1;
+        }
+        fn nudge_selected_automation(&mut self, beat_delta: f32, value_steps: f32) -> bool {
+            if !self.automation_selection { return false; }
+            self.automation_nudge_calls.push((beat_delta, value_steps));
+            true
         }
     }
 
@@ -969,6 +992,37 @@ mod b14_keyboard_layer_tests {
         assert!(consumed);
         assert!(host.paste_pasteboard_files_calls.is_empty());
         assert_eq!(host.paste_clips_calls.len(), 1);
+    }
+
+    #[test]
+    fn arrows_nudge_selected_automation_points_instead_of_clips() {
+        let (mut handler, mut host) = selected_host();
+        host.automation_selection = true;
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        for (key, m) in [
+            (NamedKey::ArrowLeft, Modifiers::NONE),
+            (NamedKey::ArrowRight, Modifiers::NONE),
+            (NamedKey::ArrowUp, Modifiers::NONE),
+            (NamedKey::ArrowDown, Modifiers::NONE),
+            (NamedKey::ArrowUp, shift),
+            (NamedKey::ArrowDown, shift),
+        ] {
+            assert!(handler.handle_keyboard_input(&Key::Named(key), m, &mut host));
+        }
+        assert_eq!(
+            host.automation_nudge_calls,
+            vec![(-0.25, 0.0), (0.25, 0.0), (0.0, 1.0), (0.0, -1.0), (0.0, 0.1), (0.0, -0.1)]
+        );
+        assert!(host.nudge_calls.is_empty(), "clips must not move");
+        assert!(host.move_layer_calls.is_empty());
+    }
+
+    #[test]
+    fn arrows_still_nudge_clips_without_automation_selection() {
+        let (mut handler, mut host) = selected_host();
+        handler.handle_keyboard_input(&Key::Named(NamedKey::ArrowRight), Modifiers::NONE, &mut host);
+        assert!(host.automation_nudge_calls.is_empty());
+        assert_eq!(host.nudge_calls.len(), 1);
     }
 
     #[test]
