@@ -61,7 +61,15 @@ static NSString* const kCopyShaderSDRBody =
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
      "    half4 c = src.read(gid);\n"
      "    float3 lin = manifold_highlight_rolloff(float3(max(c.rgb, half3(0.0h))));\n"
-     "    c.rgb = half3(manifold_srgb_encode(lin));\n"
+     "    float3 enc = manifold_srgb_encode(lin);\n"
+     "    // Triangular dither of one 8-bit step breaks up gradient banding before\n"
+     "    // the 8-bit write. Static per pixel so it costs the encoder nothing over\n"
+     "    // time; exact black and white get none so flat backgrounds stay clean.\n"
+     "    uint h = (gid.x * 73856093u) ^ (gid.y * 19349663u);\n"
+     "    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;\n"
+     "    float n = (float(h & 0xffffu) + float(h >> 16)) / 65535.0 - 1.0;\n"
+     "    float3 inside = float3(enc > 0.0) * float3(enc < 1.0);\n"
+     "    c.rgb = half3(saturate(enc + inside * (n / 255.0)));\n"
      "    dst.write(c, gid);\n"
      "}\n";
 
