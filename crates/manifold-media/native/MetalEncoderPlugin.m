@@ -44,9 +44,11 @@
 
 // SDR: apply the true piecewise sRGB OETF (compositor outputs linear light;
 // CAMetalLayer applies the sRGB transfer function for display, but export
-// needs it baked in). `manifold_srgb_encode` (ColorTransferFunctions.h)
-// is the one shared definition, ported from the tested Rust reference —
-// still_exporter.rs's `linear_to_srgb`. Built by concatenating
+// needs it baked in). Brighter-than-white EDR values pass through
+// `manifold_highlight_rolloff` first so they compress into white instead of
+// hard-clipping. Both functions live once in ColorTransferFunctions.h,
+// pinned to the Rust references in still_exporter.rs (`highlight_rolloff`,
+// `linear_to_srgb`) by metal_encoder.rs tests. Built by concatenating
 // kManifoldColorTransferFunctionsMSL with this kernel body in
 // MetalEncoder_CreateInternal (NSString literals can't be spliced at
 // compile time, so the include+function-def preamble lives there).
@@ -58,7 +60,8 @@ static NSString* const kCopyShaderSDRBody =
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
      "    half4 c = src.read(gid);\n"
-     "    c.rgb = half3(manifold_srgb_encode(float3(max(c.rgb, half3(0.0h)))));\n"
+     "    float3 lin = manifold_highlight_rolloff(float3(max(c.rgb, half3(0.0h))));\n"
+     "    c.rgb = half3(manifold_srgb_encode(lin));\n"
      "    dst.write(c, gid);\n"
      "}\n";
 
@@ -334,6 +337,14 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int
                 AVVideoWidthKey:                  @(width),
                 AVVideoHeightKey:                 @(height),
                 AVVideoCompressionPropertiesKey:  compressionProps,
+                // VideoToolbox converts BGRA to limited (video) range YCbCr
+                // with the 709 matrix; these tags make the stream say so.
+                // sRGB-curve content is tagged 1-1-1 by convention.
+                AVVideoColorPropertiesKey: @{
+                    AVVideoColorPrimariesKey:          AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey:        AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey:             AVVideoYCbCrMatrix_ITU_R_709_2,
+                },
             };
 
             pixelFormatType = kCVPixelFormatType_32BGRA;

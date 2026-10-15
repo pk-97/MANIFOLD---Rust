@@ -39,6 +39,16 @@ static NSString *const kManifoldColorTransferFunctionsMSL =
      "    float3 lo = x / 12.92;\n"
      "    float3 hi = pow((x + 0.055) / 1.055, float3(2.4));\n"
      "    return select(hi, lo, x <= float3(0.04045));\n"
+     "}\n"
+     "\n"
+     "// Soft highlight rolloff, linear [0, inf) -> [0, 1): identity below the\n"
+     "// knee, tanh shoulder above, so EDR highlights compress into SDR white\n"
+     "// instead of hard-clipping. Mirrors still_exporter.rs highlight_rolloff.\n"
+     "// The tanh argument is capped at 10 (tanh(10) == 1.0 in float) because\n"
+     "// fast-math tanh overflows to NaN for large arguments.\n"
+     "inline float3 manifold_highlight_rolloff(float3 x) {\n"
+     "    float3 t = min((x - 0.8) / 0.2, float3(10.0));\n"
+     "    return select(0.8 + 0.2 * tanh(t), x, x <= float3(0.8));\n"
      "}\n";
 
 #endif // MANIFOLD_COLOR_TRANSFER_FUNCTIONS_H

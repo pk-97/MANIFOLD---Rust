@@ -375,6 +375,39 @@ mod srgb_shader_parity_tests {
              true={true_srgb}, approx={approx}"
         );
     }
+
+    /// Literal transliteration of `manifold_highlight_rolloff` in
+    /// `native/ColorTransferFunctions.h` (scalar form).
+    fn shader_highlight_rolloff(x: f32) -> f32 {
+        let t = ((x - 0.8) / 0.2).min(10.0);
+        if x <= 0.8 { x } else { 0.8 + 0.2 * t.tanh() }
+    }
+
+    #[test]
+    fn shader_rolloff_matches_still_exporter_reference() {
+        use crate::still_exporter::highlight_rolloff;
+        // The transliteration above must be the header's text, not a guess.
+        let header = include_str!("../native/ColorTransferFunctions.h");
+        for line in [
+            "float3 t = min((x - 0.8) / 0.2, float3(10.0));",
+            "return select(0.8 + 0.2 * tanh(t), x, x <= float3(0.8));",
+        ] {
+            assert!(header.contains(line), "ColorTransferFunctions.h no longer contains {line:?}");
+        }
+        let samples = [
+            0.0_f32, 0.1, 0.5, 0.79, 0.8, 0.81, 0.9, 1.0, 1.2, 1.5, 2.0, 2.8, 3.0, 5.0, 16.0,
+            1.0e4, f32::INFINITY,
+        ];
+        for &x in &samples {
+            let shader = shader_highlight_rolloff(x);
+            let reference = highlight_rolloff(x);
+            assert!(
+                (shader - reference).abs() < 1e-6,
+                "rolloff diverges at linear={x}: shader={shader}, reference={reference}"
+            );
+            assert!(shader < 1.0 + 1e-6, "rolloff must stay at or below white, got {shader} at {x}");
+        }
+    }
 }
 
 #[cfg(test)]

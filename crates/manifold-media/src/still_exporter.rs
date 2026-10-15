@@ -38,7 +38,9 @@ pub(crate) fn linear_to_srgb(x: f32) -> f32 {
 /// highlights compress gracefully into SDR white instead of hard-clipping.
 /// Mirrors the EDR-passthrough soft-clip in the tonemap shader, targeting SDR
 /// white (1.0) rather than the display peak.
-fn highlight_rolloff(x: f32) -> f32 {
+/// The SDR video kernel runs the same function (`manifold_highlight_rolloff`
+/// in `native/ColorTransferFunctions.h`), pinned by `metal_encoder.rs` tests.
+pub(crate) fn highlight_rolloff(x: f32) -> f32 {
     const KNEE: f32 = 0.8;
     if x <= KNEE {
         x
