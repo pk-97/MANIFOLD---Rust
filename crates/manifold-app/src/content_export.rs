@@ -18,6 +18,72 @@ use crate::content_thread::ContentThread;
 
 use manifold_gpu::gpu_fault::{FaultKind, FaultKinds};
 
+/// Header metadata for an exported file: how it was made. `title` and
+/// `software` are standard fields; `com.manifold.*` keys are custom. Only the
+/// global project settings are recorded, nothing per layer. RT quality is the
+/// export column, since that is what an export renders with.
+pub(crate) fn export_metadata(
+    project: &manifold_core::project::Project,
+    config: &manifold_media::export_config::ExportConfig,
+) -> Vec<(String, String)> {
+    use manifold_core::types::TonemapCurve;
+    use manifold_core::settings::{RtQualityTier, RtRayResolution, RtSpatialDenoise};
+
+    fn tier(t: RtQualityTier) -> &'static str {
+        match t {
+            RtQualityTier::UltraLow => "Ultra Low",
+            RtQualityTier::Low => "Low",
+            RtQualityTier::Medium => "Medium",
+            RtQualityTier::High => "High",
+            RtQualityTier::ExtraHigh => "Extra High",
+            RtQualityTier::Ultra => "Ultra",
+        }
+    }
+    let rt = &project.settings.rt_quality.export;
+    let ray_res = match rt.ray_resolution {
+        RtRayResolution::Quarter => "Quarter",
+        RtRayResolution::Half => "Half",
+        RtRayResolution::ThreeQuarter => "Three Quarter",
+        RtRayResolution::Native => "Native",
+    };
+    let denoise = match rt.spatial_denoise {
+        RtSpatialDenoise::Off => "Off",
+        RtSpatialDenoise::Low => "Low",
+        RtSpatialDenoise::Medium => "Medium",
+        RtSpatialDenoise::High => "High",
+    };
+    // The curve only applies to SDR output with the tone map switched on.
+    let tonemap = if config.hdr || !project.settings.tonemap_enabled {
+        "Off"
+    } else {
+        match project.settings.tonemap_curve {
+            TonemapCurve::AcesNarkowicz => "ACES Narkowicz",
+            TonemapCurve::AcesHill => "ACES Hill",
+            TonemapCurve::Agx => "AgX",
+            TonemapCurve::KhronosPbrNeutral => "Khronos PBR Neutral",
+        }
+    };
+    let kv = |k: &str, v: String| (k.to_string(), v);
+    let mut out = Vec::new();
+    if !project.project_name.is_empty() {
+        out.push(kv("title", project.project_name.clone()));
+    }
+    out.push(kv("software", format!("MANIFOLD {}", env!("CARGO_PKG_VERSION"))));
+    out.push(kv("com.manifold.resolution", format!("{}x{}", config.width, config.height)));
+    out.push(kv("com.manifold.fps", format!("{}", config.fps)));
+    out.push(kv("com.manifold.dynamic_range", if config.hdr { "HDR10" } else { "SDR" }.into()));
+    out.push(kv("com.manifold.codec", if config.hdr { "HEVC Main10" } else { "H.264" }.into()));
+    out.push(kv("com.manifold.sdr_tone_map", tonemap.into()));
+    out.push(kv("com.manifold.rt_shadows", tier(rt.shadows).into()));
+    out.push(kv("com.manifold.rt_ao", tier(rt.ao).into()));
+    out.push(kv("com.manifold.rt_gi", tier(rt.gi).into()));
+    out.push(kv("com.manifold.rt_reflections", tier(rt.reflections).into()));
+    out.push(kv("com.manifold.rt_ray_resolution", ray_res.into()));
+    out.push(kv("com.manifold.rt_denoise", denoise.into()));
+    out.push(kv("com.manifold.bpm", format!("{:.2}", project.settings.bpm.0)));
+    out
+}
+
 /// How many times a frame is re-rendered after a recoverable GPU hang.
 const EXPORT_HANG_RETRIES: u32 = 2;
 
@@ -609,6 +675,7 @@ impl ContentThread {
             return true;
         };
 
+        export_config.metadata = export_metadata(project, &export_config);
         let start_beat = export_config.start_beat;
         let end_beat = export_config.end_beat;
 
@@ -1423,6 +1490,72 @@ impl ContentThread {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn meta_config(hdr: bool) -> manifold_media::export_config::ExportConfig {
+        manifold_media::export_config::ExportConfig {
+            output_path: String::new(),
+            width: 1920,
+            height: 1080,
+            fps: 60.0,
+            hdr,
+            start_beat: 0.0,
+            end_beat: 0.0,
+            audio_path: None,
+            audio_start_beat: 0.0,
+            audio_encoder_delay: 0.0,
+            split_at_markers: false,
+            metadata: Vec::new(),
+        }
+    }
+
+    fn meta_get<'a>(m: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        m.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn export_metadata_sdr_records_settings() {
+        use manifold_core::project::Project;
+        use manifold_core::types::TonemapCurve;
+        let mut project = Project {
+            project_name: "Night Set".into(),
+            ..Project::default()
+        };
+        project.settings.tonemap_enabled = true;
+        project.settings.tonemap_curve = TonemapCurve::Agx;
+        let m = export_metadata(&project, &meta_config(false));
+        assert_eq!(meta_get(&m, "title"), Some("Night Set"));
+        assert_eq!(
+            meta_get(&m, "software"),
+            Some(concat!("MANIFOLD ", env!("CARGO_PKG_VERSION")))
+        );
+        assert_eq!(meta_get(&m, "com.manifold.resolution"), Some("1920x1080"));
+        assert_eq!(meta_get(&m, "com.manifold.fps"), Some("60"));
+        assert_eq!(meta_get(&m, "com.manifold.dynamic_range"), Some("SDR"));
+        assert_eq!(meta_get(&m, "com.manifold.codec"), Some("H.264"));
+        assert_eq!(meta_get(&m, "com.manifold.sdr_tone_map"), Some("AgX"));
+        // Export column defaults.
+        assert_eq!(meta_get(&m, "com.manifold.rt_shadows"), Some("High"));
+        assert_eq!(meta_get(&m, "com.manifold.rt_reflections"), Some("Extra High"));
+        assert_eq!(meta_get(&m, "com.manifold.rt_ray_resolution"), Some("Native"));
+        assert_eq!(meta_get(&m, "com.manifold.rt_denoise"), Some("High"));
+        assert!(meta_get(&m, "com.manifold.bpm").is_some());
+    }
+
+    #[test]
+    fn export_metadata_hdr_and_untitled() {
+        use manifold_core::project::Project;
+        let mut project = Project::default();
+        project.settings.tonemap_enabled = true;
+        let m = export_metadata(&project, &meta_config(true));
+        assert_eq!(meta_get(&m, "title"), None);
+        assert_eq!(meta_get(&m, "com.manifold.dynamic_range"), Some("HDR10"));
+        assert_eq!(meta_get(&m, "com.manifold.codec"), Some("HEVC Main10"));
+        // The SDR curve does not apply to HDR output.
+        assert_eq!(meta_get(&m, "com.manifold.sdr_tone_map"), Some("Off"));
+        project.settings.tonemap_enabled = false;
+        let m = export_metadata(&project, &meta_config(false));
+        assert_eq!(meta_get(&m, "com.manifold.sdr_tone_map"), Some("Off"));
+    }
 
     // BUG-130 (a): when the export needs audio muxing, missing ffmpeg must
     // be caught before frame 0 — not discovered only at finalize after a
