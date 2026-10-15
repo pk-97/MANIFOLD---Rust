@@ -147,8 +147,8 @@ fn fixture_project(fixture: Fixture) -> (Project, usize, Option<u64>) {
         0,
     );
     layer.layer_id = LayerId::new(fixture.layer_id);
-    layer.gen_params_or_init().graph = Some(graph);
-    layer.gen_params_or_init().refresh_manifest_from_graph();
+    layer.gen_params_mut().unwrap().graph = Some(graph);
+    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
     let mut clip = manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0));
     clip.layer_id = layer.layer_id.clone();
     layer.clips.push(clip);

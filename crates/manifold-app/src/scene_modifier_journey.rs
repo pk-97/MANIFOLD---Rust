@@ -57,8 +57,8 @@ fn imported_layer(name: &str, layer_id: &str, index: i32, path: &Path) -> Layer 
     let mut layer =
         Layer::new_generator(name.into(), PresetTypeId::new("PhotoscanBaseline"), index);
     layer.layer_id = LayerId::new(layer_id);
-    layer.gen_params_or_init().graph = Some(graph);
-    layer.gen_params_or_init().refresh_manifest_from_graph();
+    layer.gen_params_mut().unwrap().graph = Some(graph);
+    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
     let mut clip = manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0));
     clip.layer_id = layer.layer_id.clone();
     layer.clips.push(clip);
@@ -189,8 +189,8 @@ fn math_view_project() -> Project {
         0,
     );
     layer.layer_id = LayerId::new("math-grid");
-    layer.gen_params_or_init().graph = Some(graph);
-    layer.gen_params_or_init().refresh_manifest_from_graph();
+    layer.gen_params_mut().unwrap().graph = Some(graph);
+    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
     let mut clip = manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0));
     clip.layer_id = layer.layer_id.clone();
     layer.clips.push(clip);

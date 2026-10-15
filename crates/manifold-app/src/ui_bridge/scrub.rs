@@ -745,7 +745,7 @@ pub(crate) fn dispatch_scrub(
                     }
                     let pid = param_id.clone();
                     let t = target.clone();
-                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::VALUES, move |p| {
                         p.with_preset_graph_mut(&t, |inst| {
                             inst.set_base_param(pid.as_ref(), val);
                         });
@@ -814,7 +814,7 @@ pub(crate) fn dispatch_scrub(
                     if let Some(ResolvedScrub::MasterOpacity { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
-                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::VALUES, move |p| {
                         p.settings.master_opacity = v;
                     });
                 }
@@ -853,7 +853,7 @@ pub(crate) fn dispatch_scrub(
                     }
                     // LED brightness lands via a plain (non-Live) mutation, as
                     // the retired `LedBrightnessChanged` did.
-                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::VALUES, move |p| {
                         p.settings.led_brightness = v;
                     });
                 }
@@ -898,7 +898,7 @@ pub(crate) fn dispatch_scrub(
                         *live = v;
                     }
                     let layer_id = ctx.project.timeline.layers[idx].layer_id.clone();
-                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::VALUES, move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                             layer.opacity = v;
                         }
@@ -952,7 +952,7 @@ pub(crate) fn dispatch_scrub(
                         {
                             *live = v;
                         }
-                        ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                        ctx.gesture_move(crate::content_command::touch::VALUES, move |p| {
                             manifold_core::macro_bank::MacroBank::apply_macro(p, idx, v);
                         });
                     }
@@ -1002,7 +1002,7 @@ pub(crate) fn dispatch_scrub(
                         *live = v;
                     }
                     let id = id.clone();
-                    ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::SHAPES, move |p| {
                         if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
                             l.audio_gain_db = v;
                         }
@@ -1084,7 +1084,7 @@ pub(crate) fn dispatch_scrub(
                         // Live drag: float knobs are per-frame uniforms — no
                         // structure-version bump (D8/P7).
                         let t = target.clone();
-                        ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                        ctx.gesture_move(crate::content_command::touch::SHAPES, move |p| {
                             p.with_preset_graph_mut(&t, |inst| {
                                 f.set(&mut inst.relight_params, v);
                             });
@@ -1246,7 +1246,7 @@ pub(crate) fn dispatch_scrub(
                                     // shared locate-fork so they can't split.
                                     let mt = mapping_target.clone();
                                     let pid = param_id.clone();
-                                    ctx.mutate(crate::content_command::touch::MAPPING_RANGES, move |p| {
+                                    ctx.gesture_move(crate::content_command::touch::MAPPING_RANGES, move |p| {
                                         if let Some(ms) = p
                                             .ableton_param_mappings_mut(&mt)
                                             .and_then(|opt| opt.as_mut())
@@ -2008,7 +2008,7 @@ pub(crate) fn dispatch_scrub(
                         *live = clamped;
                     }
                     let id = send_id.clone();
-                    ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::SHAPES, move |p| {
                         if let Some(s) = p.audio_setup.find_send_mut(&id) {
                             s.gain_db = clamped;
                         }
@@ -2077,7 +2077,7 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live = (low, mid);
                     }
-                    ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::SHAPES, move |p| {
                         p.audio_setup.low_hz = low;
                         p.audio_setup.mid_hz = mid;
                     });
@@ -2142,7 +2142,7 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live = (min, max);
                     }
-                    ctx.mutate(crate::content_command::touch::MAPPING_RANGES, move |p| {
+                    ctx.gesture_move(crate::content_command::touch::MAPPING_RANGES, move |p| {
                         if let Some(m) = p
                             .settings
                             .macro_bank
@@ -2256,7 +2256,7 @@ fn dispatch_rgb_scrub(
                 let t = captured.clone();
                 let pids = param_ids.clone();
                 let preset = preset.clone();
-                ctx.project.mutate(crate::content_command::touch::VALUES, move |project| {
+                ctx.project.gesture_move(crate::content_command::touch::VALUES, move |project| {
                     if project
                         .preset_instance(&t)
                         .is_some_and(|inst| inst.effect_type() == &preset)

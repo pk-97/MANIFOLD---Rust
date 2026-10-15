@@ -79,9 +79,9 @@ fn two_layer_project(env: ParamEnvelope) -> Project {
     project.settings.bpm = Bpm(120.0);
 
     let mut layer0 = Layer::new_generator("L0".into(), PresetTypeId::new("TestGen"), 0);
-    add_whole_number_param(layer0.gen_params_or_init(), "level", 8.0);
+    add_whole_number_param(layer0.gen_params_mut().unwrap(), "level", 8.0);
     layer0
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .envelopes = Some(vec![env]);
     // Clip A: beat 0..4. Clip B: beat 8..16 — a second, later start on the
     // SAME layer (a fresh edge distinct from clip A's).
@@ -516,8 +516,8 @@ fn no_clip_start_means_no_envelope_step() {
     let mut project = Project::default();
     project.settings.bpm = Bpm(120.0);
     let mut layer0 = Layer::new_generator("L0".into(), PresetTypeId::new("TestGen"), 0);
-    add_whole_number_param(layer0.gen_params_or_init(), "level", 8.0);
-    layer0.gen_params_or_init().envelopes = Some(vec![clip_edge_step_envelope(1.0, WrapMode::Clamp)]);
+    add_whole_number_param(layer0.gen_params_mut().unwrap(), "level", 8.0);
+    layer0.gen_params_mut().unwrap().envelopes = Some(vec![clip_edge_step_envelope(1.0, WrapMode::Clamp)]);
     project.timeline.layers = vec![layer0];
 
     let mut engine = create_engine();
@@ -569,9 +569,9 @@ fn clip_ending_with_nothing_replacing_fires_nothing_more() {
     let mut project = Project::default();
     project.settings.bpm = Bpm(120.0);
     let mut layer0 = Layer::new_generator("L0".into(), PresetTypeId::new("TestGen"), 0);
-    add_whole_number_param(layer0.gen_params_or_init(), "level", 8.0);
+    add_whole_number_param(layer0.gen_params_mut().unwrap(), "level", 8.0);
     layer0
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .envelopes = Some(vec![clip_edge_step_envelope(1.0, WrapMode::Clamp)]);
     layer0.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(4.0)));
     project.timeline.layers = vec![layer0];

@@ -863,7 +863,7 @@ mod scene_card_convergence_tests {
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .expect("layer resolves");
-            let inst = layer.gen_params_or_init();
+            let inst = layer.gen_params_mut().unwrap();
             // A freshly-init'd instance still TRACKS its catalog preset
             // (`graph: None`) — `binding_id_for_node_param` only resolves
             // against an instance's OWN graph override, so the effective-def
@@ -918,7 +918,7 @@ mod scene_card_convergence_tests {
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .expect("layer resolves");
-            let inst = layer.gen_params_or_init();
+            let inst = layer.gen_params_mut().unwrap();
             let id = "test.fire";
             if !inst.params.contains(id) {
                 inst.params.push(Param::bundled(ParamSpecDef {
@@ -2442,13 +2442,12 @@ mod scene_card_convergence_tests {
 
             fn host(&mut self) -> crate::editing_host::AppEditingHost<'_> {
                 crate::editing_host::AppEditingHost::new(
-                    &mut self.project,
+                    crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.tx),
                     &self.tx,
                     &self.content_state,
                     &mut self.cursor,
                     &mut self.active_layer,
                     &mut self.redraw,
-                    &mut self.edits,
                 )
             }
 

@@ -179,6 +179,9 @@ pub enum ContentCommand {
     MutateProject {
         touches: ChangeSet,
         f: Box<dyn FnOnce(&mut Project) + Send>,
+        /// A gesture's live move: rows wait for its commit
+        /// (`EditingService::mutate_gesture`).
+        gesture: bool,
     },
 
     // ── Percussion ─────────────────────────────────────────────────
@@ -409,6 +412,11 @@ impl ContentCommand {
 
     /// A `MutateProject` writing `touches`.
     pub fn mutate(touches: ChangeSet, f: Box<dyn FnOnce(&mut Project) + Send>) -> Self {
-        ContentCommand::MutateProject { touches, f }
+        ContentCommand::MutateProject { touches, f, gesture: false }
+    }
+
+    /// A gesture's live move writing `touches`; its commit reports rows.
+    pub fn gesture_move(touches: ChangeSet, f: Box<dyn FnOnce(&mut Project) + Send>) -> Self {
+        ContentCommand::MutateProject { touches, f, gesture: true }
     }
 }

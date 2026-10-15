@@ -31,7 +31,7 @@ mod selection_dispatch_tests;
 mod state_sync;
 mod transport;
 
-pub(crate) use context::{DispatchCtx, ProjectRef};
+pub(crate) use context::{DispatchCtx, LocalProject, ProjectRef};
 pub(crate) use scrub::ScrubState;
 
 /// Re-exported so `Application::handle_text_input_commit`'s

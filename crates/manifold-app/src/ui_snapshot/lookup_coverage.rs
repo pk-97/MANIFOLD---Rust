@@ -246,7 +246,6 @@ fn merged_model_layer() -> PresetInstance {
     let mut project = manifold_core::project::Project::default();
     let ty = manifold_core::PresetTypeId::from_string("PhysicsSolids".into());
     let index = project.timeline.add_layer("Merged", manifold_core::types::LayerType::Generator, ty.clone());
-    project.timeline.layers[index].gen_params_or_init();
     let layer = project.timeline.layers[index].layer_id.clone();
     let default = manifold_nodes::bundled_presets::bundled_preset_def(&ty).expect("PhysicsSolids").as_ref().clone();
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");

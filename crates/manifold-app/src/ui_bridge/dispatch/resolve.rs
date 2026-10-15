@@ -366,7 +366,7 @@ mod tests {
             "id":"a_gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2
         }))
         .unwrap();
-        let owner = layer_a.gen_params_or_init();
+        let owner = layer_a.gen_params_mut().unwrap();
         owner.graph = Some(owner_graph);
         owner.params = ParamManifest::from_params(vec![Param::bundled(spec)]);
         project.timeline.layers.push(layer_a);

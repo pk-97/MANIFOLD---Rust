@@ -765,7 +765,7 @@ mod tests {
             0,
         );
         let layer_id = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(graph);
+        layer.gen_params_mut().unwrap().graph = Some(graph);
         project.timeline.layers.push(layer);
         (project, layer_id)
     }
@@ -843,7 +843,7 @@ mod tests {
             project.timeline.layers.len() as i32,
         );
         let layer_id = layer.layer_id.clone();
-        let host = layer.gen_params_or_init();
+        let host = layer.gen_params_mut().unwrap();
         host.graph = Some(transfer_graph(prefix, include_light));
         host.refresh_manifest_from_graph();
         project.timeline.layers.push(layer);

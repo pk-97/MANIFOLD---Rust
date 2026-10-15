@@ -71,15 +71,13 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 
 fn project_with_graph(def: EffectGraphDef) -> (manifold_core::project::Project, GraphTarget) {
     let (mut project, layer_id) = project_with_one_generator_layer();
-    project.timeline.layers[0].gen_params_or_init();
     let target = GraphTarget::Generator(layer_id);
     project.graph_target_owner_mut(&target).unwrap().graph = Some(def);
     (project, target)
 }
 
 fn fresh_project() -> (manifold_core::project::Project, GraphTarget) {
-    let (mut project, layer_id) = project_with_one_generator_layer();
-    project.timeline.layers[0].gen_params_or_init();
+    let (project, layer_id) = project_with_one_generator_layer();
     (project, GraphTarget::Generator(layer_id))
 }
 

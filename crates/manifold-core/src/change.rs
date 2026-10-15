@@ -160,6 +160,29 @@ pub const LIVE_SCALAR_CONSUMERS: &[ConsumerRow] = &[
     ("band split low_hz, mid_hz", Part::Shapes, &[("analysis", Reads::Fresh)]),
 ];
 
+/// A key over every card param's row fact (`ParamSpecDef::row_fact`): what
+/// its value decides about which inspector rows exist. A value write that
+/// moves the key changed membership, so it touches Effects whatever it
+/// declared (D21). Walks the instances whose row facts the change audit
+/// owns under Effects; allocates nothing.
+pub fn row_facts_key(project: &crate::project::Project) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut put = |instance: &crate::effects::PresetInstance| {
+        for param in instance.params.iter() {
+            if let Some(fact) = param.spec.row_fact(param.base) {
+                hasher.write_i32(fact);
+            }
+        }
+    };
+    project.settings.master_effects.iter().for_each(&mut put);
+    for layer in &project.timeline.layers {
+        layer.effects.iter().flatten().for_each(&mut put);
+        layer.gen_params().into_iter().for_each(&mut put);
+    }
+    hasher.finish()
+}
+
 #[cfg(feature = "change-audit")]
 pub mod audit;
 

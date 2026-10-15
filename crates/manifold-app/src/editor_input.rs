@@ -665,8 +665,7 @@ pub(crate) fn card_lane_entries<'x>(
 /// What the card lane's dispatch reads and writes besides the editor window.
 pub(crate) struct CardLane<'a> {
     pub ws: &'a mut Workspace,
-    pub project: &'a mut Project,
-    pub edits: &'a mut crate::gesture_preview::UiEdits,
+    pub project: crate::ui_bridge::ProjectRef<'a>,
     pub content_tx: &'a Sender<ContentCommand>,
     pub content_state: &'a crate::content_state::ContentState,
     pub selection: &'a mut SelectionState,
@@ -696,7 +695,7 @@ pub(crate) struct CardLaneOutcome {
 /// mirrors the main window's selection and active layer, so param edits
 /// resolve identically, and only the editor's transient visuals (collapse,
 /// highlight, card drag) land on its tree.
-pub(crate) fn dispatch_card_lane(lane: CardLane<'_>, actions: &[PanelAction]) -> CardLaneOutcome {
+pub(crate) fn dispatch_card_lane(mut lane: CardLane<'_>, actions: &[PanelAction]) -> CardLaneOutcome {
     use manifold_ui::panels::ParamsAction;
     let mut out = CardLaneOutcome::default();
     for action in actions {
@@ -706,7 +705,7 @@ pub(crate) fn dispatch_card_lane(lane: CardLane<'_>, actions: &[PanelAction]) ->
             _ => {}
         }
         let mut dctx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut *lane.project, &mut *lane.edits, lane.content_tx),
+            project: lane.project.reborrow(),
             content_tx: lane.content_tx,
             content_state: lane.content_state,
             ui: &mut lane.ws.ui_root,

@@ -403,7 +403,7 @@ mod tests {
         let mut layer = Layer::new_generator("Host".into(), PresetTypeId::new("host"), 0);
         let layer_id = LayerId::new("layer");
         layer.layer_id = layer_id.clone();
-        let host = layer.gen_params_or_init();
+        let host = layer.gen_params_mut().unwrap();
         host.graph = Some(graph.clone());
         host.reseed_param_values_from_def(&graph);
         host.params.get_mut("outer_a").unwrap().base = 0.7;

@@ -487,10 +487,10 @@ pub struct ChangeGraphParamCommand {
     old_value: f32,
     new_value: f32,
     rejection: Option<&'static str>,
-    /// The param turns a scene feature on or off, so its base value decides
-    /// which card rows exist (SCENE_SURFACES D12 (row sets follow authored
-    /// values)). Read from the project on every execute and undo.
-    sets_rows: bool,
+    /// Effects when the move from old to new changes which rows exist. A
+    /// gesture commit's value is already live, so it measures its own move
+    /// (`command::value_moves_rows`). Read on every execute and undo.
+    rows: ChangeSet,
 }
 
 impl ChangeGraphParamCommand {
@@ -506,41 +506,29 @@ impl ChangeGraphParamCommand {
             old_value,
             new_value,
             rejection: None,
-            sets_rows: false,
+            rows: ChangeSet::NONE,
         }
     }
 
-    fn note_sets_rows(&mut self, project: &Project) {
-        self.sets_rows = card_param_sets_rows(project, &self.target, self.param_id.as_ref());
+    fn note_rows(&mut self, project: &Project) {
+        self.rows = crate::command::value_moves_rows(project, &self.target, self.param_id.as_ref(), self.old_value, self.new_value);
     }
-}
-
-/// Whether the card param's base value decides which card, Scene tab or
-/// material inspector rows exist (`ParamSpecDef::row_fact`; SCENE_SURFACES D12
-/// (row sets follow authored values)). Every command that writes a card param,
-/// directly or through a node binding, asks this.
-pub(crate) fn card_param_sets_rows(project: &Project, target: &GraphTarget, param_id: &str) -> bool {
-    project
-        .preset_instance(target)
-        .and_then(|inst| inst.params.get(param_id))
-        .is_some_and(|param| param.spec.decides_rows())
 }
 
 impl Command for ChangeGraphParamCommand {
     /// A plain value is Values. A scene-modifier param lives inside the
-    /// owner's graph definition, and a feature switch decides which rows
-    /// exist, so both are Effects too (UI_INVALIDATION D21, D22). Only valid
-    /// after `execute`, which reads the switch from the project.
+    /// owner's graph definition, so it is Effects too (UI_INVALIDATION D21,
+    /// D22). A feature switch it flips is Effects too.
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        if matches!(self.target, GraphTarget::SceneModifier { .. }) || self.sets_rows {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             ChangeSet::of(&[Part::Values, Part::Effects])
         } else {
-            ChangeSet::of(&[Part::Values])
+            ChangeSet::of(&[Part::Values]).union(self.rows)
         }
     }
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
-        self.note_sets_rows(project);
+        self.note_rows(project);
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
             && let Some(graph) = project.graph_for_target(&self.target, None)
             && let Some(reason) = manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, self.param_id.as_ref())
@@ -556,7 +544,7 @@ impl Command for ChangeGraphParamCommand {
     }
 
     fn do_undo(&mut self, project: &mut Project) {
-        self.note_sets_rows(project);
+        self.note_rows(project);
         let id = self.param_id.clone();
         let val = self.old_value;
         project.with_preset_graph_mut(&self.target, |host| {

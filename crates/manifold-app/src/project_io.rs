@@ -1587,7 +1587,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        layer.gen_params_or_init().graph = Some(old_shape_def);
+        layer.gen_params_mut().unwrap().graph = Some(old_shape_def);
         project.timeline.insert_layer(0, layer);
 
         let fixture_path = std::env::temp_dir().join(format!(

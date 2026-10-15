@@ -956,8 +956,8 @@ mod prepared_toggle_tests {
         let scene_id = graph.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
         let mut layer = Layer::new_generator("Scan".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
         let layer_id = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(graph.clone());
-        layer.gen_params_or_init().refresh_manifest_from_graph();
+        layer.gen_params_mut().unwrap().graph = Some(graph.clone());
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         let mut project = Project::default();
         project.timeline.layers.push(layer);
         let target = GraphTarget::Generator(layer_id.clone());

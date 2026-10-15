@@ -335,13 +335,12 @@ impl Application {
                 // invalidation on hover change, and cursor shape feedback.
                 if let Some(content_tx) = self.content_tx.as_ref() {
                     let mut host = crate::editing_host::AppEditingHost::new(
-                        &mut self.local_project,
+                        self.local_project.edit(&mut self.ui_edits, content_tx),
                         content_tx,
                         &self.content_state,
                         &mut self.cursor_manager,
                         &mut self.active_layer_id,
                                                 &mut self.ws.offscreen_dirty,
-                        &mut self.ui_edits,
                     );
                     self.overlay.on_pointer_move(
                         self.cursor_pos,
@@ -918,7 +917,7 @@ impl Application {
                     catalog,
                 );
                 let created = self.content_tx.as_ref().and_then(|tx| {
-                    crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).executed_by(|project| {
+                    self.local_project.edit(&mut self.ui_edits, tx).executed_by(|project| {
                         cmd.execute(project);
                         cmd.created_node_id()?;
                         Some((Box::new(cmd) as Box<dyn manifold_editing::command::Command>, ()))
@@ -1765,13 +1764,12 @@ impl Application {
                         | DragMode::AutomationDraw
                 );
                 let mut host = crate::editing_host::AppEditingHost::new(
-                    &mut self.local_project,
+                    self.local_project.edit(&mut self.ui_edits, content_tx),
                     content_tx,
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
                                         &mut self.ws.offscreen_dirty,
-                    &mut self.ui_edits,
                 );
                 self.overlay.cancel_drag(&mut host);
                 if automation_cancel {
@@ -1800,14 +1798,13 @@ impl Application {
             // All viewport access goes through the TimelineInputHost trait.
             if !consumed && let Some(content_tx) = self.content_tx.as_ref() {
                 let mut host = crate::input_host::AppInputHost {
-                    project: &mut self.local_project,
+                    project: self.local_project.edit(&mut self.ui_edits, content_tx),
                     content_tx,
                     content_state: &self.content_state,
                     ui_root: &mut self.ws.ui_root,
                     selection: &mut self.selection,
                     active_layer: &mut self.active_layer_id,
                     redraw: &mut self.ws.offscreen_dirty,
-                    edits: &mut self.ui_edits,
                     current_project_path: &self.current_project_path,
                     has_output_window: self.window_registry.has_output_window(),
                     pending_close_output: &mut self.pending_close_output,
@@ -1848,7 +1845,7 @@ impl Application {
                     // ── New: Cmd+N ──
                     Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
                         let project = Self::create_default_project();
-                        self.local_project = project.clone();
+                        *self.local_project.intake() = project.clone();
                         self.ui_edits.stamps.project_replaced();
                         self.suppress_snapshot_until = self.content_state.data_version + 1;
                         self.suppress_snapshot_set_at = self.frame_count;

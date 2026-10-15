@@ -146,12 +146,12 @@ fn project_fixture() -> (Project, LayerId, LayerId, LayerId, String, String) {
     let mut graph = scene_fixture();
     graph = insert_uniform_force(graph, "force_a", "part_a");
     graph = insert_uniform_force(graph, "force_b", "part_b");
-    parent.gen_params_or_init().graph = Some(graph.clone());
-    parent.gen_params_or_init().params = Default::default();
-    parent.gen_params_or_init().refresh_manifest_from_graph();
+    parent.gen_params_mut().unwrap().graph = Some(graph.clone());
+    parent.gen_params_mut().unwrap().params = Default::default();
+    parent.gen_params_mut().unwrap().refresh_manifest_from_graph();
     let strength_a_alias = modifier_alias(&graph, "force_a", "strength");
     let strength_b_alias = modifier_alias(&graph, "force_b", "strength");
-    let parent_params = parent.gen_params_or_init();
+    let parent_params = parent.gen_params_mut().unwrap();
     assert!(parent_params.set_base_param(&strength_a_alias, 0.0));
     assert!(parent_params.set_base_param(&strength_b_alias, 0.0));
     parent
@@ -478,7 +478,7 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
         send_id,
         AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
     );
-    parent.gen_params_or_init().audio_mods_mut().push(audio_mod);
+    parent.gen_params_mut().unwrap().audio_mods_mut().push(audio_mod);
 
     let sample_count = SAMPLE_RATE as usize * AUDIO_SECONDS;
     let master_mono = (0..sample_count)

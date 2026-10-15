@@ -223,7 +223,7 @@ mod tests {
         );
         effect_pulse.layer_id = Some(layer.layer_id.clone());
         layer.effects_mut().push(effect);
-        let instance = layer.gen_params_or_init();
+        let instance = layer.gen_params_mut().unwrap();
         instance.params.push(Param::bundled(ParamSpecDef {
             id: "gate".into(),
             is_trigger_gate: true,

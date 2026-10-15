@@ -27,8 +27,7 @@ where
         }
         DriverTarget::GeneratorParam { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
-            let gp = layer.gen_params_or_init();
-            let mods = gp.audio_mods.get_or_insert_with(Vec::new);
+            let mods = layer.gen_params_mut()?.audio_mods.get_or_insert_with(Vec::new);
             Some(f(mods))
         }
     }

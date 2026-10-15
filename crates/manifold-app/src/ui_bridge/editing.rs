@@ -332,26 +332,26 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextAutomationCut(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
-                automation::cut_selected(p, selection, content_tx)
+            project.with_sent(|p| {
+                (automation::cut_selected(p, selection, content_tx), crate::content_command::touch::AUTOMATION)
             });
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationPaste(target, param_id, beat) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
-                automation::paste(p, selection, content_tx, *beat)
+            project.with_sent(|p| {
+                (automation::paste(p, selection, content_tx, *beat), crate::content_command::touch::AUTOMATION)
             });
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::duplicate_selected(
+            project.with_sent(|p| (automation::duplicate_selected(
                 p,
                 selection,
                 content_tx,
                 ui.viewport.grid_step(),
-            ));
+            ), crate::content_command::touch::AUTOMATION));
             DispatchResult::handled()
         }
         EditingAction::ContextSelectAllAutomation(target, param_id) => {
@@ -360,13 +360,13 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
-                automation::delete_selected(p, selection, content_tx)
+            project.with_sent(|p| {
+                (automation::delete_selected(p, selection, content_tx), crate::content_command::touch::AUTOMATION)
             });
             DispatchResult::handled()
         }
         EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
-            project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::insert_shape(
+            project.with_sent(|p| (automation::insert_shape(
                 p,
                 selection,
                 content_tx,
@@ -374,7 +374,7 @@ pub(super) fn dispatch_editing(
                 param_id,
                 *beat,
                 *shape,
-            ));
+            ), crate::content_command::touch::AUTOMATION));
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationSetShape(target, param_id, beat, value_norm, shape) => {

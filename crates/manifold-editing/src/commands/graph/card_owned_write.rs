@@ -366,11 +366,11 @@ mod tests {
                 switch: Some(Feature::DepthOfField),
                 colour: None,
             });
-        let mut switch = set("amount", SerializedParamValue::Float { value: 0.5 });
-        switch.execute(&mut project);
-        assert_eq!(switch.touches(), rows_set, "bound to a card feature switch");
-        switch.undo(&mut project);
-        assert_eq!(switch.touches(), rows_set, "undo agrees");
+        // The card slot carries the inverse of out = v*2: 1.6 lands 0.8 on the
+        // card, which turns the feature on.
+        let mut switch = set("amount", SerializedParamValue::Float { value: 1.6 });
+        assert_eq!(switch.execute(&mut project), rows_set, "bound to a card feature switch");
+        assert_eq!(switch.undo(&mut project), rows_set, "undo agrees");
     }
 
     /// BUG-1l7f: the write-site warning fires exactly for a param a card

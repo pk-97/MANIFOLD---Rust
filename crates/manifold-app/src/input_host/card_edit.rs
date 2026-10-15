@@ -8,14 +8,13 @@ impl crate::app::Application {
     pub(crate) fn edit_inspector_cards(&mut self, action: CardEditAction) {
         let Some(content_tx) = self.content_tx.as_ref() else { return; };
         let mut host = AppInputHost {
-            project: &mut self.local_project,
+            project: self.local_project.edit(&mut self.ui_edits, content_tx),
             content_tx,
             content_state: &self.content_state,
             ui_root: &mut self.ws.ui_root,
             selection: &mut self.selection,
             active_layer: &mut self.active_layer_id,
             redraw: &mut self.ws.offscreen_dirty,
-            edits: &mut self.ui_edits,
             current_project_path: &self.current_project_path,
             has_output_window: self.window_registry.has_output_window(),
             pending_close_output: &mut self.pending_close_output,
@@ -48,14 +47,13 @@ impl<'a> AppInputHost<'a> {
     ) -> Self {
         let [pending_close_output, pending_export] = scratch;
         Self {
-            project,
+            project: crate::ui_bridge::ProjectRef::new(project, edits, content_tx),
             content_tx,
             content_state,
             ui_root,
             selection,
             active_layer,
             redraw,
-            edits,
             current_project_path: &None,
             has_output_window: false,
             pending_close_output,
@@ -88,7 +86,7 @@ impl<'a> AppInputHost<'a> {
     pub(super) fn copy_effect_selection(&mut self) -> bool {
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.selected_effect_ids();
-        with_effects(self.project, &target, |effects, groups| {
+        with_effects(&self.project, &target, |effects, groups| {
             let ids: Vec<_> = effects.iter().filter(|effect| selected.contains(&effect.id)).map(|effect| effect.id.clone()).collect();
             if ids.is_empty() { return false; }
             self.ui_root.effect_clipboard.copy_selection(effects, groups, &ids);
@@ -105,7 +103,7 @@ impl<'a> AppInputHost<'a> {
         let selected = self.ui_root.inspector.get_selected_effect_indices();
         let (pasted, groups) = self.ui_root.effect_clipboard.paste_payload();
         let ids: Vec<_> = pasted.iter().map(|effect| effect.id.clone()).collect();
-        let Some((before, destination_group)) = with_effects(self.project, &target, |effects, _| {
+        let Some((before, destination_group)) = with_effects(&self.project, &target, |effects, _| {
             let mut insert_at = selected.last().map_or(effects.len(), |index| (index + 1).min(effects.len()));
             let selected_group = selected.last().and_then(|&index| effects.get(index)).and_then(|effect| effect.group_id.clone());
             // Complete copied groups are siblings of the current group. Plain

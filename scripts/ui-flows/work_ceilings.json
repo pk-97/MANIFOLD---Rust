@@ -197,7 +197,7 @@
       "open_click": {
         "ChromeLayout": 1,
         "EditorTreeBuild": 3,
-        "FrameAlloc": 2243,
+        "FrameAlloc": 2244,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 8,
@@ -396,7 +396,7 @@
       "select_clip": {
         "ChromeLayout": 3,
         "ClipProjection": 1,
-        "FrameAlloc": 832,
+        "FrameAlloc": 834,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 3,

@@ -13,7 +13,6 @@ use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 use manifold_nodes_scene::node_graph::scene_vm::{CameraVm, SceneVm};
 use manifold_nodes_scene::node_graph::view_copy::{ViewCopyCamera, camera_writes_from_view};
 
-use crate::content_command::ContentCommand;
 use crate::ui_bridge::project::{apply_scene_param_write, scene_binding_id};
 
 const NO_VIEWPORT: &str = "Open this scene in the 3D viewport first";
@@ -67,10 +66,8 @@ fn current_value(project: &Project, layer_id: &LayerId, def: &EffectGraphDef, no
 
 /// The click: copy the view, or say why not. A copy stamps what it touches.
 pub(crate) fn run(
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     ui: &mut crate::ui_root::UIRoot,
-    stamps: &mut crate::frame_plan::UiStamps,
     layer_id: &LayerId,
     view: Option<&ViewportCamera>,
 ) {
@@ -81,10 +78,7 @@ pub(crate) fn run(
     match build(project, layer_id, view) {
         Ok(command) if command.is_empty() => {}
         Ok(command) => {
-            let mut command: Box<dyn Command> = Box::new(command);
-            let wrote = command.execute(project);
-            stamps.bump(wrote);
-            ContentCommand::send(content_tx, ContentCommand::Execute(command));
+            project.execute(Box::new(command));
         }
         Err(reason) => ui.toast.show(reason),
     }

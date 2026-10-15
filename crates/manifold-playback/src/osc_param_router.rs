@@ -485,6 +485,49 @@ mod tests {
         assert!((v - 0.42).abs() < 1e-6, "dispatch must write user param by id; got {v}");
     }
 
+    /// BUG-fqbxo (OSC writes to a scene feature switch leave rows stale): the
+    /// content thread runs the router as a Values write through the gateway.
+    /// A write that flips a feature switch changes which rows exist, so the
+    /// gateway adds Effects without the router knowing the rule; a write that
+    /// leaves the switch where it was stays Values.
+    #[test]
+    fn osc_switch_write_through_the_gateway_moves_effects() {
+        use manifold_core::change::{ChangeSet, Part};
+        use manifold_core::scene_surface::{CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole};
+        let (ty, prefix) = effect_with_osc_prefix();
+        let mut switch = user_spec("dof_on");
+        switch.scene = Some(SceneParamDesc {
+            role: SurfaceRole::Setup,
+            group: ControlGroup::DepthOfField,
+            band: None,
+            card_order: 0,
+            card_label: CardLabel::Param,
+            gate: None,
+            switch: Some(Feature::DepthOfField),
+            colour: None,
+        });
+        let mut fx = PresetInstance::new(ty);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(switch)]);
+        let mut project = project_with_master(fx);
+        let mut receiver = OscReceiver::new();
+        let mut router = OscParamRouter::new();
+        router.rebuild(&project, &mut receiver);
+        let mut service = manifold_editing::service::EditingService::new();
+        let values = ChangeSet::of(&[Part::Values]);
+        let mut send = |value: f32, project: &mut Project| {
+            receiver.inject(&format!("/master/{prefix}/dof_on"), &[value]);
+            receiver.update();
+            let before = service.stamps();
+            let wrote = service.mutate(values, &mut *project, |p| router.apply(p));
+            assert_eq!(service.stamps().moved_since(&before), wrote, "the gateway stamps what it returns");
+            wrote
+        };
+
+        assert_eq!(send(1.0, &mut project), values.union(ChangeSet::of(&[Part::Effects])), "switching on");
+        assert_eq!(send(0.9, &mut project), values, "still on");
+        assert_eq!(send(0.0, &mut project), values.union(ChangeSet::of(&[Part::Effects])), "switching off");
+    }
+
     /// D15: a full 0–1 controller sweep covers the user's slider range, past
     /// the declared range; only a declared hard limit caps it.
     #[test]

@@ -107,10 +107,10 @@ fn fixture_project() -> Project {
         PresetTypeId::new("PhotoscanBaseline"),
         0,
     );
-    layer.gen_params_or_init().graph = Some(graph);
-    layer.gen_params_or_init().refresh_manifest_from_graph();
+    layer.gen_params_mut().unwrap().graph = Some(graph);
+    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
     let metadata = layer
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .graph_def()
         .as_ref()
         .and_then(|graph| graph.preset_metadata.as_ref())
@@ -130,7 +130,7 @@ fn fixture_project() -> Project {
         "RT cut size must be an exposed production binding"
     );
     layer
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .drivers_mut()
         .push(ParameterDriver::new(
             ParamId::from("phase"),
@@ -148,7 +148,7 @@ fn fixture_project() -> Project {
     topology_driver.trim_min = 0.0001;
     topology_driver.trim_max = 0.0008;
     layer
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .drivers_mut()
         .push(topology_driver);
     layer
@@ -688,8 +688,8 @@ fn imported_modifiers_content(recipes: &[&str]) -> crate::content_thread::Conten
         PresetTypeId::new("PhotoscanBaseline"),
         0,
     );
-    layer.gen_params_or_init().graph = Some(graph);
-    layer.gen_params_or_init().refresh_manifest_from_graph();
+    layer.gen_params_mut().unwrap().graph = Some(graph);
+    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
     let id = layer.layer_id.clone();
     let mut clip = TimelineClip::new_generator(Beats::ZERO, Beats(TWO_BEATS));
     clip.layer_id = id.clone();

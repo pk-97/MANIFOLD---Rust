@@ -363,7 +363,7 @@ mod tests {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Generator".into(), PresetTypeId::new("test"), 0);
         let target = GraphTarget::Generator(layer.layer_id.clone());
-        layer.gen_params_or_init().params = ParamManifest::from_params(vec![slot("trigger", 0.0)]);
+        layer.gen_params_mut().unwrap().params = ParamManifest::from_params(vec![slot("trigger", 0.0)]);
         project.timeline.layers.push(layer);
         let mut command = SetParamClipTriggerSourceCommand::new(
             target.clone(),
@@ -392,7 +392,7 @@ mod tests {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("test"), 0);
         let owner = GraphTarget::Generator(layer.layer_id.clone());
-        layer.gen_params_or_init().params =
+        layer.gen_params_mut().unwrap().params =
             ParamManifest::from_params(vec![slot("force-a.fire", 0.0), slot("force-b.fire", 0.0)]);
         project.timeline.layers.push(layer);
         let target = GraphTarget::SceneModifier {

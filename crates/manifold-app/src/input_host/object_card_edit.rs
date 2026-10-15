@@ -18,7 +18,7 @@ impl AppInputHost<'_> {
         if matches!(action, CardEditAction::Copy | CardEditAction::Cut) {
             let Some(address) = selected.as_ref() else { return true; };
             match ObjectModifierClipboard::capture(
-                self.project, &address.layer_id,
+                &self.project, &address.layer_id,
                 address.group_node_id.unwrap_or(address.object_id), address.node_doc_id,
             ) {
                 Ok(clipboard) => {
@@ -38,7 +38,7 @@ impl AppInputHost<'_> {
             CardEditAction::Cut | CardEditAction::Delete => {
                 let Some(address) = selected else { return true; };
                 let target = manifold_core::GraphTarget::Generator(address.layer_id);
-                let Some(default) = crate::graph_target::owner_default(self.project, &target) else {
+                let Some(default) = crate::graph_target::owner_default(&self.project, &target) else {
                     return true;
                 };
                 ContentCommand::send(self.content_tx, ContentCommand::ExecuteOnContent(Box::new(
@@ -82,7 +82,7 @@ impl AppInputHost<'_> {
         use crate::scene_modifier_edit::SceneModifierAction;
         if matches!(action, CardEditAction::Copy | CardEditAction::Cut) {
             match crate::scene_modifier_transfer::ModifierClipboard::capture(
-                self.project,
+                &self.project,
                 &layer,
                 std::slice::from_ref(&id),
             ) {

@@ -1654,7 +1654,10 @@ impl ContentThread {
             && let Some(edit) = self.engine.project_edit()
         {
             let router = &self.osc_param_router;
-            self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| router.apply(p));
+            let wrote = self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| router.apply(p));
+            // D23: a value that flipped a feature switch changed which rows
+            // exist, so the UI needs the project, not just the values.
+            self.reactions.publish_pending |= !wrote.minus(ChangeSet::LIVE).is_empty();
         }
 
         // Ableton bridge — drain AbletonOSC replies and apply macro values.
@@ -1683,9 +1686,10 @@ impl ContentThread {
         {
             let bridge = &mut self.ableton_bridge;
             let now = self.time_since_start.0;
-            self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| {
+            let wrote = self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| {
                 bridge.apply(p, now);
             });
+            self.reactions.publish_pending |= !wrote.minus(ChangeSet::LIVE).is_empty();
         }
 
         // OSC timecode sync — M4L mode only. `enable_osc`/`disable_osc` had

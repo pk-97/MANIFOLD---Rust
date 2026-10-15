@@ -697,12 +697,10 @@ pub(crate) fn watch_editor_graph(
 }
 
 /// An effect card's stable id from its row index in an inspector tab, keyed
-/// by instance id and tab-aware (Master, Layer or Group, Clip). Takes the
-/// project mutably only because the Clip-tab lookup self-heals its location
-/// cache.
+/// by instance id and tab-aware (Master, Layer or Group, Clip).
 pub(crate) fn effect_card_id(
     tab: manifold_ui::InspectorTab,
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     active_layer: Option<&manifold_core::LayerId>,
     selection: &crate::app::SelectionState,
     ei: usize,
@@ -717,7 +715,7 @@ pub(crate) fn effect_card_id(
         manifold_ui::InspectorTab::Clip => selection
             .primary_selected_clip_id()
             .as_ref()
-            .and_then(|cid| project.timeline.find_clip_by_id(cid))
+            .and_then(|cid| project.timeline.layers.iter().flat_map(|l| l.clips.iter()).find(|c| c.id == **cid))
             .and_then(|c| c.effects.get(ei))
             .map(|e| e.id.clone()),
     }
@@ -865,9 +863,7 @@ pub(crate) fn goto_mapped_node(
 /// What the mapping actions read and write. The App and the ui-snap runner
 /// build one from their own state.
 pub(crate) struct MappingHost<'a> {
-    pub project: &'a mut manifold_core::project::Project,
-    pub edits: &'a mut crate::gesture_preview::UiEdits,
-    pub content_tx: Option<&'a crossbeam_channel::Sender<ContentCommand>>,
+    pub project: crate::ui_bridge::ProjectRef<'a>,
     pub scrub: &'a mut crate::ui_bridge::ScrubState,
 }
 
@@ -880,17 +876,16 @@ impl MappingHost<'_> {
     /// note + seeds copy-on-write), so the preview can never diverge from
     /// the commit.
     fn preview(&mut self, target: &manifold_core::GraphTarget, param_id: &str, edit: BindingMappingEdit) {
-        let Some(target) = mapping_write_target(self.project, target, param_id) else { return; };
-        let seed_def = seed_def_for_project(self.project, &target);
+        let Some(target) = mapping_write_target(&self.project, target, param_id) else { return; };
+        let seed_def = seed_def_for_project(&self.project, &target);
         // A reshape is a live scalar (Shapes, no reaction); the first tick may
         // also materialize the graph override (D21).
         let graph_absent = self
             .project
             .preset_instance(&target)
             .is_some_and(|inst| inst.graph.is_none());
-        let Some(tx) = self.content_tx else { return; };
         let pid = param_id.to_string();
-        crate::ui_bridge::ProjectRef::new(self.project, self.edits, tx).mutate(
+        self.project.gesture_move(
             crate::content_command::touch::shapes_first_move(graph_absent),
             move |p| {
                 build_mapping_command(&target, &pid, edit, seed_def).execute(p);
@@ -899,17 +894,15 @@ impl MappingHost<'_> {
     }
 
     fn send(&self, cmd: ContentCommand) {
-        if let Some(tx) = self.content_tx {
-            ContentCommand::send(tx, cmd);
-        }
+        ContentCommand::send(self.project.content_tx(), cmd);
     }
 
     /// Commit / single-shot: send the reshape edit as one undoable command.
     /// Self-captures the reverse (correct for single-shot — nothing mutated
     /// the store first).
     fn commit(&self, target: &manifold_core::GraphTarget, param_id: &str, edit: BindingMappingEdit) {
-        let Some(target) = mapping_write_target(self.project, target, param_id) else { return; };
-        let seed_def = seed_def_for_project(self.project, &target);
+        let Some(target) = mapping_write_target(&self.project, target, param_id) else { return; };
+        let seed_def = seed_def_for_project(&self.project, &target);
         self.send(ContentCommand::Execute(build_mapping_command(&target, param_id, edit, seed_def)));
     }
 
@@ -923,8 +916,8 @@ impl MappingHost<'_> {
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
     ) {
-        let Some(target) = mapping_write_target(self.project, target, param_id) else { return; };
-        let seed_def = seed_def_for_project(self.project, &target);
+        let Some(target) = mapping_write_target(&self.project, target, param_id) else { return; };
+        let seed_def = seed_def_for_project(&self.project, &target);
         self.send(ContentCommand::Execute(build_mapping_command_with_reverse(
             &target, param_id, new, reverse, seed_def,
         )));
@@ -938,7 +931,7 @@ impl MappingHost<'_> {
         match action {
             RootAction::EffectMappingRangeSnapshot { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                if let Some(shape) = target_full_reshape(self.project, target, binding_id) {
+                if let Some(shape) = target_full_reshape(&self.project, target, binding_id) {
                     self.scrub.check_single_active_on_begin("mapping-range");
                     self.scrub.active = Some(ResolvedScrub::MappingRange {
                         target: target.clone(), param_id: binding_id.clone(),
@@ -973,7 +966,7 @@ impl MappingHost<'_> {
             }
             RootAction::EffectMappingAffineSnapshot { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                if let Some(shape) = target_full_reshape(self.project, target, binding_id) {
+                if let Some(shape) = target_full_reshape(&self.project, target, binding_id) {
                     self.scrub.check_single_active_on_begin("mapping-affine");
                     self.scrub.active = Some(ResolvedScrub::MappingAffine {
                         target: target.clone(), param_id: binding_id.clone(),
@@ -1111,7 +1104,8 @@ impl Application {
     /// The mapping action handler both modal entry points share
     /// ([`MappingHost::dispatch`]). False when `action` is not a mapping action.
     pub(crate) fn dispatch_mapping_action(&mut self, action: &manifold_ui::RootAction) -> bool {
-        let outcome = self.mapping_host().dispatch(action);
+        let Some(mut host) = self.mapping_host() else { return false; };
+        let outcome = host.dispatch(action);
         if let MappingDispatch::GotoNode(target, binding_id) = &outcome {
             let snapshot = self.editor_ui_snapshot();
             goto_mapped_node(self.watched_graph_target.as_ref(), snapshot.as_ref(), self.graph_canvas.as_mut(), target, binding_id);
@@ -1119,13 +1113,11 @@ impl Application {
         !matches!(outcome, MappingDispatch::NotMapping)
     }
 
-    fn mapping_host(&mut self) -> MappingHost<'_> {
-        MappingHost {
-            project: &mut self.local_project,
-            edits: &mut self.ui_edits,
-            content_tx: self.content_tx.as_ref(),
+    fn mapping_host(&mut self) -> Option<MappingHost<'_>> {
+        Some(MappingHost {
+            project: self.local_project.edit(&mut self.ui_edits, self.content_tx.as_ref()?),
             scrub: &mut self.scrub,
-        }
+        })
     }
 
     /// Cursor position over the audio scope's waterfall, if inside it:
@@ -1288,13 +1280,11 @@ impl Application {
 
     /// Resolve an effect card's row index (in the active inspector tab) to its
     /// stable [`EffectId`]. Mirrors the cog's `OpenGraphEditor` resolution:
-    /// keyed by instance id, tab-aware (Master / Layer|Group / Clip). Takes
-    /// `&mut self` only because the Clip-tab lookup runs through
-    /// `Timeline::find_clip_by_id`, which self-heals its location cache.
-    pub(crate) fn resolve_effect_card_id(&mut self, ei: usize) -> Option<manifold_core::EffectId> {
+    /// keyed by instance id, tab-aware (Master / Layer|Group / Clip).
+    pub(crate) fn resolve_effect_card_id(&self, ei: usize) -> Option<manifold_core::EffectId> {
         effect_card_id(
             self.ws.ui_root.inspector.last_effect_tab(),
-            &mut self.local_project,
+            &self.local_project,
             self.active_layer_id.as_ref(),
             &self.selection,
             ei,
@@ -2414,13 +2404,13 @@ mod binding_reroute_tests {
         effect.params = manifest_for(&def);
         effect.graph = Some(def.clone());
         let a = GraphTarget::Effect(effect.id.clone());
-        app.local_project.settings.master_effects.push(effect);
+        app.local_project.intake().settings.master_effects.push(effect);
         let mut layer = manifold_core::layer::Layer::new_generator("Test".into(), PresetTypeId::new("Test"), 0);
         let b = GraphTarget::Generator(layer.layer_id.clone());
         let generator = layer.gen_params_mut().unwrap();
         generator.params = manifest_for(&def);
         generator.graph = Some(def);
-        app.local_project.timeline.layers.push(layer);
+        app.local_project.intake().timeline.layers.push(layer);
         app.watched_graph_target = Some(a.clone());
         (app, a, b)
     }
@@ -2682,13 +2672,13 @@ mod binding_reroute_tests {
         assert_eq!(composed.6, 8.5);
 
         let mut app = Application::new();
-        app.local_project = project.clone();
+        app.local_project = crate::ui_bridge::LocalProject::new(project.clone());
         // The mapping surface edits the public macro affine once; node-face
         // inversion above alone uses the composed leaf affine.
         assert_eq!(super::target_full_reshape(&app.local_project, &target, "macro").unwrap().5, 3.0);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
-        app.mapping_host().commit(&target, "macro", BindingMappingEdit {
+        app.mapping_host().unwrap().commit(&target, "macro", BindingMappingEdit {
             max: Some(7.0), scale: Some(4.0), ..Default::default()
         });
         let mut content_project = project;
@@ -2725,10 +2715,10 @@ mod binding_reroute_tests {
             .bindings
             .clear();
         let mut app = Application::new();
-        app.local_project = project;
+        app.local_project = crate::ui_bridge::LocalProject::new(project);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
-        app.mapping_host().commit(&target, "macro", BindingMappingEdit {
+        app.mapping_host().unwrap().commit(&target, "macro", BindingMappingEdit {
             max: Some(9.0), ..Default::default()
         });
         assert!(rx.try_iter().next().is_none(), "invalid local mapping must be atomic");

@@ -103,9 +103,11 @@ impl Command for ChangeMaterialColourCommand {
     fn description(&self) -> &str {
         "Change colour"
     }
-    /// Three base values, on execute, rollback and undo alike.
+    /// Three base values, on execute, rollback and undo alike, plus Effects
+    /// when the colour crosses a feature's default (the inner commands
+    /// measure it, since a scrub commit's value is already live).
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values])
+        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values]).union(self.inner.touches())
     }
     fn was_applied(&self) -> bool {
         !self.rejected && self.inner.was_applied()

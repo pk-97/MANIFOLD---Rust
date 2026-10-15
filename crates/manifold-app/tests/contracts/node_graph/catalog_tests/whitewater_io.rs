@@ -5,7 +5,7 @@ fn whitewater_preset_archive_preserves_graph() {
     let def = manifold_nodes_water::presets::gpu_flip::render_def(WaterScene::dam_break(64));
     let mut project = Project::default();
     let index = project.timeline.add_layer("Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
-    let instance = project.timeline.layers[index].gen_params_or_init();
+    let instance = project.timeline.layers[index].gen_params_mut().unwrap();
     instance.graph = Some(def.clone());
     instance.refresh_manifest_from_graph();
     // The live graph: the authored def with each control's range and flags

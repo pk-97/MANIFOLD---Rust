@@ -14,7 +14,6 @@ use manifold_core::effect_graph_def::{
 use manifold_core::project::Project;
 
 use crate::command::Command;
-use crate::commands::effects::card_param_sets_rows;
 use crate::commands::preset::RevertToLibraryCommand;
 
 mod modifier;
@@ -789,10 +788,6 @@ pub struct SetGraphNodeParamCommand {
     /// redirect and its card-owned-write warning, which exist to catch
     /// LONE def writes that the render would stomp — not this.
     force_def_write: bool,
-    /// The param may decide which rows exist, so the edit touches Effects as
-    /// well as Values (UI_INVALIDATION D21, D22). Read from the project on
-    /// every execute and undo; see [`Self::note_sets_rows`].
-    sets_rows: bool,
     /// Stable diagnostic when a calibrated source or raster scene guard
     /// rejects the write before any graph or card state is touched.
     rejection: Option<String>,
@@ -817,7 +812,6 @@ impl SetGraphNodeParamCommand {
             previous_value: None,
             card_redirect: None,
             force_def_write: false,
-            sets_rows: false,
             rejection: None,
             applied: false,
         }
@@ -918,39 +912,19 @@ fn node_at_scope<'a>(
 }
 
 impl SetGraphNodeParamCommand {
-    /// Two ways a node param decides which rows exist. A discrete value (a
-    /// flag, a choice, a count, a path) is what the scene view reads to pick
-    /// rows: a body's `enabled` shows its controls, a switch's selection
-    /// picks the camera, a path picks the environment. Hidden params like
-    /// those carry no scene placement in the project, so the value kind is
-    /// the only mark there is. A continuous value decides rows only when it
-    /// is bound to a card param that switches a scene feature, the same
-    /// rule `ChangeGraphParamCommand` uses. Continuous edits stay Values
-    /// only, so a drag commit never rebuilds a list.
-    fn note_sets_rows(&mut self, project: &Project) {
+    /// A discrete value (a flag, a choice, a count, a path) is what the scene
+    /// view reads to pick rows: a body's `enabled` shows its controls, a
+    /// switch's selection picks the camera, a path picks the environment.
+    /// Hidden params like those carry no scene placement in the project, so
+    /// the value kind is the only mark there is. Continuous edits stay Values
+    /// only, so a drag commit never rebuilds a list; one that flips a bound
+    /// card switch adds Effects at execute (`rows_written`).
+    fn sets_rows(&self) -> bool {
         use SerializedParamValue as V;
-        let discrete = !matches!(
+        !matches!(
             self.new_value,
             V::Float { .. } | V::Vec2 { .. } | V::Vec3 { .. } | V::Vec4 { .. } | V::Color { .. }
-        );
-        self.sets_rows = discrete || self.bound_card_param_sets_rows(project);
-    }
-
-    /// Bindings address root node ids only, so a nested edit has no slot.
-    fn bound_card_param_sets_rows(&self, project: &Project) -> bool {
-        if !self.scope_path.is_empty() {
-            return false;
-        }
-        let Some(host) = self.target.host_target() else {
-            return false;
-        };
-        let Some(inst) = project.preset_instance(host) else {
-            return false;
-        };
-        let def = inst.graph_def().as_ref().unwrap_or(&self.catalog_default);
-        self.target
-            .card_slot_for_node_param(def, self.node_id, &self.param_name)
-            .is_some_and(|slot| card_param_sets_rows(project, host, &slot.outer_id))
+        )
     }
 
     fn lock_reason(&self, project: &Project) -> Option<&'static str> {
@@ -972,10 +946,8 @@ impl SetGraphNodeParamCommand {
 }
 
 impl Command for SetGraphNodeParamCommand {
-    /// Only valid after `execute` or `undo`, which read the row rule from
-    /// the project.
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        if self.sets_rows {
+        if self.sets_rows() {
             ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values, Part::Effects])
         } else {
             ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
@@ -984,7 +956,6 @@ impl Command for SetGraphNodeParamCommand {
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
-        self.note_sets_rows(project);
         if let Some(reason) = self.lock_reason(project) {
             self.rejection = Some(reason.to_string());
             return;
@@ -1042,7 +1013,6 @@ impl Command for SetGraphNodeParamCommand {
     }
 
     fn do_undo(&mut self, project: &mut Project) {
-        self.note_sets_rows(project);
         if let Some((outer_id, previous)) = self.card_redirect.take() {
             let target = self.target.clone();
             let _ = target.host_target().and_then(|host| {

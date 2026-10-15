@@ -1047,7 +1047,7 @@ fn project_with_generator_graph(def: EffectGraphDef) -> (Project, LayerId) {
     let mut project = Project::default();
     let mut layer = Layer::new("Test Layer".to_string(), LayerType::Generator, 0);
     let lid = layer.layer_id.clone();
-    layer.gen_params_or_init().graph = Some(def);
+    layer.gen_params_mut().unwrap().graph = Some(def);
     project.timeline.layers.push(layer);
     (project, lid)
 }
@@ -2514,7 +2514,7 @@ fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity()
         .find_layer_by_id_mut(&layer_id)
         .unwrap()
         .1
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .set_preset_id(PresetTypeId::from_string("PhysicsSolids".to_string()));
     let target = GraphTarget::Generator(layer_id.clone());
 
@@ -2746,7 +2746,7 @@ fn nonphysical_object_coexists_with_physics_world_through_duplicate_remove_undo_
         .find_layer_by_id_mut(&layer_id)
         .unwrap()
         .1
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .set_preset_id(PresetTypeId::from_string("PhysicsSolids".to_string()));
     let target = GraphTarget::Generator(layer_id.clone());
     let body_wires = |project: &Project| {
@@ -3817,7 +3817,7 @@ fn add_scene_fog_command_refresh_preserves_existing_param_values() {
         .find_layer_by_id_mut(&lid)
         .unwrap()
         .1
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .params
         .get_mut(&intensity_id)
         .expect("intensity param resolves by its synthesized id")
@@ -4518,8 +4518,8 @@ fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
     // A typed generator: an untyped instance has no manifest to refresh.
     {
         let layer = project.timeline.layers.last_mut().unwrap();
-        let graph = layer.gen_params_or_init().graph.take();
-        let fx = layer.gen_params_or_init();
+        let graph = layer.gen_params_mut().unwrap().graph.take();
+        let fx = layer.gen_params_mut().unwrap();
         *fx = manifold_core::effects::PresetInstance::new_generator(
             manifold_core::PresetTypeId::from_string("Existing".to_string()),
         );

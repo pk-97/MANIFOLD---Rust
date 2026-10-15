@@ -622,7 +622,7 @@ mod retired_cpu_flip_compat_tests {
             PresetTypeId::new("WaterBasin"),
             0,
         );
-        layer.gen_params_or_init().graph = Some(graph);
+        layer.gen_params_mut().unwrap().graph = Some(graph);
         project.timeline.layers.push(layer);
 
         let root = std::env::temp_dir().join(format!(

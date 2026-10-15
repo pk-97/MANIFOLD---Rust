@@ -736,9 +736,10 @@ impl Command for ChangeGeneratorTypeCommand {
             // The generator graph lives on `gen_params` now (graph-home
             // unification); restore the snapshot there and bump its version so
             // the renderer re-snapshots.
-            let gp = layer.gen_params_or_init();
-            gp.graph = self.old_graph.clone();
-            gp.graph_version = gp.graph_version.wrapping_add(1);
+            if let Some(gp) = layer.gen_params_mut() {
+                gp.graph = self.old_graph.clone();
+                gp.graph_version = gp.graph_version.wrapping_add(1);
+            }
         }
     }
 
@@ -830,9 +831,10 @@ impl Command for PasteGeneratorCommand {
                 self.old_drivers.clone(),
                 self.old_envelopes.clone(),
             );
-            let gp = layer.gen_params_or_init();
-            gp.graph = self.old_graph.clone();
-            gp.graph_version = gp.graph_version.wrapping_add(1);
+            if let Some(gp) = layer.gen_params_mut() {
+                gp.graph = self.old_graph.clone();
+                gp.graph_version = gp.graph_version.wrapping_add(1);
+            }
         }
     }
 

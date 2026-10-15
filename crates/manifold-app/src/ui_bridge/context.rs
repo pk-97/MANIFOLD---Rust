@@ -17,9 +17,57 @@ use crate::user_prefs::UserPrefs;
 use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
-use manifold_editing::command::Command;
+use manifold_editing::command::{rows_deferred, rows_written, Command};
 
 use super::scrub::ScrubState;
+
+/// The UI's copy of the project (UI_INVALIDATION D5). Readable through
+/// `Deref`; writable only through [`Self::edit`], a [`ProjectRef`] that stamps
+/// what it writes, or [`Self::intake`], which the snapshot accept and project
+/// load use because their stamps come from the snapshot itself. An unstamped
+/// edit does not compile.
+pub struct LocalProject(Project);
+
+impl LocalProject {
+    pub fn new(project: Project) -> Self {
+        Self(project)
+    }
+
+    /// The one way to edit the local project.
+    pub fn edit<'a>(
+        &'a mut self,
+        edits: &'a mut crate::gesture_preview::UiEdits,
+        content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
+    ) -> ProjectRef<'a> {
+        ProjectRef::new(&mut self.0, edits, content_tx)
+    }
+
+    /// Writes that arrive from the content thread (snapshot accept, live
+    /// values, a drag's held value) or replace the project (load, new): the
+    /// accepted snapshot's stamps already cover them. Never an edit.
+    pub fn intake(&mut self) -> &mut Project {
+        &mut self.0
+    }
+
+    /// Clips active at `beat`. It refreshes the timeline's sort cache, which
+    /// is not model state, so it needs no stamp.
+    pub fn active_clips_at_beat(&mut self, beat: manifold_core::Beats, results: &mut Vec<(usize, usize)>, indices: &mut Vec<usize>) {
+        self.0.timeline.get_active_clips_at_beat(beat, results, indices);
+    }
+}
+
+impl std::ops::Deref for LocalProject {
+    type Target = Project;
+    fn deref(&self) -> &Project {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<Project> for LocalProject {
+    fn borrow(&self) -> &Project {
+        &self.0
+    }
+}
 
 /// The local project as dispatch sees it: readable through `Deref`, writable
 /// only through [`ProjectRef::mutate`] and [`ProjectRef::execute`], which stamp
@@ -32,7 +80,7 @@ pub struct ProjectRef<'a> {
 }
 
 impl<'a> ProjectRef<'a> {
-    pub fn new(
+    pub(crate) fn new(
         project: &'a mut Project,
         edits: &'a mut crate::gesture_preview::UiEdits,
         content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
@@ -40,15 +88,28 @@ impl<'a> ProjectRef<'a> {
         Self { project, edits, content_tx }
     }
 
-    /// A non-undoable write: apply `f` locally, stamp `touches`, and send the
-    /// same closure to the content thread.
+    /// A non-undoable write: apply `f` locally, stamp what it wrote (as
+    /// `EditingService::mutate` does), and send the same closure to the
+    /// content thread.
     pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
     where
         F: FnOnce(&mut Project) + Clone + Send + 'static,
     {
-        (f.clone())(self.project);
-        self.edits.stamps.bump(touches);
+        let ((), rows) = rows_written(self.project, f.clone());
+        self.edits.stamps.bump(touches.union(rows));
         ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
+    }
+
+    /// A gesture's live move (a scrub tick): as [`Self::mutate`], but rows
+    /// wait for the gesture's commit on both threads, so no row appears or
+    /// vanishes under the cursor mid-drag.
+    pub fn gesture_move<F>(&mut self, touches: ChangeSet, f: F)
+    where
+        F: FnOnce(&mut Project) + Clone + Send + 'static,
+    {
+        rows_deferred(self.project, f.clone());
+        self.edits.stamps.bump(touches);
+        ContentCommand::send(self.content_tx, ContentCommand::gesture_move(touches, Box::new(f)));
     }
 
     /// An undoable edit: execute `cmd` locally, stamp what it touches (read
@@ -61,12 +122,12 @@ impl<'a> ProjectRef<'a> {
     }
 
     /// Several undoable edits as one undo step, stamped with their union.
+    /// One row walk covers the batch; the commands inside it skip theirs.
     pub fn execute_batch(&mut self, mut cmds: Vec<Box<dyn Command>>, label: String) {
-        let mut touches = ChangeSet::NONE;
-        for cmd in &mut cmds {
-            touches = touches.union(cmd.execute(self.project));
-        }
-        self.edits.stamps.bump(touches);
+        let (touches, rows) = rows_written(self.project, |project| {
+            cmds.iter_mut().fold(ChangeSet::NONE, |touches, cmd| touches.union(cmd.execute(project)))
+        });
+        self.edits.stamps.bump(touches.union(rows));
         ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
     }
 
@@ -77,35 +138,53 @@ impl<'a> ProjectRef<'a> {
         &mut self,
         f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>,
     ) -> Option<R> {
-        let instances = manifold_editing::command::generator_instances(self.project);
-        let (cmd, out) = f(self.project)?;
-        let wrote = cmd.touches().union(manifold_editing::command::lifted(instances, self.project));
-        self.edits.stamps.bump(wrote);
+        let (made, rows) = rows_written(self.project, f);
+        let (cmd, out) = made?;
+        self.edits.stamps.bump(cmd.touches().union(rows));
         ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
         Some(out)
     }
 
-    /// For helpers shared with the keyboard path that write the local project
-    /// and send their own content command: stamp `touches` (what that command
-    /// declares) around the call.
-    pub fn with_sent<R>(&mut self, touches: ChangeSet, f: impl FnOnce(&mut Project) -> R) -> R {
+    /// For helpers that write the local project and send their own content
+    /// commands (the keyboard automation helpers, the file importers): `f`
+    /// returns what those commands touch, and that is stamped.
+    pub fn with_sent<R>(&mut self, f: impl FnOnce(&mut Project) -> (R, ChangeSet)) -> R {
+        let ((out, touches), rows) = rows_written(self.project, f);
+        self.edits.stamps.bump(touches.union(rows));
+        out
+    }
+
+    /// Stamp an edit the local project already shows (a committed gesture
+    /// preview) or one only the content thread runs, as its command is sent.
+    pub fn stamp(&mut self, touches: ChangeSet) {
         self.edits.stamps.bump(touches);
-        f(self.project)
+    }
+
+    /// A gesture preview write: local only, never sent, stamping nothing; it
+    /// records itself in the gesture preview, whose version the planner reads
+    /// (D12). The gesture's commit stamps.
+    pub fn preview<R>(&mut self, f: impl FnOnce(&mut Project, &mut crate::gesture_preview::GesturePreview) -> R) -> R {
+        f(self.project, &mut self.edits.preview)
+    }
+
+    /// The gesture preview, read or reset without a project write.
+    pub fn gesture_preview(&mut self) -> &mut crate::gesture_preview::GesturePreview {
+        &mut self.edits.preview
+    }
+
+    pub fn content_tx(&self) -> &'a crossbeam_channel::Sender<ContentCommand> {
+        self.content_tx
+    }
+
+    /// A shorter-lived writer over the same project, for one dispatch in a loop.
+    pub fn reborrow(&mut self) -> ProjectRef<'_> {
+        ProjectRef { project: self.project, edits: self.edits, content_tx: self.content_tx }
     }
 
     /// Clip lookup by id. It refreshes the timeline's id cache, which is not
     /// model state, so it needs no stamp.
     pub fn find_clip_by_id(&mut self, clip_id: &str) -> Option<&manifold_core::clip::TimelineClip> {
         self.project.timeline.find_clip_by_id(clip_id)
-    }
-
-    /// A marker drag preview: a local-only write the content thread never sees
-    /// and that stamps nothing (D12). It moves the marker preview version; the
-    /// gesture's commit stamps Markers.
-    pub fn preview_marker<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R {
-        let out = f(self.project);
-        self.edits.preview.record_marker();
-        out
     }
 }
 
@@ -157,5 +236,13 @@ impl DispatchCtx<'_> {
     /// See [`ProjectRef::execute`].
     pub fn execute(&mut self, cmd: Box<dyn Command>) {
         self.project.execute(cmd);
+    }
+
+    /// See [`ProjectRef::gesture_move`].
+    pub fn gesture_move<F>(&mut self, touches: ChangeSet, f: F)
+    where
+        F: FnOnce(&mut Project) + Clone + Send + 'static,
+    {
+        self.project.gesture_move(touches, f);
     }
 }
