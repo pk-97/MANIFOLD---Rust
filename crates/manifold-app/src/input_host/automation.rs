@@ -486,6 +486,134 @@ pub(crate) fn delete_selected(
     );
 }
 
+/// New value for a nudged point. A stepped lane (whole numbers or value
+/// labels) moves one whole step per press; a continuous lane moves
+/// `value_steps` percent of its range. Always clamped into the range.
+fn nudged_value(value: f32, value_steps: f32, min: f32, max: f32, whole_numbers: bool) -> f32 {
+    if value_steps == 0.0 {
+        return value;
+    }
+    let delta = if whole_numbers {
+        value_steps.signum()
+    } else {
+        value_steps * 0.01 * (max - min)
+    };
+    let moved = (value + delta).clamp(min.min(max), min.max(max));
+    if whole_numbers { moved.round() } else { moved }
+}
+
+/// Arrow-key nudge of the selected breakpoints as ONE undo entry. `beat_delta`
+/// moves them along the timeline (the whole group stops at beat 0 together,
+/// keeping its shape); `value_steps` is signed percent-of-range steps, 1.0 for
+/// a normal press and 0.1 for a fine one. Returns whether any point was
+/// selected, so the key is consumed even when a limit leaves nothing to move.
+pub(crate) fn nudge_selected(
+    project: &mut manifold_core::project::Project,
+    selection: &mut UIState,
+    content_tx: &crossbeam_channel::Sender<ContentCommand>,
+    beat_delta: Beats,
+    value_steps: f32,
+) -> bool {
+    use manifold_editing::commands::automation::MoveAutomationPointCommand;
+
+    let refs = selected_refs(selection);
+    if refs.is_empty() {
+        return false;
+    }
+    struct Resolved {
+        point_ref: UiAutomationPointRef,
+        old: AutomationPoint,
+        min: f32,
+        max: f32,
+        whole: bool,
+    }
+    let mut resolved: Vec<Resolved> = Vec::with_capacity(refs.len());
+    for point_ref in refs {
+        let target = graph_target(&point_ref.target);
+        let Some(inst) = project.preset_instance(&target) else { continue };
+        let Some(param) = inst.params.get(point_ref.param_id.as_ref()) else { continue };
+        let Some(lane) = inst
+            .automation_lanes
+            .as_ref()
+            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id.as_ref() == point_ref.param_id.as_ref()))
+        else {
+            continue;
+        };
+        let (min, max) = param.slider_span();
+        let Some(old) = lane.points.iter().find(|p| point_matches_ref(p, &point_ref, min, max)).copied() else {
+            continue;
+        };
+        resolved.push(Resolved { point_ref, old, min, max, whole: param.whole_numbers() });
+    }
+    if resolved.is_empty() {
+        return true;
+    }
+    let min_beat = resolved.iter().map(|r| r.old.beat.0).fold(f64::INFINITY, f64::min);
+    let beat_delta = Beats(beat_delta.0.max(-min_beat));
+
+    type LaneMoves = (GraphTarget, String, Vec<(AutomationPoint, AutomationPoint)>);
+    let mut lanes: Vec<LaneMoves> = Vec::new();
+    let mut moved_refs: Vec<(UiAutomationPointRef, UiAutomationPointRef)> = Vec::new();
+    for r in &resolved {
+        let new = AutomationPoint {
+            beat: r.old.beat + beat_delta,
+            value: nudged_value(r.old.value, value_steps, r.min, r.max, r.whole),
+            shape: r.old.shape,
+        };
+        if new.beat == r.old.beat && new.value == r.old.value {
+            continue;
+        }
+        moved_refs.push((
+            r.point_ref.clone(),
+            UiAutomationPointRef {
+                beat: new.beat,
+                value_norm: normalized_value(new.value, r.min, r.max),
+                ..r.point_ref.clone()
+            },
+        ));
+        let target = graph_target(&r.point_ref.target);
+        let param_id = r.point_ref.param_id.as_ref().to_string();
+        match lanes.iter_mut().find(|(t, p, _)| *t == target && *p == param_id) {
+            Some((_, _, moves)) => moves.push((r.old, new)),
+            None => lanes.push((target, param_id, vec![(r.old, new)])),
+        }
+    }
+    if lanes.is_empty() {
+        return true;
+    }
+    let mut commands: Vec<Box<dyn Command>> = lanes
+        .into_iter()
+        .map(|(target, param_id, moves)| {
+            Box::new(MoveAutomationPointCommand::for_group(target, param_id, moves)) as Box<dyn Command>
+        })
+        .collect();
+    for command in &mut commands {
+        command.execute(project);
+    }
+    ContentCommand::send(
+        content_tx,
+        ContentCommand::ExecuteBatch(commands, "Nudge Automation Points".to_string()),
+    );
+
+    let follow = |point: &mut UiAutomationPointRef| {
+        if let Some((_, to)) = moved_refs.iter().find(|(from, _)| from == point) {
+            *point = to.clone();
+        }
+    };
+    if let Some(single) = selection.selected_automation_point.as_mut() {
+        follow(single);
+    }
+    selection.selected_automation_points.iter_mut().for_each(follow);
+    if beat_delta != Beats::ZERO
+        && let Some(range) = selection.automation_time_selection.as_mut()
+    {
+        range.start = (range.start + beat_delta).max(Beats::ZERO);
+        range.end = (range.end + beat_delta).max(Beats::ZERO);
+    }
+    selection.automation_insert_beat = selection.automation_insert_beat.map(|beat| beat + beat_delta);
+    true
+}
+
 pub(crate) fn cut_selected(
     project: &mut manifold_core::project::Project,
     selection: &mut UIState,
@@ -966,5 +1094,82 @@ mod tests {
                 .iter()
                 .all(|point| (0.0..=1.0).contains(&point.value))
         );
+    }
+
+    #[test]
+    fn nudged_value_steps_percent_of_range_or_one_whole_step() {
+        assert!((nudged_value(0.5, 1.0, 0.0, 1.0, false) - 0.51).abs() < 1e-6);
+        assert!((nudged_value(0.5, -0.1, 0.0, 1.0, false) - 0.499).abs() < 1e-6);
+        assert_eq!(nudged_value(0.995, 1.0, 0.0, 1.0, false), 1.0, "clamped to the range");
+        // Stepped lanes move one whole step whatever the fine setting says.
+        assert_eq!(nudged_value(2.0, 0.1, 0.0, 5.0, true), 3.0);
+        assert_eq!(nudged_value(2.0, -1.0, 0.0, 5.0, true), 1.0);
+        assert_eq!(nudged_value(5.0, 1.0, 0.0, 5.0, true), 5.0);
+    }
+
+    #[test]
+    fn nudge_moves_the_selection_as_one_undo_entry_and_stops_at_beat_zero() {
+        use manifold_core::effects::PresetInstance;
+        use manifold_core::project::Project;
+        use manifold_editing::service::EditingService;
+
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+        fx.init_defaults();
+        let ui_target = UiGraphTarget::Effect(fx.id.clone());
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![
+                point(0.0, 0.2, SegmentShape::Linear),
+                point(4.0, 0.6, SegmentShape::Linear),
+            ],
+        }]);
+        let mut project = Project::default();
+        project.settings.master_effects.push(fx);
+        let original = project.clone();
+        let before = serde_json::to_value(&project).unwrap();
+        let (min, max) = project.settings.master_effects[0].params.get("amount").unwrap().slider_span();
+        let span = max - min;
+        let select = |beat: f64, value: f32| UiAutomationPointRef {
+            target: ui_target.clone(),
+            param_id: "amount".into(),
+            beat: Beats(beat),
+            value_norm: normalized_value(value, min, max),
+        };
+        let mut selection = UIState::new();
+        selection.selected_automation_points = vec![select(4.0, 0.6)];
+        let (tx, rx) = crossbeam_channel::unbounded();
+
+        // Right one grid step, up one percent.
+        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 1.0));
+        let lane = &project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0];
+        assert_eq!(lane.points[1].beat, Beats(4.25));
+        assert!((lane.points[1].value - (0.6 + 0.01 * span)).abs() < 1e-5);
+        assert_eq!(selection.selected_automation_points[0].beat, Beats(4.25), "selection follows the point");
+
+        // One undo entry for the whole keypress.
+        let commands: Vec<_> = rx.try_iter().collect();
+        assert_eq!(commands.len(), 1);
+        let ContentCommand::ExecuteBatch(batch, description) = commands.into_iter().next().unwrap() else {
+            panic!("a nudge is one batch");
+        };
+        let mut undo_project = original.clone();
+        let mut service = EditingService::new();
+        service.execute_batch(batch, description, &mut undo_project);
+        assert!(service.undo(&mut undo_project));
+        assert!(!service.undo(&mut undo_project));
+        assert_eq!(serde_json::to_value(&undo_project).unwrap(), before);
+
+        // A point at beat 0 pins the group: a left nudge moves nothing and
+        // still consumes the key.
+        selection.selected_automation_points = vec![select(0.0, 0.2), select(4.25, lane.points[1].value)];
+        let after = serde_json::to_value(&project).unwrap();
+        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(-0.25), 0.0));
+        assert_eq!(serde_json::to_value(&project).unwrap(), after);
+        assert!(rx.try_recv().is_err(), "nothing moved, nothing sent");
+
+        // No selection: the key is not consumed.
+        selection.selected_automation_points.clear();
+        assert!(!nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
     }
 }
