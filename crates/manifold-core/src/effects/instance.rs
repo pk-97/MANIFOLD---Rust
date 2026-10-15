@@ -1346,6 +1346,20 @@ impl PresetInstance {
             || names(&self.ableton_mappings, |m| m.param_id.as_ref(), param_id)
     }
 
+    /// Whether a switched-on driver, envelope, audio mod or automation lane,
+    /// or any Ableton mapping, drives `param_id` now: the live attachment
+    /// the card row shows (`ParamRow::is_attached`).
+    pub fn drives(&self, param_id: &str) -> bool {
+        fn live<T>(list: &Option<Vec<T>>, on: impl Fn(&T) -> Option<&str>, param_id: &str) -> bool {
+            list.as_ref().is_some_and(|list| list.iter().any(|item| on(item) == Some(param_id)))
+        }
+        live(&self.drivers, |d| d.enabled.then_some(d.param_id.as_ref()), param_id)
+            || live(&self.envelopes, |e| e.enabled.then_some(e.param_id.as_ref()), param_id)
+            || live(&self.audio_mods, |a| a.enabled.then_some(a.param_id.as_ref()), param_id)
+            || live(&self.automation_lanes, |l| l.enabled.then_some(l.param_id.as_ref()), param_id)
+            || live(&self.ableton_mappings, |m| Some(m.param_id.as_ref()), param_id)
+    }
+
     /// Put `param_id` on the scene card for good when a modulator attaches
     /// to it (SCENE_SURFACES D6 (attached rows)): a control the card would
     /// leave off, or fold away with its feature, is pinned Shown, so

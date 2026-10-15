@@ -2410,12 +2410,9 @@ mod scene_card_convergence_tests {
 
         // ── Card membership (SCENE_SURFACES D6 (attached rows)) ──
 
-        /// Roll on an orbit camera is a Setup control: off the card until a
-        /// modulator attaches. Arming pins it; switching the driver off and
-        /// deleting an audio mod keep it; undoing every step takes it off.
-        #[test]
-        fn modulating_roll_keeps_it_on_the_card() {
-            use manifold_ui::{ModulationAction::*, PanelAction::Modulation};
+        /// A PhysicsSolids layer with an audio send, and its orbit camera's
+        /// roll: a Setup control, off the card until a modulator attaches.
+        fn roll_rig() -> (Project, LayerId, manifold_core::effects::ParamId) {
             let mut project = Project::default();
             project.timeline.layers.push(manifold_core::layer::Layer::new_generator(
                 "PhysicsSolids".into(),
@@ -2425,7 +2422,7 @@ mod scene_card_convergence_tests {
             project.reconcile_param_manifests();
             with_send(&mut project);
             let layer_id = project.timeline.layers[0].layer_id.clone();
-            let roll: manifold_core::effects::ParamId = gen_inst(&project, &layer_id)
+            let roll = gen_inst(&project, &layer_id)
                 .params
                 .iter()
                 .find(|param| {
@@ -2434,22 +2431,37 @@ mod scene_card_convergence_tests {
                 })
                 .map(|param| std::borrow::Cow::Owned(param.spec.id.clone()))
                 .expect("an orbit camera roll");
-            let on_card = |p: &Project| {
-                let inst = gen_inst(p, &layer_id);
-                crate::ui_bridge::projection::cards::gen_params_to_surface(
-                    inst,
-                    layer_id.as_str(),
-                    None,
-                    &[],
-                    crate::ui_bridge::projection::cards::SurfaceVisibility::CuratedCard,
-                    (manifold_core::Bpm(120.0), 60.0),
-                )
-                .rows
-                .iter()
-                .any(|row| row.id == roll)
-            };
-            assert!(!on_card(&project), "roll starts off the card");
+            (project, layer_id, roll)
+        }
 
+        fn on_card(p: &Project, layer_id: &LayerId, id: &str) -> bool {
+            crate::ui_bridge::projection::cards::gen_params_to_surface(
+                gen_inst(p, layer_id),
+                layer_id.as_str(),
+                None,
+                &[],
+                crate::ui_bridge::projection::cards::SurfaceVisibility::CuratedCard,
+                (manifold_core::Bpm(120.0), 60.0),
+            )
+            .rows
+            .iter()
+            .any(|row| row.id == id)
+        }
+
+        /// Dispatch one action against the content side's project and land it.
+        fn land(side: &mut ContentSide, h: &mut Harness, action: PanelAction) -> usize {
+            let mut local = side.project.clone();
+            h.dispatch(&action, &mut local);
+            side.apply(h.drain())
+        }
+
+        /// Arming pins roll; switching the driver off and deleting an audio
+        /// mod keep it; undoing every step takes it off.
+        #[test]
+        fn modulating_roll_keeps_it_on_the_card() {
+            use manifold_ui::{ModulationAction::*, PanelAction::Modulation};
+            let (project, layer_id, roll) = roll_rig();
+            assert!(!on_card(&project, &layer_id, &roll), "roll starts off the card");
             let mut side = ContentSide::new(&project);
             let mut h = Harness::new(Some(layer_id.clone()));
             let steps = [
@@ -2459,10 +2471,8 @@ mod scene_card_convergence_tests {
                 ("delete audio mod", AudioModRemove(gpt(), roll.clone())),
             ];
             for (label, action) in steps {
-                let mut local = side.project.clone();
-                h.dispatch(&Modulation(action), &mut local);
-                assert_eq!(side.apply(h.drain()), 1, "{label}: one undo unit");
-                assert!(on_card(&side.project), "{label}: roll stays on the card");
+                assert_eq!(land(&mut side, &mut h, Modulation(action)), 1, "{label}: one undo unit");
+                assert!(on_card(&side.project, &layer_id, &roll), "{label}: roll stays on the card");
             }
             let inst = gen_inst(&side.project, &layer_id);
             assert!(inst.drivers.iter().flatten().all(|d| !d.enabled) && inst.find_audio_mod(&roll).is_none());
@@ -2470,7 +2480,24 @@ mod scene_card_convergence_tests {
                 assert!(side.service.undo(&mut side.project));
             }
             assert!(!gen_inst(&side.project, &layer_id).modulates(&roll), "undo removes every modulator");
-            assert!(!on_card(&side.project), "undo back to the start takes roll off the card");
+            assert!(!on_card(&side.project, &layer_id, &roll), "undo back to the start takes roll off the card");
+        }
+
+        /// A macro mapped after the driver pinned roll has no undo of its
+        /// own, so undoing the driver leaves the pin: the macro still drives
+        /// roll and it stays on the card.
+        #[test]
+        fn undoing_the_driver_keeps_a_macro_driven_roll_on_the_card() {
+            let (project, layer_id, roll) = roll_rig();
+            let mut side = ContentSide::new(&project);
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let arm = PanelAction::Modulation(ModulationAction::DriverToggle(gpt(), roll.clone()));
+            assert_eq!(land(&mut side, &mut h, arm), 1);
+            let map = PanelAction::Mapping(MappingAction::MapParamToMacro(gpt(), roll.clone(), 0));
+            assert_eq!(land(&mut side, &mut h, map), 0, "a macro mapping records no undo");
+            assert!(side.service.undo(&mut side.project));
+            assert!(!gen_inst(&side.project, &layer_id).modulates(&roll), "the driver is gone");
+            assert!(on_card(&side.project, &layer_id, &roll), "the macro keeps roll on the card");
         }
 
         // ── Clip gestures (timeline host path) ───────────────────

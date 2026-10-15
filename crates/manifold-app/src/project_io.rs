@@ -570,8 +570,9 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
 
 /// A project saved before attaches pinned their rows (SCENE_SURFACES D6
 /// (attached rows)) pins every modulated control the card would leave off,
-/// so switching its modulator off keeps it there. Only unpinned rows: a
-/// Remove from Card stands.
+/// so switching its modulator off keeps it there. A row removed from the
+/// card comes back only while a live modulator drives it, as the card showed
+/// it before; a removal over a switched-off modulator stands across loads.
 fn pin_modulated_rows(project: &mut Project) {
     let macro_targets: Vec<(manifold_core::LayerId, String)> = project
         .settings
@@ -592,9 +593,15 @@ fn pin_modulated_rows(project: &mut Project) {
         let modulated: Vec<String> = host
             .params
             .iter()
-            .filter(|param| param.choices.pin.is_none())
+            .filter(|param| match param.choices.pin {
+                None => {
+                    let id = param.spec.id.as_str();
+                    host.modulates(id) || macro_targets.iter().any(|(layer, param)| *layer == layer_id && param == id)
+                }
+                Some(manifold_core::scene_surface::CardPin::Removed) => host.drives(&param.spec.id),
+                Some(manifold_core::scene_surface::CardPin::Shown) => false,
+            })
             .map(|param| param.spec.id.clone())
-            .filter(|id| host.modulates(id) || macro_targets.iter().any(|(layer, param)| *layer == layer_id && param == id))
             .collect();
         for id in modulated {
             host.keep_on_card(&id);
@@ -1440,7 +1447,8 @@ mod tests {
     use manifold_core::units::Bpm;
 
     /// An older project's modulated Setup rows get the pin an attach writes
-    /// now; a Remove from Card stands, and a second load changes nothing.
+    /// now; a Remove from Card stands over a switched-off modulator and gives
+    /// way to a live one, and a second load changes nothing.
     #[test]
     fn load_pins_modulated_rows_once() {
         use manifold_core::scene_surface::{CardPin, SurfaceRole};
@@ -1457,7 +1465,7 @@ mod tests {
             .iter()
             .filter(|param| param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Setup))
             .map(|param| param.spec.id.clone())
-            .take(3)
+            .take(4)
             .collect();
         let driver = |id: &str| manifold_core::effects::ParameterDriver {
             param_id: std::borrow::Cow::Owned(id.to_string()),
@@ -1474,14 +1482,18 @@ mod tests {
             legacy_param_index: None,
             is_paused_by_user: false,
         };
-        host.drivers = Some(vec![driver(&setup[0]), driver(&setup[1])]);
-        host.params.get_mut(&setup[1]).unwrap().choices.pin = Some(CardPin::Removed);
+        let mut live = driver(&setup[2]);
+        live.enabled = true;
+        host.drivers = Some(vec![driver(&setup[0]), driver(&setup[1]), live]);
+        for removed in &setup[1..3] {
+            host.params.get_mut(removed).unwrap().choices.pin = Some(CardPin::Removed);
+        }
         let pins = |project: &Project| -> Vec<Option<CardPin>> {
             let host = project.timeline.layers[0].gen_params().unwrap();
             setup.iter().map(|id| host.params.get(id).unwrap().choices.pin).collect()
         };
         migrate_project_scene_graphs(&mut project);
-        let expected = vec![Some(CardPin::Shown), Some(CardPin::Removed), None];
+        let expected = vec![Some(CardPin::Shown), Some(CardPin::Removed), Some(CardPin::Shown), None];
         assert_eq!(pins(&project), expected);
         migrate_project_scene_graphs(&mut project);
         assert_eq!(pins(&project), expected);

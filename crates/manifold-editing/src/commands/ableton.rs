@@ -67,8 +67,8 @@ impl Command for ChangeAbletonMappingCommand {
     }
 
     fn do_undo(&mut self, project: &mut Project) {
-        self.keep.undo(project);
         apply_mapping(project, &self.target, &self.old_mapping);
+        self.keep.undo(project);
         if let AbletonMappingTarget::MacroSlot { slot_index } = &self.target
             && let Some(ref label) = self.old_macro_label
             && let Some(slot) = project.settings.macro_bank.slots.get_mut(*slot_index)

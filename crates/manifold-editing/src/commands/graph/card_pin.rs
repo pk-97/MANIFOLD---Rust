@@ -91,14 +91,27 @@ impl KeepOnCard {
         }
     }
 
+    /// Call after the command's own modulator is gone. The pin stays while
+    /// another live modulator or a macro (whose mapping has no undo) still
+    /// drives the control, so undo never strands a driven control off the card.
     pub fn undo(&mut self, project: &mut Project) {
-        if let Some((target, param_id, before)) = self.replaced.take() {
-            project.with_preset_graph_mut(&target, |host| {
-                if let Some(param) = host.params.get_mut(&param_id) {
-                    param.choices.pin = before;
-                }
-            });
+        let Some((target, param_id, before)) = self.replaced.take() else { return };
+        let GraphTarget::Generator(layer_id) = &target else { return };
+        let macro_driven = project.settings.macro_bank.slots.iter().flat_map(|slot| &slot.mappings).any(|mapping| {
+            matches!(&mapping.target, manifold_core::MacroMappingTarget::GenParam { layer_id: layer, param_id: id }
+                if layer == layer_id && id.as_ref() == param_id)
+        });
+        if macro_driven {
+            return;
         }
+        project.with_preset_graph_mut(&target, |host| {
+            if host.drives(&param_id) {
+                return;
+            }
+            if let Some(param) = host.params.get_mut(&param_id) {
+                param.choices.pin = before;
+            }
+        });
     }
 
     /// Effects while this command's pin stands: the pin changes card rows.

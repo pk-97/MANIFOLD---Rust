@@ -52,7 +52,8 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         }
         match place.gate {
             Some(Gate::Fold(feature)) if !pinned && !switches.is_on(feature) => continue,
-            Some(Gate::Dim(feature)) if !switches.is_on(feature) => {
+            // A pinned row stays with its feature off, dimmed like a Dim row.
+            Some(Gate::Fold(feature) | Gate::Dim(feature)) if !switches.is_on(feature) => {
                 row.spec.inactive_reason = Some(feature.off_reason().into());
             }
             _ => {}
@@ -644,6 +645,26 @@ mod tests {
             })
             .expect("a performance row");
         assert_eq!(inst.clone().keep_on_card(&performance.id), None);
+    }
+
+    /// A pinned row whose feature is off stays on the card, dimmed with the
+    /// feature's reason, never looking live (D6, D12).
+    #[test]
+    fn pinned_folded_row_shows_dimmed() {
+        let mut project = project("PhysicsSolids");
+        let host = project.timeline.layers[0].gen_params_mut().unwrap();
+        let fold = |param: &Param| param.spec.scene.is_some_and(|scene| scene.gate == Some(Gate::Fold(Feature::DepthOfField)));
+        let switch_on = host
+            .params
+            .iter()
+            .any(|param| param.spec.scene.is_some_and(|scene| scene.switch == Some(Feature::DepthOfField)) && param.base > 0.5);
+        assert!(!switch_on, "depth of field starts off");
+        let id = host.params.iter().find(|param| fold(param)).map(|param| param.id().to_string()).expect("a folded row");
+        assert!(!surface(&project, SurfaceVisibility::CuratedCard).iter().any(|row| row.id == id.as_str()));
+        project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut(&id).unwrap().choices.pin = Some(CardPin::Shown);
+        let rows = surface(&project, SurfaceVisibility::CuratedCard);
+        let row = rows.iter().find(|row| row.id == id.as_str()).expect("the pinned row builds");
+        assert_eq!(row.spec.inactive_reason.as_deref(), Some(Feature::DepthOfField.off_reason()));
     }
 
     fn folds(project: &Project) -> Vec<String> {
