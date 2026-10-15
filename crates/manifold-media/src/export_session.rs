@@ -384,6 +384,7 @@ impl ExportSession {
                 audio_path,
                 &config.output_path,
                 audio_offset,
+                &config.metadata,
             ) {
                 return Err(preserve_video_and_fail(
                     &encoder_output,
@@ -395,6 +396,8 @@ impl ExportSession {
             // Mux succeeded — config.output_path now holds video+audio, so
             // the video-only temp file is redundant.
             let _ = std::fs::remove_file(&encoder_output);
+        } else if !config.metadata.is_empty() {
+            log::info!("[ExportSession] Video-only export: no ffmpeg mux, so no header metadata is written");
         }
 
         log::info!(

@@ -304,6 +304,7 @@ fn tiny_export_config(output_path: &Path, fps: f32) -> ExportConfig {
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
         split_at_markers: false,
+        metadata: Vec::new(),
     }
 }
 
@@ -781,6 +782,7 @@ fn tiny_colour_export_config(output_path: &Path) -> ExportConfig {
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
         split_at_markers: false,
+        metadata: Vec::new(),
     }
 }
 

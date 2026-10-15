@@ -179,6 +179,7 @@ fn config(path: &Path, width: u32, height: u32, hdr: bool, split: bool) -> Expor
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
         split_at_markers: split,
+        metadata: Vec::new(),
     }
 }
 

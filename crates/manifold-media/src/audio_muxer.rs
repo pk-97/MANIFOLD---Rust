@@ -55,6 +55,7 @@ impl AudioMuxer {
         audio_path: &str,
         output_path: &str,
         audio_offset_seconds: f32,
+        metadata: &[(String, String)],
     ) -> Result<(), MuxError> {
         if !Path::new(ffmpeg_path).exists() {
             return Err(MuxError::FfmpegNotFound(ffmpeg_path.to_string()));
@@ -77,34 +78,9 @@ impl AudioMuxer {
         // Build FFmpeg command matching Unity's PostMuxAudio():
         //   ffmpeg -y -i VIDEO -itsoffset OFFSET -i AUDIO
         //     -c:v copy -c:a aac -b:a 256k
-        //     -map 0:v -map 1:a -shortest -movflags +faststart OUTPUT
+        //     -map 0:v -map 1:a -shortest -movflags +faststart+use_metadata_tags OUTPUT
         let mut cmd = Command::new(ffmpeg_path);
-        cmd.arg("-y") // Overwrite output
-            .arg("-i")
-            .arg(video_path);
-
-        // Apply audio offset
-        if audio_offset_seconds.abs() > 0.001 {
-            cmd.arg("-itsoffset")
-                .arg(format!("{:.6}", audio_offset_seconds));
-        }
-
-        cmd.arg("-i")
-            .arg(audio_path)
-            .arg("-c:v")
-            .arg("copy") // Stream-copy video (no re-encode)
-            .arg("-c:a")
-            .arg("aac")
-            .arg("-b:a")
-            .arg("256k")
-            .arg("-map")
-            .arg("0:v")
-            .arg("-map")
-            .arg("1:a")
-            .arg("-shortest")
-            .arg("-movflags")
-            .arg("+faststart")
-            .arg(output_path);
+        cmd.args(mux_args(video_path, audio_path, output_path, audio_offset_seconds, metadata));
 
         let output = cmd.output().map_err(MuxError::ProcessStart)?;
 
@@ -162,5 +138,82 @@ impl AudioMuxer {
         }
 
         None
+    }
+}
+
+/// The FFmpeg argument list for the audio mux. One `-metadata key=value` per
+/// pair (output options, so they follow the inputs); pairs with an empty key
+/// or a key containing `=` are skipped. `use_metadata_tags` makes the mov
+/// muxer keep custom keys such as `com.manifold.*`.
+fn mux_args(
+    video_path: &str,
+    audio_path: &str,
+    output_path: &str,
+    audio_offset_seconds: f32,
+    metadata: &[(String, String)],
+) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), video_path.into()];
+    if audio_offset_seconds.abs() > 0.001 {
+        args.push("-itsoffset".into());
+        args.push(format!("{audio_offset_seconds:.6}"));
+    }
+    for a in [
+        "-i", audio_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-map", "0:v", "-map",
+        "1:a", "-shortest",
+    ] {
+        args.push(a.into());
+    }
+    for (key, value) in metadata {
+        if key.is_empty() || key.contains('=') {
+            continue;
+        }
+        args.push("-metadata".into());
+        args.push(format!("{key}={value}"));
+    }
+    args.push("-movflags".into());
+    args.push("+faststart+use_metadata_tags".into());
+    args.push(output_path.into());
+    args
+}
+
+#[cfg(test)]
+mod mux_args_tests {
+    use super::mux_args;
+
+    fn p(k: &str, v: &str) -> (String, String) {
+        (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn mux_args_without_metadata_matches_old_command() {
+        let a = mux_args("v.mp4", "a.wav", "o.mp4", 0.0, &[]);
+        assert_eq!(
+            a.join(" "),
+            "-y -i v.mp4 -i a.wav -c:v copy -c:a aac -b:a 256k -map 0:v -map 1:a -shortest \
+             -movflags +faststart+use_metadata_tags o.mp4"
+        );
+    }
+
+    #[test]
+    fn mux_args_adds_offset_and_one_metadata_arg_per_pair() {
+        let a = mux_args(
+            "v.mp4",
+            "a.wav",
+            "o.mp4",
+            0.5,
+            &[p("title", "My Show; rm -rf"), p("com.manifold.fps", "60"), p("bad=key", "x"), p("", "y")],
+        );
+        assert_eq!(&a[3..5], ["-itsoffset", "0.500000"]);
+        let meta: Vec<&str> = a
+            .windows(2)
+            .filter(|w| w[0] == "-metadata")
+            .map(|w| w[1].as_str())
+            .collect();
+        assert_eq!(meta, ["title=My Show; rm -rf", "com.manifold.fps=60"]);
+        // Metadata is an output option: after both inputs, before the output path.
+        let first_meta = a.iter().position(|s| s == "-metadata").unwrap();
+        let second_input = a.iter().rposition(|s| s == "-i").unwrap();
+        assert!(first_meta > second_input);
+        assert_eq!(a.last().unwrap(), "o.mp4");
     }
 }
