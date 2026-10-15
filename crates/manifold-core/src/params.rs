@@ -200,13 +200,14 @@ impl Param {
         &self.spec.id
     }
 
-    /// True when the parameter is integral — the modulation evaluators round
-    /// the final value when this is set. Comes off the `spec` uniformly for
+    /// True when the parameter is stepped (integral, labelled or a toggle) —
+    /// the modulation evaluators round the final value and automation authors
+    /// Hold steps when this is set. Comes off the `spec` uniformly for
     /// bundled and user-added params (D3/D6: the spec is the single authority;
     /// there is no separate `ParamConvert`-derived whole-number source now).
     #[inline]
     pub fn whole_numbers(&self) -> bool {
-        self.spec.whole_numbers || !self.spec.value_labels.is_empty()
+        self.spec.whole_numbers || self.spec.is_toggle || !self.spec.value_labels.is_empty()
     }
 
     /// The slider range: the user's choice when one is saved, else the
@@ -527,6 +528,9 @@ mod tests {
         let mut s2 = spec("mode", 0.0);
         s2.value_labels = vec!["off".into(), "on".into()];
         assert!(Param::bundled(s2).whole_numbers());
+        let mut s3 = spec("on", 0.0);
+        s3.is_toggle = true;
+        assert!(Param::bundled(s3).whole_numbers(), "toggles are stepped");
     }
 
     #[test]
