@@ -1333,6 +1333,49 @@ impl PresetInstance {
         self.audio_mods.as_ref().is_some_and(|v| !v.is_empty())
     }
 
+    /// Whether a driver, envelope, audio mod, automation lane or Ableton
+    /// mapping on this instance names `param_id`, enabled or not.
+    pub fn modulates(&self, param_id: &str) -> bool {
+        fn names<T>(list: &Option<Vec<T>>, id: impl Fn(&T) -> &str, param_id: &str) -> bool {
+            list.as_ref().is_some_and(|list| list.iter().any(|item| id(item) == param_id))
+        }
+        names(&self.drivers, |d| d.param_id.as_ref(), param_id)
+            || names(&self.envelopes, |e| e.param_id.as_ref(), param_id)
+            || names(&self.audio_mods, |a| a.param_id.as_ref(), param_id)
+            || names(&self.automation_lanes, |l| l.param_id.as_ref(), param_id)
+            || names(&self.ableton_mappings, |m| m.param_id.as_ref(), param_id)
+    }
+
+    /// Put `param_id` on the scene card for good when a modulator attaches
+    /// to it (SCENE_SURFACES D6 (attached rows)): a control the card would
+    /// leave off, or fold away with its feature, is pinned Shown, so
+    /// switching the modulator off or removing it never takes the control
+    /// away. A control on the card by its role keeps no pin. Returns the pin
+    /// it replaced, or `None` when it wrote nothing; the attach command
+    /// restores that pin on undo.
+    pub fn keep_on_card(&mut self, param_id: &str) -> Option<Option<crate::scene_surface::CardPin>> {
+        use crate::scene_surface::{CardPin, Gate, SurfaceRole};
+        if !self.params.iter().any(|param| param.spec.scene.is_some()) {
+            return None;
+        }
+        let modifier_bound = self.graph.as_ref().and_then(|def| def.preset_metadata.as_ref()).is_some_and(|meta| {
+            meta.bindings.iter().any(|binding| {
+                binding.id == param_id
+                    && matches!(binding.target, crate::effect_graph_def::BindingTarget::SceneModifier { .. })
+            })
+        });
+        let param = self.params.get_mut(param_id)?;
+        let off = match param.choices.pin {
+            Some(CardPin::Shown) => false,
+            Some(CardPin::Removed) => true,
+            None => match param.spec.scene {
+                Some(scene) => scene.role != SurfaceRole::Performance || matches!(scene.gate, Some(Gate::Fold(_))),
+                None => modifier_bound || !param.spec.card_visible,
+            },
+        };
+        off.then(|| param.choices.pin.replace(CardPin::Shown))
+    }
+
     /// Whether this instance's clip-launch edge should count toward its own
     /// Trigger response (section 9 U3, supersedes the deleted `AudioTriggerMod::
     /// clip_edge_enabled`). Finds an ENABLED `audio_mods` entry targeting a

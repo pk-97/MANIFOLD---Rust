@@ -2408,6 +2408,71 @@ mod scene_card_convergence_tests {
             );
         }
 
+        // ── Card membership (SCENE_SURFACES D6 (attached rows)) ──
+
+        /// Roll on an orbit camera is a Setup control: off the card until a
+        /// modulator attaches. Arming pins it; switching the driver off and
+        /// deleting an audio mod keep it; undoing every step takes it off.
+        #[test]
+        fn modulating_roll_keeps_it_on_the_card() {
+            use manifold_ui::{ModulationAction::*, PanelAction::Modulation};
+            let mut project = Project::default();
+            project.timeline.layers.push(manifold_core::layer::Layer::new_generator(
+                "PhysicsSolids".into(),
+                PresetTypeId::from_string("PhysicsSolids".to_string()),
+                0,
+            ));
+            project.reconcile_param_manifests();
+            with_send(&mut project);
+            let layer_id = project.timeline.layers[0].layer_id.clone();
+            let roll: manifold_core::effects::ParamId = gen_inst(&project, &layer_id)
+                .params
+                .iter()
+                .find(|param| {
+                    param.spec.name == "Roll"
+                        && param.spec.scene.is_some_and(|scene| scene.role == manifold_core::scene_surface::SurfaceRole::Setup)
+                })
+                .map(|param| std::borrow::Cow::Owned(param.spec.id.clone()))
+                .expect("an orbit camera roll");
+            let on_card = |p: &Project| {
+                let inst = gen_inst(p, &layer_id);
+                crate::ui_bridge::projection::cards::gen_params_to_surface(
+                    inst,
+                    layer_id.as_str(),
+                    None,
+                    &[],
+                    crate::ui_bridge::projection::cards::SurfaceVisibility::CuratedCard,
+                    (manifold_core::Bpm(120.0), 60.0),
+                )
+                .rows
+                .iter()
+                .any(|row| row.id == roll)
+            };
+            assert!(!on_card(&project), "roll starts off the card");
+
+            let mut side = ContentSide::new(&project);
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let steps = [
+                ("arm driver", DriverToggle(gpt(), roll.clone())),
+                ("disable driver", DriverToggle(gpt(), roll.clone())),
+                ("arm audio mod", AudioModToggle(gpt(), roll.clone())),
+                ("delete audio mod", AudioModRemove(gpt(), roll.clone())),
+            ];
+            for (label, action) in steps {
+                let mut local = side.project.clone();
+                h.dispatch(&Modulation(action), &mut local);
+                assert_eq!(side.apply(h.drain()), 1, "{label}: one undo unit");
+                assert!(on_card(&side.project), "{label}: roll stays on the card");
+            }
+            let inst = gen_inst(&side.project, &layer_id);
+            assert!(inst.drivers.iter().flatten().all(|d| !d.enabled) && inst.find_audio_mod(&roll).is_none());
+            for _ in 0..4 {
+                assert!(side.service.undo(&mut side.project));
+            }
+            assert!(!gen_inst(&side.project, &layer_id).modulates(&roll), "undo removes every modulator");
+            assert!(!on_card(&side.project), "undo back to the start takes roll off the card");
+        }
+
         // ── Clip gestures (timeline host path) ───────────────────
 
         use manifold_ui::timeline_editing_host::TimelineEditingHost;

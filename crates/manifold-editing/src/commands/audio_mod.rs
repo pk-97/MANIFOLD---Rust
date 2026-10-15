@@ -9,6 +9,7 @@
 use crate::command::Command;
 use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
+use crate::commands::graph::KeepOnCard;
 use manifold_core::audio_mod::{AudioModShape, AudioModSource, ParameterAudioMod, TriggerAction};
 use manifold_core::audio_trigger::TriggerFireMode;
 use manifold_core::effects::ParamId;
@@ -54,11 +55,12 @@ pub(crate) fn action_touches(old: TriggerAction, new: TriggerAction) -> ChangeSe
 pub struct AddAudioModCommand {
     target: DriverTarget,
     audio_mod: ParameterAudioMod,
+    keep: KeepOnCard,
 }
 
 impl AddAudioModCommand {
     pub fn new(target: DriverTarget, audio_mod: ParameterAudioMod) -> Self {
-        Self { target, audio_mod }
+        Self { target, audio_mod, keep: KeepOnCard::default() }
     }
 }
 
@@ -71,6 +73,7 @@ impl Command for AddAudioModCommand {
             mods.retain(|a| a.param_id != m.param_id);
             mods.push(m);
         });
+        self.keep.attach_driver(project, &self.target, &self.audio_mod.param_id);
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -78,6 +81,7 @@ impl Command for AddAudioModCommand {
         with_audio_mods_mut(project, &self.target, |mods| {
             mods.retain(|a| a.param_id != pid);
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -127,11 +131,12 @@ pub struct ToggleAudioModEnabledCommand {
     param_id: ParamId,
     old_enabled: bool,
     new_enabled: bool,
+    keep: KeepOnCard,
 }
 
 impl ToggleAudioModEnabledCommand {
     pub fn new(target: DriverTarget, param_id: ParamId, old_enabled: bool, new_enabled: bool) -> Self {
-        Self { target, param_id, old_enabled, new_enabled }
+        Self { target, param_id, old_enabled, new_enabled, keep: KeepOnCard::default() }
     }
 }
 
@@ -139,10 +144,14 @@ impl Command for ToggleAudioModEnabledCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
     fn do_execute(&mut self, project: &mut Project) {
         set_enabled(project, &self.target, &self.param_id, self.new_enabled);
+        if self.new_enabled {
+            self.keep.attach_driver(project, &self.target, &self.param_id);
+        }
     }
 
     fn do_undo(&mut self, project: &mut Project) {
         set_enabled(project, &self.target, &self.param_id, self.old_enabled);
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {

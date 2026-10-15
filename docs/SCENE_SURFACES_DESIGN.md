@@ -145,7 +145,7 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 
 **D5 — Hide what the scene lacks; dim what does nothing now.** A row whose param the scene does not have is not built. A row that exists but has no effect right now renders with `inactive_reason` (Focus while depth of field is off; a force with no physics targets). Hidden-role params stay unstamped (today's filter semantics); already-stamped hidden params keep their exposure and ids and simply build no row.
 
-**D6 — Attached rows are always shown.** A row with a driver, envelope, audio mod, Ableton mapping, macro mapping or automation lane builds on the card whatever its role, its pin or its gate, and builds in the panel even when its role is Hidden. "Remove from card" is disabled on it, reason "Mapped — unmap to remove". Fixes BUG-pmbd3.7 (card hides mapped rows) as a class.
+**D6 — Attached rows are always shown, and stay.** Attaching a driver, envelope, audio mod, Ableton mapping, macro mapping or automation lane to a control the card leaves off (by its role, a fold gate or a Remove from Card) pins it Shown in the same undo unit (`KeepOnCard` in each attach command, `PresetInstance::keep_on_card`). Switching the modulator off or deleting it never takes the control off the card; Remove from Card is the only way off, and undoing the attach takes the pin back with it. The card reads the stored pin, never the live attachment, and a pinned row ignores its fold gate. Projects saved earlier pin their modulated, unpinned rows at load. The panel shows an attached row even when its role is Hidden. "Remove from card" is disabled while a modulator is attached, reason "Mapped — unmap to remove". Fixes BUG-pmbd3.7 (card hides mapped rows) as a class.
 
 **D7 — User choices are the only per-control display state a project saves.** `ParamChoices` (section 3.4) holds rename, slider range, curve, invert, section and card pin. They are written only by commands the user triggers: `SetCardPinCommand`, `SetSliderRangeCommand`, `EditParamMappingCommand`, and the scene-object and group renames (`RenameSceneObjectCommand`, `RenameGroupCommand`), which record the new section as a section choice through `Param::choose_section`. The join never writes them. The pin is `Option<CardPin>` (`Shown` / `Removed`); `None` follows the role. Card section fold state is saved as `PresetInstance.folded_sections` and `unfolded_sections` (a title in neither takes its default, so an unfold of the D11 default-folded Lighting holds), written through `MutateProject` like `EffectCollapseToggle` (not undoable, because it is view state). Rejected: pinning through `card_visible`, a lookup output that is no longer saved. Rejected: pinning through `user_added`, because un-exposing a user binding deletes it (`expose.rs` `unexpose_user_binding_freezes_effective_value_into_def_slot`). Rejected: pinning through `SceneSetupExposeParam`, a no-op on an exposed param, which every scene param is.
 
@@ -396,8 +396,8 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
 
 Called at the same site (`cards.rs:540-542`), after modulation is attached. Per row:
 - Read `inst.params[id].spec.scene` and `choices.pin`.
-- A row is on the card if it is attached (D6), or `pin == Shown`, or (`role == Performance` and `pin != Removed`).
-- Drop rows whose `Gate::Fold` feature switch has base value off (D12).
+- A row is on the card if `pin == Shown` (Show on Card, or an attach (D6)), or (`role == Performance` and `pin != Removed`).
+- Drop unpinned rows whose `Gate::Fold` feature switch has base value off (D12).
 - Set `inactive_reason` for `Gate::Dim` and for a force with no physics targets.
 - Set `spec.name` from `card_label` (unless `choices.rename` is set).
 - Set `spec.section` to the band's section title (D4).
@@ -486,7 +486,7 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 | INV-S2 Only the join calls the lookup; scene surfaces read the manifest | negative gate: `rg -n 'param_lookup::describe|scene_param_facts' crates/ -g '!crates/manifold-core/src/effects/instance_serde.rs' -g '!crates/manifold-core/src/param_lookup.rs' -g '!crates/manifold-nodes-scene/src/node_graph/scene_*'` → 0 (P1 onward) |
 | INV-S3 One curation decider | negative gate: `rg -n 'card_visible_for|StandardTarget|scene_performance' crates/` → 0 (P4) |
 | INV-S4 Card and panel partition rows identically | `scene_card::tests::card_and_panel_agree_on_owners` (ui-snapshot feature, it reads the headless fixtures) over gltfscene, physicsscene, waterdambreak, waterdambreakmatter, oceanscene fixtures (P4) |
-| INV-S5 Attached rows always on the card | `scene_card::tests::attached_rows_stay_on_card` — driver, envelope, audio, Ableton, macro, automation, each on a Setup and a Hidden row (written P0, kept green through P4) |
+| INV-S5 Attached rows on the card, and kept there | `scene_card::tests::attached_rows_stay_on_card` — the pin, not the live attachment, decides, on a Setup and a Hidden row; `inspector::tests::modulating_roll_keeps_it_on_the_card` — arm, disable, delete, undo through dispatch |
 | INV-S6 The join never writes user choices | `param_lookup::tests::join_preserves_choices_and_user_bindings` plus `migrate_twice_is_noop` (P1) |
 | INV-S7 Row set follows base values | `scene_card::tests::look_rows_follow_base_not_effective` (P4) |
 | INV-S8 Same label on both surfaces | `scene_card::tests::card_and_panel_labels_match` — every row on both surfaces has equal `spec.name` except `CardLabel::ItemName`/`GroupName` rows, whose text equals the item or group title shown in the panel (P4) |

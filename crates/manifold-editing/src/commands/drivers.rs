@@ -1,6 +1,7 @@
 use crate::command::Command;
 use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
+use crate::commands::graph::KeepOnCard;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
@@ -28,11 +29,12 @@ where
 pub struct AddDriverCommand {
     target: DriverTarget,
     driver: ParameterDriver,
+    keep: KeepOnCard,
 }
 
 impl AddDriverCommand {
     pub fn new(target: DriverTarget, driver: ParameterDriver) -> Self {
-        Self { target, driver }
+        Self { target, driver, keep: KeepOnCard::default() }
     }
 }
 
@@ -43,6 +45,7 @@ impl Command for AddDriverCommand {
         with_drivers_mut(project, &self.target, |drivers| {
             drivers.push(driver);
         });
+        self.keep.attach_driver(project, &self.target, &self.driver.param_id);
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -52,6 +55,7 @@ impl Command for AddDriverCommand {
                 drivers.remove(pos);
             }
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -66,6 +70,7 @@ pub struct ToggleDriverEnabledCommand {
     driver_index: usize,
     old_enabled: bool,
     new_enabled: bool,
+    keep: KeepOnCard,
 }
 
 impl ToggleDriverEnabledCommand {
@@ -80,6 +85,7 @@ impl ToggleDriverEnabledCommand {
             driver_index,
             old_enabled,
             new_enabled,
+            keep: KeepOnCard::default(),
         }
     }
 }
@@ -89,11 +95,16 @@ impl Command for ToggleDriverEnabledCommand {
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_enabled;
-        with_drivers_mut(project, &self.target, |drivers| {
-            if let Some(d) = drivers.get_mut(idx) {
+        let param_id = with_drivers_mut(project, &self.target, |drivers| {
+            drivers.get_mut(idx).map(|d| {
                 d.enabled = val;
-            }
-        });
+                d.param_id.clone()
+            })
+        })
+        .flatten();
+        if let Some(param_id) = param_id.filter(|_| val) {
+            self.keep.attach_driver(project, &self.target, &param_id);
+        }
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -104,6 +115,7 @@ impl Command for ToggleDriverEnabledCommand {
                 d.enabled = val;
             }
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {

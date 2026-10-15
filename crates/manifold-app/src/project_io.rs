@@ -564,7 +564,42 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
             _ => true,
         });
     }
+    pin_modulated_rows(project);
     notices
+}
+
+/// A project saved before attaches pinned their rows (SCENE_SURFACES D6
+/// (attached rows)) pins every modulated control the card would leave off,
+/// so switching its modulator off keeps it there. Only unpinned rows: a
+/// Remove from Card stands.
+fn pin_modulated_rows(project: &mut Project) {
+    let macro_targets: Vec<(manifold_core::LayerId, String)> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .flat_map(|slot| &slot.mappings)
+        .filter_map(|mapping| match &mapping.target {
+            manifold_core::macro_bank::MacroMappingTarget::GenParam { layer_id, param_id } => {
+                Some((layer_id.clone(), param_id.to_string()))
+            }
+            _ => None,
+        })
+        .collect();
+    for layer in &mut project.timeline.layers {
+        let layer_id = layer.layer_id.clone();
+        let Some(host) = layer.gen_params_mut() else { continue };
+        let modulated: Vec<String> = host
+            .params
+            .iter()
+            .filter(|param| param.choices.pin.is_none())
+            .map(|param| param.spec.id.clone())
+            .filter(|id| host.modulates(id) || macro_targets.iter().any(|(layer, param)| *layer == layer_id && param == id))
+            .collect();
+        for id in modulated {
+            host.keep_on_card(&id);
+        }
+    }
 }
 
 // ── ProjectIOService ────────────────────────────────────────────────
@@ -1403,6 +1438,54 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
     use manifold_core::units::Bpm;
+
+    /// An older project's modulated Setup rows get the pin an attach writes
+    /// now; a Remove from Card stands, and a second load changes nothing.
+    #[test]
+    fn load_pins_modulated_rows_once() {
+        use manifold_core::scene_surface::{CardPin, SurfaceRole};
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator(
+            "PhysicsSolids".into(),
+            PresetTypeId::from_string("PhysicsSolids".to_string()),
+            0,
+        ));
+        project.reconcile_param_manifests();
+        let host = project.timeline.layers[0].gen_params_mut().unwrap();
+        let setup: Vec<String> = host
+            .params
+            .iter()
+            .filter(|param| param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Setup))
+            .map(|param| param.spec.id.clone())
+            .take(3)
+            .collect();
+        let driver = |id: &str| manifold_core::effects::ParameterDriver {
+            param_id: std::borrow::Cow::Owned(id.to_string()),
+            beat_division: manifold_core::types::BeatDivision::Quarter,
+            waveform: manifold_core::types::DriverWaveform::Sine,
+            enabled: false,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            free_period_beats: None,
+            frame_aligned: false,
+            legacy_param_index: None,
+            is_paused_by_user: false,
+        };
+        host.drivers = Some(vec![driver(&setup[0]), driver(&setup[1])]);
+        host.params.get_mut(&setup[1]).unwrap().choices.pin = Some(CardPin::Removed);
+        let pins = |project: &Project| -> Vec<Option<CardPin>> {
+            let host = project.timeline.layers[0].gen_params().unwrap();
+            setup.iter().map(|id| host.params.get(id).unwrap().choices.pin).collect()
+        };
+        migrate_project_scene_graphs(&mut project);
+        let expected = vec![Some(CardPin::Shown), Some(CardPin::Removed), None];
+        assert_eq!(pins(&project), expected);
+        migrate_project_scene_graphs(&mut project);
+        assert_eq!(pins(&project), expected);
+    }
 
     #[test]
     fn audio_extensions_recognized_and_others_rejected() {
