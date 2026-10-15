@@ -51,7 +51,7 @@ impl SyncTarget for FakeSyncTarget {
     fn current_state(&self) -> PlaybackState {
         self.state
     }
-    fn current_time(&self) -> Seconds {
+    fn position_time(&self) -> Seconds {
         self.time
     }
     fn is_playing(&self) -> bool {
@@ -66,35 +66,24 @@ impl SyncTarget for FakeSyncTarget {
 }
 
 /// Minimal scripted `SyncArbiterTarget`: records what the arbiter forwards
-/// (play/pause/seek/nudge) so tests can assert on the controller's output
+/// (play/pause/seek) so tests can assert on the controller's output
 /// without a real `PlaybackEngine`.
 #[derive(Default)]
 struct FakeArbTarget {
-    external_time_sync: bool,
     played: bool,
     paused: bool,
     seeked_to: Option<Seconds>,
-    nudged_to: Option<Seconds>,
 }
 
 impl SyncArbiterTarget for FakeArbTarget {
     fn current_project(&self) -> Option<&Project> {
         None
     }
-    fn external_time_sync(&self) -> bool {
-        self.external_time_sync
-    }
-    fn set_external_time_sync(&mut self, value: bool) {
-        self.external_time_sync = value;
-    }
     fn play(&mut self) {
         self.played = true;
     }
     fn pause(&mut self, _clear_recording: bool) {
         self.paused = true;
-    }
-    fn nudge_time(&mut self, time: Seconds) {
-        self.nudged_to = Some(time);
     }
     fn seek(&mut self, time: Seconds) {
         self.seeked_to = Some(time);

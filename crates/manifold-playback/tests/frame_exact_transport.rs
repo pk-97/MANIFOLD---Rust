@@ -23,7 +23,7 @@ use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::{BeatDivision, DriverWaveform, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, ClipId, LayerId, PresetTypeId, SceneId, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
-use manifold_playback::sync::SyncArbiterTarget;
+use manifold_playback::external_follow::{ExternalSample, FollowProfile};
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::renderer::StubRenderer;
 
@@ -736,21 +736,6 @@ fn export_clip_inside_first_frame() {
     assert_eq!(engine.frame_rate(), 60.0, "the end of export returns to the project rate");
 }
 
-/// D9: export advances under external sync; live play under it still waits
-/// for the source (STOPGAP(frame-exact P3)).
-#[test]
-fn export_under_external_sync_advances() {
-    let mut engine = engine_with(constant_tempo(120.0, 60.0, &[]));
-    engine.set_external_time_sync(true);
-    let mut indices = Vec::new();
-    export(&mut engine, 30.0, Seconds(1.0), 5, |engine, _| indices.push(engine.transport_frame()));
-    assert_eq!(indices, vec![30, 31, 32, 33, 34]);
-    engine.play();
-    let parked = engine.transport_frame();
-    tick(&mut engine, 1);
-    assert_eq!(engine.transport_frame(), parked, "live ticks under external sync wait for the source");
-}
-
 /// An export returns the transport to the frame it left, at every tempo,
 /// playing or paused (D14: the restore point is the frame's exact beat, and
 /// a seek snaps wider than the sample offset).
@@ -774,119 +759,34 @@ fn export_restores_the_frame_it_left() {
     }
 }
 
-// ─── STOPGAP(frame-exact P3): external follow without flapping ───
-
-/// How an external source reaches the engine in the stopgap.
-#[derive(Clone, Copy, Debug)]
-enum Source {
-    /// Link: the content thread copies its beat before every tick.
-    LinkBeat,
-    /// AbletonOSC: a song-time message nudges every third tick.
-    Nudge,
-}
-
-/// Where the content thread reads Link on a tick that wakes late.
-#[derive(Clone, Copy, Debug)]
-enum Read {
-    /// At the frame's deadline, whenever the tick wakes (D15).
-    AtDeadline,
-    /// When the tick wakes: lateness becomes source position.
-    AtWake,
-}
-
-/// Held and skipped frames over one simulated minute at 120 BPM, 60 fps.
-/// The source is read as each tick begins: `phase` frames off the grid,
-/// plus uniform jitter of ±`jitter` frames, plus `step` frames from tick
-/// `step_at` on. Every 97th tick misses a deadline and every 1,013th misses
-/// two; the source has moved on by the same frames. Every 5th other tick
-/// wakes `wake.0` frames late, under a frame, which the source shows only if
-/// read at the wake. A hold or a skip is a tick whose index moved less or
-/// more than the frames it counted.
-fn follow_minute(source: Source, phase: f64, jitter: f64, step: f64, step_at: usize, seed: u64, wake: (f64, Read)) -> (usize, usize) {
-    let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
-    let step_s = engine.transport_clock().step().0;
-    let mut rng = Rng(seed);
+/// D9, D22: an export under an external authority renders map beats on the
+/// export grid and advances every frame; the follower comes back after it,
+/// and live ticks advance the grid by their frames.
+#[test]
+fn export_under_external_sync_advances() {
+    let mut engine = engine_with(constant_tempo(120.0, 60.0, &[]));
+    engine.set_follow_authority(Some(FollowProfile::FAST));
+    let mut frames = Vec::new();
+    export(&mut engine, 30.0, Seconds(1.0), 5, |engine, _| {
+        frames.push((engine.transport_frame(), engine.follows_external(), engine.frame_beat().0));
+    });
+    let expected: Vec<_> = (30..35).map(|i| (i, false, i as f64 / 30.0 * 2.0)).collect();
+    assert_eq!(frames.len(), expected.len());
+    for (got, want) in frames.iter().zip(&expected) {
+        assert_eq!((got.0, got.1), (want.0, want.1));
+        assert!((got.2 - want.2).abs() < 1e-9, "export beat {} is the map's {}", got.2, want.2);
+    }
+    assert!(engine.follows_external(), "the follower is back after the export");
+    assert!(engine.follower().awaiting_seed(), "export end is a seed point");
     engine.play();
-    let mut deadline = 0i64;
-    let (mut holds, mut skips) = (0, 0);
-    for n in 1..=3_600usize {
-        let frames: u32 = if n % 1_013 == 0 { 3 } else if n % 97 == 0 { 2 } else { 1 };
-        deadline += i64::from(frames);
-        let shift = if n >= step_at { step } else { 0.0 };
-        // One frame behind the frame this tick shows, as a source read when
-        // the tick starts is.
-        let late = match wake {
-            (lateness, Read::AtWake) if frames == 1 && n % 5 == 0 => lateness,
-            _ => 0.0,
-        };
-        let position = (deadline - 1) as f64 + phase + shift + late + (rng.unit() * 2.0 - 1.0) * jitter;
-        let time = Seconds(position * step_s);
-        // Before the source acts: a re-place made on the follow call itself
-        // counts as much as one made inside the tick.
-        let before = engine.transport_frame();
-        match source {
-            Source::LinkBeat => engine.follow_external_beat(Beats(time.0 * 2.0)),
-            Source::Nudge if n % 3 == 0 => SyncArbiterTarget::nudge_time(&mut engine, time),
-            Source::Nudge => {}
-        }
-        tick(&mut engine, frames);
-        let moved = engine.transport_frame() - before;
-        holds += usize::try_from(i64::from(frames) - moved).unwrap_or(0);
-        skips += usize::try_from(moved - i64::from(frames)).unwrap_or(0);
-    }
-    (holds, skips)
+    let parked = engine.transport_frame();
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), parked + 1, "live ticks advance under the follower");
 }
 
-/// Phases across a whole frame in 1/64 steps, the grid on the source's
-/// nearest frame, ±0.15 frame of jitter and late ticks: no held or skipped
-/// frame in a minute. Fails on re-placing every tick: at a half-frame phase
-/// the nearest frame flips with the jitter.
-#[test]
-fn external_follow_never_holds_or_skips_without_drift() {
-    for source in [Source::LinkBeat, Source::Nudge] {
-        for i in 0..64 {
-            let phase = f64::from(i) / 64.0;
-            let nearest = phase - phase.round();
-            let (holds, skips) = follow_minute(source, nearest, 0.15, 0.0, usize::MAX, SEED ^ i as u64, (0.0, Read::AtDeadline));
-            assert_eq!((holds, skips), (0, 0), "{source:?} phase {phase}: holds and skips in a minute");
-        }
-    }
-}
-
-/// A real one-frame step in the source is followed with exactly one skip or
-/// one hold, and nothing after it.
-#[test]
-fn external_follow_corrects_a_real_frame_of_drift() {
-    for source in [Source::LinkBeat, Source::Nudge] {
-        for (phase, step, expected) in [(0.0, 1.0, (0, 1)), (0.0, -1.0, (1, 0)), (0.3, 1.0, (0, 1)), (-0.3, -1.0, (1, 0))] {
-            let got = follow_minute(source, phase, 0.15, step, 1_800, SEED, (0.0, Read::AtDeadline));
-            assert_eq!(got, expected, "{source:?} phase {phase} step {step}: (holds, skips)");
-        }
-    }
-}
-
-/// Ticks that wake up to 0.9 frame late, at phases across a frame: Link read
-/// at the frame's deadline gives no held or skipped frame in a minute. Read
-/// at the wake, the lateness reads as a source ahead of the grid: a standing
-/// phase plus a late wake crosses ¾ frame, and each crossing is a skip and
-/// then a hold. AbletonOSC nudges are not covered (P3 timestamps them).
-#[test]
-fn link_read_at_the_deadline_ignores_late_wakes() {
-    for lateness in [0.3, 0.6, 0.8, 0.9] {
-        for i in 0..16 {
-            let phase = f64::from(i) / 16.0;
-            let nearest = phase - phase.round();
-            let got = follow_minute(Source::LinkBeat, nearest, 0.15, 0.0, usize::MAX, SEED ^ i as u64, (lateness, Read::AtDeadline));
-            assert_eq!(got, (0, 0), "phase {phase} lateness {lateness}: (holds, skips) in a minute");
-        }
-    }
-    let (holds, skips) = follow_minute(Source::LinkBeat, 0.0, 0.0, 0.0, usize::MAX, SEED, (0.8, Read::AtWake));
-    assert!(holds > 0 && skips > 0, "read at the wake, late ticks flap: {holds} holds, {skips} skips");
-}
-
-/// An external target read before a placement in the same tick (AbletonOSC
-/// drains a nudge and then a seek in one loop) never pulls the transport back
-/// to where the source was: every placement drops the deferred target.
+/// A sample handed over before a placement in the same tick (AbletonOSC
+/// drains a report and then a seek in one loop) never reaches the follower:
+/// every placement drops it. Undropped, its error would reach the pre-filter.
 #[test]
 fn placement_after_an_external_target_wins_the_tick() {
     type Place = fn(&mut PlaybackEngine);
@@ -895,22 +795,20 @@ fn placement_after_an_external_target_wins_the_tick() {
         ("locate", |e| e.locate(Seconds(10.0)), 601),
         ("stop then play", |e| { e.stop(); e.play(); }, 1),
     ];
-    for source in [Source::LinkBeat, Source::Nudge] {
-        for (name, place, expected) in places {
-            let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
-            engine.play();
-            for _ in 0..60 {
-                tick(&mut engine, 1);
-            }
-            let here = engine.transport_clock().time();
-            match source {
-                Source::LinkBeat => engine.follow_external_beat(Beats(here.0 * 2.0)),
-                Source::Nudge => SyncArbiterTarget::nudge_time(&mut engine, here),
-            }
-            place(&mut engine);
+    for (name, place, expected) in places {
+        let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
+        engine.set_follow_authority(Some(FollowProfile::FAST));
+        engine.play();
+        for _ in 0..60 {
             tick(&mut engine, 1);
-            assert_eq!(engine.transport_frame(), expected, "{source:?} then {name}");
         }
+        engine.set_external_sample(ExternalSample { beat: 1000.0, bpm: 120.0, fresh: true, exact: false });
+        place(&mut engine);
+        tick(&mut engine, 1);
+        assert_eq!(engine.transport_frame(), expected, "{name}");
+        let map_beat = engine.current_time().0 * 2.0;
+        assert!((engine.frame_beat().0 - map_beat).abs() < 1e-9, "{name}: beat {} is the map's {map_beat}", engine.frame_beat().0);
+        assert_eq!(engine.follower().filtered_error(), 0.0, "{name}: the sample reached the follower");
     }
 }
 

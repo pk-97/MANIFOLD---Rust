@@ -187,9 +187,9 @@ Each becomes a named harness test in P2. F1 is Peter's observed bug
   already relay Ableton's buttons). When CLK is NOT receiving, AbletonOSC
   claims authority (new tier in auto-detect: CLK > AbletonOSC-transport >
   Link > Internal) and the machine's inbound events drive transport AND
-  position — song-time nudge/seek at listener cadence with dead-reckoning
-  between reports, same thresholds as the MIDI controller (nudge < 2.0 s,
-  hard seek beyond). Peter's ruling on the fallback: **full takeover with a
+  position — each song-time report is projected to the frame's screen
+  instant and the follower trims to it; a position error over 2.0 s seeks
+  (FRAME_EXACT_TRANSPORT_DESIGN.md D7, read at the screen instant). Peter's ruling on the fallback: **full takeover with a
   visible degraded indicator** — on stage, coarse position beats frozen
   position. Fixes F5.
 - **D11 — Play-from-cursor is one compound gesture.** `PendingPlay` carries
@@ -265,7 +265,6 @@ pub enum EngineAction {
     Play,
     Pause,
     SeekBeats(f32),
-    NudgeBeats(f32),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -321,7 +320,7 @@ impl AbletonTransportSync {
 | T7 | Pending, `tick` | `now - last_send ≥ 2×RTT` and retries < 4 | Pending{retries+1} | re-emit unacked command(s) + matching query (D7) |
 | T8 | Pending, `tick` | retries = 4 exhausted | Settled | status→Warning; emit EngineAction reconciling engine to last observed Ableton state (D9) |
 | T9 | Settled | `on_osc_is_playing(p)` where p ≠ engine's playing | Settled | emit Play/Pause EngineAction (inbound relay, D10 — content thread applies only when authority permits) |
-| T10 | Settled | `on_osc_song_time(b)` while CLK absent and playing | Settled | dead-reckon; Δ < 2.0 s → NudgeBeats, else SeekBeats (D10) |
+| T10 | Settled | `on_osc_song_time(b)` while CLK absent and playing | Settled | dead-reckon; Δ < 2.0 s → the follower trims to the report (FRAME_EXACT_TRANSPORT_DESIGN.md D6, follow by tempo trim), else SeekBeats (D10) |
 | T11 | Settled | `on_osc_song_time(b)` while CLK receiving | Settled | update `observed` only — CLK owns position |
 | T12 | any | `on_osc_tempo` | same | update `observed.tempo_bpm` (used for dead-reckoning; engine tempo stays CLK/Link's job) |
 | T13 | Pending | new local gesture (play/stop/seek) before ack | Pending{new expectation, retries=0} | emit for the NEW gesture — latest user intent wins; the old expectation is abandoned |

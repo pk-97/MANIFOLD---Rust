@@ -94,9 +94,6 @@ impl TransportController {
         if authority == ClockAuthority::Osc {
             engine.set_recording(false);
         }
-
-        // STOPGAP(frame-exact P3): an authority change hands the clock back.
-        engine.set_external_time_sync(false);
     }
 
     fn disable_non_authority_sources(&mut self, authority: ClockAuthority) {

@@ -24,11 +24,45 @@ pub struct LinkSyncController {
 
     // Private state
     last_link_is_playing: bool,
+    /// Link started playing on this update (D15: the offset rounds to the
+    /// quantum).
+    started_playing: bool,
     last_num_peers: i32,
 
     // rusty_link handles
     link: Option<rusty_link::AblLink>,
     session_state: rusty_link::SessionState,
+    #[cfg(any(test, feature = "testkit"))]
+    simulated: Option<SimulatedLink>,
+}
+
+/// A Link session tests drive in place of the network: Link's beat runs at
+/// `tempo` from `beat` at `at`. `update` reads it exactly where it would read
+/// the network session, so the transport logic under test is the real one.
+#[cfg(any(test, feature = "testkit"))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimulatedLink {
+    pub at: Instant,
+    pub beat: f64,
+    pub tempo: f64,
+    pub peers: i32,
+    pub playing: bool,
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl SimulatedLink {
+    pub fn beat_at(&self, t: Instant) -> f64 {
+        let secs = match t.checked_duration_since(self.at) {
+            Some(d) => d.as_secs_f64(),
+            None => -(self.at - t).as_secs_f64(),
+        };
+        self.beat + secs * self.tempo / 60.0
+    }
+
+    /// The same session with a new tempo from `at`, keeping the beat continuous.
+    pub fn with_tempo(&self, at: Instant, tempo: f64) -> Self {
+        Self { at, beat: self.beat_at(at), tempo, ..*self }
+    }
 }
 
 impl LinkSyncController {
@@ -43,10 +77,20 @@ impl LinkSyncController {
             enable_start_stop_sync: true,
             quantum: 4.0,
             last_link_is_playing: false,
+            started_playing: false,
             last_num_peers: 0,
             link: None,
             session_state: rusty_link::SessionState::new(),
+            #[cfg(any(test, feature = "testkit"))]
+            simulated: None,
         }
+    }
+
+    /// Enable Link on a simulated session instead of the network.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn simulate(&mut self, session: SimulatedLink) {
+        self.is_link_enabled = true;
+        self.simulated = Some(session);
     }
 
     pub fn is_link_enabled(&self) -> bool {
@@ -54,6 +98,16 @@ impl LinkSyncController {
     }
     pub fn has_active_peers(&self) -> bool {
         self.is_link_enabled && self.num_peers > 0
+    }
+
+    /// Link's bar length in beats.
+    pub fn quantum(&self) -> f64 {
+        self.quantum
+    }
+
+    /// Link started playing on the last update and asked MANIFOLD to play.
+    pub fn started_playing(&self) -> bool {
+        self.started_playing
     }
 
     /// Enable Link with initial BPM.
@@ -103,6 +157,7 @@ impl LinkSyncController {
         authority: ClockAuthority,
         sample_at: Instant,
     ) {
+        self.started_playing = false;
         if !self.is_link_enabled {
             return;
         }
@@ -128,6 +183,14 @@ impl LinkSyncController {
             self.num_peers = new_num_peers;
             self.link_is_playing = new_is_playing;
         }
+        #[cfg(any(test, feature = "testkit"))]
+        if let Some(sim) = self.simulated {
+            self.current_beat = Beats(sim.beat_at(sample_at));
+            self.current_phase = self.current_beat.0.rem_euclid(self.quantum);
+            self.link_tempo = sim.tempo;
+            self.num_peers = sim.peers;
+            self.link_is_playing = sim.playing;
+        }
 
         // Sync transport from Link state
         self.sync_transport_from_link(arbiter, arb_target, authority);
@@ -152,6 +215,7 @@ impl LinkSyncController {
         let is_playing = self.link_is_playing;
 
         if is_playing && !was_playing {
+            self.started_playing = true;
             arbiter.play(ClockAuthority::Link, authority, arb_target);
             log::info!("[LinkSync] Link started playing — MANIFOLD play");
         } else if !is_playing && was_playing {

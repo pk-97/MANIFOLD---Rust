@@ -3,8 +3,8 @@
 //! to the appropriate subsystem on the content thread.
 
 use manifold_core::change::{ChangeSet, Part};
-use manifold_core::types::ClockAuthority;
-use manifold_core::{Beats, LayerId, NodeId, Seconds};
+use manifold_core::{LayerId, NodeId, Seconds};
+use manifold_playback::external_sync::OffsetTake;
 use manifold_playback::transport_controller::TransportController;
 use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::renderer::ClipRenderer;
@@ -866,6 +866,15 @@ impl ContentThread {
             // loop re-checks is_surface_ready() after handling.
             #[cfg(target_os = "macos")]
             ContentCommand::SurfaceReady => {}
+            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
+
+            // ── Sync calibration (D19) ─────────────────────────────
+            ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms } => {
+                self.calibration.set_extra_delay_ms(extra_delay_ms);
+                for (source, ms) in manifold_playback::sync_calibration::CalibratedSource::ALL.into_iter().zip(offsets_ms) {
+                    self.calibration.restore_offset(source, ms / 1000.0);
+                }
+            }
 
             // ── Transport ──────────────────────────────────────────
             ContentCommand::Play => {
@@ -883,28 +892,11 @@ impl ContentThread {
                     // pull the playhead back to the wrong beat.
                     self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 }
-                // Align transport to active external beat source BEFORE
-                // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
-                let authority = self
-                    .engine
-                    .project()
-                    .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
-                if authority == ClockAuthority::MidiClock
-                    && !self.sync_arbiter.manifold_owns_playback
-                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                    && clk.is_midi_clock_enabled()
-                {
-                    // STOPGAP(frame-exact P3): first frame at or after the
-                    // clock's beat; P3 locates to the nearest frame at the
-                    // beat projected to the deadline.
-                    let midi_beat = Beats::from_f32(clk.current_clock_beat());
-                    let time = self.engine.beat_to_timeline_time(midi_beat);
-                    crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::LocateToClock, time.0.max(0.0));
-                    self.engine.locate(Seconds(time.0.max(0.0)));
-                }
+                // Under MIDI clock the follower seeds on the first tick at the
+                // armed position (D20, D22): nothing is located here.
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Play, f64::NAN);
                 self.engine.play();
-                self.cache_link_beat_offset();
+                self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::Pause => {
                 if self.osc_sender.is_sender_enabled() || self.ableton_bridge.is_transport_enabled()
@@ -930,7 +922,7 @@ impl ContentThread {
                 self.end_tempo_recording_session();
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Stop, f64::NAN);
                 self.engine.stop();
-                self.link_beat_offset = f64::NAN;
+                self.link_offset.clear();
                 // BUG-104: release generator-side trigger-edge latches
                 // (sample_and_hold / clip_trigger_cycle / clip_trigger_index /
                 // frequency_ratio / cycle_table_row / trigger_gate /
@@ -953,7 +945,7 @@ impl ContentThread {
                     self.engine.is_playing(),
                     self.time_since_start.0,
                 );
-                self.cache_link_beat_offset();
+                self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::SeekToBeat(beat) => {
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::SeekToBeat, beat.0);
@@ -966,7 +958,7 @@ impl ContentThread {
                     self.engine.is_playing(),
                     self.time_since_start.0,
                 );
-                self.cache_link_beat_offset();
+                self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::SetRecording(rec) => {
                 self.engine.set_recording(rec);
@@ -1416,7 +1408,7 @@ impl ContentThread {
                 }
                 // Reset link beat offset and tempo recorder on project load.
                 // Port of C# PlaybackController.OnProjectLoading lines 550-551.
-                self.link_beat_offset = f64::NAN;
+                self.link_offset.clear();
                 self.tempo_recorder.reset();
                 self.engine.initialize(*project);
                 // Clear stale temporal effect state from the previous project
@@ -2091,6 +2083,7 @@ impl ContentThread {
 mod recording_save_tests {
     use super::*;
     use manifold_core::effects::PresetInstance;
+    use manifold_core::Beats;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::effect_graph_def::ParamSpecDef;
 

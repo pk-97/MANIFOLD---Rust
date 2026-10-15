@@ -293,6 +293,11 @@ pub struct ContentState {
     pub ableton_session: Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Whether the Ableton bridge is currently connected.
     pub ableton_connected: bool,
+
+    // ── Sync calibration (D19) ──────────────────────────────────
+    /// Learned source offsets against Link, s: MIDI clock, AbletonOSC,
+    /// timecode. The UI keeps them per rig in `UserPrefs`.
+    pub sync_offsets: [f64; 3],
     pub ableton_transport_enabled: bool,
     /// Closed-loop transport sync health (Locked / Confirming / degraded /
     /// warning) — drives the SYNC chip (ABLETON_TRANSPORT_SYNC_DESIGN D9/D10).
@@ -663,6 +668,7 @@ impl Default for ContentState {
             modifier_selection_update: None,
             object_modifier_selection_update: None,
             ableton_session: None,
+            sync_offsets: [0.0; 3],
             ableton_connected: false,
             ableton_transport_enabled: false,
             ableton_sync_status:

@@ -26,9 +26,9 @@ const ACK_EPSILON_BEATS: f32 = 1.0;
 const PLAY_SEEK_DELAY_SECS: f64 = 0.015;
 /// Retry cap before the machine degrades loudly (design D7/D9).
 const MAX_RETRIES: u8 = 4;
-/// Nudge-vs-hard-seek threshold in seconds, matching the MIDI clock
-/// controller's position sync (design D10).
-const NUDGE_THRESHOLD_SECS: f32 = 2.0;
+/// Above this position error a song-time report seeks; below it the
+/// follower trims to the report (design D10; FRAME_EXACT_TRANSPORT_DESIGN.md D6).
+const SEEK_THRESHOLD_SECS: f32 = 2.0;
 /// RTT estimator seed/clamp (design D8): pessimistic seed, clamped so a
 /// single wild sample can't stall retries or make them spin.
 const RTT_SEED_SECS: f64 = 0.3;
@@ -59,7 +59,6 @@ pub enum EngineAction {
     Play,
     Pause,
     SeekBeats(f32),
-    NudgeBeats(f32),
 }
 
 /// Sync health, surfaced to the UI (design D9/D10).
@@ -192,6 +191,9 @@ pub struct AbletonTransportSync {
     /// Engine transport as of the last `on_local_transport` call.
     local_playing: bool,
     local_beat: f32,
+    /// The last song-time report relays position within the seek threshold:
+    /// the follower trims to it.
+    steers_follower: bool,
 }
 
 impl AbletonTransportSync {
@@ -206,6 +208,7 @@ impl AbletonTransportSync {
             clk_receiving: false,
             local_playing: false,
             local_beat: 0.0,
+            steers_follower: false,
         }
     }
 
@@ -305,8 +308,15 @@ impl AbletonTransportSync {
         self.observed.song_time
     }
 
+    /// Whether the last song-time report steers the follower: Settled, CLK
+    /// silent, both sides playing, and within the seek threshold (T10).
+    pub fn report_steers_follower(&self) -> bool {
+        self.steers_follower
+    }
+
     pub fn on_osc_song_time(&mut self, beats: f32, now: f64) {
         self.observed.song_time = Some((beats, now));
+        self.steers_follower = false;
         match self.state {
             SyncState::Pending { .. } => self.try_ack(now),
             SyncState::Settled => {
@@ -319,8 +329,8 @@ impl AbletonTransportSync {
                     let delta_beats = (beats - self.local_beat).abs();
                     let bpm = self.observed.tempo_bpm.unwrap_or(FALLBACK_BPM);
                     let delta_secs = delta_beats * 60.0 / bpm;
-                    if delta_secs < NUDGE_THRESHOLD_SECS {
-                        self.actions.push(EngineAction::NudgeBeats(beats));
+                    if delta_secs < SEEK_THRESHOLD_SECS {
+                        self.steers_follower = true;
                     } else {
                         self.actions.push(EngineAction::SeekBeats(beats));
                     }
@@ -726,12 +736,14 @@ mod tests {
         m.on_osc_is_playing(true, 1.0);
         m.on_local_transport(true, 20.0, 1.1);
         drain_actions(&mut m);
-        // Small divergence → nudge.
+        // Small divergence: the follower trims to the report.
         m.on_osc_song_time(20.5, 1.2);
-        assert_eq!(drain_actions(&mut m), vec![EngineAction::NudgeBeats(20.5)]);
+        assert_eq!(drain_actions(&mut m), vec![]);
+        assert!(m.report_steers_follower());
         // Large divergence (> 2s at 120 BPM = > 4 beats) → hard seek.
         m.on_osc_song_time(40.0, 1.3);
         assert_eq!(drain_actions(&mut m), vec![EngineAction::SeekBeats(40.0)]);
+        assert!(!m.report_steers_follower());
         assert_eq!(m.status(), TransportSyncStatus::DegradedOscOnly);
     }
 
@@ -748,6 +760,7 @@ mod tests {
             vec![],
             "CLK owns position; OSC song time must not move the engine"
         );
+        assert!(!m.report_steers_follower(), "nor steer the follower");
     }
 
     #[test]
