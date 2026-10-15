@@ -166,6 +166,7 @@ impl ClipScheduler {
                     clip_id: entry.clip_id.clone(),
                     beat: entry.start_beat,
                     is_muted: entry.is_muted,
+                    is_live: entry.is_live_slot() || entry.is_session_slot(),
                 });
             }
             if entry.is_live_slot() && !is_current {
@@ -193,6 +194,7 @@ impl ClipScheduler {
                     sequence: 0,
                     clip_id: entry.clip_id.clone(), beat: entry.start_beat,
                     is_muted: entry.is_muted,
+                    is_live: entry.is_live_slot() || entry.is_session_slot(),
                 });
             }
             self.control_active.insert(entry.clip_id.clone(), entry.clone());

@@ -1287,6 +1287,7 @@ impl PlaybackEngine {
         let _ = self.trigger_delivery.reset();
         self.clip_controls.clear_starts();
         self.clip_controls.clear_binding_cutoffs();
+        self.clip_controls.reset_live();
         self.clip_control_cursor = None;
         self.clip_control_sample_start = None;
         self.completed_control_scratch.clear();
@@ -2104,6 +2105,10 @@ impl PlaybackEngine {
                 if layer.is_trigger() && layer.is_muted {
                     self.clip_controls.suppress_source(&layer.layer_id);
                 }
+                self.clip_controls.set_arrangement_until(
+                    &layer.layer_id,
+                    self.session_runtime.arrangement_stopped_at(&layer.layer_id),
+                );
             }
             for entry in sync_result.should_be_active.iter()
                 .chain(&self.timeline_control_scratch)

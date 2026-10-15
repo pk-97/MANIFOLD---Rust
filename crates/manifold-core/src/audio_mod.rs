@@ -542,6 +542,53 @@ pub fn random_step_value(
     }
 }
 
+/// What a Step/Random fold depends on besides its advance count. A change to
+/// any field refolds from `base`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StepFoldKey {
+    pub action: TriggerAction,
+    pub base: f32,
+    pub lo: f32,
+    pub hi: f32,
+    pub whole_numbers: bool,
+    /// Stable per-control seed mixed into `Random`'s ordinal; zero for `Step`.
+    pub seed: u32,
+}
+
+/// Runtime count behind a Step/Random control. The stepped value is `base`
+/// advanced `arrangement + live` times: `arrangement` is a pure function of
+/// the timeline at the evaluated beat, and `live` counts input that is not on
+/// the arrangement (live and session launches, audio fires) since the last
+/// seek or stop. Not serialized.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StepCounts {
+    /// Arrangement starts on the source at or before the evaluated beat.
+    pub arrangement: u32,
+    /// Live advances accepted since `live_epoch`.
+    pub live: u32,
+    /// The clip-control live epoch `live` belongs to; a newer one clears it.
+    pub live_epoch: u64,
+    /// Advances folded into `value` and `dir` under `key`.
+    pub folded: u32,
+    pub key: Option<StepFoldKey>,
+    pub value: f32,
+    pub dir: f32,
+}
+
+impl StepCounts {
+    /// Drop live advances from an older transport history.
+    pub fn begin_live_epoch(&mut self, epoch: u64) {
+        if self.live_epoch != epoch {
+            self.live_epoch = epoch;
+            self.live = 0;
+        }
+    }
+
+    pub fn total(&self) -> u32 {
+        self.arrangement.saturating_add(self.live)
+    }
+}
+
 /// An audio modulation bound to one parameter. Mirrors `ParameterDriver`:
 /// addressed by `param_id`, with runtime-only state (`smoothed`) that is not
 /// serialized.
@@ -619,6 +666,9 @@ pub struct ParameterAudioMod {
     /// follows `amount`'s authored sign). Runtime state, not serialized.
     #[serde(skip, default = "one")]
     pub step_dir: f32,
+    /// The counts `step_value` is folded from. Runtime state, not serialized.
+    #[serde(skip)]
+    pub step_counts: StepCounts,
 }
 
 fn default_true() -> bool {
@@ -651,6 +701,7 @@ impl ParameterAudioMod {
             action: TriggerAction::default(),
             step_value: None,
             step_dir: 1.0,
+            step_counts: StepCounts::default(),
         }
     }
 }

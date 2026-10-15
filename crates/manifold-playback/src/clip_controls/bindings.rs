@@ -69,7 +69,8 @@ impl ClipControlFrame {
                 layer.layer_type,
                 layer.parent_layer_id.clone(),
             );
-            self.by_source.get_mut(&layer.layer_id).unwrap().pattern_digest = Some(
+            self.by_source.get_mut(&layer.layer_id).unwrap().observe_pattern(
+                layer,
                 manifold_core::project::clip_trigger_pattern_digest(layer, &project.session),
             );
         }
@@ -194,6 +195,7 @@ mod tests {
             clip_id: ClipId::new(id),
             beat: Beats(beat),
             is_muted: false,
+            is_live: false,
             sequence: 0,
         };
         frame.record_start(source.clone(), event("old", 2.0));

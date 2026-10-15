@@ -166,14 +166,16 @@ fn reparenting_rechecks_group_source_scope_without_changing_saved_assignment() {
 
     // Mutate only hierarchy here: this isolates playback scope validation
     // from the separately tested editing command and undo machinery.
+    // Out of scope, the source counts nothing and the base shows; back in
+    // scope, the count at the new beat (starts at 0, 1 and 2) returns.
     layers_write(&mut engine, |p| p.timeline.layers[owner_index].parent_layer_id = None);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 30);
-    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
+    assert_eq!(envelope_step_value_of(&engine, owner_index), None);
     layers_write(&mut engine, |p| p.timeline.layers[owner_index].parent_layer_id = Some(group_id));
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 30);
-    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(2.0));
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(3.0));
     assert_eq!(engine.project().unwrap().timeline.layers[owner_index].gen_params().unwrap()
         .params.get("level").unwrap().clip_trigger_source, selection);
 }
@@ -297,14 +299,15 @@ fn deleting_a_source_cancels_its_unconsumed_start() {
 }
 
 #[test]
-fn seeking_cancels_starts_queued_before_the_new_playhead() {
+fn seeking_counts_a_queued_start_once_from_the_timeline() {
     let mut engine = create_engine();
     engine.initialize(two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp)));
     engine.sync_clips_to_time();
-    // Seek to the gap before modulation could consume the first clip start.
+    // Seek to the gap before modulation could consume the first clip start:
+    // beat 6 counts clip A's start at beat 0 exactly once.
     engine.seek_to(Seconds(3.0));
     tick_n(&mut engine, 1, 1);
-    assert_eq!(envelope_step_value_of(&engine, 0), None);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
 }
 
 #[test]
@@ -487,12 +490,12 @@ fn short_pattern_is_independent_of_frame_partition_and_repeated_sync() {
 }
 
 #[test]
-fn seek_skips_short_pattern_instead_of_replaying_the_interval() {
+fn seek_into_short_pattern_shows_the_count_playing_gives() {
     let mut engine = short_pattern_engine(60.0);
     engine.sync_clips_to_time();
     engine.seek_to(Seconds(0.25));
     tick_n(&mut engine, 1, 0);
-    assert_eq!(envelope_step_value_of(&engine, 0), None);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(3.0));
 }
 
 #[test]
@@ -694,4 +697,94 @@ fn layers_write(engine: &mut PlaybackEngine, f: impl FnOnce(&mut manifold_core::
     let layers = ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects, Part::Automation, Part::Values, Part::Shapes]);
     let edit = engine.project_edit().expect("project");
     manifold_editing::service::EditingService::new().mutate(layers, edit, f);
+}
+
+/// BUG-0xwux (stepped envelope survives play): Peter's Surface Peel phase. A
+/// 0..1 param stepped 0.125 with wrap by four clip starts before beat 252.5.
+fn surface_peel_project(env: ParamEnvelope) -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(134.0);
+    let mut layer = Layer::new_generator("Murmur".into(), PresetTypeId::new("TestGen"), 0);
+    layer.gen_params_mut().unwrap().params.push(Param::bundled(ParamSpecDef {
+        id: "level".into(),
+        name: "Level".into(),
+        min: 0.0,
+        max: 1.0,
+        default_value: 0.0,
+        ..ParamSpecDef::default()
+    }));
+    layer.gen_params_mut().unwrap().envelopes = Some(vec![env]);
+    layer.clips = [250.5, 251.0, 251.5, 252.0].into_iter()
+        .map(|beat| TimelineClip::new_generator(Beats(beat), Beats(0.5)))
+        .collect();
+    project.timeline.layers = vec![layer];
+    project
+}
+
+fn engine_for(project: &Project) -> PlaybackEngine {
+    let mut engine = create_engine();
+    engine.initialize(project.clone());
+    engine
+}
+
+fn seek_to_beat(engine: &mut PlaybackEngine, beat: f64) {
+    let time = engine.beat_to_timeline_time(Beats(beat));
+    engine.seek_to(time);
+}
+
+/// Play from `from` until the playhead passes 254 and return the stepped
+/// value on the first frame at or after beat 252.5.
+fn play_through(engine: &mut PlaybackEngine, from: f64) -> Option<f32> {
+    seek_to_beat(engine, from);
+    engine.play();
+    let mut at_252_5 = None;
+    let mut frame = 0u64;
+    while engine.current_beat() < Beats(254.0) {
+        frame += 1;
+        let _ = engine.tick(TickContext {
+            frames: 1,
+            realtime_now: Seconds(frame as f64 / 60.0),
+            frame_count: frame,
+        });
+        if at_252_5.is_none() && engine.current_beat() >= Beats(252.5) {
+            at_252_5 = Some(envelope_step_value_of(engine, 0));
+        }
+    }
+    at_252_5.expect("the playhead passed 252.5")
+}
+
+fn parked_at(engine: &mut PlaybackEngine, beat: f64) -> Option<f32> {
+    seek_to_beat(engine, beat);
+    tick_n(engine, 1, 0);
+    envelope_step_value_of(engine, 0)
+}
+
+#[test]
+fn stepped_value_at_a_beat_is_the_same_however_the_playhead_got_there() {
+    let project = surface_peel_project(clip_edge_step_envelope(0.125, WrapMode::Wrap));
+    let mut engine = engine_for(&project);
+    for pass in 0..4 {
+        assert_eq!(play_through(&mut engine, 248.0), Some(0.5), "space-bar play {pass}");
+        engine.pause();
+    }
+    for pass in 0..4 {
+        assert_eq!(play_through(&mut engine, 248.0), Some(0.5), "play after stop {pass}");
+        engine.stop();
+    }
+    assert_eq!(parked_at(&mut engine, 252.5), Some(0.5), "seek without playing");
+    assert_eq!(parked_at(&mut engine, 251.25), Some(0.25), "two starts so far");
+    assert_eq!(parked_at(&mut engine, 249.0), None, "before the first start the base shows");
+    assert_eq!(play_through(&mut engine_for(&project), 0.0), Some(0.5), "from the top");
+    assert_eq!(parked_at(&mut engine_for(&project), 252.5), Some(0.5), "fresh seek");
+
+    // Random draws from the start count, so a beat always gives one value.
+    let project = surface_peel_project(clip_edge_random_envelope());
+    let mut engine = engine_for(&project);
+    let first = play_through(&mut engine, 248.0);
+    assert!(first.is_some());
+    engine.pause();
+    assert_eq!(play_through(&mut engine, 248.0), first);
+    engine.stop();
+    assert_eq!(parked_at(&mut engine, 252.5), first);
+    assert_eq!(play_through(&mut engine_for(&project), 0.0), first);
 }

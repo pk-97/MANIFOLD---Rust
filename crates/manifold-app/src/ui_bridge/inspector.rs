@@ -1605,6 +1605,7 @@ mod scene_card_convergence_tests {
                     fire_count: 0,
                     step_value: None,
                     step_dir: 1.0,
+                    step_counts: Default::default(),
                 }]);
             });
             pid

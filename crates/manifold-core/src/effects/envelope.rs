@@ -62,16 +62,18 @@ pub struct ParamEnvelope {
     pub action: TriggerAction,
     /// Cached decay output (0-1) for UI display. Not serialized.
     pub current_level: f32,
-    /// PARAM_STEP_ACTIONS D4: monotonic fire counter for `Random` — the value
-    /// sequence is deterministic by this ordinal so export reproduces identically.
-    /// Not serialized; reset on load/transport stop.
+    /// Advances folded into `step_value`: arrangement starts at or before
+    /// the evaluated beat plus live starts since the last seek or stop.
+    /// Not serialized.
     pub fire_count: u32,
     /// PARAM_STEP_ACTIONS D4: the stepped/randomized value that *replaces* the
-    /// param's base for this tick. `None` until the first fire; dropped on
-    /// transport stop so the param falls back to its committed base. Not serialized.
+    /// param's base for this tick, a pure function of the beat plus live
+    /// input. `None` while no start counts. Not serialized.
     pub step_value: Option<f32>,
     /// `WrapMode::Bounce`'s running ping-pong sign (±1, D2). Not serialized.
     pub step_dir: f32,
+    /// The counts `step_value` is folded from. Not serialized.
+    pub step_counts: crate::audio_mod::StepCounts,
 }
 
 impl Serialize for ParamEnvelope {
@@ -128,6 +130,7 @@ impl ParamEnvelope {
             fire_count: 0,
             step_value: None,
             step_dir: 1.0,
+            step_counts: Default::default(),
         }
     }
 
@@ -194,6 +197,7 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             fire_count: 0,
             step_value: None,
             step_dir: 1.0,
+            step_counts: Default::default(),
         })
     }
 }
