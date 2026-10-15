@@ -778,7 +778,7 @@ impl PlaybackEngine {
             self.transport_epoch = self.transport_epoch.wrapping_add(1);
         }
         if self.current_state == PlaybackState::Playing && state != PlaybackState::Playing {
-            self.queue_finished_automation();
+            self.end_automation_session();
         }
         self.current_state = state;
     }
@@ -818,7 +818,7 @@ impl PlaybackEngine {
     pub fn stop(&mut self) {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.reset_trigger_delivery();
-        self.queue_finished_automation();
+        self.end_automation_session();
         self.current_state = PlaybackState::Stopped;
         self.stop_all_clips();
         // Clear live clip manager
@@ -855,7 +855,7 @@ impl PlaybackEngine {
         if self.current_state != PlaybackState::Playing {
             return;
         }
-        self.queue_finished_automation();
+        self.end_automation_session();
         self.current_state = PlaybackState::Paused;
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         // Pause only seekable clips (generators render procedurally each frame)
@@ -2519,12 +2519,21 @@ impl PlaybackEngine {
         self.finished_automation = commands;
     }
 
+    /// Close every take at the end of an armed playing session (transport
+    /// leaves Playing, or disarm) and drop every pointer hold. A hold whose
+    /// release never arrives would otherwise keep writing its frozen value
+    /// over the lane in every later armed pass.
+    fn end_automation_session(&mut self) {
+        self.queue_finished_automation();
+        self.automation_holds.clear();
+    }
+
     /// Toggle the global Automation Arm (section 5). Runtime-only, not a project
     /// mutation — no undo entry (`ContentCommand::AutomationSetArmed` is
     /// handled directly on the content thread, same shape as
     /// `automation_back_to_arrangement`).
     pub fn set_automation_armed(&mut self, armed: bool) {
-        if self.automation_armed && !armed { self.queue_finished_automation(); }
+        if self.automation_armed && !armed { self.end_automation_session(); }
         self.automation_armed = armed;
     }
 
@@ -4569,6 +4578,43 @@ mod tests {
             engine.initialize(Project::default());
             assert!(!engine.automation_armed());
             assert!(engine.automation_latches.is_empty() && engine.automation_gestures.is_empty());
+        }
+    }
+
+    /// A hold whose release never arrived ends with the armed session: after
+    /// a stop, pause or disarm, the next armed pass leaves the lane alone.
+    #[test]
+    fn lost_release_hold_clears_at_stop_pause_and_disarm() {
+        for boundary in 0..3 {
+            let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
+            let id = fx.id.clone();
+            fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
+            ] }]);
+            let mut project = Project::default();
+            project.settings.master_effects.push(fx);
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project);
+            engine.set_automation_armed(true);
+            engine.set_state(PlaybackState::Playing);
+            engine.set_automation_hold(GraphTarget::Effect(id.clone()), "amount".into(), true);
+            match boundary {
+                0 => engine.stop(),
+                1 => engine.pause(),
+                _ => engine.set_automation_armed(false),
+            }
+            assert!(engine.automation_holds.is_empty(), "boundary {boundary}");
+            let _ = engine.take_finished_automation();
+
+            engine.set_automation_armed(true);
+            engine.set_state(PlaybackState::Playing);
+            engine.locate(Seconds(1.0));
+            let tick = engine.tick(TickContext::default());
+            assert!(tick.pending_gesture_commits.is_empty());
+            assert!(engine.automation_gestures.is_empty(), "boundary {boundary}: no take without a hand");
+            let amount = engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount");
+            assert!((amount - 0.35).abs() < 1e-6, "boundary {boundary}: the lane plays, got {amount}");
         }
     }
 

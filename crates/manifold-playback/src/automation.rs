@@ -53,8 +53,10 @@
 //! keeps writing its held value while still and ends on release; inputs with
 //! no release (MIDI CC, OSC) end after [`GESTURE_INACTIVITY_BEATS`]. A loop
 //! wrap or backward seek starts a new pass that overwrites only the beats it
-//! covers. Each pass is thinned ([`thin_recorded_points`]) before it joins
-//! the curve.
+//! covers. Each pass is thinned as its points arrive (`PassThinner`, constant
+//! work per point) and joins the curve through buffers the take owns, so a
+//! loop wrap or release costs one linear copy and no allocation once the
+//! buffers have grown to the take's size.
 
 use ahash::AHashMap;
 
@@ -132,48 +134,78 @@ pub struct GestureState {
     /// `EditParamMappingCommand::new_with_reverse` precedent: captured at
     /// gesture START, before any recording mutated anything, not
     /// self-snapshotted after the fact).
-    pre_gesture_points: Vec<AutomationPoint>,
+    /// Held as a lane so the punch-in can sample it in place.
+    pre_gesture: AutomationLane,
     /// Whether a lane already existed for this param before the gesture
     /// started. `false` means this gesture is creating a brand new lane —
     /// undo must then remove the whole lane, mirroring
     /// `AddAutomationPointCommand`'s `created_lane` behavior.
     pre_gesture_existed: bool,
-    /// The pre-gesture curve with this gesture's finished passes punched in;
-    /// `None` until a loop wrap or backward seek finishes the first pass.
-    layered: Option<Vec<AutomationPoint>>,
-    /// The current pass's points, sorted ascending by beat.
+    /// The pre-gesture curve with this gesture's finished passes punched in.
+    /// Meaningful only once `layered_live` is set, by the first loop wrap or
+    /// backward seek.
+    layered: AutomationLane,
+    layered_live: bool,
+    /// The buffer the next punch-in writes before it swaps with `layered`.
+    scratch: Vec<AutomationPoint>,
+    /// The current pass's points, already thinned, sorted ascending by beat.
     recorded: Vec<AutomationPoint>,
+    thinner: PassThinner,
     /// The pointer holding this param let go: the gesture ends on the next
     /// tick.
     released: bool,
-    /// The param's slider range, the scale of [`THINNING_TOLERANCE`].
-    range: f32,
     /// Whole-number param: thinning keeps only value changes.
     stepped: bool,
 }
 
+/// Points a pass holds before its buffers first grow. A pass that outgrows
+/// them doubles them once and keeps the room for every later pass.
+const PASS_POINT_CAPACITY: usize = 256;
+
 impl GestureState {
-    /// Append one frame's point to the current pass. A point behind the pass
-    /// (a loop wrap or backward seek) finishes the pass first, so the new
-    /// pass overwrites only the beats it covers. A flat run slides its end
-    /// point forward instead of growing, so a held-still control records
-    /// without allocating.
+    /// Open a take. Every buffer the take reuses is sized here, at the touch
+    /// that starts it, not on a later loop downbeat.
+    fn new(
+        target: GraphTarget,
+        param_id: ParamId,
+        pre_points: Option<Vec<AutomationPoint>>,
+        range: f32,
+        stepped: bool,
+        current_beat: Beats,
+    ) -> Self {
+        let pre_gesture_existed = pre_points.is_some();
+        let pre_points = pre_points.unwrap_or_default();
+        let curve_capacity = pre_points.len() + PASS_POINT_CAPACITY + 2;
+        let lane = |points| AutomationLane { param_id: param_id.clone(), enabled: true, points };
+        GestureState {
+            target,
+            last_touch_beat: current_beat,
+            pre_gesture: lane(pre_points),
+            pre_gesture_existed,
+            layered: lane(Vec::with_capacity(curve_capacity)),
+            layered_live: false,
+            scratch: Vec::with_capacity(curve_capacity),
+            recorded: Vec::with_capacity(PASS_POINT_CAPACITY),
+            thinner: PassThinner::new(range, stepped),
+            released: false,
+            stepped,
+        }
+    }
+
+    /// Append one frame's point to the current pass, thinned as it lands. A
+    /// point behind the pass (a loop wrap or backward seek) finishes the pass
+    /// first, so the new pass overwrites only the beats it covers. A held-still
+    /// control slides one end point forward and never grows the pass.
     fn record(&mut self, point: AutomationPoint, sampled_beat: Beats) {
-        if let Some(last) = self.recorded.last() {
-            if point.beat < last.beat {
-                self.finish_pass();
-            } else if point.beat == last.beat {
-                self.recorded.pop();
-            }
+        if self.recorded.last().is_some_and(|last| point.beat < last.beat) {
+            self.finish_pass();
         }
-        match self.recorded.as_mut_slice() {
-            [.., a, b] if a.value == point.value && b.value == point.value => b.beat = point.beat,
-            _ => self.recorded.push(point),
-        }
+        self.thinner.push(&mut self.recorded, point);
         self.last_touch_beat = sampled_beat;
     }
 
-    /// Thin the current pass and punch it into `layered`.
+    /// Punch the current pass into `layered`: one linear copy into `scratch`,
+    /// then the two buffers swap.
     fn finish_pass(&mut self) {
         let Some(&last) = self.recorded.last() else {
             return;
@@ -181,19 +213,22 @@ impl GestureState {
         // Points sit on their frames' exact beats; the old curve resumes only
         // after the last touched frame's sampled beat, where replay reads it.
         if self.last_touch_beat > last.beat {
-            self.recorded.push(AutomationPoint { beat: self.last_touch_beat, value: last.value, shape: SegmentShape::Hold });
+            let end = AutomationPoint { beat: self.last_touch_beat, value: last.value, shape: SegmentShape::Hold };
+            self.thinner.push(&mut self.recorded, end);
         }
-        thin_recorded_points(&mut self.recorded, self.range, self.stepped);
-        let base = self.layered.as_deref().unwrap_or(&self.pre_gesture_points);
-        self.layered = Some(punch_recorded_points(base, &self.recorded));
+        let base = if self.layered_live { &self.layered } else { &self.pre_gesture };
+        punch_recorded_points_into(base, &self.recorded, &mut self.scratch);
+        std::mem::swap(&mut self.layered.points, &mut self.scratch);
+        self.layered_live = true;
         self.recorded.clear();
+        self.thinner.reset();
     }
 
     /// Finish the take as its one undo entry.
     fn into_command(mut self, param_id: ParamId) -> Box<dyn Command> {
         self.finish_pass();
-        let new_points = self.layered.take().unwrap_or_else(|| self.pre_gesture_points.clone());
-        let old_points = self.pre_gesture_existed.then_some(self.pre_gesture_points);
+        let new_points = if self.layered_live { self.layered.points } else { self.pre_gesture.points.clone() };
+        let old_points = self.pre_gesture_existed.then_some(self.pre_gesture.points);
         Box::new(CommitRecordedGestureCommand::new(self.target, param_id, new_points, old_points))
     }
 
@@ -217,50 +252,144 @@ pub fn release_hold(gestures: &mut AutomationGestures, target: &GraphTarget, par
     }
 }
 
-/// Simplify one recorded pass in place, endpoints kept. Continuous params use
-/// Ramer-Douglas-Peucker with the vertical (value) error at each point's beat,
-/// so no kept segment strays more than [`THINNING_TOLERANCE`] of `range` from
-/// what was played. Stepped params keep only the points where the value
-/// changes.
-pub fn thin_recorded_points(points: &mut Vec<AutomationPoint>, range: f32, stepped: bool) {
-    let n = points.len();
-    if n <= 2 {
-        return;
-    }
-    let mut keep = vec![false; n];
-    keep[0] = true;
-    keep[n - 1] = true;
-    if stepped {
-        for i in 1..n - 1 {
-            keep[i] = points[i].value != points[i - 1].value;
+/// Thins one recorded pass as its points arrive, with constant work per point
+/// and no buffer of its own, so a long take never pays a burst at its end.
+///
+/// The pass keeps its first point, its newest point, and every point the
+/// line between kept neighbours could not reproduce. Continuous params use
+/// the slope-cone test (an opening-window line simplification): from the
+/// last kept point (the anchor), each dropped point allows the slopes whose
+/// line passes within [`THINNING_TOLERANCE`] of `range` of it, and the newest
+/// point may replace the one before it only while its own slope from the
+/// anchor stays inside every dropped point's allowance. So no dropped point
+/// strays more than the tolerance from the line replay draws over it.
+/// Stepped params keep only the points where the value changes, plus the
+/// newest point.
+#[derive(Debug, Clone, Copy)]
+struct PassThinner {
+    tolerance: f64,
+    stepped: bool,
+    /// Slopes from the anchor that keep every point dropped since it in
+    /// tolerance.
+    slope_lo: f64,
+    slope_hi: f64,
+    /// The most recently dropped point: a valid end for the anchor's segment,
+    /// kept so two frames on one beat can fall back to it.
+    dropped: Option<AutomationPoint>,
+    /// Stepped: the newest point repeats its predecessor's value, so it is a
+    /// run's tail and the next point replaces it.
+    tail: bool,
+}
+
+impl PassThinner {
+    fn new(range: f32, stepped: bool) -> Self {
+        PassThinner {
+            tolerance: THINNING_TOLERANCE * if range > 0.0 { f64::from(range) } else { 1.0 },
+            stepped,
+            slope_lo: f64::NEG_INFINITY,
+            slope_hi: f64::INFINITY,
+            dropped: None,
+            tail: false,
         }
-    } else {
-        let tolerance = THINNING_TOLERANCE * if range > 0.0 { f64::from(range) } else { 1.0 };
-        let mut spans = vec![(0, n - 1)];
-        while let Some((a, b)) = spans.pop() {
-            let (start, end) = (points[a], points[b]);
-            let width = end.beat.0 - start.beat.0;
-            let mut worst = (0.0, a);
-            for (i, p) in points.iter().enumerate().take(b).skip(a + 1) {
-                let t = if width > 0.0 { (p.beat.0 - start.beat.0) / width } else { 0.0 };
-                let line = f64::from(start.value) + f64::from(end.value - start.value) * t;
-                let error = (f64::from(p.value) - line).abs();
-                if error > worst.0 {
-                    worst = (error, i);
-                }
-            }
-            if worst.0 > tolerance {
-                keep[worst.1] = true;
-                spans.push((a, worst.1));
-                spans.push((worst.1, b));
-            }
+    }
+
+    /// Forget the pass: the next point starts a new one.
+    fn reset(&mut self) {
+        self.open_segment();
+        self.tail = false;
+    }
+
+    /// A new anchor: nothing dropped since it.
+    fn open_segment(&mut self) {
+        self.slope_lo = f64::NEG_INFINITY;
+        self.slope_hi = f64::INFINITY;
+        self.dropped = None;
+    }
+
+    /// Add the pass's next point to `points` (beat at or after the newest).
+    fn push(&mut self, points: &mut Vec<AutomationPoint>, point: AutomationPoint) {
+        if self.stepped {
+            self.push_stepped(points, point);
+        } else {
+            self.push_continuous(points, point);
         }
     }
-    let mut i = 0;
-    points.retain(|_| {
-        i += 1;
-        keep[i - 1]
-    });
+
+    fn push_stepped(&mut self, points: &mut Vec<AutomationPoint>, point: AutomationPoint) {
+        // A second frame on one beat supersedes the first. What remains last
+        // is always a kept change point, which is also the dropped frame's
+        // predecessor's value.
+        if points.last().is_some_and(|last| last.beat == point.beat) {
+            points.pop();
+            self.tail = false;
+        }
+        let Some(&last) = points.last() else {
+            points.push(point);
+            return;
+        };
+        if self.tail {
+            *points.last_mut().unwrap() = point;
+        } else {
+            points.push(point);
+        }
+        self.tail = point.value == last.value;
+    }
+
+    fn push_continuous(&mut self, points: &mut Vec<AutomationPoint>, point: AutomationPoint) {
+        let n = points.len();
+        if n < 2 {
+            match points.last_mut() {
+                Some(only) if only.beat == point.beat => *only = point,
+                _ => points.push(point),
+            }
+            self.open_segment();
+            return;
+        }
+        let (anchor, last) = (points[n - 2], points[n - 1]);
+        if point.beat == last.beat {
+            // A second frame on one beat supersedes the first, if the points
+            // already dropped still fit the line to it; otherwise the last
+            // dropped point becomes the anchor and the new frame follows it.
+            if !self.fits(anchor, point, self.slope_lo, self.slope_hi)
+                && let Some(dropped) = self.dropped
+            {
+                points[n - 1] = dropped;
+                points.push(point);
+                self.open_segment();
+            } else {
+                points[n - 1] = point;
+            }
+            return;
+        }
+        let (lo, hi) = self.allowance(anchor, last);
+        let (lo, hi) = (self.slope_lo.max(lo), self.slope_hi.min(hi));
+        if self.fits(anchor, point, lo, hi) {
+            points[n - 1] = point;
+            self.slope_lo = lo;
+            self.slope_hi = hi;
+            self.dropped = Some(last);
+        } else {
+            points.push(point);
+            self.open_segment();
+        }
+    }
+
+    /// Slopes from `anchor` whose line passes within tolerance of `point`.
+    fn allowance(&self, anchor: AutomationPoint, point: AutomationPoint) -> (f64, f64) {
+        let run = point.beat.0 - anchor.beat.0;
+        let rise = f64::from(point.value) - f64::from(anchor.value);
+        ((rise - self.tolerance) / run, (rise + self.tolerance) / run)
+    }
+
+    /// Whether the line from `anchor` to `point` has a slope in `lo..=hi`.
+    fn fits(&self, anchor: AutomationPoint, point: AutomationPoint, lo: f64, hi: f64) -> bool {
+        let run = point.beat.0 - anchor.beat.0;
+        if run <= 0.0 {
+            return false;
+        }
+        let slope = (f64::from(point.value) - f64::from(anchor.value)) / run;
+        lo <= slope && slope <= hi
+    }
 }
 
 /// Runtime-only in-flight recording gestures, keyed like [`AutomationLatches`].
@@ -677,23 +806,20 @@ fn evaluate_instance_automation(
         if !contains_automation_key(gestures, &fx_id, &param_id) {
             let param = fx.params.get(param_id.as_ref());
             let (lo, hi) = param.map_or((0.0, 1.0), |p| p.slider_span());
-            let (pre_points, existed) = fx
+            let pre_points = fx
                 .automation_lanes
                 .as_ref()
                 .and_then(|lanes| lanes.iter().find(|l| l.param_id == param_id))
-                .map(|lane| (lane.points.clone(), true))
-                .unwrap_or_else(|| (Vec::new(), false));
-            gestures.insert((fx_id.clone(), param_id.clone()), GestureState {
-                target: target.clone(),
-                last_touch_beat: current_beat,
-                pre_gesture_points: pre_points,
-                pre_gesture_existed: existed,
-                layered: None,
-                recorded: Vec::new(),
-                released: false,
-                range: (hi - lo).abs(),
-                stepped: param.is_some_and(|p| p.whole_numbers()),
-            });
+                .map(|lane| lane.points.clone());
+            let gesture = GestureState::new(
+                target.clone(),
+                param_id.clone(),
+                pre_points,
+                (hi - lo).abs(),
+                param.is_some_and(|p| p.whole_numbers()),
+                current_beat,
+            );
+            gestures.insert((fx_id.clone(), param_id.clone()), gesture);
         }
         let Some(gesture) = gestures
             .iter_mut()
@@ -740,33 +866,47 @@ pub fn finish_all_gestures(gestures: &mut AutomationGestures) -> Vec<Box<dyn Com
 /// Replace the recorded closed interval while keeping the old curve outside it.
 /// Adjacent representable beats encode the two discontinuities without duplicate
 /// point identities. Restricted curve shapes preserve interpolation on both tails.
-/// Replace a beat span while retaining the sampled curve on either side.
 /// Shared by recorded gestures and authored pattern insertion.
 pub fn punch_recorded_points(original: &[AutomationPoint], recorded: &[AutomationPoint]) -> Vec<AutomationPoint> {
-    let (Some(first), Some(last)) = (recorded.first(), recorded.last()) else { return original.to_vec(); };
-    if original.is_empty() { return recorded.to_vec(); }
     let old = AutomationLane { param_id: "punch".into(), enabled: true, points: original.to_vec() };
+    let mut points = Vec::with_capacity(original.len() + recorded.len() + 2);
+    punch_recorded_points_into(&old, recorded, &mut points);
+    points
+}
+
+/// [`punch_recorded_points`] into a reused buffer: `out` is cleared, and grows
+/// only when the joined curve outgrows its capacity.
+fn punch_recorded_points_into(old: &AutomationLane, recorded: &[AutomationPoint], out: &mut Vec<AutomationPoint>) {
+    out.clear();
+    let original = old.points.as_slice();
+    let (Some(first), Some(last)) = (recorded.first(), recorded.last()) else {
+        out.extend_from_slice(original);
+        return;
+    };
+    if original.is_empty() {
+        out.extend_from_slice(recorded);
+        return;
+    }
     let before = Beats(first.beat.0.next_down());
     let after = Beats(last.beat.0.next_up());
-    let mut points: Vec<_> = original.iter().filter(|p| p.beat < before).copied().collect();
+    out.extend(original.iter().filter(|p| p.beat < before).copied());
     if first.beat > Beats::ZERO {
-        if let Some(left) = points.last_mut()
+        if let Some(left) = out.last_mut()
             && let Some(right) = original.iter().find(|p| p.beat > left.beat)
         {
             let t = ((before.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
             left.shape = left.shape.subrange(0.0, t);
         }
-        points.push(AutomationPoint { beat: before, value: old.value_at(before), shape: SegmentShape::Hold });
+        out.push(AutomationPoint { beat: before, value: old.value_at(before), shape: SegmentShape::Hold });
     }
-    points.extend_from_slice(recorded);
+    out.extend_from_slice(recorded);
     let shape = original.iter().enumerate().rfind(|(_, p)| p.beat <= after)
         .and_then(|(i, left)| original.get(i + 1).map(|right| {
             let t = ((after.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
             left.shape.subrange(t, 1.0)
         })).unwrap_or(SegmentShape::Hold);
-    points.push(AutomationPoint { beat: after, value: old.value_at(after), shape });
-    points.extend(original.iter().filter(|p| p.beat > after).copied());
-    points
+    out.push(AutomationPoint { beat: after, value: old.value_at(after), shape });
+    out.extend(original.iter().filter(|p| p.beat > after).copied());
 }
 
 // =====================================================================
@@ -1474,6 +1614,66 @@ mod tests {
 
     fn point(beat: f64, value: f32) -> AutomationPoint {
         AutomationPoint { beat: Beats(beat), value, shape: SegmentShape::Linear }
+    }
+
+    /// One whole pass through the recorder's streaming thinner.
+    fn thin_recorded_points(points: &mut Vec<AutomationPoint>, range: f32, stepped: bool) {
+        let raw = std::mem::take(points);
+        let mut thinner = PassThinner::new(range, stepped);
+        for p in raw {
+            thinner.push(points, p);
+        }
+    }
+
+    fn assert_within_tolerance(thinned: &[AutomationPoint], played: &[AutomationPoint]) {
+        let lane = AutomationLane { param_id: "amount".into(), enabled: true, points: thinned.to_vec() };
+        for p in played {
+            let error = (lane.value_at(p.beat) - p.value).abs();
+            assert!(f64::from(error) <= THINNING_TOLERANCE + 1e-6, "error {error} at {:?}", p.beat);
+        }
+    }
+
+    /// A five-minute take at 60 fps records through the real recorder: the
+    /// lane stays within tolerance of every frame played and keeps far fewer
+    /// points.
+    #[test]
+    fn long_take_thins_within_tolerance() {
+        let frames: Vec<_> = (0..18_000)
+            .map(|i| {
+                let t = i as f32;
+                let value = if (6_000..9_000).contains(&i) {
+                    0.7
+                } else {
+                    0.5 + 0.3 * (t * 0.004).sin() + 0.1 * (t * 0.02).sin()
+                };
+                point(f64::from(i) / 30.0, value)
+            })
+            .collect();
+        let target = GraphTarget::Effect(EffectId::new("fx"));
+        let mut take = GestureState::new(target, "amount".into(), None, 1.0, false, Beats::ZERO);
+        for p in &frames {
+            take.record(*p, p.beat);
+        }
+        take.finish_pass();
+        let lane = &take.layered.points;
+        assert_eq!((lane[0], *lane.last().unwrap()), (frames[0], frames[17_999]));
+        assert!(lane.len() < frames.len() / 10, "kept {} of {}", lane.len(), frames.len());
+        assert_within_tolerance(lane, &frames);
+    }
+
+    /// Two frames on one beat: the newer value wins, and the points already
+    /// dropped stay within tolerance even when the newer value breaks their
+    /// line.
+    #[test]
+    fn thinning_a_repeated_beat_keeps_the_newest_value() {
+        let ramp: Vec<_> = (0..=20).map(|i| point(f64::from(i) * 0.1, i as f32 * 0.01)).collect();
+        let jump = point(2.0, 0.9);
+        let mut thinned = ramp.clone();
+        thinned.push(jump);
+        thin_recorded_points(&mut thinned, 1.0, false);
+        assert_eq!(*thinned.last().unwrap(), jump);
+        assert!(thinned.windows(2).all(|w| w[0].beat < w[1].beat), "beats stay strictly rising");
+        assert_within_tolerance(&thinned[..thinned.len() - 1], &ramp[..20]);
     }
 
     #[test]
