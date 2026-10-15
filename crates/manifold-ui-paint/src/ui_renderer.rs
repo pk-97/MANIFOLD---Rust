@@ -1116,6 +1116,19 @@ impl UIRenderer {
         font_size: f32,
         color: impl Into<TextColor>,
     ) {
+        self.draw_text_weighted(x, y, text, font_size, color, FontWeight::Medium);
+    }
+
+    /// Queue text at a position in the given weight.
+    pub fn draw_text_weighted(
+        &mut self,
+        x: f32,
+        y: f32,
+        text: &str,
+        font_size: f32,
+        color: impl Into<TextColor>,
+        weight: FontWeight,
+    ) {
         #[cfg(target_os = "macos")]
         {
             let color = color.into().0;
@@ -1127,7 +1140,7 @@ impl UIRenderer {
             let depth = self.current_depth();
             let transform = self.current_transform();
             self.text_renderer
-                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip, depth, transform);
+                .draw_text(x, y, text, font_size, color, weight, clip, depth, transform);
         }
     }
 

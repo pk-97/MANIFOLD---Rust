@@ -520,7 +520,14 @@ impl UIRoot {
             footer: FooterPanel::new(),
             layer_headers: LayerHeaderPanel::new(),
             inspector: InspectorCompositePanel::new(),
-            viewport: TimelineViewportPanel::new(),
+            viewport: {
+                // Lane titles size with the same glyph widths the tree draws.
+                let mut viewport = TimelineViewportPanel::new();
+                viewport.set_text_measure(Box::new(
+                    manifold_ui_paint::native_text::CachedTextMeasure::new(),
+                ));
+                viewport
+            },
             audio_waveforms: crate::audio_waveform_cache::AudioWaveformCache::default(),
             dropdown: DropdownPanel::new(),
             browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),

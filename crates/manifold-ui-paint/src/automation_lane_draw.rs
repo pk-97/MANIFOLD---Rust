@@ -4,7 +4,11 @@ use manifold_ui::automation_hit_tester::AutomationOperation;
 use manifold_ui::bitmap_renderer::timing_grid_lines;
 use manifold_ui::node::{Color32, FontWeight, Rect};
 use manifold_ui::text::TextMeasure;
-use manifold_ui::panels::viewport::AutomationLaneScreen;
+use manifold_ui::panels::param_slider_shared::ParamValueText;
+use manifold_ui::panels::viewport::{
+    AUTOMATION_TITLE_NAME_H, AUTOMATION_TITLE_VALUE_GAP, AutomationLaneScreen, automation_label_prefix,
+    automation_title_has_value_line,
+};
 use manifold_ui::{UIState, color};
 use manifold_foundation::{EffectId, ParamId};
 use std::io::Write;
@@ -12,9 +16,13 @@ use std::io::Write;
 /// Shortens the END of `text` with "…" until it fits `max_w`; returns the
 /// text to draw and its measured width. A label that fits is borrowed, so the
 /// per-frame paint allocates only when it has to shorten.
-fn elide_end<'a>(measure: &dyn TextMeasure, text: &'a str, max_w: f32) -> (std::borrow::Cow<'a, str>, f32) {
-    let size = color::FONT_LABEL;
-    let weight = FontWeight::Medium;
+fn elide_end<'a>(
+    measure: &dyn TextMeasure,
+    text: &'a str,
+    max_w: f32,
+    size: u16,
+    weight: FontWeight,
+) -> (std::borrow::Cow<'a, str>, f32) {
     let w = measure.measure_text(text, size, weight).x;
     if w <= max_w {
         return (std::borrow::Cow::Borrowed(text), w);
@@ -58,13 +66,14 @@ const READOUT_LABEL_MAX: usize = 200;
 
 /// Stack formatting keeps moving readouts off the allocator. Never panics:
 /// output that overflows the buffer is truncated.
+/// `value` arrives already formatted in parameter units (the inspector's own
+/// formatter), so units and enum names read the same as the slider.
 fn format_readout<'b>(
     bytes: &'b mut [u8; 512],
     label: Option<&str>,
     beat: Option<f64>,
     beats_per_bar: f32,
-    value: f32,
-    whole_numbers: bool,
+    value: &str,
 ) -> &'b str {
     let mut text = std::io::Cursor::new(bytes.as_mut_slice());
     // Write errors only mean the buffer is full; the partial text is kept.
@@ -77,17 +86,9 @@ fn format_readout<'b>(
     }
     if let Some(beat) = beat {
         let (bar, beat_in_bar, subbeat) = musical_position(beat, beats_per_bar);
-        let _ = if whole_numbers {
-            write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.0}")
-        } else {
-            write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.3}")
-        };
+        let _ = write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   {value}");
     } else {
-        let _ = if whole_numbers {
-            write!(text, "{value:.0}")
-        } else {
-            write!(text, "{value:.3}")
-        };
+        let _ = write!(text, "{value}");
     }
     let len = text.position() as usize;
     match std::str::from_utf8(&bytes[..len]) {
@@ -96,11 +97,11 @@ fn format_readout<'b>(
     }
 }
 
-/// Min/max scale label.
-fn readout(ui: &mut UIRenderer, x: f32, y: f32, beams: f32, whole_numbers: bool) {
-    let mut bytes = [0_u8; 512];
-    let text = format_readout(&mut bytes, None, None, 1.0, beams, whole_numbers);
-    ui.draw_text(x, y, text, color::AUTOMATION_LABEL_FONT as f32, color::TEXT_WHITE_C32);
+/// Min/max scale label, in parameter units.
+fn readout(ui: &mut UIRenderer, lane: &AutomationLaneScreen, x: f32, y: f32, value: f32) {
+    let mut buf = ParamValueText::default();
+    let text = lane.display.format_value(&mut buf, value, lane.param_min, lane.whole_numbers);
+    ui.draw_text(x, y, text, color::AUTOMATION_LABEL_FONT as f32, color::AUTOMATION_LABEL_COLOR);
 }
 
 /// Format the same one-based bar/beat convention used by the timeline ruler.
@@ -165,6 +166,91 @@ fn draw_timing_grid(ui: &mut UIRenderer, lane: &AutomationLaneScreen, graph: Rec
     }
 }
 
+/// Pointer or drag this close to the title fades it out of the way.
+const TITLE_FADE_REACH: f32 = 24.0;
+const TITLE_FADED_ALPHA: u8 = 64;
+
+/// The lane title, pinned to the strip's right edge: the parameter name large
+/// and bold in the layer's colour, and under it the effect prefix and the
+/// value at the playhead in parameter units. Fades while editing nears it.
+fn draw_title(
+    ui: &mut UIRenderer,
+    measure: &dyn TextMeasure,
+    lane: &AutomationLaneScreen,
+    overridden: bool,
+    feedback: Option<&manifold_ui::automation_hit_tester::AutomationFeedback>,
+) {
+    let rect = lane.title_rect;
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return;
+    }
+    let near = Rect::new(
+        rect.x - TITLE_FADE_REACH,
+        rect.y - TITLE_FADE_REACH,
+        rect.width + 2.0 * TITLE_FADE_REACH,
+        rect.height + 2.0 * TITLE_FADE_REACH,
+    );
+    let faded = feedback.is_some_and(|f| f.operation != AutomationOperation::Title && near.contains(f.position));
+    let alpha = |c: Color32| if faded { c.with_alpha(TITLE_FADED_ALPHA.min(c.a)) } else { c };
+    let name_color = if lane.display.layer_color.a == 0 {
+        color::TEXT_WHITE_C32
+    } else {
+        lane.display.layer_color
+    };
+    // Above the curve and dots, on a see-through backing so a stroke passing
+    // behind the text dims instead of striking through it.
+    ui.push_depth(ui.current_depth().above(1));
+    ui.draw_rounded_rect(
+        rect.x - 4.0,
+        rect.y,
+        rect.width + 8.0,
+        rect.height,
+        color::AUTOMATION_STRIP_BG.with_alpha(if faded { 40 } else { 170 }),
+        3.0,
+    );
+    let name_font = color::AUTOMATION_TITLE_FONT;
+    let small = color::AUTOMATION_TITLE_VALUE_FONT;
+    let (name, name_w) = elide_end(measure, lane.title_name(), rect.width, name_font, FontWeight::Bold);
+    let name_x = rect.x_max() - name_w;
+    ui.draw_text_weighted(name_x, rect.y, &name, name_font as f32, alpha(name_color), FontWeight::Bold);
+    // The effect prefix, small and dim, sits on the name's baseline.
+    if let Some(prefix) = automation_label_prefix(&lane.label, &lane.display.param_name) {
+        let prefix_w = measure.measure_text(prefix, small, FontWeight::Medium).x;
+        let prefix_x = name_x - AUTOMATION_TITLE_VALUE_GAP - prefix_w;
+        if prefix_x >= rect.x - 0.5 {
+            let baseline_drop = (name_font - small) as f32 * 0.8;
+            ui.draw_text(
+                prefix_x,
+                rect.y + baseline_drop,
+                prefix,
+                small as f32,
+                alpha(color::AUTOMATION_LABEL_COLOR),
+            );
+        }
+    }
+    if automation_title_has_value_line(lane.strip_rect) {
+        let y = rect.y + AUTOMATION_TITLE_NAME_H;
+        let mut buf = ParamValueText::default();
+        let value = lane.display.format_value(&mut buf, lane.playhead_value, lane.param_min, lane.whole_numbers);
+        let value_w = measure.measure_text(value, small, FontWeight::Medium).x;
+        let value_color = if overridden { color::AUTOMATION_LINE_OVERRIDDEN_COLOR } else { color::TEXT_WHITE_C32 };
+        ui.draw_text(rect.x_max() - value_w, y, value, small as f32, alpha(value_color));
+        if overridden {
+            // Left of the widest value, so it holds still while the value moves.
+            const TAG: &str = "overridden";
+            let tag_w = measure.measure_text(TAG, small, FontWeight::Medium).x;
+            ui.draw_text(
+                rect.x_max() - lane.title_value_w.max(value_w) - AUTOMATION_TITLE_VALUE_GAP - tag_w,
+                y,
+                TAG,
+                small as f32,
+                alpha(color::AUTOMATION_LINE_OVERRIDDEN_COLOR),
+            );
+        }
+    }
+    ui.pop_depth();
+}
+
 pub fn emit_automation_lanes(
     ui: &mut UIRenderer,
     measure: &dyn TextMeasure,
@@ -191,7 +277,6 @@ pub fn emit_automation_lanes(
     for lane in lanes {
         let r = lane.strip_rect;
         let graph = lane.curve_rect();
-        let header = lane.header_rect();
         let feedback = selection
             .and_then(|s| s.automation_feedback.as_ref())
             .filter(|f| f.target == lane.target && f.param_id == lane.param_id);
@@ -229,69 +314,36 @@ pub fn emit_automation_lanes(
                 );
             }
         }
-        if header.height > 0.0 {
-            ui.draw_rect(
-                header.x,
-                header.y,
-                header.width,
-                header.height,
-                Color32::new(31, 34, 40, 255),
-            );
-            ui.draw_rect(
-                header.x,
-                header.y,
-                3.0,
-                header.height,
-                if selected || feedback.is_some() {
-                    accent
-                } else {
-                    color::AUTOMATION_LINE_OVERRIDDEN_COLOR
-                },
-            );
-            let label_color = if overridden {
+        // Lane marker stripe: lit while the lane is selected or under the pointer.
+        ui.draw_rect(
+            r.x,
+            r.y,
+            3.0,
+            r.height,
+            if selected || feedback.is_some() {
+                accent
+            } else {
                 color::AUTOMATION_LINE_OVERRIDDEN_COLOR
-            } else if selected || feedback.is_some() {
-                color::AUTOMATION_LINE_COLOR
-            } else {
-                color::TEXT_WHITE_C32
-            };
-            let full_label: std::borrow::Cow<'_, str> = if overridden {
-                format!("{} · overridden", lane.label).into()
-            } else {
-                lane.label.as_str().into()
-            };
-            let avail = (header.width - 16.0).max(0.0);
-            let (shown, shown_w) = elide_end(measure, &full_label, avail);
-            ui.draw_text(
-                header.x + header.width - 8.0 - shown_w,
-                r.y + 3.0,
-                &shown,
-                color::FONT_LABEL as f32,
-                label_color,
-            );
-            for norm in [0.0, 0.5, 1.0] {
-                let y = lane.y_at_norm(norm);
-                ui.draw_aa_line(
-                    graph.x,
-                    y,
-                    graph.x_max(),
-                    y,
-                    1.0,
-                    Color32::new(47, 50, 57, 255),
+            },
+        );
+        // Range guides at the bottom, middle and top, the ends labelled in
+        // parameter units.
+        for norm in [0.0, 0.5, 1.0] {
+            let y = lane.y_at_norm(norm);
+            ui.draw_aa_line(graph.x, y, graph.x_max(), y, 1.0, Color32::new(47, 50, 57, 255));
+            if graph.width >= 180.0 && graph.height >= 24.0 && norm != 0.5 {
+                let label_y = if norm == 0.0 {
+                    y - color::AUTOMATION_LABEL_FONT as f32 - 2.0
+                } else {
+                    y + 2.0
+                };
+                readout(
+                    ui,
+                    lane,
+                    graph.x + 6.0,
+                    label_y,
+                    lane.param_min + norm * (lane.param_max - lane.param_min),
                 );
-                if graph.width >= 180.0 && norm != 0.5 {
-                    readout(
-                        ui,
-                        graph.x + 6.0,
-                        if norm == 0.0 {
-                            y - color::AUTOMATION_LABEL_FONT as f32 - 2.0
-                        } else {
-                            (y + 2.0).min(r.y_max() - 16.0)
-                        },
-                        lane.param_min + norm * (lane.param_max - lane.param_min),
-                        lane.whole_numbers,
-                    );
-                }
             }
         }
         draw_timing_grid(ui, lane, graph);
@@ -391,6 +443,7 @@ pub fn emit_automation_lanes(
             );
         }
         ui.pop_immediate_clip();
+        draw_title(ui, measure, lane, overridden, feedback);
         let grip = lane.resize_rect();
         let hot_resize = feedback.is_some_and(|f| f.operation == AutomationOperation::Resize);
         let grip_color = if hot_resize {
@@ -457,13 +510,15 @@ pub fn emit_automation_lanes(
                         | AutomationOperation::Bend
                 );
                 let mut readout_bytes = [0_u8; 512];
+                let mut value_buf = ParamValueText::default();
+                let value_text =
+                    lane.display.format_value(&mut value_buf, f.value, lane.param_min, lane.whole_numbers);
                 let readout_text = format_readout(
                     &mut readout_bytes,
                     Some(&lane.label),
                     Some(f.beat.0),
                     lane.beats_per_bar,
-                    f.value,
-                    lane.whole_numbers,
+                    value_text,
                 );
                 let text_w = measure
                     .measure_text(readout_text, color::AUTOMATION_LABEL_FONT, FontWeight::Medium)
@@ -498,8 +553,8 @@ pub fn emit_automation_lanes(
                 }
                 if let Some((bubble_x, bubble_y)) = bubble {
                     // Lines are batched after rectangles at each depth. Lift
-                    // this local readout so the curve cannot cross its text.
-                    ui.push_depth(ui.current_depth().above(1));
+                    // this local readout above the curve and the lane title.
+                    ui.push_depth(ui.current_depth().above(2));
                     ui.draw_rounded_rect(
                         bubble_x,
                         bubble_y,
@@ -544,8 +599,8 @@ mod tests {
     fn long_lane_label_truncates_without_panicking() {
         let label = "é".repeat(600);
         let mut bytes = [0_u8; 512];
-        let text = format_readout(&mut bytes, Some(&label), Some(4.0), 4.0, 0.5, false);
+        let text = format_readout(&mut bytes, Some(&label), Some(4.0), 4.0, "0.50 s");
         assert!(text.len() <= 512);
-        assert!(text.ends_with("Value 0.500"));
+        assert!(text.ends_with("0.50 s"));
     }
 }

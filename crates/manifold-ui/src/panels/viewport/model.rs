@@ -286,6 +286,99 @@ pub struct AutomationLaneScreen {
     /// lane (no breakpoints yet). The first click lands here, not at the
     /// clicked height.
     pub placeholder_value: Option<f32>,
+    /// Name, layer colour and value formatting for the title and readouts.
+    pub display: crate::view::UiLaneDisplay,
+    /// The title block pinned to the strip's right edge: parameter name over
+    /// its value line. The only part of the lane that is not curve; painter
+    /// and hit-tester both read this rect.
+    pub title_rect: Rect,
+    /// Width kept for the value at the right end of the title.s second
+    /// line: the widest value the lane can print, so the line holds still
+    /// during playback.
+    pub title_value_w: f32,
+    /// The lane's value at the playhead, in param units.
+    pub playhead_value: f32,
+}
+
+/// Title block layout, shared by the painter and the hit rect.
+pub const AUTOMATION_TITLE_PAD_X: f32 = 10.0;
+pub const AUTOMATION_TITLE_PAD_TOP: f32 = 3.0;
+pub const AUTOMATION_TITLE_NAME_H: f32 = color::AUTOMATION_TITLE_FONT as f32 + 3.0;
+pub const AUTOMATION_TITLE_VALUE_H: f32 = color::AUTOMATION_TITLE_VALUE_FONT as f32 + 3.0;
+/// Gap between the small effect prefix and the big parameter name.
+pub const AUTOMATION_TITLE_VALUE_GAP: f32 = 12.0;
+
+/// The second title line shows the value only when the strip has room.
+pub fn automation_title_has_value_line(strip: Rect) -> bool {
+    strip.height >= AUTOMATION_TITLE_PAD_TOP + AUTOMATION_TITLE_NAME_H + AUTOMATION_TITLE_VALUE_H + 4.0
+}
+
+/// The effect or section prefix of `label` ("Mirror" for "Mirror: Amount").
+pub fn automation_label_prefix<'a>(label: &'a str, param_name: &str) -> Option<&'a str> {
+    label
+        .strip_suffix(param_name)
+        .and_then(|rest| rest.strip_suffix(": "))
+        .filter(|prefix| !prefix.is_empty())
+}
+
+/// The widest value the lane can print (range ends or enum names), so the
+/// block never resizes during playback.
+fn automation_value_reserve(
+    measure: &dyn crate::text::TextMeasure,
+    lane: &UiAutomationLane,
+) -> f32 {
+    let font = color::AUTOMATION_TITLE_VALUE_FONT;
+    let weight = FontWeight::Medium;
+    let display = &lane.display;
+    if let Some(labels) = display.value_labels.as_deref() {
+        labels.iter().map(|l| measure.measure_text(l, font, weight).x).fold(0.0, f32::max)
+    } else {
+        let mut buf = crate::panels::param_slider_shared::ParamValueText::default();
+        let mut widest = 0.0_f32;
+        for value in [lane.param_min, lane.param_max] {
+            let text = display.format_value(&mut buf, value, lane.param_min, lane.whole_numbers);
+            widest = widest.max(measure.measure_text(text, font, weight).x);
+        }
+        // A fractional reading can be one glyph wider than either end.
+        widest + measure.measure_text("0", font, weight).x
+    }
+}
+
+/// The title block's rect, right-aligned at the strip's right edge: the
+/// effect prefix and parameter name on the first line, the value under the
+/// name. As wide as its widest line; also returns the width kept for the
+/// value.
+pub(crate) fn automation_title_rect(
+    measure: &dyn crate::text::TextMeasure,
+    strip: Rect,
+    lane: &UiAutomationLane,
+) -> (Rect, f32) {
+    let name = automation_title_name(&lane.label, &lane.display);
+    let prefix_w = automation_label_prefix(&lane.label, &lane.display.param_name).map_or(0.0, |p| {
+        measure.measure_text(p, color::AUTOMATION_TITLE_VALUE_FONT, FontWeight::Medium).x
+            + AUTOMATION_TITLE_VALUE_GAP
+    });
+    let name_w = prefix_w
+        + measure
+            .measure_text(name, color::AUTOMATION_TITLE_FONT, FontWeight::Bold)
+            .x;
+    let value_line = automation_title_has_value_line(strip);
+    let value_w = automation_value_reserve(measure, lane);
+    let width = if value_line { name_w.max(value_w) } else { name_w };
+    let height = AUTOMATION_TITLE_NAME_H + if value_line { AUTOMATION_TITLE_VALUE_H } else { 0.0 };
+    let width = width.min((strip.width - 2.0 * AUTOMATION_TITLE_PAD_X).max(0.0));
+    let rect = Rect::new(
+        strip.x_max() - AUTOMATION_TITLE_PAD_X - width,
+        strip.y + AUTOMATION_TITLE_PAD_TOP,
+        width,
+        height.min((strip.height - AUTOMATION_TITLE_PAD_TOP).max(0.0)),
+    );
+    (rect, value_w)
+}
+
+/// The big title text: the parameter's name, else the full lane label.
+pub fn automation_title_name<'a>(label: &'a str, display: &'a crate::view::UiLaneDisplay) -> &'a str {
+    if display.param_name.is_empty() { label } else { &display.param_name }
 }
 
 impl AutomationLaneScreen {
@@ -298,33 +391,20 @@ impl AutomationLaneScreen {
             .any(|(eid, pid)| *eid == self.effect_id && *pid == self.param_id)
     }
 
-    /// Chrome and graph share one geometry contract with input and rendering.
-    pub fn header_rect(&self) -> Rect {
-        Rect::new(
-            self.strip_rect.x,
-            self.strip_rect.y,
-            self.strip_rect.width,
-            if self.strip_rect.height >= 64.0 {
-                22.0
-            } else {
-                0.0
-            },
-        )
-    }
-
+    /// The editable curve: the whole strip less a dot's room above and below.
+    /// Input and rendering share this one rect.
     pub fn curve_rect(&self) -> Rect {
         Self::curve_rect_for(self.strip_rect)
     }
 
     pub fn curve_rect_for(strip: Rect) -> Rect {
-        let header = if strip.height >= 64.0 { 22.0 } else { 0.0 };
-        let padding = if header > 0.0 { 4.0 } else { 0.0 };
-        Rect::new(
-            strip.x,
-            strip.y + header + padding,
-            strip.width,
-            (strip.height - header - padding - if header > 0.0 { 8.0 } else { 0.0 }).max(1.0),
-        )
+        let pad = color::AUTOMATION_CURVE_PAD_Y.min(strip.height * 0.15).max(0.0);
+        Rect::new(strip.x, strip.y + pad, strip.width, (strip.height - 2.0 * pad).max(1.0))
+    }
+
+    /// The title's own name, else the lane label.
+    pub fn title_name(&self) -> &str {
+        automation_title_name(&self.label, &self.display)
     }
 
     pub fn y_at_norm(&self, norm: f32) -> f32 {
@@ -560,6 +640,7 @@ mod automation_lane_geometry_tests {
             param_max: 1.0,
             whole_numbers: false,
             placeholder: false,
+            display: crate::view::UiLaneDisplay::default(),
         }
     }
 
@@ -581,7 +662,52 @@ mod automation_lane_geometry_tests {
             param_max: 1.0,
             whole_numbers: false,
             placeholder_value: None,
+            display: crate::view::UiLaneDisplay::default(),
+            title_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+            title_value_w: 0.0,
+            playhead_value: 0.0,
         }
+    }
+
+    #[test]
+    fn curve_spans_the_whole_strip_but_a_dot_pad() {
+        for height in [36.0, 60.0, 112.0, 240.0] {
+            let strip = Rect::new(120.0, 40.0, 800.0, height);
+            let curve = AutomationLaneScreen::curve_rect_for(strip);
+            assert_eq!((curve.x, curve.width), (strip.x, strip.width));
+            // A short strip gives up at most 15% of its height to each pad.
+            let pad = color::AUTOMATION_CURVE_PAD_Y.min(height * 0.15);
+            assert!((curve.y - strip.y - pad).abs() < 1e-4, "height {height}");
+            assert!((strip.y_max() - curve.y_max() - pad).abs() < 1e-4, "height {height}");
+        }
+    }
+
+    #[test]
+    fn title_rect_hugs_its_text_at_the_right_edge() {
+        let measure = crate::text::HeuristicTextMeasure;
+        let mut lane = ui_lane(Vec::new());
+        lane.label = "Mirror: Mode".into();
+        lane.display.param_name = "Mode".into();
+        lane.display.value_labels = Some(vec!["Identity".to_string(), "QuadMirror".to_string()].into());
+        lane.param_max = 1.0;
+        lane.whole_numbers = true;
+        let strip = Rect::new(120.0, 40.0, 800.0, 60.0);
+        let (rect, value_w) = automation_title_rect(&measure, strip, &lane);
+        assert!((rect.x_max() - (strip.x_max() - AUTOMATION_TITLE_PAD_X)).abs() < 0.001);
+        assert_eq!(rect.y, strip.y + AUTOMATION_TITLE_PAD_TOP);
+        let font = color::AUTOMATION_TITLE_VALUE_FONT;
+        use crate::text::TextMeasure;
+        let line1 = measure.measure_text("Mirror", font, FontWeight::Medium).x
+            + AUTOMATION_TITLE_VALUE_GAP
+            + measure.measure_text("Mode", color::AUTOMATION_TITLE_FONT, FontWeight::Bold).x;
+        assert_eq!(value_w, measure.measure_text("QuadMirror", font, FontWeight::Medium).x);
+        assert!((rect.width - line1.max(value_w)).abs() < 0.001, "{} vs {line1}", rect.width);
+        assert_eq!(rect.height, AUTOMATION_TITLE_NAME_H + AUTOMATION_TITLE_VALUE_H);
+        // The block covers the right end of the strip only.
+        assert!(rect.width < strip.width / 4.0);
+        // A strip too short for the value line keeps only the name.
+        let (short, _) = automation_title_rect(&measure, Rect::new(120.0, 40.0, 800.0, 30.0), &lane);
+        assert_eq!(short.height, AUTOMATION_TITLE_NAME_H);
     }
 
     #[test]

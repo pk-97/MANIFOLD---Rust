@@ -7,7 +7,7 @@
 use manifold_core::effects::{AutomationPoint, ParamId};
 use manifold_core::{Beats, GraphTarget};
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
-use manifold_ui::view::UiGraphTarget;
+use manifold_ui::view::{UiGraphTarget, UiLaneDisplay};
 use manifold_ui::slider::BitmapSlider;
 
 use crate::app::Application;
@@ -38,11 +38,11 @@ pub(crate) fn begin_value(
         whole_numbers: param.whole_numbers(),
         beats_per_bar: beats_per_bar(app),
     };
-    let initial = if ctx.whole_numbers {
-        format!("{}", point.value.round() as i64)
-    } else {
-        format!("{:.4}", point.value)
-    };
+    // The editor opens on the value as the inspector slider prints it.
+    let mut buf = manifold_ui::panels::param_slider_shared::ParamValueText::default();
+    let initial = lane_display(app, target, param_id)
+        .format_value(&mut buf, point.value, ctx.param_min, ctx.whole_numbers)
+        .to_owned();
     let Some(anchor) = point_anchor(app, target, param_id, beat, value_norm) else {
         invalid(app, "Automation point is off-screen");
         return;
@@ -101,7 +101,8 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
         return;
     };
     let new_value = if field == TextInputField::AutomationPointValue {
-        match parse_value(text, ctx.param_min, ctx.param_max, ctx.whole_numbers) {
+        let display = lane_display(app, &ctx.target, &ctx.param_id);
+        match parse_value(text, ctx.param_min, ctx.param_max, ctx.whole_numbers, &display) {
             Ok(value) => value,
             Err(reason) => {
                 reject_edit(app, field, text, ctx, reason);
@@ -281,23 +282,51 @@ pub(crate) fn parse_bar_beat(text: &str, beats_per_bar: u32) -> Result<Beats, &'
     Ok(Beats(absolute))
 }
 
-/// Parse, clamp, and round a point value in parameter units.
+/// How the lane prints this parameter; plain numbers when the lane is gone.
+fn lane_display(app: &Application, target: &UiGraphTarget, param_id: &ParamId) -> UiLaneDisplay {
+    app.ws.ui_root.viewport.automation_lane_screens()
+        .iter()
+        .find(|lane| &lane.target == target && lane.param_id == *param_id)
+        .map(|lane| lane.display.clone())
+        .unwrap_or_default()
+}
+
+/// Parse, clamp, and round a point value in parameter units. Reads what the
+/// editor opened on: an enum name, an angle in degrees, or a number with its
+/// unit suffix.
 pub(crate) fn parse_value(
     text: &str,
     min: f32,
     max: f32,
     whole_numbers: bool,
+    display: &UiLaneDisplay,
 ) -> Result<f32, &'static str> {
     if !min.is_finite() || !max.is_finite() || min > max {
         return Err("Automation parameter range is invalid");
     }
-    let parsed = text
-        .trim()
+    let text = text.trim();
+    if let Some(index) = display
+        .value_labels
+        .as_deref()
+        .and_then(|labels| labels.iter().position(|label| label.eq_ignore_ascii_case(text)))
+    {
+        return Ok((min + index as f32).clamp(min, max));
+    }
+    let mut number = text;
+    if let Some(unit) = display.unit {
+        number = number.strip_suffix(unit.suffix().trim()).unwrap_or(number).trim();
+    }
+    if display.is_angle {
+        number = number.strip_suffix('°').unwrap_or(number).trim();
+    }
+    let parsed = number
         .parse::<f32>()
         .map_err(|_| "Invalid automation value")?;
     if !parsed.is_finite() {
         return Err("Automation value must be finite");
     }
+    // Angles are shown and typed in degrees, stored in radians.
+    let parsed = if display.is_angle { parsed.to_radians() } else { parsed };
     let mut value = parsed.clamp(min, max);
     if whole_numbers {
         value = value.round().clamp(min, max);
@@ -359,10 +388,33 @@ mod tests {
 
     #[test]
     fn value_rejects_nonfinite_and_clamps_rounds() {
-        assert_eq!(parse_value("99", -2.0, 5.0, false).unwrap(), 5.0);
-        assert_eq!(parse_value("2.6", 0.0, 5.0, true).unwrap(), 3.0);
-        assert!(parse_value("NaN", 0.0, 1.0, false).is_err());
-        assert!(parse_value("inf", 0.0, 1.0, false).is_err());
+        let plain = UiLaneDisplay::default();
+        assert_eq!(parse_value("99", -2.0, 5.0, false, &plain).unwrap(), 5.0);
+        assert_eq!(parse_value("2.6", 0.0, 5.0, true, &plain).unwrap(), 3.0);
+        assert!(parse_value("NaN", 0.0, 1.0, false, &plain).is_err());
+        assert!(parse_value("inf", 0.0, 1.0, false, &plain).is_err());
+    }
+
+    #[test]
+    fn value_reads_back_what_the_editor_opened_on() {
+        use manifold_foundation::scene_surface::Unit;
+        let mut buf = manifold_ui::panels::param_slider_shared::ParamValueText::default();
+        let labels = UiLaneDisplay {
+            value_labels: Some(vec!["Identity".to_string(), "Mirror".to_string(), "FoldX".to_string()].into()),
+            ..UiLaneDisplay::default()
+        };
+        assert_eq!(labels.format_value(&mut buf, 2.0, 0.0, true), "FoldX");
+        assert_eq!(parse_value("FoldX", 0.0, 2.0, true, &labels).unwrap(), 2.0);
+        assert_eq!(parse_value("mirror", 0.0, 2.0, true, &labels).unwrap(), 1.0);
+        let seconds = UiLaneDisplay { unit: Some(Unit::Seconds), ..UiLaneDisplay::default() };
+        let shown = seconds.format_value(&mut buf, 1.25, 0.0, false).to_owned();
+        assert_eq!(shown, "1.25 s");
+        assert_eq!(parse_value(&shown, 0.0, 4.0, false, &seconds).unwrap(), 1.25);
+        let angle = UiLaneDisplay { is_angle: true, ..UiLaneDisplay::default() };
+        let shown = angle.format_value(&mut buf, std::f32::consts::FRAC_PI_2, 0.0, false).to_owned();
+        assert_eq!(shown, "90°");
+        let parsed = parse_value(&shown, 0.0, 4.0, false, &angle).unwrap();
+        assert!((parsed - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
     }
 
     #[test]
