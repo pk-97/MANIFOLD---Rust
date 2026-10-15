@@ -400,6 +400,57 @@ mod scene_card_convergence_tests {
         assert!(h.drain().is_empty());
     }
 
+    /// A macro lock that lands mid-drag still releases the pointer hold the
+    /// drag's Begin sent, so armed recording never keeps writing a frozen value.
+    #[test]
+    fn param_gesture_locked_mid_drag_still_releases_its_hold() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_core::scene_modifier_preset::{
+            SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        };
+        let (mut project, layer_id, ids) = material_colour_fixture();
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let mut h = Harness::new(Some(layer_id.clone()));
+        let value_ref = ValueRef::Param(
+            manifold_ui::GraphParamTarget::GeneratorOf(layer_id),
+            ids[0].clone(),
+        );
+        h.dispatch(&PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin), &mut project);
+        assert!(h.drain().iter().any(|c| matches!(c, ContentCommand::AutomationHold { held: true, .. })));
+
+        project.with_preset_graph_mut(&target, |inst| {
+            let graph = inst.graph.as_mut().unwrap();
+            let source = graph.preset_metadata.as_ref().unwrap().bindings.iter()
+                .find_map(|b| match &b.target {
+                    BindingTarget::Node { node_id, .. } if b.id == ids[0].as_ref() => Some(node_id.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let node = |node| SceneNodeRef { scope: vec![], node };
+            let modifier = SceneModifierInstanceDef {
+                id: manifold_core::NodeId::new("modifier"),
+                scene: node(manifold_core::NodeId::new("scene")),
+                targets: SceneTargetSelection::AllObjects,
+                mesh_frames: vec![SceneMeshReferenceFrame {
+                    target: node(manifold_core::NodeId::new("object")),
+                    source: node(source),
+                    source_definition_hash: "hash".into(),
+                    source_offset: [0.0; 3],
+                    scene_radius: 1.0,
+                }],
+                legacy_math_view_carrier: None,
+                graph: Box::new(graph.clone()),
+            };
+            graph.scene_modifiers.push(modifier);
+        });
+        assert!(crate::scene_modifier_edit::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some());
+
+        h.dispatch(&PanelAction::Scrub(value_ref, ScrubPhase::Commit), &mut project);
+        let commands = h.drain();
+        assert!(commands.iter().any(|c| matches!(c, ContentCommand::AutomationHold { held: false, .. })));
+        assert!(h.scrub.active.is_none());
+    }
+
     #[test]
     fn material_inspector_rgb_stale_content_ownership_rolls_back_preview_atomically() {
         use manifold_editing::command::Command;
