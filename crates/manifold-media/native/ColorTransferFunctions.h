@@ -49,6 +49,21 @@ static NSString *const kManifoldColorTransferFunctionsMSL =
      "inline float3 manifold_highlight_rolloff(float3 x) {\n"
      "    float3 t = min((x - 0.8) / 0.2, float3(10.0));\n"
      "    return select(0.8 + 0.2 * tanh(t), x, x <= float3(0.8));\n"
+     "}\n"
+     "\n"
+     "// BT.709 luma from encoded R'G'B' in [0, 1].\n"
+     "inline float manifold_bt709_luma(float3 rgb) {\n"
+     "    return dot(rgb, float3(0.2126, 0.7152, 0.0722));\n"
+     "}\n"
+     "\n"
+     "// Encoded R'G'B' in [0, 1] -> BT.709 limited-range Y'CbCr as 8-bit code\n"
+     "// values, unrounded: Y in [16, 235], Cb/Cr in [16, 240], neutral at 128.\n"
+     "// The SDR export writes these itself so the encoder does no conversion.\n"
+     "inline float3 manifold_bt709_limited_ycbcr(float3 rgb) {\n"
+     "    float y = manifold_bt709_luma(rgb);\n"
+     "    return float3(16.0 + 219.0 * y,\n"
+     "                  128.0 + 224.0 * (rgb.b - y) / 1.8556,\n"
+     "                  128.0 + 224.0 * (rgb.r - y) / 1.5748);\n"
      "}\n";
 
 #endif // MANIFOLD_COLOR_TRANSFER_FUNCTIONS_H

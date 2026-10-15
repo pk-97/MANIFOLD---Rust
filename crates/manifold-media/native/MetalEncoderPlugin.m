@@ -3,7 +3,7 @@
 // with zero GPU->CPU readback. Uses a compute shader to copy textures entirely on the GPU.
 //
 // Two encoding modes:
-//   SDR: H.264, BGRA8 pixel buffers
+//   SDR: H.264, 8-bit 4:2:0 limited-range BT.709 Y'CbCr pixel buffers we fill ourselves
 //   HDR: HEVC 10-bit, RGBA16Float pixel buffers with HDR10 metadata (BT.2020 / PQ)
 //
 // Exported C functions (FFI from Rust):
@@ -35,42 +35,53 @@
 #define ME_ERR_NULL_TEXTURE      8
 #define ME_ERR_SHADER_FAILED     9
 
-// -- Compute shader: texture copy ---------------------------------------------
-// Metal's read()/write() operate in logical RGBA space regardless of the
-// underlying pixel format. The hardware handles RGBA<->BGRA byte reordering
-// automatically via the texture's pixel format descriptor. A straight copy
-// in shader space is all that's needed -- no manual channel swizzle.
-// Works for both BGRA8Unorm (SDR) and RGBA16Float (HDR) destinations.
+// -- Compute shaders ----------------------------------------------------------
 
-// SDR: apply the true piecewise sRGB OETF (compositor outputs linear light;
-// CAMetalLayer applies the sRGB transfer function for display, but export
-// needs it baked in). Brighter-than-white EDR values pass through
-// `manifold_highlight_rolloff` first so they compress into white instead of
-// hard-clipping. Both functions live once in ColorTransferFunctions.h,
-// pinned to the Rust references in still_exporter.rs (`highlight_rolloff`,
-// `linear_to_srgb`) by metal_encoder.rs tests. Built by concatenating
-// kManifoldColorTransferFunctionsMSL with this kernel body in
-// MetalEncoder_CreateInternal (NSString literals can't be spliced at
-// compile time, so the include+function-def preamble lives there).
+// SDR: the kernel writes limited-range BT.709 Y'CbCr straight into the two
+// planes of a 4:2:0 video-range pixel buffer, so the encoder does no colour
+// conversion of its own. Handing it RGB made Apple's encoder convert in full
+// range while the stream was tagged TV range: blacks crushed, whites blew.
+// Per pixel: highlight rolloff (EDR compresses into white instead of
+// clipping), the true sRGB OETF (the compositor outputs linear light), then
+// the BT.709 limited-range matrix. All three live once in
+// ColorTransferFunctions.h, pinned to Rust references by metal_encoder.rs
+// tests. One thread per chroma sample: it writes its 2x2 block of luma and
+// the block's averaged chroma. Built by concatenating
+// kManifoldColorTransferFunctionsMSL with this body in
+// MetalEncoder_CreateInternal.
 static NSString* const kCopyShaderSDRBody =
-    @"kernel void copy_texture(\n"
-     "    texture2d<half, access::read>  src [[texture(0)]],\n"
-     "    texture2d<half, access::write> dst [[texture(1)]],\n"
+    @"kernel void encode_sdr_ycbcr(\n"
+     "    texture2d<half, access::read>   src  [[texture(0)]],\n"
+     "    texture2d<float, access::write> dstY [[texture(1)]],\n"
+     "    texture2d<float, access::write> dstC [[texture(2)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
-     "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
-     "    half4 c = src.read(gid);\n"
-     "    float3 lin = manifold_highlight_rolloff(float3(max(c.rgb, half3(0.0h))));\n"
-     "    float3 enc = manifold_srgb_encode(lin);\n"
-     "    // Triangular dither of one 8-bit step breaks up gradient banding before\n"
-     "    // the 8-bit write. Static per pixel so it costs the encoder nothing over\n"
-     "    // time; exact black and white get none so flat backgrounds stay clean.\n"
-     "    uint h = (gid.x * 73856093u) ^ (gid.y * 19349663u);\n"
-     "    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;\n"
-     "    float n = (float(h & 0xffffu) + float(h >> 16)) / 65535.0 - 1.0;\n"
-     "    float3 inside = float3(enc > 0.0) * float3(enc < 1.0);\n"
-     "    c.rgb = half3(saturate(enc + inside * (n / 255.0)));\n"
-     "    dst.write(c, gid);\n"
+     "    if (gid.x >= dstC.get_width() || gid.y >= dstC.get_height()) return;\n"
+     "    uint2 last = min(uint2(src.get_width(), src.get_height()),\n"
+     "                     uint2(dstY.get_width(), dstY.get_height())) - 1;\n"
+     "    float2 chroma = float2(0.0);\n"
+     "    for (uint i = 0; i < 4; ++i) {\n"
+     "        uint2 p = gid * 2 + uint2(i & 1u, i >> 1);\n"
+     "        half4 c = src.read(min(p, last));\n"
+     "        float3 lin = manifold_highlight_rolloff(float3(max(c.rgb, half3(0.0h))));\n"
+     "        float3 enc = manifold_srgb_encode(lin);\n"
+     "        float3 ycc = manifold_bt709_limited_ycbcr(enc);\n"
+     "        chroma += ycc.yz;\n"
+     "        if (p.x > last.x || p.y > last.y) continue;\n"
+     "        // Triangular dither of one 8-bit luma step breaks up gradient\n"
+     "        // banding. Static per pixel so it costs the encoder nothing over\n"
+     "        // time. Pixels whose channels are all exactly 0 or 1 (black,\n"
+     "        // white, pure primaries) get none, so flat fields stay clean and\n"
+     "        // black lands exactly on Y=16. Chroma is not dithered: noise there\n"
+     "        // would tint neutral greys.\n"
+     "        uint h = (p.x * 73856093u) ^ (p.y * 19349663u);\n"
+     "        h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;\n"
+     "        float n = (float(h & 0xffffu) + float(h >> 16)) / 65535.0 - 1.0;\n"
+     "        float3 inside = float3(enc > 0.0) * float3(enc < 1.0);\n"
+     "        float y = clamp(ycc.x + max3(inside.x, inside.y, inside.z) * n, 16.0, 235.0);\n"
+     "        dstY.write(float4(y / 255.0), p);\n"
+     "    }\n"
+     "    dstC.write(float4(chroma * (0.25 / 255.0), 0.0, 0.0), gid);\n"
      "}\n";
 
 // HDR: straight copy (PQ encoding already applied by PqEncoder pass).
@@ -222,7 +233,7 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int
 
         // Compile texture copy compute shader from source. SDR splices the
         // shared sRGB OETF (ColorTransferFunctions.h) ahead of the kernel
-        // body — see kCopyShaderSDRBody above (BUG-128).
+        // body — see kCopyShaderSDRBody above.
         NSError* shaderError = nil;
         NSString* shaderSrc = hdr
             ? kCopyShaderHDR
@@ -238,7 +249,8 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int
             return NULL;
         }
 
-        id<MTLFunction> swizzleFunc = [library newFunctionWithName:@"copy_texture"];
+        id<MTLFunction> swizzleFunc =
+            [library newFunctionWithName:hdr ? @"copy_texture" : @"encode_sdr_ycbcr"];
         if (swizzleFunc == nil)
         {
             NSLog(@"[MetalEncoder] Shader function not found");
@@ -345,9 +357,10 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int
                 AVVideoWidthKey:                  @(width),
                 AVVideoHeightKey:                 @(height),
                 AVVideoCompressionPropertiesKey:  compressionProps,
-                // VideoToolbox converts BGRA to limited (video) range YCbCr
-                // with the 709 matrix; these tags make the stream say so.
-                // sRGB-curve content is tagged 1-1-1 by convention.
+                // The kernel already wrote limited-range BT.709 Y'CbCr and
+                // each buffer carries the same tags (EncodeFrame), so the
+                // encoder passes samples through untouched. sRGB-curve
+                // content is tagged 1-1-1 by convention.
                 AVVideoColorPropertiesKey: @{
                     AVVideoColorPrimariesKey:          AVVideoColorPrimaries_ITU_R_709_2,
                     AVVideoTransferFunctionKey:        AVVideoTransferFunction_ITU_R_709_2,
@@ -355,7 +368,7 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int
                 },
             };
 
-            pixelFormatType = kCVPixelFormatType_32BGRA;
+            pixelFormatType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         }
 
         state->videoInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeVideo
@@ -446,44 +459,59 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         if (cvRet != kCVReturnSuccess || pixelBuffer == NULL)
             return ME_ERR_PIXELBUF_CREATE;
 
-        // Create a Metal texture wrapping the CVPixelBuffer (zero-copy -- shared GPU memory)
-        // HDR uses RGBA16Float; SDR uses BGRA8Unorm
-        MTLPixelFormat destFormat = state->isHDR ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm;
-
-        CVMetalTextureRef cvMetalTexture = NULL;
-        cvRet = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault,
-            state->textureCache,
-            pixelBuffer,
-            NULL,           // texture attributes
-            destFormat,     // matches CVPixelBuffer format
-            state->width,
-            state->height,
-            0,              // plane index
-            &cvMetalTexture);
-
-        if (cvRet != kCVReturnSuccess || cvMetalTexture == NULL)
+        // Metal textures wrapping the CVPixelBuffer (zero-copy -- shared GPU
+        // memory). HDR: one RGBA16Float plane. SDR: luma plane as R8Unorm,
+        // half-resolution interleaved CbCr plane as RG8Unorm.
+        CVMetalTextureRef cvMetalTexture = NULL;   // HDR RGBA or SDR luma
+        CVMetalTextureRef cvChromaTexture = NULL;  // SDR only
+        id<MTLTexture> destTexture = nil;
+        id<MTLTexture> chromaTexture = nil;
+        int planeCount = state->isHDR ? 1 : 2;
+        for (int plane = 0; plane < planeCount; plane++)
         {
-            CVPixelBufferRelease(pixelBuffer);
-            return ME_ERR_TEXTURE_CREATE;
+            MTLPixelFormat format = state->isHDR ? MTLPixelFormatRGBA16Float
+                                  : plane == 0   ? MTLPixelFormatR8Unorm
+                                                 : MTLPixelFormatRG8Unorm;
+            size_t w = state->isHDR ? (size_t)state->width
+                                    : CVPixelBufferGetWidthOfPlane(pixelBuffer, plane);
+            size_t h = state->isHDR ? (size_t)state->height
+                                    : CVPixelBufferGetHeightOfPlane(pixelBuffer, plane);
+            CVMetalTextureRef* slot = plane == 0 ? &cvMetalTexture : &cvChromaTexture;
+            cvRet = CVMetalTextureCacheCreateTextureFromImage(
+                kCFAllocatorDefault, state->textureCache, pixelBuffer, NULL,
+                format, w, h, plane, slot);
+            id<MTLTexture> tex = (cvRet == kCVReturnSuccess && *slot != NULL)
+                ? CVMetalTextureGetTexture(*slot) : nil;
+            if (tex == nil)
+            {
+                if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
+                if (cvMetalTexture != NULL) CFRelease(cvMetalTexture);
+                CVPixelBufferRelease(pixelBuffer);
+                return ME_ERR_TEXTURE_CREATE;
+            }
+            if (plane == 0) destTexture = tex; else chromaTexture = tex;
         }
 
-        id<MTLTexture> destTexture = CVMetalTextureGetTexture(cvMetalTexture);
-        if (destTexture == nil)
+        if (!state->isHDR)
         {
-            CFRelease(cvMetalTexture);
-            CVPixelBufferRelease(pixelBuffer);
-            return ME_ERR_TEXTURE_CREATE;
+            // Without these the encoder may assume another matrix for the
+            // Y'CbCr samples and convert them; with them it passes through.
+            CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey,
+                                  kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
+            CVBufferSetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey,
+                                  kCVImageBufferColorPrimaries_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
+            CVBufferSetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey,
+                                  kCVImageBufferTransferFunction_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
         }
 
-        // GPU compute: copy source texture -> CVPixelBuffer-backed texture.
-        // Metal's read()/write() handle format conversion automatically.
+        // GPU compute: source texture -> CVPixelBuffer-backed plane(s).
         // Entirely GPU-side -- no PCIe transfer.
         id<MTLTexture> srcTexture = (__bridge id<MTLTexture>)metalTexturePtr;
 
         id<MTLCommandBuffer> cmdBuf = [state->commandQueue commandBuffer];
         if (cmdBuf == nil)
         {
+            if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
             return ME_ERR_BLIT_FAILED;
@@ -492,6 +520,7 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         id<MTLComputeCommandEncoder> compute = [cmdBuf computeCommandEncoder];
         if (compute == nil)
         {
+            if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
             return ME_ERR_BLIT_FAILED;
@@ -500,12 +529,16 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         [compute setComputePipelineState:state->swizzlePipeline];
         [compute setTexture:srcTexture atIndex:0];
         [compute setTexture:destTexture atIndex:1];
+        if (chromaTexture != nil)
+            [compute setTexture:chromaTexture atIndex:2];
 
-        // Dispatch threads to cover the full texture
+        // HDR: one thread per pixel. SDR: one thread per chroma sample.
+        NSUInteger gridW = state->isHDR ? (NSUInteger)state->width  : chromaTexture.width;
+        NSUInteger gridH = state->isHDR ? (NSUInteger)state->height : chromaTexture.height;
         MTLSize threadGroupSize = MTLSizeMake(16, 16, 1);
         MTLSize gridSize = MTLSizeMake(
-            (state->width  + threadGroupSize.width  - 1) / threadGroupSize.width,
-            (state->height + threadGroupSize.height - 1) / threadGroupSize.height,
+            (gridW + threadGroupSize.width  - 1) / threadGroupSize.width,
+            (gridH + threadGroupSize.height - 1) / threadGroupSize.height,
             1);
         [compute dispatchThreadgroups:gridSize threadsPerThreadgroup:threadGroupSize];
 
@@ -516,6 +549,7 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         if (cmdBuf.status == MTLCommandBufferStatusError)
         {
             NSLog(@"[MetalEncoder] Compute command buffer error: %@", cmdBuf.error);
+            if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
             return ME_ERR_BLIT_FAILED;
@@ -541,6 +575,7 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
             {
                 NSLog(@"[MetalEncoder] writer failed while waiting for readiness at frame %d: %@",
                       frameIndex, state->assetWriter.error);
+                if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
                 CFRelease(cvMetalTexture);
                 CVPixelBufferRelease(pixelBuffer);
                 return ME_ERR_APPEND_FAILED;
@@ -557,6 +592,7 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         {
             NSLog(@"[MetalEncoder] writer still not ready after %dms at frame %d: %@",
                   maxWaitMs, frameIndex, state->assetWriter.error);
+            if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
             return ME_ERR_APPEND_FAILED;
@@ -565,6 +601,7 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         BOOL appended = [state->adaptor appendPixelBuffer:pixelBuffer
                                      withPresentationTime:presentTime];
 
+        if (cvChromaTexture != NULL) CFRelease(cvChromaTexture);
         CFRelease(cvMetalTexture);
         CVPixelBufferRelease(pixelBuffer);
 
