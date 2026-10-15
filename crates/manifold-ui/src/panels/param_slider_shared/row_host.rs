@@ -1157,7 +1157,9 @@ impl RowHost {
             return;
         };
         let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
-        let text = format_param_value(
+        let mut buf = super::state::ParamValueText::default();
+        let text = super::state::param_value_text(
+            &mut buf,
             value,
             spec.min,
             spec.whole_numbers,
@@ -1165,7 +1167,7 @@ impl RowHost {
             spec.value_labels.as_deref(),
             spec.unit,
         );
-        crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), &text);
+        crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), text);
         crate::slider::BitmapSlider::mark_past_end(tree, ids, super::state::past_slider_end(value, spec));
     }
 

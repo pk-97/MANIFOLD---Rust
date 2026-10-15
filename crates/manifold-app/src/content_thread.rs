@@ -156,6 +156,7 @@ pub struct ContentThread {
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
+    pub mod_published: crate::content_state::ModSnapshotPool,
 
     /// Audio-modulation capture runtime — owns the live audio capture device +
     /// feature worker and feeds the engine its per-send feature snapshot each
@@ -1155,18 +1156,18 @@ impl ContentThread {
         // without flagging `modulation_active`, and gating the send on that
         // flag left the UI showing stale values until the next structural
         // snapshot. The capture is a linear walk over the param manifests into
-        // a reusable scratch buffer (zero-alloc steady state), then one clone
-        // of the flat buffer. Blocks are id-keyed at capture, so a structural
+        // a reusable scratch buffer, then one copy into a recycled published
+        // buffer (zero-alloc steady state). Blocks are id-keyed at capture, so a structural
         // edit landing between capture and the UI's apply can't misroute
         // values (see ModulationSnapshot).
-        // D15: the capture compares as it writes; the buffer is cloned and
+        // D15: the capture compares as it writes; the buffer is copied and
         // `values_seq` moves only when a live value changed.
         let modulation_snapshot = if let Some(project) = self.engine.project()
             && self.mod_scratch.capture_into(project)
         {
             self.reactions.values_seq += 1;
             record_work(WorkKind::ModSnapshotCopy);
-            Some(self.mod_scratch.clone())
+            Some(self.mod_published.publish(&self.mod_scratch))
         } else {
             None
         };

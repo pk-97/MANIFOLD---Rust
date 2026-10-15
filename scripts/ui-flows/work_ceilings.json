@@ -69,7 +69,7 @@
       "point_drag_1s": {
         "ChromeLayout": 9,
         "ClipProjection": 3,
-        "FrameAlloc": 4287,
+        "FrameAlloc": 4251,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 64,
@@ -89,7 +89,7 @@
     "work-browser-search": {
       "type_query": {
         "ChromeLayout": 3,
-        "FrameAlloc": 461,
+        "FrameAlloc": 443,
         "RegionRebuild": 1,
         "ValuePush": 1
       }
@@ -98,7 +98,7 @@
       "drag_2s": {
         "ChromeLayout": 12,
         "ClipProjection": 120,
-        "FrameAlloc": 6831,
+        "FrameAlloc": 6778,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 7,
@@ -113,7 +113,7 @@
       "trim_1s": {
         "ChromeLayout": 12,
         "ClipProjection": 61,
-        "FrameAlloc": 4743,
+        "FrameAlloc": 4690,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 7,
@@ -137,7 +137,7 @@
       "four_cursor_moves": {
         "ChromeLayout": 12,
         "ClipProjection": 1,
-        "FrameAlloc": 1539,
+        "FrameAlloc": 1510,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 6,
@@ -151,16 +151,28 @@
     "work-dock-scroll": {
       "four_notches": {
         "ChromeLayout": 12,
-        "FrameAlloc": 1464,
+        "FrameAlloc": 1412,
         "InPlaceUpdate": 4,
         "SlotInvalidate": 4,
         "ValuePush": 4
+      },
+      "inspector_drag_moves_dock": {
+        "ChromeLayout": 3,
+        "FrameAlloc": 624,
+        "GridBitmapRepaint": 27,
+        "InPlaceUpdate": 3,
+        "OverviewRepaint": 1,
+        "RegionRebuild": 1,
+        "RegionTranslate": 1,
+        "SlotInvalidate": 8,
+        "TextMeasureMiss": 4,
+        "ValuePush": 1
       }
     },
     "work-drawer-tween": {
       "drawer_change_click": {
         "ChromeLayout": 6,
-        "FrameAlloc": 1062,
+        "FrameAlloc": 1036,
         "InspectorSync": 2,
         "LaneProjection": 2,
         "RegionRebuild": 4,
@@ -168,7 +180,6 @@
         "ValuePush": 2
       },
       "drawer_change_half_second": {
-        "FrameAlloc": 14,
         "ValuePush": 1
       }
     },
@@ -186,7 +197,7 @@
       "open_click": {
         "ChromeLayout": 1,
         "EditorTreeBuild": 3,
-        "FrameAlloc": 2251,
+        "FrameAlloc": 2243,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 8,
@@ -202,7 +213,7 @@
     "work-fold-toggle": {
       "chrome_fold": {
         "ChromeLayout": 3,
-        "FrameAlloc": 520,
+        "FrameAlloc": 502,
         "RegionRebuild": 1,
         "SlotInvalidate": 1,
         "ValuePush": 1
@@ -212,7 +223,7 @@
       "follow_2s": {
         "ChromeLayout": 3,
         "DriverScan": 1,
-        "FrameAlloc": 160,
+        "FrameAlloc": 148,
         "GridBitmapRepaint": 7,
         "InPlaceUpdate": 1,
         "OverviewRepaint": 1,
@@ -232,11 +243,11 @@
     "work-inspector-resize": {
       "resize_1s": {
         "ChromeLayout": 180,
-        "FrameAlloc": 76802,
+        "FrameAlloc": 72722,
         "GridBitmapRepaint": 180,
-        "InPlaceUpdate": 60,
+        "InPlaceUpdate": 180,
         "OverviewRepaint": 60,
-        "RegionRebuild": 180,
+        "RegionRebuild": 60,
         "SlotInvalidate": 480,
         "ValuePush": 60
       }
@@ -244,7 +255,7 @@
     "work-lane-resize": {
       "resize_1s": {
         "ChromeLayout": 177,
-        "FrameAlloc": 14098,
+        "FrameAlloc": 13390,
         "GridBitmapRepaint": 59,
         "InPlaceUpdate": 59,
         "LaneProjection": 60,
@@ -262,7 +273,7 @@
       "drag_1s": {
         "ChromeLayout": 6,
         "ClipProjection": 2,
-        "FrameAlloc": 1629,
+        "FrameAlloc": 1605,
         "GridBitmapRepaint": 14,
         "InspectorSync": 2,
         "LaneProjection": 4,
@@ -278,7 +289,7 @@
         "FrameAlloc": 163
       },
       "type_range_max": {
-        "FrameAlloc": 814,
+        "FrameAlloc": 744,
         "ValuePush": 4
       }
     },
@@ -286,7 +297,7 @@
       "marquee_1s": {
         "ChromeLayout": 12,
         "ClipProjection": 62,
-        "FrameAlloc": 4834,
+        "FrameAlloc": 4781,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 7,
@@ -304,13 +315,13 @@
     },
     "work-modulated-step": {
       "step_half_second": {
-        "FrameAlloc": 561,
+        "FrameAlloc": 1,
         "ValuePush": 28
       }
     },
     "work-node-param-drag": {
       "card_lane_drag": {
-        "FrameAlloc": 628,
+        "FrameAlloc": 283,
         "ValuePush": 20
       }
     },
@@ -318,7 +329,7 @@
       "cursor_select_cursor_paused": {
         "ChromeLayout": 12,
         "ClipProjection": 3,
-        "FrameAlloc": 2550,
+        "FrameAlloc": 2497,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 9,
@@ -353,7 +364,7 @@
       "region_move_1s": {
         "ChromeLayout": 6,
         "ClipProjection": 61,
-        "FrameAlloc": 3715,
+        "FrameAlloc": 3691,
         "GridBitmapRepaint": 14,
         "InspectorSync": 2,
         "LaneProjection": 5,
@@ -373,7 +384,7 @@
     "work-scrollbar-drag": {
       "drag_1s": {
         "ChromeLayout": 177,
-        "FrameAlloc": 9117,
+        "FrameAlloc": 8409,
         "GridBitmapRepaint": 413,
         "InPlaceUpdate": 59,
         "OverviewRepaint": 59,
@@ -385,7 +396,7 @@
       "select_clip": {
         "ChromeLayout": 3,
         "ClipProjection": 1,
-        "FrameAlloc": 844,
+        "FrameAlloc": 832,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 3,
@@ -404,20 +415,20 @@
     },
     "work-slider-drag": {
       "drag_2s": {
-        "FrameAlloc": 2787,
+        "FrameAlloc": 489,
         "ValuePush": 121
       }
     },
     "work-slider-grab": {
       "three_grabs_lanes_hidden": {
-        "FrameAlloc": 119,
+        "FrameAlloc": 27,
         "ValuePush": 5
       }
     },
     "work-split-drag": {
       "split_1s": {
         "ChromeLayout": 240,
-        "FrameAlloc": 9122,
+        "FrameAlloc": 8402,
         "InPlaceUpdate": 60,
         "RegionTranslate": 120,
         "SlotInvalidate": 480,
@@ -426,14 +437,14 @@
     },
     "work-text-commit": {
       "type_and_commit": {
-        "FrameAlloc": 43,
+        "FrameAlloc": 24,
         "ValuePush": 1
       }
     },
     "work-trigger-shape": {
       "drag_1s": {
         "ChromeLayout": 6,
-        "FrameAlloc": 3144,
+        "FrameAlloc": 3108,
         "InspectorSync": 2,
         "LaneProjection": 2,
         "RegionRebuild": 4,
@@ -449,14 +460,14 @@
     },
     "work-values-undo": {
       "undo": {
-        "FrameAlloc": 21,
+        "FrameAlloc": 2,
         "ValuePush": 1
       }
     },
     "work-zoom": {
       "zoom_30_notches": {
         "ChromeLayout": 51,
-        "FrameAlloc": 2567,
+        "FrameAlloc": 2363,
         "GridBitmapRepaint": 119,
         "InPlaceUpdate": 17,
         "OverviewRepaint": 17,

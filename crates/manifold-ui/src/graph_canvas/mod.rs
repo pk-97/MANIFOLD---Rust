@@ -527,6 +527,9 @@ pub struct GraphCanvas {
     /// live node set on a topology rebuild. Empty when no editor is watching.
     pub(crate) spark_history:
         ahash::AHashMap<manifold_foundation::NodeId, std::collections::VecDeque<f32>>,
+    /// Scratch for [`Self::apply_live_values`]: each live node id's position
+    /// in this frame's feed, refilled in place.
+    pub(crate) live_index: ahash::AHashMap<manifold_foundation::NodeId, usize>,
     /// Runtime id of a node the canvas should centre + select once it is laid
     /// out at the current scope — set by [`Self::focus_node`] (jump-to-node from
     /// a card param) and consumed by [`Self::resolve_pending_focus`] one frame
@@ -651,6 +654,7 @@ impl GraphCanvas {
             scope_titles: Vec::new(),
             format_on_enter: false,
             spark_history: ahash::AHashMap::new(),
+            live_index: ahash::AHashMap::new(),
             pending_focus: None,
             fit_pending: true,
             node_search: String::new(),

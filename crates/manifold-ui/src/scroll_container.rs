@@ -348,6 +348,13 @@ impl ScrollContainer {
         self.viewport
     }
 
+    /// The built clip, content and scrollbar moved by `(dx, dy)` with their
+    /// region: the viewport moves with them.
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        self.viewport.x += dx;
+        self.viewport.y += dy;
+    }
+
     /// Reveal live content bounds without rebuilding or changing the user's
     /// scroll when the item is already visible. Tall items align at the top.
     pub fn reveal_rect(&mut self, tree: &mut UITree, bounds: Rect) -> bool {

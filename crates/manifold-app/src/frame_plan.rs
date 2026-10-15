@@ -418,6 +418,9 @@ pub(crate) struct FramePlan {
     pub rebuild: RegionMask,
     /// Rect origin moved, size did not.
     pub translate: RegionMask,
+    /// Rect resized; the region's panel lays its nodes out again in place at
+    /// the new rect.
+    pub resize: RegionMask,
     pub in_place: RegionMask,
     /// Atlas slots to repaint.
     pub repaint: RegionMask,
@@ -641,11 +644,14 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
 ///
 /// Translate is live for the regions whose panels take a new rect after a
 /// move: the three chrome bars (their host re-lays out at the rect it is
-/// handed, [`crate::ui_root::UIRoot::follow_translate`]) and the split
-/// handle (ids only). The layer headers and viewport lay out again in place
-/// on a rect move ([`ViewportMoves::relayout`]). The inspector and dock keep
-/// their rects inside their scroll containers, so a rect change rebuilds
-/// them.
+/// handed, [`crate::ui_root::UIRoot::follow_translate`]), the split handle
+/// (ids only) and the audio dock (its scroll container and hit rects follow).
+/// The bars and the split handle also take a new size in place
+/// ([`crate::ui_root::UIRoot::follow_resize`]). The layer headers and
+/// viewport lay out again in place on a rect move
+/// ([`ViewportMoves::relayout`]). The inspector lays its cards out at its
+/// width while it builds, so any rect change rebuilds it, and a new dock
+/// size rebuilds the dock.
 #[allow(clippy::too_many_arguments)]
 fn plan_regions(
     plan: &mut FramePlan,
@@ -670,6 +676,7 @@ fn plan_regions(
     let moved = |r: MainRegion| last.rects.get(r) != next.rects.get(r);
     let mut rebuild = RegionMask::NONE;
     let mut translate = RegionMask::NONE;
+    let mut resize = RegionMask::NONE;
     let mut in_place = RegionMask::NONE;
     let live = projections.contains(Projection::LiveValues)
         || projections.contains(Projection::LiveShapes)
@@ -677,8 +684,10 @@ fn plan_regions(
         || projections.contains(Projection::SceneEyes);
 
     for chrome in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+        // A resized bar takes its new rect and lays out in place.
         if size(chrome) {
-            rebuild.insert(chrome);
+            resize.insert(chrome);
+            in_place.insert(chrome);
         } else if origin(chrome) {
             translate.insert(chrome);
         }
@@ -703,12 +712,12 @@ fn plan_regions(
         in_place.insert(inspector);
     }
 
+    // The dock moves when the inspector beside it resizes: it translates.
     let dock = MainRegion::AudioDock;
-    if moved(dock)
-        || projections.contains(Projection::AudioDevices)
-        || last.dock_view != next.dock_view
-    {
+    if size(dock) || projections.contains(Projection::AudioDevices) || last.dock_view != next.dock_view {
         rebuild.insert(dock);
+    } else if origin(dock) {
+        translate.insert(dock);
     }
     if last.dock_scroll_px != next.dock_scroll_px {
         in_place.insert(dock);
@@ -716,7 +725,7 @@ fn plan_regions(
 
     let handles = MainRegion::SplitHandles;
     if size(handles) {
-        rebuild.insert(handles);
+        resize.insert(handles);
     } else if origin(handles) {
         translate.insert(handles);
     }
@@ -784,9 +793,10 @@ fn plan_regions(
     // Ghosts are refilled from input while a ghost exists; no input here.
     plan.rebuild = rebuild;
     plan.translate = translate;
+    plan.resize = resize;
     plan.in_place = in_place;
     plan.rects_moved = last.rects != next.rects;
-    let mut repaint = rebuild.union(translate).union(in_place);
+    let mut repaint = rebuild.union(translate).union(resize).union(in_place);
     repaint.0 &= !(1 << MainRegion::Ghosts as u8);
     plan.repaint = repaint;
 }
@@ -1190,7 +1200,8 @@ mod tests {
     #[test]
     fn region_transport_header_footer() {
         for region in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
-            assert!(plan(resized(region)).rebuild.contains(region));
+            let p = plan(resized(region));
+            assert!(p.resize.contains(region) && p.in_place.contains(region) && !p.rebuild.contains(region));
             let p = plan(moved(region));
             assert!(p.translate.contains(region) && !p.rebuild.contains(region));
             assert!(plan(with_parts(&[Part::Settings])).in_place.contains(region));
@@ -1216,8 +1227,8 @@ mod tests {
         assert!(p.rebuild.contains(r));
         assert!(p.projections.contains(Projection::InspectorSync));
         assert!(!p.projections.contains(Projection::ProjectSync));
-        // The inspector keeps its rects inside its scroll containers: a move
-        // rebuilds it until it re-anchors in place (P5b).
+        // The inspector lays its cards out at its width while it builds: any
+        // rect change rebuilds it.
         assert!(plan(moved(r)).rebuild.contains(r));
         let mut next = base();
         next.inspector_scroll_px = 12;
@@ -1235,7 +1246,8 @@ mod tests {
         let mut next = base();
         next.dock_view = 1;
         assert!(plan(next).rebuild.contains(r));
-        assert!(plan(moved(r)).rebuild.contains(r));
+        let p = plan(moved(r));
+        assert!(p.translate.contains(r) && !p.rebuild.contains(r), "the dock follows the inspector's edge");
         let mut next = base();
         next.dock_scroll_px = 3;
         let p = plan(next);
@@ -1245,7 +1257,8 @@ mod tests {
     #[test]
     fn region_split_handles() {
         let r = MainRegion::SplitHandles;
-        assert!(plan(resized(r)).rebuild.contains(r));
+        let p = plan(resized(r));
+        assert!(p.resize.contains(r) && !p.rebuild.contains(r));
         let p = plan(moved(r));
         assert!(p.translate.contains(r) && !p.rebuild.contains(r));
     }

@@ -195,33 +195,14 @@ impl PerformIntake {
 
 /// Text as the HUD prints it, held on the stack so deriving it per frame
 /// allocates nothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ShownText {
-    bytes: [u8; 15],
-    len: u8,
-}
+pub(crate) type ShownText = manifold_core::scratch::StackText<15>;
 
-impl ShownText {
-    /// `value` printed with one decimal, exactly as the HUD's `{:.1}`.
-    fn one_decimal(value: f64) -> Self {
-        use std::fmt::Write;
-        let mut text = Self::default();
-        let _ = write!(text, "{value:.1}");
-        text
-    }
-}
-
-impl std::fmt::Write for ShownText {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        let start = self.len as usize;
-        let end = start + s.len();
-        if end > self.bytes.len() {
-            return Err(std::fmt::Error);
-        }
-        self.bytes[start..end].copy_from_slice(s.as_bytes());
-        self.len = end as u8;
-        Ok(())
-    }
+/// `value` printed with one decimal, exactly as the HUD's `{:.1}`.
+fn one_decimal(value: f64) -> ShownText {
+    use std::fmt::Write;
+    let mut text = ShownText::default();
+    let _ = write!(text, "{value:.1}");
+    text
 }
 
 /// The track rows a section lists, as indices into the PLAY group, at most
@@ -325,12 +306,12 @@ impl PerformHudInputs {
             next_cue: next.map(|i| i as u16),
             countdown: analysis
                 .beats_to_next
-                .map(|b| ShownText::one_decimal(cue::countdown_bars(b, beats_per_bar))),
+                .map(|b| one_decimal(cue::countdown_bars(b, beats_per_bar))),
             bar_beat,
             section_fill_px: progress.map(|p| render::section_fill_px(layout.logical_w as f32, p)),
             now_tracks,
             next_tracks,
-            bpm: ShownText::one_decimal(content_state.bpm),
+            bpm: one_decimal(content_state.bpm),
             playing: content_state.is_playing,
             ableton_connected: content_state.ableton_connected,
             cues_empty: cues.is_empty(),

@@ -51,6 +51,9 @@ fn fmt_macro(v: f32) -> String {
     format!("{:.2}", v)
 }
 
+/// A macro's default name ("M1"), written on the stack.
+type MacroName = manifold_foundation::scratch::StackText<8>;
+
 // what an Ableton-range
 // trim-bar drag targets — folds the old `i32` slot-index sentinel (−1 idle)
 // plus its parallel min/max bool onto `DragController`, the same
@@ -93,12 +96,17 @@ impl Default for MacrosPanel {
 }
 
 impl MacrosPanel {
-    fn display_label(labels: &[String], index: usize) -> String {
-        labels
-            .get(index)
-            .filter(|label| !label.is_empty())
-            .cloned()
-            .unwrap_or_else(|| format!("M{}", index + 1))
+    /// The slot's label, or its default name ("M1") written into `name`.
+    fn display_label<'a>(labels: &'a [String], index: usize, name: &'a mut MacroName) -> &'a str {
+        use std::fmt::Write;
+        match labels.get(index).filter(|label| !label.is_empty()) {
+            Some(label) => label,
+            None => {
+                name.clear();
+                let _ = write!(name, "M{}", index + 1);
+                name.as_str()
+            }
+        }
     }
 
     pub fn new() -> Self {
@@ -152,11 +160,10 @@ impl MacrosPanel {
         self.first_node.map_or(usize::MAX, |id| id.slot())
     }
 
-    /// Set Ableton display data per macro slot (call before build).
-    pub fn set_ableton_displays(&mut self, displays: &[Option<AbletonMappingDisplay>]) {
-        for (i, d) in displays.iter().enumerate().take(MACRO_COUNT) {
-            self.ableton_displays[i] = d.clone();
-        }
+    /// The Ableton display data per macro slot, which the host writes in
+    /// place (read by the next build).
+    pub fn ableton_displays_mut(&mut self) -> &mut [Option<AbletonMappingDisplay>; MACRO_COUNT] {
+        &mut self.ableton_displays
     }
 
     /// Set Ableton trim ranges per macro slot (call before build or sync).
@@ -189,34 +196,30 @@ impl MacrosPanel {
         self.sliders.iter().any(|s| s.is_dragging())
     }
 
-    /// Sync cached macro values from project state.
+    /// Sync cached macro values from project state. Allocates nothing: the
+    /// labels and value text are written on the stack.
     pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32], labels: &[String]) {
-        let copied_label = self
-            .copied_flash
-            .label_id()
-            .map(|label_id| {
-                self.sliders
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, s)| {
-                        s.ids()
-                            .filter(|ids| ids.label == Some(label_id))
-                            .map(|_| Self::display_label(labels, i))
-                    })
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
-        self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
+        use std::fmt::Write;
+        let flash = self.copied_flash.label_id();
+        let copied = flash.and_then(|label_id| {
+            self.sliders.iter().position(|s| s.ids().is_some_and(|ids| ids.label == Some(label_id)))
+        });
+        let mut name = MacroName::default();
+        let copied_label = copied.map_or("", |i| Self::display_label(labels, i, &mut name));
+        self.copied_flash.sync(tree, FONT_SIZE, copied_label);
 
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(ids) = s.ids()
                 && let Some(label) = ids.label
-                && Some(label) != self.copied_flash.label_id()
+                && Some(label) != flash
             {
-                tree.set_text(label, &Self::display_label(labels, i));
+                let mut name = MacroName::default();
+                tree.set_text(label, Self::display_label(labels, i, &mut name));
             }
             if let Some(&v) = values.get(i) {
-                s.sync(tree, v, &fmt_macro);
+                let mut text = manifold_foundation::scratch::StackText::<48>::default();
+                let _ = write!(text, "{v:.2}");
+                s.sync_text(tree, v, text.as_str());
             }
         }
     }
@@ -563,15 +566,13 @@ pub(super) mod tests {
         let mut panel = MacrosPanel::new();
         panel.set_collapsed(false);
         let base = panel.height();
-        let mut displays: Vec<Option<AbletonMappingDisplay>> = vec![None; MACRO_COUNT];
-        displays[0] = Some(AbletonMappingDisplay {
+        panel.ableton_displays_mut()[0] = Some(AbletonMappingDisplay {
             macro_name: "Macro 1".into(),
             track_name: "Track".into(),
             device_name: "Dev".into(),
             status: crate::panels::param_slider_shared::AbletonMappingStatus::Active,
             inverted: false,
         });
-        panel.set_ableton_displays(&displays);
         assert!(panel.height() > base);
     }
 
