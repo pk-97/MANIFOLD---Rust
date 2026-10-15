@@ -45,6 +45,36 @@ class StorageGateTests(unittest.TestCase):
             _, refusal = landing_gate.build_environment(["cargo", "test"], self.repo)
         self.assertIn("conflicting", refusal)
 
+    def test_one_gate_maintains_caches_once_and_checks_the_reserve_every_leg(self):
+        target = self.repo / "target"
+        good = BuildCheck(True, target, 200 * 2**30)
+        short = BuildCheck(False, target, 10 * 2**30, 30 * 2**30,
+                           reason="REFUSED: only 10.0 GiB free", reclaimable=True)
+        token = landing_gate.MAINTAINED_TARGETS.set(set())
+        try:
+            with patch.dict(os.environ, {}, clear=True), \
+                    patch("storage_budget.disk_free", return_value=123), \
+                    patch("storage_budget.check_build",
+                          side_effect=[good, good, short, good]) as check:
+                for _ in range(3):
+                    _, refusal = landing_gate.build_environment(["cargo", "clippy"], self.repo)
+                    self.assertIsNone(refusal)
+        finally:
+            landing_gate.MAINTAINED_TARGETS.reset(token)
+        calls = [(c.args, c.kwargs) for c in check.call_args_list]
+        # Full maintenance, a read-only reserve check, then a read-only check
+        # that falls short and so maintains again before admitting.
+        self.assertEqual(calls, [((target, self.repo), {}),
+                                 ((target, self.repo), {"free_bytes": 123}),
+                                 ((target, self.repo), {"free_bytes": 123}),
+                                 ((target, self.repo), {})])
+        # Outside a gate run every admission maintains.
+        with patch.dict(os.environ, {}, clear=True), \
+                patch("storage_budget.check_build", return_value=good) as check:
+            landing_gate.build_environment(["cargo", "clippy"], self.repo)
+            landing_gate.build_environment(["cargo", "clippy"], self.repo)
+        self.assertEqual([c.kwargs for c in check.call_args_list], [{}, {}])
+
     def test_reserve_shortfall_reclaims_then_admits(self):
         short = BuildCheck(False, self.repo / "target", 10 * 2**30, 100 * 2**30,
                            reason="REFUSED: only 10.0 GiB free", reclaimable=True)
