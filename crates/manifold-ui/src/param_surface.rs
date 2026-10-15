@@ -346,8 +346,8 @@ pub struct ParamRow {
 impl ParamRow {
     /// A driver, envelope, automation lane, audio mod or Ableton mapping on
     /// the row. Hiding such a row hides a live control from the performer, so
-    /// both scene surfaces show it whatever its role (SCENE_SURFACES D6
-    /// (attached rows are always shown)).
+    /// the Scene tab shows it whatever its role; the card keeps it through
+    /// the pin the attach wrote (SCENE_SURFACES D6 (attached rows)).
     pub fn is_attached(&self) -> bool {
         self.modulation.driver_active
             || self.modulation.envelope_active
