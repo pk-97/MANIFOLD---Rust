@@ -109,7 +109,7 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
         // As `apply_frame_plan` runs it: the push, then the bars lay out.
         Projection::ChromePush => {
             crate::ui_bridge::push_chrome(ui, &data.project, &data.content, &data.selection, false, None, &mut cache);
-            ui.lay_out_chrome();
+            assert!(ui.lay_out_chrome().is_empty(), "a chrome push changed a bar's structure");
         }
         Projection::ClockPush => crate::ui_bridge::push_clock(ui, &data.project, &data.content, &mut cache),
         Projection::LiveValues => crate::ui_bridge::push_live(

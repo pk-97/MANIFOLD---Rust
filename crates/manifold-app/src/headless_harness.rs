@@ -121,6 +121,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         node_preview_normalize: false,
         cached_graph_snapshot: None,
         mod_scratch: crate::content_state::ModulationSnapshot::empty(),
+        mod_published: Default::default(),
         audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
         cached_midi_clock_position: Arc::from(""),
         cached_midi_clock_device: Arc::from(""),

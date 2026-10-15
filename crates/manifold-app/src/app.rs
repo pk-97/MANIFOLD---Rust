@@ -385,6 +385,9 @@ pub struct Application {
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
     /// Shares the editor window with `graph_canvas`.
     pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
+    /// What the shown node inspector's title and description were built
+    /// from: while it matches, a frame only refreshes the live port values.
+    pub(crate) node_inspector_key: Option<crate::editor_bridge::NodeInspectorKey>,
     /// UI-side mirror of the node-output preview's auto-gain toggle. On by
     /// default; the editor's preview pane flips it and sends
     /// `ContentCommand::SetNodePreviewNormalize` to the content thread. Drives
@@ -663,6 +666,7 @@ impl Application {
             graph_canvas: None,
             editor_ui_graph: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
+            node_inspector_key: None,
             node_preview_normalize: false,
             editor_sidebar_intents: manifold_ui::intent::IntentRegistry::new(),
             editor_smart_preview_toggle_id: None,
@@ -1936,6 +1940,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 node_preview_normalize: false,
                 cached_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
+                mod_published: Default::default(),
                 audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
                 cached_midi_clock_position: Arc::from(""),
                 cached_midi_clock_device: Arc::from(""),
