@@ -164,25 +164,26 @@ fn source_switch_cuts_old_starts_preserves_phase_and_accepts_new_same_beat_launc
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
 
-    // Undoing the assignment at the same beat must not replay A's queued start.
+    // A stepped value counts the assigned source's arrangement starts at the
+    // beat, so an undo shows A's count once and never replays a queued start.
     run(&mut engine, &mut command, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), None);
+    assert_eq!(step_value(&engine, &owner_id), Some(1.0));
 
-    // Re-apply B: starts queued before this binding remain cut off.
+    // Re-apply B: B's start at beat 0 counts once.
     run(&mut engine, &mut command, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), None);
+    assert_eq!(step_value(&engine, &owner_id), Some(1.0));
 
-    // B was already active at assignment, so phase is available without a
-    // Step edge; the muted owner does not mute its trigger children.
+    // Phase is available without a new edge; the muted owner does not mute
+    // its trigger children.
     engine.locate(Seconds(0.5));
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), None);
+    assert_eq!(step_value(&engine, &owner_id), Some(1.0));
     assert_eq!(
         engine.clip_controls().elapsed(
             &ClipTriggerSource::Lane {
@@ -194,8 +195,8 @@ fn source_switch_cuts_old_starts_preserves_phase_and_accepts_new_same_beat_launc
         Some(Beats(1.0))
     );
 
-    // A session launch creates a new B start at the assignment beat and must
-    // remain a real edge even though older B starts were cut off.
+    // A session launch is live input: it adds one step on top of the
+    // arrangement count, even though starts queued before the binding are cut off.
     run(&mut engine, &mut command, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
@@ -205,17 +206,18 @@ fn source_switch_cuts_old_starts_preserves_phase_and_accepts_new_same_beat_launc
     engine.session_set_quantize(Beats::ZERO);
     engine.session_launch_slot(source_b_id.clone(), scene_id);
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), Some(1.0));
+    assert_eq!(step_value(&engine, &owner_id), Some(2.0));
 
-    // The later arrangement B start is also new and advances exactly once.
+    // Back on the arrangement, B's start at beat 4 counts; the live step stays.
     engine.session_back_to_arrangement(Some(source_b_id.clone()));
     engine.locate(Seconds(2.0));
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), Some(2.0));
+    assert_eq!(step_value(&engine, &owner_id), Some(3.0));
 
+    // A seek drops the live step: beat 0 shows what it showed the first time.
     engine.seek_to(Seconds::ZERO);
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), Some(3.0), "seek starts a fresh transport history");
+    assert_eq!(step_value(&engine, &owner_id), Some(1.0), "seek returns to the timeline's count");
 
     // Keep the command target live and prove the stable IDs survived engine
     // initialization and all source edits.
@@ -518,8 +520,6 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
         clock_jumps_to(&mut engine, Beats(beat));
         engine.sync_clips_to_time();
         tick(&mut engine);
-    // Envelope Step is composed on the following evaluation.
-    tick(&mut engine);
         assert_eq!(
             step_value_for(&engine, &owner_id, PARAM_ID),
             expected,
@@ -529,7 +529,8 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     }
 
     // Disconnecting leaves the authored response untouched but makes its
-    // selected source inert. Undo restores the same child connection.
+    // selected source inert: nothing counts, so the base shows. Undo restores
+    // the same child connection and its count at the new beat.
     let mut disconnect = SetParamClipTriggerSourceCommand::for_assignment(
         target.clone(),
         PARAM_ID,
@@ -542,10 +543,8 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     clock_jumps_to(&mut engine, Beats(4.0));
     engine.sync_clips_to_time();
     tick(&mut engine);
-    // Envelope Step is composed on the following evaluation.
-    tick(&mut engine);
-    assert_eq!(step_value_for(&engine, &owner_id, PARAM_ID), Some(1.0));
-    assert_value(&engine, &owner_id, 1.0);
+    assert_eq!(step_value_for(&engine, &owner_id, PARAM_ID), None);
+    assert_value(&engine, &owner_id, 0.0);
 
     run(&mut engine, &mut disconnect, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
@@ -553,10 +552,8 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     clock_jumps_to(&mut engine, Beats(8.0));
     engine.sync_clips_to_time();
     tick(&mut engine);
-    // Envelope Step is composed on the following evaluation.
-    tick(&mut engine);
-    assert_eq!(step_value_for(&engine, &owner_id, PARAM_ID), Some(2.0));
-    assert_value(&engine, &owner_id, 2.0);
+    assert_eq!(step_value_for(&engine, &owner_id, PARAM_ID), Some(3.0));
+    assert_value(&engine, &owner_id, 3.0);
 
     let mut save_path = std::env::temp_dir();
     save_path.push(format!(
@@ -596,8 +593,6 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
         clock_jumps_to(&mut loaded_engine, Beats(beat));
         loaded_engine.sync_clips_to_time();
         tick(&mut loaded_engine);
-    // Envelope Step is composed on the following evaluation.
-    tick(&mut loaded_engine);
         assert_eq!(
             step_value_for(&loaded_engine, &owner_id, PARAM_ID),
             expected,
@@ -650,14 +645,10 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     clock_jumps_to(&mut missing_engine, Beats::ZERO);
     missing_engine.sync_clips_to_time();
     tick(&mut missing_engine);
-    // Envelope Step is composed on the following evaluation.
-    tick(&mut missing_engine);
     assert_eq!(step_value_for(&missing_engine, &owner_id, PARAM_ID), None);
     assert_value(&missing_engine, &owner_id, 0.0);
     clock_jumps_to(&mut missing_engine, Beats(1.0));
     missing_engine.sync_clips_to_time();
-    tick(&mut missing_engine);
-    // Envelope Step is composed on the following evaluation.
     tick(&mut missing_engine);
     assert_eq!(step_value_for(&missing_engine, &owner_id, PARAM_ID), None);
     assert_value(&missing_engine, &owner_id, 0.0);

@@ -61,7 +61,8 @@ const DEFAULT_QUANTIZE_BEATS: f64 = 4.0;
 pub struct SessionRuntime {
     playing: AHashMap<LayerId, PlayingSlot>,
     pending: Vec<PendingSlotLaunch>,
-    session_override: AHashSet<LayerId>,
+    /// Detached layers, each with the beat its arrangement stopped at.
+    session_override: AHashMap<LayerId, Beats>,
     arrangement_resumed_at: AHashMap<LayerId, Beats>,
     quantize_beats: Beats,
     // Scratch index for extending retained spans across out-of-tick syncs.
@@ -73,7 +74,7 @@ impl SessionRuntime {
         Self {
             playing: AHashMap::with_capacity(8),
             pending: Vec::with_capacity(4),
-            session_override: AHashSet::with_capacity(8),
+            session_override: AHashMap::with_capacity(8),
             arrangement_resumed_at: AHashMap::with_capacity(8),
             quantize_beats: Beats(DEFAULT_QUANTIZE_BEATS),
             control_span_indices: AHashMap::with_capacity(8),
@@ -85,7 +86,13 @@ impl SessionRuntime {
     /// Whether `layer_id` is detached from the arrangement (section 6) — suppresses
     /// `query_active_timeline_clips` for that layer.
     pub fn is_overridden(&self, layer_id: &LayerId) -> bool {
-        self.session_override.contains(layer_id)
+        self.session_override.contains_key(layer_id)
+    }
+
+    /// Where a detached layer's arrangement stopped: its starts from here on
+    /// are not playing, so stepped controls do not count them.
+    pub(crate) fn arrangement_stopped_at(&self, layer_id: &LayerId) -> Option<Beats> {
+        self.session_override.get(layer_id).copied()
     }
 
     pub(crate) fn arrangement_control_from(&self, layer_id: &LayerId) -> Option<Beats> {
@@ -236,14 +243,14 @@ impl SessionRuntime {
     pub fn back_to_arrangement(&mut self, layer_id: Option<&LayerId>, beat: Beats) {
         match layer_id {
             Some(id) => {
-                if self.session_override.remove(id) {
+                if self.session_override.remove(id).is_some() {
                     self.arrangement_resumed_at.insert(id.clone(), beat);
                 }
                 self.playing.remove(id);
                 self.replace_pending_for_layer(id);
             }
             None => {
-                for id in self.session_override.drain() {
+                for (id, _) in self.session_override.drain() {
                     self.arrangement_resumed_at.insert(id, beat);
                 }
                 self.playing.clear();
@@ -291,7 +298,8 @@ impl SessionRuntime {
                 let due = self.pending.remove(i);
                 match due.action {
                     LaunchAction::Launch(scene_id) => {
-                        self.session_override.insert(due.layer_id.clone());
+                        self.session_override.entry(due.layer_id.clone())
+                            .or_insert(Beats(due.target_beat));
                         self.playing.insert(
                             due.layer_id,
                             PlayingSlot {

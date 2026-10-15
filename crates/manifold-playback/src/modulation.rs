@@ -4,16 +4,20 @@
 //!
 //! After automation, retained audio advances once at each source hop. Value
 //! composition applies base/reset → audio steps → envelope steps → drivers →
-//! audio values/counters → continuous envelopes. Clip-triggered envelope steps
-//! advance afterward for the next update, preserving the existing edge timing.
-//! The pure composition pass can be sampled without re-firing those events.
+//! audio values/counters → continuous envelopes. The pure composition pass can
+//! be sampled without re-firing input events.
+//!
+//! A Step/Random control's value at beat B is its base advanced once per
+//! arrangement start on its source in [0, B], plus once per live input since
+//! the last seek or stop ([`StepCounts`]). Seek, pause and play never change
+//! what a beat shows; only live input moves it off the timeline.
 
 pub mod composition;
 mod pulses;
 pub use pulses::{
     TriggerPulse, TriggerPulseBuffer, TriggerPulseKind, TriggerPulseSink, TriggerSourceStamp,
 };
-use crate::clip_controls::ClipControlFrame;
+use crate::clip_controls::{ClipControlFrame, MutedStarts};
 
 use composition::{
     AudioControlState, ControlSample, ControlSources, compose_param,
@@ -25,7 +29,7 @@ use manifold_core::audio_features::{
 };
 use manifold_core::audio_mod::{
     AudioFeatureKind, HopClock, HopValue,
-    ParameterAudioMod, TriggerAction, WrapMode, random_step_value,
+    ParameterAudioMod, StepCounts, StepFoldKey, TriggerAction, WrapMode, random_step_value,
 };
 use manifold_core::control_history::{ControlContribution, ControlObservation, ControlHistoryError};
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
@@ -65,21 +69,120 @@ fn advance_step(
 }
 
 /// Compute a deterministic pseudo-random next value in `[lo, hi]`, never repeating
-/// the current discrete position. `fire_count` is the monotonic ordinal; it is
-/// incremented here so it matches the audio-mod Random path.
+/// the current discrete position. `ordinal` is incremented before it keys the value.
 fn advance_random(
-    fire_count: &mut u32,
+    ordinal: &mut u32,
     lo: f32,
     hi: f32,
     whole_numbers: bool,
     current: f32,
 ) -> f32 {
-    *fire_count = fire_count.wrapping_add(1);
+    *ordinal = ordinal.wrapping_add(1);
     let discrete_count = whole_numbers.then(|| ((hi - lo).round().max(0.0) as u32) + 1);
     let current_index = discrete_count
         .map(|n| ((current - lo).round().max(0.0) as u32).min(n.saturating_sub(1)))
         .unwrap_or(0);
-    random_step_value(*fire_count, lo, hi, discrete_count, current_index).clamp(lo, hi)
+    random_step_value(*ordinal, lo, hi, discrete_count, current_index).clamp(lo, hi)
+}
+
+/// Stable per-control seed for `Random`, so two Random controls never share one
+/// value sequence. FNV-1a over the owning instance id and the param id.
+fn step_seed(instance: &manifold_core::EffectId, param_id: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in instance.as_str().bytes().chain([0]).chain(param_id.bytes()) {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// Fold `key.base` through `counts.total()` advances; `None` while nothing
+/// counts. Advances already folded under the same key are reused, so a frame
+/// with no new start does no stepping; a smaller count or a changed key refolds
+/// from `base`. Allocation-free.
+fn fold_steps(counts: &mut StepCounts, key: StepFoldKey) -> Option<f32> {
+    let target = counts.total();
+    if counts.key != Some(key) || target < counts.folded {
+        counts.key = Some(key);
+        counts.folded = 0;
+        counts.value = key.base.clamp(key.lo, key.hi);
+        counts.dir = 1.0;
+    }
+    while counts.folded < target {
+        counts.value = match key.action {
+            TriggerAction::Step { amount, wrap } => advance_step(
+                counts.value, amount, wrap, &mut counts.dir, key.lo, key.hi, key.whole_numbers,
+            ),
+            TriggerAction::Random => {
+                let mut ordinal = key.seed.wrapping_add(counts.folded);
+                advance_random(&mut ordinal, key.lo, key.hi, key.whole_numbers, counts.value)
+            }
+            TriggerAction::Continuous => counts.value,
+        };
+        counts.folded += 1;
+    }
+    (target > 0).then_some(counts.value)
+}
+
+/// Count this update's starts for every Step/Random envelope on `inst` and fold
+/// its value. Arrangement starts come from the timeline at `beat`; only live
+/// starts are taken from this frame's events. `owner` is `None` for an instance
+/// with no clip source (master chain, disabled effect), which counts nothing.
+fn resolve_envelope_steps(
+    inst: &mut PresetInstance,
+    beat: Beats,
+    controls: &ClipControlFrame,
+    owner: Option<&manifold_core::LayerId>,
+) {
+    let Some(envelopes) = inst.envelopes.as_mut() else { return; };
+    let epoch = controls.live_epoch();
+    for env in envelopes.iter_mut() {
+        if !env.enabled || matches!(env.action, TriggerAction::Continuous) {
+            continue;
+        }
+        let Some(p) = inst.params.get(env.param_id.as_ref()) else { continue; };
+        let counts = &mut env.step_counts;
+        counts.begin_live_epoch(epoch);
+        counts.arrangement = 0;
+        if owner.is_some() {
+            let live = controls.parameter_starts(&inst.id, p, owner).iter()
+                .filter(|start| start.is_live && !start.is_muted)
+                .count();
+            counts.live = counts.live.saturating_add(u32::try_from(live).unwrap_or(u32::MAX));
+            counts.arrangement = controls.arrangement_starts_through(
+                &p.clip_trigger_source, owner, beat, MutedStarts::Skip,
+            );        }
+        let (lo, hi) = p.slider_span();
+        let seed = if matches!(env.action, TriggerAction::Random) {
+            step_seed(&inst.id, env.param_id.as_ref())
+        } else { 0 };
+        env.step_value = fold_steps(counts, StepFoldKey {
+            action: env.action, base: p.base, lo, hi, whole_numbers: p.spec.whole_numbers, seed,
+        });
+        env.step_dir = counts.dir;
+        env.fire_count = counts.folded;
+    }
+}
+
+/// Resolve every stepped envelope and audio mod before composition reads
+/// their values. The one place an update consumes live envelope starts.
+fn resolve_step_counts(project: &mut Project, beat: Beats, controls: &ClipControlFrame) {
+    for fx in project.settings.master_effects.iter_mut() {
+        resolve_envelope_steps(fx, beat, controls, None);
+        resolve_audio_steps(fx, beat, controls, None);
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        let layer_id = layer.layer_id.clone();
+        for fx in layer.effects.iter_mut().flatten() {
+            let clip_owner = fx.enabled.then_some(&layer_id);
+            resolve_envelope_steps(fx, beat, controls, clip_owner);
+            resolve_audio_steps(fx, beat, controls, Some(&layer_id));
+        }
+        if let Some(gp) = layer.gen_params_mut() {
+            resolve_envelope_steps(gp, beat, controls, Some(&layer_id));
+            resolve_audio_steps(gp, beat, controls, Some(&layer_id));
+        }
+    }
 }
 
 /// Apply every envelope carried by one instance against the active-clip timing of
@@ -87,22 +190,18 @@ fn advance_random(
 ///
 /// Envelope-home unification: an envelope lives on its owning `PresetInstance`
 /// and resolves its target param directly against that instance's manifest.
-/// Continuous envelopes apply the existing additive decay offset. Step/Random
-/// envelopes advance a runtime shadow once for each explicit source start; the
-/// shadow is written to `p.value` by [`apply_envelope_step_values`] before this
-/// walk, exactly like audio-mod stepped values.
-/// `compose_continuous` is false after the retained path's pure composition;
-/// that call updates edge state only.
+/// Continuous envelopes apply the existing additive decay offset; Step/Random
+/// envelopes resolve their counted value first ([`resolve_envelope_steps`]).
 fn apply_instance_envelopes(
     inst: &mut PresetInstance,
     current_beat: Beats,
     controls: &ClipControlFrame,
     owner: Option<&manifold_core::LayerId>,
-    compose_continuous: bool,
 ) -> bool {
     let Some(owner) = owner else { return false; };
     let owner = Some(owner);
-    let any_modulated = compose_continuous && compose_prepared_controls(
+    resolve_envelope_steps(inst, current_beat, controls, owner);
+    compose_prepared_controls(
         &mut inst.params,
         ControlSources {
             enabled: false,
@@ -115,49 +214,7 @@ fn apply_instance_envelopes(
             active_elapsed: controls.elapsed(&param.clip_trigger_source, owner, current_beat),
         },
         |_, m| AudioControlState::current(m),
-    );
-    let Some(envelopes) = inst.envelopes.as_mut() else {
-        return any_modulated;
-    };
-    if envelopes.is_empty() {
-        return false;
-    }
-    // Disjoint mutable borrows: envelopes and params are separate fields of
-    // `PresetInstance`, so we can update envelope state and the manifest in one
-    // loop without per-frame scratch allocations.
-    let params = &mut inst.params;
-    for env in envelopes.iter_mut() {
-        if !env.enabled {
-            continue;
-        }
-        let Some(p) = params.get_mut(env.param_id.as_ref()) else {
-            continue;
-        };
-        let ((min, max), whole_numbers) = (p.slider_span(), p.spec.whole_numbers);
-        match env.action {
-            TriggerAction::Continuous => {}
-            TriggerAction::Step { amount, wrap } => {
-                for _ in controls.parameter_starts(&inst.id, p, owner).iter().filter(|start| !start.is_muted) {
-                    let lo = min;
-                    let hi = max;
-                    let current = env.step_value.unwrap_or(p.base).clamp(lo, hi);
-                    let next = advance_step(current, amount, wrap, &mut env.step_dir, lo, hi, whole_numbers);
-                    env.step_value = Some(next);
-                }
-            }
-            TriggerAction::Random => {
-                for _ in controls.parameter_starts(&inst.id, p, owner).iter().filter(|start| !start.is_muted) {
-                    let lo = min;
-                    let hi = max;
-                    let current = env.step_value.unwrap_or(p.base).clamp(lo, hi);
-                    let next = advance_random(&mut env.fire_count, lo, hi, whole_numbers, current);
-                    env.step_value = Some(next);
-                }
-            }
-        }
-    }
-
-    any_modulated
+    )
 }
 
 // =====================================================================
@@ -328,7 +385,7 @@ pub fn evaluate_all_envelopes(
                 if !fx.enabled {
                     continue;
                 }
-                if apply_instance_envelopes(fx, current_beat, controls, Some(&layer_id), true) {
+                if apply_instance_envelopes(fx, current_beat, controls, Some(&layer_id)) {
                     any_modulated = true;
                 }
             }
@@ -337,7 +394,7 @@ pub fn evaluate_all_envelopes(
         // Generator instance (the layer's singleton gen_params) — the same
         // walk, no separate generator pass.
         if let Some(gp) = layer.gen_params_mut()
-            && apply_instance_envelopes(gp, current_beat, controls, Some(&layer_id), true)
+            && apply_instance_envelopes(gp, current_beat, controls, Some(&layer_id))
         {
             any_modulated = true;
         }
@@ -363,9 +420,10 @@ pub fn evaluate_modulation(
     trigger_pulses: &mut impl TriggerPulseSink,
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
-    // Snapshot Step/Random shadows are prepared before input advancement;
-    // retained-hop shadows become visible on this update. Both use the same
-    // value composition and advance envelope steps afterward.
+    // Stepped values are counted at this beat before anything reads them.
+    // Audio fires in the snapshot path advance after its shadows are applied,
+    // so they show on the next update; retained hops show on this one.
+    resolve_step_counts(project, current_beat, controls);
     let retained_hops = !audio.hop_batches.is_empty();
     let mut any = false;
     if retained_hops {
@@ -559,8 +617,6 @@ fn compose_instance_controls(
     if retained_hops {
         publish_audio_meters(instance, fire_meters);
     }
-    // Step/Random envelopes retain their existing next-update visibility.
-    apply_instance_envelopes(instance, sample.beat, controls, owner, false);
     any
 }
 
@@ -741,6 +797,7 @@ fn advance_instance_audio_hops(
 ) {
     let Some(mods) = fx.audio_mods.as_mut() else { return; };
     for m in mods {
+        m.step_counts.begin_live_epoch(controls.live_epoch());
         m.control_observations.begin(m.audio_hop_cursor.epoch());
         if !fx.enabled || !m.enabled {
             m.control_observations.begin(0);
@@ -860,8 +917,9 @@ fn advance_clip_response(
     if info.is_trigger {
         fire_parameter(owner_id, m, layer_id, stamp.clone(), pulses);
         m.audio_held_output = Some(info.base + m.fire_count as f32);
-    } else {
-        advance_action(m, info);
+    } else if start.is_live {
+        // An arrangement start is already in the count resolved at this beat.
+        advance_action(owner_id, m, info);
     }
     if let Some(contribution) = info.contribution(m) {
         record_control(m, ControlObservation {
@@ -902,6 +960,11 @@ impl From<&manifold_core::params::Param> for AudioParamInfo {
 impl AudioParamInfo {
     fn has_event_response(self, m: &ParameterAudioMod) -> bool {
         !self.is_trigger_gate && (self.is_trigger || !matches!(m.action, TriggerAction::Continuous))
+    }
+
+    fn is_stepped(self, m: &ParameterAudioMod) -> bool {
+        !self.is_trigger && !self.is_trigger_gate
+            && matches!(m.action, TriggerAction::Step { .. } | TriggerAction::Random)
     }
 
     fn accepts_clip_response(self, m: &ParameterAudioMod) -> bool {
@@ -989,17 +1052,32 @@ fn process_audio_sample(
             m.audio_held_output = None;
             let edge = m.trigger_edge.advance(action_conditioned, 0.5);
             if edge && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_transient() {
-                advance_action(m, info);
+                advance_action(owner_id, m, info);
             }
             None
         }
     }
 }
 
+/// One live fire (an audio onset or a live clip start) on a stepped audio mod.
 fn advance_action(
+    owner_id: &manifold_core::EffectId,
     m: &mut manifold_core::audio_mod::ParameterAudioMod,
     info: AudioParamInfo,
 ) {
+    m.step_counts.live = m.step_counts.live.saturating_add(1);
+    fold_audio_step(owner_id, m, info);
+}
+
+/// Fold a stepped audio mod's counts into `step_value` within its shaped zone.
+fn fold_audio_step(
+    owner_id: &manifold_core::EffectId,
+    m: &mut manifold_core::audio_mod::ParameterAudioMod,
+    info: AudioParamInfo,
+) {
+    if matches!(m.action, TriggerAction::Continuous) {
+        return;
+    }
     let (mut lo, mut hi) = m.shape.zone(info.min, info.max);
     if info.whole_numbers {
         let lo_i = lo.ceil();
@@ -1013,19 +1091,37 @@ fn advance_action(
             hi = hi_i;
         }
     }
-    let current = m.step_value.unwrap_or(info.base).clamp(lo, hi);
-    match m.action {
-        TriggerAction::Step { amount, wrap } => {
-            m.step_value = Some(advance_step(
-                current, amount, wrap, &mut m.step_dir, lo, hi, info.whole_numbers,
-            ));
-        }
-        TriggerAction::Random => {
-            m.step_value = Some(advance_random(
-                &mut m.fire_count, lo, hi, info.whole_numbers, current,
-            ));
-        }
-        TriggerAction::Continuous => {}
+    let random = matches!(m.action, TriggerAction::Random);
+    let seed = if random { step_seed(owner_id, m.param_id.as_ref()) } else { 0 };
+    m.step_value = fold_steps(&mut m.step_counts, StepFoldKey {
+        action: m.action, base: info.base, lo, hi, whole_numbers: info.whole_numbers, seed,
+    });
+    m.step_dir = m.step_counts.dir;
+    if random {
+        m.fire_count = m.step_counts.folded;
+    }
+}
+
+/// Count arrangement clip edges for every stepped audio mod on `inst` at
+/// `beat` and fold its value. Audio onsets and live clip starts add to the
+/// live count as they arrive during the advance phase.
+fn resolve_audio_steps(
+    inst: &mut PresetInstance,
+    beat: Beats,
+    controls: &ClipControlFrame,
+    owner: Option<&manifold_core::LayerId>,
+) {
+    if !inst.enabled { return; }
+    let Some(mods) = inst.audio_mods.as_mut() else { return; };
+    for m in mods.iter_mut().filter(|m| m.enabled) {
+        let Some(p) = inst.params.get(m.param_id.as_ref()) else { continue; };
+        let info = AudioParamInfo::from(p);
+        if !info.is_stepped(m) { continue; }
+        m.step_counts.begin_live_epoch(controls.live_epoch());
+        m.step_counts.arrangement = if info.accepts_clip_response(m) {
+            controls.arrangement_starts_through(&p.clip_trigger_source, owner, beat, MutedStarts::Count)
+        } else { 0 };
+        fold_audio_step(&inst.id, m, info);
     }
 }
 
@@ -1196,6 +1292,7 @@ fn advance_instance_snapshot_audio(
     if !fx.enabled { return; }
     let Some(mods) = fx.audio_mods.as_mut() else { return; };
     for m in mods.iter_mut().filter(|m| m.enabled) {
+        m.step_counts.begin_live_epoch(controls.live_epoch());
         m.audio_held_output = None;
         let Some(p) = fx.params.get(m.param_id.as_ref()) else { continue; };
         let info = AudioParamInfo::from(p);
@@ -1249,11 +1346,8 @@ fn advance_instance_snapshot_audio(
 /// cards (section 9 U1); the former separate `audio_trigger.edge` holder was
 /// deleted along with the config type it lived on.
 ///
-/// PARAM_STEP_ACTIONS D4: also drops each mod's step shadow
-/// (`step_value`/`step_dir`) back to its initial `None`/`+1` state, at the
-/// same call site — a transport stop is exactly the "kill the trigger"
-/// moment D4 documents: the param falls back to its committed base rather
-/// than resuming mid-sequence next time the transport starts.
+/// Also drops every Step/Random control's counts and shadow; the next update
+/// counts again from the arrangement at the stop beat, with no live input.
 pub fn clear_all_trigger_edges(project: &mut Project) {
     fn clear_instance(fx: &mut PresetInstance) {
         if let Some(mods) = fx.audio_mods.as_mut() {
@@ -1262,6 +1356,7 @@ pub fn clear_all_trigger_edges(project: &mut Project) {
                 m.control_observations.reset(0);
                 m.step_value = None;
                 m.step_dir = 1.0;
+                m.step_counts = Default::default();
             }
         }
         if let Some(envs) = fx.envelopes.as_mut() {
@@ -1269,6 +1364,7 @@ pub fn clear_all_trigger_edges(project: &mut Project) {
                 e.fire_count = 0;
                 e.step_value = None;
                 e.step_dir = 1.0;
+                e.step_counts = Default::default();
             }
         }
     }
@@ -1344,7 +1440,7 @@ mod tests {
                     layer.layer_id.clone(),
                     crate::clip_controls::ClipControlStart {
                         sequence: 0,
-                        is_muted: false,
+                        is_muted: false, is_live: true,
                         clip_id: manifold_core::ClipId::new("fixture-start"),
                         beat: current_beat,
                     },
@@ -1376,7 +1472,7 @@ mod tests {
                     layer.layer_id.clone(),
                     crate::clip_controls::ClipControlStart {
                         sequence: 0,
-                        is_muted: false,
+                        is_muted: false, is_live: true,
                         clip_id: manifold_core::ClipId::new("fixture-start"),
                         beat: Beats::ZERO,
                     },
@@ -1425,7 +1521,7 @@ mod tests {
                     layer.layer_id.clone(),
                     crate::clip_controls::ClipControlStart {
                         sequence: 0,
-                        is_muted: false,
+                        is_muted: false, is_live: true,
                         clip_id: manifold_core::ClipId::new("fixture-start"),
                         beat: current_beat,
                     },
@@ -1444,6 +1540,7 @@ mod tests {
         fire_meters: &mut FireMeterCapture,
     ) -> bool {
         let controls = controls_for_timing(project, beat, timing);
+        resolve_step_counts(project, beat, &controls);
         compose_project_controls(project, beat, time, &controls, fire_meters, true)
     }
 
@@ -1810,7 +1907,7 @@ mod tests {
             owner,
             crate::clip_controls::ClipControlStart {
                 sequence: 0,
-                is_muted: false,
+                is_muted: false, is_live: true,
                 clip_id: manifold_core::ClipId::new("own"),
                 beat: Beats::ZERO,
             },
@@ -1819,7 +1916,7 @@ mod tests {
             lane.clone(),
             crate::clip_controls::ClipControlStart {
                 sequence: 0,
-                is_muted: false,
+                is_muted: false, is_live: true,
                 clip_id: manifold_core::ClipId::new("lane"),
                 beat: Beats::ZERO,
             },
@@ -1845,7 +1942,7 @@ mod tests {
             lane,
             crate::clip_controls::ClipControlStart {
                 sequence: 0,
-                is_muted: false,
+                is_muted: false, is_live: true,
                 clip_id: manifold_core::ClipId::new("disabled"),
                 beat: Beats(1.0),
             },
@@ -1932,15 +2029,14 @@ mod tests {
     #[test]
     fn envelope_random_is_deterministic_by_ordinal() {
         let mut project = project_with(effect_layer_with_env(random_env("amount")));
+        let mut project2 = project.clone();
 
-        // Two identical rising edges produce the same pseudo-random value
-        // because `fire_count` advances monotonically and deterministically.
+        // The same envelope at the same start count draws the same value.
         evaluate_all_envelopes_fixture(&mut project, &[(Beats(0.0), Beats(8.0))]);
         let first = project.timeline.layers[0].effects.as_ref().unwrap()[0]
             .envelopes.as_ref().unwrap()[0]
             .step_value;
 
-        let mut project2 = project_with(effect_layer_with_env(random_env("amount")));
         evaluate_all_envelopes_fixture(&mut project2, &[(Beats(0.0), Beats(8.0))]);
         let second = project2.timeline.layers[0].effects.as_ref().unwrap()[0]
             .envelopes.as_ref().unwrap()[0]
@@ -2067,7 +2163,7 @@ mod tests {
         for (id, beat) in [("first", 0.125), ("second", 0.375)] {
             controls.record_start(source.clone(), crate::clip_controls::ClipControlStart {
                 sequence: 0,
-                clip_id: manifold_core::ClipId::new(id), beat: Beats(beat), is_muted: false,
+                clip_id: manifold_core::ClipId::new(id), beat: Beats(beat), is_muted: false, is_live: true,
             });
         }
         let mut pulses = Vec::new();
@@ -2120,13 +2216,15 @@ mod tests {
     #[test]
     fn mixed_clip_audio_responses_preserve_every_source_time_across_partitions() {
         for response in 0..3 {
+            // One project identity for every partition: Random seeds from it.
+            let (mut template, send_id) = project_with_audio_send();
+            template.timeline.layers[0] = generator_layer();
             let run = |chunk_size: usize| {
-                let (mut project, send_id) = project_with_audio_send();
-                project.timeline.layers[0] = generator_layer();
+                let mut project = template.clone();
                 let owner = project.timeline.layers[0].layer_id.clone();
                 let gp = project.timeline.layers[0].gen_params_mut().unwrap();
                 gp.params.get_mut("count").unwrap().spec.is_trigger = response == 2;
-                let mut m = ParameterAudioMod::new("count".into(), send_id,
+                let mut m = ParameterAudioMod::new("count".into(), send_id.clone(),
                     AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low));
                 m.shape.attack_ms = 0.0;
                 m.shape.release_ms = 0.0;
@@ -2154,7 +2252,7 @@ mod tests {
                             controls.record_start(owner.clone(), crate::clip_controls::ClipControlStart {
                                 sequence: 0,
                                 clip_id: manifold_core::ClipId::new(format!("clip-{ordinal}")),
-                                beat: Beats(time * 2.0), is_muted: false,
+                                beat: Beats(time * 2.0), is_muted: false, is_live: true,
                             });
                         }
                     }
@@ -2384,11 +2482,17 @@ mod tests {
                     &mut project, beat, time, &timing, &mut composed_meters,
                 );
                 let mut staged_meters = FireMeterCapture::default();
+                // Steps are counted before any stage reads them; the last
+                // stage then composes continuous envelopes with no new start.
+                let envelope_beat = timing[0].0;
+                let mut staged_controls = controls_for_timing(&staged, envelope_beat, &timing);
+                resolve_step_counts(&mut staged, envelope_beat, &staged_controls);
                 let mut staged_dirty = apply_step_values(&mut staged);
                 staged_dirty |= apply_envelope_step_values(&mut staged);
                 staged_dirty |= evaluate_all_drivers(&mut staged, beat, time);
                 staged_dirty |= apply_audio_controls(&mut staged, &mut staged_meters, true);
-                staged_dirty |= evaluate_all_envelopes_fixture(&mut staged, &timing);
+                staged_controls.clear_starts();
+                staged_dirty |= evaluate_all_envelopes(&mut staged, envelope_beat, &staged_controls);
                 assert_eq!(composed_dirty, staged_dirty);
                 for (actual, expected) in instances(&project).into_iter().zip(instances(&staged)) {
                     assert_eq!(actual.params, expected.params, "disabled={disabled}, elapsed={elapsed}");
@@ -2408,14 +2512,14 @@ mod tests {
     }
 
     #[test]
-    fn retained_pipeline_advances_envelope_step_once_after_value_composition() {
+    fn retained_pipeline_shows_each_envelope_step_on_its_start_frame() {
         let mut project = project_with(effect_layer_with_env(step_env("amount", 0.2, WrapMode::Clamp)));
         project.timeline.layers[0].clips.push(manifold_core::clip::TimelineClip::new_generator(
             Beats::ZERO, Beats(4.0),
         ));
         let snapshot = empty_hop_snapshot(1);
         for (beat, expected_value, expected_shadow) in [
-            (0.0, 0.0, 0.2), (0.25, 0.2, 0.2), (0.0, 0.2, 0.4), (0.25, 0.4, 0.4),
+            (0.0, 0.2, 0.2), (0.25, 0.2, 0.2), (0.0, 0.4, 0.4), (0.25, 0.4, 0.4),
         ] {
             let clip_starts: &[i32] = if beat == 0.0 { &[0] } else { &[] };
             evaluate_modulation_fixture(
@@ -2431,9 +2535,11 @@ mod tests {
     #[test]
     fn retained_modulation_all_actions_are_partition_invariant_and_redraw_safe() {
         for mode in 0..5 {
+            // One project identity for every partition: Random seeds from it.
+            let (mut template, send_id) = project_with_audio_send();
+            attach_full_range_low_mod(&mut template, &send_id);
             let run = |chunk_size: usize, display_dt: Seconds| {
-                let (mut project, send_id) = project_with_audio_send();
-                attach_full_range_low_mod(&mut project, &send_id);
+                let mut project = template.clone();
                 let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
                 fx.params.get_mut("amount").unwrap().spec.is_trigger = mode == 1;
                 fx.params.get_mut("amount").unwrap().spec.is_trigger_gate = mode == 2;
@@ -3697,15 +3803,13 @@ mod tests {
 
     #[test]
     fn random_is_deterministic_replaying_the_same_fire_sequence_twice() {
-        // Two independently-built, identical projects, driven by the
-        // identical fire sequence: the sequence of values must match exactly
-        // both times — no RNG state, no wall clock, purely a function of the
-        // mod's own fire ordinal (D7). This is the property offline export
-        // leans on for reproducible audio-reactive renders.
+        // The same project replayed with the identical fire sequence: the
+        // values must match exactly — no RNG state, no wall clock, purely a
+        // function of the mod's identity and fire ordinal (D7). This is the
+        // property offline export leans on for reproducible renders.
         let (mut project_a, send_a) = project_with_audio_send();
         attach_action_mod(&mut project_a, &send_a, "segs", TriggerAction::Random);
-        let (mut project_b, send_b) = project_with_audio_send();
-        attach_action_mod(&mut project_b, &send_b, "segs", TriggerAction::Random);
+        let mut project_b = project_a.clone();
 
         let seq_a = fire_n_times(&mut project_a, 50);
         let seq_b = fire_n_times(&mut project_b, 50);
@@ -4013,12 +4117,9 @@ mod tests {
             ..Default::default()
         };
         m.action = TriggerAction::Step { amount: 2.0, wrap: WrapMode::Wrap };
-        m.step_value = Some(7.0); // seed the current directly inside the zone
-        project.timeline.layers[0]
-            .gen_params_mut()
-            .unwrap()
-            .audio_mods_mut()
-            .push(m);
+        let gp = project.timeline.layers[0].gen_params_mut().unwrap();
+        gp.params.get_mut("speed").unwrap().base = 7.0; // start inside the zone
+        gp.audio_mods_mut().push(m);
 
         let hot = snapshot_full_transient(0.9);
         evaluate_all_audio_mods_fixture(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());

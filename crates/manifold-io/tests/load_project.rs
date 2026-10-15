@@ -675,6 +675,7 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
         action: Default::default(),
         step_value: None,
         step_dir: 1.0,
+        step_counts: Default::default(),
     }]);
 
     let json = serde_json::to_string(&project).unwrap();

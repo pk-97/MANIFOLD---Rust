@@ -136,6 +136,17 @@ mostly wiring; the audit is why.
   these; the fallback is always the committed base. (3) Reload resets the
   stepped position — matches how `trigger_count`-driven cycles reset across
   sessions today.
+  **Supersedes the fire-by-fire lifecycle above.**
+  BUG-0xwux (stepped value kept across play) is the reason: the stepped value
+  at beat B is `base` advanced once per arrangement start on the source in
+  [0, B] (counted from the timeline, never from playback history), plus once
+  per live input since the last seek or stop: live-slot and session starts,
+  and audio fires. `StepCounts` in `manifold-core/src/audio_mod.rs` holds both
+  counts; `modulation.rs` `resolve_step_counts` folds them before composition.
+  Seek, pause and play never change what a beat shows. A detached (session)
+  layer counts only arrangement starts before its launch; a recorded take
+  counts once, as live, until the next reset. Random draws from the count and
+  a per-control seed (instance id + param id).
 
 - **D5 — The clip edge for steps is an ENGINE event, not renderer feedback.**
   Steps mutate playback-side param state, so the clip edge must be observed in

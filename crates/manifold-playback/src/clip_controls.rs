@@ -3,8 +3,12 @@
 //! This module deliberately does not inspect a project or infer clip edges.
 //! `sync_clips_to_time` is the scheduling authority and records the spans and
 //! starts it has already decided to deliver. Consumers only query this frame.
+//! The one exception is the per-source arrangement start index stepped
+//! controls count from, rebuilt from the project at the edit boundary.
 
 use ahash::AHashMap;
+use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
 use manifold_core::params::ClipTriggerSource;
 use manifold_core::project::{ClipTriggerLayer, clip_trigger_source_is_eligible};
 use manifold_core::types::LayerType;
@@ -34,8 +38,66 @@ pub struct ClipControlStart {
     /// Main clip mute suppresses envelopes; legacy audio clip-edge responses
     /// still observe its start. Source-level mute is applied by the producer.
     pub is_muted: bool,
+    /// A live-slot or session start: not on the arrangement, so stepped
+    /// controls count it as live input. Arrangement starts are counted from
+    /// the timeline instead ([`ClipControlFrame::arrangement_starts_through`]).
+    pub is_live: bool,
     /// Assigned by the producer frame, independent of musical time.
     pub(crate) sequence: u64,
+}
+
+/// Which arrangement starts a stepped control counts. Envelopes skip muted
+/// clips; legacy audio clip-edge responses observe them. A muted trigger
+/// clip or layer delivers no start to either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MutedStarts {
+    Skip,
+    Count,
+}
+
+/// Sorted start beats of one source's arrangement clips.
+#[derive(Debug, Default)]
+struct SourceStarts {
+    unmuted: Vec<Beats>,
+    all: Vec<Beats>,
+}
+
+impl SourceStarts {
+    fn clear(&mut self) {
+        self.unmuted.clear();
+        self.all.clear();
+    }
+
+    fn push(&mut self, layer: &Layer, clip: &TimelineClip) {
+        if layer.is_trigger() && (layer.is_muted || clip.is_muted) {
+            return;
+        }
+        if clip.duration_beats <= Beats::ZERO {
+            return;
+        }
+        self.all.push(clip.start_beat);
+        if !clip.is_muted {
+            self.unmuted.push(clip.start_beat);
+        }
+    }
+
+    fn sort(&mut self) {
+        self.unmuted.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        self.all.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    }
+
+    /// Starts at or before `beat`, and before `until` when set.
+    fn through(&self, beat: Beats, until: Option<Beats>, muted: MutedStarts) -> u32 {
+        let starts = match muted {
+            MutedStarts::Skip => &self.unmuted,
+            MutedStarts::Count => &self.all,
+        };
+        let mut count = starts.partition_point(|start| *start <= beat);
+        if let Some(until) = until {
+            count = count.min(starts.partition_point(|start| *start < until));
+        }
+        u32::try_from(count).unwrap_or(u32::MAX)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -45,6 +107,37 @@ struct ClipControlSource {
     pattern_digest: Option<[u8; 32]>,
     spans: Vec<ClipControlSpan>,
     starts: Vec<ClipControlStart>,
+    /// Rebuilt only when `pattern_digest` changes, at the edit boundary.
+    arrangement: SourceStarts,
+    /// Clips that delivered a live start since the last transport reset.
+    live_clips: Vec<ClipId>,
+    /// Arrangement clips that are recorded takes of `live_clips`: already
+    /// counted live, so the arrangement count leaves them out until reset.
+    promoted: SourceStarts,
+    /// Where a session launch stopped this layer's arrangement, while it is
+    /// detached; later arrangement starts are not playing.
+    arrangement_until: Option<Beats>,
+}
+
+impl ClipControlSource {
+    fn observe_pattern(&mut self, layer: &Layer, digest: [u8; 32]) {
+        if self.pattern_digest != Some(digest) {
+            self.pattern_digest = Some(digest);
+            self.arrangement.clear();
+            for clip in &layer.clips {
+                self.arrangement.push(layer, clip);
+            }
+            self.arrangement.sort();
+        }
+        self.promoted.clear();
+        if self.live_clips.is_empty() {
+            return;
+        }
+        for clip in layer.clips.iter().filter(|clip| self.live_clips.contains(&clip.id)) {
+            self.promoted.push(layer, clip);
+        }
+        self.promoted.sort();
+    }
 }
 
 /// Read-only view of one source's clip-control facts.
@@ -60,6 +153,9 @@ pub struct ClipControlFrame {
     by_source: AHashMap<LayerId, ClipControlSource>,
     bindings: bindings::ClipControlBindings,
     next_sequence: u64,
+    /// Bumped at every transport reset; stepped controls drop live advances
+    /// counted under an older epoch.
+    live_epoch: u64,
 }
 
 impl ClipControlFrame {
@@ -121,6 +217,49 @@ impl ClipControlFrame {
         self.by_source.clear();
         self.bindings = Default::default();
         self.next_sequence = 0;
+        self.reset_live();
+    }
+
+    /// A seek or stop ends the live history: stepped controls fall back to
+    /// what the arrangement alone gives at the new beat.
+    pub(crate) fn reset_live(&mut self) {
+        for source in self.by_source.values_mut() {
+            source.live_clips.clear();
+            source.promoted.clear();
+        }
+        self.live_epoch = self.live_epoch.wrapping_add(1);
+    }
+
+    pub fn live_epoch(&self) -> u64 {
+        self.live_epoch
+    }
+
+    /// Arrangement starts on the selected source at or before `beat`, from
+    /// an index rebuilt at the edit boundary. Seek, pause and
+    /// play never change it. Zero for a disabled or ineligible source.
+    pub(crate) fn arrangement_starts_through(
+        &self,
+        source: &ClipTriggerSource,
+        owner: Option<&LayerId>,
+        beat: Beats,
+        muted: MutedStarts,
+    ) -> u32 {
+        let Some(source) = self.source_layer(source, owner).and_then(|id| self.by_source.get(id)) else {
+            return 0;
+        };
+        let until = source.arrangement_until;
+        source.arrangement.through(beat, until, muted)
+            .saturating_sub(source.promoted.through(beat, until, muted))
+    }
+
+    /// Publish where session mode stopped `source`'s arrangement, `None`
+    /// while the arrangement plays. Published on every sync.
+    pub(crate) fn set_arrangement_until(&mut self, source: &LayerId, until: Option<Beats>) {
+        if let Some(source) = self.by_source.get_mut(source) {
+            source.arrangement_until = until;
+        } else if until.is_some() {
+            self.by_source.entry(source.clone()).or_default().arrangement_until = until;
+        }
     }
 
     /// Record an already-scheduled active span for `source_layer`.
@@ -137,11 +276,11 @@ impl ClipControlFrame {
         start.sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.checked_add(1)
             .expect("clip-control event sequence exhausted");
-        self.by_source
-            .entry(source_layer)
-            .or_default()
-            .starts
-            .push(start);
+        let source = self.by_source.entry(source_layer).or_default();
+        if start.is_live && !source.live_clips.contains(&start.clip_id) {
+            source.live_clips.push(start.clip_id.clone());
+        }
+        source.starts.push(start);
     }
 
     /// Finish producer writes and order starts deterministically by beat, then
@@ -246,6 +385,7 @@ mod tests {
             clip_id: ClipId::new(id),
             beat: Beats(beat),
             is_muted: false,
+            is_live: false,
         }
     }
 
@@ -391,5 +531,46 @@ mod tests {
         assert!(after.starts.is_empty());
         assert_eq!(after.spans.as_ptr(), before_span_ptr);
         assert_eq!(after.starts.as_ptr(), before_start_ptr);
+    }
+
+    #[test]
+    fn arrangement_count_follows_the_timeline_and_skips_recorded_live_takes() {
+        use manifold_core::session::SessionGrid;
+        let observe = |frame: &mut ClipControlFrame, layer: &Layer| {
+            let digest = manifold_core::project::clip_trigger_pattern_digest(layer, &SessionGrid::default());
+            frame.by_source.get_mut(&layer.layer_id).unwrap().observe_pattern(layer, digest);
+        };
+        let mut layer = Layer::new_generator("L".into(), manifold_core::PresetTypeId::new("T"), 0);
+        layer.clips = [0.0, 1.0, 2.0].into_iter()
+            .map(|beat| TimelineClip::new_generator(Beats(beat), Beats(0.5))).collect();
+        layer.clips[1].is_muted = true;
+        let id = layer.layer_id.clone();
+        let own = ClipTriggerSource::OwnLayer;
+        let mut frame = ClipControlFrame::default();
+        frame.set_layer_scope(id.clone(), layer.layer_type, None);
+        observe(&mut frame, &layer);
+        let count = |frame: &ClipControlFrame, beat, muted| {
+            frame.arrangement_starts_through(&own, Some(&id), Beats(beat), muted)
+        };
+        assert_eq!(count(&frame, 1.5, MutedStarts::Skip), 1);
+        assert_eq!(count(&frame, 1.5, MutedStarts::Count), 2);
+        assert_eq!(count(&frame, 2.0, MutedStarts::Skip), 2, "a start at the beat counts");
+
+        // A detached layer's arrangement stops counting at the launch.
+        frame.set_arrangement_until(&id, Some(Beats(1.0)));
+        assert_eq!(count(&frame, 2.5, MutedStarts::Count), 1);
+        frame.set_arrangement_until(&id, None);
+
+        // A live start recorded into the arrangement is counted once, live,
+        // until a transport reset hands it to the timeline.
+        let take = TimelineClip::new_generator(Beats(3.0), Beats(0.5));
+        frame.record_start(id.clone(), ClipControlStart {
+            clip_id: take.id.clone(), beat: Beats(3.0), is_muted: false, is_live: true, sequence: 0,
+        });
+        layer.clips.push(take);
+        observe(&mut frame, &layer);
+        assert_eq!(count(&frame, 3.5, MutedStarts::Skip), 2);
+        frame.reset_live();
+        assert_eq!(count(&frame, 3.5, MutedStarts::Skip), 3);
     }
 }
