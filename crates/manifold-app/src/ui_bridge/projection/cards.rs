@@ -1007,34 +1007,37 @@ fn modifier_object_label(
     labels.join(" / ")
 }
 
-/// Build a human-readable description for a macro mapping target.
-pub(crate) fn describe_macro_mapping(
+/// Write a human-readable description of a macro mapping target over `out`,
+/// reusing its allocation.
+pub(crate) fn write_macro_mapping(
+    out: &mut String,
     target: &manifold_core::MacroMappingTarget,
     project: &manifold_core::project::Project,
-) -> String {
+) {
     use manifold_core::MacroMappingTarget;
-    match target {
-        MacroMappingTarget::MasterOpacity => "Master Opacity".to_string(),
+    use std::fmt::Write;
+    out.clear();
+    let _ = match target {
+        MacroMappingTarget::MasterOpacity => out.write_str("Master Opacity"),
         MacroMappingTarget::Effect {
             effect_id,
             param_id,
         } => {
             let Some(fx) = project.find_effect_by_id(effect_id) else {
-                return "Effect → ?".to_string();
+                out.push_str("Effect → ?");
+                return;
             };
             let effect_type = fx.effect_type();
             // Effect display name is type-level template metadata (a boundary
             // read); the param name comes off the LIVE manifest so user-added /
             // glb params resolve instead of rendering "?" (was a registry
             // id-lookup miss, the UI twin of the P4 blind spot).
-            let effect_name = manifold_core::preset_definition_registry::try_get(effect_type)
-                .map(|d| d.display_name.clone())
-                .unwrap_or_else(|| effect_type.as_str().to_string());
+            let def = manifold_core::preset_definition_registry::try_get(effect_type);
+            let effect_name = def.as_deref().map_or(effect_type.as_str(), |d| d.display_name.as_str());
             let param_name = fx
                 .params
                 .get(param_id.as_ref())
-                .map(|p| p.spec.name.clone())
-                .unwrap_or_else(|| "?".to_string());
+                .map_or("?", |p| p.spec.name.as_str());
             // Prefix with the owning layer's name; master effects have none.
             match project.layer_id_for_effect(effect_id) {
                 Some(layer_id) => {
@@ -1045,9 +1048,9 @@ pub(crate) fn describe_macro_mapping(
                         .find(|l| l.layer_id == layer_id)
                         .map(|l| l.name.as_str())
                         .unwrap_or("?");
-                    format!("{} {} → {}", layer_name, effect_name, param_name)
+                    write!(out, "{} {} → {}", layer_name, effect_name, param_name)
                 }
-                None => format!("{} → {}", effect_name, param_name),
+                None => write!(out, "{} → {}", effect_name, param_name),
             }
         }
         MacroMappingTarget::LayerOpacity { layer_id } => {
@@ -1058,7 +1061,7 @@ pub(crate) fn describe_macro_mapping(
                 .find(|l| l.layer_id == *layer_id)
                 .map(|l| l.name.as_str())
                 .unwrap_or(layer_id.as_str());
-            format!("{} Opacity", layer_name)
+            write!(out, "{} Opacity", layer_name)
         }
         MacroMappingTarget::GenParam { layer_id, param_id } => {
             let layer = project
@@ -1070,11 +1073,11 @@ pub(crate) fn describe_macro_mapping(
             // Param name off the LIVE manifest (user-added / glb params resolve).
             let param_name = layer
                 .and_then(|l| l.gen_params())
-                .and_then(|gp| gp.params.get(param_id.as_ref()).map(|p| p.spec.name.clone()))
-                .unwrap_or_else(|| "?".to_string());
-            format!("{} Gen → {}", layer_name, param_name)
+                .and_then(|gp| gp.params.get(param_id.as_ref()))
+                .map_or("?", |p| p.spec.name.as_str());
+            write!(out, "{} Gen → {}", layer_name, param_name)
         }
-    }
+    };
 }
 
 #[cfg(test)]
@@ -1129,7 +1132,8 @@ mod param_label_tests {
             effect_id,
             param_id: std::borrow::Cow::Owned("user_glow".to_string()),
         };
-        let label = describe_macro_mapping(&target, &project);
+        let mut label = String::new();
+        write_macro_mapping(&mut label, &target, &project);
         assert!(
             label.contains("Glow Amount"),
             "label must show the live param name, got {label:?}"

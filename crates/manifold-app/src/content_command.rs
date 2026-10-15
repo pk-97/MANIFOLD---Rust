@@ -298,6 +298,15 @@ pub enum ContentCommand {
     /// Sent by the Metal `SharedEventListener` notification block.
     #[cfg(target_os = "macos")]
     SurfaceReady,
+    /// The stage output's drawable went on screen at `at` (Metal's presented
+    /// handler, host time mapped to `Instant`). Feeds the screen delay (D19).
+    FramePresented { drawable_id: u64, at: std::time::Instant },
+
+    // ── Sync calibration (D19) ────────────────────────────────────
+    /// Stored values from `UserPrefs`, sent before the first tick: the hidden
+    /// extra output delay in ms, and the learned offsets in ms for MIDI
+    /// clock, AbletonOSC and timecode (NaN where none is stored).
+    SetSyncCalibration { extra_delay_ms: f64, offsets_ms: [f64; 3] },
 
     // ── Editor canvas ─────────────────────────────────────────────
     /// Tell the content thread which effect instance's internal graph

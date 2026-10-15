@@ -22,6 +22,7 @@ impl Application {
         //    published here is in `local_project` on exit. Nothing is pushed
         //    to panels; the normal UI is frozen.
         self.intake_content_state();
+        self.tick_sync_calibration();
 
         // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1) — this is the
         // path that matters most: perform mode IS the live show. Unlike

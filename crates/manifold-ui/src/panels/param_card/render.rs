@@ -2184,15 +2184,15 @@ impl ParamCardPanel {
 
         // Label dirty-check (slider rows only — toggle/trigger rows have
         // their label baked into the row at build time).
-        if !info.spec.is_toggle && !info.spec.is_trigger {
-            let new_label = Some(info.spec.name.clone());
-            if self.label_cache[i] != new_label {
-                self.label_cache[i] = new_label;
-                if let Some(ref ids) = self.row_host.slider_ids[i]
-                    && let Some(label) = ids.label
-                {
-                    tree.set_text(label, &info.spec.name);
-                }
+        if !info.spec.is_toggle
+            && !info.spec.is_trigger
+            && self.label_cache[i].as_deref() != Some(&*info.spec.name)
+        {
+            self.label_cache[i] = Some(info.spec.name.clone());
+            if let Some(ref ids) = self.row_host.slider_ids[i]
+                && let Some(label) = ids.label
+            {
+                tree.set_text(label, &info.spec.name);
             }
         }
 

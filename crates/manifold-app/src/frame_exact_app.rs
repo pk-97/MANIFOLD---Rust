@@ -33,6 +33,8 @@ const PRE_ROLL_TICKS: usize = 3;
 const PLAYING_TICKS: usize = 960;
 const STALL_AT_TICK: usize = 500;
 const SEED: u64 = 0x5EED_A9B1_44D3;
+/// ms from a frame's deadline to its present, for the stand-in handler.
+const SCREEN_DELAY_MS: u64 = 25;
 
 struct Rng(u64);
 
@@ -182,6 +184,7 @@ fn wait_for_surface(ct: &ContentThread) {
 fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame: impl FnMut(&ContentThread, i64)) {
     let (state_tx, state_rx) = crate::content_state::state_channel();
     ct.timer.reanchor_grid_at(anchor);
+    let mut presented = 0u64;
     for event in events {
         let now = match event {
             Event::Press(_) => {
@@ -193,8 +196,18 @@ fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame
         wait_for_surface(ct);
         let playing = ct.engine.is_playing();
         ct.tick_frame_at(now, &state_tx);
-        // D15: Link is read at the frame's deadline, not when the tick woke.
-        assert_eq!(Some(ct.link_sample_at), ct.timer.tick_deadline(), "Link sample instant is the tick's deadline");
+        // D19: sources are read for the frame's screen instant, the tick's
+        // deadline plus the measured delay, not when the tick woke.
+        let deadline = ct.timer.tick_deadline().expect("a ticked frame has a deadline");
+        let read_at = deadline + Duration::from_secs_f64(ct.calibration.read_delay());
+        assert_eq!(ct.link_sample_at, read_at, "the read instant is the deadline plus L");
+        // The headless pipeline has no stage window: stand in for Metal's
+        // presented handler, each frame on screen 25 ms after its deadline.
+        presented += 1;
+        let drawable_id = presented;
+        ct.issued_presents.record(drawable_id, deadline);
+        let at = deadline + Duration::from_millis(SCREEN_DELAY_MS);
+        assert!(!ct.handle_command(ContentCommand::FramePresented { drawable_id, at }), "a present must not shut down");
         while state_rx.try_recv().is_ok() {}
         // D5: graphs get the tick's grid frames as dt, never wall time.
         let grid_dt = f64::from(ct.engine.tick_frames()) * ct.engine.transport_clock().step().0;
@@ -213,6 +226,10 @@ fn run(seed: Option<u64>) -> BTreeMap<i64, Frame> {
     drive(&mut ct, anchor, &events, |ct, index| {
         frames.insert(index, capture(ct));
     });
+    // D19: the presents reached the calibration, and the read instant moved
+    // from the 17 ms default to what they measured.
+    let measured = ct.calibration.present_delay();
+    assert!((measured - SCREEN_DELAY_MS as f64 / 1000.0).abs() < 1e-6, "the measured screen delay: {:.3} ms", measured * 1000.0);
     frames
 }
 

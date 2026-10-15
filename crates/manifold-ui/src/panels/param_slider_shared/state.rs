@@ -501,20 +501,43 @@ pub(crate) fn format_param_value(
     value_labels: Option<&[String]>,
     unit: Option<manifold_foundation::scene_surface::Unit>,
 ) -> String {
+    let mut buf = ParamValueText::default();
+    param_value_text(&mut buf, val, min, whole_numbers, is_angle, value_labels, unit).to_owned()
+}
+
+/// A formatted number as a param readout shows it: long enough for any `f32`
+/// with two decimals and a unit suffix.
+pub(crate) type ParamValueText = manifold_foundation::scratch::StackText<64>;
+
+/// [`format_param_value`] without allocating: a value label is borrowed, a
+/// number is written into `buf`.
+pub(crate) fn param_value_text<'a>(
+    buf: &'a mut ParamValueText,
+    val: f32,
+    min: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    value_labels: Option<&'a [String]>,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
+) -> &'a str {
+    use std::fmt::Write;
     if let Some(labels) = value_labels {
         let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
-        return labels[idx].clone();
+        return &labels[idx];
     }
-    if is_angle {
+    buf.clear();
+    let _ = if is_angle {
         // `val` is radians; the user always sees and edits degrees.
-        return format!("{:.0}°", val.to_degrees());
-    }
-    let suffix = unit.map_or("", |unit| unit.suffix());
-    if whole_numbers {
-        format!("{}{suffix}", val.round() as i32)
+        write!(buf, "{:.0}°", val.to_degrees())
     } else {
-        format!("{:.2}{suffix}", val)
-    }
+        let suffix = unit.map_or("", |unit| unit.suffix());
+        if whole_numbers {
+            write!(buf, "{}{suffix}", val.round() as i32)
+        } else {
+            write!(buf, "{:.2}{suffix}", val)
+        }
+    };
+    buf.as_str()
 }
 
 /// Shared Shift-fine scaling for a param value scrub (the D8 fine-drag

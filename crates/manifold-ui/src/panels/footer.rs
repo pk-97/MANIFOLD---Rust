@@ -48,10 +48,20 @@ pub struct FooterPanel {
 }
 
 impl FooterPanel {
-    /// The bar's region was translated (UI_INVALIDATION D7): the next
+    /// The bar's region was translated or resized (UI_INVALIDATION D7): the next
     /// in-place update lays out at the rect the nodes moved to.
     pub fn follow_rect(&mut self, rect: Rect) {
         self.rect = rect;
+    }
+
+    /// Lay the bar out in place at its rect and values. `NeedsRebuild` when
+    /// its structure changed; the caller rebuilds the bar then.
+    pub fn relayout(&mut self, tree: &mut UITree) -> Reconcile {
+        if !self.host.is_built() {
+            return Reconcile::Updated;
+        }
+        let view = self.view();
+        self.host.update(tree, &view, self.rect)
     }
 
     /// The rect the bar last laid out at.
@@ -173,16 +183,7 @@ impl Panel for FooterPanel {
     }
 
     fn update(&mut self, tree: &mut UITree) {
-        if !self.host.is_built() {
-            return;
-        }
-        let view = self.view();
-        let reconcile = self.host.update(tree, &view, self.rect);
-        debug_assert_eq!(
-            reconcile,
-            Reconcile::Updated,
-            "footer structure is invariant per frame — value changes update in place"
-        );
+        let _ = self.relayout(tree);
     }
 
     /// Footer is fully intent-dispatched (see `register_intents`); clicks resolve

@@ -12,6 +12,7 @@ use manifold_core::{Beats, Bpm, LayerId, PresetTypeId, SceneId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::trigger_source::SetParamClipTriggerSourceCommand;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::external_follow::FollowProfile;
 
 fn add_level_param(instance: &mut PresetInstance) {
     instance.params.push(Param::bundled(ParamSpecDef {
@@ -96,12 +97,19 @@ fn trigger_source_project() -> (Project, LayerId, LayerId, LayerId, SceneId) {
     (project, owner_id, source_a_id, source_b_id, scene_id)
 }
 
-/// Playing with an external clock that freezes the grid (the CLK stopgap):
-/// each `follow_external_beat` lands on the nearest frame at once, with no
-/// seek side effects, and ticks never move the playhead.
+/// Playing under an external clock (D6, D8): the follow segment is the
+/// converter, and ticks of zero frames never move the grid.
 fn play_on_external_clock(engine: &mut PlaybackEngine) {
+    engine.set_follow_authority(Some(FollowProfile::FAST));
     engine.set_state(PlaybackState::Playing);
-    engine.set_external_time_sync(true);
+}
+
+/// The external clock jumps to `beat` with no seek side effects: the frame
+/// at the beat's time, no hold, the follow segment re-anchored there (D4,
+/// D6). No tick runs, so a start the jump registers stays unevaluated.
+fn clock_jumps_to(engine: &mut PlaybackEngine, beat: Beats) {
+    let t = engine.beat_to_timeline_time(beat);
+    engine.locate(t);
 }
 
 fn tick(engine: &mut PlaybackEngine) {
@@ -323,20 +331,20 @@ fn direct_backward_clock_clears_pending_fire_without_retriggering_active_clip() 
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
         play_on_external_clock(&mut engine);
-        engine.follow_external_beat(Beats::ZERO);
+        clock_jumps_to(&mut engine, Beats::ZERO);
         engine.sync_clips_to_time();
         tick(&mut engine);
         assert_eq!(engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner_id.clone())).unwrap()
             .params.get("level").unwrap().value, 1.0);
         let transport_epoch = engine.transport_epoch();
 
-        engine.follow_external_beat(Beats(2.0));
+        clock_jumps_to(&mut engine, Beats(2.0));
         engine.sync_clips_to_time();
         tick(&mut engine);
         if use_set_time {
             engine.locate(Seconds::ZERO);
         } else {
-            engine.follow_external_beat(Beats::ZERO);
+            clock_jumps_to(&mut engine, Beats::ZERO);
         }
         engine.sync_clips_to_time();
         tick(&mut engine);
@@ -346,7 +354,7 @@ fn direct_backward_clock_clears_pending_fire_without_retriggering_active_clip() 
         assert_eq!(engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner_id.clone())).unwrap()
             .params.get("level").unwrap().value, 1.0);
 
-        engine.follow_external_beat(Beats(4.0));
+        clock_jumps_to(&mut engine, Beats(4.0));
         engine.sync_clips_to_time();
         tick(&mut engine);
         assert_eq!(engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner_id)).unwrap()
@@ -366,7 +374,7 @@ fn backward_set_beat_clears_late_source_cutoff_before_earlier_start() {
     let mut engine = PlaybackEngine::new(Vec::new());
     engine.initialize(project);
     play_on_external_clock(&mut engine);
-    engine.follow_external_beat(Beats(4.0));
+    clock_jumps_to(&mut engine, Beats(4.0));
     engine.sync_clips_to_time();
 
     let target = GraphTarget::Generator(owner_id.clone());
@@ -381,7 +389,7 @@ fn backward_set_beat_clears_late_source_cutoff_before_earlier_start() {
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
 
-    engine.follow_external_beat(Beats::ZERO);
+    clock_jumps_to(&mut engine, Beats::ZERO);
     engine.sync_clips_to_time();
     tick(&mut engine);
     assert_eq!(step_value(&engine, &owner_id), Some(1.0));
@@ -409,11 +417,11 @@ fn backward_clock_clears_unevaluated_later_step_start() {
     let mut engine = PlaybackEngine::new(Vec::new());
     engine.initialize(project);
     play_on_external_clock(&mut engine);
-    engine.follow_external_beat(Beats(4.0));
+    clock_jumps_to(&mut engine, Beats(4.0));
     engine.sync_clips_to_time();
     assert_eq!(step_value(&engine, &owner_id), None);
 
-    engine.follow_external_beat(Beats::ZERO);
+    clock_jumps_to(&mut engine, Beats::ZERO);
     engine.sync_clips_to_time();
     tick(&mut engine);
     assert_eq!(step_value(&engine, &owner_id), None);
@@ -507,7 +515,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     play_on_external_clock(&mut engine);
 
     for (beat, expected) in [(0.0, Some(1.0)), (1.0, Some(1.0)), (3.0, Some(1.0))] {
-        engine.follow_external_beat(Beats(beat));
+        clock_jumps_to(&mut engine, Beats(beat));
         engine.sync_clips_to_time();
         tick(&mut engine);
     // Envelope Step is composed on the following evaluation.
@@ -531,7 +539,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     assert!(disconnect.was_applied());
     engine.reconcile_clip_control_bindings();
-    engine.follow_external_beat(Beats(4.0));
+    clock_jumps_to(&mut engine, Beats(4.0));
     engine.sync_clips_to_time();
     tick(&mut engine);
     // Envelope Step is composed on the following evaluation.
@@ -542,7 +550,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     run(&mut engine, &mut disconnect, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
-    engine.follow_external_beat(Beats(8.0));
+    clock_jumps_to(&mut engine, Beats(8.0));
     engine.sync_clips_to_time();
     tick(&mut engine);
     // Envelope Step is composed on the following evaluation.
@@ -585,7 +593,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
         (3.0, Some(1.0)),
         (4.0, Some(2.0)),
     ] {
-        loaded_engine.follow_external_beat(Beats(beat));
+        clock_jumps_to(&mut loaded_engine, Beats(beat));
         loaded_engine.sync_clips_to_time();
         tick(&mut loaded_engine);
     // Envelope Step is composed on the following evaluation.
@@ -639,14 +647,14 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     let mut missing_engine = PlaybackEngine::new(Vec::new());
     missing_engine.initialize(missing);
     play_on_external_clock(&mut missing_engine);
-    missing_engine.follow_external_beat(Beats::ZERO);
+    clock_jumps_to(&mut missing_engine, Beats::ZERO);
     missing_engine.sync_clips_to_time();
     tick(&mut missing_engine);
     // Envelope Step is composed on the following evaluation.
     tick(&mut missing_engine);
     assert_eq!(step_value_for(&missing_engine, &owner_id, PARAM_ID), None);
     assert_value(&missing_engine, &owner_id, 0.0);
-    missing_engine.follow_external_beat(Beats(1.0));
+    clock_jumps_to(&mut missing_engine, Beats(1.0));
     missing_engine.sync_clips_to_time();
     tick(&mut missing_engine);
     // Envelope Step is composed on the following evaluation.

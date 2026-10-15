@@ -266,6 +266,37 @@ pub(crate) fn serialized_value_as_f32(
 /// every generator graph the user opens.
 /// Recursively find a snapshot node by stable [`NodeId`], descending into
 /// groups. Resolves a previewed node's title + type_id for the value inspector.
+/// What the editor's node inspector title and description were built from.
+/// Holding the snapshot keeps its identity unique while compared.
+pub(crate) struct NodeInspectorKey {
+    node: manifold_core::NodeId,
+    diagnostic: Option<&'static str>,
+    snapshot: Option<std::sync::Arc<manifold_node_engine::snapshot::GraphSnapshot>>,
+}
+
+impl NodeInspectorKey {
+    fn of(
+        info: &crate::content_state::NodePreviewInfo,
+        snapshot: Option<&std::sync::Arc<manifold_node_engine::snapshot::GraphSnapshot>>,
+    ) -> Self {
+        Self { node: info.node_id.clone(), diagnostic: info.diagnostic, snapshot: snapshot.cloned() }
+    }
+
+    fn matches(
+        &self,
+        info: &crate::content_state::NodePreviewInfo,
+        snapshot: Option<&std::sync::Arc<manifold_node_engine::snapshot::GraphSnapshot>>,
+    ) -> bool {
+        self.node == info.node_id
+            && self.diagnostic == info.diagnostic
+            && match (&self.snapshot, snapshot) {
+                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 fn find_snapshot_node<'a>(
     nodes: &'a [manifold_node_engine::snapshot::NodeSnapshot],
     id: &manifold_core::NodeId,
@@ -1748,9 +1779,18 @@ impl Application {
             .set_node_preview_normalize(self.node_preview_normalize);
         // Value inspector for a previewed node with no image: its description
         // (from the descriptor) + the live scalar I/O captured this frame.
-        let node_inspector = node_preview_info
-            .as_ref()
-            .filter(|i| !i.has_image)
+        // The strings follow the node, its diagnostic and the snapshot; while
+        // those hold, a frame only moves the port values in place.
+        let shown = node_preview_info.as_ref().filter(|i| !i.has_image);
+        let keep = shown.is_some_and(|info| {
+            self.node_inspector_key
+                .as_ref()
+                .is_some_and(|key| key.matches(info, snap_arc.as_ref()))
+                && self.graph_editor_panel.update_node_inspector_io(&info.inputs, &info.outputs)
+        });
+        self.node_inspector_key = shown.map(|info| NodeInspectorKey::of(info, snap_arc.as_ref()));
+        let node_inspector = shown
+            .filter(|_| !keep)
             .map(|info| {
                 let snap_node = snap_arc
                     .as_deref()
@@ -1781,7 +1821,9 @@ impl Application {
                     outputs: info.outputs.clone(),
                 }
             });
-        self.graph_editor_panel.set_node_inspector(node_inspector);
+        if !keep {
+            self.graph_editor_panel.set_node_inspector(node_inspector);
+        }
 
         // Right lane = the whole main-window inspector column, this window's
         // own `ws.ui_root.inspector` instance, configured in the main tick in
@@ -1828,7 +1870,7 @@ impl Application {
         {
             let atlas_handle =
                 manifold_ui::node::texture_handle_for_key("__manifold_graph_node_atlas__");
-            let prepared = if let (Some(bridge), Some(canvas)) = (
+            let atlas_tex = if let (Some(bridge), Some(_)) = (
                 self.node_atlas_texture_bridge.as_ref(),
                 self.graph_canvas.as_ref(),
             ) {
@@ -1839,46 +1881,29 @@ impl Application {
                     .and_then(|t| t.as_ref())
                     .map(|atlas_tex| {
                         bridge_leases.push((bridge.clone(), lease));
-                        let layout: ahash::AHashMap<&manifold_core::NodeId, u32> = self
-                            .content_state
-                            .node_atlas_layout
-                            .iter()
-                            .map(|(id, cell)| (id, *cell))
-                            .collect();
-                        let vp = crate::graph_canvas::Rect::new(
-                            canvas_x,
-                            0.0,
-                            canvas_width,
-                            logical_h as f32,
-                        );
-                        // Each source is letterboxed into its 16:9 cell; the
-                        // on-canvas screen takes the project aspect, so sample only
-                        // the letterboxed content sub-rect. Edge-straddle clipping
-                        // is now the canvas viewport scissor, so (unlike the old
-                        // blit) no per-node UV cropping is needed here.
-                        let mut map: ahash::AHashMap<
-                            manifold_core::NodeId,
-                            (manifold_ui::node::TextureHandle, [f32; 4]),
-                        > = ahash::AHashMap::new();
-                        for (node_id, _, _, _, _) in canvas.visible_node_thumbnails(vp) {
-                            let Some(&cell) = layout.get(&node_id) else {
-                                continue;
-                            };
-                            let uv = crate::content_pipeline::atlas_cell_uv(cell, monitor_aspect);
-                            map.insert(node_id, (atlas_handle, uv));
-                        }
-                        (atlas_tex.clone(), map)
+                        atlas_tex.clone()
                     })
             } else {
                 None
             };
-            if let Some((atlas_tex, map)) = prepared {
-                previews_visible = !map.is_empty();
+            if let Some(atlas_tex) = atlas_tex {
                 if let Some(ui) = self.ui_renderer.as_mut() {
                     ui.register_external_texture(atlas_handle, atlas_tex);
                 }
                 if let Some(canvas) = self.graph_canvas.as_mut() {
-                    canvas.set_node_preview_src(map);
+                    let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32);
+                    // Each source is letterboxed into its 16:9 cell; the
+                    // on-canvas screen takes the project aspect, so sample only
+                    // the letterboxed content sub-rect. Edge-straddle clipping
+                    // is the canvas viewport scissor, so no per-node UV
+                    // cropping is needed here. The map refills in place and
+                    // the atlas layout is a short list, so this allocates
+                    // nothing per frame.
+                    let layout = &self.content_state.node_atlas_layout;
+                    previews_visible = canvas.refill_node_preview_src(vp, |id| {
+                        let &(_, cell) = layout.iter().find(|(node, _)| node == id)?;
+                        Some((atlas_handle, crate::content_pipeline::atlas_cell_uv(cell, monitor_aspect)))
+                    });
                 }
             }
         }

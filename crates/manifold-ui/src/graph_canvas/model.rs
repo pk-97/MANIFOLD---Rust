@@ -908,16 +908,41 @@ pub(crate) fn numeric_value_fill(
     value: f32,
     range: Option<(f32, f32)>,
 ) -> Option<(String, Option<f32>)> {
+    let mut s = String::new();
+    let fill = write_numeric_value(&mut s, kind, value, range)?;
+    Some((s, fill))
+}
+
+/// [`numeric_value_fill`] writing the text over `out`, reusing its
+/// allocation; returns the fill. `None` (and `out` untouched) for a kind with
+/// no numeric display.
+pub(crate) fn write_numeric_value(
+    out: &mut String,
+    kind: crate::graph_view::ParamSnapshotKind,
+    value: f32,
+    range: Option<(f32, f32)>,
+) -> Option<Option<f32>> {
     use crate::graph_view::ParamSnapshotKind;
-    let s = match kind {
-        ParamSnapshotKind::Float => format!("{value:.2}"),
+    use std::fmt::Write;
+    if !matches!(
+        kind,
+        ParamSnapshotKind::Float
+            | ParamSnapshotKind::Angle
+            | ParamSnapshotKind::Frequency
+            | ParamSnapshotKind::Int
+            | ParamSnapshotKind::Bool
+    ) {
+        return None;
+    }
+    out.clear();
+    let _ = match kind {
+        ParamSnapshotKind::Float => write!(out, "{value:.2}"),
         // Stored radians, shown as degrees (see ParamType::Angle).
-        ParamSnapshotKind::Angle => format!("{:.0}°", value.to_degrees()),
+        ParamSnapshotKind::Angle => write!(out, "{:.0}°", value.to_degrees()),
         // Stored rad/s, shown as Hz (see ParamType::Frequency).
-        ParamSnapshotKind::Frequency => format!("{:.2} Hz", value / std::f32::consts::TAU),
-        ParamSnapshotKind::Int => format!("{}", value as i64),
-        ParamSnapshotKind::Bool => if value >= 0.5 { "On" } else { "Off" }.to_string(),
-        _ => return None,
+        ParamSnapshotKind::Frequency => write!(out, "{:.2} Hz", value / std::f32::consts::TAU),
+        ParamSnapshotKind::Int => write!(out, "{}", value as i64),
+        _ => out.write_str(if value >= 0.5 { "On" } else { "Off" }),
     };
     let fill = match kind {
         ParamSnapshotKind::Float
@@ -932,7 +957,7 @@ pub(crate) fn numeric_value_fill(
         }),
         _ => None,
     };
-    Some((s, fill))
+    Some(fill)
 }
 
 /// Scrub metadata for the draggable numeric kinds (Float / Angle / Frequency /
@@ -1093,38 +1118,62 @@ impl GraphCanvas {
         self.node_preview_src = src;
     }
 
+    /// [`Self::set_node_preview_src`] in place, for the live editor's every
+    /// frame: refill the sources of the nodes visible in `viewport` from
+    /// `src_of` (a capture id's source, `None` when it has none), reusing the
+    /// map's allocation. Returns whether any preview shows.
+    pub fn refill_node_preview_src(
+        &mut self,
+        viewport: Rect,
+        mut src_of: impl FnMut(&manifold_foundation::NodeId) -> Option<(crate::node::TextureHandle, [f32; 4])>,
+    ) -> bool {
+        let mut src = std::mem::take(&mut self.node_preview_src);
+        src.clear();
+        for node in &self.nodes {
+            if let Some((capture_id, ..)) = self.visible_preview(node, viewport)
+                && let Some(s) = src_of(capture_id)
+            {
+                src.insert(capture_id.clone(), s);
+            }
+        }
+        self.node_preview_src = src;
+        !self.node_preview_src.is_empty()
+    }
+
     pub fn visible_node_thumbnails(
         &self,
         viewport: Rect,
     ) -> Vec<(manifold_foundation::NodeId, f32, f32, f32, f32)> {
-        let mut out = Vec::new();
-        let header = NODE_HEADER_HEIGHT * self.zoom;
-        let pad = PREVIEW_PAD * self.zoom;
-        for node in &self.nodes {
-            let (Some(capture_id), Some((screen_w, screen_h))) =
-                (node.preview_node_id.clone(), node.preview_screen)
-            else {
-                continue;
-            };
-            let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
-            let sw = NODE_WIDTH * self.zoom;
-            let sh = node.height() * self.zoom;
-            if sx + sw < viewport.x
-                || sx > viewport.x + viewport.w
-                || sy + sh < viewport.y
-                || sy > viewport.y + viewport.h
-            {
-                continue;
-            }
-            let strip_w = screen_w * self.zoom;
-            let strip_h = screen_h * self.zoom;
-            // Centre a narrower-than-full-width screen (portrait) in the band.
-            let strip_x = sx + pad + (PREVIEW_IMG_W * self.zoom - strip_w) * 0.5;
-            if strip_h > 1.0 {
-                out.push((capture_id, strip_x, sy + header + pad, strip_w, strip_h));
-            }
+        self.nodes
+            .iter()
+            .filter_map(|node| self.visible_preview(node, viewport))
+            .map(|(id, x, y, w, h)| (id.clone(), x, y, w, h))
+            .collect()
+    }
+
+    /// `node`'s capture id and preview strip rect, when it previews an image
+    /// and is on canvas.
+    fn visible_preview<'a>(
+        &self,
+        node: &'a NodeView,
+        viewport: Rect,
+    ) -> Option<(&'a manifold_foundation::NodeId, f32, f32, f32, f32)> {
+        let (Some(capture_id), Some((screen_w, screen_h))) = (node.preview_node_id.as_ref(), node.preview_screen)
+        else {
+            return None;
+        };
+        let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        let sw = NODE_WIDTH * self.zoom;
+        let sh = node.height() * self.zoom;
+        if sx + sw < viewport.x || sx > viewport.x + viewport.w || sy + sh < viewport.y || sy > viewport.y + viewport.h {
+            return None;
         }
-        out
+        let strip_w = screen_w * self.zoom;
+        let strip_h = screen_h * self.zoom;
+        // Centre a narrower-than-full-width screen (portrait) in the band.
+        let strip_x = sx + PREVIEW_PAD * self.zoom + (PREVIEW_IMG_W * self.zoom - strip_w) * 0.5;
+        let strip_y = sy + NODE_HEADER_HEIGHT * self.zoom + PREVIEW_PAD * self.zoom;
+        (strip_h > 1.0).then_some((capture_id, strip_x, strip_y, strip_w, strip_h))
     }
 
     /// Whether `node` matches the active search — its title or handle contains
@@ -1558,23 +1607,23 @@ impl GraphCanvas {
         if live.is_empty() {
             return;
         }
-        let by_id: ahash::AHashMap<&manifold_foundation::NodeId, &Vec<(&'static str, f32)>> =
-            live.iter().map(|(id, vals)| (id, vals)).collect();
+        // Retained index from node id to its entry in `live`: refilled in
+        // place, so a live frame allocates nothing (ids are `Arc`s).
+        let index = &mut self.live_index;
+        index.clear();
+        index.extend(live.iter().enumerate().map(|(i, (id, _))| (id.clone(), i)));
+        let by_id = |id: &manifold_foundation::NodeId| index.get(id).map(|&i| &live[i].1);
         // The param the user is mid-scrub on stays the source of truth until
-        // release; cloned so the per-node mutable walk below has no live borrow
-        // of `self.drag_mode`.
-        let scrubbing: Option<(u32, String)> = match self.drag.payload() {
+        // release.
+        let scrubbing = match self.drag.payload() {
             Some(CanvasDrag::ParamScrub {
                 node_id,
                 param_name,
                 ..
-            }) => Some((*node_id, param_name.clone())),
+            }) => Some((*node_id, param_name.as_str())),
             _ => None,
         };
-        // Sparkline samples gathered during the mutable node walk, applied to
-        // `spark_history` afterwards (can't touch `self.spark_history` while
-        // `self.nodes` is borrowed mutably).
-        let mut spark_updates: Vec<(manifold_foundation::NodeId, f32)> = Vec::new();
+        let spark_history = &mut self.spark_history;
         for node in &mut self.nodes {
             // Ordinary rows match against the enclosing node's own live
             // entry; group-face mirror rows (`live_source`, D6) carry their
@@ -1585,7 +1634,7 @@ impl GraphCanvas {
             let node_vals = if node.node_id.is_empty() {
                 None
             } else {
-                by_id.get(&node.node_id)
+                by_id(&node.node_id)
             };
             if node_vals.is_none() && !node.params.iter().any(|p| p.live_source.is_some()) {
                 continue;
@@ -1596,26 +1645,20 @@ impl GraphCanvas {
             // the summary read the same knob.
             let mut primary_fill: Option<f32> = None;
             for pv in &mut node.params {
-                if scrubbing
-                    .as_ref()
-                    .is_some_and(|(sn, sp)| *sn == node_id && sp.as_str() == pv.name)
-                {
+                if scrubbing.is_some_and(|(sn, sp)| sn == node_id && sp == pv.name) {
                     continue;
                 }
                 let found = if let Some((src_id, src_name)) = &pv.live_source {
-                    by_id
-                        .get(src_id)
-                        .and_then(|vals| vals.iter().find(|(name, _)| *name == src_name.as_str()))
+                    by_id(src_id).and_then(|vals| vals.iter().find(|(name, _)| *name == src_name.as_str()))
                 } else {
                     node_vals.and_then(|vals| vals.iter().find(|(name, _)| *name == pv.name))
                 };
                 let Some(&(_, value)) = found else {
                     continue;
                 };
-                let Some((value_str, fill)) = numeric_value_fill(pv.kind, value, pv.range) else {
+                let Some(fill) = write_numeric_value(&mut pv.value, pv.kind, value, pv.range) else {
                     continue;
                 };
-                pv.value = value_str;
                 pv.fill = fill;
                 pv.current_value = value;
                 if let Some(scrub) = pv.scrub.as_mut() {
@@ -1633,15 +1676,12 @@ impl GraphCanvas {
             if !node.node_id.is_empty()
                 && let Some(f) = primary_fill
             {
-                spark_updates.push((node.node_id.clone(), f));
+                let hist = spark_history.entry(node.node_id.clone()).or_default();
+                if hist.len() >= SPARK_CAPACITY {
+                    hist.pop_front();
+                }
+                hist.push_back(f);
             }
-        }
-        for (id, f) in spark_updates {
-            let hist = self.spark_history.entry(id).or_default();
-            if hist.len() >= SPARK_CAPACITY {
-                hist.pop_front();
-            }
-            hist.push_back(f);
         }
     }
 

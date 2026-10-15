@@ -293,6 +293,11 @@ pub struct ContentState {
     pub ableton_session: Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Whether the Ableton bridge is currently connected.
     pub ableton_connected: bool,
+
+    // ── Sync calibration (D19) ──────────────────────────────────
+    /// Learned source offsets against Link, s: MIDI clock, AbletonOSC,
+    /// timecode. The UI keeps them per rig in `UserPrefs`.
+    pub sync_offsets: [f64; 3],
     pub ableton_transport_enabled: bool,
     /// Closed-loop transport sync health (Locked / Confirming / degraded /
     /// warning) — drives the SYNC chip (ABLETON_TRANSPORT_SYNC_DESIGN D9/D10).
@@ -307,8 +312,9 @@ pub struct ContentState {
 
     /// Lightweight modulation delta — just the param_values that
     /// drivers/envelopes wrote this frame. Applied in-place to the UI's
-    /// local_project without a full Project clone.
-    pub modulation_snapshot: Option<ModulationSnapshot>,
+    /// local_project without a full Project clone. Shared from the content
+    /// thread's [`ModSnapshotPool`], so a publish copies without allocating.
+    pub modulation_snapshot: Option<Arc<ModulationSnapshot>>,
 
     /// Live snapshot of the first graph-backed effect's internal node
     /// graph, for the editor canvas. `None` when no graph-backed effect
@@ -384,8 +390,6 @@ pub type ChainFailures = Arc<[(Option<LayerId>, Arc<str>)]>;
 /// starve a block. The `topology` stamp still guards a found-by-id block
 /// against a same-frame manifest reshape (skipped for exactly one frame —
 /// the next capture re-keys).
-/// Clone = 4 Vec allocations (values + block_lens + block_topos +
-/// block_owners) instead of ~128 separate Vec<f32> clones.
 #[derive(Clone)]
 pub struct ModulationSnapshot {
     /// All param values concatenated in block order.
@@ -555,6 +559,43 @@ impl ModulationSnapshot {
             cursor += len;
         }
     }
+
+    /// Overwrite this snapshot with `src`, reusing every buffer's allocation.
+    fn copy_from(&mut self, src: &ModulationSnapshot) {
+        self.values.clone_from(&src.values);
+        self.block_lens.clone_from(&src.block_lens);
+        self.block_topos.clone_from(&src.block_topos);
+        // Owner ids are `Arc`s: a clone is a count bump.
+        self.block_owners.clone_from(&src.block_owners);
+    }
+}
+
+/// The published copies of the content thread's capture. The UI drops a copy
+/// once it has applied it, so the next publish reuses that buffer. One copy
+/// can wait in the handoff slot and one be in the UI's hands while a third is
+/// written, so three buffers cover every frame; past that a publish allocates.
+#[derive(Default)]
+pub struct ModSnapshotPool {
+    bufs: Vec<Arc<ModulationSnapshot>>,
+}
+
+impl ModSnapshotPool {
+    const RETAINED: usize = 3;
+
+    /// A shared copy of `src`, in a buffer nobody else holds when one exists.
+    pub fn publish(&mut self, src: &ModulationSnapshot) -> Arc<ModulationSnapshot> {
+        for i in 0..self.bufs.len() {
+            if let Some(buf) = Arc::get_mut(&mut self.bufs[i]) {
+                buf.copy_from(src);
+                return Arc::clone(&self.bufs[i]);
+            }
+        }
+        let copy = Arc::new(src.clone());
+        if self.bufs.len() < Self::RETAINED {
+            self.bufs.push(Arc::clone(&copy));
+        }
+        copy
+    }
 }
 
 impl Default for ContentState {
@@ -627,6 +668,7 @@ impl Default for ContentState {
             modifier_selection_update: None,
             object_modifier_selection_update: None,
             ableton_session: None,
+            sync_offsets: [0.0; 3],
             ableton_connected: false,
             ableton_transport_enabled: false,
             ableton_sync_status:
@@ -1164,6 +1206,26 @@ mod modulation_topology_guard_tests {
                 "tick {tick}: values must cover macros + master fx + layer fx"
             );
         }
+    }
+
+    /// A copy the UI dropped is written again; one it still holds is left as
+    /// it is.
+    #[test]
+    fn publish_reuses_only_released_buffers() {
+        let mut project = Project::default();
+        project.settings.master_effects.push(effect(&[("m", 0.30)]));
+        let mut scratch = ModulationSnapshot::empty();
+        let mut pool = ModSnapshotPool::default();
+        scratch.capture_into(&project);
+        let held = pool.publish(&scratch);
+        let released = Arc::as_ptr(&pool.publish(&scratch));
+
+        project.settings.master_effects[0].params.iter_mut().for_each(|p| p.value = 0.9);
+        scratch.capture_into(&project);
+        let next = pool.publish(&scratch);
+        assert_eq!(Arc::as_ptr(&next), released, "the released buffer is reused");
+        assert_eq!(next.values.last(), Some(&0.9));
+        assert_eq!(held.values.last(), Some(&0.30), "a held copy never changes");
     }
 }
 

@@ -16,24 +16,28 @@
 
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::time::Instant;
 
 use manifold_core::Seconds;
 use manifold_core::types::{ClockAuthority, PlaybackState};
 
 use crate::osc_receiver::OscReceiver;
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
+use crate::sync_projection::TimecodeReport;
 use crate::sync_source::SyncSource;
 
 /// Latest OSC timecode message captured by the subscription callback
 /// (which runs on the content thread inside `OscReceiver::update()`'s
 /// dispatch loop, but cannot hold `&mut OscSyncController` — see
-/// `enable_osc`). Fixed-size buffer: SMPTE timecode is at most 4 floats
+/// `enable_osc`). Fixed-size buffer: SMPTE timecode is at most 4 values
 /// (H M S F), so no heap allocation on write (callback) or drain
 /// (`drain_pending_osc_timecode`, called every content-thread frame).
+/// `at` is the receive thread's arrival stamp (D7).
 #[derive(Clone, Copy)]
 struct PendingOscTimecode {
-    values: [f32; 4],
+    values: [f64; 4],
     len: u8,
+    at: Instant,
 }
 
 /// OSC timecode sync controller.
@@ -99,6 +103,9 @@ pub struct OscSyncController {
     // Port of `pendingTimecodeSeconds`, `hasNewTimecode`.
     pending_timecode_seconds: Seconds,
     has_new_timecode: bool,
+    pending_report: Option<TimecodeReport>,
+    /// The latest message `update()` processed, for the follower (D7).
+    report: Option<TimecodeReport>,
 
     /// Shared slot the OSC subscription callback writes into (see
     /// `enable_osc`). Drained once per frame by `drain_pending_osc_timecode`,
@@ -154,6 +161,8 @@ impl OscSyncController {
 
             pending_timecode_seconds: Seconds(-1.0),
             has_new_timecode: false,
+            pending_report: None,
+            report: None,
 
             pending_osc_message: Arc::new(Mutex::new(None)),
         }
@@ -194,15 +203,16 @@ impl OscSyncController {
             // out of scope here). `unsubscribe_all` in disable_osc is exact for our
             // single-subscriber use of this address.
             let slot = Arc::clone(&self.pending_osc_message);
-            receiver.subscribe(
+            receiver.subscribe_stamped(
                 &self.timecode_address,
-                Box::new(move |_addr, values| {
+                Box::new(move |_addr, values, at| {
                     let len = values.len().min(4);
-                    let mut buf = [0f32; 4];
+                    let mut buf = [0f64; 4];
                     buf[..len].copy_from_slice(&values[..len]);
                     *slot.lock() = Some(PendingOscTimecode {
                         values: buf,
                         len: len as u8,
+                        at,
                     });
                 }),
             );
@@ -216,7 +226,6 @@ impl OscSyncController {
 
         self.was_receiving = false;
         self.is_osc_enabled = true;
-        // ExternalTimeSync is managed per-frame based on is_receiving_timecode (not just enabled)
         true
     }
 
@@ -238,10 +247,18 @@ impl OscSyncController {
         self.was_receiving = false;
         self.current_timecode_display = "--:--:--:--".to_string();
         self.has_new_timecode = false;
+        self.pending_report = None;
+        self.report = None;
         *self.pending_osc_message.lock() = None;
 
-        // syncArbiter?.ClearExternalTimeSync() — caller must forward this.
         log::info!("[OscSync] Disabled");
+    }
+
+    /// The latest message, while timecode arrives: song seconds, arrival
+    /// stamp, and the frame length for a label. The follower takes its
+    /// projection every tick (D6, D7).
+    pub fn timecode_report(&self) -> Option<TimecodeReport> {
+        self.report.filter(|_| self.is_receiving_timecode)
     }
 
     pub fn toggle_osc(&mut self, receiver: &mut OscReceiver) {
@@ -275,7 +292,7 @@ impl OscSyncController {
             // Address is unused by on_timecode_received (values alone
             // determine the parse path) — "" is fine, avoids a clone of
             // timecode_address just to satisfy the parameter.
-            self.on_timecode_received("", &m.values[..m.len as usize], now);
+            self.on_timecode_received("", &m.values[..m.len as usize], m.at, now);
         }
     }
 
@@ -285,8 +302,10 @@ impl OscSyncController {
     ///
     /// Port of Unity OscSyncController.OnTimecodeReceived(string address, float[] values).
     ///
-    /// `now` = current wall-clock time in seconds (replaces Unity's `Time.time`).
-    pub fn on_timecode_received(&mut self, _address: &str, values: &[f32], now: Seconds) {
+    /// `at` = the receive thread's arrival stamp; `now` = the drain time,
+    /// which drives the receive timeout.
+    pub fn on_timecode_received(&mut self, _address: &str, values: &[f64], at: Instant, now: Seconds) {
+        let frame;
         if values.len() >= 4 {
             let hours = values[0] as i32;
             let minutes = values[1] as i32;
@@ -294,9 +313,9 @@ impl OscSyncController {
             let frames = values[3] as i32;
 
             self.pending_timecode_seconds = Seconds(
-                (self.timecode_to_seconds(hours, minutes, seconds, frames) + self.timecode_offset)
-                    as f64,
+                self.timecode_to_seconds(hours, minutes, seconds, frames) + f64::from(self.timecode_offset),
             );
+            frame = Some(self.frame_seconds());
 
             if hours != self.cached_tc_h
                 || minutes != self.cached_tc_m
@@ -311,7 +330,8 @@ impl OscSyncController {
                     format!("{:02}:{:02}:{:02}:{:02}", hours, minutes, seconds, frames);
             }
         } else if !values.is_empty() {
-            self.pending_timecode_seconds = Seconds((values[0] + self.timecode_offset) as f64);
+            self.pending_timecode_seconds = Seconds(values[0] + f64::from(self.timecode_offset));
+            frame = None;
             let total_sec = self.pending_timecode_seconds.0 as i32;
             let h = total_sec / 3600;
             let m = (total_sec % 3600) / 60;
@@ -335,7 +355,13 @@ impl OscSyncController {
         }
 
         self.has_new_timecode = true;
+        self.pending_report = Some(TimecodeReport { seconds: self.pending_timecode_seconds.0, at, frame });
         self.last_timecode_received_time = now;
+    }
+
+    /// One timecode frame's length in seconds.
+    fn frame_seconds(&self) -> f64 {
+        if self.drop_frame { 1001.0 / 30000.0 } else { 1.0 / f64::from(self.timecode_frame_rate) }
     }
 
     // =================================================================
@@ -368,10 +394,6 @@ impl OscSyncController {
         let receiving = (now - self.last_timecode_received_time).0 < self.transport_timeout as f64;
         self.is_receiving_timecode = receiving;
 
-        // STOPGAP(frame-exact P3): the clock stops advancing on its own only
-        // while OSC is the selected authority and timecode is arriving.
-        arbiter.set_external_time_sync(ClockAuthority::Osc, authority, arb_target, receiving);
-
         // Transport detection: timecode arriving = play, timecode stopped = pause.
         if self.follow_transport {
             if receiving && !self.was_receiving {
@@ -394,6 +416,7 @@ impl OscSyncController {
         if self.has_new_timecode {
             self.has_new_timecode = false;
             self.current_timecode_seconds = self.pending_timecode_seconds;
+            self.report = self.pending_report.take();
             self.sync_timecode_to_playback(sync_target, arbiter, arb_target, authority);
         }
     }
@@ -410,7 +433,7 @@ impl OscSyncController {
         authority: ClockAuthority,
     ) {
         let osc_time = self.current_timecode_seconds;
-        let current_time = sync_target.current_time();
+        let current_time = sync_target.position_time();
         let delta = (osc_time - current_time).abs();
 
         if delta.0 < 0.001 {
@@ -418,12 +441,9 @@ impl OscSyncController {
         } // identical
 
         if sync_target.is_playing() {
-            if delta.0 < 0.5 {
-                // Normal sync: set time directly. No threshold — apply every OSC frame
-                // so drift never accumulates. ExternalTimeSync prevents deltaTime from
-                // fighting this, so the playhead advances purely from OSC timecode.
-                arbiter.nudge_time(ClockAuthority::Osc, authority, arb_target, osc_time);
-            } else {
+            // Inside 0.5 s the follower trims the beat from this tick's
+            // sample (D6); a larger error seeks.
+            if delta.0 >= 0.5 {
                 // Large jump during playback: full Seek (rebuilds clip state).
                 arbiter.seek(ClockAuthority::Osc, authority, arb_target, osc_time);
 
@@ -461,7 +481,7 @@ impl OscSyncController {
 
     /// Convert SMPTE timecode components to linear seconds.
     /// Port of Unity OscSyncController.TimecodeToSeconds().
-    fn timecode_to_seconds(&self, hours: i32, minutes: i32, seconds: i32, frames: i32) -> f32 {
+    fn timecode_to_seconds(&self, hours: i32, minutes: i32, seconds: i32, frames: i32) -> f64 {
         if self.drop_frame {
             // SMPTE 12M drop-frame: convert displayed TC to linear frame count.
             // Frames 0,1 are skipped at each minute except 0,10,20,30,40,50.
@@ -469,16 +489,14 @@ impl OscSyncController {
             let dropped_frames = 2 * (total_minutes - total_minutes / 10);
             let total_frames =
                 108000 * hours + 1800 * minutes + 30 * seconds + frames - dropped_frames;
-            // BUG-091 fix: true NTSC drop-frame rate is 30000/1001
-            // (≈29.970029970…), not the literal 29.97. Computed in f64 to keep
-            // the divisor exact, then narrowed. At 00:01:00:02 this now yields
-            // exactly 60.06s.
-            (total_frames as f64 * 1001.0 / 30000.0) as f32
+            // BUG-091 (drop-frame divisor): the NTSC rate is exactly
+            // 30000/1001, not 29.97; 00:01:00:02 is 60.06 s.
+            f64::from(total_frames) * 1001.0 / 30000.0
         } else {
-            hours as f32 * 3600.0
-                + minutes as f32 * 60.0
-                + seconds as f32
-                + frames as f32 / self.timecode_frame_rate
+            f64::from(hours) * 3600.0
+                + f64::from(minutes) * 60.0
+                + f64::from(seconds)
+                + f64::from(frames) / f64::from(self.timecode_frame_rate)
         }
     }
 }
@@ -593,7 +611,49 @@ mod tests {
         assert!((secs - expected).abs() < 1e-4);
     }
 
-    // ── Nudge-vs-seek + transport-follow ─────────────────────────────────
+    /// A frame label carries its frame length for the half-frame bias; one
+    /// double keeps full precision and carries none. The latest report holds
+    /// until the next message, and ends with the receive timeout (D7).
+    #[test]
+    fn timecode_reports_carry_the_stamp_and_frame() {
+        let mut ctrl = OscSyncController {
+            is_osc_enabled: true,
+            drop_frame: false,
+            timecode_frame_rate: 25.0,
+            follow_transport: false,
+            ..OscSyncController::new()
+        };
+        let target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(0.0),
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+        let mut tick = |ctrl: &mut OscSyncController, now: f64| {
+            ctrl.update(Seconds(now), &target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+        };
+
+        let at = Instant::now();
+        ctrl.on_timecode_received("", &[0.0, 1.0, 2.0, 5.0], at, Seconds(1.0));
+        tick(&mut ctrl, 1.0);
+        let label = ctrl.timecode_report().expect("a report");
+        assert!((label.seconds - 62.2).abs() < 1e-12);
+        assert_eq!(label.at, at);
+        assert!((label.frame.expect("a label has a frame") - 0.04).abs() < 1e-15);
+
+        tick(&mut ctrl, 1.02);
+        assert_eq!(ctrl.timecode_report(), Some(label), "held until the next message");
+
+        let seconds = 3_600.123_456_789;
+        ctrl.on_timecode_received("", &[seconds], at, Seconds(1.04));
+        tick(&mut ctrl, 1.04);
+        assert_eq!(ctrl.timecode_report(), Some(TimecodeReport { seconds, at, frame: None }));
+        tick(&mut ctrl, 1.6);
+        assert_eq!(ctrl.timecode_report(), None, "gone after the receive timeout");
+    }
+
+    // ── Seek-or-trim + transport-follow ─────────────────────────────────
 
     struct FakeSyncTarget {
         state: PlaybackState,
@@ -605,7 +665,7 @@ mod tests {
         fn current_state(&self) -> PlaybackState {
             self.state
         }
-        fn current_time(&self) -> Seconds {
+        fn position_time(&self) -> Seconds {
             self.time
         }
         fn is_playing(&self) -> bool {
@@ -621,10 +681,8 @@ mod tests {
 
     #[derive(Default)]
     struct FakeArbTarget {
-        external_time_sync: bool,
         played: bool,
         paused: bool,
-        nudge_count: u32,
         seek_count: u32,
     }
 
@@ -632,30 +690,21 @@ mod tests {
         fn current_project(&self) -> Option<&Project> {
             None
         }
-        fn external_time_sync(&self) -> bool {
-            self.external_time_sync
-        }
-        fn set_external_time_sync(&mut self, value: bool) {
-            self.external_time_sync = value;
-        }
         fn play(&mut self) {
             self.played = true;
         }
         fn pause(&mut self, _clear_recording: bool) {
             self.paused = true;
         }
-        fn nudge_time(&mut self, _time: Seconds) {
-            self.nudge_count += 1;
-        }
         fn seek(&mut self, _time: Seconds) {
             self.seek_count += 1;
         }
     }
 
-    /// section 11 OSC nudge/seek split = 0.5s: while playing, a small position
-    /// error nudges every message rather than hard-seeking.
+    /// section 11 OSC seek threshold = 0.5s: while playing, a small position
+    /// error is left to the follower's trim, never seeked.
     #[test]
-    fn osc_sync_nudges_when_playing_delta_under_threshold() {
+    fn osc_sync_leaves_small_errors_to_the_follower() {
         let ctrl = OscSyncController {
             current_timecode_seconds: Seconds(5.2),
             ..OscSyncController::new()
@@ -670,7 +719,6 @@ mod tests {
 
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
-        assert_eq!(arb_target.nudge_count, 1);
         assert_eq!(arb_target.seek_count, 0);
     }
 
@@ -691,7 +739,6 @@ mod tests {
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
         assert_eq!(arb_target.seek_count, 1);
-        assert_eq!(arb_target.nudge_count, 0);
     }
 
     #[test]
@@ -710,7 +757,6 @@ mod tests {
 
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
-        assert_eq!(arb_target.nudge_count, 0);
         assert_eq!(arb_target.seek_count, 0);
     }
 
@@ -752,7 +798,6 @@ mod tests {
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
         assert_eq!(arb_target.seek_count, 0);
-        assert_eq!(arb_target.nudge_count, 0);
     }
 
     /// section 7: "timecode arriving = play, 0.5s silence = pause."

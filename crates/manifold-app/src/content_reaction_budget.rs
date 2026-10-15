@@ -466,7 +466,7 @@ fn check_or_record(cases: &[(&str, WorkSnapshot)]) {
 
 /// D24's oracle: a tempo ramp through a recording session, beat and time per
 /// tick, against values recorded from today's code. The external tempo is fed
-/// the way a Link peer feeds it (`set_live_external_tempo`).
+/// each tick by the test tempo source, where a Link peer delivers it.
 #[test]
 fn tempo_ramp_matches_today() {
     let mut project = budget_project();
@@ -481,7 +481,7 @@ fn tempo_ramp_matches_today() {
     let mut rows = Vec::with_capacity(TICKS);
     for i in 0..TICKS {
         let bpm = 120.0 + 20.0 * i as f32 / (TICKS - 1) as f32;
-        content.engine.set_live_external_tempo(true, Bpm(bpm), TempoPointSource::Link);
+        content.test_tempo_source = Some((Bpm(bpm), TempoPointSource::Link));
         content.tick_frame(&state_tx);
         rows.push([content.engine.current_beat().0, content.engine.current_time().0]);
     }
@@ -528,7 +528,7 @@ fn clock_wobble_is_not_an_edit() {
     let work = thread_work_snapshot();
     for i in 0..120 {
         let wobble = if i % 2 == 0 { 0.01 } else { -0.01 };
-        content.engine.set_live_external_tempo(true, Bpm(120.0 + wobble), TempoPointSource::Link);
+        content.test_tempo_source = Some((Bpm(120.0 + wobble), TempoPointSource::Link));
         content.tick_frame(&state_tx);
     }
     let work = thread_work_snapshot().since(&work);

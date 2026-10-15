@@ -8,13 +8,15 @@ use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 
 use manifold_core::change::{ChangeSet, Part};
-use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_core::work_count::{record_work, WorkKind};
 use manifold_editing::service::EditingService;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::external_follow::{ExternalSample, FollowProfile};
+use manifold_playback::external_sync::{live_tempo, LinkOffset, LinkTempoGuard, OffsetTake};
+use manifold_playback::sync_calibration::{difference_seconds, CalibratedSource, SyncCalibration};
 use manifold_playback::midi_input::MidiInputController;
 use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
@@ -22,6 +24,7 @@ use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
+use manifold_playback::sync_projection::{map_sample, seconds_between, song_time_beat_at, timecode_seconds_at};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
 use manifold_node_engine::gpu::context::GpuContext;
@@ -30,6 +33,38 @@ use crate::content_command::ContentCommand;
 use crate::content_pipeline::ContentPipeline;
 use crate::content_state::{ContentState, StateTx};
 use crate::frame_timer::FrameTimer;
+
+/// The follower row for an authority (D6): Link and MIDI clock are fast and
+/// clean, AbletonOSC and timecode slow and coarse; Internal follows the map.
+fn follow_profile(authority: ClockAuthority) -> Option<FollowProfile> {
+    match authority {
+        ClockAuthority::Internal => None,
+        ClockAuthority::Link | ClockAuthority::MidiClock => Some(FollowProfile::FAST),
+        ClockAuthority::Osc => Some(FollowProfile::SLOW),
+    }
+}
+
+/// Stage presents the content thread issued, each with the deadline of the
+/// frame it carries, until Metal reports when it went on screen (D19). A
+/// handful covers the frames in flight.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct IssuedPresents {
+    ring: [Option<(u64, std::time::Instant)>; 8],
+    next: usize,
+}
+
+impl IssuedPresents {
+    pub(crate) fn record(&mut self, drawable_id: u64, deadline: std::time::Instant) {
+        self.ring[self.next] = Some((drawable_id, deadline));
+        self.next = (self.next + 1) % self.ring.len();
+    }
+
+    /// The deadline of the frame `drawable_id` carried, once.
+    pub(crate) fn take(&mut self, drawable_id: u64) -> Option<std::time::Instant> {
+        let slot = self.ring.iter_mut().find(|e| e.is_some_and(|(id, _)| id == drawable_id))?;
+        slot.take().map(|(_, deadline)| deadline)
+    }
+}
 
 /// An in-flight "export current frame" request. Captured across two content
 /// ticks so the live render never stalls: tick N submits the GPU readback (and
@@ -97,11 +132,22 @@ pub struct ContentThread {
     /// Tempo recording/provenance — tracks external tempo for tempo automation.
     /// Port of C# PlaybackController.tempoRecorder field.
     pub tempo_recorder: TempoRecorder,
-    /// Offset between Link's absolute beat epoch and MANIFOLD's timeline beat 0.
-    /// Cached ONLY at Play()/Seek() sync points. NOT refreshed periodically —
-    /// Link's cumulative beat counter keeps the offset valid across BPM changes.
-    /// Port of C# PlaybackController.linkBeatOffset field (line 74).
-    pub link_beat_offset: f64,
+    /// MANIFOLD's beat under Link is Link's beat minus this (D15).
+    pub link_offset: LinkOffset,
+    /// Whether Link's tempo stands in for MIDI clock's or AbletonOSC's (D21).
+    pub tempo_guard: LinkTempoGuard,
+    /// The read instant's output latency and the source offsets (D19).
+    pub calibration: SyncCalibration,
+    /// The `[Transport]` operating log.
+    pub sync_log: manifold_playback::sync_log::SyncLog,
+    /// The deadline of the frame this tick shows.
+    pub(crate) frame_deadline: std::time::Instant,
+    /// Stage presents waiting for their presented time.
+    pub(crate) issued_presents: IssuedPresents,
+    /// A tempo source for tests that stand in for Link or MIDI clock: it
+    /// delivers this tempo every tick, where a real source would (D21).
+    #[cfg(test)]
+    pub(crate) test_tempo_source: Option<(Bpm, TempoPointSource)>,
     /// Per-tick sync rig log state (FRAME_EXACT_TRANSPORT_DESIGN P3, C0).
     pub rig_probe: crate::sync_rig_log::TickProbe,
 
@@ -156,6 +202,7 @@ pub struct ContentThread {
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
+    pub mod_published: crate::content_state::ModSnapshotPool,
 
     /// Audio-modulation capture runtime — owns the live audio capture device +
     /// feature worker and feeds the engine its per-send feature snapshot each
@@ -231,78 +278,8 @@ impl ContentThread {
         let mut work_trace = manifold_core::work_count::WorkTrace::new();
         loop {
             work_trace.frame("content");
-            // 1. Drain ALL pending commands, coalescing consecutive seeks.
-            // During scrubbing the UI sends a SeekTo/SeekToBeat per mouse-move
-            // event — at high polling rates this floods the channel. Only the
-            // final seek in a burst matters, so we defer it and overwrite.
-            let mut pending_seek: Option<ContentCommand> = None;
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(ContentCommand::StartExport(config)) => {
-                        self.engine.clear_automation_previews();
-                        // Stop any active live recording before entering export.
-                        #[cfg(target_os = "macos")]
-                        if let Some(session) = self.content_pipeline.recording_session.take() {
-                            log::warn!(
-                                "[ContentThread] Stopping active recording \
-                                 before export"
-                            );
-                            let _ = session.stop();
-                        }
-                        // Flush any pending seek before entering export.
-                        if let Some(seek) = pending_seek.take() {
-                            let _ = self.handle_command(seek);
-                        }
-                        self.run_export(*config, &cmd_rx, &state_tx);
-                    }
-                    Ok(ContentCommand::LoadProject(project)) => {
-                        // Flush any pending seek before the load.
-                        if let Some(seek) = pending_seek.take()
-                            && self.handle_command(seek)
-                        {
-                            log::info!("[ContentThread] shutdown received");
-                            return;
-                        }
-                        let report = self.load_project_and_warmup(project, &cmd_rx, &cmd_tx, &state_tx);
-                        if report.warmup.interrupted {
-                            return;
-                        }
-                    }
-                    Ok(cmd @ ContentCommand::SeekTo(_))
-                    | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
-                        // Coalesce: overwrite previous pending seek.
-                        pending_seek = Some(cmd);
-                    }
-                    // SurfaceReady is a no-op GPU event — don't flush pending
-                    // seeks, as that would break coalescing during scrubbing.
-                    #[cfg(target_os = "macos")]
-                    Ok(ContentCommand::SurfaceReady) => {}
-                    Ok(cmd) => {
-                        // Flush any pending seek before a non-seek command
-                        // to preserve ordering (e.g. Seek then Play).
-                        if let Some(seek) = pending_seek.take()
-                            && self.handle_command(seek)
-                        {
-                            log::info!("[ContentThread] shutdown received");
-                            return;
-                        }
-                        if self.handle_command(cmd) {
-                            log::info!("[ContentThread] shutdown received");
-                            return;
-                        }
-                    }
-                    Err(crossbeam_channel::TryRecvError::Empty) => break,
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        log::info!("[ContentThread] command channel disconnected, shutting down");
-                        return;
-                    }
-                }
-            }
-            // Apply the final coalesced seek (if any).
-            if let Some(seek) = pending_seek.take()
-                && self.handle_command(seek)
-            {
-                log::info!("[ContentThread] shutdown received");
+            // 1. Drain every pending command, coalescing consecutive seeks.
+            if self.drain_commands(&cmd_tx, &cmd_rx, &state_tx) {
                 return;
             }
             self.publish_snapshot_if_dirty(&state_tx);
@@ -311,6 +288,84 @@ impl ContentThread {
                 return;
             }
         }
+    }
+
+    /// Drains every queued command, coalescing consecutive seeks. During
+    /// scrubbing the UI sends a SeekTo/SeekToBeat per mouse move; only the
+    /// last seek of a burst matters, so it waits and is overwritten. GPU
+    /// events (SurfaceReady, FramePresented) never flush it. Returns true on
+    /// shutdown.
+    pub(crate) fn drain_commands(
+        &mut self,
+        cmd_tx: &Sender<ContentCommand>,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &StateTx,
+    ) -> bool {
+        let mut pending_seek: Option<ContentCommand> = None;
+        loop {
+            match cmd_rx.try_recv() {
+                Ok(ContentCommand::StartExport(config)) => {
+                    self.engine.clear_automation_previews();
+                    // Stop any active live recording before entering export.
+                    #[cfg(target_os = "macos")]
+                    if let Some(session) = self.content_pipeline.recording_session.take() {
+                        log::warn!("[ContentThread] Stopping active recording before export");
+                        let _ = session.stop();
+                    }
+                    // Flush any pending seek before entering export.
+                    if let Some(seek) = pending_seek.take() {
+                        let _ = self.handle_command(seek);
+                    }
+                    self.run_export(*config, cmd_rx, state_tx);
+                }
+                Ok(ContentCommand::LoadProject(project)) => {
+                    // Flush any pending seek before the load.
+                    if let Some(seek) = pending_seek.take()
+                        && self.handle_command(seek)
+                    {
+                        log::info!("[ContentThread] shutdown received");
+                        return true;
+                    }
+                    let report = self.load_project_and_warmup(project, cmd_rx, cmd_tx, state_tx);
+                    if report.warmup.interrupted {
+                        return true;
+                    }
+                }
+                Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
+                    pending_seek = Some(cmd);
+                }
+                #[cfg(target_os = "macos")]
+                Ok(ContentCommand::SurfaceReady) => {}
+                Ok(ContentCommand::FramePresented { drawable_id, at }) => self.frame_presented(drawable_id, at),
+                Ok(cmd) => {
+                    // Flush any pending seek before a non-seek command
+                    // to preserve ordering (e.g. Seek then Play).
+                    if let Some(seek) = pending_seek.take()
+                        && self.handle_command(seek)
+                    {
+                        log::info!("[ContentThread] shutdown received");
+                        return true;
+                    }
+                    if self.handle_command(cmd) {
+                        log::info!("[ContentThread] shutdown received");
+                        return true;
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    log::info!("[ContentThread] command channel disconnected, shutting down");
+                    return true;
+                }
+            }
+        }
+        // Apply the final coalesced seek (if any).
+        if let Some(seek) = pending_seek.take()
+            && self.handle_command(seek)
+        {
+            log::info!("[ContentThread] shutdown received");
+            return true;
+        }
+        false
     }
 
     /// One production-paced frame shared by the app and headless profiler.
@@ -416,6 +471,7 @@ impl ContentThread {
                 Ok(ContentCommand::SurfaceReady) => {
                     // GPU wake signal — loop back to check is_surface_ready().
                 }
+                Ok(ContentCommand::FramePresented { drawable_id, at }) => self.frame_presented(drawable_id, at),
                 Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
                     pending_seek = Some(cmd);
                 }
@@ -433,6 +489,7 @@ impl ContentThread {
                     while let Ok(cmd) = cmd_rx.try_recv() {
                         match cmd {
                             ContentCommand::SurfaceReady => {}
+                            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
                             cmd @ ContentCommand::SeekTo(_)
                             | cmd @ ContentCommand::SeekToBeat(_) => {
                                 pending_seek = Some(cmd);
@@ -492,7 +549,9 @@ impl ContentThread {
         // headless harness); a no-op when the drain already reacted.
         self.run_reactions();
         let frames = self.timer.consume_frames_at(now).frames;
-        self.link_sample_at = self.timer.tick_deadline().unwrap_or(now);
+        // Sources are read for the moment this frame reaches the screen (D19).
+        self.frame_deadline = self.timer.tick_deadline().unwrap_or(now);
+        self.link_sample_at = self.frame_deadline + std::time::Duration::from_secs_f64(self.calibration.read_delay());
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
@@ -549,7 +608,7 @@ impl ContentThread {
         let tick_stamps = self.editing_service.stamps();
         let tick_window = self.engine.project().map(manifold_editing::edit::tick_audit::open);
 
-        self.tick_sync_controllers();
+        self.tick_sync_controllers(frames);
 
         // 3c. External beat derivation + tempo recording/resolution.
         // Port of C# PlaybackController.Update lines 1064-1099.
@@ -559,7 +618,8 @@ impl ContentThread {
             .engine
             .project()
             .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
-        self.derive_external_beat(authority);
+        self.hand_external_sample(authority);
+        self.learn_source_offsets();
         self.update_recording_session_state(authority);
         self.apply_resolved_tempo(authority);
 
@@ -590,6 +650,7 @@ impl ContentThread {
             manifold_editing::edit::tick_audit::close(window, p, gateway);
         }
         self.rig_probe_tick(now, frames, authority);
+        self.log_sync(authority);
         // The engine's clock follows the project rate (D10); the tick grid
         // follows the clock, so the two never run at different rates.
         let clock_fps = f64::from(self.engine.frame_rate());
@@ -731,6 +792,9 @@ impl ContentThread {
             self.editing_service.stamps(),
             Some(self.audio_mod_runtime.visuals()),
         );
+        if let Some(id) = self.content_pipeline.take_issued_present() {
+            self.issued_presents.record(id, self.frame_deadline);
+        }
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
         self.content_pipeline.set_last_render_work_ms(render_work_ms);
@@ -1155,18 +1219,18 @@ impl ContentThread {
         // without flagging `modulation_active`, and gating the send on that
         // flag left the UI showing stale values until the next structural
         // snapshot. The capture is a linear walk over the param manifests into
-        // a reusable scratch buffer (zero-alloc steady state), then one clone
-        // of the flat buffer. Blocks are id-keyed at capture, so a structural
+        // a reusable scratch buffer, then one copy into a recycled published
+        // buffer (zero-alloc steady state). Blocks are id-keyed at capture, so a structural
         // edit landing between capture and the UI's apply can't misroute
         // values (see ModulationSnapshot).
-        // D15: the capture compares as it writes; the buffer is cloned and
+        // D15: the capture compares as it writes; the buffer is copied and
         // `values_seq` moves only when a live value changed.
         let modulation_snapshot = if let Some(project) = self.engine.project()
             && self.mod_scratch.capture_into(project)
         {
             self.reactions.values_seq += 1;
             record_work(WorkKind::ModSnapshotCopy);
-            Some(self.mod_scratch.clone())
+            Some(self.mod_published.publish(&self.mod_scratch))
         } else {
             None
         };
@@ -1440,6 +1504,7 @@ impl ContentThread {
                 .cloned()
                 .collect(),
             automation_armed: self.engine.automation_armed(),
+            sync_offsets: self.calibration.offsets(),
             chain_failures: self.reactions.chain_failures.clone(),
         };
 
@@ -1462,14 +1527,24 @@ impl ContentThread {
     /// Tick all sync controllers once per frame. Called before engine tick.
     /// Handles the borrow-split problem: snapshot read-only engine state first,
     /// then pass &mut engine for transport commands via SyncArbiter.
-    fn tick_sync_controllers(&mut self) {
+    /// `frames`: what this tick advances, so a Link offset is taken against
+    /// the frame it shows (D15).
+    fn tick_sync_controllers(&mut self, frames: u32) {
         let now = self.time_since_start;
+        // Live tempo lasts one tick: only a source that delivers a tempo this
+        // tick sets it (D21), so it can never outlive its source.
+        self.engine
+            .set_live_external_tempo(false, Bpm::DEFAULT, TempoPointSource::Unknown);
+        #[cfg(test)]
+        if let Some((bpm, source)) = self.test_tempo_source {
+            self.engine.set_live_external_tempo(true, bpm, source);
+        }
 
         // Auto-determine clock authority BEFORE sync controllers run.
         // Uses previous frame's receiving/peer state (updated by sync controllers
         // last frame). This ensures the SyncArbiter gates are consistent with
-        // the authority — prevents one-frame mismatch where external_time_sync
-        // or transport commands are incorrectly rejected.
+        // the authority — prevents one-frame mismatch where samples or
+        // transport commands are incorrectly rejected.
         let osc_sync_mode = self
             .engine
             .project()
@@ -1507,27 +1582,45 @@ impl ContentThread {
             } else {
                 ClockAuthority::Internal
             };
+            let previous = self.engine.project().map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
             manifold_playback::transport_controller::write_clock_authority(&mut self.engine, auto);
+            // An authority change swaps the engine's converter before any
+            // source acts on it this tick (D6, D8). The second test catches a
+            // change an export deferred and a project loaded with a saved
+            // external authority.
+            let profile = follow_profile(auto);
+            if auto != previous || self.engine.follows_external() != profile.is_some() {
+                self.engine.set_follow_authority(profile);
+            }
+            // Link becoming the authority while MANIFOLD plays (D15).
+            if auto != previous && auto == ClockAuthority::Link && self.engine.is_playing() {
+                self.link_offset.link_became_authority();
+            }
             auto
         };
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
-        let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
+        if let Some(ref mut link) = self.transport_controller.link_sync {
             link.update(&mut self.sync_arbiter, &mut self.engine, authority, self.link_sample_at);
-            // Link provides the most accurate BPM when peers are connected.
-            if link.is_link_enabled() && link.has_active_peers() {
-                self.engine.set_live_external_tempo(
-                    true,
-                    Bpm(link.link_tempo as f32),
-                    TempoPointSource::Link,
-                );
-                true
-            } else {
-                false
+            if link.is_link_enabled() {
+                // A Link-initiated start lines MANIFOLD's bar up with Link's;
+                // every due offset is taken here, at the read instant,
+                // against the beat of the frame this tick shows (D15).
+                if link.started_playing() && authority == ClockAuthority::Link {
+                    self.link_offset.request(OffsetTake::Quantum);
+                }
+                if self.link_offset.is_due() {
+                    let frame_beat = self.engine.upcoming_frame_beat(frames).0;
+                    self.link_offset.take(link.current_beat.0, frame_beat, link.quantum());
+                }
             }
-        } else {
-            false
-        };
+        }
+        let link_bpm = self
+            .transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| l.is_link_enabled() && l.has_active_peers())
+            .map(|l| l.link_tempo);
 
         // MIDI Clock sync — poll clock/SPP from midir.
         // Snapshot SyncTarget state before passing &mut engine as SyncArbiterTarget.
@@ -1538,6 +1631,10 @@ impl ContentThread {
         let suppress_clock_plane = self.sync_arbiter.is_seek_cooldown_active(now)
             || self.ableton_bridge.transport_sync_pending();
         if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
+            // With the guard latched the tick filter runs on Link's period
+            // and filters phase only (D20, D21).
+            let latched = authority == ClockAuthority::MidiClock && self.tempo_guard.latched();
+            clk.set_link_tempo(link_bpm.filter(|_| latched));
             let snap = SyncTargetSnapshot::from_engine(&self.engine);
             clk.update(
                 now,
@@ -1547,15 +1644,6 @@ impl ContentThread {
                 authority,
                 suppress_clock_plane,
             );
-            // Feed live MIDI Clock BPM to engine — but Link takes priority
-            // when available (more accurate, network-synced tempo).
-            if !link_has_tempo && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
-                self.engine.set_live_external_tempo(
-                    true,
-                    Bpm(clk.current_clock_bpm()),
-                    TempoPointSource::MidiClock,
-                );
-            }
         }
 
         // OSC receiver — drain queued UDP messages and dispatch to subscribers.
@@ -1685,20 +1773,59 @@ impl ContentThread {
                             time,
                         );
                     }
-                    EngineAction::NudgeBeats(beat) => {
-                        let time = self
-                            .engine
-                            .beat_to_timeline_time(Beats::from_f32(beat));
-                        self.sync_arbiter.nudge_time(
-                            ClockAuthority::Osc,
-                            ClockAuthority::Osc,
-                            &mut self.engine,
-                            time,
-                        );
-                    }
                 }
             }
         }
+
+        self.update_tempo_plane(authority, osc_sync_mode, link_bpm);
+    }
+
+    /// The guard compares Link with the authority's own tempo, and the live
+    /// tempo reports the authority's base tempo (D21). After every source
+    /// has updated this tick.
+    fn update_tempo_plane(&mut self, authority: ClockAuthority, mode: OscSyncMode, link_bpm: Option<f64>) {
+        let now = self.time_since_start.0;
+        let clk = self
+            .transport_controller
+            .midi_clock_sync
+            .as_ref()
+            .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock());
+        let listener = (mode == OscSyncMode::AbletonOsc && self.ableton_bridge.is_transport_receiving(now))
+            .then(|| f64::from(self.ableton_bridge.ableton_tempo()));
+        let link_beat = self.transport_controller.link_sync.as_ref().map(|l| l.current_beat.0);
+        // The guard watches whenever Link and a comparable source are both
+        // live, so it is already latched when that source takes over.
+        match (link_bpm, link_beat, clk, listener) {
+            (Some(bpm), Some(beat_at_r), Some(clk), _) => {
+                if let Some((tick, arrival)) = clk.last_landed_tick() {
+                    // Link's beat when the tick arrived: Link runs at its
+                    // session tempo between the arrival and the read instant.
+                    let back = clk.seconds(self.link_sample_at) - arrival;
+                    self.tempo_guard.observe_clock(now, arrival, tick, beat_at_r - back * bpm / 60.0);
+                }
+            }
+            (Some(bpm), _, None, Some(listener)) => self.tempo_guard.observe_listener(now, bpm, listener),
+            _ => self.tempo_guard.release(),
+        }
+
+        let own = match authority {
+            ClockAuthority::MidiClock => clk.map(|c| (f64::from(c.current_clock_bpm()), TempoPointSource::MidiClock)),
+            ClockAuthority::Osc => listener.map(|bpm| (bpm, TempoPointSource::AbletonOsc)),
+            _ => None,
+        };
+        if let Some((bpm, source)) = live_tempo(authority, link_bpm, own, self.tempo_guard.latched()) {
+            self.engine.set_live_external_tempo(true, Bpm(bpm as f32), source);
+        }
+    }
+
+    /// Link's session tempo while the guard lets it stand in for the
+    /// authority's own (D21).
+    fn latched_link_tempo(&self) -> Option<f64> {
+        self.transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| self.tempo_guard.latched() && l.is_link_enabled() && l.has_active_peers())
+            .map(|l| l.link_tempo)
     }
 
     /// Sync rig log records for this tick; reads only, never steers playback.
@@ -1731,7 +1858,7 @@ impl ContentThread {
             authority,
             playing: self.engine.is_playing(),
             link,
-            link_offset: self.link_beat_offset,
+            link_offset: self.link_offset.get().unwrap_or(f64::NAN),
             clk,
             osc,
         };
@@ -1743,74 +1870,162 @@ impl ContentThread {
     // Port of C# PlaybackController.Update lines 1064-1096.
     // ═══════════════════════════════════════════════════════════════
 
-    /// When playing with an external beat authority (Link or MidiClock),
-    /// override the engine's beat from the sync controller's current position.
-    fn derive_external_beat(&mut self, authority: ClockAuthority) {
-        if self.engine.current_state() != PlaybackState::Playing {
+    /// This tick's sample from the authority's own source, after every
+    /// transport action the sources took this tick (D7): a placement drops
+    /// the sample, so it is handed over last. Today's gates stay in front.
+    fn hand_external_sample(&mut self, authority: ClockAuthority) {
+        if self.engine.current_state() != PlaybackState::Playing || !self.engine.follows_external() {
             return;
         }
-
-        match authority {
+        let sample = match authority {
             ClockAuthority::Link => {
-                // Link only provides BPM — block position override when Manifold
-                // owns transport (prevents brief authority-falls-to-Link glitches
-                // during MIDI Clock gaps).
+                // Block while MANIFOLD owns transport (prevents brief
+                // authority-falls-to-Link glitches during MIDI Clock gaps).
+                // Link's beat is exact at the read instant, less the offset;
+                // none until an offset is taken (D15).
                 if !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref link) = self.transport_controller.link_sync
                     && link.is_link_enabled()
                     && link.has_active_peers()
-                    && !self.link_beat_offset.is_nan()
                 {
-                    // STOPGAP(frame-exact P3): Link's beat at this frame's
-                    // deadline (D15), followed past ¾ frame; P3 observes it.
-                    self.engine
-                        .follow_external_beat(Beats(link.current_beat.0 - self.link_beat_offset));
+                    self.link_offset.beat(link.current_beat.0).map(|beat| ExternalSample {
+                        beat,
+                        bpm: link.link_tempo,
+                        fresh: true,
+                        exact: true,
+                    })
+                } else {
+                    None
                 }
             }
             ClockAuthority::MidiClock => {
-                // MIDI Clock always drives position when active — suppressed
-                // during the seek cooldown (user scrub, M4L path) AND while
-                // an AbletonOSC transport command awaits its ack
-                // (ABLETON_TRANSPORT_SYNC_DESIGN D5). The missing ack gate
-                // here was the play-from-cursor drag-back: the cooldown
-                // expired on a wall clock while Ableton's clock still
-                // reported the old position, and it pulled the playhead back.
-                if !self
-                    .sync_arbiter
-                    .is_seek_cooldown_active(self.time_since_start)
+                // Suppressed during the seek cooldown (user scrub, M4L path)
+                // AND while an AbletonOSC transport command awaits its ack
+                // (ABLETON_TRANSPORT_SYNC_DESIGN D5): what Ableton's clock
+                // reports then is the old position.
+                if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
                     && !self.ableton_bridge.transport_sync_pending()
-                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                    && clk.is_midi_clock_enabled()
-                    && clk.is_receiving_clock()
                 {
-                    // STOPGAP(frame-exact P3): nearest frame to the last
-                    // clock tick's beat; P3 projects it to the deadline.
-                    self.engine
-                        .follow_external_beat(Beats::from_f32(clk.current_clock_beat()));
+                    self.clk_sample(self.source_read_at(CalibratedSource::MidiClock))
+                } else {
+                    None
                 }
-                // else: the engine's clock steps the frame
             }
-            // ClockAuthority::Internal | Osc: the engine's clock steps the frame
-            _ => {}
+            ClockAuthority::Osc => match self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode) {
+                OscSyncMode::M4L => self.timecode_sample(self.source_read_at(CalibratedSource::Timecode)),
+                OscSyncMode::AbletonOsc => self.ableton_osc_sample(self.source_read_at(CalibratedSource::AbletonOsc)),
+            },
+            ClockAuthority::Internal => None,
+        };
+        if let Some(sample) = sample {
+            self.engine.set_external_sample(sample);
         }
     }
 
-    /// Cache the offset between Link's absolute beat epoch and MANIFOLD's timeline beat 0.
-    /// Called at Play() and Seek() sync points.
-    /// Port of C# PlaybackController.CacheLinkBeatOffset lines 352-360.
-    pub(crate) fn cache_link_beat_offset(&mut self) {
-        if let Some(ref link) = self.transport_controller.link_sync {
-            if link.is_link_enabled() {
-                let manifold_beat = self
-                    .engine
-                    .time_to_timeline_beat(self.engine.current_time())
-                    .0;
-                self.link_beat_offset = link.current_beat.0 - manifold_beat;
-            } else {
-                self.link_beat_offset = 0.0;
+    /// A non-Link source is read at the read instant plus the offset it
+    /// showed against Link (D19).
+    fn source_read_at(&self, source: CalibratedSource) -> std::time::Instant {
+        let offset = self.calibration.offset(source);
+        let magnitude = std::time::Duration::from_secs_f64(offset.abs());
+        if offset >= 0.0 { self.link_sample_at + magnitude } else { self.link_sample_at - magnitude }
+    }
+
+    /// The tick filter's beat at `r` (D20), while the clock is live.
+    fn clk_sample(&self, r: std::time::Instant) -> Option<ExternalSample> {
+        let clk = self
+            .transport_controller
+            .midi_clock_sync
+            .as_ref()
+            .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock())?;
+        clk.sample_at(r).map(|s| ExternalSample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
+    }
+
+    /// M4L timecode: the latest message's song seconds projected from its
+    /// arrival to `r`, through the map, at the map's tempo over the next frame
+    /// (D7). Every tick while timecode arrives (D6: one sample per tick).
+    fn timecode_sample(&mut self, r: std::time::Instant) -> Option<ExternalSample> {
+        let tc = self.osc_sync.timecode_report()?;
+        let s = timecode_seconds_at(tc.seconds, seconds_between(tc.at, r), tc.frame);
+        let step = 1.0 / f64::from(self.engine.frame_rate());
+        let engine = &mut self.engine;
+        let (beat, bpm) = map_sample(s, step, |s| engine.time_to_timeline_beat(Seconds(s)).0);
+        Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+    }
+
+    /// The relay's song time projected to `r` at Live's tempo in force (D7).
+    /// No one-way delay: the relay's round trip measures command to
+    /// acknowledgement, not the wire; a constant is the calibration's to
+    /// learn (D19). The tempo is Link's while the guard is latched (D21).
+    fn ableton_osc_sample(&self, r: std::time::Instant) -> Option<ExternalSample> {
+        let (report, tempo) = self.ableton_bridge.follower_song_time(self.time_since_start.0)?;
+        let beat = song_time_beat_at(report.beat, seconds_between(report.at, r), tempo.before, tempo.bpm, seconds_between(tempo.at, r));
+        let bpm = self.latched_link_tempo().unwrap_or(tempo.bpm);
+        Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+    }
+
+    /// Metal reported a stage frame on screen: its delay after the deadline
+    /// it was rendered for feeds the screen delay (D19). Never a transport
+    /// boundary, so it never flushes a coalesced seek.
+    pub(crate) fn frame_presented(&mut self, drawable_id: u64, at: std::time::Instant) {
+        if let Some(deadline) = self.issued_presents.take(drawable_id) {
+            let delay = manifold_playback::sync_projection::seconds_between(deadline, at);
+            self.calibration.presented(delay, self.time_since_start.0);
+        }
+    }
+
+    /// The operating log's view of this tick, after the engine's tick.
+    fn log_sync(&mut self, authority: ClockAuthority) {
+        let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+        let (name, calibrated) = match (authority, mode) {
+            (ClockAuthority::Link, _) => (Some("Link"), None),
+            (ClockAuthority::MidiClock, _) => (Some("CLK"), Some(CalibratedSource::MidiClock)),
+            (ClockAuthority::Osc, OscSyncMode::AbletonOsc) => (Some("OSC"), Some(CalibratedSource::AbletonOsc)),
+            (ClockAuthority::Osc, OscSyncMode::M4L) => (Some("timecode"), Some(CalibratedSource::Timecode)),
+            (ClockAuthority::Internal, _) => (None, None),
+        };
+        let tick = manifold_playback::sync_log::SyncTick {
+            now: self.time_since_start.0,
+            source: name.filter(|_| self.engine.follows_external()),
+            playing: self.engine.is_playing(),
+            follower: self.engine.follower(),
+            event: self.engine.follow_event(),
+            calibration: &self.calibration,
+            offset: calibrated.map(|s| self.calibration.offset(s)),
+        };
+        self.sync_log.observe(&tick);
+    }
+
+    /// While Link and another source both deliver, each source's offset
+    /// against Link is learned from the two reads at the same read instant
+    /// (D19). Steady play only: playing, no catch-up window open.
+    fn learn_source_offsets(&mut self) {
+        if !self.engine.is_playing() {
+            return;
+        }
+        let Some((link_beat, bpm, quantum)) = self
+            .transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| l.is_link_enabled() && l.has_active_peers())
+            .map(|l| (l.current_beat.0, l.link_tempo, l.quantum()))
+        else {
+            return;
+        };
+        let steady = !self.engine.follower().catch_up_open();
+        let now = self.time_since_start.0;
+        let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+        for source in CalibratedSource::ALL {
+            let r = self.source_read_at(source);
+            let sample = match (source, mode) {
+                (CalibratedSource::MidiClock, _) => self.clk_sample(r),
+                (CalibratedSource::AbletonOsc, OscSyncMode::AbletonOsc) => self.ableton_osc_sample(r),
+                (CalibratedSource::Timecode, OscSyncMode::M4L) => self.timecode_sample(r),
+                _ => None,
+            };
+            if let Some(sample) = sample {
+                let difference = difference_seconds(link_beat, sample.beat, bpm, quantum);
+                self.calibration.observe_offset(source, now, difference, steady);
             }
-        } else {
-            self.link_beat_offset = 0.0;
         }
     }
 
@@ -1889,28 +2104,9 @@ impl ContentThread {
                     recorder.append_tempo_change(&mut p.recording_provenance, current_time, current_beat, bpm, source);
                 });
             }
-        } else if authority == ClockAuthority::Internal {
-            // No automation lane authored and no external position source:
-            // treat tempo as a global master value. Compare quantized values
-            // so raw float jitter doesn't trigger writes.
-            // Port of C# ApplyResolvedTempo lines 1127-1134.
-            //
-            // When MidiClock or Link is active, do NOT write to the tempo map —
-            // the project BPM is updated via sync_project_bpm_from_current_beat()
-            // for display only. Writing the tempo map causes beat re-derivation
-            // from stale time values, which makes the timeline stutter.
-            let differs = self.engine.project().is_some_and(|p| {
-                let map_bpm = p.tempo_map.get_bpm_at_beat_immut(Beats::ZERO, p.settings.bpm);
-                p.tempo_map.point_count() <= 1
-                    && (map_bpm.0 - BeatQuantizer::quantize_bpm(bpm)).abs() >= TempoRecorder::BPM_THRESHOLD
-            });
-            if differs && let Some(edit) = self.engine.project_edit() {
-                tick_write(TickField::BaseTempo, edit, |p| {
-                    p.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), source, 0.001);
-                });
-                tempo_map_changed = true;
-            }
         }
+        // Outside a recording session nothing writes the map: under Internal
+        // the map is the truth (FRAME_EXACT_TRANSPORT_DESIGN D8, D21).
 
         if tempo_map_changed {
             // Time is kept; the frame's beat comes from the new map.
@@ -2054,6 +2250,95 @@ mod tests {
         rx.try_iter().filter_map(|s| s.project_snapshot).last()
     }
 
+    /// BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo
+    /// point), FRAME_EXACT_TRANSPORT_DESIGN P3 test 10: Link plays at 128
+    /// over a one-point map at 120; when its peers vanish, authority falls to
+    /// Internal and the map must be untouched (D21).
+    #[test]
+    fn peers_vanishing_keeps_the_beat_and_the_map() {
+        use manifold_core::types::{ClockAuthority, TempoPointSource};
+        use manifold_core::{Beats, Bpm};
+        use manifold_playback::link_sync::{LinkSyncController, SimulatedLink};
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Unknown, 0.001);
+        let mut thread = headless_content_thread(project, 64, 64);
+        thread.timer.set_frame_clocked(true);
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
+        let mut link = LinkSyncController::new();
+        let session = SimulatedLink { at: std::time::Instant::now(), beat: 0.0, tempo: 128.0, peers: 1, playing: false };
+        link.simulate(session);
+        thread.transport_controller.link_sync = Some(link);
+        thread.handle_command(ContentCommand::Play);
+        for _ in 0..300 {
+            thread.tick_frame(&state_tx);
+        }
+        assert_eq!(thread.engine.project().unwrap().settings.clock_authority, ClockAuthority::Link);
+
+        thread.transport_controller.link_sync.as_mut().unwrap().simulate(SimulatedLink { peers: 0, ..session });
+        for _ in 0..60 {
+            thread.tick_frame(&state_tx);
+        }
+        let p = thread.engine.project().unwrap();
+        assert_eq!(p.settings.clock_authority, ClockAuthority::Internal);
+        assert_eq!(p.tempo_map.point_count(), 1, "peers vanishing must not add tempo points");
+        assert_eq!(
+            p.tempo_map.get_bpm_at_beat_immut(Beats::ZERO, Bpm(0.0)),
+            Bpm(120.0),
+            "the stale Link tempo must not be written into the beat-0 point"
+        );
+    }
+
+    /// BUG-0u1al (Link-initiated Play never caches the Link beat offset),
+    /// FRAME_EXACT_TRANSPORT_DESIGN P3 test 9: after a Stop, MANIFOLD sits at
+    /// beat 10 and Link starts playing at its beat 37.3. The offset rounds to
+    /// Link's quantum, so MANIFOLD's bar lines up with Link's, and Link then
+    /// steers for a minute within Link's 1 ms bound (D15).
+    #[test]
+    fn link_started_play_aligns_to_the_bar_and_steers() {
+        use manifold_core::types::{ClockAuthority, TempoPointSource};
+        use manifold_core::{Beats, Bpm};
+        use manifold_playback::link_sync::{LinkSyncController, SimulatedLink};
+        use std::time::Duration;
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Unknown, 0.001);
+        let mut thread = headless_content_thread(project, 64, 64);
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
+        let step = Duration::from_secs_f64(1.0 / 60.0);
+        let anchor = std::time::Instant::now() + step;
+        let at = |k: u32| anchor + step * k + step.mul_f64(0.3);
+        // Link's beat is 37.3 when it starts playing, 600 frames in.
+        let session = SimulatedLink { at: anchor, beat: 37.3 - 10.0 * 2.0, tempo: 120.0, peers: 1, playing: false };
+        let mut link = LinkSyncController::new();
+        link.simulate(session);
+        thread.transport_controller.link_sync = Some(link);
+        thread.handle_command(ContentCommand::Stop);
+        thread.handle_command(ContentCommand::SeekToBeat(Beats(10.0)));
+        let mut k = 0;
+        while k < 600 {
+            thread.tick_frame_at(at(k), &state_tx);
+            k += 1;
+        }
+        assert!(!thread.engine.is_playing(), "MANIFOLD waits at beat 10");
+        thread.transport_controller.link_sync.as_mut().unwrap().simulate(SimulatedLink { playing: true, ..session });
+        let mut worst_ms: f64 = 0.0;
+        for _ in 0..3_600 {
+            thread.tick_frame_at(at(k), &state_tx);
+            k += 1;
+            assert_eq!(thread.engine.project().unwrap().settings.clock_authority, ClockAuthority::Link);
+            if k < 600 + 300 {
+                continue;
+            }
+            assert!(thread.engine.is_playing(), "Link's play started MANIFOLD");
+            let link_beat = session.beat_at(thread.link_sample_at);
+            let diff = link_beat - thread.engine.frame_beat().0;
+            let folded = (diff + 2.0).rem_euclid(4.0) - 2.0;
+            worst_ms = worst_ms.max(folded.abs() * 60.0 / 120.0 * 1000.0);
+        }
+        assert!(worst_ms <= 1.0, "MANIFOLD's bar is {worst_ms:.2} ms off Link's (mod 4 beats)");
+    }
+
     /// BUG-mmct0.5 (MIDI recording commits bypass EditingService): a recorded
     /// take commits through the gateway, so the UI receives it and Cmd+Z
     /// removes it.
@@ -2165,5 +2450,26 @@ mod tests {
         tick_and_check(&mut thread, 24.0, "undo");
         assert!(!thread.handle_command(ContentCommand::Redo));
         tick_and_check(&mut thread, 30.0, "redo");
+    }
+
+    /// Metal's presents arrive between a scrub's seeks: they feed the screen
+    /// delay without flushing the coalesced seek, so a burst is one seek.
+    #[test]
+    fn presents_inside_a_scrub_burst_leave_one_seek() {
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
+        let epoch = thread.engine.transport_epoch();
+        let now = std::time::Instant::now();
+        for (id, seconds) in [(1u64, 1.0), (2, 2.0), (3, 3.0)] {
+            cmd_tx.send(ContentCommand::SeekTo(manifold_core::Seconds(seconds))).expect("send");
+            thread.issued_presents.record(id, now);
+            let at = now + std::time::Duration::from_millis(25);
+            cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at }).expect("send");
+        }
+        assert!(!thread.drain_commands(&cmd_tx, &cmd_rx, &state_tx), "no shutdown");
+        assert_eq!(thread.engine.transport_epoch(), epoch.wrapping_add(1), "one seek for the burst");
+        assert!((thread.engine.current_time().0 - 3.0).abs() < 1.0 / 60.0, "the burst's last seek wins");
+        assert!(thread.issued_presents.take(1).is_none(), "the presents reached the calibration");
     }
 }

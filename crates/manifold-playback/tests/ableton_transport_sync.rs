@@ -231,6 +231,8 @@ struct Harness {
     fake: FakeAbleton,
     engine_playing: bool,
     engine_beat: f32,
+    /// A song-time report steered the follower at some frame.
+    steered: bool,
     now: f64,
 }
 
@@ -247,6 +249,7 @@ impl Harness {
             fake,
             engine_playing: false,
             engine_beat: 0.0,
+            steered: false,
             now: 0.0,
         };
         h.frame(0.0, true);
@@ -299,7 +302,14 @@ impl Harness {
         for ev in events {
             match ev {
                 ObsEvent::IsPlaying(p) => self.machine.on_osc_is_playing(p, self.now),
-                ObsEvent::SongTime(b) => self.machine.on_osc_song_time(b, self.now),
+                ObsEvent::SongTime(b) => {
+                    self.machine.on_osc_song_time(b, self.now);
+                    // Stands in for the follower trimming to the report.
+                    if self.machine.report_steers_follower() {
+                        self.engine_beat = b;
+                        self.steered = true;
+                    }
+                }
                 ObsEvent::Tempo(t) => self.machine.on_osc_tempo(t, self.now),
             }
         }
@@ -309,7 +319,7 @@ impl Harness {
             match action {
                 EngineAction::Play => self.engine_playing = true,
                 EngineAction::Pause => self.engine_playing = false,
-                EngineAction::SeekBeats(b) | EngineAction::NudgeBeats(b) => {
+                EngineAction::SeekBeats(b) => {
                     self.engine_beat = *b;
                 }
             }
@@ -556,13 +566,11 @@ fn f5_ableton_play_relays_when_clk_absent() {
         "harness engine should reflect the applied relay"
     );
 
+    h.steered = false;
     let mut saw_position_action = false;
     for _ in 0..15 {
         let result = h.frame(FRAME_DT, false);
-        if result
-            .actions
-            .iter()
-            .any(|a| matches!(a, EngineAction::NudgeBeats(_) | EngineAction::SeekBeats(_)))
+        if h.steered || result.actions.iter().any(|a| matches!(a, EngineAction::SeekBeats(_)))
         {
             saw_position_action = true;
             break;
@@ -570,7 +578,7 @@ fn f5_ableton_play_relays_when_clk_absent() {
     }
     assert!(
         saw_position_action,
-        "expected OSC-driven position nudge/seek while CLK absent (D10 takeover)"
+        "expected OSC-driven position trim or seek while CLK absent (D10 takeover)"
     );
 }
 

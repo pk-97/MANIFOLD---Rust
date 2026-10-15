@@ -684,26 +684,25 @@ pub(crate) fn editor_dispatch_context(
     }
 }
 
-/// Build the display label for the LED exit path dropdown button.
-pub(crate) fn led_exit_path_label(
+/// Write the display label for the LED exit path dropdown button over `out`,
+/// reusing its allocation.
+pub(crate) fn write_led_exit_path_label(
+    out: &mut String,
     led_exit_index: i32,
     master_effects: &[manifold_core::effects::PresetInstance],
-) -> String {
+) {
     use manifold_core::preset_type_registry;
-    match led_exit_index {
-        -1 => "After All FX".into(),
-        0 => "Before FX".into(),
-        n => {
-            let idx = (n - 1) as usize;
-            if let Some(fx) = master_effects.get(idx) {
-                format!(
-                    "After {}",
-                    preset_type_registry::display_name(fx.effect_type())
-                )
-            } else {
-                "After All FX".into()
-            }
+    out.clear();
+    let after = (led_exit_index > 0)
+        .then(|| master_effects.get((led_exit_index - 1) as usize))
+        .flatten();
+    match (led_exit_index, after) {
+        (0, _) => out.push_str("Before FX"),
+        (_, Some(fx)) => {
+            out.push_str("After ");
+            out.push_str(preset_type_registry::display_name(fx.effect_type()));
         }
+        _ => out.push_str("After All FX"),
     }
 }
 

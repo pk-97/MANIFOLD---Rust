@@ -8,7 +8,10 @@ use manifold_core::{Beats, Seconds};
 /// Port of C# ISyncTarget.cs lines 8-16.
 pub trait SyncTarget {
     fn current_state(&self) -> PlaybackState;
-    fn current_time(&self) -> Seconds;
+    /// The map time of the beat on screen: what a source compares its own
+    /// position against. Under an external authority the grid time drifts
+    /// from the map with the source's tempo; the beat does not (D8).
+    fn position_time(&self) -> Seconds;
     fn is_playing(&self) -> bool;
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds;
     fn current_project(&self) -> Option<&Project>;
@@ -20,11 +23,8 @@ pub trait SyncTarget {
 /// Port of C# ISyncArbiterTarget.cs lines 20-30.
 pub trait SyncArbiterTarget {
     fn current_project(&self) -> Option<&Project>;
-    fn external_time_sync(&self) -> bool;
-    fn set_external_time_sync(&mut self, value: bool);
     fn play(&mut self);
     fn pause(&mut self, clear_recording: bool);
-    fn nudge_time(&mut self, time: Seconds);
     fn seek(&mut self, time: Seconds);
 }
 
@@ -43,7 +43,7 @@ impl SyncTargetSnapshot {
         let bpm = target.current_project().map_or(120.0, |p| p.settings.bpm.0);
         Self {
             state: target.current_state(),
-            time: target.current_time(),
+            time: target.position_time(),
             bpm,
         }
     }
@@ -53,7 +53,7 @@ impl SyncTarget for SyncTargetSnapshot {
     fn current_state(&self) -> PlaybackState {
         self.state
     }
-    fn current_time(&self) -> Seconds {
+    fn position_time(&self) -> Seconds {
         self.time
     }
     fn is_playing(&self) -> bool {
@@ -190,20 +190,6 @@ impl SyncArbiter {
         true
     }
 
-    pub fn nudge_time(
-        &self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-        time: Seconds,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
-        target.nudge_time(time);
-        true
-    }
-
     pub fn seek(
         &mut self,
         source: ClockAuthority,
@@ -220,24 +206,6 @@ impl SyncArbiter {
         log_transport(source, crate::rig_log::TransportKind::Seek, time.0);
         target.seek(time);
         true
-    }
-
-    pub fn set_external_time_sync(
-        &self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-        value: bool,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
-        target.set_external_time_sync(value);
-        true
-    }
-
-    pub fn clear_external_time_sync(&self, target: &mut dyn SyncArbiterTarget) {
-        target.set_external_time_sync(false);
     }
 }
 
@@ -258,29 +226,18 @@ mod tests {
     struct FakeArbTarget {
         played: bool,
         paused: bool,
-        nudged: Option<Seconds>,
         sought: Option<Seconds>,
-        external_time_sync: bool,
     }
 
     impl SyncArbiterTarget for FakeArbTarget {
         fn current_project(&self) -> Option<&Project> {
             None
         }
-        fn external_time_sync(&self) -> bool {
-            self.external_time_sync
-        }
-        fn set_external_time_sync(&mut self, value: bool) {
-            self.external_time_sync = value;
-        }
         fn play(&mut self) {
             self.played = true;
         }
         fn pause(&mut self, _clear_recording: bool) {
             self.paused = true;
-        }
-        fn nudge_time(&mut self, time: Seconds) {
-            self.nudged = Some(time);
         }
         fn seek(&mut self, time: Seconds) {
             self.sought = Some(time);
@@ -296,7 +253,7 @@ mod tests {
 
     // ── section 7 gate matrix: "every sync controller passes (source, authority)
     // and the call is dropped unless they match." Exhaustive over the 4×4
-    // grid for each of the five gated operations. ──────────────────────────
+    // grid for each of the three gated operations. ──────────────────────────
 
     #[test]
     fn arbiter_gate_matrix_play() {
@@ -328,20 +285,6 @@ mod tests {
     }
 
     #[test]
-    fn arbiter_gate_matrix_nudge_time() {
-        for &source in &ALL_AUTHORITIES {
-            for &authority in &ALL_AUTHORITIES {
-                let arbiter = SyncArbiter::new();
-                let mut target = FakeArbTarget::default();
-                let passed = arbiter.nudge_time(source, authority, &mut target, Seconds(5.0));
-                let should_pass = source == authority;
-                assert_eq!(passed, should_pass, "nudge_time({source:?}, {authority:?})");
-                assert_eq!(target.nudged, should_pass.then_some(Seconds(5.0)));
-            }
-        }
-    }
-
-    #[test]
     fn arbiter_gate_matrix_seek() {
         for &source in &ALL_AUTHORITIES {
             for &authority in &ALL_AUTHORITIES {
@@ -351,23 +294,6 @@ mod tests {
                 let should_pass = source == authority;
                 assert_eq!(passed, should_pass, "seek({source:?}, {authority:?})");
                 assert_eq!(target.sought, should_pass.then_some(Seconds(7.0)));
-            }
-        }
-    }
-
-    #[test]
-    fn arbiter_gate_matrix_set_external_time_sync() {
-        for &source in &ALL_AUTHORITIES {
-            for &authority in &ALL_AUTHORITIES {
-                let arbiter = SyncArbiter::new();
-                let mut target = FakeArbTarget::default();
-                let passed = arbiter.set_external_time_sync(source, authority, &mut target, true);
-                let should_pass = source == authority;
-                assert_eq!(
-                    passed, should_pass,
-                    "set_external_time_sync({source:?}, {authority:?})"
-                );
-                assert_eq!(target.external_time_sync, should_pass);
             }
         }
     }

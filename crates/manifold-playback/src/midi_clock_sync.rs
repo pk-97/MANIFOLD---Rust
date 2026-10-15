@@ -1,109 +1,101 @@
 //! MIDI Clock/SPP sync controller.
-//! Mechanical translation of Unity MidiClockSyncController.cs.
 //!
-//! One-way sync: DAW controls MANIFOLD position + transport via MIDI Clock.
-//! Position is received in sixteenth notes (beat-native).
-//!
-//! MidiClockReceiver replaces Unity's MidiClock native CoreMIDI plugin (MidiClock.cs).
-//! midir provides raw MIDI byte access — same CoreMIDI backend on macOS, ALSA on Linux.
+//! One-way sync: the DAW drives MANIFOLD's transport and beat by MIDI clock.
+//! The midir callback stamps every clock message and sends it through a
+//! channel; the content thread rebuilds the position by MIDI 1.0 rules and
+//! filters the tick times into a beat at any instant
+//! (FRAME_EXACT_TRANSPORT_DESIGN D20, `tick_filter`).
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+pub mod tick_filter;
+
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, Seconds};
 
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
 use crate::sync_source::SyncSource;
+use tick_filter::{ClockKind, ClockSample, ClockTracker};
 
-// ── MidiClockState (lock-free, packed into AtomicU64) ─────────────────────────
+/// Ticks between two content ticks outside this range are a song-position
+/// jump or a restart: a seek.
+const SANE_TICK_DELTA: std::ops::RangeInclusive<i64> = 0..=384;
 
-/// Lock-free MIDI clock state shared between midir callback and main thread.
-/// Packed into a single u64 for atomic read-modify-write without locks.
-///
-/// Layout (64 bits):
-///   bits  0..31  position_sixteenths (i32, stored as u32)
-///   bits 32..47  clock_tick (i16, stored as u16, only uses 0-5)
-///   bit  48      is_playing
-///   bit  49      has_received_clock
-struct AtomicClockState(AtomicU64);
-
-/// Unpacked snapshot of MIDI clock state.
-#[derive(Clone, Copy, Default)]
-struct MidiClockState {
-    position_sixteenths: i32,
-    clock_tick: i32,
-    is_playing: bool,
-    has_received_clock: bool,
+/// One clock message and when it arrived (D20).
+#[derive(Debug, Clone, Copy)]
+struct ClockEvent {
+    kind: ClockKind,
+    at: Instant,
 }
 
-impl MidiClockState {
-    fn pack(self) -> u64 {
-        let pos = self.position_sixteenths as u32 as u64;
-        let tick = (self.clock_tick as u16 as u64) << 32;
-        let playing = (self.is_playing as u64) << 48;
-        let received = (self.has_received_clock as u64) << 49;
-        pos | tick | playing | received
-    }
-
-    fn unpack(bits: u64) -> Self {
-        Self {
-            position_sixteenths: bits as u32 as i32,
-            clock_tick: ((bits >> 32) & 0xFFFF) as i32,
-            is_playing: (bits >> 48) & 1 != 0,
-            has_received_clock: (bits >> 49) & 1 != 0,
-        }
-    }
+/// midir's packet timestamp (microseconds) as an `Instant`. The smallest
+/// delivery lag seen is taken as zero, so the mapping needs no knowledge of
+/// the timestamp's base; a stall then shows as late delivery, not late
+/// ticks. A missing stamp (0) is the callback's own `Instant::now()`.
+struct StampMap {
+    origin: Instant,
+    min_offset_us: Option<i128>,
 }
 
-impl AtomicClockState {
+/// A stamp older than this against the best mapping means the base moved.
+const STAMP_REBASE_US: i128 = 5_000_000;
+
+impl StampMap {
     fn new() -> Self {
-        Self(AtomicU64::new(MidiClockState::default().pack()))
+        Self { origin: Instant::now(), min_offset_us: None }
     }
 
-    /// Atomically read the current state.
-    fn load(&self) -> MidiClockState {
-        MidiClockState::unpack(self.0.load(Ordering::Acquire))
+    fn map(&mut self, stamp_us: u64, now: Instant) -> Instant {
+        if stamp_us == 0 {
+            return now;
+        }
+        let now_us = now.saturating_duration_since(self.origin).as_micros() as i128;
+        let offset = now_us - stamp_us as i128;
+        let min = match self.min_offset_us {
+            Some(min) if offset - min <= STAMP_REBASE_US => min.min(offset),
+            _ => offset,
+        };
+        self.min_offset_us = Some(min);
+        let at_us = (stamp_us as i128 + min).clamp(0, now_us);
+        self.origin + Duration::from_micros(at_us as u64)
     }
+}
 
-    /// Atomically update the state via a closure (CAS loop).
-    /// The closure receives the current state and returns the new state.
-    fn update(&self, f: impl Fn(MidiClockState) -> MidiClockState) {
-        let _ = self
-            .0
-            .fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
-                Some(f(MidiClockState::unpack(bits)).pack())
-            });
+struct ClockSender {
+    tx: mpsc::Sender<ClockEvent>,
+    stamps: StampMap,
+}
+
+fn clock_kind(message: &[u8]) -> Option<ClockKind> {
+    match message.first()? {
+        0xF8 => Some(ClockKind::Tick),
+        0xFA => Some(ClockKind::Start),
+        0xFB => Some(ClockKind::Continue),
+        0xFC => Some(ClockKind::Stop),
+        0xF2 if message.len() >= 3 => {
+            Some(ClockKind::SongPosition((u16::from(message[2]) << 7) | u16::from(message[1])))
+        }
+        _ => None,
     }
 }
 
 // ── MidiClockReceiver ─────────────────────────────────────────────────────────
 
-/// Receives MIDI clock/SPP/start/stop via midir.
-/// Replaces Unity's MidiClock.cs native CoreMIDI plugin.
-///
-/// Architecture divergence [D-30]: Unity's MidiClock plugin internally maintains
-/// PositionSixteenths + ClockTick from 0xF8 ticks and 0xF2 SPP. midir delivers
-/// raw bytes — we reconstruct the same fields in the callback.
-/// See docs/KNOWN_DIVERGENCES.md.
-///
-/// LOCK-FREE: State is packed into AtomicU64, updated via CAS in the midir
-/// callback. No Mutex — the OS MIDI thread never blocks.
+/// Receives MIDI clock, Song Position Pointer, Start, Continue and Stop via
+/// midir and sends each, stamped, to the content thread. The OS MIDI thread
+/// never blocks.
 struct MidiClockReceiver {
-    state: Arc<AtomicClockState>,
-    connection: Option<midir::MidiInputConnection<Arc<AtomicClockState>>>,
+    events: Option<mpsc::Receiver<ClockEvent>>,
+    connection: Option<midir::MidiInputConnection<ClockSender>>,
 }
 
 impl MidiClockReceiver {
     fn new() -> Self {
-        Self {
-            state: Arc::new(AtomicClockState::new()),
-            connection: None,
-        }
+        Self { events: None, connection: None }
     }
 
     /// Open a midir connection to the port at `source_index`.
-    /// Equivalent to MidiClock_Start(ptr, sourceIndex) in Unity.
     fn start(&mut self, source_index: i32) {
         manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::Midi);
         let midi_in = match midir::MidiInput::new("manifold-clock") {
@@ -127,15 +119,17 @@ impl MidiClockReceiver {
             }
         };
 
-        let state_arc = Arc::clone(&self.state);
+        let (tx, rx) = mpsc::channel();
+        let sender = ClockSender { tx, stamps: StampMap::new() };
 
         let connection = match midi_in.connect(
             port,
             "manifold-clock-conn",
-            move |timestamp_us: u64, message: &[u8], state_arc: &mut Arc<AtomicClockState>| {
+            move |timestamp_us: u64, message: &[u8], sender: &mut ClockSender| {
                 if message.is_empty() {
                     return;
                 }
+                let now = Instant::now();
                 // Rig log (C0): every message with midir's stamp and ours.
                 crate::rig_log::emit(crate::rig_log::RigRecord::ClkByte {
                     at_ns: crate::rig_log::now_ns(),
@@ -144,64 +138,12 @@ impl MidiClockReceiver {
                     d1: message.get(1).copied().unwrap_or(0),
                     d2: message.get(2).copied().unwrap_or(0),
                 });
-
-                let status = message[0];
-
-                match status {
-                    // Timing Clock — 24 per quarter note, 6 per sixteenth.
-                    0xF8 => {
-                        state_arc.update(|mut s| {
-                            s.clock_tick += 1;
-                            if s.clock_tick >= 6 {
-                                s.clock_tick = 0;
-                                s.position_sixteenths += 1;
-                            }
-                            s.has_received_clock = true;
-                            s
-                        });
-                    }
-                    // Start — reset position to 0.
-                    0xFA => {
-                        state_arc.update(|mut s| {
-                            s.is_playing = true;
-                            s.position_sixteenths = 0;
-                            s.clock_tick = 0;
-                            s.has_received_clock = true;
-                            s
-                        });
-                    }
-                    // Continue — resume without resetting position.
-                    0xFB => {
-                        state_arc.update(|mut s| {
-                            s.is_playing = true;
-                            s.has_received_clock = true;
-                            s
-                        });
-                    }
-                    // Stop.
-                    0xFC => {
-                        state_arc.update(|mut s| {
-                            s.is_playing = false;
-                            s.has_received_clock = true;
-                            s
-                        });
-                    }
-                    // Song Position Pointer — 2 data bytes: LSB, MSB.
-                    0xF2 if message.len() >= 3 => {
-                        let lsb = message[1] as i32;
-                        let msb = message[2] as i32;
-                        let pos = (msb << 7) | lsb;
-                        state_arc.update(|mut s| {
-                            s.position_sixteenths = pos;
-                            s.clock_tick = 0;
-                            s.has_received_clock = true;
-                            s
-                        });
-                    }
-                    _ => {}
+                if let Some(kind) = clock_kind(message) {
+                    let at = sender.stamps.map(timestamp_us, now);
+                    let _ = sender.tx.send(ClockEvent { kind, at });
                 }
             },
-            state_arc,
+            sender,
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -214,6 +156,7 @@ impl MidiClockReceiver {
             }
         };
 
+        self.events = Some(rx);
         self.connection = Some(connection);
         log::info!(
             "[MidiClockSync] midir clock receiver connected (port {})",
@@ -222,27 +165,13 @@ impl MidiClockReceiver {
     }
 
     /// Close the midir connection.
-    /// Equivalent to MidiClock_Stop / MidiClock_Destroy in Unity.
     fn stop(&mut self) {
         self.connection = None;
+        self.events = None;
         log::info!("[MidiClockSync] midir clock receiver disconnected");
     }
 
-    /// Snapshot current state — lock-free atomic read.
-    /// Equivalent to MidiClock_Update() P/Invoke in Unity.
-    /// Returns (position_sixteenths, clock_tick, is_playing, has_received_clock).
-    fn update_state(&self) -> (i32, i32, bool, bool) {
-        let s = self.state.load();
-        (
-            s.position_sixteenths,
-            s.clock_tick,
-            s.is_playing,
-            s.has_received_clock,
-        )
-    }
-
     /// Number of available MIDI input ports.
-    /// Equivalent to MidiClock.GetSourceCount() in Unity.
     fn source_count() -> usize {
         if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::Midi) {
             return 0;
@@ -254,7 +183,6 @@ impl MidiClockReceiver {
     }
 
     /// Display name of the MIDI port at `index`.
-    /// Equivalent to MidiClock.GetSourceName(index) in Unity.
     fn source_name(index: i32) -> String {
         if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::Midi) {
             return format!("Port {}", index);
@@ -276,13 +204,10 @@ impl MidiClockReceiver {
 // ── MidiClockSyncController ───────────────────────────────────────────────────
 
 /// MIDI Clock sync controller.
-/// Port of Unity MidiClockSyncController.cs.
 pub struct MidiClockSyncController {
     is_midi_clock_enabled: bool,
     is_receiving_clock: bool,
-    current_position_sixteenths: i32,
     current_position_display: String,
-    current_clock_bpm: f32,
     hard_seek_count: i32,
     last_hard_seek_delta_seconds: f32,
     selected_source_index: i32,
@@ -290,33 +215,19 @@ pub struct MidiClockSyncController {
     /// enable/disable/change_source — avoids per-frame CoreMIDI enumeration.
     cached_source_name: String,
 
-    // Config
     clock_signal_timeout: f32,
-    derive_bpm_from_clock: bool,
-    min_ticks_per_bpm_estimate: i32,
-    bpm_ema_alpha: f32,
 
-    // Private state — equivalent to Unity's lastObserved* fields
     last_is_playing: bool,
     last_position_sixteenths: i32,
-    last_observed_sixteenths: i32,
-    last_observed_clock_tick: i32,
-    last_observed_playing: bool,
+    /// The landed tick the last position sync saw, for the jump check.
+    last_synced_tick: Option<i64>,
     last_clock_activity_time: Seconds,
     cached_display_sixteenths: i32,
 
-    // BPM estimation
-    last_tempo_abs_tick: i32,
-    last_tempo_sample_time: f32,
-    tempo_accum_time: f32,
-    tempo_accum_ticks: i32,
+    /// Event times are seconds since this instant.
+    origin: Instant,
+    tracker: ClockTracker,
 
-    // Transport time integrator
-    transport_time_integrator_initialized: bool,
-    last_transport_absolute_tick: i32,
-    integrated_clock_time_seconds: Seconds,
-
-    // midir receiver (replaces Unity's MidiClock native plugin instance)
     receiver: Option<MidiClockReceiver>,
 }
 
@@ -325,35 +236,22 @@ impl MidiClockSyncController {
         Self {
             is_midi_clock_enabled: false,
             is_receiving_clock: false,
-            current_position_sixteenths: 0,
             current_position_display: "---".into(),
-            current_clock_bpm: 120.0,
             hard_seek_count: 0,
             last_hard_seek_delta_seconds: 0.0,
             selected_source_index: -1,
             cached_source_name: "None".into(),
 
             clock_signal_timeout: 0.5,
-            derive_bpm_from_clock: true,
-            min_ticks_per_bpm_estimate: 96,
-            bpm_ema_alpha: 0.30,
 
             last_is_playing: false,
             last_position_sixteenths: -1,
-            last_observed_sixteenths: 0,
-            last_observed_clock_tick: 0,
-            last_observed_playing: false,
+            last_synced_tick: None,
             last_clock_activity_time: Seconds(-999.0),
             cached_display_sixteenths: -1,
 
-            last_tempo_abs_tick: -1,
-            last_tempo_sample_time: -1.0,
-            tempo_accum_time: 0.0,
-            tempo_accum_ticks: 0,
-
-            transport_time_integrator_initialized: false,
-            last_transport_absolute_tick: -1,
-            integrated_clock_time_seconds: Seconds::ZERO,
+            origin: Instant::now(),
+            tracker: ClockTracker::new(),
 
             receiver: None,
         }
@@ -373,15 +271,38 @@ impl MidiClockSyncController {
     pub fn current_position_display(&self) -> &str {
         &self.current_position_display
     }
+    /// The filter's tempo; 120 before any estimate.
     pub fn current_clock_bpm(&self) -> f32 {
-        self.current_clock_bpm
+        self.tracker.bpm().unwrap_or(120.0) as f32
     }
 
-    /// Current MIDI clock position as a beat value.
-    /// Computed as (position_sixteenths + clock_tick / 6.0) / 4.0.
-    /// Port of C# PlaybackController.Update() beat derivation formula.
+    /// The last landed tick's beat, for display and the rig log. The beat
+    /// the follower reads is `sample_at`.
     pub fn current_clock_beat(&self) -> f32 {
-        (self.last_observed_sixteenths as f32 + self.last_observed_clock_tick as f32 / 6.0) / 4.0
+        self.tracker.landed_tick().map_or(0.0, |k| k as f32 / 24.0)
+    }
+
+    /// The clock's beat and tempo at `r` (D7, D20); none while stopped,
+    /// before the first tick after a seed point, or when stale.
+    pub fn sample_at(&self, r: Instant) -> Option<ClockSample> {
+        self.tracker.sample_at(self.seconds(r))
+    }
+
+    /// Seconds on the clock's own monotonic origin, the base of
+    /// `last_landed_tick`.
+    pub fn seconds(&self, at: Instant) -> f64 {
+        at.saturating_duration_since(self.origin).as_secs_f64()
+    }
+
+    /// Link's tempo while the guard is latched: the tick filter takes Link's
+    /// period and filters phase only (D20, D21). Set before `update`.
+    pub fn set_link_tempo(&mut self, bpm: Option<f64>) {
+        self.tracker.set_link_tempo(bpm);
+    }
+
+    /// The last landed tick and its arrival in `seconds`, for the guard (D21).
+    pub fn last_landed_tick(&self) -> Option<(i64, f64)> {
+        self.tracker.last_landed()
     }
 
     pub fn hard_seek_count(&self) -> i32 {
@@ -413,21 +334,19 @@ impl MidiClockSyncController {
     }
 
     /// Display name of the currently selected MIDI source.
-    /// Port of C# MidiClockSyncController.SelectedSourceName property.
     pub fn selected_source_name(&self) -> &str {
         &self.cached_source_name
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────
 
-    /// Enable MIDI Clock on the given source index.
-    /// Port of C# MidiClockSyncController.EnableMidiClock (lines 97-151).
+    /// Enable MIDI Clock on the given source index; a negative index takes
+    /// the first source.
     pub fn enable_midi_clock(&mut self, source_index: i32) {
         if self.is_midi_clock_enabled {
             return;
         }
 
-        // Auto-select first source if none specified (port of C# lines 110-119).
         let source_index = if source_index < 0 {
             let count = MidiClockReceiver::source_count();
             if count > 0 {
@@ -447,30 +366,7 @@ impl MidiClockSyncController {
         receiver.start(source_index);
         self.receiver = Some(receiver);
 
-        // Prime observed state (port of C# lines 131-135).
-        // After start(), we immediately snapshot what the receiver has (all zeros initially).
-        let (pos_sixteenths, clock_tick, is_playing, has_received_clock) =
-            self.receiver.as_ref().unwrap().update_state();
-        self.last_observed_sixteenths = pos_sixteenths;
-        self.last_observed_clock_tick = clock_tick;
-        self.last_observed_playing = is_playing;
-        self.last_clock_activity_time = if has_received_clock {
-            Seconds::ZERO
-        } else {
-            Seconds(-999.0)
-        };
-
-        self.last_is_playing = false;
-        self.last_position_sixteenths = -1;
-        self.current_clock_bpm = 120.0;
-        self.hard_seek_count = 0;
-        self.last_hard_seek_delta_seconds = 0.0;
-        let initial_abs_tick = pos_sixteenths * 6 + clock_tick;
-        self.reset_bpm_estimator(0.0, initial_abs_tick);
-        // Transport time integrator will be initialized on first SyncPositionToPlayback call.
-        self.transport_time_integrator_initialized = false;
-        self.last_transport_absolute_tick = -1;
-        self.integrated_clock_time_seconds = Seconds::ZERO;
+        self.reset_state();
         self.is_midi_clock_enabled = true;
 
         log::info!(
@@ -479,8 +375,17 @@ impl MidiClockSyncController {
         );
     }
 
+    fn reset_state(&mut self) {
+        self.last_is_playing = false;
+        self.last_position_sixteenths = -1;
+        self.last_synced_tick = None;
+        self.last_clock_activity_time = Seconds(-999.0);
+        self.hard_seek_count = 0;
+        self.last_hard_seek_delta_seconds = 0.0;
+        self.tracker = ClockTracker::new();
+    }
+
     /// Switch to a different MIDI source. Restarts the receiver.
-    /// Port of C# MidiClockSyncController.ChangeSource (lines 154-165).
     pub fn change_source(&mut self, source_index: i32) {
         if self.is_midi_clock_enabled {
             self.disable_midi_clock();
@@ -496,7 +401,6 @@ impl MidiClockSyncController {
     }
 
     /// Disable MIDI Clock and release the receiver.
-    /// Port of C# MidiClockSyncController.DisableMidiClock (lines 167-189).
     pub fn disable_midi_clock(&mut self) {
         if !self.is_midi_clock_enabled {
             return;
@@ -506,16 +410,8 @@ impl MidiClockSyncController {
         self.is_receiving_clock = false;
         self.cached_source_name = "None".into();
         self.current_position_display = "---".into();
-        self.last_is_playing = false;
-        self.last_clock_activity_time = Seconds(-999.0);
-        self.hard_seek_count = 0;
-        self.last_hard_seek_delta_seconds = 0.0;
-        self.reset_bpm_estimator(0.0, 0);
-        self.transport_time_integrator_initialized = false;
-        self.last_transport_absolute_tick = -1;
-        self.integrated_clock_time_seconds = Seconds::ZERO;
+        self.reset_state();
 
-        // Drop connection — equivalent to MidiClock.Shutdown() in Unity.
         if let Some(mut receiver) = self.receiver.take() {
             receiver.stop();
         }
@@ -523,11 +419,8 @@ impl MidiClockSyncController {
         log::info!("[MidiClockSync] Disabled");
     }
 
-    /// Poll MIDI clock state each frame and forward transport/position to MANIFOLD.
-    /// Port of C# MidiClockSyncController.Update (lines 215-296).
-    ///
-    /// Unity's Update() takes no parameters — it holds refs to syncTarget and syncArbiter
-    /// as fields. Rust passes them as arguments to avoid unsafe shared mutable state.
+    /// Drain this tick's clock events in order, then forward transport and
+    /// position to MANIFOLD.
     ///
     /// `suppress_clock_plane`: caller-computed gate (ABLETON_TRANSPORT_SYNC_DESIGN
     /// D5): seek-cooldown (M4L path) OR an unacknowledged AbletonOSC transport
@@ -543,37 +436,39 @@ impl MidiClockSyncController {
         authority: ClockAuthority,
         suppress_clock_plane: bool,
     ) {
-        if !self.is_midi_clock_enabled || self.receiver.is_none() {
+        if !self.is_midi_clock_enabled {
             return;
         }
-
-        // Poll native state. Equivalent to clock.UpdateState() + reading clock.* in Unity.
-        let (pos_sixteenths, clock_tick, is_playing, has_received_clock) =
-            self.receiver.as_ref().unwrap().update_state();
-
-        // Detect state change (port of C# lines 222-237).
-        // Unity's stateChanged drives lastClockActivityTime; we replicate that logic.
-        let state_changed = pos_sixteenths != self.last_observed_sixteenths
-            || clock_tick != self.last_observed_clock_tick
-            || is_playing != self.last_observed_playing;
-
-        if state_changed {
-            self.last_observed_sixteenths = pos_sixteenths;
-            self.last_observed_clock_tick = clock_tick;
-            self.last_observed_playing = is_playing;
-
-            if has_received_clock {
+        if let Some(events) = self.receiver.as_ref().and_then(|r| r.events.as_ref()) {
+            // The map's tempo at the armed position seeds a filter with no
+            // estimate yet (D20).
+            let armed = Beats(self.tracker.next_tick() as f64 / 24.0);
+            let beat_seconds = (sync_target.timeline_beat_to_time(armed + Beats(1.0)) - sync_target.timeline_beat_to_time(armed)).0;
+            let fallback_bpm = if beat_seconds > 0.0 { 60.0 / beat_seconds } else { 120.0 };
+            while let Ok(event) = events.try_recv() {
+                let at = event.at.saturating_duration_since(self.origin).as_secs_f64();
+                self.tracker.event(event.kind, at, fallback_bpm);
                 self.last_clock_activity_time = now;
             }
         }
+        self.apply(now, arbiter, arb_target, sync_target, authority, suppress_clock_plane);
+    }
 
-        // Activity timeout check (port of C# lines 239-240).
+    fn apply(
+        &mut self,
+        now: Seconds,
+        arbiter: &mut SyncArbiter,
+        arb_target: &mut dyn SyncArbiterTarget,
+        sync_target: &dyn SyncTarget,
+        authority: ClockAuthority,
+        suppress_clock_plane: bool,
+    ) {
+        let is_playing = self.tracker.is_playing();
         let was_receiving = self.is_receiving_clock;
         let has_recent_clock_activity =
             (now - self.last_clock_activity_time).0 as f32 <= self.clock_signal_timeout;
         self.is_receiving_clock = has_recent_clock_activity;
 
-        // Log sync state transitions for live monitoring.
         if has_recent_clock_activity && !was_receiving {
             log::info!(
                 "[MidiClockSync] SYNC ESTABLISHED — receiving clock from {}",
@@ -586,35 +481,13 @@ impl MidiClockSyncController {
             );
         }
 
-        // Whether MANIFOLD initiated this play session (port of C# line 245).
+        // Whether MANIFOLD initiated this play session.
         let manifold_owns = arbiter.manifold_owns_playback;
 
-        // BPM estimation from clock ticks (port of C# line 247).
-        self.update_bpm_from_clock(
-            now.as_f32(),
-            pos_sixteenths,
-            clock_tick,
-            has_recent_clock_activity,
-            is_playing,
-        );
-
-        // STOPGAP(frame-exact P3): the clock stops advancing on its own while
-        // CLK is the active authority and playing.
-        // Not gated on manifold_owns — MIDI Clock always drives timing when active.
-        // Gated on the clock-plane suppress — during scrubs and in-flight
-        // AbletonOSC commands, the engine advances internally until Ableton
-        // confirms the new state.
-        arbiter.set_external_time_sync(
-            ClockAuthority::MidiClock,
-            authority,
-            arb_target,
-            has_recent_clock_activity && is_playing && !suppress_clock_plane,
-        );
-
-        // Transport sync — gated by arbiter authority check (port of C# lines 256-279).
-        // Also held while the clock plane is suppressed: during an in-flight
-        // play-from-cursor, Ableton's clock still says "stopped" — relaying
-        // that as a pause is the "doesn't respond" flap (F1's cousin).
+        // Transport sync — gated by arbiter authority check. Also held while
+        // the clock plane is suppressed: during an in-flight play-from-cursor,
+        // Ableton's clock still says "stopped" — relaying that as a pause is
+        // the "doesn't respond" flap.
         if !manifold_owns && !suppress_clock_plane {
             let playing = has_recent_clock_activity && is_playing;
             if playing {
@@ -624,198 +497,73 @@ impl MidiClockSyncController {
                         log::info!("[MidiClockSync] Transport: PLAY");
                     }
                 }
-            } else {
-                if sync_target.is_playing() {
-                    arbiter.pause(ClockAuthority::MidiClock, authority, arb_target, false);
-                    if playing != self.last_is_playing {
-                        log::info!("[MidiClockSync] Transport: PAUSE");
-                    }
+            } else if sync_target.is_playing() {
+                arbiter.pause(ClockAuthority::MidiClock, authority, arb_target, false);
+                if playing != self.last_is_playing {
+                    log::info!("[MidiClockSync] Transport: PAUSE");
                 }
             }
             self.last_is_playing = playing;
         }
 
-        // Clear MANIFOLD ownership when CLK shows stopped (port of C# lines 283-287).
-        // Use grace-period-aware clear to avoid premature clearing during the
-        // OSC→DAW→MIDI round trip (Ableton needs time to process and reflect state).
+        // Clear MANIFOLD ownership when CLK shows stopped, after the grace
+        // period of the OSC→DAW→MIDI round trip.
         if manifold_owns && (!has_recent_clock_activity || !is_playing) {
             arbiter.clear_ownership_if_expired(now);
         }
 
-        // Position sync — MIDI Clock always drives position when active.
-        // manifold_owns only gates transport (play/stop), not position.
-        // Suppressed while the clock plane is gated (user scrub not yet
-        // processed by Ableton, or an AbletonOSC command awaiting its ack —
-        // either way the clock is reporting a stale position).
+        // Position sync — manifold_owns gates transport only. Suppressed while
+        // the clock plane is gated: the clock is reporting a stale position.
         if has_recent_clock_activity && !suppress_clock_plane {
-            self.current_position_sixteenths = pos_sixteenths;
-            self.update_position_display(pos_sixteenths);
-            self.sync_position_to_playback(
-                pos_sixteenths,
-                clock_tick,
-                arbiter,
-                arb_target,
-                sync_target,
-                authority,
-            );
+            let ticks = if is_playing {
+                self.tracker.landed_tick().unwrap_or(self.tracker.next_tick())
+            } else {
+                self.tracker.next_tick()
+            };
+            let sixteenths = i32::try_from(ticks.div_euclid(6)).unwrap_or(i32::MAX);
+            self.update_position_display(sixteenths);
+            self.sync_position_to_playback(ticks, arbiter, arb_target, sync_target, authority);
         }
-    }
-
-    /// Reset transport time integrator.
-    /// Port of C# MidiClockSyncController.ResetTransportTimeIntegrator (lines 357-362).
-    pub fn reset_transport_time_integrator(&mut self) {
-        self.transport_time_integrator_initialized = false;
-        self.last_transport_absolute_tick = -1;
-        self.integrated_clock_time_seconds = Seconds::ZERO;
-    }
-
-    // ── BPM estimation ───────────────────────────────────────────────
-
-    fn reset_bpm_estimator(&mut self, now: f32, absolute_tick: i32) {
-        self.last_tempo_abs_tick = absolute_tick;
-        self.last_tempo_sample_time = now;
-        self.tempo_accum_ticks = 0;
-        self.tempo_accum_time = 0.0;
-    }
-
-    /// Estimate BPM from clock tick rate using exponential moving average.
-    /// 24 PPQN: 6 ticks per sixteenth note, 24 per quarter note.
-    /// Port of C# MidiClockSyncController.UpdateBpmFromClock (lines 306-355).
-    fn update_bpm_from_clock(
-        &mut self,
-        now: f32,
-        pos_sixteenths: i32,
-        clock_tick: i32,
-        has_recent_clock_activity: bool,
-        is_playing: bool,
-    ) {
-        // absolute_tick = PositionSixteenths * 6 + ClockTick (port of C# line 314).
-        let absolute_tick = pos_sixteenths * 6 + clock_tick;
-
-        if !self.derive_bpm_from_clock {
-            self.reset_bpm_estimator(now, absolute_tick);
-            return;
-        }
-
-        if !is_playing || !has_recent_clock_activity {
-            self.reset_bpm_estimator(now, absolute_tick);
-            return;
-        }
-        if self.last_tempo_sample_time < 0.0 || self.last_tempo_abs_tick < 0 {
-            self.reset_bpm_estimator(now, absolute_tick);
-            return;
-        }
-
-        let dt = now - self.last_tempo_sample_time;
-        let d_ticks = absolute_tick - self.last_tempo_abs_tick;
-        self.last_tempo_sample_time = now;
-        self.last_tempo_abs_tick = absolute_tick;
-
-        if dt <= 0.0 {
-            return;
-        }
-        if d_ticks < 0 {
-            // Song-position jump or source reset; restart estimator window.
-            self.tempo_accum_ticks = 0;
-            self.tempo_accum_time = 0.0;
-            return;
-        }
-
-        self.tempo_accum_ticks += d_ticks;
-        self.tempo_accum_time += dt;
-
-        let tick_window = self.min_ticks_per_bpm_estimate.max(1);
-        if self.tempo_accum_ticks < tick_window || self.tempo_accum_time <= 0.0 {
-            return;
-        }
-
-        let raw_bpm = (self.tempo_accum_ticks as f32 * 60.0) / (24.0 * self.tempo_accum_time);
-        self.tempo_accum_ticks = 0;
-        self.tempo_accum_time = 0.0;
-
-        if !(20.0..=300.0).contains(&raw_bpm) {
-            return;
-        }
-
-        // Port of C# line 354: Mathf.Lerp clamps t to [0,1].
-        let alpha = self.bpm_ema_alpha.clamp(0.0, 1.0);
-        self.current_clock_bpm = if self.current_clock_bpm <= 0.0 {
-            raw_bpm
-        } else {
-            // Mathf.Lerp(a, b, t) = a + (b - a) * clamp01(t)
-            self.current_clock_bpm + (raw_bpm - self.current_clock_bpm) * alpha
-        };
     }
 
     // ── Position sync ────────────────────────────────────────────────
 
-    /// Sync MANIFOLD playback position to MIDI clock position.
-    /// Port of C# MidiClockSyncController.SyncPositionToPlayback (lines 368-436).
+    /// Seek MANIFOLD to the clock's position on a jump: a Song Position
+    /// Pointer or restart (a tick delta outside the sane range), an error of
+    /// 2 s or more while playing, or any position change while stopped.
+    /// Inside 2 s the follower trims the beat from this tick's sample (D6).
     fn sync_position_to_playback(
         &mut self,
-        pos_sixteenths: i32,
-        clock_tick: i32,
+        ticks: i64,
         arbiter: &mut SyncArbiter,
         arb_target: &mut dyn SyncArbiterTarget,
         sync_target: &dyn SyncTarget,
         authority: ClockAuthority,
     ) {
-        // Port of C# line 370: guard on project and arbiter.
         if sync_target.current_project().is_none() {
             return;
         }
 
-        let current_sixteenths = pos_sixteenths;
-        let absolute_tick = pos_sixteenths * 6 + clock_tick;
+        let current_sixteenths = i32::try_from(ticks.div_euclid(6)).unwrap_or(i32::MAX);
+        let clock_time = sync_target.timeline_beat_to_time(Beats(ticks as f64 / 24.0));
+        let is_transport_jump = self
+            .last_synced_tick
+            .is_some_and(|last| !SANE_TICK_DELTA.contains(&(ticks - last)));
+        self.last_synced_tick = Some(ticks);
 
-        // Include sub-sixteenth tick for 24 PPQN precision (port of C# lines 375-377).
-        // 6 ticks per sixteenth, 4 sixteenths per beat.
-        let clock_beat = (pos_sixteenths as f32 + clock_tick as f32 / 6.0) / 4.0;
-        let clock_time = sync_target.timeline_beat_to_time(Beats::from_f32(clock_beat));
-        let mut is_transport_jump = false;
-
-        if !self.transport_time_integrator_initialized {
-            // First call: anchor integrator (port of C# lines 380-383).
-            self.integrated_clock_time_seconds = clock_time.max(Seconds::ZERO);
-            self.last_transport_absolute_tick = absolute_tick;
-            self.transport_time_integrator_initialized = true;
-        } else {
-            let delta_ticks = absolute_tick - self.last_transport_absolute_tick;
-            if !(0..=384).contains(&delta_ticks) {
-                // Song-position jump / restart: re-anchor (port of C# lines 387-391).
-                is_transport_jump = true;
-            }
-
-            // Keep diagnostics coherent (port of C# lines 395-397).
-            self.integrated_clock_time_seconds = clock_time;
-            self.last_transport_absolute_tick = absolute_tick;
-        }
-
-        let current_time = sync_target.current_time();
-        let delta = (clock_time - current_time).abs();
+        let delta = (clock_time - sync_target.position_time()).abs();
 
         if sync_target.is_playing() {
-            if !is_transport_jump && delta < Seconds(2.0) {
-                // NudgeTime for smooth per-frame tracking (port of C# line 407).
-                // Threshold widened from 0.5s to 2.0s to absorb tempo ramps
-                // without triggering hard seeks. SPP jumps and transport
-                // restarts are already caught by is_transport_jump (tick-delta
-                // range check), so this threshold only needs to catch genuine
-                // position errors — not continuous drift from tempo automation.
-                arbiter.nudge_time(ClockAuthority::MidiClock, authority, arb_target, clock_time);
-            } else {
-                // Large jump via full Seek (port of C# lines 412-419).
+            if is_transport_jump || delta >= Seconds(2.0) {
                 self.hard_seek_count += 1;
                 self.last_hard_seek_delta_seconds = delta.as_f32();
                 arbiter.seek(ClockAuthority::MidiClock, authority, arb_target, clock_time);
             }
-        } else {
-            // Not playing: Seek on position change (port of C# lines 425-432).
-            if current_sixteenths != self.last_position_sixteenths {
-                self.hard_seek_count += 1;
-                self.last_hard_seek_delta_seconds = delta.as_f32();
-                arbiter.seek(ClockAuthority::MidiClock, authority, arb_target, clock_time);
-            }
+        } else if current_sixteenths != self.last_position_sixteenths {
+            // Not playing: seek on position change.
+            self.hard_seek_count += 1;
+            self.last_hard_seek_delta_seconds = delta.as_f32();
+            arbiter.seek(ClockAuthority::MidiClock, authority, arb_target, clock_time);
         }
 
         self.last_position_sixteenths = current_sixteenths;
@@ -825,7 +573,6 @@ impl MidiClockSyncController {
 
     /// Update position display. Dirty-checked to avoid string alloc per frame.
     /// Format: bars.beats.sub (1-based).
-    /// Port of C# MidiClockSyncController.UpdatePositionDisplay (lines 445-455).
     fn update_position_display(&mut self, sixteenths: i32) {
         if sixteenths == self.cached_display_sixteenths {
             return;
@@ -866,136 +613,201 @@ mod tests {
     use manifold_core::project::Project;
     use manifold_core::types::PlaybackState;
 
-    // ── MidiClockState pack/unpack round trip ───────────────────────────
+    use tick_filter::{period_of_bpm, TickFilter};
 
-    /// Bits 0..31 hold `position_sixteenths` as a raw i32 bit pattern — the
-    /// cast chain (`as u32 as u64` / `as u32 as i32`) is bit-preserving, so
-    /// every i32 value round-trips exactly.
-    #[test]
-    fn midi_clock_state_position_roundtrips_full_i32_range() {
-        for &pos in &[
-            i32::MIN,
-            i32::MIN + 1,
-            -1_000_000,
-            -1,
-            0,
-            1,
-            42,
-            1_000_000,
-            i32::MAX - 1,
-            i32::MAX,
-        ] {
-            let state = MidiClockState {
-                position_sixteenths: pos,
-                clock_tick: 0,
-                is_playing: false,
-                has_received_clock: false,
-            };
-            let round = MidiClockState::unpack(state.pack());
-            assert_eq!(round.position_sixteenths, pos);
+    // ── D20: position rules ──────────────────────────────────────────────
+
+    const P120: f64 = 60.0 / (24.0 * 120.0);
+
+    /// Feed `n` ticks at `period` from `start`, from tick time `t`.
+    fn ticks(tracker: &mut ClockTracker, t: f64, n: usize, period: f64) -> f64 {
+        let mut at = t;
+        for _ in 0..n {
+            tracker.event(ClockKind::Tick, at, 120.0);
+            at += period;
         }
+        at
     }
 
-    /// `clock_tick` only ever carries 0..=5 in production (6 MIDI-clock
-    /// ticks per sixteenth note) — exhaustive over that domain crossed with
-    /// the is_playing/has_received_clock flag combinations.
+    /// MIDI 1.0: the first tick after Start is position 0, not 1/24.
     #[test]
-    fn midi_clock_state_tick_and_flags_roundtrip() {
-        for tick in 0..=5 {
-            for &playing in &[true, false] {
-                for &received in &[true, false] {
-                    let state = MidiClockState {
-                        position_sixteenths: 42,
-                        clock_tick: tick,
-                        is_playing: playing,
-                        has_received_clock: received,
-                    };
-                    let round = MidiClockState::unpack(state.pack());
-                    assert_eq!(round.position_sixteenths, 42);
-                    assert_eq!(round.clock_tick, tick);
-                    assert_eq!(round.is_playing, playing);
-                    assert_eq!(round.has_received_clock, received);
-                }
+    fn first_clock_after_start_is_the_start_position() {
+        let mut tracker = ClockTracker::new();
+        tracker.event(ClockKind::Start, 0.0, 120.0);
+        assert_eq!(tracker.sample_at(0.0), None, "no beat before the first tick");
+        tracker.event(ClockKind::Tick, 0.001, 120.0);
+        assert_eq!(tracker.landed_tick(), Some(0));
+        let s = tracker.sample_at(0.001).expect("a beat after the first tick");
+        assert!(s.beat.abs() < 1e-12, "beat {}", s.beat);
+        ticks(&mut tracker, 0.001 + P120, 23, P120);
+        assert_eq!(tracker.landed_tick(), Some(23));
+    }
+
+    #[test]
+    fn ticks_while_stopped_do_not_move_the_position() {
+        let mut tracker = ClockTracker::new();
+        tracker.event(ClockKind::Start, 0.0, 120.0);
+        let t = ticks(&mut tracker, 0.0, 48, P120);
+        tracker.event(ClockKind::Stop, t, 120.0);
+        let t = ticks(&mut tracker, t, 100, P120);
+        assert_eq!(tracker.landed_tick(), Some(47));
+        assert_eq!(tracker.next_tick(), 48);
+        assert_eq!(tracker.sample_at(t), None, "no sample while stopped");
+        tracker.event(ClockKind::Continue, t, 120.0);
+        tracker.event(ClockKind::Tick, t + 0.001, 120.0);
+        assert_eq!(tracker.landed_tick(), Some(48), "Continue lands on the current position");
+    }
+
+    #[test]
+    fn song_position_then_continue_arms_the_position() {
+        let mut tracker = ClockTracker::new();
+        tracker.event(ClockKind::Start, 0.0, 120.0);
+        let t = ticks(&mut tracker, 0.0, 30, P120);
+        tracker.event(ClockKind::Stop, t, 120.0);
+        tracker.event(ClockKind::SongPosition(64), t + 0.1, 120.0);
+        assert_eq!(tracker.next_tick(), 384);
+        tracker.event(ClockKind::Continue, t + 0.2, 120.0);
+        tracker.event(ClockKind::Tick, t + 0.21, 120.0);
+        assert_eq!(tracker.landed_tick(), Some(384));
+        let s = tracker.sample_at(t + 0.21).unwrap();
+        assert!((s.beat - 16.0).abs() < 1e-9, "beat {}", s.beat);
+    }
+
+    // ── D20: the filter ──────────────────────────────────────────────────
+
+    /// A single 4 ms late tick moves the phase by a fraction of it, and the
+    /// filter is back within 0.1 ms after a beat.
+    #[test]
+    fn filter_ignores_a_single_late_tick() {
+        let mut filter = TickFilter::seeded(0, 0.0, P120);
+        for k in 1..=480 {
+            filter.tick(k, k as f64 * P120);
+        }
+        filter.tick(481, 481.0 * P120 + 0.004);
+        assert!((filter.time_of(481.0) - 481.0 * P120).abs() < 0.0005, "one late tick moved the phase {}", filter.time_of(481.0) - 481.0 * P120);
+        for k in 482..=600 {
+            filter.tick(k, k as f64 * P120);
+        }
+        assert!((filter.time_of(600.0) - 600.0 * P120).abs() < 0.0001);
+        assert!((filter.bpm() - 120.0).abs() < 0.05, "bpm {}", filter.bpm());
+    }
+
+    /// Two growing misses are not a tempo change; the third refits the period
+    /// to the new tempo at once.
+    #[test]
+    fn refit_needs_three_growing_misses() {
+        let mut filter = TickFilter::seeded(0, 0.0, P120);
+        for k in 1..=240 {
+            filter.tick(k, k as f64 * P120);
+        }
+        // 120 -> 140 at tick 240: arrivals come early by a growing margin.
+        let p140 = period_of_bpm(140.0);
+        let base = 240.0 * P120;
+        let mut refit_at = None;
+        for n in 1..=12 {
+            let before = filter.period();
+            filter.tick(240 + n, base + n as f64 * p140);
+            if refit_at.is_none() && (filter.period() - p140).abs() < 0.02 * p140 && (before - p140).abs() > 0.05 * p140 {
+                refit_at = Some(n);
             }
         }
+        let refit_at = refit_at.expect("the tempo change was refit");
+        assert!(refit_at >= 3, "refit after {refit_at} ticks, before three misses");
+        assert!(refit_at <= 8, "refit only after {refit_at} ticks");
     }
 
+    /// With Link's tempo latched the period is Link's at each tick, a tempo
+    /// change included, and only phase is filtered (D20, D21).
     #[test]
-    fn atomic_clock_state_load_update_roundtrip() {
-        let atomic = AtomicClockState::new();
-        atomic.update(|_| MidiClockState {
-            position_sixteenths: 777,
-            clock_tick: 3,
-            is_playing: true,
-            has_received_clock: true,
-        });
-        let loaded = atomic.load();
-        assert_eq!(loaded.position_sixteenths, 777);
-        assert_eq!(loaded.clock_tick, 3);
-        assert!(loaded.is_playing);
-        assert!(loaded.has_received_clock);
-    }
-
-    // ── BPM estimator ────────────────────────────────────────────────────
-
-    /// section 11: BPM estimated over ≥96 ticks (24 PPQN ⇒ 4 beats), EMA α=0.30.
-    /// The raw-BPM formula (`ticks*60 / (24*seconds)`) is the standard
-    /// MIDI-clock tempo derivation (24 clocks per quarter note) — an
-    /// external standard, not something derived here, so convergence to the
-    /// injected rate is safe to pin.
-    #[test]
-    fn bpm_estimator_converges_toward_injected_tempo() {
-        let target_bpm = 150.0_f32; // deliberately non-120
-        let seconds_per_tick = 60.0 / (target_bpm * 24.0);
-        let mut ctrl = MidiClockSyncController::new();
-
-        let mut now = 0.0_f32;
-        // First call only anchors the estimator (guarded by last_tempo_sample_time < 0).
-        ctrl.update_bpm_from_clock(now, 0, 0, true, true);
-
-        for t in 1..=3000_i64 {
-            now += seconds_per_tick;
-            let pos = (t / 6) as i32;
-            let tick = (t % 6) as i32;
-            ctrl.update_bpm_from_clock(now, pos, tick, true, true);
+    fn latched_link_period_filters_phase_only() {
+        let mut tracker = ClockTracker::new();
+        tracker.set_link_tempo(Some(128.0));
+        tracker.event(ClockKind::Start, 0.0, 120.0);
+        let p128 = period_of_bpm(128.0);
+        for k in 0..240 {
+            // Ticks 0.3 ms late on every other tick: phase noise only.
+            let late = if k % 2 == 0 { 0.0003 } else { 0.0 };
+            tracker.event(ClockKind::Tick, k as f64 * p128 + late, 120.0);
         }
-
-        assert!(
-            (ctrl.current_clock_bpm() - target_bpm).abs() < 0.5,
-            "expected convergence to {target_bpm} BPM, got {}",
-            ctrl.current_clock_bpm()
-        );
+        assert!((tracker.bpm().unwrap() - 128.0).abs() < 1e-9, "the period is Link's, not an estimate");
+        // Link and Live jump to 174 together: the next tick takes Link's
+        // period, with no wait for misses to refit.
+        tracker.set_link_tempo(Some(174.0));
+        let base = 239.0 * p128;
+        tracker.event(ClockKind::Tick, base + period_of_bpm(174.0), 120.0);
+        assert!((tracker.bpm().unwrap() - 174.0).abs() < 1e-9);
+        let s = tracker.sample_at(base + period_of_bpm(174.0)).unwrap();
+        assert!((s.beat - 240.0 / 24.0).abs() < 0.001, "beat {}", s.beat);
+        assert_eq!(tracker.last_landed().map(|(k, _)| k), Some(240));
     }
 
-    /// A backward tick jump (SPP rewind / MIDI Start resetting position to
-    /// 0) must not corrupt the running estimate — `update_bpm_from_clock`
-    /// returns before touching `current_clock_bpm` on a negative delta
-    /// ("Song-position jump or source reset; restart estimator window").
+    /// Stalls of 150-600 ms released as a burst stamped on arrival: the
+    /// period stays inside the clamp and near the truth, the position never
+    /// diverges.
+    #[test]
+    fn stall_then_burst_does_not_diverge() {
+        for stall in [0.15, 0.2, 0.3, 0.6] {
+            let mut tracker = ClockTracker::new();
+            tracker.event(ClockKind::Start, 0.0, 120.0);
+            let held_from = 10.0;
+            let release = held_from + stall;
+            let mut k = 0usize;
+            loop {
+                let true_at = k as f64 * P120;
+                if true_at > 20.0 {
+                    break;
+                }
+                let at = if true_at >= held_from && true_at < release { release } else { true_at };
+                tracker.event(ClockKind::Tick, at, 120.0);
+                let bpm = tracker.bpm().unwrap();
+                assert!((20.0..=300.0).contains(&bpm), "stall {stall}: bpm {bpm}");
+                if true_at >= release {
+                    let s = tracker.sample_at(true_at).unwrap();
+                    assert!((s.beat - k as f64 / 24.0).abs() * 0.5 < 0.020, "stall {stall}: tick {k} off by {} ms", (s.beat - k as f64 / 24.0) * 500.0);
+                }
+                k += 1;
+            }
+            let bpm = tracker.bpm().unwrap();
+            assert!((bpm - 120.0).abs() < 1.0, "stall {stall}: bpm {bpm} at the end");
+        }
+    }
+
+    /// A Start (position back to 0) never reaches the filter as a backward
+    /// tick: it seeds the phase again and keeps the tempo estimate.
     #[test]
     fn bpm_estimator_survives_backward_tick_jump() {
-        let target_bpm = 140.0_f32;
-        let seconds_per_tick = 60.0 / (target_bpm * 24.0);
-        let mut ctrl = MidiClockSyncController::new();
-        let mut now = 0.0_f32;
-        ctrl.update_bpm_from_clock(now, 0, 0, true, true);
-        for t in 1..=200_i64 {
-            now += seconds_per_tick;
-            ctrl.update_bpm_from_clock(now, (t / 6) as i32, (t % 6) as i32, true, true);
-        }
-        let bpm_before = ctrl.current_clock_bpm();
-
-        // Backward jump: position resets to 0 (e.g. MIDI Start).
-        now += seconds_per_tick;
-        ctrl.update_bpm_from_clock(now, 0, 0, true, true);
-
-        assert_eq!(
-            ctrl.current_clock_bpm(),
-            bpm_before,
-            "a backward tick delta must not perturb the estimate mid-window"
-        );
+        let p140 = period_of_bpm(140.0);
+        let mut tracker = ClockTracker::new();
+        tracker.event(ClockKind::Start, 0.0, 120.0);
+        let t = ticks(&mut tracker, 0.0, 2400, p140);
+        let bpm_before = tracker.bpm().unwrap();
+        assert!((bpm_before - 140.0).abs() < 0.05, "bpm {bpm_before}");
+        tracker.event(ClockKind::Start, t, 120.0);
+        tracker.event(ClockKind::Tick, t + 0.001, 120.0);
+        assert_eq!(tracker.landed_tick(), Some(0));
+        assert_eq!(tracker.bpm(), Some(bpm_before), "a restart keeps the estimate");
     }
 
-    // ── Nudge-vs-seek position sync ─────────────────────────────────────
+    /// The stamp map takes the fastest delivery as zero lag: a later message
+    /// delivered late keeps its own stamp, never the delivery time.
+    #[test]
+    fn stamps_map_to_delivery_minus_the_fastest_lag() {
+        let mut map = StampMap::new();
+        let origin = map.origin;
+        let at = |us: u64| origin + Duration::from_micros(us);
+        // Stamp base 1_000_000 µs ahead of the origin; first delivery 300 µs late.
+        let first = map.map(1_000_000 + 10_000, at(10_300));
+        assert_eq!(first, at(10_300));
+        // A faster delivery tightens the mapping.
+        let second = map.map(1_000_000 + 20_000, at(20_100));
+        assert_eq!(second, at(20_100));
+        // Delivered 200 ms late (a stall): mapped to its own stamp.
+        let stalled = map.map(1_000_000 + 30_000, at(230_000));
+        assert_eq!(stalled, at(30_100));
+        assert_eq!(map.map(0, at(500_000)), at(500_000), "no stamp: the delivery time");
+    }
+
+    // ── Seek-or-trim position sync ─────────────────────────────────────
 
     struct FakeSyncTarget {
         state: PlaybackState,
@@ -1008,7 +820,7 @@ mod tests {
         fn current_state(&self) -> PlaybackState {
             self.state
         }
-        fn current_time(&self) -> Seconds {
+        fn position_time(&self) -> Seconds {
             self.time
         }
         fn is_playing(&self) -> bool {
@@ -1024,8 +836,6 @@ mod tests {
 
     #[derive(Default)]
     struct FakeArbTarget {
-        external_time_sync: bool,
-        nudge_count: u32,
         seek_count: u32,
     }
 
@@ -1033,28 +843,19 @@ mod tests {
         fn current_project(&self) -> Option<&Project> {
             None
         }
-        fn external_time_sync(&self) -> bool {
-            self.external_time_sync
-        }
-        fn set_external_time_sync(&mut self, value: bool) {
-            self.external_time_sync = value;
-        }
         fn play(&mut self) {}
         fn pause(&mut self, _clear_recording: bool) {}
-        fn nudge_time(&mut self, _time: Seconds) {
-            self.nudge_count += 1;
-        }
         fn seek(&mut self, _time: Seconds) {
             self.seek_count += 1;
         }
     }
 
-    /// section 11 CLK nudge/seek split = 2.0s: while playing, a small position
-    /// error nudges rather than hard-seeking.
+    /// section 11 CLK seek threshold = 2.0s: while playing, a small position
+    /// error is left to the follower's trim, never seeked.
     #[test]
-    fn clk_position_sync_nudges_when_playing_within_threshold() {
+    fn clk_position_sync_leaves_small_errors_to_the_follower() {
         let bpm = 150.0;
-        // beat 25 @ 150 BPM = 10.0s exactly -> matches current_time -> delta 0.
+        // beat 25 @ 150 BPM = 10.0s exactly -> matches position_time -> delta 0.
         let sync_target = FakeSyncTarget {
             state: PlaybackState::Playing,
             time: Seconds(10.0),
@@ -1066,19 +867,17 @@ mod tests {
         let mut ctrl = MidiClockSyncController::new();
 
         ctrl.sync_position_to_playback(
-            100,
-            0,
+            600,
             &mut arbiter,
             &mut arb_target,
             &sync_target,
             ClockAuthority::MidiClock,
         );
 
-        assert_eq!(arb_target.nudge_count, 1);
         assert_eq!(arb_target.seek_count, 0);
     }
 
-    /// Delta >= 2.0s forces a full seek instead of a nudge.
+    /// Delta >= 2.0s forces a full seek.
     #[test]
     fn clk_position_sync_hard_seeks_when_playing_beyond_threshold() {
         let bpm = 150.0;
@@ -1092,10 +891,9 @@ mod tests {
         let mut arbiter = SyncArbiter::new();
         let mut ctrl = MidiClockSyncController::new();
 
-        // beat 25 @ 150 BPM = 10.0s away from current_time(0.0) -> delta > 2.0s.
+        // beat 25 @ 150 BPM = 10.0s away from position_time(0.0) -> delta > 2.0s.
         ctrl.sync_position_to_playback(
-            100,
-            0,
+            600,
             &mut arbiter,
             &mut arb_target,
             &sync_target,
@@ -1103,13 +901,12 @@ mod tests {
         );
 
         assert_eq!(arb_target.seek_count, 1);
-        assert_eq!(arb_target.nudge_count, 0);
     }
 
     /// section 11 CLK tick-delta sanity = 0..=384: a transport restart (position
     /// snaps back to 0, e.g. MIDI Start) is a large *negative* tick delta —
     /// outside the sane range — and must force a hard seek even when the
-    /// resulting time delta alone would look nudge-sized.
+    /// resulting time delta alone would stay under the seek threshold.
     #[test]
     fn clk_position_sync_transport_restart_forces_seek_despite_small_delta() {
         let bpm = 150.0;
@@ -1117,7 +914,7 @@ mod tests {
         let mut arbiter = SyncArbiter::new();
         let mut ctrl = MidiClockSyncController::new();
 
-        // Anchor at beat 25 (absolute_tick 600), matching current_time exactly.
+        // Anchor at beat 25 (absolute_tick 600), matching position_time exactly.
         let sync_target_anchor = FakeSyncTarget {
             state: PlaybackState::Playing,
             time: Seconds(10.0),
@@ -1125,23 +922,18 @@ mod tests {
             project: Some(Project::default()),
         };
         ctrl.sync_position_to_playback(
-            100,
-            0,
+            600,
             &mut arbiter,
             &mut arb_target,
             &sync_target_anchor,
             ClockAuthority::MidiClock,
         );
-        assert_eq!(arb_target.nudge_count, 1);
-        assert_eq!(
-            arb_target.seek_count, 0,
-            "anchor call should nudge, not seek"
-        );
+        assert_eq!(arb_target.seek_count, 0, "anchor call should not seek");
 
         // Restart: position resets to 0 (absolute_tick 0, delta -600 —
-        // outside 0..=384). MANIFOLD's own current_time is still near the
+        // outside 0..=384). MANIFOLD's own position_time is still near the
         // pre-restart value (0.02s): a small time delta, but the tick-jump
-        // guard must win over the 2.0s nudge threshold.
+        // guard must win over the 2.0s threshold.
         let sync_target_restart = FakeSyncTarget {
             state: PlaybackState::Playing,
             time: Seconds(0.02),
@@ -1149,7 +941,6 @@ mod tests {
             project: Some(Project::default()),
         };
         ctrl.sync_position_to_playback(
-            0,
             0,
             &mut arbiter,
             &mut arb_target,
@@ -1160,10 +951,6 @@ mod tests {
         assert_eq!(
             arb_target.seek_count, 1,
             "transport restart must hard-seek even though |Δtime| < 2.0s"
-        );
-        assert_eq!(
-            arb_target.nudge_count, 1,
-            "nudge count must not have grown on the restart call"
         );
     }
 
@@ -1183,8 +970,7 @@ mod tests {
         let mut ctrl = MidiClockSyncController::new();
 
         ctrl.sync_position_to_playback(
-            5,
-            0,
+            30,
             &mut arbiter,
             &mut arb_target,
             &sync_target,
@@ -1194,8 +980,7 @@ mod tests {
 
         // Same sixteenths again -> no new seek.
         ctrl.sync_position_to_playback(
-            5,
-            0,
+            30,
             &mut arbiter,
             &mut arb_target,
             &sync_target,

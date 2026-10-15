@@ -366,6 +366,7 @@ impl Application {
 
         // 1. Take the newest state from the content thread.
         self.intake_content_state();
+        self.tick_sync_calibration();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(

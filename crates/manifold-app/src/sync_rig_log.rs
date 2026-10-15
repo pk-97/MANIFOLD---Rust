@@ -54,8 +54,6 @@ pub fn start() {
         return;
     };
     log::info!("sync rig log: {:?}", writer.path());
-    #[cfg(target_os = "macos")]
-    manifold_gpu::set_presented_observer(on_presented);
     let spawned = std::thread::Builder::new()
         .name("sync-rig-log".into())
         .spawn(move || run(rx, writer));
@@ -73,12 +71,6 @@ pub fn user_transport(kind: rig_log::TransportKind, value: f64) {
         kind,
         value,
     });
-}
-
-/// Metal's presented handler forwards here, on Metal's thread.
-#[cfg(target_os = "macos")]
-fn on_presented(drawable_id: u64, presented_s: f64) {
-    rig_log::emit(RigRecord::Presented { drawable_id, presented_s, at_ns: rig_log::now_ns() });
 }
 
 /// Appends records to a size-capped, rotating set of files.

@@ -5,5 +5,9 @@
   { "Pointer": { "target": { "Point": { "x": 1300.0, "y": 600.0 } }, "gesture": { "Scroll": { "delta": { "x": 0.0, "y": -40.0 } } } } },
   { "Pointer": { "target": { "Point": { "x": 1300.0, "y": 600.0 } }, "gesture": { "Scroll": { "delta": { "x": 0.0, "y": -40.0 } } } } },
   { "AssertWork": { "window": "four_notches" } },
+  "AssertFresh",
+  "ResetWork",
+  { "ResizeDrag": { "handle": "InspectorWidth", "from": 936.0, "to": 916.0, "steps": 10 } },
+  { "AssertWork": { "window": "inspector_drag_moves_dock" } },
   "AssertFresh"
 ]
