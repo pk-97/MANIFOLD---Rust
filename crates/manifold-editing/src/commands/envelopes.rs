@@ -7,6 +7,7 @@
 //! envelope pool anymore.
 
 use crate::command::Command;
+use crate::commands::graph::KeepOnCard;
 use manifold_core::change::{ChangeSet, Part};
 use manifold_core::GraphTarget;
 use manifold_core::audio_mod::TriggerAction;
@@ -18,11 +19,12 @@ use manifold_core::project::Project;
 pub struct AddEnvelopeCommand {
     target: GraphTarget,
     envelope: ParamEnvelope,
+    keep: KeepOnCard,
 }
 
 impl AddEnvelopeCommand {
     pub fn new(target: GraphTarget, envelope: ParamEnvelope) -> Self {
-        Self { target, envelope }
+        Self { target, envelope, keep: KeepOnCard::default() }
     }
 }
 
@@ -33,6 +35,7 @@ impl Command for AddEnvelopeCommand {
         project.with_preset_graph_mut(&self.target, |inst| {
             inst.envelopes_mut().push(envelope);
         });
+        self.keep.attach(project, &self.target, &self.envelope.param_id);
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -41,6 +44,7 @@ impl Command for AddEnvelopeCommand {
                 envs.pop();
             }
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -107,6 +111,7 @@ pub struct ToggleEnvelopeEnabledCommand {
     env_index: usize,
     old_enabled: bool,
     new_enabled: bool,
+    keep: KeepOnCard,
 }
 
 impl ToggleEnvelopeEnabledCommand {
@@ -116,6 +121,7 @@ impl ToggleEnvelopeEnabledCommand {
             env_index,
             old_enabled,
             new_enabled,
+            keep: KeepOnCard::default(),
         }
     }
 }
@@ -125,11 +131,17 @@ impl Command for ToggleEnvelopeEnabledCommand {
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.env_index;
         let val = self.new_enabled;
-        project.with_preset_graph_mut(&self.target, |inst| {
-            if let Some(e) = inst.envelopes.as_mut().and_then(|envs| envs.get_mut(idx)) {
-                e.enabled = val;
-            }
-        });
+        let param_id = project
+            .with_preset_graph_mut(&self.target, |inst| {
+                inst.envelopes.as_mut().and_then(|envs| envs.get_mut(idx)).map(|e| {
+                    e.enabled = val;
+                    e.param_id.clone()
+                })
+            })
+            .flatten();
+        if let Some(param_id) = param_id.filter(|_| val) {
+            self.keep.attach(project, &self.target, &param_id);
+        }
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -140,6 +152,7 @@ impl Command for ToggleEnvelopeEnabledCommand {
                 e.enabled = val;
             }
         });
+        self.keep.undo(project);
     }
 
     fn description(&self) -> &str {

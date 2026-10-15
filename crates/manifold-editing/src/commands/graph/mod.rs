@@ -29,7 +29,7 @@ use manifold_core::project::Project;
 
 mod card_owned_write;
 mod card_pin;
-pub use card_pin::SetCardPinCommand;
+pub use card_pin::{KeepOnCard, SetCardPinCommand};
 mod slider_range;
 pub use slider_range::SetSliderRangeCommand;
 mod node_edit;

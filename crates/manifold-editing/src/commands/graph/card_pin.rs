@@ -62,6 +62,65 @@ impl Command for SetCardPinCommand {
     }
 }
 
+/// The card pin an attach command writes beside its modulator (D6 (attached
+/// rows)): attaching a driver, envelope, audio mod, automation lane or
+/// mapping to a control the Layer-tab card leaves off pins it Shown in the
+/// same undo unit, so switching the modulator off or deleting it keeps the
+/// control on the card. Call [`Self::attach`] at the end of `do_execute` and
+/// [`Self::undo`] at the end of `do_undo`.
+#[derive(Debug, Default)]
+pub struct KeepOnCard {
+    /// The pin this command replaced, while its execute stands.
+    replaced: Option<(GraphTarget, String, Option<CardPin>)>,
+}
+
+impl KeepOnCard {
+    /// Only a generator has a Layer-tab card.
+    pub fn attach(&mut self, project: &mut Project, target: &GraphTarget, param_id: &str) {
+        self.replaced = None;
+        if !matches!(target, GraphTarget::Generator(_)) {
+            return;
+        }
+        let before = project.with_preset_graph_mut(target, |host| host.keep_on_card(param_id)).flatten();
+        self.replaced = before.map(|before| (target.clone(), param_id.to_string(), before));
+    }
+
+    pub fn attach_driver(&mut self, project: &mut Project, target: &crate::commands::effect_target::DriverTarget, param_id: &str) {
+        if let crate::commands::effect_target::DriverTarget::GeneratorParam { layer_id } = target {
+            self.attach(project, &GraphTarget::Generator(layer_id.clone()), param_id);
+        }
+    }
+
+    /// Call after the command's own modulator is gone. The pin stays while
+    /// another live modulator or a macro (whose mapping has no undo) still
+    /// drives the control, so undo never strands a driven control off the card.
+    pub fn undo(&mut self, project: &mut Project) {
+        let Some((target, param_id, before)) = self.replaced.take() else { return };
+        let GraphTarget::Generator(layer_id) = &target else { return };
+        let macro_driven = project.settings.macro_bank.slots.iter().flat_map(|slot| &slot.mappings).any(|mapping| {
+            matches!(&mapping.target, manifold_core::MacroMappingTarget::GenParam { layer_id: layer, param_id: id }
+                if layer == layer_id && id.as_ref() == param_id)
+        });
+        if macro_driven {
+            return;
+        }
+        project.with_preset_graph_mut(&target, |host| {
+            if host.drives(&param_id) {
+                return;
+            }
+            if let Some(param) = host.params.get_mut(&param_id) {
+                param.choices.pin = before;
+            }
+        });
+    }
+
+    /// Effects while this command's pin stands: the pin changes card rows.
+    pub fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        if self.replaced.is_some() { ChangeSet::of(&[Part::Effects]) } else { ChangeSet::NONE }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{project_with_one_generator_layer, slot};

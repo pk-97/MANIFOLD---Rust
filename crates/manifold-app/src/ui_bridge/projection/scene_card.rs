@@ -40,17 +40,20 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         let Some(param) = inst.params.get(row.id.as_ref()) else { continue };
         let owner_index = owner(row.id.as_ref());
         let item = owner_index.map(|index| &items[index]);
-        let attached = row.is_attached();
+        // A pinned row stays whatever its gate: Show on Card and every
+        // modulator attach write the pin (D6 (attached rows)).
+        let pinned = param.choices.pin == Some(CardPin::Shown);
         let id = row.id.as_ref();
-        let Some(place) = Placement::of(param, item, attached, user_added(param, def, id), modifier_bound(def, id)) else {
+        let Some(place) = Placement::of(param, item, user_added(param, def, id), modifier_bound(def, id)) else {
             continue;
         };
-        if !attached && !row.value.exposed {
+        if !pinned && !row.value.exposed {
             continue;
         }
         match place.gate {
-            Some(Gate::Fold(feature)) if !attached && !switches.is_on(feature) => continue,
-            Some(Gate::Dim(feature)) if !switches.is_on(feature) => {
+            Some(Gate::Fold(feature)) if !pinned && !switches.is_on(feature) => continue,
+            // A pinned row stays with its feature off, dimmed like a Dim row.
+            Some(Gate::Fold(feature) | Gate::Dim(feature)) if !switches.is_on(feature) => {
                 row.spec.inactive_reason = Some(feature.off_reason().into());
             }
             _ => {}
@@ -143,9 +146,9 @@ struct Placement {
 }
 
 impl Placement {
-    fn of(param: &Param, item: Option<&SceneItem>, attached: bool, user_added: bool, modifier_bound: bool) -> Option<Self> {
+    fn of(param: &Param, item: Option<&SceneItem>, user_added: bool, modifier_bound: bool) -> Option<Self> {
         let pin = param.choices.pin;
-        let shown = attached || pin == Some(CardPin::Shown) || (user_added && pin != Some(CardPin::Removed));
+        let shown = pin == Some(CardPin::Shown) || (user_added && pin != Some(CardPin::Removed));
         let Some(scene) = param.spec.scene else {
             // An authored control (composite macro, preset control on a
             // non-scene node) follows its card visibility, in the Scene band.
@@ -588,8 +591,10 @@ mod tests {
         }
     }
 
-    /// INV-S5 (D6): a row carrying a driver, envelope, automation lane,
-    /// audio mod or Ableton mapping stays on the card whatever its role.
+    /// INV-S5 (D6): card membership is the stored pin, never the live
+    /// attachment. An attach pins a Setup or Hidden row Shown
+    /// (`PresetInstance::keep_on_card`); with the pin it stays after every
+    /// modulator is gone, and an attachment without a pin builds no row.
     #[test]
     fn attached_rows_stay_on_card() {
         let project = project("WaterDamBreakGpuFlip");
@@ -610,17 +615,56 @@ mod tests {
         let mut scene = param.spec.scene.unwrap();
         scene.role = SurfaceRole::Hidden;
         param.spec.scene = Some(scene);
+        let on_card = |inst: &PresetInstance, rows: &[ParamRow], id: &str| {
+            let mut rows = rows.to_vec();
+            assert!(scene_card_rows(&mut rows, inst, &def));
+            rows.iter().any(|row| row.id == id)
+        };
         for id in [&setup[0], hidden] {
-            let mut bare = all.clone();
-            assert!(scene_card_rows(&mut bare, &inst, &def));
-            assert!(!bare.iter().any(|row| row.id == id.as_str()), "{id} is off the card unattached");
+            assert!(!on_card(&inst, &all, id), "{id} is off the card unattached");
             for kind in ["driver", "envelope", "automation", "audio", "ableton"] {
                 let mut rows = all.clone();
                 attach(rows.iter_mut().find(|row| row.id == id.as_str()).unwrap(), kind);
-                assert!(scene_card_rows(&mut rows, &inst, &def));
-                assert!(rows.iter().any(|row| row.id == id.as_str()), "{id} with {kind} dropped from the card");
+                assert!(!on_card(&inst, &rows, id), "{id} with {kind} but no pin builds no row");
             }
+            let mut pinned = inst.clone();
+            assert_eq!(pinned.keep_on_card(id), Some(None), "the attach pins {id}");
+            assert_eq!(pinned.keep_on_card(id), None, "a second attach writes nothing");
+            assert!(on_card(&pinned, &all, id), "{id} stays with its modulator gone");
         }
+        // Remove from Card gives way to a later attach; a Performance row
+        // is on the card by its role and takes no pin.
+        let mut removed = inst.clone();
+        removed.params.get_mut(&setup[0]).unwrap().choices.pin = Some(CardPin::Removed);
+        assert_eq!(removed.keep_on_card(&setup[0]), Some(Some(CardPin::Removed)));
+        let performance = all
+            .iter()
+            .find(|row| {
+                scene_of(&project, &row.id)
+                    .is_some_and(|scene| scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_))))
+            })
+            .expect("a performance row");
+        assert_eq!(inst.clone().keep_on_card(&performance.id), None);
+    }
+
+    /// A pinned row whose feature is off stays on the card, dimmed with the
+    /// feature's reason, never looking live (D6, D12).
+    #[test]
+    fn pinned_folded_row_shows_dimmed() {
+        let mut project = project("PhysicsSolids");
+        let host = project.timeline.layers[0].gen_params_mut().unwrap();
+        let fold = |param: &Param| param.spec.scene.is_some_and(|scene| scene.gate == Some(Gate::Fold(Feature::DepthOfField)));
+        let switch_on = host
+            .params
+            .iter()
+            .any(|param| param.spec.scene.is_some_and(|scene| scene.switch == Some(Feature::DepthOfField)) && param.base > 0.5);
+        assert!(!switch_on, "depth of field starts off");
+        let id = host.params.iter().find(|param| fold(param)).map(|param| param.id().to_string()).expect("a folded row");
+        assert!(!surface(&project, SurfaceVisibility::CuratedCard).iter().any(|row| row.id == id.as_str()));
+        project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut(&id).unwrap().choices.pin = Some(CardPin::Shown);
+        let rows = surface(&project, SurfaceVisibility::CuratedCard);
+        let row = rows.iter().find(|row| row.id == id.as_str()).expect("the pinned row builds");
+        assert_eq!(row.spec.inactive_reason.as_deref(), Some(Feature::DepthOfField.off_reason()));
     }
 
     fn folds(project: &Project) -> Vec<String> {
@@ -784,12 +828,11 @@ mod tests {
             ..Default::default()
         });
         assert!(param.spec.scene.is_none());
-        assert!(Placement::of(&param, None, false, false, true).is_none());
-        assert!(Placement::of(&param, None, true, false, true).is_some(), "attached rows stay (D6)");
-        assert!(Placement::of(&param, None, false, true, true).is_some(), "user-added rows stay");
+        assert!(Placement::of(&param, None, false, true).is_none());
+        assert!(Placement::of(&param, None, true, true).is_some(), "user-added rows stay");
         let mut pinned = param.clone();
         pinned.choices.pin = Some(CardPin::Shown);
-        assert!(Placement::of(&pinned, None, false, false, true).is_some(), "Show on Card wins");
-        assert!(Placement::of(&param, None, false, false, false).is_some(), "authored controls keep card visibility");
+        assert!(Placement::of(&pinned, None, false, true).is_some(), "Show on Card and attaches (D6) win");
+        assert!(Placement::of(&param, None, false, false).is_some(), "authored controls keep card visibility");
     }
 }

@@ -15,6 +15,7 @@ pub struct ChangeAbletonMappingCommand {
     /// For MacroSlot: old label to restore on undo.
     old_macro_label: Option<String>,
     new_macro_label: Option<String>,
+    keep: crate::commands::graph::KeepOnCard,
 }
 
 impl ChangeAbletonMappingCommand {
@@ -31,6 +32,7 @@ impl ChangeAbletonMappingCommand {
             new_mapping: Some(mapping),
             old_macro_label,
             new_macro_label,
+            keep: Default::default(),
         }
     }
 
@@ -41,6 +43,7 @@ impl ChangeAbletonMappingCommand {
             new_mapping: None,
             old_macro_label: None,
             new_macro_label: None,
+            keep: Default::default(),
         }
     }
 }
@@ -58,10 +61,14 @@ impl Command for ChangeAbletonMappingCommand {
         {
             slot.label = label.clone();
         }
+        if let (AbletonMappingTarget::GenParam { layer_id, param_id }, Some(_)) = (&self.target, &self.new_mapping) {
+            self.keep.attach(project, &manifold_core::GraphTarget::Generator(layer_id.clone()), param_id);
+        }
     }
 
     fn do_undo(&mut self, project: &mut Project) {
         apply_mapping(project, &self.target, &self.old_mapping);
+        self.keep.undo(project);
         if let AbletonMappingTarget::MacroSlot { slot_index } = &self.target
             && let Some(ref label) = self.old_macro_label
             && let Some(slot) = project.settings.macro_bank.slots.get_mut(*slot_index)
