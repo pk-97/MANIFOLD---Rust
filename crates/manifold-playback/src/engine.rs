@@ -302,6 +302,8 @@ pub struct PlaybackEngine {
     /// `Project`, never serialized — same lifetime rule as
     /// `automation_latches`. Off by default.
     automation_armed: bool,
+    /// Params a pointer is holding down (a mouse on a slider). Runtime-only.
+    automation_holds: crate::automation::AutomationHolds,
     /// In-flight recording gestures (section 5). Runtime-only, owned by the
     /// playback side alongside `automation_latches`/`automation_armed`.
     automation_gestures: crate::automation::AutomationGestures,
@@ -416,6 +418,7 @@ impl PlaybackEngine {
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
             automation_latches: crate::automation::AutomationLatches::default(),
             automation_armed: false,
+            automation_holds: Vec::with_capacity(2),
             automation_gestures: crate::automation::AutomationGestures::default(),
             finished_automation: Vec::new(),
             export_param_values: Vec::new(),
@@ -694,6 +697,7 @@ impl PlaybackEngine {
         self.finished_automation.clear();
         self.automation_latches.clear();
         self.automation_armed = false;
+        self.automation_holds.clear();
         self.export_param_values.clear();
         // BUG-256: a project swap is a hard boundary for ALL runtime state
         // keyed by project-local identity. Renderers cache by `LayerId` /
@@ -774,7 +778,7 @@ impl PlaybackEngine {
             self.transport_epoch = self.transport_epoch.wrapping_add(1);
         }
         if self.current_state == PlaybackState::Playing && state != PlaybackState::Playing {
-            self.queue_finished_automation();
+            self.end_automation_session();
         }
         self.current_state = state;
     }
@@ -814,7 +818,7 @@ impl PlaybackEngine {
     pub fn stop(&mut self) {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.reset_trigger_delivery();
-        self.queue_finished_automation();
+        self.end_automation_session();
         self.current_state = PlaybackState::Stopped;
         self.stop_all_clips();
         // Clear live clip manager
@@ -851,7 +855,7 @@ impl PlaybackEngine {
         if self.current_state != PlaybackState::Playing {
             return;
         }
-        self.queue_finished_automation();
+        self.end_automation_session();
         self.current_state = PlaybackState::Paused;
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         // Pause only seekable clips (generators render procedurally each frame)
@@ -1429,7 +1433,10 @@ impl PlaybackEngine {
                 Beats(self.current_beat),
                 Beats(self.frame_beat),
                 &mut self.automation_latches,
-                self.automation_armed,
+                crate::automation::AutomationWrite {
+                    armed: self.automation_armed,
+                    holds: &self.automation_holds,
+                },
                 &mut self.automation_gestures,
                 if self.is_export_mode { crate::automation::AutomationSamplingMode::Export }
                 else { crate::automation::AutomationSamplingMode::Playback },
@@ -2492,9 +2499,10 @@ impl PlaybackEngine {
         if self.is_playing() && self.automation_armed && !self.is_export_mode
             && let Some(project) = &mut self.project
         {
+            let write = crate::automation::AutomationWrite { armed: true, holds: &self.automation_holds };
             let (_, expired) = crate::automation::evaluate_all_automation_at(
                 project, Beats(self.current_beat), Beats(self.frame_beat), &mut self.automation_latches,
-                true, &mut self.automation_gestures, crate::automation::AutomationSamplingMode::Playback,
+                write, &mut self.automation_gestures, crate::automation::AutomationSamplingMode::Playback,
             );
             commands.extend(expired);
         }
@@ -2511,12 +2519,21 @@ impl PlaybackEngine {
         self.finished_automation = commands;
     }
 
+    /// Close every take at the end of an armed playing session (transport
+    /// leaves Playing, or disarm) and drop every pointer hold. A hold whose
+    /// release never arrives would otherwise keep writing its frozen value
+    /// over the lane in every later armed pass.
+    fn end_automation_session(&mut self) {
+        self.queue_finished_automation();
+        self.automation_holds.clear();
+    }
+
     /// Toggle the global Automation Arm (section 5). Runtime-only, not a project
     /// mutation — no undo entry (`ContentCommand::AutomationSetArmed` is
     /// handled directly on the content thread, same shape as
     /// `automation_back_to_arrangement`).
     pub fn set_automation_armed(&mut self, armed: bool) {
-        if self.automation_armed && !armed { self.queue_finished_automation(); }
+        if self.automation_armed && !armed { self.end_automation_session(); }
         self.automation_armed = armed;
     }
 
@@ -2524,6 +2541,27 @@ impl PlaybackEngine {
     /// transport-bar arm button's lit/unlit state — P4).
     pub fn automation_armed(&self) -> bool {
         self.automation_armed
+    }
+
+    /// A pointer pressed (`held`) or let go of a param. There is one pointer,
+    /// so a new hold releases any other. A release ends that param's open
+    /// take on the next tick.
+    pub fn set_automation_hold(
+        &mut self,
+        target: GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        held: bool,
+    ) {
+        for (other_target, other_param) in self.automation_holds.drain(..) {
+            if !(held && other_target == target && other_param == param_id) {
+                crate::automation::release_hold(&mut self.automation_gestures, &other_target, &other_param);
+            }
+        }
+        if held {
+            self.automation_holds.push((target, param_id));
+        } else {
+            crate::automation::release_hold(&mut self.automation_gestures, &target, &param_id);
+        }
     }
 
     // ─── Time/Tempo math ───
@@ -4540,6 +4578,43 @@ mod tests {
             engine.initialize(Project::default());
             assert!(!engine.automation_armed());
             assert!(engine.automation_latches.is_empty() && engine.automation_gestures.is_empty());
+        }
+    }
+
+    /// A hold whose release never arrived ends with the armed session: after
+    /// a stop, pause or disarm, the next armed pass leaves the lane alone.
+    #[test]
+    fn lost_release_hold_clears_at_stop_pause_and_disarm() {
+        for boundary in 0..3 {
+            let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
+            let id = fx.id.clone();
+            fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
+            ] }]);
+            let mut project = Project::default();
+            project.settings.master_effects.push(fx);
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project);
+            engine.set_automation_armed(true);
+            engine.set_state(PlaybackState::Playing);
+            engine.set_automation_hold(GraphTarget::Effect(id.clone()), "amount".into(), true);
+            match boundary {
+                0 => engine.stop(),
+                1 => engine.pause(),
+                _ => engine.set_automation_armed(false),
+            }
+            assert!(engine.automation_holds.is_empty(), "boundary {boundary}");
+            let _ = engine.take_finished_automation();
+
+            engine.set_automation_armed(true);
+            engine.set_state(PlaybackState::Playing);
+            engine.locate(Seconds(1.0));
+            let tick = engine.tick(TickContext::default());
+            assert!(tick.pending_gesture_commits.is_empty());
+            assert!(engine.automation_gestures.is_empty(), "boundary {boundary}: no take without a hand");
+            let amount = engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount");
+            assert!((amount - 0.35).abs() < 1e-6, "boundary {boundary}: the lane plays, got {amount}");
         }
     }
 

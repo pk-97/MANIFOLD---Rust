@@ -12,8 +12,9 @@
 //! separate "AddLaneCommand" — a lane is born from its first point, same as
 //! drawing the first breakpoint in Ableton). `points` must stay sorted
 //! ascending by beat (section 2's invariant, mirroring `TempoMap::ensure_sorted`);
-//! [`AddAutomationPointCommand`] and [`MoveAutomationPointCommand`] both
-//! replace collisions and restore snapshots on undo.
+//! [`AddAutomationPointCommand`] and group [`MoveAutomationPointCommand`]s
+//! replace collisions (a single-point move never deletes a twin), and all
+//! restore snapshots on undo.
 //!
 //! Point identity across execute/undo: [`AutomationPoint`] carries no id, so
 //! commands match the exact stored `(beat, value)` key. This
@@ -246,6 +247,11 @@ pub struct MoveAutomationPointCommand {
     target: GraphTarget,
     param_id: String,
     moves: Vec<(AutomationPoint, AutomationPoint)>,
+    /// A move that keeps twins never deletes anything: only the first stored
+    /// point matching each source changes, so landing on an exact
+    /// `(beat, value)` twin leaves the twin in place. Plain group moves keep
+    /// replacing collisions.
+    keep_destination_twins: bool,
     previous_lane: Option<AutomationLane>,
     previous_lane_index: Option<usize>,
 }
@@ -257,7 +263,9 @@ impl MoveAutomationPointCommand {
         old_point: AutomationPoint,
         new_point: AutomationPoint,
     ) -> Self {
-        Self::for_group(target, param_id, vec![(old_point, new_point)])
+        let mut command = Self::for_group(target, param_id, vec![(old_point, new_point)]);
+        command.keep_destination_twins = true;
+        command
     }
 
     /// Move all selected points simultaneously, preserving their authored order.
@@ -268,8 +276,22 @@ impl MoveAutomationPointCommand {
     ) -> Self {
         Self {
             target, param_id: param_id.into(), moves,
+            keep_destination_twins: false,
             previous_lane: None, previous_lane_index: None,
         }
+    }
+
+    /// Like [`Self::for_group`], but a destination that lands on an exact
+    /// `(beat, value)` twin of a point outside the group leaves that twin in
+    /// place. Keyboard nudges use it so a move never deletes a point.
+    pub fn for_group_keeping_twins(
+        target: GraphTarget,
+        param_id: impl Into<String>,
+        moves: Vec<(AutomationPoint, AutomationPoint)>,
+    ) -> Self {
+        let mut command = Self::for_group(target, param_id, moves);
+        command.keep_destination_twins = true;
+        command
     }
 
     fn apply(
@@ -277,6 +299,7 @@ impl MoveAutomationPointCommand {
         target: &GraphTarget,
         param_id: &str,
         moves: &[(AutomationPoint, AutomationPoint)],
+        keep_destination_twins: bool,
     ) -> bool {
         project
             .with_preset_graph_mut(target, |inst| {
@@ -288,6 +311,21 @@ impl MoveAutomationPointCommand {
                 };
                 if moves.is_empty() || !moves.iter().all(|(from, _)| lane.points.iter().any(|p| same_point(p, from))) {
                     return false;
+                }
+                if keep_destination_twins {
+                    // Each move rewrites the first not-yet-moved stored point
+                    // matching its source; nothing else is removed.
+                    let mut moved = vec![false; lane.points.len()];
+                    for (from, to) in moves {
+                        if let Some(index) = (0..lane.points.len())
+                            .find(|&i| !moved[i] && same_point(&lane.points[i], from))
+                        {
+                            lane.points[index] = *to;
+                            moved[index] = true;
+                        }
+                    }
+                    lane.points.sort_by(|a, b| a.beat.0.total_cmp(&b.beat.0));
+                    return true;
                 }
                 // Transform in original lane order, then use a stable beat sort.
                 // This preserves step order for single and group moves alike.
@@ -332,6 +370,7 @@ impl Command for MoveAutomationPointCommand {
             &self.target,
             &self.param_id,
             &self.moves,
+            self.keep_destination_twins,
         );
     }
 
@@ -1036,6 +1075,20 @@ mod tests {
             lane_points(&project, &fx_id),
             &[point(4.0, 0.9), point(4.0, 0.4), point(4.0, 0.5), point(8.0, 0.8)]
         );
+    }
+
+    #[test]
+    fn single_move_onto_exact_twin_keeps_both_and_undoes() {
+        let (mut project, fx_id) = project_with_effect();
+        let original = vec![point(4.0, 0.5), point(8.0, 0.5), point(12.0, 0.9)];
+        install_lane(&mut project, &fx_id, original.clone());
+        let mut cmd = MoveAutomationPointCommand::new(
+            GraphTarget::Effect(fx_id.clone()), "amount", point(4.0, 0.5), point(8.0, 0.5),
+        );
+        cmd.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), &[point(8.0, 0.5), point(8.0, 0.5), point(12.0, 0.9)]);
+        cmd.undo(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), original.as_slice());
     }
 
     #[test]

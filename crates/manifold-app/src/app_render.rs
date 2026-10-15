@@ -2393,16 +2393,18 @@ impl Application {
                 transport_cache: &mut self.transport_cache,
             },
             |ui_root, project, selection, active_layer, redraw| {
-                // Per-frame drag polling with auto-scroll (move/trim/rubber-band).
+                // Per-frame drag polling with auto-scroll (move/trim/rubber-band and
+                // automation point/segment/group/marquee/pencil gestures).
                 // Continues edge autoscroll when the mouse is stationary; also
                 // drives the live readout, which must reflect the post-poll
                 // (already-snapped) clip state.
-                use manifold_ui::interaction_overlay::DragMode;
+                use manifold_ui::interaction_overlay::{DragMode, InteractionOverlay};
                 let drag_mode = overlay.drag_mode();
                 if matches!(
                     drag_mode,
                     DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect
-                ) {
+                ) || InteractionOverlay::autoscrolls_at_edge(drag_mode)
+                {
                     let tx = content_tx.expect("content thread spawned before a drag");
                     let mut host = crate::editing_host::AppEditingHost::new(
                         project.edit(ui_edits, tx),

@@ -334,4 +334,13 @@ pub trait TimelineInputHost {
     /// Duplicate the selected automation phrase immediately after its end,
     /// using one grid interval for a single point, as one undoable operation.
     fn duplicate_selected_automation(&mut self);
+
+    /// Arrow-key nudge of the selected automation breakpoints as one undo
+    /// entry. `beat_delta` is the signed move along the timeline;
+    /// `value_steps` is signed percent-of-range steps (1.0 normal, 0.1 fine;
+    /// a stepped lane moves one whole step regardless). Returns `true` when
+    /// breakpoints were selected, so the key does not also nudge clips.
+    fn nudge_selected_automation(&mut self, _beat_delta: f32, _value_steps: f32) -> bool {
+        false
+    }
 }

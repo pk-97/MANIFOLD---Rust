@@ -51,6 +51,8 @@ use coordinate::GridSubdivision;
 pub use model::{
     AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion,
     TimelineOverlays, TrackInfo, ViewportAutomationLane, ViewportClip, clip_zones,
+    AUTOMATION_TITLE_NAME_H, AUTOMATION_TITLE_PAD_TOP, AUTOMATION_TITLE_VALUE_GAP,
+    AUTOMATION_TITLE_VALUE_H, automation_label_prefix, automation_title_has_value_line,
 };
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 // `zone_widths` is the trim-rule core `clip_zones` wraps — `clip_hit_tester`
@@ -102,6 +104,12 @@ pub struct TimelineViewportPanel {
     /// Screen geometry for every visible lane, rebuilt eagerly by every
     /// mutator of its inputs so per-event and per-frame reads never allocate.
     automation_lane_screens: Vec<AutomationLaneScreen>,
+    /// `(layer, lane)` index of each screen's source lane, so a playhead move
+    /// refreshes the title values without rebuilding the geometry.
+    automation_lane_sources: Vec<(usize, usize)>,
+    /// Sizes the lane titles when the screens rebuild. The app installs the
+    /// same measurer its trees draw with.
+    text_measure: Box<dyn crate::text::TextMeasure>,
 
     // Per-layer bitmap renderers (None for group layers)
     bitmap_renderers: Vec<Option<crate::bitmap_renderer::LayerBitmapRenderer>>,
@@ -346,6 +354,8 @@ impl TimelineViewportPanel {
             automation_lanes_by_layer: Vec::new(),
             automation_lane_heights: Vec::new(),
             automation_lane_screens: Vec::new(),
+            automation_lane_sources: Vec::new(),
+            text_measure: Box::new(crate::text::HeuristicTextMeasure),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: Beats::ZERO,
@@ -1023,6 +1033,7 @@ impl TimelineViewportPanel {
     fn rebuild_automation_lane_screens(&mut self) {
         let mut out = std::mem::take(&mut self.automation_lane_screens);
         out.clear();
+        self.automation_lane_sources.clear();
         let tx0 = self.tracks_rect.x;
         let tx1 = self.tracks_rect.x_max();
         let ty0 = self.tracks_rect.y;
@@ -1061,6 +1072,8 @@ impl TimelineViewportPanel {
                 strip_y += lane_h;
 
                 let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
+                let (title_rect, title_value_w) =
+                    model::automation_title_rect(&*self.text_measure, strip_rect, lane);
 
                 // Segment-aware geometry keeps exact breakpoint attachment and
                 // gives Hold segments their vertical edge. Curves receive more
@@ -1130,7 +1143,12 @@ impl TimelineViewportPanel {
                         .then(|| lane.points.first())
                         .flatten()
                         .map(|p| lane.param_min + p.value_norm * (lane.param_max - lane.param_min)),
+                    display: lane.display.clone(),
+                    title_rect,
+                    title_value_w,
+                    playhead_value: lane.denormalize(lane.value_at_norm(self.playhead_beat)),
                 });
+                self.automation_lane_sources.push((i, lane_index));
             }
         }
         self.automation_lane_screens = out;
@@ -1353,7 +1371,29 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_playhead(&mut self, beat: Beats) {
-        self.playhead_beat = beat;
+        if self.playhead_beat != beat {
+            self.playhead_beat = beat;
+            self.refresh_automation_playhead_values();
+        }
+    }
+
+    /// Install the measurer the lane titles size with, then re-lay them out.
+    pub fn set_text_measure(&mut self, measure: Box<dyn crate::text::TextMeasure>) {
+        self.text_measure = measure;
+        self.rebuild_automation_lane_screens();
+    }
+
+    fn refresh_automation_playhead_values(&mut self) {
+        let beat = self.playhead_beat;
+        for (screen, &(layer, index)) in self
+            .automation_lane_screens
+            .iter_mut()
+            .zip(&self.automation_lane_sources)
+        {
+            if let Some(lane) = self.automation_lanes_by_layer.get(layer).and_then(|l| l.get(index)) {
+                screen.playhead_value = lane.denormalize(lane.value_at_norm(beat));
+            }
+        }
     }
 
     pub fn set_insert_cursor(&mut self, beat: Beats) {
@@ -2383,6 +2423,7 @@ mod tests {
                 param_max: 1.0,
                 whole_numbers: false,
                 placeholder: true,
+                display: crate::view::UiLaneDisplay::default(),
             },
         }]);
 
@@ -2426,6 +2467,7 @@ mod tests {
                 param_max: 1.0,
                 whole_numbers: false,
                 placeholder: false,
+                display: crate::view::UiLaneDisplay::default(),
             },
         }]);
 

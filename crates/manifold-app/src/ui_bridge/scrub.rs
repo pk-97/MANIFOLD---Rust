@@ -611,6 +611,18 @@ impl ResolvedScrub {
     }
 }
 
+/// End a param gesture: clear the slot and release the pointer hold its Begin
+/// sent. Every Commit exit of the Param arm runs this; a lost release would
+/// keep armed recording writing the frozen value until the transport stops.
+fn end_param_gesture(ctx: &mut DispatchCtx) {
+    if let Some(ResolvedScrub::Param { target, param_id, .. }) = ctx.scrub.active.take() {
+        ContentCommand::send(
+            ctx.content_tx,
+            ContentCommand::AutomationHold { target, param_id, held: false },
+        );
+    }
+}
+
 /// Dispatch a scrub gesture (`PanelAction::Scrub`). Resolves the address and
 /// runs the phase's operation — same commands, same one-undo-entry-per-gesture
 /// cadence the retired per-family trios produced (D4 parity oracle:
@@ -646,11 +658,15 @@ pub(crate) fn dispatch_scrub(
             param_id.as_ref(),
         )
     {
-        if matches!(phase, ScrubPhase::Begin) {
-            crate::content_command::ContentCommand::send(
+        match phase {
+            ScrubPhase::Begin => crate::content_command::ContentCommand::send(
                 ctx.content_tx,
                 crate::content_command::ContentCommand::GraphEditRejected(reason.into()),
-            );
+            ),
+            // A lock that arrived mid-gesture still ends the gesture: the
+            // hold sent at Begin must be released.
+            ScrubPhase::Commit => end_param_gesture(ctx),
+            ScrubPhase::Move(_) => {}
         }
         return DispatchResult::handled();
     }
@@ -709,6 +725,17 @@ pub(crate) fn dispatch_scrub(
                                 param_id.clone(),
                             );
                         }
+                        // The slider is under the pointer until Commit: armed
+                        // Touch recording keeps writing it while still and
+                        // ends the take on release.
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::AutomationHold {
+                                target: target.clone(),
+                                param_id: param_id.clone(),
+                                held: true,
+                            },
+                        );
                         ctx.scrub.active = Some(ResolvedScrub::Param {
                             target: target.clone(),
                             param_id: param_id.clone(),
@@ -795,7 +822,7 @@ pub(crate) fn dispatch_scrub(
                         );
                     }
                 }
-                ctx.scrub.active = None;
+                end_param_gesture(ctx);
                 DispatchResult::handled()
             }
         },

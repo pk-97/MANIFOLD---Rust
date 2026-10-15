@@ -317,7 +317,7 @@ impl UIState {
     }
 
     pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
-        let height = height.clamp(64.0, 240.0);
+        let height = height.clamp(crate::color::AUTOMATION_LANE_MIN_HEIGHT, crate::color::AUTOMATION_LANE_MAX_HEIGHT);
         let previous = self.automation_lane_heights.insert((target, param_id), height);
         if previous != Some(height) && self.automation_mode_visible {
             self.lane_heights_view += 1;

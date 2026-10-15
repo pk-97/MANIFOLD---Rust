@@ -1437,6 +1437,16 @@ impl TimelineInputHost for AppInputHost<'_> {
         ), crate::content_command::touch::AUTOMATION));
     }
 
+    fn nudge_selected_automation(&mut self, beat_delta: f32, value_steps: f32) -> bool {
+        self.project.with_sent(|p| (automation::nudge_selected(
+            p,
+            self.selection,
+            self.content_tx,
+            Beats::from_f32(beat_delta),
+            value_steps,
+        ), crate::content_command::touch::AUTOMATION))
+    }
+
     fn delete_selected_automation_points(&mut self) {
         self.project.with_sent(|p| (automation::delete_selected(
             p,

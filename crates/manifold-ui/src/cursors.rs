@@ -31,6 +31,9 @@ pub enum TimelineCursor {
     /// ⊘ not-allowed. Unity: `Cursors.SetBlocked()`
     /// Used for: invalid cross-layer drag (video↔generator)
     Blocked,
+    /// Open hand: Alt over an automation segment, grabbing it to bend the
+    /// curve. Distinct from the plain segment move's vertical arrows.
+    Bend,
 }
 
 /// Tracks the current cursor state to avoid redundant winit calls.
@@ -101,6 +104,7 @@ impl TimelineCursor {
             TimelineCursor::ResizeVertical => "RowResize",
             TimelineCursor::Move => "Move",
             TimelineCursor::Blocked => "NotAllowed",
+            TimelineCursor::Bend => "Grab",
         }
     }
 }
@@ -110,10 +114,11 @@ impl From<crate::automation_hit_tester::AutomationOperation> for TimelineCursor 
         use crate::automation_hit_tester::AutomationOperation as Op;
         match operation {
             Op::Point => Self::Move,
-            Op::Segment | Op::Bend | Op::Resize => Self::ResizeVertical,
+            Op::Segment | Op::Resize => Self::ResizeVertical,
+            Op::Bend => Self::Bend,
             Op::Insert | Op::Draw | Op::Marquee => Self::Crosshair,
             Op::Blocked => Self::Blocked,
-            Op::Header => Self::Default,
+            Op::Title => Self::Default,
         }
     }
 }

@@ -585,7 +585,7 @@ pub const EXIT_PATH_HOVER: Color32 = Color32::new(58, 58, 63, 255);
 pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
 
 // ── Overview strip ──────────────────────────────────────────────────
-pub const OVERVIEW_BG: Color32 = Color32::new(15, 15, 17, 255);
+pub const OVERVIEW_BG: Color32 = Color32::new(34, 34, 40, 255);
 pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 120);
 pub const OVERVIEW_VIEWPORT_BORDER: Color32 = Color32::new(120, 170, 245, 200);
 pub const OVERVIEW_PLAYHEAD: Color32 = RED_ACTIVE;
@@ -913,7 +913,16 @@ pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 // Engaging automation mode grows a content track by one strip per enabled
 // lane — `CoordinateMapper::layer_height` is the single place this height
 // actually applies (never re-derived elsewhere).
-pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 96.0;
+pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 60.0;
+/// Resize-grip bounds for one lane strip.
+pub const AUTOMATION_LANE_MIN_HEIGHT: f32 = 36.0;
+pub const AUTOMATION_LANE_MAX_HEIGHT: f32 = 240.0;
+/// The curve spans the whole strip except this much above and below, so a
+/// dot at the range end keeps its full radius inside the strip.
+pub const AUTOMATION_CURVE_PAD_Y: f32 = 6.0;
+/// The lane title: parameter name, then its value at the playhead.
+pub const AUTOMATION_TITLE_FONT: u16 = FONT_TITLE;
+pub const AUTOMATION_TITLE_VALUE_FONT: u16 = FONT_LABEL;
 /// Strip background — a subtle recess so the lane reads as its own row
 /// within the taller track, distinct from the routing-form area above it.
 pub const AUTOMATION_STRIP_BG: Color32 = Color32::new(20, 20, 22, 255);

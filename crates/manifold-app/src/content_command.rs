@@ -147,6 +147,13 @@ pub enum ContentCommand {
     /// `AutomationBackToArrangement` — no undo entry. Sent by the transport
     /// bar's ARM button (`PanelAction::ToggleAutomationArm`).
     AutomationSetArmed(bool),
+    /// A pointer pressed (`held`) or let go of a param slider. While armed, a
+    /// held param keeps recording its value while still; release ends its take.
+    AutomationHold {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        held: bool,
+    },
 
     // ── Audio ──────────────────────────────────────────────────────
     /// Set which send the Audio Setup spectrogram scope is showing (`None` =

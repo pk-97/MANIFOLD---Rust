@@ -327,6 +327,15 @@ pub fn layer_automation_lanes_to_ui_with_view(
         push_chosen_placeholder_lane(layer, target, param_id, &mut out);
     }
 
+    let layer_color = manifold_ui::node::Color32::from_f32(
+        layer.layer_color.r,
+        layer.layer_color.g,
+        layer.layer_color.b,
+        1.0,
+    );
+    for lane in &mut out {
+        lane.display.layer_color = layer_color;
+    }
     out.retain(|lane| {
         !hidden_lanes
             .iter()
@@ -408,7 +417,20 @@ fn push_chosen_placeholder_lane(
         param_max: pmax,
         whole_numbers: whole,
         placeholder: true,
+        display: lane_display(p),
     });
+}
+
+/// The inspector row's display facts for one lane, so the lane prints the
+/// value the way the slider does.
+fn lane_display(p: &manifold_core::params::Param) -> manifold_ui::view::UiLaneDisplay {
+    manifold_ui::view::UiLaneDisplay {
+        param_name: p.spec.name.clone(),
+        layer_color: manifold_ui::node::Color32::TRANSPARENT,
+        is_angle: p.spec.is_angle,
+        value_labels: (!p.spec.value_labels.is_empty()).then(|| p.spec.value_labels.clone().into()),
+        unit: p.spec.unit,
+    }
 }
 
 /// Lane label prefix, in order: the scene modifier that owns the param, the
@@ -469,6 +491,7 @@ fn push_instance_automation_lanes(
             param_max: pmax,
             whole_numbers: whole,
             placeholder: false,
+            display: lane_display(p),
         });
     }
 }

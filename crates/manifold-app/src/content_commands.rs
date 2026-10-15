@@ -998,6 +998,9 @@ impl ContentThread {
                 self.engine.set_automation_armed(armed);
                 self.engine.mark_compositor_dirty_now();
             }
+            ContentCommand::AutomationHold { target, param_id, held } => {
+                self.engine.set_automation_hold(target, param_id, held);
+            }
 
             // ── Editing ────────────────────────────────────────────
             ContentCommand::GraphEditRejected(message) => self.report_graph_edit_rejection(message),

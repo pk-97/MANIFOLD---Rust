@@ -1,6 +1,6 @@
 # Automation Lanes — Design
 
-**Status: SHIPPED — P1–P4 on main 2026-07-04; P5 (section 7 (UI/UX) addendum) partially shipped and merged 2026-07-07 — the P5 status block after section 10 (Phasing) is exact on landed vs. remaining. Owed: VD-001 (LANES live confirm) — Peter confirms LANES lights live and ARM-records a first lane.**
+**Status: SHIPPED — P1–P4 on main 2026-07-04; P5 (section 7 (UI/UX) addendum) partially shipped; the P5 status block after section 10 (Phasing) is exact on landed vs. remaining. Lane editing UX reworked on feat/automation-ux (BUG-5bwzr (automation lanes pro-grade editing UX)). Owed: VD-001 (LANES live confirm); BUG-5bwzr.12 (automation reach); the two lane-title click beads under BUG-5bwzr.**
 **Prerequisites: none. SESSION_MODE_DESIGN section 2 (Hard dependency edges) reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) and section 8 (Execution protocol) before any phase; audit claims are a 2026-07-02 snapshot — run the section 8.3 (pre-flight) check first.**
 
@@ -141,7 +141,7 @@ Ableton semantics, copied:
   stops writing. The lane data is untouched.
 - **Back to Arrangement** clears latches and resumes lanes: one global action
   (transport-bar button, lights up red when any latch is set, exactly like
-  Live) + per-lane re-enable in the lane UI.
+  Live) + per-lane Restore Automation in the lane menu (clicking the lane title to re-enable is not built: bead "Automation lane title: click re-enables an overridden lane" under BUG-5bwzr).
 - Latches are **runtime-only** (never serialized). Stored as an
   `AHashMap<(PresetId, ParamId), ()>` (or set) owned by the playback side, not
   the `Project`. Cleared on project load and on transport... no — Ableton does
@@ -173,9 +173,11 @@ latching an override.
 - Armed + playing + `touched` → append/replace points at `current_beat` with
   the current `base` (the post-One-Euro smoothed value for Ableton sources —
   record what was applied, not the raw wire).
-- While a touch is "held" (touched again within a short window, ~2 beats of
-  inactivity ends the gesture), successive frames overwrite the beat range
-  being passed — i.e. punch-over, Ableton overwrite behavior. On gesture end,
+- A held slider keeps writing and its release ends the take. MIDI and OSC
+  have no release event, so they end the take after ~2 beats of inactivity.
+  Holds clear at stop, pause and disarm. While held, successive frames overwrite
+  the beat range being passed — punch-over, Ableton overwrite behavior. A loop
+  re-pass overwrites only the beats it covers. On gesture end,
   the recorded segment joins the existing curve with boundary points at the
   punch-in/out beats (so the old curve resumes exactly — Live's behavior).
   Exact representable-beat guards preserve dense samples outside the take;
@@ -210,15 +212,14 @@ target + `param_id`), not indices — same discipline as
 ## 7. UI / UX (decided: copy Ableton's model — Peter, 2026-07-02)
 
 Interaction feedback contract (2026-09-14): lane chrome identifies layer-owned
-arrangement automation. Default lanes are 160 px; resizing retains a 64 px
-minimum. Header, plot, and footer geometry is shared by rendering and input;
+arrangement automation. Lanes have no header band and default to 60 px; resizing keeps them between 36 and 240 px. A large right-edge title shows the parameter name in the layer colour, the value at the playhead in parameter units, and an overridden tag. Only the title's own bare rect hits the title; right-click anywhere in a lane opens the lane menu. Plot and footer geometry is shared by rendering and input;
 chrome consumes clicks without creating points. Automation uses a cyan accent,
 with selected/hovered points and segments highlighted and overridden lanes dimmed.
 Hover feedback identifies the operation before pressing; active feedback remains
 bound to the captured gesture until release or cancellation. Point values and
 insertion previews use the same beat snap, parameter range, and integer rounding
 as editing. One click in empty plot space or on a segment inserts a point;
-Shift-click deselects and a bare drag selects a region. Segment clicks insert,
+Shift-click toggles a point's selection and a bare drag selects a region. Segment hits use distance to the drawn curve and Bend has its own cursor. Segment clicks insert,
 segment drags move vertically, and Alt-drag bends continuous parameters. Integer
 segments remain stepped. Draw mode takes precedence over point/segment drags.
 The corresponding inspector parameter receives a selection outline. Modifier
@@ -285,10 +286,15 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 
 - **Automation mode toggle** (Live's `A`): show/hide automation across the
   timeline; lanes draw as a cyan breakpoint line beneath the layer.
-- **Click on the line** adds a breakpoint (dot); **drag** moves it (snapped
-  to the timeline grid); **Delete** removes the selection. Repeated clicks
-  select the dot without deleting it; Shift-click toggles its selection.
-- Every lane uses single-click insertion, including empty placeholders.
+- **Click on the line** adds a breakpoint (dot); **drag** moves it. A point
+  drag keeps its beat until 4 px of horizontal travel, then snaps to the grid.
+  A single-point drag clamps between its neighbours and a drop never deletes
+  points. Toggles are stepped params. **Delete** removes the selection; a plain
+  click on a point deletes it; Shift-click toggles its selection. Arrow keys nudge selected points
+  (grid step horizontally, 1% vertically, Shift 0.1%; stepped lanes move 1) and
+  stop at unselected points. Shift-marquee adds to the selection. Automation
+  drags edge-autoscroll horizontally once they move in time.
+- Every lane uses single-click insertion, including empty placeholders. Readouts (drag bubble, range labels, title, typed editor) use the inspector formatter param_value_text, so units and enum names show.
   Shift-click away from the line deselects without changing the curve.
   Selected dots draw larger and white. A moved point remains selected at its new
   beat and value; hiding automation or undo/redo clears point selections.
@@ -309,7 +315,7 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   clears stale selection/reveal state, and closes its placeholder. The lane
   menu also offers **Clear points** to keep an empty lane open.
   Master and group automation editors remain deferred.
-- **Drag the grip at the bottom-left of a lane** to resize it from 64–240px.
+- **Drag the grip at the bottom-left of a lane** to resize it from 36–240px.
   Heights are session-only UI state keyed by the existing target/parameter
   address. Mapper row totals and visible strips use the same resolved heights;
   folding a track preserves its size without reserving hidden space.
@@ -513,8 +519,7 @@ reviewable arc; P3/P4 independent after.
 - **Deferred:** automating driver/envelope/audio-mod fields themselves
   (rate, trim, depth — "automate the LFO's rate knob"); clip-relative
   envelopes; automation shapes beyond curvature (S-curves, steps-with-slew);
-  lane consolidation/simplify (point-thinning on record exists implicitly via
-  gesture overwrite — a Douglas-Peucker pass is polish).
+  lane consolidation/simplify (recording already thins streaming samples with a slope cone at THINNING_TOLERANCE; later consolidation of drawn lanes is open).
 - **Rejected:** base-relative (bipolar-depth) driver mode as part of this
   work — it changes existing project behavior and duplicates what automating
   driver fields will do better; a fifth modulation phase in
