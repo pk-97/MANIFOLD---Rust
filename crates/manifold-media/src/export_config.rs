@@ -30,6 +30,9 @@ pub struct ExportConfig {
     /// Derived on the content thread from timeline markers; false means
     /// today's single-export behavior (docs/SECTION_EXPORT_DESIGN.md D4/D5).
     pub split_at_markers: bool,
+    /// Header metadata as (key, value) pairs, passed to ffmpeg as `-metadata` during the
+    /// audio mux. Video-only exports skip the mux and get none. Empty = none.
+    pub metadata: Vec<(String, String)>,
 }
 
 impl ExportConfig {
@@ -38,3 +41,4 @@ impl ExportConfig {
         self.audio_path.as_ref().is_some_and(|p| !p.is_empty())
     }
 }
+

@@ -319,6 +319,7 @@ impl Application {
             audio_start_beat: 0.0,
             audio_encoder_delay: 0.0,
             split_at_markers: project.settings.split_at_markers,
+            metadata: Vec::new(),
         };
 
         log::info!(

@@ -138,6 +138,7 @@ fn run_export(args: &ExportReproArgs) -> Result<(), String> {
             audio_start_beat: 0.0,
             audio_encoder_delay: 0.0,
             split_at_markers: false,
+            metadata: Vec::new(),
         },
         &cmd_rx,
         &state_tx,
