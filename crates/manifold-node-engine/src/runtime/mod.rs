@@ -52,7 +52,7 @@ pub(crate) mod segments;
 }
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::freeze::install::prewarm_worker_pending_count;
-use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
+use segments::{SegmentMember, SegmentRefusal, classify_segment_member, segment_run, build_segment_cards, resolve_segment_bindings};
 
 manifold_core::testkit_visible! {
 #[doc(hidden)]

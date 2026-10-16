@@ -35,6 +35,81 @@ pub(super) fn build_segment_cards(
     cards
 }
 
+/// A fused segment that cannot be built with every member's params live. The
+/// chain build refuses the segment by its cache key and rebuilds its cards one
+/// by one.
+pub(crate) struct SegmentRefusal {
+    pub(crate) key: u64,
+    effect_ids: Vec<EffectId>,
+    reason: String,
+}
+
+impl SegmentRefusal {
+    pub(crate) fn new(key: u64, members: &[&PresetInstance], reason: String) -> Self {
+        Self { key, effect_ids: members.iter().map(|fx| fx.id.clone()).collect(), reason }
+    }
+}
+
+impl std::fmt::Display for SegmentRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ids: Vec<&str> = self.effect_ids.iter().map(|id| id.as_str()).collect();
+        write!(f, "segment of effects [{}] refused: {}", ids.join(", "), self.reason)
+    }
+}
+
+/// Every member card's static and user bindings, resolved against the segment
+/// splice (`graph` + `node_map`), in member order. `Err` names each binding
+/// that did not resolve; the caller refuses the segment rather than build a
+/// member with params dropped.
+pub(crate) fn resolve_segment_bindings(
+    view: &crate::freeze::install::SegmentView,
+    members: &[&PresetInstance],
+    graph: &Graph,
+    node_map: &[(NodeId, NodeInstanceId)],
+) -> Result<Vec<Vec<ResolvedBinding>>, String> {
+    let mut resolved = Vec::with_capacity(members.len());
+    let mut missing: Vec<String> = Vec::new();
+    for (seg_idx, fx) in members.iter().enumerate() {
+        let prefix = crate::freeze::segment::card_prefix(seg_idx);
+        let Some(card_static) = view.card_bindings.get(seg_idx) else {
+            missing.push(format!("{} has no bindings in the segment", fx.id.as_str()));
+            continue;
+        };
+        let user_bindings = fx.user_param_bindings();
+        let mut bindings = Vec::with_capacity(card_static.len() + user_bindings.len());
+        for b in card_static {
+            match ResolvedBinding::from_static(b, node_map) {
+                Some(rb) => bindings.push(rb),
+                None => missing.push(format!("{} param {}", fx.id.as_str(), b.id.as_ref())),
+            }
+        }
+        for core in user_bindings.iter() {
+            // Repoint into the segment namespace: a fused-away target goes
+            // through the segment retarget map; a surviving target resolves
+            // by prefixing its stable node id.
+            let prefixed_key = (format!("{prefix}{}", core.node_id.as_str()), core.inner_param.clone());
+            let mut c = core.clone();
+            if let Some((fused_id, field)) = view.retarget.get(&prefixed_key) {
+                c.node_id = fused_id.clone();
+                c.inner_param = field.clone();
+                c.convert = crate::freeze::install::convert_for_fused_field(c.convert);
+            } else {
+                c.node_id = NodeId::new(prefixed_key.0.clone());
+            }
+            match ResolvedBinding::from_user(&c, graph, node_map) {
+                Some(rb) => bindings.push(rb),
+                None => missing.push(format!("{} user param {}", fx.id.as_str(), core.id)),
+            }
+        }
+        resolved.push(bindings);
+    }
+    if missing.is_empty() {
+        Ok(resolved)
+    } else {
+        Err(format!("bindings did not resolve: {}", missing.join("; ")))
+    }
+}
+
 manifold_core::testkit_visible! {
 /// Chain-fusion segment eligibility for one card (docs/CHAIN_FUSION_DESIGN.md).
 /// Shared between the chain build and the project-load prewarm so the two can
@@ -157,5 +232,125 @@ pub fn prewarm_project_chain_segments(project: &manifold_core::project::Project)
                 &primitives,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::freeze::install::{self, SegmentLookup, SegmentView};
+    use crate::param_binding::{ParamBinding, ParamConvert, ParamId, ParamTarget};
+    use std::borrow::Cow;
+
+    fn binding(id: &'static str, node: &str) -> ParamBinding {
+        ParamBinding {
+            id: ParamId::from(id),
+            label: Cow::Borrowed("Param"),
+            default_value: 0.0,
+            target: ParamTarget::Node { node_id: NodeId::new(node), param: Cow::Borrowed("gain") },
+            convert: ParamConvert::Float,
+            scale: 1.0,
+            offset: 0.0,
+            min: 0.0,
+            max: 1.0,
+            curve: manifold_core::macro_bank::MacroCurve::Linear,
+            invert: false,
+            default_mirrors_node_param: false,
+        }
+    }
+
+    fn passthrough_def(name: &str) -> EffectGraphDef {
+        serde_json::from_value(serde_json::json!({
+            "version": 3, "name": name,
+            "nodes": [
+                {"id": 0, "nodeId": "source", "typeId": "system.source"},
+                {"id": 1, "nodeId": "final_output", "typeId": "system.final_output"}
+            ],
+            "wires": [{"fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in"}]
+        }))
+        .expect("passthrough def parses")
+    }
+
+    fn view_of(def: &EffectGraphDef, type_id: &'static str) -> Arc<LoadedPresetView> {
+        Arc::new(LoadedPresetView {
+            type_id: PresetTypeId::new(type_id),
+            canonical_def: Arc::new(def.clone()),
+            bindings: vec![binding("gain", "map")],
+            fused_retarget: Default::default(),
+            mesh_rules: Default::default(),
+        })
+    }
+
+    /// A segment member whose binding has no node in the fused splice refuses
+    /// the whole segment, naming the effect, and the next lookup of that
+    /// segment is Refused, so the build splices every member on its own with
+    /// its own bindings. A neighbour can never leave a card's params dead.
+    #[test]
+    fn unresolvable_member_binding_refuses_the_segment() {
+        let members = [
+            PresetInstance::new(PresetTypeId::new("SegA")),
+            PresetInstance::new(PresetTypeId::new("SegB")),
+        ];
+        let member_refs: Vec<&PresetInstance> = members.iter().collect();
+        let graph = Graph::new();
+        let node_map = vec![(NodeId::new("c0.map"), NodeInstanceId(0))];
+        let mut view = SegmentView {
+            def: passthrough_def("segment"),
+            card_bindings: vec![vec![binding("gain", "c0.map")], vec![binding("gain", "c1.map")]],
+            retarget: Default::default(),
+            mesh_rules: Default::default(),
+        };
+
+        let err = resolve_segment_bindings(&view, &member_refs, &graph, &node_map)
+            .expect_err("a member binding with no node must refuse the segment");
+        assert!(err.contains(members[1].id.as_str()), "refusal names the member: {err}");
+        assert!(!err.contains(members[0].id.as_str()), "only the broken member is named: {err}");
+
+        view.card_bindings[1] = vec![binding("gain", "c0.map")];
+        let resolved = resolve_segment_bindings(&view, &member_refs, &graph, &node_map)
+            .expect("every binding resolves");
+        assert_eq!(resolved.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1]);
+
+        let defs = [passthrough_def("refused-a"), passthrough_def("refused-b")];
+        let cards: Vec<(EffectGraphDef, Arc<LoadedPresetView>)> = defs
+            .iter()
+            .zip(["SegA", "SegB"])
+            .map(|(d, t)| (d.clone(), view_of(d, t)))
+            .collect();
+        let refs: Vec<_> = cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
+        install::refuse_segment(install::segment_key(&refs));
+        assert!(
+            matches!(install::fused_segment_view_for(&cards), SegmentLookup::Refused),
+            "a refused segment must build its cards one by one",
+        );
+    }
+
+    /// The segment and fused-effect cache keys cover the bindings a compiled
+    /// view carries: the same graph with a different binding list is a
+    /// different entry, so no card inherits another card's bindings.
+    #[test]
+    fn fused_cache_keys_cover_bindings() {
+        let def = passthrough_def("keyed");
+        let a = view_of(&def, "KeyA");
+        let b = view_of(&def, "KeyA");
+        assert_eq!(
+            install::fused_effect_cache_key(&def, &a),
+            install::fused_effect_cache_key(&def, &b),
+            "equal inputs share an entry",
+        );
+        let mut scaled = view_of(&def, "KeyA");
+        Arc::get_mut(&mut scaled).expect("unique").bindings[0].scale = 2.0;
+        assert_ne!(
+            install::fused_effect_cache_key(&def, &a),
+            install::fused_effect_cache_key(&def, &scaled),
+        );
+        assert_ne!(
+            install::fused_effect_cache_key(&def, &a),
+            install::fused_effect_cache_key(&def, &view_of(&def, "KeyC")),
+        );
+        assert_ne!(
+            install::segment_key(&[(&def, a.as_ref()), (&def, a.as_ref())]),
+            install::segment_key(&[(&def, a.as_ref()), (&def, scaled.as_ref())]),
+        );
     }
 }

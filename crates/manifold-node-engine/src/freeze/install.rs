@@ -399,7 +399,7 @@ pub fn fused_effect_cache_len_for_test() -> usize {
 /// fuse retargets them onto the fused nodes (refusing, → `None` → unfused, if one
 /// would strand). Selection reads only this; the blocking is just memoize-on-miss.
 pub fn fused_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
-    let key = effect_def_content_key(def);
+    let key = fused_effect_cache_key(def, base);
     if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
     }
@@ -542,7 +542,7 @@ pub fn fused_effect_generation() -> u64 {
 /// the door for startup prewarm (`tune_all`) and direct callers, where
 /// blocking is the point. Content thread only.
 pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> FusedEffectLookup {
-    let key = effect_def_content_key(def);
+    let key = fused_effect_cache_key(def, base);
     if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return match cached {
             Some(view) => FusedEffectLookup::Ready(view),
@@ -714,10 +714,44 @@ pub fn segment_key(cards: &[(&EffectGraphDef, &LoadedPresetView)]) -> u64 {
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
     cards.len().hash(&mut h);
-    for (def, _) in cards {
-        effect_def_content_key(def).hash(&mut h);
+    for (def, view) in cards {
+        fused_effect_cache_key(def, view).hash(&mut h);
     }
     h.finish()
+}
+
+/// Key of a cached fused view: the def's structure plus every binding fact the
+/// compiled view carries (the base view's type and bindings). Two views that
+/// share WGSL but carry different bindings are different cache entries, so a
+/// card never runs with another card's binding list.
+pub fn fused_effect_cache_key(def: &EffectGraphDef, base: &LoadedPresetView) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    effect_def_content_key(def).hash(&mut h);
+    base.type_id.as_str().hash(&mut h);
+    base.bindings.len().hash(&mut h);
+    for b in &base.bindings {
+        b.id.as_ref().hash(&mut h);
+        b.label.hash(&mut h);
+        format!("{:?}|{:?}|{:?}", b.target, b.convert, b.curve).hash(&mut h);
+        for v in [b.default_value, b.scale, b.offset, b.min, b.max] {
+            v.to_bits().hash(&mut h);
+        }
+        (b.invert, b.default_mirrors_node_param).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Negative-cache a segment so every later build splices its cards one by one.
+/// Used when a segment that compiled cannot be built with all of its members'
+/// bindings live: a card's params must never depend on its neighbours.
+pub(crate) fn refuse_segment(key: u64) {
+    SEGMENT_PENDING.with(|p| {
+        p.borrow_mut().remove(&key);
+    });
+    SEGMENT_CACHE.with(|c| {
+        c.borrow_mut().insert(key, None);
+    });
 }
 
 thread_local! {
