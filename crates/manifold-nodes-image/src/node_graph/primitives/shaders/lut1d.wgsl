@@ -31,7 +31,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
 
-    let lum_raw = dot(src.rgb, vec3<f32>(0.299, 0.587, 0.114));
+    // Input is premultiplied: read luma from the straight colour, and write
+    // premultiplied so a transparent pixel stays transparent instead of
+    // carrying the palette's bottom colour at zero alpha.
+    let straight = select(vec3<f32>(0.0), src.rgb / max(src.a, 1e-4), src.a > 1e-4);
+    let lum_raw = dot(straight, vec3<f32>(0.299, 0.587, 0.114));
     let lum = max(0.0, (lum_raw - 0.5) * uniforms.contrast + 0.5);
 
     // `lum * 0.5` matches legacy fx_infrared.wgsl exactly: legacy LUT
@@ -42,6 +46,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let lut_coord = clamp(lum * 0.5, 0.0, 1.0);
     let thermal = textureSampleLevel(lut_tex, tex_sampler, vec2<f32>(lut_coord, 0.5), 0.0).rgb;
 
-    let result = mix(src.rgb, thermal, uniforms.amount);
+    let result = mix(straight, thermal, uniforms.amount) * src.a;
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, src.a));
 }
