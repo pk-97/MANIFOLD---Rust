@@ -884,7 +884,7 @@ impl ProjectIOService {
         project.saved_playhead_time = current_time;
 
         let project_name = if project.project_name.is_empty() {
-            "project"
+            "Untitled"
         } else {
             &project.project_name
         };
