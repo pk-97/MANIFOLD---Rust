@@ -295,7 +295,7 @@ impl Application {
             crate::file_dialogs::DialogAction::ExportVideo,
             host,
             &mut self.user_prefs,
-            &format!("{project_name}.mp4"),
+            project_name,
         ) else {
             return;
         };
@@ -361,7 +361,7 @@ impl Application {
             crate::file_dialogs::DialogAction::ExportFrame,
             host,
             &mut self.user_prefs,
-            &format!("{project_name}.png"),
+            project_name,
         ) else {
             self.send_content_cmd(ContentCommand::DiscardStill);
             return;

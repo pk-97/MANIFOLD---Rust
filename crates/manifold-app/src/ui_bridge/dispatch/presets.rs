@@ -64,7 +64,7 @@ pub(crate) fn dispatch_preset(
                     crate::file_dialogs::DialogAction::ExportPreset,
                     ctx.dialogs,
                     ctx.user_prefs,
-                    &format!("{}.json", id.as_str()),
+                    id.as_str(),
                 )
                 && let Err(error) = manifold_io::preset_file::export_preset(&def, &path)
             {

@@ -50,6 +50,10 @@ struct Spec {
     /// Whether the open project's folder is a useful starting point.
     project_folder: bool,
     home: HomeFallback,
+    /// Whether the last file name used is remembered per project.
+    remember_name: bool,
+    /// Extension appended to a suggested name; empty leaves it bare.
+    default_ext: &'static str,
 }
 
 const VIDEO_EXTS: &[&str] = crate::project_io::VIDEO_EXTENSIONS;
@@ -72,7 +76,13 @@ impl DialogAction {
             Self::NodeFile => ("Choose File", &[], "MANIFOLD_DialogPath_NodeFile", true, H::None),
             Self::NodeFolder => ("Choose Folder", &[], "MANIFOLD_DialogPath_NodeFolder", true, H::None),
         };
-        Spec { title, filters, pref_key, project_folder, home }
+        let (remember_name, default_ext) = match self {
+            Self::ExportVideo => (true, "mp4"),
+            Self::ExportFrame => (true, "png"),
+            Self::ExportPreset => (false, "json"),
+            _ => (false, ""),
+        };
+        Spec { title, filters, pref_key, project_folder, home, remember_name, default_ext }
     }
 }
 
@@ -127,18 +137,74 @@ pub(crate) fn pick_folder(action: DialogAction, host: DialogHost, prefs: &mut Us
     Some(path)
 }
 
-/// Save panel with `default_name` in the name field. Remembers the folder the
-/// user picked in the panel, not wherever the caller later writes the file
-/// (Save As may create a project folder inside it).
+/// Save panel. The name field is filled here, for every save-type action:
+/// see [`default_file_name`]. `untitled_stem` is the caller's name for a
+/// project (or object) that has no file yet. Remembers the folder the user
+/// picked in the panel, not wherever the caller later writes the file (Save
+/// As may create a project folder inside it), and the file name for export
+/// actions.
 pub(crate) fn save_file(
     action: DialogAction,
     host: DialogHost,
     prefs: &mut UserPrefs,
-    default_name: &str,
+    untitled_stem: &str,
 ) -> Option<PathBuf> {
+    let name_key = name_pref_key(action);
+    let last = Some(prefs.get_string(&name_key, "")).filter(|s| !s.is_empty());
+    let default_name = default_file_name(action, host.project_path, untitled_stem, last.as_deref());
     let path = build(action, host, prefs).set_file_name(default_name).save_file()?;
     remember(action, &path, prefs);
+    if action.spec().remember_name
+        && let Some(name) = path.file_name().and_then(|n| n.to_str())
+    {
+        prefs.set_string(&name_key, &format!("{}\n{name}", project_key(host.project_path)));
+        prefs.save();
+    }
     Some(path)
+}
+
+fn name_pref_key(action: DialogAction) -> String {
+    format!("{}_LastName", action.spec().pref_key)
+}
+
+/// Identity of the project a remembered export name belongs to. An unsaved
+/// project has none, so its names are never reused.
+fn project_key(project_path: Option<&Path>) -> String {
+    project_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The file name a save panel opens with. Pure, so the rules are testable.
+///
+/// Save As: the open project's file stem; an unsaved project uses
+/// `untitled_stem`. Exports: the name last used for the same export from this
+/// same project (`last` is the stored `project key\nname`), else the project's
+/// name. Other save actions: `untitled_stem` plus the action's extension.
+fn default_file_name(
+    action: DialogAction,
+    project_path: Option<&Path>,
+    untitled_stem: &str,
+    last: Option<&str>,
+) -> String {
+    let spec = action.spec();
+    let project_stem = project_path.and_then(Path::file_stem).and_then(|s| s.to_str());
+    if spec.remember_name
+        && let Some((key, name)) = last.and_then(|l| l.split_once('\n'))
+        && !key.is_empty()
+        && key == project_key(project_path)
+        && !name.is_empty()
+    {
+        return name.to_string();
+    }
+    let stem = match action {
+        DialogAction::SaveProjectAs | DialogAction::ExportVideo | DialogAction::ExportFrame => {
+            project_stem.unwrap_or(untitled_stem)
+        }
+        _ => untitled_stem,
+    };
+    match spec.default_ext {
+        "" => stem.to_string(),
+        ext => format!("{stem}.{ext}"),
+    }
 }
 
 fn build(action: DialogAction, host: DialogHost, prefs: &UserPrefs) -> rfd::FileDialog {
@@ -295,6 +361,31 @@ mod tests {
             &is_dir,
         );
         assert_eq!(got, Some("/Users/p/Movies".into()));
+    }
+
+    #[test]
+    fn save_as_defaults_to_project_file_stem() {
+        let p = Path::new("/Shows/A/Set_v2.manifold");
+        assert_eq!(default_file_name(DialogAction::SaveProjectAs, Some(p), "stale", None), "Set_v2");
+        assert_eq!(default_file_name(DialogAction::SaveProjectAs, None, "Untitled", None), "Untitled");
+    }
+
+    #[test]
+    fn export_defaults_to_project_name_then_last_name() {
+        let p = Path::new("/Shows/A/Set.manifold");
+        assert_eq!(default_file_name(DialogAction::ExportVideo, Some(p), "x", None), "Set.mp4");
+        let last = format!("{}\nSet_final.mp4", project_key(Some(p)));
+        assert_eq!(default_file_name(DialogAction::ExportVideo, Some(p), "x", Some(&last)), "Set_final.mp4");
+    }
+
+    #[test]
+    fn export_name_from_another_project_is_not_reused() {
+        let other = Path::new("/Shows/B/Other.manifold");
+        let p = Path::new("/Shows/A/Set.manifold");
+        let last = format!("{}\nOther_cut.png", project_key(Some(other)));
+        assert_eq!(default_file_name(DialogAction::ExportFrame, Some(p), "x", Some(&last)), "Set.png");
+        let unsaved = "\nOld.png";
+        assert_eq!(default_file_name(DialogAction::ExportFrame, None, "MANIFOLD_Frame", Some(unsaved)), "MANIFOLD_Frame.png");
     }
 
     #[test]
