@@ -129,8 +129,19 @@ pub(super) fn validate_mask_groups(
 /// sidecar. Retired CPU FLIP authored graphs explicitly refuse that fallback
 /// so their saved topology cannot be silently replaced. Returns None when the
 /// canonical splice itself fails or a retired graph refuses fallback.
+/// Which def [`splice_card_with_canonical_fallback`] spliced. The caller binds
+/// the card through the view that matches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SplicedDef {
+    Primary,
+    CanonicalFallback,
+}
+
+/// `canonical_relight` is the relight toggle for the canonical fallback: a
+/// fused primary carries its relight template inside the fused def, the
+/// canonical def does not.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn splice_card_with_canonical_fallback(
+pub(crate) fn splice_card_with_canonical_fallback(
     graph: &mut Graph,
     card_input: (NodeInstanceId, &'static str),
     splice_def: &EffectGraphDef,
@@ -139,10 +150,11 @@ pub(super) fn splice_card_with_canonical_fallback(
     canonical_mesh_rules: &PreparedMeshRules,
     primitives: &PrimitiveRegistry,
     relight_params: Option<&RelightParams>,
+    canonical_relight: Option<&RelightParams>,
     divergent: Option<(EffectId, PresetTypeId)>,
     preserve_authored_cpu_flip_graph: bool,
     errors: &mut Vec<ChainError>,
-) -> Option<SpliceResult> {
+) -> Option<(SpliceResult, SplicedDef)> {
     if let Some(r) = splice_def_into_chain(
         graph,
         card_input,
@@ -151,7 +163,7 @@ pub(super) fn splice_card_with_canonical_fallback(
         relight_params,
         mesh_rules,
     ) {
-        return Some(r);
+        return Some((r, SplicedDef::Primary));
     }
     if preserve_authored_cpu_flip_graph {
         eprintln!(
@@ -170,10 +182,10 @@ pub(super) fn splice_card_with_canonical_fallback(
         card_input,
         canonical_def,
         primitives,
-        relight_params,
+        canonical_relight,
         canonical_mesh_rules,
     ) {
-        Some(r) => Some(r),
+        Some(r) => Some((r, SplicedDef::CanonicalFallback)),
         None => {
             eprintln!("[chain-build-fail] canonical splice failed after fallback");
             None

@@ -53,6 +53,8 @@ pub(crate) mod segments;
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
+mod segment_bindings;
+use segment_bindings::{SegmentRefusal, resolve_segment_bindings};
 
 manifold_core::testkit_visible! {
 #[doc(hidden)]
@@ -104,6 +106,12 @@ mod persistent_slot_tests;
 
 #[cfg(test)]
 mod transient_slot_tests;
+
+#[cfg(test)]
+mod segment_bindings_tests;
+
+#[cfg(test)]
+mod groups_tests;
 
 
 

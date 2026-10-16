@@ -2,7 +2,7 @@
 //! the type it owns. The other preset_runtime submodules are facets of
 //! this type. Extracted from preset_runtime.rs (Wave 3 P3-R, design D3).
 
-use super::groups::splice_card_with_canonical_fallback;
+use super::groups::{SplicedDef, splice_card_with_canonical_fallback};
 use super::*;
 use crate::{exec::backend::Backend, ports::PortType};
 
@@ -389,6 +389,7 @@ fn warn_provisional_manifest_once(id: &EffectId) {
 /// output dimensions (D9). Bundled so the build call reads two arguments (these
 /// inputs + the optional `prior` runtime) instead of nine. Every field is a
 /// `Copy` borrow, so `try_build` destructures it and its body stays unchanged.
+#[derive(Clone, Copy)]
 pub struct ChainBuildInputs<'a> {
     /// The effects to build into the chain, in chain order.
     pub effects: &'a [PresetInstance],
@@ -497,13 +498,28 @@ impl PresetRuntime {
             return Ok(None);
         }
         let mut errors = Vec::new();
-        Self::build_into(inputs, prior, &mut errors).map(Some).ok_or(errors)
+        let mut prior = prior;
+        // A segment that cannot be built with every member's bindings live is
+        // refused (negative-cached) and the chain rebuilds with its cards one by
+        // one. Each pass refuses one segment, so the passes are bounded.
+        for _ in 0..=inputs.effects.len() {
+            let mut refusal = None;
+            let built = Self::build_into(inputs, prior.as_deref_mut(), &mut errors, &mut refusal);
+            let Some(refusal) = refusal else {
+                return built.map(Some).ok_or(errors);
+            };
+            eprintln!("[chain-segment-refused] {refusal}: its cards render one by one, unfused");
+            crate::freeze::install::refuse_segment(refusal.key);
+            errors.clear();
+        }
+        Err(errors)
     }
 
     fn build_into(
         inputs: ChainBuildInputs<'_>,
         prior: Option<&mut Self>,
         errors: &mut Vec<ChainError>,
+        refusal: &mut Option<SegmentRefusal>,
     ) -> Option<Self> {
         let ChainBuildInputs {
             effects,
@@ -594,6 +610,9 @@ impl PresetRuntime {
                 /// chain order.
                 cards: Vec<usize>,
                 view: std::sync::Arc<freeze_install::SegmentView>,
+                /// The segment cache key, so a build that cannot keep every
+                /// member's bindings live refuses exactly this segment.
+                key: u64,
             },
         }
         // Eligibility: watched card, any grouped card (wet/dry Mix seams),
@@ -629,9 +648,12 @@ impl PresetRuntime {
                 let cards = build_segment_cards(&fuse_idxs, &active_effects, primitives);
                 match freeze_install::fused_segment_view_for(&cards) {
                     freeze_install::SegmentLookup::Ready(view) => {
+                        let card_refs: Vec<_> =
+                            cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
                         units.push(SpliceUnit::Segment {
                             cards: fuse_idxs,
                             view,
+                            key: freeze_install::segment_key(&card_refs),
                         });
                     }
                     freeze_install::SegmentLookup::Pending => {
@@ -653,7 +675,10 @@ impl PresetRuntime {
                 SpliceUnit::Segment {
                     cards: seg_cards,
                     view,
+                    key,
                 } => {
+                    let members: Vec<&PresetInstance> =
+                        seg_cards.iter().map(|k| active_effects[*k].1).collect();
                     // Segment cards are ungrouped — close any open wet/dry
                     // group exactly as an ungrouped card would.
                     if let Some(closing) = open_group.take() {
@@ -697,11 +722,7 @@ impl PresetRuntime {
                         &view.mesh_rules,
                     )
                     else {
-                        // Near-unreachable: compile_segment_view verified the def
-                        // builds. Follow the canonical-splice-failure precedent
-                        // (None → passthrough this frame; the next rebuild
-                        // renders per-card).
-                        eprintln!("[chain-build-fail] fused segment splice failed");
+                        *refusal = Some(SegmentRefusal::new(*key, &members, "the fused segment did not splice".into()));
                         return None;
                     };
                     let node_map: Vec<(NodeId, NodeInstanceId)> = handles
@@ -710,59 +731,19 @@ impl PresetRuntime {
                             graph.get_node(*id).map(|inst| (inst.node_id.clone(), *id))
                         })
                         .collect();
-                    for (seg_idx, k) in seg_cards.iter().enumerate() {
+                    // Every member keeps all of its params live, or the segment
+                    // is refused and its cards build one by one: whether a card's
+                    // params work must never depend on its neighbours.
+                    let resolved = match resolve_segment_bindings(view, &members, &graph, &node_map) {
+                        Ok(resolved) => resolved,
+                        Err(reason) => {
+                            *refusal = Some(SegmentRefusal::new(*key, &members, reason));
+                            return None;
+                        }
+                    };
+                    for ((seg_idx, k), bindings) in seg_cards.iter().enumerate().zip(resolved) {
                         let (legacy_index, fx) = &active_effects[*k];
-                        let base_view = loaded_preset_view_by_id(fx.effect_type())
-                            .expect("preflight guarantees view");
                         let prefix = crate::freeze::segment::card_prefix(seg_idx);
-                        let card_static = &view.card_bindings[seg_idx];
-                        let user_bindings = fx.user_param_bindings();
-                        let mut bindings: Vec<ResolvedBinding> =
-                            Vec::with_capacity(card_static.len() + user_bindings.len());
-                        for b in card_static.iter() {
-                            match ResolvedBinding::from_static(b, &node_map) {
-                                Some(rb) => bindings.push(rb),
-                                None => record_chain_error(
-                                    errors,
-                                    ChainError::StaticBindingHandleMissing {
-                                        effect_type: base_view.type_id.clone(),
-                                        binding_id: b.id.to_string(),
-                                    },
-                                ),
-                            }
-                        }
-                        for core in user_bindings.iter() {
-                            // Repoint into the segment namespace: a fused-away
-                            // target goes through the segment retarget map; a
-                            // surviving target resolves by prefixing its stable
-                            // node id.
-                            let prefixed_key = (
-                                format!("{prefix}{}", core.node_id.as_str()),
-                                core.inner_param.clone(),
-                            );
-                            let mut c = core.clone();
-                            if let Some((fused_id, field)) = view.retarget.get(&prefixed_key) {
-                                c.node_id = fused_id.clone();
-                                c.inner_param = field.clone();
-                                c.convert = freeze_install::convert_for_fused_field(c.convert);
-                            } else {
-                                c.node_id = NodeId::new(prefixed_key.0.clone());
-                            }
-                            match ResolvedBinding::from_user(&c, &graph, &node_map) {
-                                Some(rb) => bindings.push(rb),
-                                None => record_chain_error(
-                                    errors,
-                                    ChainError::UserBindingResolveFailed {
-                                        effect_id: fx.id.clone(),
-                                        effect_type: fx.effect_type().clone(),
-                                        binding_id: core.id.clone(),
-                                        node_id: core.node_id.to_string(),
-                                        inner_param: core.inner_param.clone(),
-                                        rehydrate: false,
-                                    },
-                                ),
-                            }
-                        }
                         // The segment's def carries `c{i}.`-prefixed node ids —
                         // the same address space `node_map` is keyed in — so it
                         // resolves this card's bindings directly (BUG-1l7f).
@@ -959,7 +940,7 @@ impl PresetRuntime {
             };
             // The spliced def and its mesh-rule sidecar travel together —
             // see splice_card_with_canonical_fallback.
-            let splice_result = splice_card_with_canonical_fallback(
+            let (splice_result, spliced) = splice_card_with_canonical_fallback(
                 &mut graph,
                 card_input,
                 splice_def,
@@ -968,11 +949,21 @@ impl PresetRuntime {
                 &base_view.mesh_rules,
                 primitives,
                 relight_params,
+                fx.relight_active().then_some(&fx.relight_params),
                 (fx.graph.is_some() || fused_view.is_some())
                     .then(|| (fx.id.clone(), fx.effect_type().clone())),
                 preserve_authored_cpu_flip_graph,
                 errors,
             )?;
+            // A canonical fallback built the canonical graph, so the card binds
+            // through the canonical view: the fused view's bindings name nodes
+            // that graph does not have.
+            let (view, splice_def): (&LoadedPresetView, &EffectGraphDef) = match spliced {
+                SplicedDef::Primary => (view, splice_def),
+                SplicedDef::CanonicalFallback => {
+                    (base_view.as_ref(), base_view.canonical_def.as_ref())
+                }
+            };
             let SpliceResult {
                 output,
                 handles,

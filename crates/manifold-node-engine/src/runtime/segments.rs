@@ -35,6 +35,7 @@ pub(super) fn build_segment_cards(
     cards
 }
 
+
 manifold_core::testkit_visible! {
 /// Chain-fusion segment eligibility for one card (docs/CHAIN_FUSION_DESIGN.md).
 /// Shared between the chain build and the project-load prewarm so the two can
