@@ -384,6 +384,19 @@ impl GeneratorRenderer {
         }
     }
 
+    /// What the master-preview physics overlay needs from `layer_id`'s scene:
+    /// its accepted fluid domains (appended to `domains`) and the camera it
+    /// last rendered through. `None` when the layer has no scene camera.
+    pub fn write_physics_overlay(
+        &self,
+        layer_id: &LayerId,
+        domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
+    ) -> Option<manifold_node_engine::scene::camera::Camera> {
+        let state = self.layer_generators.get(layer_id)?;
+        state.generator.write_fluid_domains_watched(domains);
+        state.generator.rendered_camera()
+    }
+
     /// Keep local modifier addresses out of the host's node namespace.
     pub fn set_modifier_preview_node(
         &mut self,

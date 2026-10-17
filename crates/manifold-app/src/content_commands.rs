@@ -831,6 +831,9 @@ impl ContentThread {
                     self.content_pipeline.set_scene_viewport_request(request);
                 }
             }
+            ContentCommand::SetPhysicsOverlay(layer) => {
+                self.content_pipeline.set_physics_overlay(layer);
+            }
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
             }

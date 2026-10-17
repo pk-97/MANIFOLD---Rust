@@ -27,6 +27,14 @@ impl PresetRuntime {
         }
     }
 
+    /// The camera the scene last rendered through: the first node in authored
+    /// order that reports one. Read-only, for editor overlays.
+    pub fn rendered_camera(&self) -> Option<crate::scene::camera::Camera> {
+        self.extension_slots().first()?.node_map.iter().find_map(|(_, instance)| {
+            self.graph.get_node(*instance)?.node.rendered_camera()
+        })
+    }
+
     pub fn write_fluid_domains_watched(&self, output: &mut Vec<(NodeId, FluidDomainSnapshot)>) {
         if let Some(slot) = self.extension_slots().first() {
             self.write_fluid_domains(slot.effect_id, output);

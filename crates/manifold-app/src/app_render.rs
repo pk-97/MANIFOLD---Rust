@@ -909,6 +909,12 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::Root(RootAction::SceneSetupPhysicsOverlay(layer_id)) => {
+                    if let Some(tx) = self.content_tx.as_ref() {
+                        ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(layer_id.clone()));
+                    }
+                    continue;
+                }
                 PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {
                     // D7 "Open Graph Editor" empty state — same mechanism as
                     // `OpenGeneratorGraphEditor` below, addressed explicitly by

@@ -1409,6 +1409,12 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// The camera this node last rendered through, so editor overlays can sit
+    /// on its picture. A read-only observation; it never feeds the render.
+    fn rendered_camera(&self) -> Option<crate::scene::camera::Camera> {
+        None
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,

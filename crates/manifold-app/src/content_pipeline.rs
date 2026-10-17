@@ -1007,6 +1007,7 @@ pub struct ContentPipeline {
     last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
     scene_viewport_request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>,
     scene_viewport_observations: crate::scene_viewport::SceneViewportObservations,
+    physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
@@ -1181,6 +1182,7 @@ impl ContentPipeline {
             last_node_preview_info: None,
             scene_viewport_request: None,
             scene_viewport_observations: Default::default(),
+            physics_overlay: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
             clip_desc_scratch: Vec::new(),
@@ -1977,6 +1979,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         &self.scene_viewport_observations.frames
     }
 
+    pub fn set_physics_overlay(&mut self, layer: Option<manifold_core::LayerId>) {
+        self.physics_overlay.set_layer(layer);
+    }
+
+    pub fn physics_overlay_frames(&self) -> &crate::physics_overlay::PhysicsOverlayFrames {
+        &self.physics_overlay.frames
+    }
+
     /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
     #[cfg(target_os = "macos")]
     pub fn set_node_atlas_textures(
@@ -2586,6 +2596,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 self.last_rt_dispatches = gpu_gen.rt_dispatches;
                 self.last_rt_history_resets = gpu_gen.rt_history_resets;
             }
+            self.physics_overlay.record(
+                self.write_surface_index,
+                renderers.iter().find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>()),
+            );
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
             // or clear to black when nothing was captured (non-texture node).

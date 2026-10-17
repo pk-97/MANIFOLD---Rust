@@ -72,6 +72,7 @@ const KEY_ADD_FOG: u64 = 80_011;
 const KEY_NEW_SCENE: u64 = 80_012;
 const KEY_OPEN_GRAPH_EDITOR: u64 = 80_013;
 const KEY_CAMERA_SETUP: u64 = 80_025;
+const KEY_PHYSICS_OVERLAY: u64 = 80_026;
 /// Frame button offset: use offset 33 to avoid collision with Remove (20), Duplicate (21), and mod buttons (22..32)
 const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
@@ -965,6 +966,10 @@ pub struct ScenePanel {
     camera_setup_id: Option<NodeId>,
     new_scene_id: Option<NodeId>,
     open_graph_editor_id: Option<NodeId>,
+    physics_overlay_id: Option<NodeId>,
+    /// The scene layer whose physics gizmos draw over the editor's master
+    /// preview. UI-only workspace state, never saved with the project.
+    physics_overlay: Option<LayerId>,
     /// P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the ONE
     /// unified properties card — the selected outliner item's rows, filtered
     /// straight off `full_params` (the layer's REAL generator
@@ -1157,6 +1162,8 @@ impl Default for ScenePanel {
             camera_setup_id: None,
             new_scene_id: None,
             open_graph_editor_id: None,
+            physics_overlay_id: None,
+            physics_overlay: None,
             properties_card: SceneCardState::new(),
             object_modifier_cards: Vec::new(),
             object_modifier_drag: None,
@@ -1314,6 +1321,11 @@ impl ScenePanel {
         }
     }
 
+    /// The scene layer whose physics gizmos draw over the master preview.
+    pub fn physics_overlay_layer(&self) -> Option<&LayerId> {
+        self.physics_overlay.as_ref()
+    }
+
     /// Build into the inspector's Scene tab content rect
     /// (`InspectorCompositePanel::scene_content_rect`). No-op when closed.
     pub fn build_docked(&mut self, tree: &mut UITree, rect: Rect) {
@@ -1352,6 +1364,7 @@ impl ScenePanel {
         self.camera_setup_id = None;
         self.new_scene_id = None;
         self.open_graph_editor_id = None;
+        self.physics_overlay_id = None;
         self.add_object_id = None;
         self.add_light_id = None;
         self.add_force_id = None;
@@ -1505,6 +1518,18 @@ impl ScenePanel {
             );
             cy += ROW_H + ROW_GAP;
         }
+        let overlay_on = self.physics_overlay.as_ref() == Some(&vm.layer_id);
+        self.physics_overlay_id = Some(tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            toggle_btn_style(overlay_on),
+            "Physics gizmos on Master",
+            KEY_PHYSICS_OVERLAY,
+        ));
+        cy += ROW_H + ROW_GAP;
         let selected = self.resolve_selection(vm);
         cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, &selected);
         cy += ROW_GAP * 2.0;
@@ -1910,6 +1935,13 @@ impl ScenePanel {
                 (true, vec![PanelAction::Root(RootAction::SceneItemRightClicked)])
             }
             UIEvent::Click { node_id, .. } => {
+                if self.physics_overlay_id == Some(*node_id)
+                    && let Some(layer_id) = self.live_layer_id().cloned()
+                {
+                    self.physics_overlay = (self.physics_overlay.as_ref() != Some(&layer_id)).then_some(layer_id);
+                    self.view_version += 1;
+                    return (true, vec![PanelAction::Root(RootAction::SceneSetupPhysicsOverlay(self.physics_overlay.clone()))]);
+                }
                 if let Some((_, group_id)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id) {
                     let Some(vm) = self.state.as_live() else {
                         return (true, Vec::new());

@@ -9107,6 +9107,10 @@ impl EffectNode for RenderScene {
         Some(Box::new(scene_viewport::SceneViewportPass::new()))
     }
 
+    fn rendered_camera(&self) -> Option<Camera> {
+        self.prev_cam_state
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,

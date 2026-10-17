@@ -18,9 +18,14 @@
 //! through the EDITOR camera (not the wired show camera — the overlay must
 //! move with the navigation camera) and rasterized with a plain
 //! integer-stepped line draw.
+//!
+//! The physics gizmos (`physics_overlay_lines`) are the exception: the
+//! master-preview overlay projects them through the show camera instead
+//! (`docs/REALTIME_3D_DESIGN.md` D7a).
 
 use manifold_node_engine::scene::camera::Camera;
 use manifold_core::fluid_domain::FluidDomainLayout;
+use crate::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
 /// One overlay line segment in world space, with its RGBA8 color.
 #[derive(Debug, Clone, Copy)]
@@ -94,6 +99,30 @@ pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
         edge(4, 5), edge(5, 6), edge(6, 7), edge(7, 4),
         edge(0, 4), edge(1, 5), edge(2, 6), edge(3, 7),
     ]
+}
+
+/// Physics gizmos for a whole scene, in world space, appended to `out`. The
+/// master-preview overlay and the editor viewport both draw from here. Each
+/// shape family (fluid domains today; forces, colliders, sources and drains
+/// next) is one builder called below with the same `(scene, out)` shape.
+pub fn physics_overlay_lines(scene: &SceneVm, out: &mut Vec<WorldLine>) {
+    fluid_domain_overlay_lines(scene, out);
+}
+
+/// One box per fluid domain in the scene, whichever objects share it.
+pub fn fluid_domain_overlay_lines(scene: &SceneVm, out: &mut Vec<WorldLine>) {
+    for (index, object) in scene.objects.iter().enumerate() {
+        let SceneObjectVm::Known(row) = object else { continue };
+        let Some(layout) = row.fluid_domain else { continue };
+        let shared_earlier = row.liquid_domain.is_some()
+            && scene.objects[..index].iter().any(|earlier| {
+                matches!(earlier, SceneObjectVm::Known(earlier)
+                    if earlier.fluid_domain.is_some() && earlier.liquid_domain == row.liquid_domain)
+            });
+        if !shared_earlier {
+            out.extend(fluid_domain_lines(layout));
+        }
+    }
 }
 
 /// A ground-plane (XZ, y=0) grid centred at the origin. The two lines through

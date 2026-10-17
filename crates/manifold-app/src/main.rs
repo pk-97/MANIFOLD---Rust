@@ -170,6 +170,7 @@ mod window_input;
 mod live_ui;
 mod viewport_input;
 mod scene_viewport;
+mod physics_overlay;
 // P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
 mod viewport_p5c_demo;
 // P6 evidence — test-only (`#![cfg(test)]` inside), see its module doc.

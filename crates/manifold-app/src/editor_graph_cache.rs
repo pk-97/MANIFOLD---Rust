@@ -15,6 +15,9 @@ use manifold_core::project::Project;
 /// Graph edits declare Overrides; Values is left out so a slider drag does not
 /// re-diff the graph.
 const GRAPH_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::Shapes, Part::EmbeddedPresets]);
+/// Parts that can move a scene viewport's authored projection: the graph plus
+/// the owner's base values.
+pub(crate) const VIEWPORT_PARTS: ChangeSet = GRAPH_PARTS.union(ChangeSet::of(&[Part::Values]));
 
 #[derive(Default)]
 pub(crate) struct EditorGraphCache {
@@ -96,7 +99,7 @@ impl EditorGraphCache {
         target: Option<&GraphTarget>,
         parts: &PartStamps,
     ) -> ViewportDef {
-        let key = self.key(target, parts, GRAPH_PARTS.union(ChangeSet::of(&[Part::Values])));
+        let key = self.key(target, parts, VIEWPORT_PARTS);
         if let Some((cached, def)) = &self.viewport
             && *cached == key
         {

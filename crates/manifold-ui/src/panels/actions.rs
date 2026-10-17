@@ -925,6 +925,9 @@ pub enum RootAction {
     /// D7 "Open Graph Editor" empty-state action for a generator layer with
     /// no `render_scene` — reuses the existing open-editor action.
     SceneSetupOpenGraphEditor(LayerId),
+    /// The Scene panel's physics-gizmo toggle: the scene layer whose gizmos
+    /// draw over the editor's master preview, or `None` for off.
+    SceneSetupPhysicsOverlay(Option<LayerId>),
     /// The Camera header's "Use this view" (SCENE_SURFACES D14): copy the
     /// editor viewport's view into this layer's scene camera. The app owns
     /// the viewport camera, so it resolves the pose and builds the command.

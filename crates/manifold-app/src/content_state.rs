@@ -329,6 +329,9 @@ pub struct ContentState {
     /// when no node is being previewed. See [`NodePreviewInfo`].
     pub node_preview_info: Option<NodePreviewInfo>,
     pub scene_viewport_frames: crate::scene_viewport::SceneViewportFrames,
+    /// Per output surface: the camera the physics-overlay scene rendered
+    /// through, for the master preview's gizmo lines.
+    pub physics_overlay_frames: crate::physics_overlay::PhysicsOverlayFrames,
 
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. The editor canvas
@@ -681,6 +684,7 @@ impl Default for ContentState {
             active_graph_target: None,
             node_preview_info: None,
             scene_viewport_frames: std::array::from_fn(|_| None),
+            physics_overlay_frames: std::array::from_fn(|_| None),
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
             clip_atlas_layout: Arc::from([]),

@@ -1627,12 +1627,12 @@ impl Application {
         // stacked monitors) feeds the tree build, the composite and the
         // monitor blits; the pointer handlers read the same `Dock`, so
         // hit-testing tracks whatever the user dragged the columns to.
-        let output_aspect = self
+        let output_dims = self
             .content_pipeline_output
             .as_ref()
             .map(|p| p.get_dimensions())
-            .filter(|(_, h)| *h > 0)
-            .map(|(w, h)| w as f32 / h as f32);
+            .filter(|(w, h)| *w > 0 && *h > 0);
+        let output_aspect = output_dims.map(|(w, h)| w as f32 / h as f32);
         let layout = crate::editor_frame::EditorLayout::compute(&ws.dock, logical_w, logical_h, output_aspect);
         let monitor_aspect = layout.monitor_aspect;
         let canvas_x = layout.canvas.x;
@@ -2104,6 +2104,29 @@ impl Application {
                         manifold_gpu::GpuLoadAction::Load,
                         "Master Out → Sidebar",
                     );
+                    // Physics gizmos over the master image, through the
+                    // camera that rendered this exact surface (D7a). Drawn
+                    // into the drawable after the blit so they sit on top.
+                    let overlay_layer = self.ws.ui_root.scene_setup_panel.physics_overlay_layer();
+                    if let Some(frame) = self.content_state.physics_overlay_frames[front].as_ref()
+                        .filter(|frame| Some(&frame.layer) == overlay_layer)
+                        && let Some((out_w, out_h)) = output_dims
+                        && let Some(ui) = self.ui_renderer.as_mut()
+                    {
+                        let lines = ws.physics_overlay_lines.update(
+                            &self.local_project,
+                            frame,
+                            parts.key(crate::editor_graph_cache::VIEWPORT_PARTS),
+                        );
+                        let rect = manifold_ui::Rect::new(preview_x, master_img_y, preview_w, preview_h);
+                        ui.begin_frame();
+                        ui.push_immediate_clip(rect.x, rect.y, rect.width, rect.height);
+                        crate::scene_viewport::draw_world_lines(ui, rect, &frame.camera, out_w, out_h, lines);
+                        ui.pop_immediate_clip();
+                        if ui.prepare(&gpu.device, logical_w, logical_h, f64::from(scale)) {
+                            ui.render(&mut present_enc, &drawable_tex, manifold_gpu::GpuLoadAction::Load);
+                        }
+                    }
                 }
             }
         }

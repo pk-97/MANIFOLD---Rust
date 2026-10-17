@@ -117,6 +117,8 @@ pub struct Workspace {
     /// Reusable world-space editor lines appended to the viewport's gizmo
     /// lines for selected scene overlays (currently fluid domain bounds).
     pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
+    /// The master preview's physics-gizmo lines (`physics_overlay`).
+    pub physics_overlay_lines: crate::physics_overlay::PhysicsOverlayLines,
     /// The `node.scene_object` doc id the gizmo is attached to this session,
     /// set by a viewport object-pick (`viewport_gizmo::pick_object`) and
     /// cleared when the viewport closes or the def no longer resolves it
@@ -183,6 +185,7 @@ impl Workspace {
             // Largest gizmo geometry plus the persistent grid and fluid bounds
             // fit without a display-frame reallocation.
             viewport_overlay_lines: Vec::with_capacity(viewport_overlay_capacity),
+            physics_overlay_lines: Default::default(),
             viewport_selected_object: None,
             viewport_gizmo_drag: None,
             editor_frame: Default::default(),
