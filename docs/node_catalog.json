@@ -20698,6 +20698,7 @@
         "LED Strobe",
         "MaskBlobMotion",
         "MotionMosh",
+        "ParticleText",
         "StylizedFeedback",
         "Watercolor"
       ],
@@ -79331,6 +79332,27 @@
           "max": "20",
           "min": "0",
           "name": "Text Strength"
+        },
+        {
+          "default": "0",
+          "id": "text_x",
+          "max": "0.5",
+          "min": "-0.5",
+          "name": "Text X"
+        },
+        {
+          "default": "0",
+          "id": "text_y",
+          "max": "0.5",
+          "min": "-0.5",
+          "name": "Text Y"
+        },
+        {
+          "default": "0",
+          "id": "text_rotation",
+          "max": "180",
+          "min": "-180",
+          "name": "Text Rotation"
         }
       ]
     },

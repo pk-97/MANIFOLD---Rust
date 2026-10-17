@@ -11,7 +11,12 @@
 //!       --param cam_dist=31.75 --param tilt=15
 //!
 //! Params are outer-card ids from the preset's `presetMetadata.params`;
-//! anything not overridden renders at its declared default. Output is the
+//! anything not overridden renders at its declared default. The preset is a
+//! bundled id, or a path ending in `.json` to render a draft. `--string
+//! key=value` sets a string param (e.g. `text`) from frame 0, and `--string-at
+//! FRAME:key=value` changes it at that frame, the way a new clip with
+//! different text does (pair it with `--triggers FRAME` for the clip edge).
+//! Output is the
 //! same Reinhard-tonemapped, straight-alpha-over-black PNG convention the
 //! save-time thumbnail path uses (linear HDR graph output → viewable PNG).
 
@@ -35,6 +40,8 @@ struct Args {
     frames: u32,
     out: PathBuf,
     overrides: Vec<(String, f32)>,
+    /// String param changes as (frame, key, value); frame 0 is the start value.
+    strings: Vec<(u32, String, String)>,
     /// Fire a clip trigger every N frames (0 = never) — trigger_count
     /// advances as frame/N so trigger-responsive presets can be exercised
     /// headlessly.
@@ -56,6 +63,7 @@ fn parse_args() -> Result<Args, String> {
         frames: 90,
         out: PathBuf::from("/tmp/preset-render.png"),
         overrides: Vec::new(),
+        strings: Vec::new(),
         trigger_every: 0,
         max_frames: 300,
     };
@@ -88,6 +96,20 @@ fn parse_args() -> Result<Args, String> {
                 let v: f32 = v.parse().map_err(|e| format!("bad value for {id}: {e}"))?;
                 args.overrides.push((id.to_string(), v));
             }
+            "--string" | "--string-at" => {
+                let (frame, pair) = if flag == "--string-at" {
+                    let (f, rest) = value
+                        .split_once(':')
+                        .ok_or_else(|| format!("--string-at wants FRAME:key=value, got {value}"))?;
+                    (f.parse().map_err(|e| format!("bad frame in {value}: {e}"))?, rest)
+                } else {
+                    (0, value.as_str())
+                };
+                let (key, v) = pair
+                    .split_once('=')
+                    .ok_or_else(|| format!("{flag} wants key=value, got {pair}"))?;
+                args.strings.push((frame, key.to_string(), v.to_string()));
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -103,9 +125,13 @@ fn main() {
         }
     };
 
-    let json_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets/generator-presets")
-        .join(format!("{}.json", args.preset));
+    let json_path = if args.preset.ends_with(".json") {
+        PathBuf::from(&args.preset)
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/generator-presets")
+            .join(format!("{}.json", args.preset))
+    };
     let json = std::fs::read_to_string(&json_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", json_path.display()));
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse preset JSON");
@@ -162,6 +188,7 @@ fn main() {
     const STABLE_STREAK: u32 = 3;
     let warmup_frames = args.frames.max(1);
     let max_frames = args.max_frames.max(warmup_frames);
+    let mut strings = std::collections::BTreeMap::new();
     let mut prev_raw: Option<Vec<u8>> = None;
     let mut stable_count = 0u32;
     let mut converged = false;
@@ -186,6 +213,12 @@ fn main() {
                 0
             },
         };
+        if args.strings.iter().any(|(f, _, _)| *f == frame) {
+            for (_, key, value) in args.strings.iter().filter(|(f, _, _)| *f == frame) {
+                strings.insert(key.clone(), value.clone());
+            }
+            runtime.set_string_params(Some(&strings));
+        }
         let mut enc = device.create_encoder("look-dev-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
