@@ -5,6 +5,10 @@ Cleanup uses an exact Cargo-file manifest; only empty incremental session
 directories may also be removed. Unknown files, links and proof captures stay.
 Admission prunes caches older than an hour in idle slots and the admitting
 slot, holding Cargo locks and failing closed on unavailable process inspection.
+Artifacts (deps, examples, fingerprints, build-script output) leave only by
+whole profile, and only from a foreign slot the caller proved landed, clean,
+lease-free and process-free: removing a profile's fingerprints with its
+outputs makes Cargo rebuild it cleanly rather than trust half a cache.
 MANIFOLD_SLOT_TARGET_CAP_GIB configures the per-slot budget (default 160 GiB).
 Budgets are best effort: protected data can exceed them; the free-space reserve
 (MAINTENANCE_GOAL_BYTES) still refuses a build when safe reclamation cannot meet it.
@@ -371,7 +375,8 @@ def check_build(target_dir: Path, repo: Path, free_bytes: Optional[int] = None,
                                     if root == own or idle_slot(root)]
                         removed, files, failures = maintain_caches(
                             eligible, target.parent, reserve_bytes, cap,
-                            same_slot=own / "target" if own else None)
+                            same_slot=own / "target" if own else None,
+                            evict_profiles=True)
                     else:
                         failures = ("cache maintenance skipped: pool lock busy or unavailable",)
             if files:
@@ -491,6 +496,20 @@ def _cache_path(target: Path, path: Path) -> bool:
     return _recognized_cargo_file(parts[1], parts[2:], path)
 
 
+def _build_output_path(target: Path, path: Path) -> bool:
+    """A file inside Cargo's OUT_DIR, <profile>/build/<pkg>-<hash>/out/...
+
+    Eligible only in whole-profile eviction: its fingerprint goes with it, so
+    the build script reruns and rewrites it.
+    """
+    if _contains_symlink(path, target):
+        return False
+    parts = _relative_parts(target, path)
+    return (parts is not None and len(parts) >= 5 and _profile_dir(target / parts[0])
+            and parts[1] == "build" and bool(_HASHED_DIR.match(parts[2]))
+            and parts[3] == "out")
+
+
 _HASHED_DIR = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}$")
 _HASHED_ARTIFACT = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}(?:\.[A-Za-z0-9]+)?$")
 # Covers the hash file (lib-foo), its JSON twin and the dep-info file, for
@@ -587,8 +606,12 @@ def _iter_regular_files(root: Path, errors: Optional[list[str]] = None) -> Itera
         return
 
 
-def plan_cache_cleanup(target: Path, profiles: Optional[Iterable[Path]] = None) -> CleanupPlan:
-    """Build a manifest of exact Cargo cache files below a tagged target."""
+def plan_cache_cleanup(target: Path, profiles: Optional[Iterable[Path]] = None,
+                       include_build_out: bool = False) -> CleanupPlan:
+    """Build a manifest of exact Cargo cache files below a tagged target.
+
+    ``include_build_out`` adds OUT_DIR files, for whole-profile eviction only.
+    """
     target = _absolute(target)
     refusals: list[str] = []
     if target.is_symlink() or not target.is_dir():
@@ -608,7 +631,8 @@ def plan_cache_cleanup(target: Path, profiles: Optional[Iterable[Path]] = None) 
             if subtree.is_symlink() or not subtree.is_dir():
                 continue
             for path in _iter_regular_files(subtree, refusals):
-                if not _cache_path(target, path):
+                if not (_cache_path(target, path)
+                        or (include_build_out and _build_output_path(target, path))):
                     continue
                 try:
                     stat = path.lstat()
@@ -733,6 +757,20 @@ def stale_cache_units(plan: CleanupPlan, cutoff: float):
     return sorted(units)
 
 
+def stale_profile_units(plan: CleanupPlan, cutoff: float):
+    """One unit per profile, aged by its newest file; a fresh file protects it."""
+    profiles: dict[Path, list[CacheEntry]] = {}
+    for entry in plan.entries:
+        profile = plan.target / entry.path.relative_to(plan.target).parts[0]
+        profiles.setdefault(profile, []).append(entry)
+    units = []
+    for profile, entries in profiles.items():
+        newest = max(entry.identity[3] / 1e9 for entry in entries)
+        if newest <= cutoff:
+            units.append((2, newest, profile, tuple(entries)))
+    return sorted(units)
+
+
 def _remove_empty_session(target: Path, session: Path):
     """Empty-only removal through no-follow fds; never remove its crate directory."""
     parts = _relative_parts(target, session)
@@ -751,24 +789,33 @@ def maintain_caches(targets: Iterable[Path], disk_path: Path,
                     reserve_bytes: int = MAINTENANCE_GOAL_BYTES,
                     cap_bytes: Optional[int] = None,
                     same_slot: Optional[Path] = None,
-                    process_check=None, free_check=None, repo: Optional[Path] = None
+                    process_check=None, free_check=None, repo: Optional[Path] = None,
+                    evict_profiles: bool = False
                     ) -> tuple[int, int, tuple[str, ...]]:
-    """Pressure-driven stale cleanup through the shared reservation executor."""
+    """Pressure-driven stale cleanup through the shared reservation executor.
+
+    ``evict_profiles`` asserts every target except ``same_slot`` is a landed,
+    clean, lease-free slot; the executor still vetoes live processes.
+    """
     return _execute_cleanup(targets, repo or disk_path, disk_path=disk_path,
                             reserve_bytes=max(reserve_bytes, MAINTENANCE_GOAL_BYTES),
                             cap_bytes=slot_cap_bytes() if cap_bytes is None else cap_bytes,
                             same_slot=same_slot, process_check=process_check,
-                            free_check=free_check)
+                            free_check=free_check, evict_profiles=evict_profiles)
 
 
 def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
                      cap_bytes=0, same_slot=None, process_check=None,
-                     free_check=None, manifest=None, dry_run=False):
+                     free_check=None, manifest=None, dry_run=False,
+                     evict_profiles=False):
     """The sole deletion executor: registry, reservation, Cargo locks, then scan.
 
-    Direct app/test launches do not participate in Cargo's lock. Keep compiled
-    artifacts and the Cargo metadata needed to reuse them. Only known
-    incremental sessions are eligible under the Cargo lock.
+    Direct app/test launches do not participate in Cargo's lock, so compiled
+    artifacts stay in any slot that may host one: the admitting slot, pinned
+    slots and manifest callers. Stale incremental sessions go first; with
+    ``evict_profiles`` whole stale profiles of the other targets follow,
+    least recently built first. Without whole-profile eviction an idle slot's
+    deps grew without bound (BUG-k213c, pool caches outgrow the 40 GiB target).
     """
     roots = registered_worktrees(repo)
     if not roots:
@@ -794,7 +841,8 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
                     continue
                 profiles, errors = _lock_profiles(target, stack)
                 failures.extend(errors)
-                plan = plan_cache_cleanup(target, profiles)
+                evict = evict_profiles and manifest is None and target != same_slot
+                plan = plan_cache_cleanup(target, profiles, include_build_out=evict)
                 if plan.refusals:
                     failures.extend(plan.refusals)
                     continue
@@ -810,16 +858,28 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
                             selected.append(entry)
                     units.extend((1, e.identity[3] / 1e9, e.path, (e,), target) for e in selected)
                 else:
-                    units.extend((*unit, target) for unit in stale_cache_units(plan, cutoff))
+                    # A profile unit covers the single files a plain pass reports as kept.
+                    units.extend((*unit, target) for unit in stale_cache_units(plan, cutoff)
+                                 if not (evict and unit[0] == 1))
+                    if evict:
+                        stale = stale_profile_units(plan, cutoff)
+                        units.extend((*unit, target) for unit in stale)
+                        built = {e.path.relative_to(target).parts[0] for e in plan.entries}
+                        for name in sorted(built - {unit[2].name for unit in stale}):
+                            failures.append(f"KEEP profile {target / name}: built within "
+                                            f"{STALE_CACHE_SECONDS // 60} minutes")
             check = process_snapshot() if process_check is None else process_check
             removed_bytes = removed_files = 0
             reported = set()
             foreign_status = {}
+            removed_paths: set[Path] = set()
             for kind, _mtime, path, entries, target in sorted(units):
                 if disk_path is not None and available >= reserve_bytes and sizes[target] <= cap_bytes:
                     continue
-                subtree = path.relative_to(target).parts[1]
-                if subtree != "incremental":
+                if kind == 2:
+                    entries = tuple(e for e in entries if e.path not in removed_paths)
+                elif path.relative_to(target).parts[1] != "incremental":
+                    subtree = path.relative_to(target).parts[1]
                     if subtree in ("deps", "examples"):
                         message = f"KEEP deps/examples in {target}: direct launches have no exclusion lock"
                     else:
@@ -850,8 +910,10 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
                     failures.append(f"cannot revalidate {path}: {error}")
                     continue
                 for entry in entries:
-                    removed, error = (True, None) if dry_run else _unlink_entry(target, entry)
+                    removed, error = ((True, None) if dry_run else
+                                      _unlink_entry(target, entry, allow_build_out=kind == 2))
                     if removed:
+                        removed_paths.add(entry.path)
                         removed_bytes += entry.size_bytes
                         removed_files += 1
                         sizes[target] -= entry.size_bytes
@@ -939,10 +1001,12 @@ def _lock_profiles(target: Path, stack: ExitStack):
     return profiles, failures
 
 
-def _unlink_entry(target: Path, entry: CacheEntry) -> tuple[bool, Optional[str]]:
+def _unlink_entry(target: Path, entry: CacheEntry,
+                  allow_build_out: bool = False) -> tuple[bool, Optional[str]]:
     """Validate and unlink one entry through O_NOFOLLOW directory fds."""
     parts = _relative_parts(target, entry.path)
-    if parts is None or not _cache_path(target, entry.path):
+    if parts is None or not (_cache_path(target, entry.path)
+                             or (allow_build_out and _build_output_path(target, entry.path))):
         return False, f"stale or unsafe manifest entry: {entry.path}"
     fds: list[int] = []
     try:
