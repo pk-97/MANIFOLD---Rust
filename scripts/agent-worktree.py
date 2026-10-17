@@ -18,11 +18,12 @@ must be resolved first. Failed uploads preserve source and a local archive.
 Unique ignored assets remain local: preserve these before removing a checkout.
 Public remotes expose archive contents. Archives are not verified app landings.
 
-Acquire and release scrub inactive caches toward 40 GiB and prune idle slots'
-incremental sessions (the only reclaimable cache; artifacts and metadata stay
-warm). Build admission also
+Acquire and release prune idle slots' incremental sessions, then scrub the
+pool toward 40 GiB, least recently built slot first. A landed, clean,
+lease-free, process-free slot loses whole stale profiles (deps, fingerprints,
+build output); any other slot keeps its artifacts warm. Build admission also
 maintains the admitting slot between builds. MANIFOLD_SLOT_TARGET_CAP_GIB sets
-the per-slot budget (default 25 GiB); stale means untouched for 60 minutes.
+the per-slot budget (default 160 GiB); stale means untouched for 60 minutes.
 Open target files and unknown process state protect caches. Protected data may
 exceed the budget, but builds still require the storage_budget.MAINTENANCE_GOAL_BYTES
 free-space reserve.
@@ -245,15 +246,22 @@ def pool_slots():
                   if path.parent == POOL and path.name.startswith(SLOT_PREFIX))
 
 
+def evict_stale_caches(wt, cap):
+    """Stale incremental sessions, then whole stale profiles of a landed idle
+    slot, until its target fits ``cap``. A slot that is not landed, clean,
+    lease-free and process-free only loses incremental sessions."""
+    return maintain_caches(
+        [wt / "target"], wt, cap_bytes=cap,
+        process_check=lambda target, **_: (slot_has_live_session(wt)
+                                            or target_live_status(target)),
+        repo=REPO, evict_profiles=reclaimable_for_landing(wt)[0])
+
+
 def enforce_target_cap(wt):
     size = target_size(wt / "target")
     cap = slot_cap_bytes()
     if size > cap:
-        removed, files, failures = maintain_caches(
-            [wt / "target"], wt, cap_bytes=cap,
-            process_check=lambda target, **_: (slot_has_live_session(wt)
-                                                or target_live_status(target)),
-            repo=REPO)
+        removed, files, failures = evict_stale_caches(wt, cap)
         if failures:
             print(f"TARGET:   kept {size / 2**30:.1f}G; removed {files} files "
                   f"({removed / 2**30:.1f}G); cleanup refused: "
@@ -545,10 +553,8 @@ def build_recency(wt):
 def prune_idle_incremental(wt):
     """Drop an idle slot's incremental sessions on every scrub.
 
-    Since bd91b025d (2026-10-09) incremental state is the only reclaimable
-    cache — deps, executables and build metadata stay warm — but the 160G cap
-    and the 40G pool budget rarely fire, so idle slots carried gigabytes of
-    dead sessions between acquires. An idle slot is clean, landed, lease-free
+    The 160G cap and the 40G pool budget fire only on pressure, so idle slots
+    carried gigabytes of dead sessions between acquires. An idle slot is clean, landed, lease-free
     and process-free, and the executor holds each profile's Cargo lock across
     deletion, so nothing can be compiling against these sessions; a staleness
     cutoff would add no safety. Every file identity is revalidated by the
@@ -623,7 +629,9 @@ def cmd_scrub(_args):
     while total > SCRUB_TO_GB and victims:
         wt = victims.pop(0)  # least recently built loses its cache first
         size = target_size(wt / "target") / 2**30
-        removed, files, failures = _cleanup_target(wt, "SCRUBBED")
+        removed, files, failures = evict_stale_caches(wt, 0)
+        if failures:
+            print(f"SCRUBBED {wt.name}: kept: " + "; ".join(failures))
         print(f"SCRUBBED {wt.name}: removed {files} files "
               f"({removed / 2**30:.1f}G) from {size:.1f}G target (pool over "
               f"{SCRUB_TO_GB}G)")
@@ -663,7 +671,7 @@ def cmd_reclaim(args):
         [wt / "target" for wt in victims], POOL, reserve_bytes=need,
         process_check=lambda target, **_: (slot_has_live_session(target.parent)
                                           or target_live_status(target)),
-        free_check=disk_free, repo=REPO)
+        free_check=disk_free, repo=REPO, evict_profiles=True)
     print(f"RECLAIMED: removed {files} stale cache files ({removed / 2**30:.1f}G)")
     for failure in failures:
         print(failure)
