@@ -189,7 +189,7 @@ impl ScenePanel {
         node_id: NodeId,
         tree: &mut UITree,
     ) -> bool {
-        let Some(index) = self.card_index_for_node(node_id) else { return false };
+        let Some(index) = self.card_index_for_node(tree, node_id) else { return false };
         self.selected_object_modifier = self.object_modifier_cards[index]
             .object_modifier_info()
             .cloned();
@@ -237,8 +237,8 @@ impl ScenePanel {
         cy
     }
 
-    fn card_index_for_node(&self, node_id: NodeId) -> Option<usize> {
-        self.object_modifier_cards.iter().position(|card| card.owns_node(node_id))
+    fn card_index_for_node(&self, tree: &UITree, node_id: NodeId) -> Option<usize> {
+        self.object_modifier_cards.iter().position(|card| card.owns_node(tree, node_id))
     }
 
     pub(crate) fn object_modifier_card_click(
@@ -246,7 +246,7 @@ impl ScenePanel {
         node_id: NodeId,
         tree: &mut UITree,
     ) -> Option<Vec<PanelAction>> {
-        let index = self.card_index_for_node(node_id)?;
+        let index = self.card_index_for_node(tree, node_id)?;
         self.selected_object_modifier = self.object_modifier_cards[index]
             .object_modifier_info()
             .cloned();
@@ -267,7 +267,7 @@ impl ScenePanel {
         pos: Vec2,
         tree: &mut UITree,
     ) -> Option<Vec<PanelAction>> {
-        let index = self.card_index_for_node(node_id)?;
+        let index = self.card_index_for_node(tree, node_id)?;
         self.selected_object_modifier = self.object_modifier_cards[index]
             .object_modifier_info()
             .cloned();
@@ -283,7 +283,7 @@ impl ScenePanel {
         node_id: NodeId,
         tree: &UITree,
     ) -> Option<PanelAction> {
-        let index = self.card_index_for_node(node_id)?;
+        let index = self.card_index_for_node(tree, node_id)?;
         self.object_modifier_cards[index].value_cell_typein(node_id, tree)
     }
 
@@ -567,21 +567,22 @@ impl ScenePanel {
         })
     }
 
-    pub fn contains_object_modifier_node(&self, node_id: NodeId) -> bool {
-        self.card_index_for_node(node_id).is_some() || self.force_card_index_for_node(node_id).is_some()
+    pub fn contains_object_modifier_node(&self, tree: &UITree, node_id: NodeId) -> bool {
+        self.card_index_for_node(tree, node_id).is_some() || self.force_card_index_for_node(tree, node_id).is_some()
     }
 
     pub fn audio_drawer_intent(
         &mut self,
+        tree: &UITree,
         node_id: NodeId,
         target: GraphParamTarget,
         param_id: &manifold_foundation::ParamId,
         click: AudioDrawerClick,
     ) -> Vec<PanelAction> {
-        if let Some(index) = self.card_index_for_node(node_id) {
+        if let Some(index) = self.card_index_for_node(tree, node_id) {
             return self.object_modifier_cards[index].audio_drawer_intent(target, param_id, click);
         }
-        self.force_card_index_for_node(node_id)
+        self.force_card_index_for_node(tree, node_id)
             .map(|index| self.force_cards[index].audio_drawer_intent(target, param_id, click))
             .unwrap_or_default()
     }
@@ -598,12 +599,12 @@ impl ScenePanel {
         ) {
             return action;
         }
-        if let Some(index) = self.card_index_for_node(node_id) {
+        if let Some(index) = self.card_index_for_node(tree, node_id) {
             return self.object_modifier_cards[index]
                 .driver_period_typein(node_id, tree)
                 .unwrap_or(action);
         }
-        self.force_card_index_for_node(node_id)
+        self.force_card_index_for_node(tree, node_id)
             .and_then(|index| self.force_cards[index].driver_period_typein(node_id, tree))
             .unwrap_or(action)
     }

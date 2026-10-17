@@ -273,9 +273,10 @@ struct BrowserLayout {
     /// Parallel to action rows that have a secondary action.
     secondary_ids: Vec<(NodeId, usize)>,
     paste_id: Option<NodeId>,
-    /// Slots in `region`'s arena.
-    region: u8,
+    /// The latest build's node range: its first slot, the live id there when
+    /// the build finished, and how many nodes it made.
     first_node: usize,
+    first_id: NodeId,
     node_count: usize,
 }
 
@@ -299,8 +300,8 @@ impl BrowserLayout {
             cell_ids: Vec::new(),
             secondary_ids: Vec::new(),
             paste_id: None,
-            region: crate::tree::DEFAULT_REGION,
             first_node: 0,
+            first_id: NodeId::PLACEHOLDER,
             node_count: 0,
         }
     }
@@ -539,7 +540,6 @@ impl BrowserPopupPanel {
         };
 
         session.layout.first_node = tree.count();
-        session.layout.region = tree.building_region();
         session.layout.cell_ids.clear();
         session.layout.secondary_ids.clear();
         session.layout.chip_ids.clear();
@@ -988,6 +988,7 @@ impl BrowserPopupPanel {
         }
 
         session.layout.node_count = tree.count() - session.layout.first_node;
+        session.layout.first_id = tree.id_in(tree.building_region(), session.layout.first_node);
     }
 
     // ── Event handling ──
@@ -1253,13 +1254,10 @@ impl BrowserPopupPanel {
     }
 
     /// Check if a node belongs to this popup.
-    pub fn contains_node(&self, node_id: NodeId) -> bool {
-        let Some(session) = self.session.as_ref() else {
-            return false;
-        };
-        let id = node_id.slot();
-        let layout = &session.layout;
-        node_id.region() == layout.region && id >= layout.first_node && id < layout.first_node + layout.node_count
+    pub fn contains_node(&self, tree: &UITree, node_id: NodeId) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|s| tree.range_owns(s.layout.first_id, s.layout.node_count, node_id))
     }
 
     /// Get search bar rect for text input anchoring.

@@ -801,6 +801,15 @@ impl SceneCardState {
         }
         self.row_host.resize(n);
         self.row_host.row_index.clear();
+        // The id join must never point past the truncated per-row vectors.
+        self.row_id_index.retain(|_, row| *row < n);
+    }
+
+    /// Forget the node ids from the last build. Value caches and the id join
+    /// (`last_pushed_values`, `row_id_index`) stay, so the next build of the
+    /// same rows carries its values over.
+    fn clear_nodes(&mut self) {
+        self.row_host.clear_nodes();
     }
 
     /// P2 slice 2a: populate this card from a FILTERED slice of the layer's
@@ -1382,6 +1391,10 @@ impl ScenePanel {
         for card in &mut self.force_cards {
             card.clear_nodes();
         }
+        // Same for the properties card: a Force, folded-outliner or missing
+        // item branch skips `build_item_properties`, and its old ids would
+        // otherwise register intents on whatever now sits in those slots.
+        self.properties_card.clear_nodes();
         self.active_material_info = None;
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -2241,7 +2254,7 @@ impl ScenePanel {
                 if self.begin_object_modifier_drag(*node_id, tree) {
                     return (true, Vec::new());
                 }
-                if node_id.is_some_and(|node| self.force_card_index_for_node(node).is_some())
+                if node_id.is_some_and(|node| self.force_card_index_for_node(tree, node).is_some())
                     && self.force_pressed_card.is_some()
                 {
                     return (true, Vec::new());

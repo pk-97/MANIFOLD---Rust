@@ -438,13 +438,13 @@ impl InspectorCompositePanel {
     }
 
     pub fn audio_drawer_intent(
-        &mut self, node: NodeId, target: GraphParamTarget,
+        &mut self, tree: &UITree, node: NodeId, target: GraphParamTarget,
         param_id: &manifold_foundation::ParamId, click: AudioDrawerClick,
     ) -> Vec<PanelAction> {
         for card in self.effects.iter_mut().flatten()
             .chain(self.modifier_cards.iter_mut()).chain(self.gen_params.iter_mut())
         {
-            if card.owns_node(node) {
+            if card.owns_node(tree, node) {
                 return card.audio_drawer_intent(target, param_id, click);
             }
         }
@@ -1488,7 +1488,7 @@ impl Panel for InspectorCompositePanel {
                 if self.pressed_target.is_none()
                     && let Some(node_id) = *node_id
                 {
-                    let target = self.find_target_for_node(node_id);
+                    let target = self.find_target_for_node(tree, node_id);
                     self.pressed_target = target;
                     if let Some(ref t) = target {
                         self.update_last_effect_tab(t);
@@ -1842,7 +1842,7 @@ mod tests {
         }).unwrap();
         let master_height = inspector.effects[0][0].compute_height();
         let layer_height = inspector.effects[1][0].compute_height();
-        let actions = inspector.audio_drawer_intent(button, target, &pid, AudioDrawerClick::Custom);
+        let actions = inspector.audio_drawer_intent(&tree, button, target, &pid, AudioDrawerClick::Custom);
         assert!(matches!(actions.as_slice(), [PanelAction::Params(crate::ParamsAction::ModConfigTabChanged)]));
         // A rebuild projects the opened matrix without changing the other card.
         inspector.effects[1][0].build(&mut UITree::new(), Rect::new(350.0, 0.0, 340.0, 600.0));
@@ -2002,7 +2002,7 @@ mod tests {
         assert!(count > 0, "gen card should have built nodes");
 
         for i in first..first + count {
-            let target = panel.find_target_for_node(tree.id_at(i));
+            let target = panel.find_target_for_node(&tree, tree.id_at(i));
             assert!(
                 matches!(target, Some(PressedTarget::GenParam)),
                 "gen-card node {i} must route to GenParam on the Layer tab, got {target:?}",
@@ -3266,7 +3266,7 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         let target =
-            panel.find_target_for_node(panel.layer_scroll.track_id().unwrap());
+            panel.find_target_for_node(&tree, panel.layer_scroll.track_id().unwrap());
         assert!(matches!(target, Some(PressedTarget::Scrollbar)));
     }
 
@@ -3280,7 +3280,7 @@ mod tests {
         // The master chrome's chevron button should route to MasterChrome
         let first = panel.master_chrome.first_node();
         if panel.master_chrome.node_count() > 0 {
-            let target = panel.find_target_for_node(tree.id_at(first));
+            let target = panel.find_target_for_node(&tree, tree.id_at(first));
             assert!(matches!(target, Some(PressedTarget::MasterChrome)));
         }
     }
@@ -3336,7 +3336,7 @@ mod tests {
         let lc = &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0];
         assert!(lc.node_count() > 0);
         let probe = lc.first_node();
-        let target = panel.find_target_for_node(tree.id_at(probe));
+        let target = panel.find_target_for_node(&tree, tree.id_at(probe));
         assert!(
             matches!(target, Some(PressedTarget::LayerEffect(0))),
             "live layer node must route to LayerEffect, got {target:?}"

@@ -635,6 +635,20 @@ impl UITree {
             .is_some_and(|&g| g == id.generation())
     }
 
+    /// Whether live `id` is one of the `count` nodes a panel built starting at
+    /// `first`. The range owns nothing once `first` is stale: after its region
+    /// is rebuilt, the same slots belong to whoever built them this time.
+    /// Panels that remember their nodes as a slot range ask this, never a bare
+    /// slot comparison.
+    #[inline]
+    pub fn range_owns(&self, first: NodeId, count: usize, id: NodeId) -> bool {
+        id.region() == first.region()
+            && id.slot() >= first.slot()
+            && id.slot() - first.slot() < count
+            && self.is_live(first)
+            && self.is_live(id)
+    }
+
     /// `None` if `id` is stale or invalid. Callers that cache a `NodeId`
     /// across a rebuild must handle `None`.
     pub fn get_node(&self, id: NodeId) -> Option<&UINode> {
@@ -1534,6 +1548,23 @@ mod tests {
         let b = tree.add_button(None, x, 40.0, 50.0, 20.0, default_style(), "b");
         tree.end_region(token, start);
         vec![a, b]
+    }
+
+    /// A remembered range stops owning its slots once its region is rebuilt,
+    /// even though the new build puts nodes at exactly those slots.
+    #[test]
+    fn range_owns_rejects_a_range_from_an_earlier_build() {
+        let mut tree = UITree::new();
+        let old = build_region(&mut tree, 1, ZTier::Base, 0.0);
+        let (first, count) = (old[0], old[1].slot() - old[0].slot() + 1);
+        assert!(old.iter().all(|&id| tree.range_owns(first, count, id)));
+
+        let new = build_region(&mut tree, 1, ZTier::Base, 0.0);
+        assert_eq!(new[0].slot(), first.slot(), "the rebuild reuses the slots");
+        assert!(new.iter().all(|&id| !tree.range_owns(first, count, id)));
+        assert!(new.iter().all(|&id| tree.range_owns(new[0], count, id)));
+        let other = build_region(&mut tree, 2, ZTier::Base, 200.0);
+        assert!(!tree.range_owns(new[0], count, other[0]), "another region's slot is not ours");
     }
 
     /// INV-14: rebuilding one region touches only its own arena. The other

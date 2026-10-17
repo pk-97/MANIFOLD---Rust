@@ -471,9 +471,12 @@ pub struct ParamCardPanel {
     /// in release.
     row_value_synced: Vec<bool>,
 
-    // Node range: slots in `region`'s arena.
+    // Node range: slots in `region`'s arena. `first_id` is the live id at
+    // `first_node` when the build finished, so a range from an earlier build
+    // of the region owns nothing.
     region: u8,
     first_node: usize,
+    first_id: NodeId,
     node_count: usize,
 
     // Card position (for effect drag-reorder hit testing)
@@ -570,6 +573,7 @@ impl ParamCardPanel {
             row_value_synced: Vec::new(),
             region: crate::tree::DEFAULT_REGION,
             first_node: 0,
+            first_id: NodeId::PLACEHOLDER,
             node_count: 0,
         }
     }
@@ -827,12 +831,15 @@ impl ParamCardPanel {
         self.region
     }
 
-    /// Whether `id` is one of the nodes this card built this frame.
-    pub fn owns_node(&self, id: NodeId) -> bool {
-        self.is_live()
-            && id.region() == self.region
-            && id.slot() >= self.first_node
-            && id.slot() < self.first_node + self.node_count
+    /// Whether `id` is one of the nodes this card's latest live build made.
+    pub fn owns_node(&self, tree: &UITree, id: NodeId) -> bool {
+        tree.range_owns(self.first_id, self.node_count, id)
+    }
+
+    /// Close the node range a build opened at `first_node`.
+    pub(super) fn finish_node_range(&mut self, tree: &UITree) {
+        self.node_count = tree.count() - self.first_node;
+        self.first_id = tree.id_in(self.region, self.first_node);
     }
 
     /// D9 widget catalog — enumerate this card's sanctioned row affordances by
@@ -875,6 +882,7 @@ impl ParamCardPanel {
     /// scope's node indices.
     pub fn clear_nodes(&mut self) {
         self.first_node = usize::MAX;
+        self.first_id = NodeId::PLACEHOLDER;
         self.node_count = 0;
     }
 
@@ -1502,6 +1510,26 @@ pub(super) mod tests {
             material_attached: false,
         });
         c
+    }
+
+    /// A card its owner did not clear still must not claim nodes another
+    /// build put in its old slots.
+    #[test]
+    fn owns_node_ignores_nodes_from_a_later_build() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_toggle_and_trigger());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+        let (first, count) = (panel.first_node, panel.node_count);
+        assert!(panel.owns_node(&tree, tree.id_in(panel.region, first)));
+
+        tree.clear();
+        for _ in 0..first + count {
+            tree.add_button(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default(), "");
+        }
+        assert!((first..first + count)
+            .map(|slot| tree.id_in(panel.region, slot))
+            .all(|id| tree.is_live(id) && !panel.owns_node(&tree, id)));
     }
 
     #[test]

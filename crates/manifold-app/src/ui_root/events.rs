@@ -10,16 +10,38 @@ impl UIRoot {
     /// stored node ids. A full repopulate each call keeps the registry
     /// consistent with single-region rebuilds without per-region bookkeeping
     /// — panels register against whatever ids they hold now.
+    ///
+    /// In debug builds it also logs, per panel, how many entries it registered
+    /// against ids that are no longer live. Those entries are inert (the
+    /// registry keys by full id), but each is a panel holding ids from an
+    /// earlier build.
     pub(crate) fn repopulate_intents(&mut self) {
         use manifold_ui::panels::Panel;
         self.intents.clear();
+        let mut dead = 0usize;
+        let mut note = |intents: &manifold_ui::intent::IntentRegistry, tree: &UITree, panel: &str| {
+            if cfg!(debug_assertions) {
+                let now = intents.dead_entry_count(tree);
+                if now > dead {
+                    log::debug!("[intents] {panel} registered {} stale node id(s)", now - dead);
+                }
+                dead = now;
+            }
+        };
         self.transport.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "transport");
         self.header.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "header");
         self.footer.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "footer");
         self.layer_headers.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "layer_headers");
         self.inspector.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "inspector");
         self.viewport.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "viewport");
         self.scene_setup_panel.register_intents(&mut self.intents);
+        note(&self.intents, &self.tree, "scene_setup");
     }
 
     /// Resolve a discrete-gesture event through node-intent dispatch. Returns
@@ -37,16 +59,16 @@ impl UIRoot {
         Some(match action {
             PanelAction::Root(RootAction::AudioDrawerClick(target, param_id, click)) =>
                 node_id.map(|node| {
-                    if self.scene_setup_panel.contains_object_modifier_node(node) {
-                        self.scene_setup_panel.audio_drawer_intent(node, target, &param_id, click)
+                    if self.scene_setup_panel.contains_object_modifier_node(&self.tree, node) {
+                        self.scene_setup_panel.audio_drawer_intent(&self.tree, node, target, &param_id, click)
                     } else {
-                        self.inspector.audio_drawer_intent(node, target, &param_id, click)
+                        self.inspector.audio_drawer_intent(&self.tree, node, target, &param_id, click)
                     }
                 }).unwrap_or_default(),
             PanelAction::Root(RootAction::ClipTriggerDrawerClick(layer, row, click)) =>
                 self.inspector.clip_trigger_drawer_intent(&layer, row, &click),
             action => vec![match node_id {
-                Some(node) if self.scene_setup_panel.contains_object_modifier_node(node) =>
+                Some(node) if self.scene_setup_panel.contains_object_modifier_node(&self.tree, node) =>
                     self.scene_setup_panel.refresh_driver_period_intent(node, &self.tree, action),
                 Some(node) => self.inspector.refresh_driver_period_intent(node, &self.tree, action),
                 None => action,
@@ -183,7 +205,7 @@ impl UIRoot {
                     UIEvent::RightClick { node_id, .. } => *node_id,
                     _ => None,
                 };
-                if node.is_some_and(|node| self.scene_setup_panel.contains_object_modifier_node(node))
+                if node.is_some_and(|node| self.scene_setup_panel.contains_object_modifier_node(&self.tree, node))
                     && let Some(resolved) = self.resolve_intent(event)
                 {
                     actions.extend(resolved);

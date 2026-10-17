@@ -797,7 +797,7 @@ impl ParamCardPanel {
             self.build_effect_sliders(tree, sliders_parent, inner.x, body_y, inner_w);
         }
 
-        self.node_count = tree.count() - self.first_node;
+        self.finish_node_range(tree);
     }
 
     fn build_effect_header(&mut self, tree: &mut UITree, x: f32, y: f32, w: f32) {
@@ -1968,7 +1968,7 @@ impl ParamCardPanel {
             self.build_relight_rows(tree, None, cx, cy, content_w);
         } // end if !self.is_collapsed
 
-        self.node_count = tree.count() - self.first_node;
+        self.finish_node_range(tree);
     }
 
     /// Per-frame value sync from the manifest's id-keyed slot channel
