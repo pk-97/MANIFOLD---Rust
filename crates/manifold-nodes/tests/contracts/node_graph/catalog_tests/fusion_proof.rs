@@ -635,20 +635,17 @@ fn every_fused_generator_kernel_compiles() {
     );
 }
 
-/// Diagnostic for the Infrared "black background goes navy" report: render the
-/// REAL bundled Infrared preset (full palette bank group + mux, Arctic palette,
-/// amount 1, contrast 1) on a pure-black input through the production executor,
-/// unfused — the path the live compositor actually runs. The centre pixel must
-/// be black; if it's navy (Arctic's low stop) the preset graph itself lifts
-/// black, independent of the live compositor/input.
-#[test]
-fn infrared_preset_black_stays_black() {
+/// Render the REAL bundled Infrared preset (full palette bank group + mux,
+/// amount 1, contrast 1) on a uniform `fill` input through the production
+/// executor, unfused — the path the live compositor runs — and return the
+/// centre pixel's rgb.
+fn infrared_centre_rgb(palette: f32, fill: [f32; 4]) -> [f32; 3] {
     use manifold_node_engine::load::chain_spec::splice_def_into_chain;
     use manifold_node_engine::parameters::ParamValue;
     use manifold_core::PresetTypeId;
 
-    fn black_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
-        let px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+    fn fill_input(device: &GpuDevice, w: u32, h: u32, fill: [f32; 4]) -> GpuTexture {
+        let px: Vec<f16> = (0..(w * h * 4) as usize).map(|i| f16::from_f32(fill[i % 4])).collect();
         let tex = device.create_texture(&GpuTextureDesc {
             width: w,
             height: h,
@@ -658,7 +655,7 @@ fn infrared_preset_black_stays_black() {
             usage: GpuTextureUsage::CPU_UPLOAD
                 | GpuTextureUsage::SHADER_READ
                 | GpuTextureUsage::COPY_SRC,
-            label: "ir-black-in",
+            label: "ir-fill-in",
             mip_levels: 1,
         });
         let bytes = unsafe {
@@ -692,7 +689,7 @@ fn infrared_preset_black_stays_black() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (128u32, 128u32);
-    let input = black_input(&device, w, h);
+    let input = fill_input(&device, w, h, fill);
 
     let id = PresetTypeId::new("Infrared");
     let def = manifold_nodes::bundled_presets::bundled_preset_def(&id)
@@ -702,8 +699,6 @@ fn infrared_preset_black_stays_black() {
     let src = graph.add_node(Box::new(Source::new()));
     let result =
         splice_def_into_chain(&mut graph, (src, "out"), def.as_ref(), &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("splice");
-    let names: Vec<&str> = result.handles.iter().map(|(n, _)| n.as_ref()).collect();
-    eprintln!("handles: {names:?}");
     let find = |name: &str| -> Option<NodeInstanceId> {
         result
             .handles
@@ -711,15 +706,13 @@ fn infrared_preset_black_stays_black() {
             .find(|(n, _)| n.as_ref() == name)
             .map(|(_, id)| *id)
     };
-    // Arctic (6) if the mux handle is reachable; otherwise default palette
-    // (White Hot) — texel 0 is black for both, so black→black either way.
-    if let Some(mux) = find("Palette Bank/palette_mux").or_else(|| find("palette_mux")) {
-        graph.set_param(mux, "selector", ParamValue::Float(6.0)).unwrap();
-    }
-    if let Some(ir) = find("infrared") {
-        graph.set_param(ir, "amount", ParamValue::Float(1.0)).unwrap();
-        graph.set_param(ir, "contrast", ParamValue::Float(1.0)).unwrap();
-    }
+    let mux = find("Palette Bank/palette_mux")
+        .or_else(|| find("palette_mux"))
+        .expect("Infrared palette mux handle");
+    graph.set_param(mux, "selector", ParamValue::Float(palette)).unwrap();
+    let ir = find("infrared").expect("Infrared colour LUT handle");
+    graph.set_param(ir, "amount", ParamValue::Float(1.0)).unwrap();
+    graph.set_param(ir, "contrast", ParamValue::Float(1.0)).unwrap();
     let fout = graph.add_node(Box::new(FinalOutput::new()));
     graph.connect(result.output, (fout, "in")).unwrap();
 
@@ -727,8 +720,14 @@ fn infrared_preset_black_stays_black() {
     let src_res = resource_for_output(&plan, src, "out");
     let out_res = resource_for_output(&plan, result.output.0, result.output.1);
     let img = render_graph(&device.arc(), &mut graph, &plan, src_res, &input, out_res);
-    let rgb = center_rgb(&device, &img);
+    center_rgb(&device, &img)
+}
 
+/// Infrared "black background goes navy": the centre of a pure-black input
+/// must read back black, not Arctic's low stop.
+#[test]
+fn infrared_preset_black_stays_black() {
+    let rgb = infrared_centre_rgb(6.0, [0.0, 0.0, 0.0, 1.0]);
     eprintln!("Infrared preset (Arctic, black input) centre = {rgb:?}");
     // Pure black must read back PURE black, not a faint navy. With the old
     // centre LUT mapping this was [0, 0.0006, 0.0046] (visible blue); the
@@ -737,6 +736,26 @@ fn infrared_preset_black_stays_black() {
         rgb[0] < 5e-4 && rgb[1] < 5e-4 && rgb[2] < 5e-4,
         "Infrared lifted pure black to {rgb:?} — the LUT's texel 0 is not the \
          first stop (centre-vs-endpoint mapping regression in gradient_ramp)",
+    );
+}
+
+/// Rainbow's bottom stop is red, so it shows both halves of the coverage rule:
+/// an empty pixel (rgb 0, a 0) stays black (BUG-cbqzw, Infrared paints
+/// transparent pixels), and a dim luma-keyed pixel (rgb == a == 0.03, what
+/// Particle Text writes) keeps the full palette colour for its luma. Dividing
+/// by alpha read that pixel as white (Rainbow cyan at mid-LUT); scaling the
+/// palette by coverage left it near black.
+#[test]
+fn infrared_empty_pixel_black_dim_pixel_keeps_palette() {
+    let empty = infrared_centre_rgb(4.0, [0.0; 4]);
+    assert!(
+        empty.iter().all(|c| c.abs() < 5e-4),
+        "an empty pixel must stay black, got {empty:?}",
+    );
+    let dim = infrared_centre_rgb(4.0, [0.03; 4]);
+    assert!(
+        dim[0] > 0.8 && dim[1] < 0.3 && dim[2] < 0.1,
+        "a dim luma-keyed pixel must take Rainbow's red end at full strength, got {dim:?}",
     );
 }
 
