@@ -537,7 +537,8 @@ use super::whitewater_step::empty_slot;
 
 /// What `node.whitewater_step` keeps across ticks beside the pool, as its
 /// `state` buffer holds it. pool_full, emitted and thinned count since the
-/// pool was seeded.
+/// pool was seeded. `front` is the number of front slots this frame's
+/// appends overwrote; compaction clears it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PoolState {
     pub live: u32,
@@ -545,12 +546,21 @@ pub(super) struct PoolState {
     pub pool_full: u32,
     pub emitted: u32,
     pub thinned: u32,
+    pub front: u32,
 }
 
 /// The step's compaction: the kept slots in pool order, then empty slots.
+/// The first `front` slots hold this frame's overwrites, the newest, so the
+/// kept ones rotate behind the survivors to keep birth order.
 pub(super) fn compact(pool: &[WhitewaterParticle], flags: &[u32], state: &mut PoolState) -> Vec<WhitewaterParticle> {
-    let mut out: Vec<WhitewaterParticle> = pool.iter().zip(flags).filter(|(_, f)| **f == 1).map(|(p, _)| *p).collect();
+    let front = (state.front as usize).min(pool.len());
+    let kept = |range: std::ops::Range<usize>| -> Vec<WhitewaterParticle> {
+        range.filter(|&i| flags[i] == 1).map(|i| pool[i]).collect()
+    };
+    let mut out = kept(front..pool.len());
+    out.extend(kept(0..front));
     state.live = out.len() as u32;
+    state.front = 0;
     out.resize(pool.len(), empty_slot());
     out
 }
@@ -560,27 +570,34 @@ pub(super) fn live_spawn(spawn: &WhitewaterSpawn) -> u32 {
     u32::from(spawn.position_lifetime[3] > 0.0)
 }
 
-/// FLIP's load, as the step's append runs it: the frame's live spawns, in
-/// order, into the empty slots after the live ones, each taking the next
-/// id. Spawns past the pool's room count as pool full; `emissions` past the
-/// spawn slots count as thinned.
+/// FLIP's load, as the step's append runs it, with one departure: FLIP drops
+/// spawns once the pool is full, here they overwrite the oldest particles.
+/// The frame's live spawns, in order, fill the empty slots after the live
+/// ones, then overwrite the oldest slots not yet overwritten this frame
+/// (from `front` on), each taking the next id. Spawns that met a full pool
+/// count as pool full; `emissions` past the spawn slots count as thinned.
 pub(super) fn append(pool: &mut [WhitewaterParticle], spawns: &[WhitewaterSpawn], emissions: u32, state: &mut PoolState) {
     let capacity = pool.len() as u32;
     let live: Vec<&WhitewaterSpawn> = spawns.iter().filter(|s| live_spawn(s) == 1).collect();
     let spawned = live.len() as u32;
-    let placed = spawned.min(capacity - state.live.min(capacity));
-    for (k, spawn) in live.iter().take(placed as usize).enumerate() {
-        pool[(state.live + k as u32) as usize] = WhitewaterParticle {
+    let old_live = state.live.min(capacity);
+    let tail = spawned.min(capacity - old_live);
+    let over = (spawned - tail).min(old_live - state.front);
+    for (k, spawn) in live.iter().take((tail + over) as usize).enumerate() {
+        let k = k as u32;
+        let slot = if k < tail { old_live + k } else { state.front + (k - tail) };
+        pool[slot as usize] = WhitewaterParticle {
             position_lifetime: spawn.position_lifetime,
             velocity: spawn.velocity,
             kind: spawn.kind,
-            id: (state.next_id + k as u32) % WHITEWATER_ID_LIMIT,
+            id: (state.next_id + k) % WHITEWATER_ID_LIMIT,
             ..Default::default()
         };
     }
-    state.live += placed;
-    state.next_id = (state.next_id + placed) % WHITEWATER_ID_LIMIT;
-    state.pool_full += spawned - placed;
+    state.live = old_live + tail;
+    state.front += over;
+    state.next_id = (state.next_id + tail + over) % WHITEWATER_ID_LIMIT;
+    state.pool_full += spawned - tail;
     state.emitted += spawned;
     state.thinned += emissions - emissions.min(spawns.len() as u32);
 }

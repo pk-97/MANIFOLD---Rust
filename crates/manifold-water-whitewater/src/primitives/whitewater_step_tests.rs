@@ -723,3 +723,55 @@ mod gpu {
         println!("{compared} particles compared");
     }
 }
+
+fn tagged_spawns(tags: std::ops::Range<u32>) -> Vec<WhitewaterSpawn> {
+    tags.map(|t| WhitewaterSpawn { position_lifetime: [t as f32, 0.0, 0.0, 1.0], velocity: [0.0; 3], kind: 0 }).collect()
+}
+
+fn tags(pool: &[WhitewaterParticle]) -> Vec<u32> {
+    pool.iter().map(|p| p.position_lifetime[0] as u32).collect()
+}
+
+/// A full pool of particles tagged 0..cap, all kept by the next compaction.
+fn full_pool(cap: u32) -> (Vec<WhitewaterParticle>, PoolState) {
+    let mut pool = vec![empty_slot(); cap as usize];
+    let mut state = PoolState::default();
+    pool_cpu::append(&mut pool, &tagged_spawns(0..cap), cap, &mut state);
+    (pool, state)
+}
+
+// Departs from FLIP Fluids, which drops spawns on a full pool: new spawns
+// replace the oldest particles and birth order survives compaction.
+#[test]
+fn full_pool_spawns_replace_the_oldest() {
+    let (mut pool, mut state) = full_pool(8);
+    pool_cpu::append(&mut pool, &tagged_spawns(100..103), 3, &mut state);
+    assert_eq!(tags(&pool), [100, 101, 102, 3, 4, 5, 6, 7]);
+    assert_eq!((state.live, state.front, state.pool_full), (8, 3, 3));
+    let out = pool_cpu::compact(&pool, &[1; 8], &mut state);
+    assert_eq!(tags(&out), [3, 4, 5, 6, 7, 100, 101, 102]);
+    assert_eq!((state.live, state.front), (8, 0));
+    let ids: Vec<u32> = out.iter().map(|p| p.id).collect();
+    assert_eq!(&ids[5..], [8, 9, 10]);
+}
+
+#[test]
+fn dust_append_evicts_the_next_oldest_not_this_frames_spray() {
+    let (mut pool, mut state) = full_pool(8);
+    pool_cpu::append(&mut pool, &tagged_spawns(100..102), 2, &mut state);
+    pool_cpu::append(&mut pool, &tagged_spawns(200..202), 2, &mut state);
+    assert_eq!(tags(&pool), [100, 101, 200, 201, 4, 5, 6, 7]);
+    assert_eq!((state.front, state.pool_full), (4, 4));
+    let out = pool_cpu::compact(&pool, &[1; 8], &mut state);
+    assert_eq!(tags(&out), [4, 5, 6, 7, 100, 101, 200, 201]);
+}
+
+#[test]
+fn more_spawns_than_capacity_leaves_an_all_new_pool() {
+    let (mut pool, mut state) = full_pool(4);
+    pool_cpu::append(&mut pool, &tagged_spawns(100..107), 7, &mut state);
+    assert_eq!(tags(&pool), [100, 101, 102, 103]);
+    assert_eq!((state.front, state.pool_full), (4, 7));
+    let out = pool_cpu::compact(&pool, &[1; 4], &mut state);
+    assert_eq!(tags(&out), [100, 101, 102, 103]);
+}
