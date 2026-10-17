@@ -180,6 +180,39 @@
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F1"
+      },
+      {
+        "id": "text_x",
+        "name": "Text X",
+        "min": -0.5,
+        "max": 0.5,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "text_y",
+        "name": "Text Y",
+        "min": -0.5,
+        "max": 0.5,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "text_rotation",
+        "name": "Text Rotation",
+        "min": -180.0,
+        "max": 180.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
       }
     ],
     "bindings": [
@@ -410,8 +443,47 @@
         "defaultValue": 4.0,
         "target": {
           "kind": "node",
-          "nodeId": "text_force_gain",
-          "param": "gain"
+          "nodeId": "text_strength_scale",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "text_x",
+        "label": "Text X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "text_place",
+          "param": "translate_x"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "text_y",
+        "label": "Text Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "text_y_up",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "text_rotation",
+        "label": "Text Rotation",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "text_rotate",
+          "param": "rotation"
         },
         "convert": {
           "type": "Float"
@@ -1090,10 +1162,207 @@
             {
               "name": "out",
               "portType": ""
+            },
+            {
+              "name": "push",
+              "portType": ""
+            },
+            {
+              "name": "mask",
+              "portType": ""
             }
           ]
         },
         "nodes": [
+          {
+            "id": 300,
+            "nodeId": "text_rotate",
+            "typeId": "node.transform",
+            "handle": "text_rotate",
+            "params": {
+              "rotation": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "translate_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "translate_y": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Rotate Text"
+          },
+          {
+            "id": 301,
+            "nodeId": "text_place",
+            "typeId": "node.transform",
+            "handle": "text_place",
+            "params": {
+              "rotation": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "translate_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "translate_y": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Place Text"
+          },
+          {
+            "id": 302,
+            "nodeId": "text_y_up",
+            "typeId": "node.math",
+            "handle": "text_y_up",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Text Y Up"
+          },
+          {
+            "id": 303,
+            "nodeId": "text_push_blur_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "text_push_blur_h",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "radius": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Letter Body H"
+          },
+          {
+            "id": 304,
+            "nodeId": "text_push_blur_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "text_push_blur_v",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "radius": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Letter Body V"
+          },
+          {
+            "id": 305,
+            "nodeId": "text_push_slope",
+            "typeId": "node.edge_slope",
+            "handle": "text_push_slope",
+            "params": {
+              "channel": {
+                "type": "Enum",
+                "value": 0
+              },
+              "scale_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "wrap_mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Letter Body Slope"
+          },
+          {
+            "id": 306,
+            "nodeId": "text_push_out",
+            "typeId": "node.rotate_vector",
+            "handle": "text_push_out",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 3.1415927
+              }
+            },
+            "title": "Point Out of Letters"
+          },
+          {
+            "id": 307,
+            "nodeId": "text_push_gain",
+            "typeId": "node.exposure",
+            "handle": "text_push_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Letter Push Strength"
+          },
+          {
+            "id": 310,
+            "nodeId": "text_strength_scale",
+            "typeId": "node.math",
+            "handle": "text_strength_scale",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 4.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.005
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Text Strength to Step Size"
+          },
           {
             "id": 200,
             "nodeId": "text_render",
@@ -1227,7 +1496,7 @@
             "params": {
               "gain": {
                 "type": "Float",
-                "value": 4.0
+                "value": 0.02
               }
             },
             "title": "Text Force Gain"
@@ -1245,8 +1514,74 @@
           {
             "fromNode": 200,
             "fromPort": "out",
+            "toNode": 300,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 300,
+            "fromPort": "out",
+            "toNode": 301,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 302,
+            "fromPort": "out",
+            "toNode": 301,
+            "toPort": "translate_y"
+          },
+          {
+            "fromNode": 301,
+            "fromPort": "out",
             "toNode": 201,
             "toPort": "in"
+          },
+          {
+            "fromNode": 301,
+            "fromPort": "out",
+            "toNode": 303,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 303,
+            "fromPort": "out",
+            "toNode": 304,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 304,
+            "fromPort": "out",
+            "toNode": 305,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 305,
+            "fromPort": "out",
+            "toNode": 306,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 306,
+            "fromPort": "out",
+            "toNode": 307,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 307,
+            "fromPort": "out",
+            "toNode": 212,
+            "toPort": "push"
+          },
+          {
+            "fromNode": 310,
+            "fromPort": "out",
+            "toNode": 205,
+            "toPort": "gain"
+          },
+          {
+            "fromNode": 301,
+            "fromPort": "out",
+            "toNode": 212,
+            "toPort": "mask"
           },
           {
             "fromNode": 201,
@@ -1296,6 +1631,14 @@
             {
               "name": "b",
               "portType": ""
+            },
+            {
+              "name": "push",
+              "portType": ""
+            },
+            {
+              "name": "mask",
+              "portType": ""
             }
           ],
           "outputs": [
@@ -1306,6 +1649,19 @@
           ]
         },
         "nodes": [
+          {
+            "id": 308,
+            "nodeId": "solid_letters",
+            "typeId": "node.masked_mix",
+            "handle": "solid_letters",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Solid Letters"
+          },
           {
             "id": 206,
             "nodeId": "field_plus_text",
@@ -1347,6 +1703,24 @@
           },
           {
             "fromNode": 206,
+            "fromPort": "out",
+            "toNode": 308,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 212,
+            "fromPort": "push",
+            "toNode": 308,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 212,
+            "fromPort": "mask",
+            "toNode": 308,
+            "toPort": "mask"
+          },
+          {
+            "fromNode": 308,
             "fromPort": "out",
             "toNode": 213,
             "toPort": "out"
@@ -2574,6 +2948,27 @@
             "title": "Pattern Cycle Counter"
           },
           {
+            "id": 309,
+            "nodeId": "seed_pattern_pick",
+            "typeId": "node.switch_value",
+            "handle": "seed_pattern_pick",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "in_0": {
+                "type": "Float",
+                "value": 7.0
+              },
+              "in_1": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Even Spread Unless Pattern Mode"
+          },
+          {
             "id": 71,
             "nodeId": "mode_value",
             "typeId": "node.value",
@@ -2839,6 +3234,18 @@
           },
           {
             "fromNode": 70,
+            "fromPort": "out",
+            "toNode": 309,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "out",
+            "toNode": 309,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 309,
             "fromPort": "out",
             "toNode": 216,
             "toPort": "out_6"
@@ -3256,6 +3663,18 @@
       "fromPort": "out",
       "toNode": 211,
       "toPort": "b"
+    },
+    {
+      "fromNode": 210,
+      "fromPort": "push",
+      "toNode": 211,
+      "toPort": "push"
+    },
+    {
+      "fromNode": 210,
+      "fromPort": "mask",
+      "toNode": 211,
+      "toPort": "mask"
     },
     {
       "fromNode": 213,

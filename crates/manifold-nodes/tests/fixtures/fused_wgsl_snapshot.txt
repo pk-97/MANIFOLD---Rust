@@ -13791,7 +13791,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     particles[i] = p;
 }
 
-=== generator:ParticleText node:67 ===
+=== generator:ParticleText node:78 ===
 // @input_access: src_0 gather_texel
 // @precision_critical: src_0
 struct Params {
@@ -13885,7 +13885,101 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== generator:ParticleText node:68 ===
+=== generator:ParticleText node:79 ===
+// @input_access: src_0 gather_texel
+// @precision_critical: src_0
+struct Params {
+    n0_channel: u32,
+    n0_scale_mode: u32,
+    n0_wrap_mode: u32,
+    n1_angle: f32,
+    n2_gain: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+fn gcd_select_channel(c: vec4<f32>, idx: u32) -> f32 {
+    switch idx {
+        case 0u: { return c.r; }
+        case 1u: { return c.g; }
+        case 2u: { return c.b; }
+        default: { return c.a; }
+    }
+}
+
+// Resolve a neighbour texel index per `wrap_mode`: 0 (Clamp) clamps to the
+// texture bounds — the ClampToEdge-sampler equivalent, exact because the
+// offset is always precisely one texel from a fragment sampled at its own
+// texel center. 1 (Repeat) modulo-wraps the index — the Repeat-address-
+// sampler equivalent, exact for the same reason (a periodic sampler wrap at
+// an exact one-texel-out-of-range UV lands on the exact opposite-edge texel
+// center, identical to wrapping the integer index).
+
+fn gcd_wrap_coord(c: vec2<i32>, dims_i: vec2<i32>, wrap_mode: u32) -> vec2<i32> {
+    if wrap_mode == 1u {
+        return ((c % dims_i) + dims_i) % dims_i;
+    }
+    return clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+}
+
+fn n0_body(in_tex: texture_2d<f32>, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
+    let dims_i = vec2<i32>(dims);
+    let c = vec2<i32>(uv * dims);
+
+    let cL = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cR = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cD = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(0, 1), dims_i, wrap_mode), 0);
+    let cU = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(0, 1), dims_i, wrap_mode), 0);
+
+    let diff_x = gcd_select_channel(cR, channel) - gcd_select_channel(cL, channel);
+    let diff_y = gcd_select_channel(cU, channel) - gcd_select_channel(cD, channel);
+
+    let scale_xy = select(
+        vec2<f32>(0.5, 0.5),
+        vec2<f32>(dims.x * 0.5, dims.y * 0.5),
+        scale_mode == 1u,
+    );
+    let dx = diff_x * scale_xy.x;
+    let dy = diff_y * scale_xy.y;
+
+    return vec4<f32>(dx, dy, 0.0, 1.0);
+}
+
+fn n1_body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, angle: f32) -> vec4<f32> {
+    let v = c_in.rg;
+    let cos_a = cos(angle);
+    let sin_a = sin(angle);
+    let r = vec2<f32>(
+        v.x * cos_a - v.y * sin_a,
+        v.x * sin_a + v.y * cos_a,
+    );
+    return vec4<f32>(r, 0.0, 1.0);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(src_0, uv, vec2<f32>(dims), params.n0_channel, params.n0_scale_mode, params.n0_wrap_mode);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_angle);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_gain);
+    textureStore(dst, coord, r2);
+}
+
+=== generator:ParticleText node:80 ===
 struct Element {
     position: vec3<f32>,
     velocity: vec3<f32>,
@@ -14124,7 +14218,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     src_0[idx] = r4;
 }
 
-=== generator:ParticleText node:69 ===
+=== generator:ParticleText node:81 ===
 // @input_access: src_0 gather
 struct Params {
     n0_translate_x: f32,
