@@ -141,9 +141,10 @@ pub struct AbletonPickerPopup {
     track_row_ids: Vec<(NodeId, usize)>,
     /// (node_id, address) for each visible macro item.
     macro_item_ids: Vec<(NodeId, AbletonMacroAddress)>,
-    /// Slots in `region`'s arena.
-    region: u8,
+    /// The latest build's node range: its first slot, the live id there when
+    /// the build finished, and how many nodes it made.
     first_node: usize,
+    first_id: NodeId,
     node_count: usize,
     /// Selection captured by `Overlay::on_event`, drained by the app-layer
     /// overlay driver and lowered against `UIRoot`'s picker context. The picker
@@ -173,8 +174,8 @@ impl AbletonPickerPopup {
             backdrop_id: None,
             track_row_ids: Vec::new(),
             macro_item_ids: Vec::new(),
-            region: crate::tree::DEFAULT_REGION,
             first_node: 0,
+            first_id: NodeId::PLACEHOLDER,
             node_count: 0,
             pending_selection: None,
         }
@@ -262,7 +263,6 @@ impl AbletonPickerPopup {
         }
 
         self.first_node = tree.count();
-        self.region = tree.building_region();
         self.track_row_ids.clear();
         self.macro_item_ids.clear();
 
@@ -585,10 +585,11 @@ impl AbletonPickerPopup {
 
         self.scroll.set_content_height(self.body_content_height());
         self.node_count = tree.count() - self.first_node;
+        self.first_id = tree.id_in(tree.building_region(), self.first_node);
     }
 
     /// Handle a click event. Returns an action if consumed.
-    pub fn handle_click(&mut self, node_id: NodeId) -> Option<AbletonPickerAction> {
+    pub fn handle_click(&mut self, tree: &UITree, node_id: NodeId) -> Option<AbletonPickerAction> {
         if !self.is_open {
             return None;
         }
@@ -620,7 +621,7 @@ impl AbletonPickerPopup {
         }
 
         // Internal non-interactive click — consume without closing
-        if self.contains_node(node_id) {
+        if self.contains_node(tree, node_id) {
             return None;
         }
 
@@ -637,9 +638,8 @@ impl AbletonPickerPopup {
         }
     }
 
-    pub fn contains_node(&self, node_id: NodeId) -> bool {
-        let id = node_id.slot();
-        node_id.region() == self.region && id >= self.first_node && id < self.first_node + self.node_count
+    pub fn contains_node(&self, tree: &UITree, node_id: NodeId) -> bool {
+        tree.range_owns(self.first_id, self.node_count, node_id)
     }
 
     // ── Layout ────────────────────────────────────────────────────
@@ -739,7 +739,7 @@ impl Overlay for AbletonPickerPopup {
         self.build(tree);
     }
 
-    fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+    fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse {
         if !self.is_open {
             return OverlayResponse::Ignored;
         }
@@ -749,7 +749,7 @@ impl Overlay for AbletonPickerPopup {
                 OverlayResponse::Consumed(Vec::new())
             }
             UIEvent::Click { node_id, .. } => {
-                if let Some(AbletonPickerAction::Selected(addr)) = self.handle_click(*node_id) {
+                if let Some(AbletonPickerAction::Selected(addr)) = self.handle_click(tree, *node_id) {
                     // Stash; the app drains and lowers against its picker context.
                     self.pending_selection = Some(addr);
                 }
@@ -851,6 +851,27 @@ mod tests {
     }
 
     #[test]
+    fn contains_node_ignores_nodes_from_a_later_build() {
+        let (dd, mut tree) = open_and_build(vec![track("Track", vec![])]);
+        let first = tree.id_in(dd.first_id.region(), dd.first_node);
+        assert!(dd.contains_node(&tree, first));
+
+        let region = dd.first_id.region();
+        tree.clear();
+        let token = tree.begin_region_in(region, Rect::new(0.0, 0.0, 10.0, 10.0), ZTier::Overlay, "other", UIFlags::empty());
+        let start = tree.count();
+        for _ in 0..dd.first_node + dd.node_count {
+            tree.add_button(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default(), "");
+        }
+        tree.end_region(token, start);
+        let reused: Vec<NodeId> = (dd.first_node..dd.first_node + dd.node_count)
+            .map(|slot| tree.id_in(region, slot))
+            .collect();
+        assert!(reused.iter().all(|&id| tree.is_live(id)), "the other build fills the picker's slots");
+        assert!(reused.iter().all(|&id| !dd.contains_node(&tree, id)));
+    }
+
+    #[test]
     fn tall_track_list_scrolls_and_stays_contained() {
         // 30 tracks × 26px = 780px of left column against a 480px popup cap:
         // rows past the body viewport must be culled, scrollable to, and
@@ -917,7 +938,7 @@ mod tests {
         );
 
         // Clicking it selects track 29 — culling must not shift indices.
-        let action = dd.handle_click(last);
+        let action = dd.handle_click(&tree, last);
         assert!(action.is_none(), "track select consumes without closing");
         assert_eq!(dd.selected_track_idx, Some(29));
         // Track change resets the scroll for the new right column.

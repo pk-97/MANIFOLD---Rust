@@ -443,7 +443,7 @@ impl InspectorCompositePanel {
         Vec::new()
     }
 
-    pub(super) fn find_target_for_node(&self, node_id: NodeId) -> Option<PressedTarget> {
+    pub(super) fn find_target_for_node(&self, tree: &UITree, node_id: NodeId) -> Option<PressedTarget> {
         // Every press target below is an inspector node; slots compare only
         // inside the inspector's own arena.
         if node_id.region() != self.cache_region {
@@ -451,11 +451,11 @@ impl InspectorCompositePanel {
         }
         let idx = node_id.slot();
         // Macros panel (above both columns)
-        if self.macros_panel.owns_node(node_id) {
+        if self.macros_panel.owns_node(tree, node_id) {
             return Some(PressedTarget::Macros);
         }
         // AUDIO TRIGGERS section (top of the layer column's content)
-        if self.audio_trigger_section.owns_node(node_id) {
+        if self.audio_trigger_section.owns_node(tree, node_id) {
             return Some(PressedTarget::AudioTriggers);
         }
 
@@ -468,11 +468,10 @@ impl InspectorCompositePanel {
             return Some(PressedTarget::Scrollbar);
         }
 
-        // Every section below is matched purely by its node range. Only the
-        // active scope built nodes this frame; the rest were reset to empty
-        // ranges in `build`, and `in_range` is false for an empty range — so no
-        // `*_visible()` gate is needed and an inactive scope can't match a live
-        // index. The node range is the single source of truth.
+        // Every section below is matched by its node range. Param cards check
+        // that their range's first node is still live, so a range from an
+        // earlier build owns nothing. The chrome sections compare bare slots
+        // and rely on `build` resetting an inactive scope to an empty range.
 
         // Master section
         if in_range(
@@ -483,7 +482,7 @@ impl InspectorCompositePanel {
             return Some(PressedTarget::MasterChrome);
         }
         for (i, card) in self.effects[Self::SCOPE_MASTER].iter().enumerate() {
-            if in_range(idx, card.first_node(), card.node_count()) {
+            if card.owns_node(tree, node_id) {
                 return Some(PressedTarget::MasterEffect(i));
             }
         }
@@ -499,17 +498,17 @@ impl InspectorCompositePanel {
             return Some(PressedTarget::LayerChrome);
         }
         if let Some(ref gp) = self.gen_params
-            && in_range(idx, gp.first_node(), gp.node_count())
+            && gp.owns_node(tree, node_id)
         {
             return Some(PressedTarget::GenParam);
         }
         for (i, card) in self.modifier_cards.iter().enumerate() {
-            if in_range(idx, card.first_node(), card.node_count()) {
+            if card.owns_node(tree, node_id) {
                 return Some(PressedTarget::Modifier(i));
             }
         }
         for (i, card) in self.effects[Self::SCOPE_LAYER].iter().enumerate() {
-            if in_range(idx, card.first_node(), card.node_count()) {
+            if card.owns_node(tree, node_id) {
                 return Some(PressedTarget::LayerEffect(i));
             }
         }
@@ -600,7 +599,7 @@ impl InspectorCompositePanel {
                 None => Vec::new(),
             };
         }
-        if let Some(target) = self.find_target_for_node(node_id) {
+        if let Some(target) = self.find_target_for_node(tree, node_id) {
             self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_click(node_id),
@@ -701,7 +700,7 @@ impl InspectorCompositePanel {
             self.select_rack_group(&group_id, modifiers.ctrl || modifiers.command);
             return vec![PanelAction::Params(ParamsAction::EffectSelectionChanged)];
         }
-        let target = self.find_target_for_node(node_id);
+        let target = self.find_target_for_node(tree, node_id);
         self.pressed_target = target;
         // Record which tab this interaction targets (survives drag_end)
         if let Some(ref t) = target {

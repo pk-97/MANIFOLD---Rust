@@ -252,6 +252,37 @@ impl RowHost {
 
     }
 
+    /// Forget every node id from the last build, keeping the row count and the
+    /// value caches (`swatch_rgb`, `swatch_members`) and the gesture. A card
+    /// its owner does not rebuild this pass must not keep ids that now name
+    /// another panel's nodes in the same slots.
+    pub(crate) fn clear_nodes(&mut self) {
+        fn none<T>(ids: &mut [Option<T>]) {
+            ids.iter_mut().for_each(|id| *id = None);
+        }
+        none(&mut self.slider_ids);
+        none(&mut self.slider_resets);
+        none(&mut self.row_catcher_ids);
+        none(&mut self.driver_btn_ids);
+        none(&mut self.envelope_btn_ids);
+        none(&mut self.driver_config_ids);
+        none(&mut self.audio_btn_ids);
+        none(&mut self.audio_configs);
+        none(&mut self.audio_trigger_mode_badge_ids);
+        none(&mut self.target_ids);
+        none(&mut self.envelope_config_ids);
+        none(&mut self.trim_ids);
+        none(&mut self.ableton_trim_ids);
+        none(&mut self.audio_trim_ids);
+        none(&mut self.ableton_config_ids);
+        none(&mut self.toggle_ids);
+        none(&mut self.mapping_chevron_ids);
+        none(&mut self.swatch_ids);
+        self.mod_tab_ids.iter_mut().for_each(Vec::clear);
+        self.section_header_ids.clear();
+        self.row_index.clear();
+    }
+
     /// Rewrite a frame-aligned driver's period readout in place (D20): the
     /// content clock moved the frame-quantized period, nothing structural.
     pub(crate) fn sync_driver_frame_rate(

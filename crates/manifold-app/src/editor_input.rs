@@ -584,7 +584,7 @@ pub(crate) fn drain(
                         out.graph_edits.push(GraphEditCommand::AddGraphNodeAt { type_id, graph_pos });
                     }
                     ed.offscreen_dirty = true;
-                } else if ed.ui_root.browser_popup.contains_node(node_id) {
+                } else if ed.ui_root.browser_popup.contains_node(&ed.ui_root.tree, node_id) {
                     ed.ui_root.note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
                     // An internal click (category chip, background) does not
                     // leak to the canvas.

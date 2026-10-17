@@ -487,13 +487,9 @@ impl MacrosPanel {
         }
     }
 
-    /// Check if a node belongs to this panel.
-    pub fn owns_node(&self, node_id: NodeId) -> bool {
-        let Some(first) = self.first_node else {
-            return false;
-        };
-        let id = node_id.slot();
-        node_id.region() == first.region() && id >= first.slot() && id < first.slot() + self.node_count
+    /// Whether `node_id` is one of the nodes this panel's latest live build made.
+    pub fn owns_node(&self, tree: &UITree, node_id: NodeId) -> bool {
+        self.first_node.is_some_and(|first| tree.range_owns(first, self.node_count, node_id))
     }
 
     pub fn label_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {
@@ -511,6 +507,25 @@ pub(super) mod tests {
 
     fn rect() -> Rect {
         Rect::new(0.0, 0.0, 300.0, 220.0)
+    }
+
+    /// After the tree is rebuilt without this panel, nodes in its old slots
+    /// belong to whoever built them.
+    #[test]
+    fn owns_node_ignores_nodes_from_a_later_build() {
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        panel.build(&mut tree, rect());
+        let first = panel.first_node.expect("built");
+        assert!(panel.owns_node(&tree, first));
+
+        tree.clear();
+        let filler: Vec<NodeId> = (0..panel.node_count)
+            .map(|_| tree.add_button(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default(), ""))
+            .collect();
+        assert_eq!(filler[0].slot(), first.slot());
+        assert!(filler.iter().all(|&id| !panel.owns_node(&tree, id)));
     }
 
     #[test]

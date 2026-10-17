@@ -116,8 +116,8 @@ impl ScenePanel {
         cy + height + ROW_GAP
     }
 
-    pub(crate) fn force_card_index_for_node(&self, node_id: NodeId) -> Option<usize> {
-        self.force_cards.iter().position(|card| card.owns_node(node_id))
+    pub(crate) fn force_card_index_for_node(&self, tree: &UITree, node_id: NodeId) -> Option<usize> {
+        self.force_cards.iter().position(|card| card.owns_node(tree, node_id))
     }
 
     pub(crate) fn force_card_click(
@@ -125,7 +125,7 @@ impl ScenePanel {
         node_id: NodeId,
         tree: &mut UITree,
     ) -> Option<Vec<PanelAction>> {
-        let index = self.force_card_index_for_node(node_id)?;
+        let index = self.force_card_index_for_node(tree, node_id)?;
         let info = self.force_cards[index].modifier_info()?.clone();
 
         self.selection.insert(
@@ -156,7 +156,7 @@ impl ScenePanel {
         pos: Vec2,
         tree: &mut UITree,
     ) -> Option<Vec<PanelAction>> {
-        let index = self.force_card_index_for_node(node_id)?;
+        let index = self.force_card_index_for_node(tree, node_id)?;
         let info = self.force_cards[index].modifier_info()?.clone();
 
         self.selection.insert(
@@ -175,7 +175,7 @@ impl ScenePanel {
         node_id: NodeId,
         tree: &UITree,
     ) -> Option<PanelAction> {
-        let index = self.force_card_index_for_node(node_id)?;
+        let index = self.force_card_index_for_node(tree, node_id)?;
         self.force_cards[index].value_cell_typein(node_id, tree)
     }
 
@@ -408,6 +408,67 @@ mod tests {
             PanelAction::Scrub(ValueRef::Param(GraphParamTarget::GeneratorOf(layer), param), ScrubPhase::Commit)
                 if layer.as_str() == "layer-a" && param.as_ref() == "force_strength")));
         assert!(panel.force_card_double_click(value, &tree).is_some());
+    }
+
+    /// Selecting a force after a camera row's driver drawer was open must not
+    /// leave the drawer's rate buttons answering clicks on the force card
+    /// that now occupies their slots.
+    #[test]
+    fn force_card_cells_never_fire_a_stale_camera_driver_drawer() {
+        use crate::intent::{Gesture, IntentRegistry};
+        use crate::panels::ModulationAction;
+        let layer = LayerId::new("layer-1");
+        let force = manifold_foundation::NodeId::new("force");
+        let (mut vm, mut surface) = super::super::tests::world_transform_vm();
+        vm.camera = CameraRowVm::Custom;
+        vm.forces = vec![SceneForceRowVm { instance_id: force.clone(), title: "Force".into() }];
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Camera, &["orbit_speed"]);
+        let mut orbit = surface.rows[0].clone();
+        orbit.id = "orbit_speed".into();
+        orbit.spec.name = "Orbit Speed".into();
+        orbit.spec.section = Some("Camera".into());
+        orbit.modulation.driver_active = true;
+        surface.rows.push(orbit);
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(super::super::tests::live(vm));
+        panel.configure_params(Some(surface));
+        panel.configure_force_cards(&[force_surface("layer-1", "force")]);
+        panel.selection.insert(layer.clone(), SceneSelection::Camera);
+        let rect = Rect::new(0.0, 0.0, 400.0, 1600.0);
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, rect);
+        let stale: Vec<NodeId> = panel.properties_card.row_host.driver_config_ids
+            .iter()
+            .flatten()
+            .flat_map(|drawer| drawer.button_ids().to_vec())
+            .collect();
+        assert!(!stale.is_empty(), "the Orbit Speed driver drawer is open");
+
+        panel.selection.insert(layer, SceneSelection::Force(force));
+        tree.clear();
+        panel.build_docked(&mut tree, rect);
+        assert!(panel.properties_card.row_host.driver_config_ids.iter().all(Option::is_none));
+        let mut intents = IntentRegistry::new();
+        panel.register_intents(&mut intents);
+        assert_eq!(intents.dead_entry_count(&tree), 0, "the panel registers only live ids");
+
+        let value = tree.all_nodes()
+            .find(|node| tree.name_of(node.id) == Some("param_row.force_strength.value"))
+            .expect("force card value cell")
+            .id;
+        assert!(intents.resolve(&tree, Some(value), Gesture::Click).is_none());
+        let reused: Vec<NodeId> = stale.iter()
+            .map(|id| tree.id_in(id.region(), id.slot()))
+            .filter(|&id| tree.is_live(id))
+            .collect();
+        assert!(!reused.is_empty(), "the force build reuses the drawer's slots");
+        for id in reused {
+            assert!(!matches!(
+                intents.resolve(&tree, Some(id), Gesture::Click),
+                Some(PanelAction::Modulation(ModulationAction::DriverConfig(..)))
+            ));
+        }
     }
 
     fn force_vm(surface: ParamSurface) -> SceneSetupVm {

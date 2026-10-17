@@ -434,12 +434,9 @@ impl AudioTriggerSection {
         self.node_count = tree.count() - first;
     }
 
-    pub fn owns_node(&self, node_id: NodeId) -> bool {
-        let Some(first) = self.first_node else {
-            return false;
-        };
-        let id = node_id.slot();
-        node_id.region() == first.region() && id >= first.slot() && id < first.slot() + self.node_count
+    /// Whether `node_id` is one of the nodes this section's latest live build made.
+    pub fn owns_node(&self, tree: &UITree, node_id: NodeId) -> bool {
+        self.first_node.is_some_and(|first| tree.range_owns(first, self.node_count, node_id))
     }
 
     // ── Click resolution ─────────────────────────────────────────────

@@ -14,6 +14,12 @@
 //! sidebar instantiates it as `IntentRegistry<GraphEditCommand>` to fold its own
 //! click dispatch onto the same machinery (UI Architecture Overhaul Phase 6).
 //!
+//! Entries are keyed by the full [`NodeId`], generation included. A panel may
+//! register against an id it kept from an earlier build of its region; that
+//! entry is inert. It can never be found from a live node, even one that now
+//! sits in the same region and slot, because the live node carries a different
+//! generation.
+//!
 //! See `docs/NODE_INTENT_DISPATCH.md` for the full design + migration plan.
 
 #[cfg(test)]
@@ -32,7 +38,8 @@ pub enum Gesture {
 }
 
 /// Per-node intent: which action `A` each gesture maps to. Most nodes carry
-/// none, so the registry stores these sparsely (boxed, behind `Option`).
+/// none, so the registry stores only the nodes that carry one, inline in a
+/// map that keeps its capacity across rebuilds (no allocation per entry).
 /// Generic over the action type (default [`PanelAction`]); the graph-editor
 /// sidebar uses `NodeIntent<GraphEditCommand>`.
 pub struct NodeIntent<A = PanelAction> {
@@ -80,17 +87,21 @@ impl<A> NodeIntent<A> {
     }
 }
 
-/// Dense intent store indexed by region and slot, parallel to the tree's
-/// per-region arenas. Cleared at build start and repopulated as panels create
-/// nodes. Generic over the action type (default [`PanelAction`]).
+/// Sparse intent store keyed by the full [`NodeId`] (region, slot and
+/// generation). Cleared at build start and repopulated as panels create nodes.
+/// Generic over the action type (default [`PanelAction`]).
+///
+/// Contract: a registration against a stale id is inert. The key carries the
+/// generation, so a stale id and the live node that reuses its slot never
+/// share an entry.
 pub struct IntentRegistry<A = PanelAction> {
-    slots: [Vec<Option<Box<NodeIntent<A>>>>; crate::tree::MAX_REGIONS],
+    entries: ahash::AHashMap<NodeId, NodeIntent<A>>,
 }
 
-// Hand-rolled to avoid a spurious `A: Default` bound (`Vec::new()` needs none).
+// Hand-rolled to avoid a spurious `A: Default` bound.
 impl<A> Default for IntentRegistry<A> {
     fn default() -> Self {
-        Self { slots: std::array::from_fn(|_| Vec::new()) }
+        Self { entries: ahash::AHashMap::new() }
     }
 }
 
@@ -99,20 +110,21 @@ impl<A> IntentRegistry<A> {
         Self::default()
     }
 
-    /// Drop all intent. Call once at the start of each tree build.
+    /// Drop all intent, keeping the map's capacity. Call once at the start of
+    /// each tree build.
     pub fn clear(&mut self) {
-        for region in &mut self.slots {
-            region.clear();
-        }
+        self.entries.clear();
+    }
+
+    /// How many registered entries name a node that is not live in `tree`.
+    /// Such entries are inert, but each one is a panel registering ids it
+    /// kept from an earlier build.
+    pub fn dead_entry_count(&self, tree: &UITree) -> usize {
+        self.entries.keys().filter(|&&id| !tree.is_live(id)).count()
     }
 
     fn slot_mut(&mut self, node: NodeId) -> &mut NodeIntent<A> {
-        let slots = &mut self.slots[node.region() as usize];
-        let idx = node.slot();
-        if idx >= slots.len() {
-            slots.resize_with(idx + 1, || None);
-        }
-        slots[idx].get_or_insert_with(|| Box::new(NodeIntent::default()))
+        self.entries.entry(node).or_default()
     }
 
     /// Map a gesture on `node` to `action`.
@@ -131,11 +143,7 @@ impl<A> IntentRegistry<A> {
     }
 
     fn get(&self, node: NodeId) -> Option<&NodeIntent<A>> {
-        self.slots
-            .get(node.region() as usize)
-            .and_then(|r| r.get(node.slot()))
-            .and_then(|s| s.as_deref())
-            .filter(|i| !i.is_empty())
+        self.entries.get(&node).filter(|i| !i.is_empty())
     }
 
     /// Fold up from `hit` toward the root, returning the first ancestor's action
@@ -235,6 +243,32 @@ mod tests {
                 .is_none(),
             "claimed region must shadow the outer right-click intent"
         );
+    }
+
+    /// A panel that re-registers an id from an earlier build of its region
+    /// must not hand its action to the live node now at that slot.
+    #[test]
+    fn stale_id_registration_is_inert_after_slot_reuse() {
+        let mut tree = UITree::new();
+        let mut intents = IntentRegistry::new();
+
+        let stale = tree.add_button(None, 0.0, 0.0, 80.0, 30.0, style(), "");
+        tree.clear_region(stale.region());
+        let live = tree.add_button(None, 0.0, 0.0, 80.0, 30.0, style(), "");
+        assert_eq!((stale.region(), stale.slot()), (live.region(), live.slot()), "slot is reused");
+        assert_ne!(stale, live);
+
+        intents.clear();
+        intents.on(stale, Gesture::Click, PanelAction::Transport(TransportAction::Stop));
+
+        assert!(intents.resolve(&tree, Some(live), Gesture::Click).is_none());
+        assert_eq!(intents.dead_entry_count(&tree), 1);
+
+        intents.on(live, Gesture::Click, PanelAction::Transport(TransportAction::PlayPause));
+        assert!(matches!(
+            intents.resolve(&tree, Some(live), Gesture::Click),
+            Some(PanelAction::Transport(TransportAction::PlayPause))
+        ));
     }
 
     #[test]
