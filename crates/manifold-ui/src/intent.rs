@@ -38,7 +38,8 @@ pub enum Gesture {
 }
 
 /// Per-node intent: which action `A` each gesture maps to. Most nodes carry
-/// none, so the registry stores these sparsely (boxed, behind `Option`).
+/// none, so the registry stores only the nodes that carry one, inline in a
+/// map that keeps its capacity across rebuilds (no allocation per entry).
 /// Generic over the action type (default [`PanelAction`]); the graph-editor
 /// sidebar uses `NodeIntent<GraphEditCommand>`.
 pub struct NodeIntent<A = PanelAction> {
@@ -94,7 +95,7 @@ impl<A> NodeIntent<A> {
 /// generation, so a stale id and the live node that reuses its slot never
 /// share an entry.
 pub struct IntentRegistry<A = PanelAction> {
-    entries: ahash::AHashMap<NodeId, Box<NodeIntent<A>>>,
+    entries: ahash::AHashMap<NodeId, NodeIntent<A>>,
 }
 
 // Hand-rolled to avoid a spurious `A: Default` bound.
@@ -142,7 +143,7 @@ impl<A> IntentRegistry<A> {
     }
 
     fn get(&self, node: NodeId) -> Option<&NodeIntent<A>> {
-        self.entries.get(&node).map(|b| &**b).filter(|i| !i.is_empty())
+        self.entries.get(&node).filter(|i| !i.is_empty())
     }
 
     /// Fold up from `hit` toward the root, returning the first ancestor's action
