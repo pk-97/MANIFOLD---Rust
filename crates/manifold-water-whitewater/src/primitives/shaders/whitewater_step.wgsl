@@ -6,6 +6,7 @@
 // The pool is `capacity` WhitewaterParticle slots, live ones first; `state`
 // holds what FLIP keeps across ticks:
 //   [0] live slots  [1] next id  [2] pool full  [3] emitted  [4] thinned
+//   [5] front: slots overwritten by this frame's appends (0 between frames)
 // pool full, emitted and thinned count since the pool was seeded.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
@@ -104,18 +105,37 @@ fn live_spawns() -> u32 {
     return scan[params.spawn_slots - 1u];
 }
 
-// FLIP's load: the frame's live spawns, in spawn order, into the empty slots
-// after the live ones, each taking the next id. Spawns past capacity find no
-// room. The pool is written in place; only its empty slots change.
+// FLIP's load, with one departure: FLIP drops spawns once the pool is full,
+// here they overwrite the oldest particles. The pool is in birth order, live
+// slots [0, live) oldest first. Spawns fill the empty slots after the live
+// ones (`tail`); the rest overwrite the oldest slots not yet overwritten this
+// frame, from `front` on (`over`). Each takes the next id. The pool is
+// written in place; compaction later rotates the overwritten front slots
+// behind the survivors.
+fn append_plan(live: u32, front: u32) -> vec3<u32> {
+    let spawned = live_spawns();
+    let tail = min(spawned, params.capacity - live);
+    let over = min(spawned - tail, live - front);
+    return vec3<u32>(tail, over, spawned);
+}
+
 @compute @workgroup_size(256)
 fn append(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    let live = state[0];
-    let placed = min(live_spawns(), params.capacity - min(live, params.capacity));
-    if i < live || i >= live + placed || i >= params.capacity {
+    if i >= params.capacity {
         return;
     }
-    let k = i - live;
+    let live = min(state[0], params.capacity);
+    let front = state[5];
+    let plan = append_plan(live, front);
+    var k = 0u;
+    if i >= live && i < live + plan.x {
+        k = i - live;
+    } else if i >= front && i < front + plan.y {
+        k = plan.x + (i - front);
+    } else {
+        return;
+    }
     var lo = 0u;
     var hi = params.spawn_slots - 1u;
     while lo < hi {
@@ -135,37 +155,52 @@ fn append(@builtin(global_invocation_id) gid: vec3<u32>) {
     pool_out[i] = p;
 }
 
-// After append: the live count and id advance by what was placed; the rest
-// is counted as pool full. Emitted counts the live spawns, thinned the
-// emissions past the spawn slots (`offsets` is the emitters' running total).
+// After append: the live count, the overwritten-front count and the id
+// advance by what was placed; spawns that met a full pool are counted as
+// pool full (replaced or dropped). Emitted counts the live spawns, thinned
+// the emissions past the spawn slots (`offsets` is the emitters' running
+// total).
 @compute @workgroup_size(1)
 fn append_state() {
     let live = min(state[0], params.capacity);
-    let spawned = live_spawns();
-    let placed = min(spawned, params.capacity - live);
+    let plan = append_plan(live, state[5]);
     var total = 0u;
     if params.emitters > 0u {
         total = offsets[params.emitters - 1u];
     }
-    state[0] = live + placed;
-    state[1] = (state[1] + placed) % ID_LIMIT;
-    state[2] = state[2] + (spawned - placed);
-    state[3] = state[3] + spawned;
+    state[0] = live + plan.x;
+    state[5] = state[5] + plan.y;
+    state[1] = (state[1] + plan.x + plan.y) % ID_LIMIT;
+    state[2] = state[2] + (plan.z - plan.x);
+    state[3] = state[3] + plan.z;
     state[4] = state[4] + (total - min(total, params.spawn_slots));
 }
 
 // FLIP's removeParticles: each kept slot (its keep flag scanned) moves to
-// the front in pool order; slots past the kept total go empty.
+// the front in pool order; slots past the kept total go empty. The first
+// `front` slots hold this frame's overwrites, the newest particles, so they
+// rotate to the back to keep birth order.
 @compute @workgroup_size(256)
 fn compact(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if i >= params.capacity {
         return;
     }
-    if flag(i) == 1u {
-        pool_out[scan[i] - 1u] = pool_in[i];
+    let kept = scan[params.capacity - 1u];
+    let front = state[5];
+    var front_kept = 0u;
+    if front > 0u {
+        front_kept = scan[front - 1u];
     }
-    if i >= scan[params.capacity - 1u] {
+    if flag(i) == 1u {
+        let rank = scan[i] - 1u;
+        var dest = rank - front_kept;
+        if i < front {
+            dest = rank + (kept - front_kept);
+        }
+        pool_out[dest] = pool_in[i];
+    }
+    if i >= kept {
         pool_out[i] = empty_particle();
     }
 }
@@ -175,6 +210,7 @@ fn compact_state() {
     if params.capacity > 0u {
         state[0] = scan[params.capacity - 1u];
     }
+    state[5] = 0u;
 }
 
 // One flag per (population, slot): slot s of population p is flagged when
