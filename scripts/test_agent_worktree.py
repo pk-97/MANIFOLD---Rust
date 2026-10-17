@@ -655,26 +655,82 @@ def fake_incremental(wt, age=7200, crate="manifold_app"):
     return session, files
 
 
-def test_scrub_frees_an_idle_slot_over_its_cap(repo):
-    """Since bd91b025d only incremental sessions are reclaimable: an over-cap
-    idle slot loses its incremental cache while runnable artifacts and warm
-    metadata survive (direct launches hold no Cargo lock to exclude them)."""
+def fake_build_out(wt, age=7200):
+    """A build-script OUT_DIR file plus a non-Cargo file in the same target."""
+    out = wt / "target" / "debug" / "build" / "spirv-tools-sys-f083afb9e96a943c" / "out"
+    out.mkdir(parents=True)
+    product = out / "lib" / "libSPIRV-Tools.a"
+    product.parent.mkdir()
+    product.write_bytes(b"\0" * 65536)
+    old = time.time() - age
+    os.utime(product, (old, old))
+    capture = wt / "target" / "proof-captures" / "frame.png"
+    capture.parent.mkdir(parents=True)
+    capture.write_bytes(b"png")
+    return product, capture
+
+
+def test_scrub_evicts_a_landed_idle_slot_over_its_cap(repo):
+    """deps/ only ever grew (BUG-k213c, pool caches outgrow the 40 GiB target):
+    an over-cap landed idle slot now loses its whole stale profile —
+    executables, fingerprints and build output — while files Cargo does not
+    own stay, and the checkout is untouched."""
     wt = add_slot(repo, "slot-0", "lane/landed")
     exe = fake_target(wt)
     _session, inc_files = fake_incremental(wt)
+    product, capture = fake_build_out(wt)
+    fingerprint = wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp"
     with patch.object(aw, "slot_cap_bytes", return_value=1), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
             patch.object(aw, "target_live_status", return_value=False), \
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_scrub(SimpleNamespace())
-    check("over-cap idle slot preserves linked executables", exe.exists(), out.getvalue())
-    check("over-cap idle slot preserves fingerprint metadata",
-          (wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
-          out.getvalue())
-    check("over-cap idle slot loses its incremental session",
-          not any(path.exists() for path in inc_files), out.getvalue())
-    check("scrub reports the removed files", "removed 3 files" in out.getvalue(), out.getvalue())
+    text = out.getvalue()
+    check("over-cap landed slot loses linked executables", not exe.exists(), text)
+    check("over-cap landed slot loses fingerprints with them", not fingerprint.exists(), text)
+    check("over-cap landed slot loses build-script output", not product.exists(), text)
+    check("over-cap landed slot loses its incremental session",
+          not any(path.exists() for path in inc_files), text)
+    check("files Cargo does not own survive eviction", capture.exists(), text)
+    check("scrub reports the removed files", "removed 6 cache files" in text, text)
     check("checkout untouched", (wt / "f.txt").read_text() == "base\n")
+
+
+def test_cap_eviction_spares_fresh_and_pinned_slots(repo):
+    """A just-built profile is not stale; a dirty, leased or unlanded slot never
+    loses artifacts, whatever its size."""
+    fresh = add_slot(repo, "slot-0", "lane/fresh")
+    fresh_exe = fake_target(fresh)
+    os.utime(fresh_exe, None)
+    dirty = add_slot(repo, "slot-1", "lane/dirty-cap")
+    (dirty / "f.txt").write_text("uncommitted\n")
+    dirty_exe = fake_target(dirty)
+    leased = add_slot(repo, "slot-2", "lane/leased-cap")
+    write_lease(leased, holder_pid=os.getpid(), age_h=0.5)
+    leased_exe = fake_target(leased)
+    twin = add_slot(repo, "slot-3", "lane/twin-a")
+    (twin / "g.txt").write_text("x\n")
+    sh(twin, "git", "add", "g.txt")
+    sh(twin, "git", "commit", "-qm", "unlanded")
+    dup = aw.POOL / "slot-4"
+    sh(repo, "git", "worktree", "add", "-q", "--detach", str(dup), "origin/main")
+    sh(dup, "git", "symbolic-ref", "HEAD", "refs/heads/lane/twin-a")  # duplicate holder fixture
+    sh(dup, "git", "read-tree", "-m", "-u", "lane/twin-a")
+    dup_exe = fake_target(dup)
+    check("fixture: duplicate is reclaimable for acquire",
+          aw.slot_state(dup)[0] == aw.RECLAIMABLE, aw.slot_state(dup))
+    with patch.object(aw, "slot_cap_bytes", return_value=1), \
+            patch.object(aw, "SCRUB_TO_GB", 0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.cmd_scrub(SimpleNamespace())
+    text = out.getvalue()
+    check("fresh profile survives cap pressure", fresh_exe.exists(), text)
+    check("fresh profile skip is reported", "KEEP profile" in text and "slot-0" in text, text)
+    check("dirty slot keeps artifacts over cap", dirty_exe.exists(), text)
+    check("leased slot keeps artifacts over cap", leased_exe.exists(), text)
+    check("unlanded duplicate keeps artifacts over cap", dup_exe.exists(), text)
 
 
 def test_scrub_prunes_idle_incremental_without_pressure(repo):
@@ -724,10 +780,8 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
         os.utime(path, (old, old))
 
     def free_space(_path):
-        # Reclaim can only free the incremental session now (bd91b025d keeps
-        # artifacts and metadata warm), so the reserve is met exactly when the
-        # session's first file is gone.
-        return 10**15 if not landed_inc[0].exists() else 0
+        # The reserve is met once the LRU slot's profile is gone.
+        return 10**15 if not landed_exe.exists() else 0
 
     with patch.object(aw, "disk_free", side_effect=free_space), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
@@ -736,14 +790,14 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
         aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
     text = out.getvalue()
     check("landed idle slot incremental reclaimed", not landed_inc[0].exists(), text)
-    check("landed idle slot keeps fingerprint metadata", landed_cache.exists(), text)
-    check("landed linked executable preserved", landed_exe.exists(), text)
+    check("landed idle slot loses its fingerprints", not landed_cache.exists(), text)
+    check("landed linked executable reclaimed", not landed_exe.exists(), text)
     check("reclaim stops once the reserve is met", spare_exe.exists(), text)
     check("dirty slot untouched", dirty_exe.exists() and (dirty / "f.txt").read_text() == "uncommitted\n", text)
     check("unlanded slot untouched", unlanded_exe.exists(), text)
     check("leased slot untouched", leased_exe.exists(), text)
     check("reclaim names what it kept", "KEEP slot-1: dirty" in text and "KEEP slot-2: unlanded" in text, text)
-    check("reclaim reports the freed slot", "RECLAIMED: removed 3" in text, text)
+    check("reclaim reports the freed slot", "RECLAIMED: removed 5" in text, text)
 
     with patch.object(aw, "disk_free", return_value=0), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
@@ -796,7 +850,7 @@ def test_scrub_continues_past_a_victim_that_frees_nothing(repo):
     check("scrub reaches the cache behind a no-op victim",
           not warm_inc[0].exists() and "SCRUBBED slot-1" in out.getvalue(),
           out.getvalue())
-    check("warm artifacts and metadata survive the pass", exe.exists() and
+    check("over-budget pool evicts the landed slot's stale profile", not exe.exists() and not
           (warm / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
           out.getvalue())
 
@@ -810,7 +864,8 @@ def test_pool_ignores_unregistered_cargo_slot(repo):
           str(aw.pool_slots()))
 
 
-TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
+TESTS += [test_scrub_evicts_a_landed_idle_slot_over_its_cap,
+          test_cap_eviction_spares_fresh_and_pinned_slots,
           test_scrub_prunes_idle_incremental_without_pressure,
           test_reclaim_touches_only_landed_clean_idle_slots,
           test_reclaim_refuses_a_live_process,

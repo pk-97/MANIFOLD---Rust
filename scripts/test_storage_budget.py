@@ -486,6 +486,49 @@ def test_admission_reclaims_same_slot_and_idle_only():
               not refused.ok and refused.reserve_bytes == sb.MAINTENANCE_GOAL_BYTES == 30 * sb.GIB, refused)
 
 
+def test_whole_profile_eviction():
+    """Idle slots' deps grew without bound (BUG-k213c, pool caches outgrow the
+    40 GiB target). Profiles leave whole, oldest first, never from the
+    admitting slot and never past a live or uninspectable process."""
+    def aged(path, age, contents=b"\0" * 65536):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+        os.utime(path, (time.time() - age,) * 2)
+        return path
+
+    with fixture_directory() as raw:
+        root = Path(raw)
+        idle, own = root / "idle" / "target", root / "own" / "target"
+        marker(idle)
+        marker(own)
+        old_lib = aged(idle / "debug" / "deps" / "libold-0123456789abcdef.rlib", 10800)
+        old_print = aged(idle / "debug" / ".fingerprint" / "old-abcdef" / "lib-old.json", 10800)
+        old_out = aged(idle / "debug" / "build" / "old-abcdef" / "out" / "gen" / "bindings.rs", 10800)
+        newer_lib = aged(idle / "release" / "deps" / "libnew-0123456789abcdef.rlib", 5400)
+        report = aged(idle / "debug" / "my-report.txt", 10800, b"keep")
+        own_lib = aged(own / "debug" / "deps" / "libown-0123456789abcdef.rlib", 10800)
+        idle_only = lambda *a, **k: False
+        result = sb.maintain_caches([idle, own], root, cap_bytes=sb.target_size(idle) - 1,
+                                   same_slot=own, process_check=idle_only,
+                                   free_check=lambda _: 100 * sb.GIB, evict_profiles=True)
+        check("oldest profile leaves whole", not any(p.exists() for p in (old_lib, old_print, old_out)), result)
+        check("eviction stops once the slot fits its cap", newer_lib.exists(), result)
+        check("non-Cargo files survive profile eviction", report.exists(), result)
+        for live in (True, None):
+            result = sb.maintain_caches([idle], root, cap_bytes=0, process_check=lambda *a, **k: live,
+                                       free_check=lambda _: 100 * sb.GIB, evict_profiles=True)
+            check(f"profile eviction refused when liveness={live}", newer_lib.exists() and result[2], result)
+        result = sb.maintain_caches([idle, own], root, cap_bytes=0, same_slot=own,
+                                   process_check=idle_only, free_check=lambda _: 100 * sb.GIB,
+                                   evict_profiles=True)
+        check("admitting slot keeps its artifacts", own_lib.exists(), result)
+        check("idle slot loses every stale profile past its cap", not newer_lib.exists(), result)
+        plain = aged(idle / "debug" / "deps" / "libplain-0123456789abcdef.rlib", 10800)
+        result = sb.maintain_caches([idle], root, cap_bytes=0, process_check=idle_only,
+                                   free_check=lambda _: 100 * sb.GIB)
+        check("artifacts stay without profile eviction", plain.exists(), result)
+
+
 def test_cap_configuration():
     with patch.dict(os.environ, {}, clear=True):
         check("default cap is 160 GiB", sb.slot_cap_bytes() == 160 * sb.GIB)
@@ -576,7 +619,7 @@ except BlockingIOError:
 print('ACQUIRED', flush=True)
 os.close(fd)
 """
-        def inventory_after_builder_start(path, profiles=None):
+        def inventory_after_builder_start(path, profiles=None, **kwargs):
             child = subprocess.Popen([sys.executable, "-c", program, str(lock)],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             builders.append(child)
@@ -585,7 +628,7 @@ os.close(fd)
             assert ready, "builder did not reach lock barrier"
             check("build starting before inventory blocks on created Cargo lock",
                   child.stdout.readline().strip() == "BLOCKED")
-            return original_plan(path, profiles)
+            return original_plan(path, profiles, **kwargs)
         try:
             with patch.object(sb, "plan_cache_cleanup", side_effect=inventory_after_builder_start):
                 result = sb.maintain_caches([target], root, same_slot=target,
@@ -651,8 +694,8 @@ def test_binary_opened_after_enumeration():
                 (root / ".worktree-lease.json").write_text('{"holder_pid": %d}' % os.getpid())
             original_plan = sb.plan_cache_cleanup
             opened = []
-            def open_after_inventory(path, profiles=None):
-                plan = original_plan(path, profiles)
+            def open_after_inventory(path, profiles=None, **kwargs):
+                plan = original_plan(path, profiles, **kwargs)
                 opened.extend(p.open("rb") for p in artifacts)
                 return plan
             try:
@@ -728,9 +771,9 @@ def test_executor_holds_reservation_for_validation_and_unlink():
         def validate(*args):
             assert_reserved()
             return original_validate(*args)
-        def unlink(*args):
+        def unlink(*args, **kwargs):
             assert_reserved()
-            return original_unlink(*args)
+            return original_unlink(*args, **kwargs)
         with patch.object(sb, "canonical_target", side_effect=validate), \
                 patch.object(sb, "_unlink_entry", side_effect=unlink):
             result = sb.maintain_caches([target], root, process_check=lambda _: False,
@@ -749,7 +792,8 @@ for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
              test_real_cargo_names, test_hashed_executables,
              test_bounded_reclaim_order_and_preservation, test_bounded_reclaim_liveness_and_lock,
-             test_admission_reclaims_same_slot_and_idle_only, test_cap_configuration,
+             test_admission_reclaims_same_slot_and_idle_only, test_whole_profile_eviction,
+             test_cap_configuration,
              test_same_slot_open_session_and_log,
              test_admission_cap_with_healthy_reserve_and_fresh_refusal,
              test_admission_pool_reservation_safety,
