@@ -46,6 +46,7 @@ pub mod group_edit;
 pub mod id;
 pub mod layer;
 pub mod fluid_domain;
+pub mod physics_gizmo;
 pub mod liquid_domain;
 pub mod macro_bank;
 pub mod marker;

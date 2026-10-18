@@ -22,6 +22,7 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_physics::clock::TICK;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_water_liquid::fluid_role::FluidRole;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
@@ -334,6 +335,8 @@ manifold_node_engine::primitive! {
         clock: LiquidClock = LiquidClock::default(),
         schedule: Vec<MatterInterval> = Vec::new(),
         setup: Option<MatterSetup> = None,
+        // The domain box of the accepted setup.
+        layout: Option<FluidDomainLayout> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
         bodies: LiquidBodies = LiquidBodies::default(),
@@ -503,8 +506,10 @@ const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_63",
 ];
 const TICKS: usize = 20;
+const EPOCH: usize = 22;
 const IMPULSE_TICK: usize = 51;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
+const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
 impl Primitive for MatterDomain {
@@ -668,6 +673,29 @@ impl Primitive for MatterDomain {
 }
 
 impl PhysicsNode for MatterDomain {
+    fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
+        let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
+        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch))
+    }
+
+    /// The pool and the initial column as the fill seeds them (whole
+    /// cells), then bodies and forces.
+    fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
+        let (Some(layout), Some(setup)) = (self.layout, self.setup) else { return };
+        // The lattice's f32 cell size, as `fill_region` counts cells.
+        let dx = layout.cell_size as f32;
+        let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
+        if setup.pool_cells > 0 {
+            let top = layout.min[1] + setup.pool_cells as f32 * dx;
+            out.push(PhysicsGizmo::aabb(PhysicsGizmoFamily::Fill, layout.min, [max[0], top, max[2]]));
+        }
+        if setup.column.iter().all(|[lo, hi]| hi > lo) {
+            let corner = |end: usize| std::array::from_fn(|i| layout.min[i] + setup.column[i][end] as f32 * dx);
+            out.push(PhysicsGizmo::aabb(PhysicsGizmoFamily::Fill, corner(0), corner(1)));
+        }
+        manifold_water_liquid::gizmos::write_liquid_gizmos(&layout, &self.bodies, self.acceleration.as_ref(), out);
+    }
+
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
@@ -842,6 +870,7 @@ impl MatterDomain {
             }
         }
         self.setup = Some(setup);
+        self.layout = Some(layout);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
             ctx.sim_step.interval.0,
@@ -1223,3 +1252,35 @@ mod sim_rate_tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+#[cfg(test)]
+mod gizmo_tests {
+    use super::*;
+    use manifold_core::physics_gizmo::PhysicsGizmoShape;
+
+    /// The fill gizmos are the cells the fill seeds: the pool up to its cell
+    /// layers and the column within half a cell of the authored box.
+    #[test]
+    fn matter_fill_gizmos_are_the_seeded_cells() {
+        let column = Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() };
+        let read = |name: &str, default: f32| if name == "fill_height" { 0.16 } else { default };
+        let geometry = matter_geometry(read, &ParamValues::default(), None, Some(column)).expect("fills");
+        let mut domain = MatterDomain::new();
+        (domain.setup, domain.layout) = (Some(geometry.setup), Some(geometry.layout));
+        assert_eq!(domain.fluid_domain_snapshot().unwrap().accepted_layout, Some(geometry.layout));
+        let mut out = Vec::new();
+        domain.write_physics_gizmos(&mut out);
+        let boxes: Vec<_> = out.iter().map(|gizmo| match (gizmo.family, gizmo.shape) {
+            (PhysicsGizmoFamily::Fill, PhysicsGizmoShape::Box { center, half, .. }) => (center, half),
+            other => panic!("{other:?}"),
+        }).collect();
+        assert_eq!(boxes.len(), 2);
+        let (layout, dx) = (geometry.layout, geometry.layout.cell_size as f32);
+        let pool_top = boxes[0].0[1] + boxes[0].1[1];
+        assert!((pool_top - (layout.min[1] + geometry.setup.pool_cells as f32 * dx)).abs() < 1e-6);
+        assert!((pool_top - layout.min[1] - 0.16).abs() <= 0.5 * dx);
+        for axis in 0..3 {
+            assert!((boxes[1].0[axis] - column.pos[axis]).abs() <= 0.5 * dx, "axis {axis}: {:?}", boxes[1]);
+        }
+    }
+}

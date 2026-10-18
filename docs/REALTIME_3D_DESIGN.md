@@ -99,10 +99,17 @@ between this doc and execution.
   editor-only overlay. Tier 2 (v1, Peter: "gizmos are important"): click-select via
   ID-buffer pick pass; move/rotate/scale gizmos.
 - **D7a — Scene gizmos on the main output preview (amends D7).** The Scene panel's
-  global "Show gizmos" switch draws the ground grid, a marker per light and every
-  accepted fluid domain box (forces, colliders, bodies, sources and drains next)
-  over the main window's output preview, for the scene the panel shows, through
-  the show camera rather than an editor camera. No camera frustum: the preview
+  global "Show gizmos" switch draws the ground grid, a marker per light, every
+  accepted fluid domain box and the physics setup each GPU liquid domain (FLIP
+  and MPM) simulated that frame, one color per family: the pool under the fill
+  height and the initial column as the seeded sites or cells, a box per
+  collider, coupled body, inflow and drain at the pose of its first tick row
+  with its mesh bounds scaled, and per force leaf of the domain's field a
+  sphere (radial, vortex) or a direction arrow (uniform, vortex axis; sign
+  included). A sampled grid force and a rigid-only scene's bodies draw nothing:
+  neither has a positioned runtime shape. All of it is drawn over the main
+  window's output preview, for the scene the panel shows, through the show
+  camera rather than an editor camera. No camera frustum: the preview
   already looks through that camera. It works without the graph editor and is
   editor chrome like the rest of D7: UI-only state, read-only, drawn by the UI
   over the preview blit, never in a render pass, and it changes no camera, graph
@@ -111,7 +118,8 @@ between this doc and execution.
   (`EffectNode::rendered_camera` and `rendered_lights`), and after the generators
   render, the pipeline records them, with the content frame number and the
   scene's accepted fluid domains, for the output surface being written
-  (`physics_overlay.rs`). A layer that did not render that frame (clip ended,
+  (`physics_overlay.rs`; the domains report their layout and setup shapes
+  through `PhysicsNode`). A layer that did not render that frame (clip ended,
   occluded, or the scene bailed early) records nothing. The UI uses the entry only
   when its frame matches the frame the preview bridge published, and projects
   through `Camera::project_to_pixel` at the output size into the aspect-fit

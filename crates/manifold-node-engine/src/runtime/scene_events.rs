@@ -46,6 +46,15 @@ impl PresetRuntime {
         }
     }
 
+    /// Append the setup shapes of the same slot's simulations, for the
+    /// gizmo overlay. The caller reuses the buffer.
+    pub fn write_physics_gizmos_watched(&self, output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {
+        let Some(slot) = self.extension_slots().first() else { return };
+        for extension in &self.extensions {
+            extension.write_physics_gizmos(&self.graph, slot, output);
+        }
+    }
+
     /// Translate the selected generated modifier copy back to authored node IDs.
     pub fn write_modifier_fluid_domains(
         &self,

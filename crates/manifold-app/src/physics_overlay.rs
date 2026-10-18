@@ -8,14 +8,17 @@
 use std::sync::Arc;
 
 use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot, FluidDomainState};
+use manifold_core::physics_gizmo::PhysicsGizmo;
 use manifold_core::{LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_nodes_scene::node_graph::viewport_overlay::{
-    ViewportOverlayConfig, WorldLine, fluid_domain_lines, light_billboard_lines,
+    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, light_billboard_lines,
+    physics_gizmo_lines,
 };
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
 type Lights = [[f32; 3]];
+type Gizmos = [PhysicsGizmo];
 
 /// What one output surface's scene was rendered with.
 #[derive(Clone)]
@@ -27,6 +30,9 @@ pub(crate) struct PhysicsOverlayFrame {
     pub camera: Camera,
     pub domains: Arc<Domains>,
     pub lights: Arc<Lights>,
+    /// Forces, colliders, bodies, sources, drains and the fill, as the
+    /// simulation used them.
+    pub gizmos: Arc<Gizmos>,
 }
 
 impl PhysicsOverlayFrame {
@@ -42,8 +48,9 @@ impl PhysicsOverlayFrame {
     }
 
     /// Hand every gizmo to `draw`, a batch at a time: the ground grid, a
-    /// marker per light, a box per accepted fluid domain. No camera frustum:
-    /// the preview already looks through that camera.
+    /// marker per light, a box per accepted fluid domain, then one wireframe
+    /// per physics setup shape. No camera frustum: the preview already looks
+    /// through that camera.
     pub fn for_each_gizmo(&self, grid: &[WorldLine], mut draw: impl FnMut(&[WorldLine])) {
         draw(grid);
         let size = ViewportOverlayConfig::default().light_billboard_size;
@@ -52,6 +59,11 @@ impl PhysicsOverlayFrame {
         }
         for layout in self.accepted_domains() {
             draw(&fluid_domain_lines(layout));
+        }
+        let mut lines = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
+        for gizmo in self.gizmos.iter() {
+            let count = physics_gizmo_lines(gizmo, &mut lines);
+            draw(&lines[..count]);
         }
     }
 }
@@ -76,8 +88,10 @@ pub(crate) struct PhysicsOverlayObservations {
     layer: Option<LayerId>,
     domain_scratch: Vec<(NodeId, FluidDomainSnapshot)>,
     light_scratch: Vec<[f32; 3]>,
+    gizmo_scratch: Vec<PhysicsGizmo>,
     domains: Arc<Domains>,
     lights: Arc<Lights>,
+    gizmos: Arc<Gizmos>,
     pub frames: PhysicsOverlayFrames,
 }
 
@@ -87,8 +101,10 @@ impl Default for PhysicsOverlayObservations {
             layer: None,
             domain_scratch: Vec::new(),
             light_scratch: Vec::new(),
+            gizmo_scratch: Vec::new(),
             domains: Arc::from([]),
             lights: Arc::from([]),
+            gizmos: Arc::from([]),
             frames: std::array::from_fn(|_| None),
         }
     }
@@ -103,25 +119,30 @@ impl PhysicsOverlayObservations {
     }
 
     /// Record what surface `slot` was rendered with on content frame `frame`.
-    /// `observe` appends the layer's domains and light positions and returns
+    /// `observe` appends the layer's domains, light positions and physics
+    /// setup shapes and returns
     /// the camera, or `None` when the layer did not render this frame, which
     /// clears the slot.
     pub fn record(
         &mut self,
         slot: usize,
         frame: u64,
-        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>) -> Option<Camera>,
+        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>, &mut Vec<PhysicsGizmo>) -> Option<Camera>,
     ) {
         self.frames[slot] = None;
         let Some(layer) = self.layer.as_ref() else { return };
         self.domain_scratch.clear();
         self.light_scratch.clear();
-        let Some(camera) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch) else { return };
+        self.gizmo_scratch.clear();
+        let Some(camera) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
         if self.domain_scratch.as_slice() != self.domains.as_ref() {
             self.domains = Arc::from(self.domain_scratch.as_slice());
         }
         if self.light_scratch.as_slice() != self.lights.as_ref() {
             self.lights = Arc::from(self.light_scratch.as_slice());
+        }
+        if self.gizmo_scratch.as_slice() != self.gizmos.as_ref() {
+            self.gizmos = Arc::from(self.gizmo_scratch.as_slice());
         }
         self.frames[slot] = Some(PhysicsOverlayFrame {
             layer: layer.clone(),
@@ -129,6 +150,7 @@ impl PhysicsOverlayObservations {
             camera,
             domains: self.domains.clone(),
             lights: self.lights.clone(),
+            gizmos: self.gizmos.clone(),
         });
     }
 }
@@ -192,7 +214,7 @@ mod tests {
         let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready };
         let mut observations = PhysicsOverlayObservations::default();
         observations.set_layer(Some(LayerId::new("scene")));
-        observations.record(1, 3, |_, domains, lights| {
+        observations.record(1, 3, |_, domains, lights, _| {
             domains.extend([(NodeId::new("a"), ready), (NodeId::new("b"), pending)]);
             lights.extend([[0.0, 4.0, 0.0], [2.0, 1.0, -1.0]]);
             Some(Camera::default_perspective())
@@ -207,6 +229,33 @@ mod tests {
     }
 
     #[test]
+    fn show_gizmos_draws_each_physics_shape_after_the_domains() {
+        use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
+        let collider = PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]);
+        let force = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Sphere { center: [0.0; 3], radius: 1.0 } };
+        let wind = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [1.0, 0.0, 0.0] } };
+        let mut observations = PhysicsOverlayObservations::default();
+        observations.set_layer(Some(LayerId::new("water")));
+        let observe = |gizmos: &mut Vec<PhysicsGizmo>| {
+            gizmos.extend([collider, force, wind]);
+            Some(Camera::default_perspective())
+        };
+        observations.record(0, 1, |_, _, _, gizmos| observe(gizmos));
+        let first = observations.frames[0].as_ref().unwrap().gizmos.clone();
+        let mut batches = Vec::new();
+        observations.frames[0].as_ref().unwrap().for_each_gizmo(&[], |lines| if let Some(line) = lines.first() { batches.push((lines.len(), line.color)) });
+        let color = manifold_nodes_scene::node_graph::viewport_overlay::physics_gizmo_color;
+        assert_eq!(batches, [
+            (12, color(PhysicsGizmoFamily::Collider)),
+            (PHYSICS_GIZMO_LINES, color(PhysicsGizmoFamily::Force)),
+            (5, color(PhysicsGizmoFamily::Force)),
+        ]);
+        // An unchanged setup publishes no new snapshot.
+        observations.record(1, 2, |_, _, _, gizmos| observe(gizmos));
+        assert!(Arc::ptr_eq(&first, &observations.frames[1].as_ref().unwrap().gizmos));
+    }
+
+    #[test]
     fn a_late_gizmo_entry_redraws_the_frame_already_shown() {
         let layer = LayerId::new("scene");
         let mut observations = PhysicsOverlayObservations::default();
@@ -217,7 +266,7 @@ mod tests {
         };
         // The surface was published and drawn before its entry arrived.
         let shown = inputs(&observations.frames);
-        observations.record(2, 41, |_, _, _| Some(Camera::default_perspective()));
+        observations.record(2, 41, |_, _, _, _| Some(Camera::default_perspective()));
         let arrived = inputs(&observations.frames);
         assert!(crate::frame_plan::plan_frame(&shown, &arrived).redraw);
         assert!(!crate::frame_plan::plan_frame(&arrived, &arrived).redraw);
@@ -230,7 +279,7 @@ mod tests {
         let layer = LayerId::new("water");
         let mut observations = PhysicsOverlayObservations::default();
         observations.set_layer(Some(layer.clone()));
-        observations.record(0, 7, |_, _, lights| {
+        observations.record(0, 7, |_, _, lights, _| {
             lights.push([0.0; 3]);
             Some(Camera::default_perspective())
         });
@@ -239,7 +288,7 @@ mod tests {
 
         // The clip ended or the layer was occluded: the same slot's next write
         // must not keep last frame's camera, lights or boxes.
-        observations.record(0, 10, |_, _, _| None);
+        observations.record(0, 10, |_, _, _, _| None);
         assert!(observations.frames[0].is_none());
     }
 }

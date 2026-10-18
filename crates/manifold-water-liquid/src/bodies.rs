@@ -15,6 +15,7 @@ use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
 use crate::tick_samples::TickSamples;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 use crate::fluid_role::{DistanceState, FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use manifold_water_rigid::physics::pose_from_transform;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
@@ -291,6 +292,8 @@ pub struct LiquidBodies {
     clock_obstacles: Vec<GpuFlipBodyVertex>,
     clock_sources: Vec<GpuFlipBodyVertex>,
     shapes: Vec<LiquidShape>,
+    /// Each shape's local mesh bounds, unscaled: min then max.
+    bounds: Vec<[[f32; 3]; 2]>,
     atlas: Vec<u32>,
     /// Bumped whenever `shapes` or `atlas` is rebuilt.
     pub version: u64,
@@ -535,6 +538,7 @@ impl LiquidBodies {
     fn rebuild(&mut self, roles: &[Option<FluidRole>], coupled: &[Arc<PreparedFluidGeometry>], cell_size: f32) {
         self.roles.clear();
         self.shapes.clear();
+        self.bounds.clear();
         self.atlas.clear();
         let mut placed: Vec<(Arc<PreparedFluidGeometry>, LiquidShape)> = Vec::new();
         let role_shapes = roles.iter().enumerate().filter_map(|(slot, role)| {
@@ -566,6 +570,7 @@ impl LiquidBodies {
             };
             let smallest = scale[0].min(scale[1]).min(scale[2]);
             self.shapes.push(LiquidShape { scale_min: [scale[0], scale[1], scale[2], smallest], ..base });
+            self.bounds.push(mesh_bounds(geometry));
             // The geometry's extent without the lattice padding, scaled.
             let thinnest = (0..3)
                 .map(|axis| {
@@ -716,6 +721,56 @@ impl LiquidBodies {
         }
         Ok(((start * std::mem::size_of::<LiquidBody>()) as u64, rows))
     }
+
+    /// The box around every enabled body and region at the first tick's
+    /// start of the last [`Self::rows`] call, posed as the solver poses it.
+    pub fn write_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
+        let colliders = self.colliders();
+        let bodies = self.rows.iter().take(self.count()).enumerate()
+            .map(|(index, row)| (row, if index < colliders { PhysicsGizmoFamily::Collider } else { PhysicsGizmoFamily::Body }));
+        let regions = self.region_rows.iter().take(self.region_count()).map(|row| {
+            (row, if row.angular_velocity[3] == REGION_INFLOW { PhysicsGizmoFamily::Source } else { PhysicsGizmoFamily::Drain })
+        });
+        for (row, family) in bodies.chain(regions) {
+            // A disabled body carries shape -1.
+            let shape = row.accel_shape[3];
+            if shape < 0.0 {
+                continue;
+            }
+            let (Some(bounds), Some(scaled)) = (self.bounds.get(shape as usize), self.shapes.get(shape as usize)) else { continue };
+            let scale = [scaled.scale_min[0], scaled.scale_min[1], scaled.scale_min[2]];
+            let local: [f32; 3] = std::array::from_fn(|i| 0.5 * (bounds[0][i] + bounds[1][i]) * scale[i]);
+            let offset = rotate(row.rotation, local);
+            out.push(PhysicsGizmo {
+                family,
+                shape: PhysicsGizmoShape::Box {
+                    center: std::array::from_fn(|i| row.position_inv_mass[i] + offset[i]),
+                    half: std::array::from_fn(|i| 0.5 * (bounds[1][i] - bounds[0][i]) * scale[i]),
+                    rotation: row.rotation,
+                },
+            });
+        }
+    }
+}
+
+fn mesh_bounds(geometry: &PreparedFluidGeometry) -> [[f32; 3]; 2] {
+    let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
+    for vertex in geometry.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+        for i in 0..3 {
+            bounds[0][i] = bounds[0][i].min(vertex[i]);
+            bounds[1][i] = bounds[1][i].max(vertex[i]);
+        }
+    }
+    bounds
+}
+
+/// `v` turned by the unit quaternion `q` (xyzw).
+fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let axis = [q[0], q[1], q[2]];
+    let uv = cross(axis, v);
+    let uuv = cross(axis, uv);
+    std::array::from_fn(|i| v[i] + 2.0 * (q[3] * uv[i] + uuv[i]))
 }
 
 /// A coupled body's row with its shape index moved past the roles' shapes.
@@ -1168,6 +1223,46 @@ mod tests {
         assert_eq!(bodies.last_rows()[0].position_inv_mass, rows[0].position_inv_mass);
         assert_eq!(bodies.last_rows()[1].position_inv_mass[0], 1.0);
         assert_eq!(bodies.last_rows()[1].accel_shape[3], 3.0);
+    }
+
+    /// The overlay boxes are the solver's rows: each collider, coupled
+    /// body, inflow and drain at its tick-start pose with its mesh bounds
+    /// scaled, and a disabled collider draws nothing.
+    #[test]
+    fn liquid_body_gizmos_are_the_boxes_the_solver_poses() {
+        let geometry = cube();
+        let region = |kind, pos| Some(FluidRole { kind, ..collider(&geometry, pos, 0.0).unwrap() });
+        let turned = std::f32::consts::FRAC_PI_2;
+        let off = Some(FluidRole { enabled: false, ..collider(&geometry, [3.0; 3], 0.0).unwrap() });
+        let roles = vec![
+            region(FluidRoleKind::Inflow, [0.0, 2.0, 0.0]),
+            collider(&geometry, [0.5, 0.0, 0.0], turned),
+            region(FluidRoleKind::Outflow, [1.0, 0.0, 0.0]),
+            off,
+        ];
+        let mut bodies = LiquidBodies::with_regions();
+        ready_coupled(&mut bodies, &roles, &[cube()]);
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, TICK, &|_| roles.clone());
+        rig.frame(&mut bodies, TICK, TICK, &|_| roles.clone());
+        let coupled = LiquidBody { position_inv_mass: [0.0, 1.0, 0.0, 0.5], rotation: [0.0, 0.0, 0.0, 1.0], ..LiquidBody::default() };
+        bodies.rows(0, 1, &[coupled]).unwrap();
+        let mut gizmos = Vec::new();
+        bodies.write_gizmos(&mut gizmos);
+        let families: Vec<_> = gizmos.iter().map(|gizmo| gizmo.family).collect();
+        use PhysicsGizmoFamily::*;
+        assert_eq!(families, [Collider, Body, Source, Drain]);
+        let boxes: Vec<_> = gizmos.iter().map(|gizmo| match gizmo.shape {
+            PhysicsGizmoShape::Box { center, half, rotation } => (center, half, rotation),
+            other => panic!("{other:?}"),
+        }).collect();
+        // The collider's yaw turns its box; the box keeps its local extents.
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+        assert!(close(boxes[0].0, [0.5, 0.0, 0.0]) && close(boxes[0].1, [0.2, 0.1, 0.15]));
+        let x_axis = rotate(boxes[0].2, [1.0, 0.0, 0.0]);
+        assert!(close(x_axis, [0.0, 0.0, -1.0]), "{x_axis:?}");
+        assert_eq!((boxes[1].0, boxes[1].1), ([0.0, 1.0, 0.0], [0.5; 3]));
+        assert!(close(boxes[2].0, [0.0, 2.0, 0.0]) && close(boxes[3].0, [1.0, 0.0, 0.0]));
     }
 
     /// A collider joins the clock's CFL only under rigid coupling, as in the

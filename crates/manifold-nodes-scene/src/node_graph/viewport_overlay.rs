@@ -21,6 +21,7 @@
 
 use manifold_node_engine::scene::camera::Camera;
 use manifold_core::fluid_domain::FluidDomainLayout;
+use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 
 /// One overlay line segment in world space, with its RGBA8 color.
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +127,112 @@ pub fn light_billboard_lines(pos: [f32; 3], size: f32) -> [WorldLine; 3] {
         WorldLine { a: [x, y - size, z], b: [x, y + size, z], color: LIGHT_COLOR },
         WorldLine { a: [x, y, z - size], b: [x, y, z + size], color: LIGHT_COLOR },
     ]
+}
+
+/// Segments per ring of a physics sphere gizmo.
+const RING_SEGMENTS: usize = 16;
+
+/// The most lines one physics gizmo draws: a sphere's three rings and its
+/// centre cross.
+pub const PHYSICS_GIZMO_LINES: usize = 3 * RING_SEGMENTS + 3;
+
+/// One color per physics family, apart from the domain box and the lights.
+pub fn physics_gizmo_color(family: PhysicsGizmoFamily) -> [u8; 4] {
+    match family {
+        PhysicsGizmoFamily::Force => [230, 90, 220, 255],
+        PhysicsGizmoFamily::Collider => [240, 140, 50, 255],
+        PhysicsGizmoFamily::Body => [110, 220, 110, 255],
+        PhysicsGizmoFamily::Source => [80, 200, 255, 255],
+        PhysicsGizmoFamily::Drain => [235, 70, 70, 255],
+        PhysicsGizmoFamily::Fill => [70, 120, 255, 255],
+    }
+}
+
+/// A physics gizmo's wireframe into `out`; returns how many lines it
+/// wrote. A box draws its 12 edges, a sphere three rings around a centre
+/// cross, an arrow its shaft and a four-line head.
+pub fn physics_gizmo_lines(gizmo: &PhysicsGizmo, out: &mut [WorldLine; PHYSICS_GIZMO_LINES]) -> usize {
+    let color = physics_gizmo_color(gizmo.family);
+    let line = |a, b| WorldLine { a, b, color };
+    let add = |p: [f32; 3], d: [f32; 3], s: f32| -> [f32; 3] { std::array::from_fn(|i| p[i] + d[i] * s) };
+    match gizmo.shape {
+        PhysicsGizmoShape::Box { center, half, rotation } => {
+            let corner = |k: usize| {
+                let local = std::array::from_fn(|i| if k >> i & 1 == 1 { half[i] } else { -half[i] });
+                add(center, rotate(rotation, local), 1.0)
+            };
+            // Corners differ in one bit along an edge.
+            let mut n = 0;
+            for k in 0..8 {
+                for axis in 0..3 {
+                    if k >> axis & 1 == 0 {
+                        out[n] = line(corner(k), corner(k | 1 << axis));
+                        n += 1;
+                    }
+                }
+            }
+            n
+        }
+        PhysicsGizmoShape::Sphere { center, radius } => {
+            let mut n = 0;
+            for (u, v) in [(0, 1), (1, 2), (0, 2)] {
+                let point = |k: usize| {
+                    let angle = k as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
+                    let mut p = center;
+                    p[u] += radius * angle.cos();
+                    p[v] += radius * angle.sin();
+                    p
+                };
+                for k in 0..RING_SEGMENTS {
+                    out[n] = line(point(k), point(k + 1));
+                    n += 1;
+                }
+            }
+            let size = (0.15 * radius).min(0.1);
+            for axis in 0..3 {
+                let mut d = [0.0; 3];
+                d[axis] = size;
+                out[n] = line(add(center, d, -1.0), add(center, d, 1.0));
+                n += 1;
+            }
+            n
+        }
+        PhysicsGizmoShape::Arrow { from, to } => {
+            let d: [f32; 3] = std::array::from_fn(|i| to[i] - from[i]);
+            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            out[0] = line(from, to);
+            if length <= 0.0 {
+                return 1;
+            }
+            let dir = d.map(|c| c / length);
+            // Any axis not along the arrow gives two perpendiculars.
+            let pick = if dir[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+            let p = normalize(cross(dir, pick));
+            let q = cross(dir, p);
+            let base = add(to, dir, -0.2 * length);
+            for (k, side) in [p, p.map(|c| -c), q, q.map(|c| -c)].into_iter().enumerate() {
+                out[1 + k] = line(to, add(base, side, 0.08 * length));
+            }
+            5
+        }
+    }
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    v.map(|c| c / length)
+}
+
+/// `v` turned by the unit quaternion `q` (xyzw).
+fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let axis = [q[0], q[1], q[2]];
+    let uv = cross(axis, v);
+    let uuv = cross(axis, uv);
+    std::array::from_fn(|i| v[i] + 2.0 * (q[3] * uv[i] + uuv[i]))
 }
 
 /// Wireframe frustum for `cam`, drawn from its position out to
@@ -318,6 +425,49 @@ mod tests {
                 assert!(!same, "duplicate box edge: {first:?}");
             }
         }
+    }
+
+    #[test]
+    fn physics_gizmos_draw_their_shapes_in_their_family_color() {
+        let blank = WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] };
+        let mut lines = [blank; PHYSICS_GIZMO_LINES];
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+
+        // A box turned a quarter about Y: its x extent runs along world z.
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        let turned = PhysicsGizmo {
+            family: PhysicsGizmoFamily::Collider,
+            shape: PhysicsGizmoShape::Box { center: [1.0, 0.0, 0.0], half: [0.5, 0.1, 0.2], rotation: [0.0, s, 0.0, s] },
+        };
+        let n = physics_gizmo_lines(&turned, &mut lines);
+        assert_eq!(n, 12);
+        for line in &lines[..n] {
+            for p in [line.a, line.b] {
+                assert!((p[0] - 1.0).abs() <= 0.2 + 1e-5 && p[1].abs() <= 0.1 + 1e-5 && p[2].abs() <= 0.5 + 1e-5, "{p:?}");
+            }
+            assert_eq!(line.color, physics_gizmo_color(PhysicsGizmoFamily::Collider));
+        }
+
+        let sphere = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Sphere { center: [0.0, 1.0, 0.0], radius: 2.0 } };
+        assert_eq!(physics_gizmo_lines(&sphere, &mut lines), PHYSICS_GIZMO_LINES);
+        for line in &lines[..3 * RING_SEGMENTS] {
+            let r = ((line.a[0]).powi(2) + (line.a[1] - 1.0).powi(2) + line.a[2].powi(2)).sqrt();
+            assert!((r - 2.0).abs() < 1e-4, "ring point at radius {r}");
+        }
+
+        let arrow = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [0.0, 0.0, 1.0] } };
+        assert_eq!(physics_gizmo_lines(&arrow, &mut lines), 5);
+        assert!(close(lines[0].b, [0.0, 0.0, 1.0]));
+        assert!(lines[1..5].iter().all(|line| close(line.a, [0.0, 0.0, 1.0]) && (line.b[2] - 0.8).abs() < 1e-5));
+
+        let families = [
+            PhysicsGizmoFamily::Force, PhysicsGizmoFamily::Collider, PhysicsGizmoFamily::Body,
+            PhysicsGizmoFamily::Source, PhysicsGizmoFamily::Drain, PhysicsGizmoFamily::Fill,
+        ];
+        let mut colors: Vec<_> = families.map(physics_gizmo_color).into_iter().chain([FRUSTUM_COLOR, LIGHT_COLOR]).collect();
+        colors.sort();
+        colors.dedup();
+        assert_eq!(colors.len(), 8, "every family has its own color");
     }
 
     #[test]
