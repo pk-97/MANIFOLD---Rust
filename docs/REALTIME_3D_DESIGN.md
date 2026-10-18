@@ -98,23 +98,27 @@ between this doc and execution.
   preview context only; light billboards, camera frustum lines, ground grid drawn as
   editor-only overlay. Tier 2 (v1, Peter: "gizmos are important"): click-select via
   ID-buffer pick pass; move/rotate/scale gizmos.
-- **D7a — Physics gizmos on the master preview (amends D7).** The Scene panel's
-  "Physics gizmos on Master" toggle draws physics lines (fluid domain boxes now;
-  forces, colliders, bodies, sources and drains next) over the graph editor's
-  master preview pane, through the show camera rather than an editor camera. It is
-  editor chrome like the rest of D7: read-only, drawn by the UI after the master
-  blit, never in a render pass, and it changes no camera, graph or history (D9
-  holds). The camera comes from the content thread: `render_scene` keeps the camera
-  it rendered through (`EffectNode::rendered_camera`), and after the generators
-  render, the pipeline records it, with the content frame number and that scene's
-  accepted fluid domains, for the output surface being written
+- **D7a — Scene gizmos on the main output preview (amends D7).** The Scene panel's
+  global "Show gizmos" switch draws the ground grid, a marker per light and every
+  accepted fluid domain box (forces, colliders, bodies, sources and drains next)
+  over the main window's output preview, for the scene the panel shows, through
+  the show camera rather than an editor camera. No camera frustum: the preview
+  already looks through that camera. It works without the graph editor and is
+  editor chrome like the rest of D7: UI-only state, read-only, drawn by the UI
+  over the preview blit, never in a render pass, and it changes no camera, graph
+  or history (D9 holds). The view comes from the content thread: `render_scene`
+  keeps the camera and light positions of the frame it drew
+  (`EffectNode::rendered_camera` and `rendered_lights`), and after the generators
+  render, the pipeline records them, with the content frame number and the
+  scene's accepted fluid domains, for the output surface being written
   (`physics_overlay.rs`). A layer that did not render that frame (clip ended,
   occluded, or the scene bailed early) records nothing. The UI uses the entry only
-  when its frame matches the frame the master bridge published, and projects each
-  accepted domain's box through `Camera::project_to_pixel` at the output size, so
-  the lines follow looped, orbiting or automated cameras frame for frame.
-  Limits: a layer transform or a generator rendered at a different aspect from the
-  output is not accounted for, and the separate Output window gets no overlay.
+  when its frame matches the frame the preview bridge published, and projects
+  through `Camera::project_to_pixel` at the output size into the aspect-fit
+  picture, so the lines follow looped, orbiting or automated cameras frame for
+  frame. Limits: a layer transform or a generator rendered at a different aspect
+  from the output is not accounted for, and the separate Output window gets no
+  overlay.
 - **D8 — Gizmos are param editors.** A gizmo drag writes the object's `transform_n`
   params (or a light's pos/aim, a camera's pos) **through `EditingService` like any
   slider** — undoable, bindable, nothing new in the mutation model. **If the param is

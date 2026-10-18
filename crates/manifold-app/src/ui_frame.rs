@@ -656,6 +656,7 @@ pub(crate) fn composite_main_ui_frame(
     scale_factor: f64,
     video: Option<&GpuTexture>,
     video_source_dims: (f32, f32),
+    gizmos: Option<MainGizmos<'_>>,
 ) {
     // ── Panel cache update: paint only dirty panels into the persistent
     // atlas via LoadOp::Load. The cache manager doesn't own the UITree, so
@@ -693,40 +694,69 @@ pub(crate) fn composite_main_ui_frame(
     // Pass 3: Blit compositor output ON TOP of atlas in video area
     // (aspect-fit). Compositor replaces whatever is in the video rect
     // (opaque, no blend). `None` in the harness (D8 gap #2).
-    if let Some(compositor_tex) = video {
-        let (comp_w, comp_h) = video_source_dims;
-        let source_aspect = if comp_h > 0.0 { comp_w / comp_h } else { 0.0 };
-        let video_rect = ui_root.layout.video_area();
-        let rect_x = video_rect.x * sf;
-        let rect_y = video_rect.y * sf;
-        let rect_w = video_rect.width * sf;
-        let rect_h = video_rect.height * sf;
+    let fit = video_fit_rect(ui_root.layout.video_area(), video_source_dims);
+    if let Some(compositor_tex) = video
+        && let Some(fit) = fit
+    {
+        encoder.draw_fullscreen_viewport(
+            blit_pipeline,
+            offscreen,
+            &[
+                manifold_gpu::GpuBinding::Texture { binding: 0, texture: compositor_tex },
+                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
+            ],
+            (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf),
+            manifold_gpu::GpuLoadAction::Load,
+            "Blit Compositor",
+        );
+    }
 
-        if rect_w > 0.0 && rect_h > 0.0 && source_aspect > 0.0 {
-            let rect_aspect = rect_w / rect_h;
-            let (fit_w, fit_h) = if source_aspect > rect_aspect {
-                (rect_w, rect_w / source_aspect)
-            } else {
-                (rect_h * source_aspect, rect_h)
-            };
-            let fit_x = rect_x + (rect_w - fit_w) * 0.5;
-            let fit_y = rect_y + (rect_h - fit_h) * 0.5;
-
-            encoder.draw_fullscreen_viewport(
-                blit_pipeline,
-                offscreen,
-                &[
-                    manifold_gpu::GpuBinding::Texture { binding: 0, texture: compositor_tex },
-                    manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
-                ],
-                (fit_x, fit_y, fit_w, fit_h),
-                manifold_gpu::GpuLoadAction::Load,
-                "Blit Compositor",
-            );
+    // Pass 3b: the Scene panel's gizmos over the show picture, through the
+    // camera that rendered it (REALTIME_3D_DESIGN.md D7a). Editor chrome only.
+    if let Some(gizmos) = gizmos
+        && video.is_some()
+        && let Some(fit) = fit
+    {
+        ui_renderer.begin_frame();
+        ui_renderer.push_immediate_clip(fit.x, fit.y, fit.width, fit.height);
+        let (w, h) = gizmos.output;
+        gizmos.frame.for_each_gizmo(gizmos.grid, |lines| {
+            crate::scene_viewport::draw_world_lines(ui_renderer, fit, &gizmos.frame.camera, w, h, lines);
+        });
+        ui_renderer.pop_immediate_clip();
+        let (logical_w, logical_h) = (
+            (offscreen.width as f64 / scale_factor) as u32,
+            (offscreen.height as f64 / scale_factor) as u32,
+        );
+        if ui_renderer.prepare(device, logical_w, logical_h, scale_factor) {
+            ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
         }
     }
 
     encoder.commit();
+}
+
+/// The Scene panel's gizmo overlay for one main-window frame.
+pub(crate) struct MainGizmos<'a> {
+    pub frame: &'a crate::physics_overlay::PhysicsOverlayFrame,
+    pub grid: &'a [manifold_nodes_scene::node_graph::viewport_overlay::WorldLine],
+    /// The show's output size, the render the preview shows.
+    pub output: (u32, u32),
+}
+
+/// Where the show picture sits inside `area`: aspect-fit and centred, in
+/// logical units. `None` for an empty area or source.
+pub(crate) fn video_fit_rect(area: manifold_ui::Rect, (source_w, source_h): (f32, f32)) -> Option<manifold_ui::Rect> {
+    let source_aspect = if source_h > 0.0 { source_w / source_h } else { 0.0 };
+    if area.width <= 0.0 || area.height <= 0.0 || source_aspect <= 0.0 {
+        return None;
+    }
+    let (fit_w, fit_h) = if source_aspect > area.width / area.height {
+        (area.width, area.width / source_aspect)
+    } else {
+        (area.height * source_aspect, area.height)
+    };
+    Some(manifold_ui::Rect::new(area.x + (area.width - fit_w) * 0.5, area.y + (area.height - fit_h) * 0.5, fit_w, fit_h))
 }
 
 /// The `Application` field bundle the VQT (Audio Setup spectrogram

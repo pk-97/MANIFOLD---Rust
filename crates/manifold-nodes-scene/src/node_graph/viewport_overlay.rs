@@ -119,9 +119,9 @@ pub fn grid_lines(extent: f32, step: f32) -> Vec<WorldLine> {
 /// navigation angle (unlike a screen-facing billboard, which would need the
 /// EDITOR camera threaded in here; a fixed 3D cross is simpler and reads
 /// fine at the size lights are drawn at).
-pub fn light_billboard_lines(pos: [f32; 3], size: f32) -> Vec<WorldLine> {
+pub fn light_billboard_lines(pos: [f32; 3], size: f32) -> [WorldLine; 3] {
     let [x, y, z] = pos;
-    vec![
+    [
         WorldLine { a: [x - size, y, z], b: [x + size, y, z], color: LIGHT_COLOR },
         WorldLine { a: [x, y - size, z], b: [x, y + size, z], color: LIGHT_COLOR },
         WorldLine { a: [x, y, z - size], b: [x, y, z + size], color: LIGHT_COLOR },

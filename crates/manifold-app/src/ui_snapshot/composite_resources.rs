@@ -134,5 +134,6 @@ pub(super) fn composite_frame(
         scale_factor,
         None,
         (0.0, 0.0),
+        None,
     );
 }

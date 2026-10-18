@@ -1110,6 +1110,9 @@ pub struct RenderScene {
     /// The camera this frame's render went through; `None` when the frame
     /// bailed before drawing. Read by editor overlays only.
     rendered_camera: Option<Camera>,
+    /// This frame's light positions, for the same overlays. Retained so a
+    /// steady frame allocates nothing.
+    rendered_lights: Vec<[f32; 3]>,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -6036,9 +6039,11 @@ impl RenderScene {
         // table below is shared, unfiltered by mode).
         let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
         let mut shaft_light_count: u32 = 0;
+        self.rendered_lights.clear();
         for i in 0..lights_n {
             let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
             if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
+                self.rendered_lights.push(l.pos);
                 let slot: f32 = if l.cast_shadows && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
                     let s = casters.len() as f32;
                     casters.push(l);
@@ -6540,6 +6545,7 @@ impl RenderScene {
             prev_view_proj: None,
             prev_cam_state: None,
             rendered_camera: None,
+            rendered_lights: Vec::new(),
             prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,
@@ -9114,6 +9120,10 @@ impl EffectNode for RenderScene {
 
     fn rendered_camera(&self) -> Option<Camera> {
         self.rendered_camera
+    }
+
+    fn rendered_lights(&self) -> &[[f32; 3]] {
+        &self.rendered_lights
     }
 
     #[cfg(feature = "gpu-proofs")]

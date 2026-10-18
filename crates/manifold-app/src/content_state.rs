@@ -329,8 +329,8 @@ pub struct ContentState {
     /// when no node is being previewed. See [`NodePreviewInfo`].
     pub node_preview_info: Option<NodePreviewInfo>,
     pub scene_viewport_frames: crate::scene_viewport::SceneViewportFrames,
-    /// Per output surface: the camera the physics-overlay scene rendered
-    /// through, for the master preview's gizmo lines.
+    /// Per output surface: the view the gizmo scene rendered with, for the
+    /// main window's output-preview gizmos.
     pub physics_overlay_frames: crate::physics_overlay::PhysicsOverlayFrames,
 
     /// Live (post-modulation) scalar param values for every node of the watched
