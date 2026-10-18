@@ -1107,6 +1107,9 @@ pub struct RenderScene {
     /// rotating camera snapped the gates every frame and the
     /// snap→rebuild→retrip cycle boiled the image.
     prev_cam_state: Option<Camera>,
+    /// The camera this frame's render went through; `None` when the frame
+    /// bailed before drawing. Read by editor overlays only.
+    rendered_camera: Option<Camera>,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -6400,6 +6403,7 @@ impl RenderScene {
             None => 0.0,
         };
         self.prev_cam_state = Some(cam);
+        self.rendered_camera = Some(cam);
         if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
             eprintln!(
                 "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
@@ -6535,6 +6539,7 @@ impl RenderScene {
             prev_model: Vec::new(),
             prev_view_proj: None,
             prev_cam_state: None,
+            rendered_camera: None,
             prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,
@@ -9107,6 +9112,10 @@ impl EffectNode for RenderScene {
         Some(Box::new(scene_viewport::SceneViewportPass::new()))
     }
 
+    fn rendered_camera(&self) -> Option<Camera> {
+        self.rendered_camera
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,
@@ -9274,6 +9283,7 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        self.rendered_camera = None;
         self.render_objects(ctx, None);
     }
 }

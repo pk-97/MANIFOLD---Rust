@@ -198,29 +198,44 @@ impl SceneViewportPaint<'_> {
         );
         ui.push_depth(Depth(Depth::CONTENT.0 + 1));
         let config = self.frame.request.config;
-        let camera = config.camera.to_camera();
-        for line in self.lines {
-            if let Some(a) = camera.project_to_pixel(line.a, config.width, config.height)
-                && let Some(b) = camera.project_to_pixel(line.b, config.width, config.height)
-            {
-                ui.draw_line(
-                    r.x + a.px * r.width / config.width as f32,
-                    r.y + a.py * r.height / config.height as f32,
-                    r.x + b.px * r.width / config.width as f32,
-                    r.y + b.py * r.height / config.height as f32,
-                    1.0,
-                    manifold_ui::node::Color32::new(
-                        line.color[0],
-                        line.color[1],
-                        line.color[2],
-                        line.color[3],
-                    ),
-                );
-            }
-        }
+        draw_world_lines(ui, r, &config.camera.to_camera(), config.width, config.height, self.lines);
         ui.pop_depth();
         ui.pop_immediate_clip();
         ui.pop_depth();
+    }
+}
+
+/// `line` projected through `camera` for a `width x height` render, mapped
+/// into `rect` (the pane that shows that render). `None` when an end is behind
+/// the camera.
+pub(crate) fn project_line(
+    camera: &manifold_node_engine::scene::camera::Camera,
+    width: u32,
+    height: u32,
+    rect: manifold_ui::Rect,
+    line: &WorldLine,
+) -> Option<[f32; 4]> {
+    let a = camera.project_to_pixel(line.a, width, height)?;
+    let b = camera.project_to_pixel(line.b, width, height)?;
+    let (sx, sy) = (rect.width / width.max(1) as f32, rect.height / height.max(1) as f32);
+    Some([rect.x + a.px * sx, rect.y + a.py * sy, rect.x + b.px * sx, rect.y + b.py * sy])
+}
+
+/// Draw world-space overlay lines over a pane showing a `width x height`
+/// render through `camera`. Callers own depth and clip.
+pub(crate) fn draw_world_lines(
+    ui: &mut manifold_ui_paint::ui_renderer::UIRenderer,
+    rect: manifold_ui::Rect,
+    camera: &manifold_node_engine::scene::camera::Camera,
+    width: u32,
+    height: u32,
+    lines: &[WorldLine],
+) {
+    for line in lines {
+        if let Some([x0, y0, x1, y1]) = project_line(camera, width, height, rect, line) {
+            let [r, g, b, a] = line.color;
+            ui.draw_line(x0, y0, x1, y1, 1.0, manifold_ui::node::Color32::new(r, g, b, a));
+        }
     }
 }
 
