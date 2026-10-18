@@ -1,10 +1,11 @@
 [
-  {"Assert": {"selector": {"Query": {"name": "param_row.6_f_stop"}}, "check": "Exists"}},
-  {"Pointer": {"target": {"Query": {"name": "param_row.35_enabled"}}, "gesture": {"Click": {"modifiers": {}}}}},
-  {"Assert": {"selector": {"Query": {"name": "param_row.6_f_stop"}}, "check": {"Count": 0}}},
-  {"Assert": {"selector": {"Query": {"name": "param_row.35_enabled"}}, "check": {"TextEquals": "OFF"}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.6_f_stop"}},"check":{"Count":0}}},
+  {"Pointer":{"target":{"Query":{"name":"param_row.35_enabled"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.6_f_stop"}},"check":{"Count":0}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.35_enabled"}},"check":{"TextEquals":"OFF"}}},
   "Snapshot",
-  {"Pointer": {"target": {"Query": {"name": "param_row.35_enabled"}}, "gesture": {"Click": {"modifiers": {}}}}},
-  {"Assert": {"selector": {"Query": {"name": "param_row.6_f_stop"}}, "check": "Exists"}},
+  {"Pointer":{"target":{"Query":{"name":"param_row.35_enabled"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.35_enabled"}},"check":{"TextEquals":"ON"}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.6_f_stop"}},"check":{"Count":0}}},
   "Snapshot"
 ]

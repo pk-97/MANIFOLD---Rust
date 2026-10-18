@@ -266,11 +266,17 @@ pub(crate) fn begin_for_action(
             }
         }
         PanelAction::Params(ParamsAction::GenStringParamClicked(sp_idx)) => {
-            if let Some(gp) = ui_root.inspector.gen_params()
-                && let Some(sp) = gp.string_param(*sp_idx)
-                && let Some(r) = gp.string_param_rect(&ui_root.tree, *sp_idx)
-            {
-                text_input.begin(TextInputField::GenStringParam(*sp_idx), &sp.value, anchor_of(r), 11.0);
+            // The Scene tab's HDRI file row while that tab shows, else the
+            // layer card's string row.
+            let entry = if ui_root.scene_setup_panel.is_open() {
+                ui_root.scene_setup_panel.string_param_entry(&ui_root.tree, *sp_idx)
+            } else {
+                ui_root.inspector.gen_params().and_then(|gp| {
+                    Some((gp.string_param(*sp_idx)?.value.clone(), gp.string_param_rect(&ui_root.tree, *sp_idx)?))
+                })
+            };
+            if let Some((value, r)) = entry {
+                text_input.begin(TextInputField::GenStringParam(*sp_idx), &value, anchor_of(r), 11.0);
             }
         }
         PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)) => {

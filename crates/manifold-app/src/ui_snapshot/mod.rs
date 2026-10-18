@@ -327,6 +327,7 @@ fn render_ui_scene(
         || scene == "mushroomscene"
         || scene == "physicsscene"
         || scene == "physicsboxes"
+        || scene == "newscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "dmxcard"

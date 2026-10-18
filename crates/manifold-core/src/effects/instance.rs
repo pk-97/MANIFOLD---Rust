@@ -1361,14 +1361,13 @@ impl PresetInstance {
     }
 
     /// Put `param_id` on the scene card for good when a modulator attaches
-    /// to it (SCENE_SURFACES D6 (attached rows)): a control the card would
-    /// leave off, or fold away with its feature, is pinned Shown, so
-    /// switching the modulator off or removing it never takes the control
-    /// away. A control on the card by its role keeps no pin. Returns the pin
-    /// it replaced, or `None` when it wrote nothing; the attach command
-    /// restores that pin on undo.
+    /// to it (SCENE_SURFACES D6 (attached rows)): a scene control with no
+    /// pin is off the card, since its role never places it, so it is pinned
+    /// Shown, and switching the modulator off or removing it never takes the
+    /// control away. Returns the pin it replaced, or `None` when it wrote
+    /// nothing; the attach command restores that pin on undo.
     pub fn keep_on_card(&mut self, param_id: &str) -> Option<Option<crate::scene_surface::CardPin>> {
-        use crate::scene_surface::{CardPin, Gate, SurfaceRole};
+        use crate::scene_surface::CardPin;
         if !self.params.iter().any(|param| param.spec.scene.is_some()) {
             return None;
         }
@@ -1383,7 +1382,7 @@ impl PresetInstance {
             Some(CardPin::Shown) => false,
             Some(CardPin::Removed) => true,
             None => match param.spec.scene {
-                Some(scene) => scene.role != SurfaceRole::Performance || matches!(scene.gate, Some(Gate::Fold(_))),
+                Some(_) => true,
                 None => modifier_bound || !param.spec.card_visible,
             },
         };

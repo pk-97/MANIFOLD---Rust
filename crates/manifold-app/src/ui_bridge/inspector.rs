@@ -521,6 +521,12 @@ mod scene_card_convergence_tests {
         let mut project = Project::default();
         project.timeline.add_layer("Lights", LayerType::Generator, PresetTypeId::new("PhysicsSolids"));
         project.reconcile_param_manifests();
+        // The user put the light faders on the card.
+        for param in project.timeline.layers[0].gen_params_mut().unwrap().params.iter_mut() {
+            if param.spec.scene.is_some_and(|scene| scene.card_label == manifold_core::scene_surface::CardLabel::ItemName) {
+                param.choices.pin = Some(manifold_core::scene_surface::CardPin::Shown);
+            }
+        }
         let layer = &project.timeline.layers[0];
         let layer_id = layer.layer_id.clone();
         let rows = gen_params_to_surface(

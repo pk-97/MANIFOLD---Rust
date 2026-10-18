@@ -813,6 +813,7 @@ pub fn sync_inspector_data(
                                                 2.0,
                                             ),
                                         ),
+                                        hdri_param: super::scene::hdri_string_param(def.as_ref(), &gen_type, e.hdri_node_id),
                                         hdri_file: e.hdri_file_value,
                                     }
                                 }
@@ -902,7 +903,14 @@ pub fn sync_inspector_data(
                                 let mut surface = gen_params_to_surface(
                                     gp,
                                     layer_id.as_str(),
-                                    None,
+                                    // The HDRI file row reads the clip's string
+                                    // params, as the layer card does.
+                                    selection
+                                        .primary_selected_clip_id()
+                                        .as_ref()
+                                        .and_then(|sel_id| l.clips.iter().find(|c| c.id == **sel_id))
+                                        .or_else(|| l.clips.first())
+                                        .and_then(|c| c.string_params.as_ref()),
                                     automation_latched,
                                     SurfaceVisibility::All,
                                     driver_timing,
@@ -912,7 +920,9 @@ pub fn sync_inspector_data(
                                 surface
                             });
                             let tree_items =
-                                super::scene::scene_item_vms(def.as_ref(), &items, &objects, &lights, object_ids);
+                                super::scene::scene_item_vms(def.as_ref(), &items, &objects, &lights, object_ids, &|id| {
+                                    gen_inst.and_then(|gp| gp.params.get(id)).and_then(|param| param.spec.scene)
+                                });
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
                                 multiple_scenes: vm.multiple_scenes,

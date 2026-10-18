@@ -146,6 +146,10 @@ struct Placement {
 }
 
 impl Placement {
+    /// The card shows only what the user put there: a Show on Card or a
+    /// mapping (both write the pin, D6), or a control the user added. A
+    /// scene control's role never places it, so a new scene's card starts
+    /// empty.
     fn of(param: &Param, item: Option<&SceneItem>, user_added: bool, modifier_bound: bool) -> Option<Self> {
         let pin = param.choices.pin;
         let shown = pin == Some(CardPin::Shown) || (user_added && pin != Some(CardPin::Removed));
@@ -158,10 +162,7 @@ impl Placement {
             let on = shown || (!modifier_bound && param.spec.card_visible && pin != Some(CardPin::Removed));
             return on.then_some(Self { band: CardBand::Scene, card_order: 0, label: CardLabel::Param, gate: None });
         };
-        let performance = scene.role == SurfaceRole::Performance && pin != Some(CardPin::Removed);
-        // A scene control no item owns drives nothing on screen (an unwired
-        // camera's orbit); it builds no row unless the user put it there.
-        if !(shown || (performance && item.is_some())) {
+        if !shown {
             return None;
         }
         let band = scene.band.filter(|_| scene.role == SurfaceRole::Performance).unwrap_or_else(|| item_band(item));
@@ -315,8 +316,36 @@ mod tests {
         .rows
     }
 
+    /// Show on Card every control whose role marks it a performance
+    /// control, as a user would; fold-gated details too when `details`.
+    fn pin_performance(project: &mut Project, details: bool) {
+        for param in project.timeline.layers[0].gen_params_mut().unwrap().params.iter_mut() {
+            let Some(scene) = param.spec.scene else { continue };
+            let folded = matches!(scene.gate, Some(Gate::Fold(_)));
+            if scene.role == SurfaceRole::Performance && (details || !folded) {
+                param.choices.pin = Some(CardPin::Shown);
+            }
+        }
+    }
+
+    /// The card once the user has put every performance control on it.
     fn card(preset: &str) -> Vec<ParamRow> {
-        surface(&project(preset), SurfaceVisibility::CuratedCard)
+        let mut project = project(preset);
+        pin_performance(&mut project, false);
+        surface(&project, SurfaceVisibility::CuratedCard)
+    }
+
+    /// A new scene's card shows nothing the user did not choose: no scene
+    /// control is placed by its role alone.
+    #[test]
+    fn new_scene_card_starts_empty() {
+        for preset in ["PhysicsSolids", "Ocean", "WaterDamBreakGpuFlip", "WaterDamBreakMatter", "PhysicsBoxes"] {
+            let project = project(preset);
+            for row in surface(&project, SurfaceVisibility::CuratedCard) {
+                assert!(scene_of(&project, &row.id).is_none(), "{preset}: {} is on a new card", row.id);
+            }
+        }
+        assert!(surface(&project("PhysicsSolids"), SurfaceVisibility::CuratedCard).is_empty());
     }
 
     fn catalog_def(preset: &str) -> EffectGraphDef {
@@ -405,7 +434,8 @@ mod tests {
 
     #[test]
     fn matter_card_bands() {
-        let project = project("WaterDamBreakMatter");
+        let mut project = project("WaterDamBreakMatter");
+        pin_performance(&mut project, false);
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
         for id in ["cohesion", "stiffness", "liveliness"] {
             let scene = scene_of(&project, id).unwrap_or_else(|| panic!("{id} has a scene description"));
@@ -458,6 +488,7 @@ mod tests {
             .collect();
         assert_eq!(names.len(), 3);
 
+        pin_performance(&mut project, false);
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
         let lighting = names_in(&rows, "Lighting");
         assert_eq!(lighting[..2], ["Exposure", "Environment"]);
@@ -498,6 +529,13 @@ mod tests {
         def.nodes.retain(|node| !removed.contains(&node.id));
         def.wires.retain(|wire| !removed.contains(&wire.from_node) && !removed.contains(&wire.to_node));
         project.timeline.layers[0].gen_params_mut().unwrap().graph = Some(def);
+        // The user put every other performance control on the card; the
+        // lens's focus dims with no depth of field switch left to turn on.
+        for param in project.timeline.layers[0].gen_params_mut().unwrap().params.iter_mut() {
+            if param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance) && !dof_row(param.spec.scene) {
+                param.choices.pin = Some(CardPin::Shown);
+            }
+        }
 
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
         assert!(!rows.is_empty());
@@ -508,11 +546,12 @@ mod tests {
         assert_eq!(focus.spec.inactive_reason.as_deref(), Some(Feature::DepthOfField.off_reason()));
     }
 
-    /// D12 (row sets follow authored values): a driver lifting the effective
-    /// value never builds the detail rows; the base value does.
+    /// D12 (row sets follow authored values): a pinned detail row dims by
+    /// its switch's base value, never the effective value a driver lifts.
     #[test]
     fn look_rows_follow_base_not_effective() {
         let mut project = project("PhysicsSolids");
+        pin_performance(&mut project, true);
         let switch = project.timeline.layers[0]
             .gen_params()
             .unwrap()
@@ -521,12 +560,13 @@ mod tests {
             .find(|param| param.spec.scene.is_some_and(|scene| scene.switch == Some(Feature::DepthOfField)))
             .map(|param| param.id().to_string())
             .expect("a depth of field switch");
-        let folded = |project: &Project, rows: &[ParamRow]| {
+        let live_details = |project: &Project, rows: &[ParamRow]| {
             rows.iter()
                 .filter(|row| {
                     scene_of(project, &row.id)
                         .is_some_and(|scene| scene.gate == Some(Gate::Fold(Feature::DepthOfField)))
                 })
+                .filter(|row| row.spec.inactive_reason.is_none())
                 .count()
         };
         let set = |project: &mut Project, base: f32, effective: f32| {
@@ -537,11 +577,11 @@ mod tests {
 
         set(&mut project, 0.0, 1.0);
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
-        assert_eq!(folded(&project, &rows), 0, "the effective value built detail rows");
+        assert_eq!(live_details(&project, &rows), 0, "the effective value woke the detail rows");
 
         set(&mut project, 1.0, 0.0);
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
-        assert_eq!(folded(&project, &rows), 2, "F-Stop and Max Blur build while the base is on");
+        assert_eq!(live_details(&project, &rows), 2, "F-Stop and Max Blur are live while the base is on");
         assert!(rows.iter().any(|row| row.spec.name == "F-Stop"));
     }
 
@@ -550,7 +590,8 @@ mod tests {
     #[test]
     fn card_and_panel_labels_match() {
         for preset in ["PhysicsSolids", "Ocean", "WaterDamBreakGpuFlip", "WaterDamBreakMatter", "PhysicsBoxes"] {
-            let project = project(preset);
+            let mut project = project(preset);
+            pin_performance(&mut project, true);
             let def = catalog_def(preset);
             let vm = SceneVm::from_def(&def).expect("scene");
             let items = scene_items(&def, &vm);
@@ -632,8 +673,9 @@ mod tests {
             assert_eq!(pinned.keep_on_card(id), None, "a second attach writes nothing");
             assert!(on_card(&pinned, &all, id), "{id} stays with its modulator gone");
         }
-        // Remove from Card gives way to a later attach; a Performance row
-        // is on the card by its role and takes no pin.
+        // Remove from Card gives way to a later attach. A Performance row is
+        // off the card until the user puts it there, so mapping it pins it
+        // like any other.
         let mut removed = inst.clone();
         removed.params.get_mut(&setup[0]).unwrap().choices.pin = Some(CardPin::Removed);
         assert_eq!(removed.keep_on_card(&setup[0]), Some(Some(CardPin::Removed)));
@@ -644,7 +686,10 @@ mod tests {
                     .is_some_and(|scene| scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_))))
             })
             .expect("a performance row");
-        assert_eq!(inst.clone().keep_on_card(&performance.id), None);
+        assert!(!on_card(&inst, &all, &performance.id), "a performance row is off a new card");
+        let mut mapped = inst.clone();
+        assert_eq!(mapped.keep_on_card(&performance.id), Some(None), "mapping pins a performance row");
+        assert!(on_card(&mapped, &all, &performance.id));
     }
 
     /// A pinned row whose feature is off stays on the card, dimmed with the
@@ -680,6 +725,7 @@ mod tests {
     fn pins_and_folds_survive_save_and_reload() {
         use manifold_editing::command::Command;
         let mut project = project("PhysicsSolids");
+        pin_performance(&mut project, false);
         let target = manifold_core::GraphTarget::Generator(project.timeline.layers[0].layer_id.clone());
         let card_ids = |project: &Project| -> Vec<String> {
             surface(project, SurfaceVisibility::CuratedCard).iter().map(|row| row.id.to_string()).collect()
@@ -726,6 +772,7 @@ mod tests {
     fn lighting_folds_past_eight_lights_until_unfolded() {
         use manifold_editing::command::Command;
         let mut project = project("PhysicsSolids");
+        pin_performance(&mut project, false);
         let target = manifold_core::GraphTarget::Generator(project.timeline.layers[0].layer_id.clone());
         let lights = |project: &Project| {
             names_in(&surface(project, SurfaceVisibility::CuratedCard), "Lighting").len() - 2
@@ -760,6 +807,7 @@ mod tests {
             )
             .execute(&mut project);
             project.reconcile_param_manifests();
+            pin_performance(&mut project, false);
         }
         assert_eq!(lights(&project), LIGHT_ROWS_BEFORE_FOLD + 1);
         assert_eq!(folds(&project), ["Lighting"], "nine lights fold Lighting by default");
@@ -777,7 +825,13 @@ mod tests {
             let data = crate::ui_snapshot::fixtures::build_cached(scene, &mut cache).expect("fixture");
             let index = data.active.expect("a selected scene layer");
             let layer = &data.project.timeline.layers[index];
-            let inst = layer.gen_params().expect("generator");
+            let mut pinned = layer.gen_params().expect("generator").clone();
+            for param in pinned.params.iter_mut() {
+                if param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance) {
+                    param.choices.pin = Some(CardPin::Shown);
+                }
+            }
+            let inst = &pinned;
             let def = match &inst.graph {
                 Some(def) => def.clone(),
                 None => catalog_def(inst.effect_type().as_str()),

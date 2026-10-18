@@ -39,7 +39,7 @@
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "F-Stop", "type": "Label" } },
+      "selector": { "Query": { "text": "Depth of Field", "type": "Label" } },
       "check": "Exists"
     }
   },
@@ -52,7 +52,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "F-Stop", "type": "Label" } },
+      "selector": { "Query": { "text": "Depth of Field", "type": "Label" } },
       "check": { "Count": 0 }
     }
   },
@@ -70,7 +70,7 @@
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "F-Stop", "type": "Label" } },
+      "selector": { "Query": { "text": "Depth of Field", "type": "Label" } },
       "check": "Exists"
     }
   },

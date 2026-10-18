@@ -54,7 +54,10 @@
                 parent,
             }
         };
-        let mut items = vec![item(SceneItemKind::Camera, SceneSelection::Camera, "Camera", None)];
+        let mut items = vec![
+            item(SceneItemKind::Camera, SceneSelection::Camera, "Camera", None),
+            item(SceneItemKind::Light, SceneSelection::Lighting, "Lighting", None),
+        ];
         items.extend(vm.lights.iter().filter_map(|light| match light {
             LightRowVm::Known(row) => Some(item(SceneItemKind::Light, SceneSelection::Light(row.node_doc_id), &row.name, None)),
             LightRowVm::Custom { .. } => None,
@@ -145,12 +148,17 @@
             items: Vec::new(),
             scene_bounds: None,
         }));
+        // Lighting offers the missing environment, World the missing fog.
         let mut tree = UITree::new();
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Lighting);
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.add_environment_id.is_some());
-        assert!(panel.add_fog_id.is_some());
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::World);
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert!(panel.add_fog_id.is_some());
     }
 
     /// SCENE_SURFACES D17: an old project with two scenes in one layer shows
@@ -279,11 +287,10 @@
         panel.configure(live(azalea_shaped_vm()));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Clickable tree rows: Camera, the Lights header, the Known light,
-        // the Objects header, the Known object, the Physics header and
-        // World. Custom rows are listed as plain labels: they have no
-        // address to select by.
-        assert_eq!(panel.outliner_row_ids.len(), 7);
+        // Clickable tree rows: Camera, Lighting, the Objects header, the
+        // Known object, the Physics header and World. Custom rows are listed
+        // as plain labels: they have no address to select by.
+        assert_eq!(panel.outliner_row_ids.len(), 6);
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
@@ -724,7 +731,7 @@
             .filter(|&i| tree.name_of(tree.id_at(i)) == Some(name))
             .count();
         for group in SceneGroup::ORDER {
-            let expected = usize::from(matches!(group, SceneGroup::Lights | SceneGroup::Objects | SceneGroup::Forces));
+            let expected = usize::from(matches!(group, SceneGroup::Lighting | SceneGroup::Objects | SceneGroup::Forces));
             assert_eq!(named(&format!("scene_tree.add.{}", group.title())), expected, "{group:?}");
         }
         let adds = (0..tree.count())
@@ -845,7 +852,7 @@
     }
 
     #[test]
-    fn keyboard_and_context_actions_follow_selected_object_or_light() {
+    fn keyboard_and_context_actions_follow_selected_object() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(live(azalea_shaped_vm()));
@@ -855,14 +862,16 @@
         assert!(!object.is_light);
         assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, 99, 40)))));
         assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 40, _)))));
-        let light_node = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Light(60)).unwrap().0;
+        // Lighting is many items, so the single-item shortcuts do nothing;
+        // each light keeps rename and delete on its own header.
+        let lighting = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Lighting).unwrap().0;
         let (consumed, actions) = panel.handle_event(&UIEvent::RightClick {
-            node_id: Some(light_node), pos: Vec2::new(0.0, 0.0), modifiers: Modifiers::NONE,
+            node_id: Some(lighting), pos: Vec2::new(0.0, 0.0), modifiers: Modifiers::NONE,
         }, &mut tree);
         assert!(consumed);
         assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneItemRightClicked)]));
-        assert!(panel.selected_scene_item().unwrap().is_light);
-        assert!(matches!(panel.remove_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupRemoveLight(_, 99, 0)))));
+        assert!(panel.selected_scene_item().is_none());
+        assert!(panel.remove_selection_action().is_none());
         assert!(panel.frame_selection_action().is_none());
         panel.navigate_selection(-1).unwrap();
         assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Camera));
@@ -871,7 +880,7 @@
     /// D7: clicking an outliner row changes the UI-local selection, and the
     /// next build shows THAT item's properties instead — "select the object
     /// to use the tools" (Peter). Proves the Object→World switch (Properties
-    /// content changes: object body gone, Environment/Fog appear) and that
+    /// content changes: object body gone, Fog appears) and that
     /// a click on the World row is what does it.
     #[test]
     fn selecting_a_different_outliner_row_switches_properties_content() {
@@ -880,10 +889,10 @@
         panel.configure(live(azalea_shaped_vm()));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Default selection = Azalea: no environment/fog "add" affordances
-        // (azalea fixture's environment is None — but World isn't selected,
-        // so neither button builds).
-        assert!(panel.add_environment_id.is_none(), "World isn't selected — no Environment row built yet");
+        // Default selection = Azalea: no fog "add" affordance
+        // (azalea fixture's atmosphere is None — but World isn't selected,
+        // so it does not build).
+        assert!(panel.add_fog_id.is_none(), "World isn't selected — no Fog row built yet");
 
         let world_row_id = panel
             .outliner_row_ids
@@ -902,7 +911,8 @@
 
         let mut tree2 = UITree::new();
         panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.add_environment_id.is_some(), "World selected — Environment's Add affordance renders");
+        assert!(panel.add_fog_id.is_some(), "World selected — Fog's Add affordance renders");
+        assert!(panel.add_environment_id.is_none(), "the environment lives in Lighting");
     }
 
     /// D7's fallback: removing the selected object from a rebuilt Vm falls
@@ -1019,8 +1029,7 @@
         let selections: Vec<_> = panel.outliner_row_ids.iter().map(|(_, selection)| selection.clone()).collect();
         assert_eq!(selections, vec![
             SceneSelection::Camera,
-            SceneSelection::OutlinerFold(SceneGroup::Lights),
-            SceneSelection::Light(60),
+            SceneSelection::Lighting,
             SceneSelection::OutlinerFold(SceneGroup::Objects),
             SceneSelection::Object(40),
             SceneSelection::OutlinerFold(SceneGroup::Physics),
@@ -1038,7 +1047,7 @@
             .filter_map(|i| tree.name_of(tree.id_at(i)))
             .filter_map(|name| name.strip_prefix("scene_tree.group."))
             .collect();
-        assert_eq!(headers, ["Lights", "Objects", "Forces", "Physics"]);
+        assert_eq!(headers, ["Objects", "Forces", "Physics"]);
     }
 
     fn scene_row(template: &ParamRow, id: &'static str, group: manifold_foundation::scene_surface::ControlGroup) -> ParamRow {
@@ -1059,20 +1068,20 @@
         row
     }
 
-    /// World holds Environment, Fog and Ray Tracing; a physics world is its
-    /// own item. Each shows only its own controls, one fold section per
-    /// control group, in group order.
+    /// World holds Fog and Ray Tracing; a physics world is its own item.
+    /// Each shows only its own controls, one fold section per control
+    /// group, in group order.
     #[test]
     fn world_and_physics_items_show_their_own_controls_by_group() {
         use manifold_foundation::scene_surface::ControlGroup;
         let (mut vm, mut surface) = world_transform_vm();
         let physics = SceneSelection::Physics(FoundationNodeId::new("world"));
-        set_item_ids(&mut vm, SceneSelection::World, &["render", "env"]);
+        set_item_ids(&mut vm, SceneSelection::World, &["render", "fog"]);
         set_item_ids(&mut vm, physics.clone(), &["steps"]);
         let template = surface.rows[0].clone();
         surface.rows = vec![
             scene_row(&template, "render", ControlGroup::RayTracing),
-            scene_row(&template, "env", ControlGroup::Environment),
+            scene_row(&template, "fog", ControlGroup::Fog),
             scene_row(&template, "steps", ControlGroup::PhysicsWorld),
         ];
         let mut panel = ScenePanel::new();
@@ -1081,7 +1090,7 @@
         panel.configure_params(Some(surface));
         let mut tree = UITree::new();
         for (selection, expected, sections) in [
-            (SceneSelection::World, vec!["env", "render"], vec!["Environment", "Ray Tracing"]),
+            (SceneSelection::World, vec!["fog", "render"], vec!["Fog", "Ray Tracing"]),
             (physics, vec!["steps"], vec!["Physics"]),
         ] {
             panel.selection.insert(LayerId::new("layer-1"), selection);
@@ -1094,6 +1103,59 @@
                 .collect();
             assert_eq!(titles, sections);
         }
+    }
+
+    /// Lighting shows every lighting control in one place: the environment,
+    /// exposure, then each light under its own header, in light order. A
+    /// light selected from outside shows as Lighting.
+    #[test]
+    fn lighting_shows_environment_exposure_then_each_light() {
+        use manifold_foundation::scene_surface::ControlGroup;
+        let (mut vm, mut surface) = world_transform_vm();
+        let LightRowVm::Known(sun) = &vm.lights[0] else { unreachable!() };
+        let mut fill = sun.clone();
+        fill.index = 1;
+        fill.node_doc_id = 61;
+        fill.name = "Fill Light".into();
+        vm.lights.push(LightRowVm::Known(fill));
+        vm.light_count = 2;
+        set_item_ids(&mut vm, SceneSelection::Lighting, &["exposure", "env"]);
+        set_item_ids(&mut vm, SceneSelection::Light(60), &["sun", "sun_shadow"]);
+        set_item_ids(&mut vm, SceneSelection::Light(61), &["fill"]);
+        let template = surface.rows[0].clone();
+        surface.rows = vec![
+            scene_row(&template, "fill", ControlGroup::Light),
+            scene_row(&template, "sun_shadow", ControlGroup::Shadows),
+            scene_row(&template, "sun", ControlGroup::Light),
+            scene_row(&template, "exposure", ControlGroup::Lens),
+            scene_row(&template, "env", ControlGroup::Environment),
+        ];
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm));
+        panel.configure_params(Some(surface));
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Light(61));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1200.0));
+        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Lighting));
+        assert_eq!(
+            panel.properties_card.rows.iter().map(|row| row.id.as_ref()).collect::<Vec<_>>(),
+            ["env", "exposure", "sun", "sun_shadow", "fill"],
+        );
+        let named = |name: &str| -> Vec<String> {
+            (0..tree.count())
+                .map(|i| tree.id_at(i))
+                .filter(|&id| tree.name_of(id) == Some(name))
+                .filter_map(|id| tree.get_node(id).and_then(|node| node.text.clone()))
+                .collect()
+        };
+        assert_eq!(named("scene_setup.properties.name_value"), ["Lighting", "Sun", "Fill Light"]);
+        assert_eq!(named("scene_setup.properties.remove").len(), 2, "each light keeps its delete");
+        let titles: Vec<_> = (0..tree.count())
+            .filter_map(|i| tree.name_of(tree.id_at(i)))
+            .filter_map(|name| name.strip_prefix("scene_setup.group."))
+            .collect();
+        assert_eq!(titles, ["Environment", "Exposure"]);
     }
 
     /// An imported model keeps its own collider shape: the body shows
@@ -1157,7 +1219,6 @@
         panel.open();
         panel.configure(live(azalea_shaped_vm()));
         for (selection, name, kind) in [
-            (SceneSelection::Light(60), "Sun", Some("Light")),
             (SceneSelection::Object(40), "Azalea", Some("Object")),
             (SceneSelection::Camera, "Camera", None),
             (SceneSelection::World, "World", None),
@@ -1501,14 +1562,14 @@
 
         // Set fold states
         panel.section_folded.insert("Material".to_string(), true);
-        panel.outliner_folded.insert(SceneGroup::Lights, true);
+        panel.outliner_folded.insert(SceneGroup::Objects, true);
 
         let mut tree = UITree::new();
 
         // First build
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after first build");
-        assert!(panel.outliner_folded.get(&SceneGroup::Lights).copied().unwrap_or(false), "Lights folded after first build");
+        assert!(panel.outliner_folded.get(&SceneGroup::Objects).copied().unwrap_or(false), "Objects folded after first build");
 
         // Reconfigure (simulating a layer change or sync)
         let vm = azalea_shaped_vm();
@@ -1516,12 +1577,12 @@
 
         // Fold states should survive configure
         assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after reconfigure");
-        assert!(panel.outliner_folded.get(&SceneGroup::Lights).copied().unwrap_or(false), "Lights folded after reconfigure");
+        assert!(panel.outliner_folded.get(&SceneGroup::Objects).copied().unwrap_or(false), "Objects folded after reconfigure");
 
         // Second build
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after second build");
-        assert!(panel.outliner_folded.get(&SceneGroup::Lights).copied().unwrap_or(false), "Lights folded after second build");
+        assert!(panel.outliner_folded.get(&SceneGroup::Objects).copied().unwrap_or(false), "Objects folded after second build");
 
         // Verify the folded state still affects rendering
         // (folded sections should have fewer rows than expanded)
@@ -1610,10 +1671,10 @@
             ButtonCase {
                 name: "remove light",
                 select: |p| {
-                    p.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
+                    p.selection.insert(LayerId::new("layer-1"), SceneSelection::Lighting);
                 },
                 locate: |p, _| {
-                    assert_eq!(p.light_remove_ids.len(), 1, "one remove button, the properties header's");
+                    assert_eq!(p.light_remove_ids.len(), 1, "one remove button, the light's header in Lighting");
                     let (id, index) = p.light_remove_ids[0];
                     assert_eq!(index, 0);
                     id
