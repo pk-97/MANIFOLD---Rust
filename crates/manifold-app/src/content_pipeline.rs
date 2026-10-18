@@ -2596,10 +2596,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 self.last_rt_dispatches = gpu_gen.rt_dispatches;
                 self.last_rt_history_resets = gpu_gen.rt_history_resets;
             }
-            self.physics_overlay.record(
-                self.write_surface_index,
-                renderers.iter().find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>()),
-            );
+            let generators = renderers.iter().find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
+            self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains| {
+                generators?.write_physics_overlay(layer, domains)
+            });
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
             // or clear to black when nothing was captured (non-texture node).

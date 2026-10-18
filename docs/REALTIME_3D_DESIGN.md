@@ -106,14 +106,15 @@ between this doc and execution.
   blit, never in a render pass, and it changes no camera, graph or history (D9
   holds). The camera comes from the content thread: `render_scene` keeps the camera
   it rendered through (`EffectNode::rendered_camera`), and after the generators
-  render, the pipeline records it with that scene's accepted fluid domains for the
-  output surface being written (`physics_overlay.rs`). The UI picks the entry for
-  the surface the pane is showing and projects through `Camera::project_to_pixel`
-  at the output size, so the lines follow looped, orbiting or automated cameras
-  frame for frame. Lines come from `viewport_overlay::physics_overlay_lines`,
-  which the graph-editor viewport can share. Limits: a layer transform or a
-  generator rendered at a different aspect from the output is not accounted for,
-  and the separate Output window gets no overlay.
+  render, the pipeline records it, with the content frame number and that scene's
+  accepted fluid domains, for the output surface being written
+  (`physics_overlay.rs`). A layer that did not render that frame (clip ended,
+  occluded, or the scene bailed early) records nothing. The UI uses the entry only
+  when its frame matches the frame the master bridge published, and projects each
+  accepted domain's box through `Camera::project_to_pixel` at the output size, so
+  the lines follow looped, orbiting or automated cameras frame for frame.
+  Limits: a layer transform or a generator rendered at a different aspect from the
+  output is not accounted for, and the separate Output window gets no overlay.
 - **D8 — Gizmos are param editors.** A gizmo drag writes the object's `transform_n`
   params (or a light's pos/aim, a camera's pos) **through `EditingService` like any
   slider** — undoable, bindable, nothing new in the mutation model. **If the param is

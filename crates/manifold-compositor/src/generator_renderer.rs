@@ -106,6 +106,8 @@ pub struct GeneratorRenderer {
     pub uniform_arena: UniformArena,
     /// Last `structure_key` (Layers, Clips, Effects stamps) — layer_index refresh scan only runs when this changes.
     last_structure_key: u64,
+    /// Counts `render_all` calls; a layer stamps it when it actually renders.
+    render_pass: u64,
     /// The layer whose generator is currently open in the graph editor (watched),
     /// or `None`. Set each frame by [`Self::set_preview_node`] / cleared by
     /// [`Self::clear_preview`]. A watched generator renders *unfused* so the
@@ -194,6 +196,7 @@ impl GeneratorRenderer {
             layer_id_scratch: Vec::new(),
             uniform_arena,
             last_structure_key: u64::MAX, // force scan on first frame
+            render_pass: 0,
             preview_layer: None,
             profiling_enabled: false,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
@@ -386,13 +389,15 @@ impl GeneratorRenderer {
 
     /// What the master-preview physics overlay needs from `layer_id`'s scene:
     /// its accepted fluid domains (appended to `domains`) and the camera it
-    /// last rendered through. `None` when the layer has no scene camera.
+    /// rendered through. `None` unless the layer rendered in the last
+    /// `render_all` (a finished clip or an occluded layer reports nothing).
     pub fn write_physics_overlay(
         &self,
         layer_id: &LayerId,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
     ) -> Option<manifold_node_engine::scene::camera::Camera> {
-        let state = self.layer_generators.get(layer_id)?;
+        let state = self.layer_generators.get(layer_id)
+            .filter(|state| state.rendered_pass == Some(self.render_pass))?;
         state.generator.write_fluid_domains_watched(domains);
         state.generator.rendered_camera()
     }
@@ -730,6 +735,7 @@ impl GeneratorRenderer {
         render_skip: &[i32],
         project_tempo: Option<&ProjectTempo>,
     ) {
+        self.render_pass += 1;
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
         gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
@@ -1030,6 +1036,7 @@ impl GeneratorRenderer {
                     params,
                 );
                 active.anim_progress = new_progress;
+                layer_state.rendered_pass = Some(self.render_pass);
                 layer_state.generator.drain_sim_metrics(&mut self.sim_metrics);
                 // Acknowledge native tick-start receipts every rendered frame;
                 // otherwise completed clicks would fill the bounded event queue.
@@ -1285,6 +1292,7 @@ impl GeneratorRenderer {
                 string_params_dirty: true,
                 built_watched: is_watched,
                 applied_relight: (relight, relight_params),
+                rendered_pass: None,
             },
         );
         // Mark every active clip on this layer for a clear before the

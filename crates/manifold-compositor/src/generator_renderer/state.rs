@@ -81,6 +81,8 @@ pub struct LayerGeneratorState {
     /// a knob drag. Compared against the layer's current `gen_params` each
     /// sweep to force exactly the rebuild those values need.
     pub(super) applied_relight: (bool, manifold_core::effects::RelightParams),
+    /// The `render_all` pass this layer last rendered in.
+    pub(super) rendered_pass: Option<u64>,
 }
 
 impl LayerGeneratorState {

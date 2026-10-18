@@ -1,15 +1,14 @@
 //! Physics gizmos over the editor's master preview (`docs/REALTIME_3D_DESIGN.md`
 //! D7a). Editor chrome only: the content thread reports, per output surface,
-//! the camera the toggled scene rendered through, and the UI projects
-//! world-space lines through it onto the master pane. Nothing here feeds the
-//! render.
+//! the camera the toggled scene rendered through and its accepted fluid
+//! domains, and the UI projects their boxes onto the master pane. Nothing here
+//! feeds the render.
 
 use std::sync::Arc;
 
-use manifold_core::fluid_domain::FluidDomainSnapshot;
-use manifold_core::{GraphTarget, LayerId, NodeId};
+use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
+use manifold_core::{LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
-use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
 
@@ -17,14 +16,27 @@ type Domains = [(NodeId, FluidDomainSnapshot)];
 #[derive(Clone)]
 pub(crate) struct PhysicsOverlayFrame {
     pub layer: LayerId,
+    /// The content frame that wrote the surface; matched against the frame
+    /// the master bridge published so lines never sit on another frame.
+    pub frame: u64,
     pub camera: Camera,
     pub domains: Arc<Domains>,
-    /// Moves whenever `domains` changes.
-    pub domains_version: u64,
 }
 
-/// One entry per output surface, indexed like the master preview bridge, so
-/// the lines match the exact frame the pane shows.
+impl PhysicsOverlayFrame {
+    pub fn matches(&self, layer: Option<&LayerId>, frame: u64) -> bool {
+        self.frame == frame && Some(&self.layer) == layer
+    }
+
+    /// Every domain the simulation accepted this frame, as its box.
+    pub fn accepted_domains(&self) -> impl Iterator<Item = manifold_core::fluid_domain::FluidDomainLayout> + '_ {
+        self.domains.iter()
+            .filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready)
+            .filter_map(|(_, snapshot)| snapshot.accepted_layout)
+    }
+}
+
+/// One entry per output surface, indexed like the master preview bridge.
 pub(crate) type PhysicsOverlayFrames = [Option<PhysicsOverlayFrame>; 3];
 
 /// Content-thread side. The domain buffer is reused each frame; a new
@@ -33,13 +45,12 @@ pub(crate) struct PhysicsOverlayObservations {
     layer: Option<LayerId>,
     scratch: Vec<(NodeId, FluidDomainSnapshot)>,
     domains: Arc<Domains>,
-    domains_version: u64,
     pub frames: PhysicsOverlayFrames,
 }
 
 impl Default for PhysicsOverlayObservations {
     fn default() -> Self {
-        Self { layer: None, scratch: Vec::new(), domains: Arc::from([]), domains_version: 0, frames: std::array::from_fn(|_| None) }
+        Self { layer: None, scratch: Vec::new(), domains: Arc::from([]), frames: std::array::from_fn(|_| None) }
     }
 }
 
@@ -51,61 +62,31 @@ impl PhysicsOverlayObservations {
         }
     }
 
-    /// Record what surface `slot` was rendered with. Call after the
-    /// generators rendered this frame.
-    pub fn record(&mut self, slot: usize, generators: Option<&manifold_compositor::generator_renderer::GeneratorRenderer>) {
+    /// Record what surface `slot` was rendered with on content frame `frame`.
+    /// `observe` appends the layer's domains and returns the camera, or
+    /// `None` when the layer did not render this frame, which clears the slot.
+    pub fn record(
+        &mut self,
+        slot: usize,
+        frame: u64,
+        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>) -> Option<Camera>,
+    ) {
         self.frames[slot] = None;
-        let (Some(layer), Some(generators)) = (self.layer.as_ref(), generators) else { return };
+        let Some(layer) = self.layer.as_ref() else { return };
         self.scratch.clear();
-        let Some(camera) = generators.write_physics_overlay(layer, &mut self.scratch) else { return };
+        let Some(camera) = observe(layer, &mut self.scratch) else { return };
         if self.scratch.as_slice() != self.domains.as_ref() {
             self.domains = Arc::from(self.scratch.as_slice());
-            self.domains_version += 1;
         }
-        self.frames[slot] = Some(PhysicsOverlayFrame { layer: layer.clone(), camera, domains: self.domains.clone(), domains_version: self.domains_version });
-    }
-}
-
-/// UI side: the overlay's world-space lines, rebuilt only when the scene's
-/// authored graph or its accepted domains change.
-#[derive(Default)]
-pub(crate) struct PhysicsOverlayLines {
-    key: Option<(LayerId, u64, u64, u64)>,
-    lines: Vec<WorldLine>,
-}
-
-impl PhysicsOverlayLines {
-    pub fn update(
-        &mut self,
-        project: &manifold_core::project::Project,
-        frame: &PhysicsOverlayFrame,
-        parts_key: u64,
-    ) -> &[WorldLine] {
-        let generation = manifold_node_engine::load::preset_loader::catalog_generation();
-        let fresh = self.key.as_ref().is_some_and(|(layer, parts, catalog, version)| {
-            *layer == frame.layer && *parts == parts_key && *catalog == generation && *version == frame.domains_version
-        });
-        if !fresh {
-            self.lines.clear();
-            let target = GraphTarget::Generator(frame.layer.clone());
-            if let Some(def) = crate::fluid_domain_edit::authored_def(project, &target)
-                && let Some(mut scene) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def)
-            {
-                crate::fluid_domain_edit::apply_runtime_domains(&mut scene, &frame.domains);
-                manifold_nodes_scene::node_graph::viewport_overlay::physics_overlay_lines(&scene, &mut self.lines);
-            }
-            self.key = Some((frame.layer.clone(), parts_key, generation, frame.domains_version));
-        }
-        &self.lines
+        self.frames[slot] = Some(PhysicsOverlayFrame { layer: layer.clone(), frame, camera, domains: self.domains.clone() });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainState};
-    use manifold_core::{PresetTypeId, project::Project, types::LayerType};
-    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use manifold_core::fluid_domain::FluidDomainLayout;
+    use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
 
     #[test]
     fn a_world_point_lands_on_its_pixel_in_the_master_pane() {
@@ -126,35 +107,24 @@ mod tests {
     }
 
     #[test]
-    fn every_accepted_fluid_domain_draws_one_box_and_unaccepted_draws_none() {
-        let mut project = Project::default();
-        let index = project.timeline.add_layer(
-            "Fluid",
-            LayerType::Generator,
-            PresetTypeId::from_string("WaterDamBreakGpuFlip".to_string()),
-        );
-        let layer = project.timeline.layers[index].layer_id.clone();
-        let def = crate::fluid_domain_edit::authored_def(&project, &GraphTarget::Generator(layer.clone())).unwrap();
-        let scene = SceneVm::from_def(&def).unwrap();
-        let domain = scene.objects.iter().find_map(|object| match object {
-            SceneObjectVm::Known(row) => row.liquid_domain.as_ref().map(|domain| domain.node.clone()),
-            _ => None,
-        }).expect("the dam break has a fluid");
-        let layout = FluidDomainLayout { min: [-1.0, 0.0, -2.0], size: [2.0, 3.0, 4.0], cells: [8, 8, 8], cell_size: 0.25 };
+    fn a_layer_that_did_not_render_leaves_no_overlay() {
+        let layer = LayerId::new("water");
+        let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
         let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
-        let mut frame = PhysicsOverlayFrame {
-            layer,
-            camera: Camera::default_perspective(),
-            domains: Arc::from([(domain, ready)]),
-            domains_version: 1,
-        };
-        let mut lines = PhysicsOverlayLines::default();
-        let drawn = lines.update(&project, &frame, 0);
-        assert_eq!(drawn.len(), 12);
-        assert!(drawn.iter().all(|line| (0..3).all(|i| line.a[i] >= layout.min[i] && line.a[i] <= layout.min[i] + layout.size[i])));
+        let mut observations = PhysicsOverlayObservations::default();
+        observations.set_layer(Some(layer.clone()));
 
-        frame.domains = Arc::from([]);
-        frame.domains_version = 2;
-        assert!(lines.update(&project, &frame, 0).is_empty(), "a domain the runtime has not accepted draws nothing");
+        observations.record(0, 7, |_, domains| {
+            domains.push((NodeId::new("domain"), ready));
+            Some(Camera::default_perspective())
+        });
+        let frame = observations.frames[0].as_ref().expect("a rendered layer reports");
+        assert!(frame.matches(Some(&layer), 7) && !frame.matches(Some(&layer), 8));
+        assert_eq!(frame.accepted_domains().count(), 1);
+
+        // The clip ended or the layer was occluded: the same slot's next write
+        // must not keep last frame's camera or boxes.
+        observations.record(0, 10, |_, _| None);
+        assert!(observations.frames[0].is_none());
     }
 }
