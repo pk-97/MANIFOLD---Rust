@@ -387,19 +387,20 @@ impl GeneratorRenderer {
         }
     }
 
-    /// What the master-preview physics overlay needs from `layer_id`'s scene:
-    /// its accepted fluid domains (appended to `domains`) and the camera it
-    /// rendered through. `None` unless the layer rendered in the last
+    /// What the Scene panel's gizmo overlay needs from `layer_id`'s scene:
+    /// its accepted fluid domains and light positions (appended) and the
+    /// camera it rendered through. `None` unless the layer rendered in the last
     /// `render_all` (a finished clip or an occluded layer reports nothing).
     pub fn write_physics_overlay(
         &self,
         layer_id: &LayerId,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
+        lights: &mut Vec<[f32; 3]>,
     ) -> Option<manifold_node_engine::scene::camera::Camera> {
         let state = self.layer_generators.get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?;
         state.generator.write_fluid_domains_watched(domains);
-        state.generator.rendered_camera()
+        state.generator.write_rendered_view(lights)
     }
 
     /// Keep local modifier addresses out of the host's node namespace.

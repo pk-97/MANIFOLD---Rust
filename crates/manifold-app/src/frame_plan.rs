@@ -303,6 +303,9 @@ pub(crate) struct FrameInputs {
     pub driver_period_key: u64,
     /// The LED controller state the master chrome shows (live push).
     pub led_enabled: bool,
+    /// The newest gizmo entry for the Scene panel's scene (D7a): a late
+    /// entry for a frame already on screen redraws it with its lines.
+    pub gizmo_frame: u64,
 }
 
 impl FrameInputs {

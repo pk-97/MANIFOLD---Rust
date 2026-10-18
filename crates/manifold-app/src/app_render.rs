@@ -367,6 +367,15 @@ impl Application {
         // 1. Take the newest state from the content thread.
         self.intake_content_state();
         self.tick_sync_calibration();
+        // "Show gizmos" follows whichever scene the Scene panel shows; the
+        // content thread reports that layer's rendered view (D7a).
+        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
+        if gizmo_layer != self.ws.gizmo_layer_sent.as_ref()
+            && let Some(tx) = self.content_tx.as_ref()
+        {
+            self.ws.gizmo_layer_sent = gizmo_layer.cloned();
+            ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
+        }
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(
@@ -906,12 +915,6 @@ impl Application {
                             &mut self.local_project.edit(&mut self.ui_edits, content_tx),
                             &mut self.ws.ui_root, layer_id, view.as_ref(),
                         );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupPhysicsOverlay(layer_id)) => {
-                    if let Some(tx) = self.content_tx.as_ref() {
-                        ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(layer_id.clone()));
                     }
                     continue;
                 }

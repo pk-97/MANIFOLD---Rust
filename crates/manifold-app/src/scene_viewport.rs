@@ -206,8 +206,9 @@ impl SceneViewportPaint<'_> {
 }
 
 /// `line` projected through `camera` for a `width x height` render, mapped
-/// into `rect` (the pane that shows that render). `None` when an end is behind
-/// the camera.
+/// into `rect` (the pane that shows that render). The segment is clipped to
+/// the camera's near plane first, so a line running past or behind the camera
+/// keeps its visible part. `None` when all of it is behind.
 pub(crate) fn project_line(
     camera: &manifold_node_engine::scene::camera::Camera,
     width: u32,
@@ -215,8 +216,18 @@ pub(crate) fn project_line(
     rect: manifold_ui::Rect,
     line: &WorldLine,
 ) -> Option<[f32; 4]> {
-    let a = camera.project_to_pixel(line.a, width, height)?;
-    let b = camera.project_to_pixel(line.b, width, height)?;
+    let depth = |p: [f32; 3]| (0..3).map(|i| (p[i] - camera.pos[i]) * camera.fwd[i]).sum::<f32>();
+    let toward = |from: [f32; 3], to: [f32; 3], t: f32| [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t);
+    let near = camera.near.max(1e-4);
+    let (da, db) = (depth(line.a), depth(line.b));
+    let (a, b) = match (da < near, db < near) {
+        (true, true) => return None,
+        (true, false) => (toward(line.a, line.b, (near - da) / (db - da)), line.b),
+        (false, true) => (line.a, toward(line.b, line.a, (near - db) / (da - db))),
+        (false, false) => (line.a, line.b),
+    };
+    let a = camera.project_to_pixel(a, width, height)?;
+    let b = camera.project_to_pixel(b, width, height)?;
     let (sx, sy) = (rect.width / width.max(1) as f32, rect.height / height.max(1) as f32);
     Some([rect.x + a.px * sx, rect.y + a.py * sy, rect.x + b.px * sx, rect.y + b.py * sy])
 }

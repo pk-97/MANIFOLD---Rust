@@ -344,8 +344,8 @@ pub enum ContentCommand {
     /// the editor's node selection changes.
     SetGraphPreviewNode(Option<manifold_core::NodeId>),
     SetSceneViewport(Option<std::sync::Arc<crate::scene_viewport::SceneViewportRequest>>),
-    /// The scene layer whose rendered camera and fluid domains are reported
-    /// for the master-preview physics overlay; `None` stops reporting.
+    /// The scene layer whose rendered camera, lights and fluid domains are
+    /// reported for the Scene panel's gizmo overlay; `None` stops reporting.
     SetPhysicsOverlay(Option<manifold_core::LayerId>),
     SetModifierPreviewContext {
         scope: Vec<manifold_core::NodeId>,

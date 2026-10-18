@@ -1415,6 +1415,12 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// World positions of the lights this node rendered with this frame, for
+    /// the same overlays. Empty by default.
+    fn rendered_lights(&self) -> &[[f32; 3]] {
+        &[]
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,

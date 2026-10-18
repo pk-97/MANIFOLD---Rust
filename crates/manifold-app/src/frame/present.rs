@@ -223,6 +223,23 @@ impl Application {
                 (w as f32, h as f32)
             })
             .unwrap_or((1920.0, 1080.0));
+        // The Scene panel's gizmos, only for the exact frame being shown.
+        #[cfg(target_os = "macos")]
+        let gizmo_frame = preview_lease
+            .zip(self.preview_texture_bridge.as_ref())
+            .and_then(|(lease, bridge)| bridge.leased_frame(lease))
+            .and_then(|published| {
+                let layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
+                self.content_state.physics_overlay_frames[preview_slot].as_ref()
+                    .filter(|frame| frame.matches(layer, published))
+            });
+        #[cfg(not(target_os = "macos"))]
+        let gizmo_frame: Option<&crate::physics_overlay::PhysicsOverlayFrame> = None;
+        let gizmos = gizmo_frame.map(|frame| crate::ui_frame::MainGizmos {
+            frame,
+            grid: &self.ws.viewport_grid_lines,
+            output: (video_source_dims.0 as u32, video_source_dims.1 as u32),
+        });
         if let (
             Some(cm),
             Some(ui),
@@ -251,6 +268,7 @@ impl Application {
                 scale,
                 compositor_tex,
                 video_source_dims,
+                gizmos,
             );
         }
         self.ui_profile.add("present.clear_atlas_compositor", pseg.elapsed());
