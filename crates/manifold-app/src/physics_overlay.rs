@@ -59,6 +59,17 @@ impl PhysicsOverlayFrame {
 /// One entry per output surface, indexed like the preview bridge.
 pub(crate) type PhysicsOverlayFrames = [Option<PhysicsOverlayFrame>; 3];
 
+/// The newest content frame with a gizmo entry for `layer`, 0 for none. A
+/// frame-planner input: an entry arriving after its frame was already shown
+/// moves it, so that frame is drawn again with its lines.
+pub(crate) fn newest_frame(frames: &PhysicsOverlayFrames, layer: Option<&LayerId>) -> u64 {
+    frames.iter().flatten()
+        .filter(|entry| Some(&entry.layer) == layer)
+        .map(|entry| entry.frame)
+        .max()
+        .unwrap_or(0)
+}
+
 /// Content-thread side. The buffers are reused each frame; a new published
 /// snapshot is allocated only when the domains or light positions change.
 pub(crate) struct PhysicsOverlayObservations {
@@ -145,6 +156,29 @@ mod tests {
     }
 
     #[test]
+    fn a_camera_standing_inside_the_grid_keeps_every_line_along_its_view() {
+        // The show camera at (0, 2, 6) looking at the origin: every grid line
+        // running along z passes beside and behind it.
+        let camera = Camera::look_at([0.0, 2.0, 6.0], [0.0; 3], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_3, 0.05, 200.0);
+        let rect = manifold_ui::Rect::new(0.0, 0.0, 320.0, 180.0);
+        let grid = manifold_nodes_scene::node_graph::viewport_overlay::grid_lines(10.0, 1.0);
+        let along_z: Vec<_> = grid.iter().filter(|line| line.a[2] != line.b[2]).collect();
+        assert_eq!(along_z.len(), 21);
+        for line in &along_z {
+            let [x0, y0, x1, y1] = crate::scene_viewport::project_line(&camera, 1920, 1080, rect, line)
+                .unwrap_or_else(|| panic!("line {line:?} vanished"));
+            // The far end projects exactly as an unclipped point would.
+            let far = camera.project_to_pixel(line.a, 1920, 1080).unwrap();
+            assert!((x0 - far.px / 6.0).abs() < 1e-3 && (y0 - far.py / 6.0).abs() < 1e-3);
+            // The clipped near end runs toward the bottom of the picture.
+            assert!(y1.is_finite() && x1.is_finite() && y1 > y0);
+        }
+        // A line wholly behind the camera still draws nothing.
+        let behind = WorldLine { a: [-1.0, 0.0, 8.0], b: [1.0, 0.0, 8.0], color: [255; 4] };
+        assert!(crate::scene_viewport::project_line(&camera, 1920, 1080, rect, &behind).is_none());
+    }
+
+    #[test]
     fn the_preview_fits_the_show_inside_the_video_area() {
         let area = manifold_ui::Rect::new(0.0, 0.0, 400.0, 400.0);
         let fit = crate::ui_frame::video_fit_rect(area, (1920.0, 1080.0)).unwrap();
@@ -170,6 +204,25 @@ mod tests {
         // The grid, two 3-line light crosses, one 12-edge box (the pending
         // domain draws nothing).
         assert_eq!(batches, [grid.len(), 3, 3, 12]);
+    }
+
+    #[test]
+    fn a_late_gizmo_entry_redraws_the_frame_already_shown() {
+        let layer = LayerId::new("scene");
+        let mut observations = PhysicsOverlayObservations::default();
+        observations.set_layer(Some(layer.clone()));
+        let inputs = |frames: &PhysicsOverlayFrames| crate::frame_plan::FrameInputs {
+            gizmo_frame: newest_frame(frames, Some(&layer)),
+            ..Default::default()
+        };
+        // The surface was published and drawn before its entry arrived.
+        let shown = inputs(&observations.frames);
+        observations.record(2, 41, |_, _, _| Some(Camera::default_perspective()));
+        let arrived = inputs(&observations.frames);
+        assert!(crate::frame_plan::plan_frame(&shown, &arrived).redraw);
+        assert!(!crate::frame_plan::plan_frame(&arrived, &arrived).redraw);
+        // Another scene's entries never move it.
+        assert_eq!(newest_frame(&observations.frames, Some(&LayerId::new("other"))), 0);
     }
 
     #[test]

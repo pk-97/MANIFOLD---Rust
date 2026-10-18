@@ -418,6 +418,10 @@ pub(crate) fn gather_frame_inputs(
         runtime: content_state.runtime,
         driver_period_key: content_state.bpm.to_bits(),
         led_enabled: content_state.led_enabled,
+        gizmo_frame: crate::physics_overlay::newest_frame(
+            &content_state.physics_overlay_frames,
+            ui_root.scene_setup_panel.gizmo_layer(),
+        ),
         clock_digits: crate::frame_plan::clock_digits(
             content_state,
             chrome.project.settings.time_signature_numerator,
