@@ -116,9 +116,6 @@ docs/SCENE_MODIFIER_RT_INVENTORY.md:crates/manifold-nodes/tests/scene_setup_roun
 docs/SCENE_MODIFIER_RT_INVENTORY.md:crates/manifold-nodes/tests/wave_pilot_presets.rs
 docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md:crates/manifold-nodes/src/node_graph/bundled_presets.rs
 docs/SCENE_SETUP_PANEL_DESIGN.md:crates/manifold-nodes/src/node_graph/primitives/
-docs/SCENE_SURFACES_DESIGN.md:crates/manifold-app/src/ui_bridge/projection/scene_card.rs
-docs/SCENE_SURFACES_DESIGN.md:crates/manifold-core/src/param_lookup.rs
-docs/SCENE_SURFACES_DESIGN.md:scripts/ui-flows/scene-card-bands.json
 docs/STATIC_THUMBNAILS_DESIGN.md:crates/manifold-nodes/src/audition/mod.rs
 docs/STATIC_THUMBNAILS_DESIGN.md:crates/manifold-nodes/src/bin/generate_preset_thumbnails.rs
 docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md:crates/manifold-nodes/tests/headless_ui_spike.rs

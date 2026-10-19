@@ -2,7 +2,7 @@
 
 <!-- index: Implementation contract for a new shape-preserving blob tracker and effect-group masks, retaining the original Blob Track. -->
 
-**Status:** IMPLEMENTED · 2026-09-23 · Codex. V2 presets, detector/tracker and masks are present; legacy Blob Track is preserved. Owed: allocation measurement (BUG-7bi8) and visual/mask refinement (BUG-sh4i). Evidence and refinement history: §7.
+**Status:** IN PROGRESS · 2026-09-23 · Codex · implemented. V2 presets, detector/tracker and masks are present; legacy Blob Track is preserved. Owed: allocation measurement (BUG-7bi8) and visual/mask refinement (BUG-sh4i). Evidence and refinement history: §7.
 **Prerequisites:** existing effect-group masks, native BlobDetector bundle, and optical-flow primitive; verified against the implementation.
 **Execution contract:** P1–P4 ownership and run constraints are recorded in §7; current CLAUDE.md and landing gates still apply.
 

@@ -1,6 +1,6 @@
 # Frame-Exact Transport — one frame grid for live play and export
 
-**Status:** IN PROGRESS · 2026-10-14 · P1 and P2 landed on main (ff922660e). P3 (a tempo-trim follower, a catch-up window, measured output latency, learned source offsets) is built on `feat/frame-exact-sync`. Owed: P3 review and landing, Peter's rig test (section 6 (Phasing), P3 demo), constants tuned from the rig log, P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
+**Status:** IN PROGRESS · 2026-10-14 · P1, P2 and P3 on main (P3 landed 2d64b50e1: tempo-trim follower, catch-up window, measured output latency, learned source offsets). Owed: Peter's rig test (section 6 (Phasing), P3 demo), constants tuned from the rig log, P4. Bead: BUG-l0pnn (Frame-exact transport: rig test, constant tuning, P4 video locking); origin BUG-gqhep (live-transport-nondeterministic-frame-clock), closed.
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 

@@ -46,7 +46,7 @@ or the project file.
 Companion docs:
 - [DETECTOR_LAB_DESIGN.md](DETECTOR_LAB_DESIGN.md) — the parts, configs and runs; its P7 (releases from component configs) is built here.
 - [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md) — the kick's consumer contract, the container format, threading; its sections 2–4 are superseded here.
-- `docs/archive/SNARE_REALTIME_DESIGN.md` — the snare v1 port, superseded here. Its consumer contract still holds: `SendFeatures.bands[Mid].snare` is 1.0 on the fire hop and decays like the kick; the trigger drawer's Snare chip reads it.
+- `SNARE_REALTIME_DESIGN.md (deleted)` — the snare v1 port, superseded here. Its consumer contract still holds: `SendFeatures.bands[Mid].snare` is 1.0 on the fire hop and decays like the kick; the trigger drawer's Snare chip reads it.
 
 ## 1. Audit — what exists (verified 2026-10-11)
 

@@ -230,7 +230,7 @@ Header: sweep name, model, main commit (from `raw/main_commit.txt`), raw files u
 
 | id | location | category | proof | risk | grade | action | lines |
 |---|---|---|---|---|---|---|---|
-| engine-001 | `crates/manifold-foundation/src/uv_transform.rs` | 3.2 | 2 fns and a struct only its own tests use; 0 hits in other crates, strings, corpus; caller deleted in 61b52dcef | none | A | delete module and tests | 111 |
+| engine-001 | `uv_transform.rs (deleted)` | 3.2 | 2 fns and a struct only its own tests use; 0 hits in other crates, strings, corpus; caller deleted in 61b52dcef | none | A | delete module and tests | 111 |
 
 - **id:** `<sweep>-NNN`.
 - **location:** `path:line` for an item, a path for a file, the id for content (`node.peak`, preset `WaterDamBreakMatter`).
@@ -401,11 +401,11 @@ Standing rules, restated in every brief: read-only on code; write only your two 
 
 > You are the `tooling` sweep of the simplification census (BUG-yn979, Simplification pass). Read `/Users/peterkiemann/MANIFOLD - Rust/docs/SIMPLIFICATION_CENSUS.md` sections 3.12 and 4 first.
 >
-> Standing rules as in 11.1. Scope: `scripts/` (not the contents of `scripts/ui-flows/`), `scripts/dev.py` verbs, `.claude/hooks/`, `docs/` (top level and `docs/archive/`), the repo root, `plugins/` except `plugins/vendor/`, `tv-led-mirror/`. Screens at main `<main commit>` are in `/tmp/simplification_census/raw/`.
+> Standing rules as in 11.1. Scope: `scripts/` (not the contents of `scripts/ui-flows/`), `scripts/dev.py` verbs, `.claude/hooks/`, `docs/` (top level and `the deleted archive folder`), the repo root, `plugins/` except `plugins/vendor/`, `tv-led-mirror/`. Screens at main `<main commit>` are in `/tmp/simplification_census/raw/`.
 >
 > 1. Scripts: start from `raw/scripts.tsv` (runs in 30 days, executable bit, references). For each script with 0 runs, also count runs through its verb: `fd -e jsonl . /Users/peterkiemann/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust --changed-within 30d -X rg -o --no-filename '"command":"[^"]{0,300}dev\.py VERB'`. Run `"/Users/peterkiemann/MANIFOLD - Rust/scripts/dev.py" VERB --help` for every verb and record which crash. Note which scripts are libraries other scripts import (`rg -n 'import NAME|from NAME' "/Users/peterkiemann/MANIFOLD - Rust/scripts"`).
 > 2. Hooks: list the hook registrations in `.claude/settings.json` with `jq`, then count fires per hook over 30 days in `.claude/telemetry/hook-fires.jsonl` with `jq`. One command per step, output to `/tmp/simplification_census/`; never pipe a `.claude` path into awk or sed. A hook file no registration names is a candidate.
-> 3. Docs: from `raw/docs.tsv`, every doc with 0 reads and 2 or fewer inbound references: read its first 20 lines and its status line, list who references it. Run `"/Users/peterkiemann/MANIFOLD - Rust/.claude/hooks/design_status.py" --lifecycle-check`. For `docs/archive/`, count inbound references per file.
+> 3. Docs: from `raw/docs.tsv`, every doc with 0 reads and 2 or fewer inbound references: read its first 20 lines and its status line, list who references it. Run `"/Users/peterkiemann/MANIFOLD - Rust/.claude/hooks/design_status.py" --lifecycle-check`. For `the deleted archive folder`, count inbound references per file.
 > 4. Repo root and leftovers: `git -C "/Users/peterkiemann/MANIFOLD - Rust" ls-files` at depth 1, tracked binaries, `tv-led-mirror/`, `plugins/`. Who builds or runs each.
 > 5. Write `docs/evidence/simplification_census_2026-10/tooling.md` and `tooling.proof.md` in the record format of the census doc's section 4 (The candidate record). Anything Peter may run by hand is `ask`.
 

@@ -11,7 +11,7 @@ Peter's directives, verbatim:
 - "all effects and generators should default to 100% amount param though"
 - On the stencil default showing broken in the thumbnail: the default is the bug — fix the default, and the grid becomes a standing audit of every preset.
 
-Companion docs: [archive/PRESET_BROWSER_AUDITION_DESIGN.md](archive/PRESET_BROWSER_AUDITION_DESIGN.md) (the live-preview design this supersedes), `docs/archive/PRESET_LIBRARY_DESIGN.md` (P6/D7 built the static path this design finishes).
+Companion docs: [archive/PRESET_BROWSER_AUDITION_DESIGN.md](archive/PRESET_BROWSER_AUDITION_DESIGN.md) (the live-preview design this supersedes), `PRESET_LIBRARY_DESIGN.md (deleted)` (P6/D7 built the static path this design finishes).
 
 ## 1. Audit — what exists (verified 2026-09-11)
 

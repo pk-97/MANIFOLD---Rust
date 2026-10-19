@@ -68,7 +68,7 @@ $ git -C REPO blame -L 161,161 --date=short crates/manifold-app/src/project_io.r
 
 - `set_local` (app/src/texture_pane.rs:126): 1 hit(s); code: none; corpus: 0
 - `raw_io_surface` (app/src/shared_texture.rs:425): 1 hit(s); code: none; corpus: 0
-- `bridged` (app/src/texture_pane.rs:70): 7 hit(s); code: none; tests: nodes/tests/blob_v2_demo.rs:795; comment-only: 4; docs: docs/archive/FFT_WATER_SOLVER_DESIGN.md; corpus: 0
+- `bridged` (app/src/texture_pane.rs:70): 7 hit(s); code: none; tests: nodes/tests/blob_v2_demo.rs:795; comment-only: 4; docs: FFT_WATER_SOLVER_DESIGN.md (deleted); corpus: 0
 ```
 $ rg -n -w -e PaneSource -e TexturePane crates/manifold-app/src          # live users construct `TexturePane::local` only
 $ rg -n 'TexturePane|PaneSource' docs .beads/issues.jsonl                # REALTIME_3D_DESIGN.md:284 and the landing note describe the `Local` path ("TexturePane/blit_texture_pane present path"); no doc or bead names Bridged as upcoming
@@ -209,10 +209,10 @@ $ rg -n 'self\.commands|self\.icon_commands|mem::take' crates/manifold-ui-paint/
 ## app-ui-022
 
 ```
-$ rg --hidden -g '!.git/' -g '!plugins/vendor/' -n -w widget_layout .         # lib.rs:50 `pub mod widget_layout;`, docs/archive/UI_ARCHITECTURE_AUDIT.md (2 prose lines), the census doc
+$ rg --hidden -g '!.git/' -g '!plugins/vendor/' -n -w widget_layout .         # lib.rs:50 `pub mod widget_layout;`, UI_ARCHITECTURE_AUDIT.md (deleted) (2 prose lines), the census doc
 $ rg -n 'widget_layout' crates -g '*.rs'                                      # lib.rs:50 only
 ```
-- The 44 `pub const` of the file: 43 read DEAD in the screen; the 44th, `SCALE`, is multiplied into the others and has no other user (its 82 whole-word hits are the common word `SCALE` in unrelated crates). `crates/manifold-ui/src/widget_layout.rs` is 72 lines.
+- The 44 `pub const` of the file: 43 read DEAD in the screen; the 44th, `SCALE`, is multiplied into the others and has no other user (its 82 whole-word hits are the common word `SCALE` in unrelated crates). `widget_layout.rs (deleted)` is 72 lines.
 - 43 names from the const scan (`const_cascade.py`, status DEAD or CASCADE).
 - Every name: whole-word hits outside its own definition = 0 in code, 0 in tests; corpus files = 0 (`rg -l -w -F NAME corpus`, all 43 names run).
 - No name has a comment-only hit, a doc mention or a cascade parent: each has exactly one hit, its definition.
@@ -223,7 +223,7 @@ $ rg -n 'widget_layout' crates -g '*.rs'                                      # 
 ```
 $ rg --hidden -g '!.git/' -g '!plugins/vendor/' -n -w driver_waveform_icons .   # lib.rs:17 `pub mod driver_waveform_icons;` only
 $ rg -n -w DriverWaveformIcons crates -g '*.rs'                                   # no output
-$ git -C REPO log --format='%h %ad %s' --date=short -- crates/manifold-ui/src/driver_waveform_icons.rs | head -3   # last touched in the 2026-06-23 UI split; ported 2026-03-18
+$ git -C REPO log --format='%h %ad %s' --date=short -- driver_waveform_icons.rs (deleted) | head -3   # last touched in the 2026-06-23 UI split; ported 2026-03-18
 ```
 - The module exposes `get` and `icon_size`; no `driver_waveform_icons::` path appears anywhere. The icon atlas in `icons.rs` (`WAVEFORMS`, `waveform_icon_char`) draws the waveform shapes now. 227 lines plus the `pub mod` line.
 
@@ -253,10 +253,10 @@ $ sed -n 40,50p docs/SCENE_PANEL_UX_DESIGN.md                                   
   - `ENVELOPE_ACTIVE` (ui/src/color.rs:436): docs: docs/GRAPH_AND_UI_POLISH_PLAN.md
   - `MONITOR_ACTIVE` (ui/src/color.rs:558): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md
   - `EXPORT_ACTIVE` (ui/src/color.rs:559): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md, docs/UI_SOTA_UPGRADE_PLAN.md
-  - `BROWSER_CELL_BADGE_TEXT` (ui/src/color.rs:841): docs: docs/archive/BUG_BACKLOG_CLOSED.md
+  - `BROWSER_CELL_BADGE_TEXT` (ui/src/color.rs:841): docs: BUG_BACKLOG_CLOSED.md (deleted)
   - `TRIM_HANDLE_THRESHOLD_PX` (ui/src/color.rs:853): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md
   - `TRIM_HANDLE_MIN_CLIP_WIDTH_PX` (ui/src/color.rs:854): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md
-  - `SPACE_XS` (ui/src/color.rs:992): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md, docs/archive/UI_ARCHITECTURE_AUDIT.md
+  - `SPACE_XS` (ui/src/color.rs:992): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md, UI_ARCHITECTURE_AUDIT.md (deleted)
   - `SPACE_XXL` (ui/src/color.rs:997): docs: docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md
   - `LAYER_CTRL_TYPE_BADGE_SIZE` (ui/src/color.rs:1094): docs: docs/TIMELINE_UI_REDESIGN.md
 - Full name list: `BG_1_HOVER`, `BG_2_HOVER`, `BG_2_PRESSED`, `AMBER_IDLE`, `ORANGE_IDLE`, `ORANGE_ACTIVE`, `BLUE_IDLE`, `BLUE_ACTIVE`, `CYAN_IDLE`, `CYAN_BASE`, `CYAN_ACTIVE`, `PURPLE_IDLE`, `PURPLE_ACTIVE`, `INSPECTOR_BG_FOCUSED`, `INPUT_FIELD_BG`, `INPUT_FIELD_BG_ALT`, `SCROLLBAR_BG`, `DROPDOWN_ITEM_BG`, `DROPDOWN_TEMPLATE_BG`, `PICKER_BG`, `PROGRESS_BAR_BG`, `OVERLAY_BG`, `ACCENT_BLUE_SLIDER`, `ACCENT_BLUE_DIM`, `PROGRESS_FILL_BLUE`, `HANDLE_BG`, `SCROLLBAR_HANDLE`, `SLIDER_BG`, `DRAG_HANDLE_HOVER`, `SLIDER_HANDLE`, `TOGGLE_HIGHLIGHTED`, `TOGGLE_PRESSED`, `SELECTED_LAYER_CONTROL`, `ACTIVE_SHORTCUT_KEY_BG`, `CLIP_SELECTED`, `CLIP_HOVER`, `CLIP_SEPARATOR`, `CLIP_GEN_SELECTED`, `CLIP_GEN_HOVER`, `GEN_TYPE_LABEL`, `COLLAPSED_GROUP_OVERLAY_BG`, `PLACEHOLDER_TEXT`, `DROPDOWN_INACTIVE_TEXT`, `STATUS_NEUTRAL`, `STATUS_ACTIVE`, `STATUS_OFF`, `SAVE_FLASH_GREEN`, `TRANSPORT_FIELD_BG`, `MIDI_POPUP_ACTIVE`, `DELETE_BTN_NORMAL`, `DELETE_BTN_HIGHLIGHTED`, `DELETE_BTN_PRESSED`, `RACK_BORDER`, `RACK_BG`, `CARD_BORDER`, `RACK_HANDLE_BG`, `RACK_HANDLE_TEXT`, `EFFECT_HEADER_NAME`, `EFFECT_CARD_INNER_BG`, `REMOVE_BTN_BG`, `REMOVE_BTN_HIGHLIGHTED`, `REMOVE_BTN_PRESSED`, `REMOVE_BTN_TEXT`, `ADD_BTN_BG`, `ADD_BTN_HIGHLIGHTED`, `ADD_BTN_PRESSED`, `EFFECT_DRAG_GHOST_BLUE`, `EFFECT_DRAG_GHOST_RACK`, `EFFECT_DRAG_INDICATOR_UNGROUP`, `EFFECT_DRAG_INDICATOR_REGROUP`, `SELECTED_LAYER_RING_WIDTH`, `TRIM_HANDLE_COLOR`, `DRIVER_ACTIVE`, `DRIVER_INACTIVE`, `ENVELOPE_ACTIVE`, `ENVELOPE_INACTIVE`, `ENVELOPE_CARD_BG`, `PARAM_GROUP_BG`, `COLOR_GRID_ROWS`, `LAYER_PALETTE`, `TEMPO_LINE`, `TEMPO_POINT`, `MONITOR_ACTIVE`, `EXPORT_ACTIVE`, `RULER_BG`, `LOOP_OFF_COLOR`, `BPM_BTN_HOVER`, `GEN_TYPE_HOVER`, `EXIT_PATH_BG`, `EXIT_PATH_HOVER`, `EXIT_PATH_PRESSED`, `MARKER_LINE_WIDTH`, `TEXT_LIGHT_C32`, `BUTTON_INACTIVE_HOVER_C32`, `BUTTON_INACTIVE_PRESS_C32`, `DRIVER_INACTIVE_HOVER_C32`, `DRIVER_INACTIVE_PRESS_C32`, `ENVELOPE_ACTIVE_HOVER_C32`, `ENVELOPE_ACTIVE_PRESS_C32`, `CONFIG_BTN_INACTIVE_C32`, `CONFIG_BTN_HOVER_C32`, `CONFIG_BTN_PRESSED_C32`, `MOD_HEADER_BG_C32`, `GEN_CARD_HEADER_BG_C32`, `GEN_CARD_HEADER_NAME_C32`, `HEADER_BUTTON_DIM`, `HEADER_BUTTON_ACTIVE`, `HEADER_BUTTON_ACTIVE_HOVER`, `HEADER_BUTTON_ACTIVE_PRESSED`, `FOOTER_BTN_HOVER`, `FOOTER_BTN_PRESSED`, `TRANSPORT_BUTTON_HOVER`, `TRANSPORT_SAVE_DIRTY_BG`, `TRANSPORT_BPM_FIELD_HOVER`, `ADD_EFFECT_BTN_BG_C32`, `ADD_EFFECT_BTN_HOVER_C32`, `ADD_EFFECT_BTN_TEXT_C32`, `CHIP_BG`, `CHIP_BG_HOVER`, `CHIP_BG_PRESSED`, `CHIP_LINE`, `CLIP_LABEL_BG`, `CLIP_LABEL_BG_HOVER`, `BROWSER_CELL_CAPTION_BG`, `BROWSER_CELL_BADGE_TEXT`, `DRAG_EDGE_ZONE_PX`, `DRAG_SCROLL_SPEED_PX_PER_SEC`, `TRIM_HANDLE_THRESHOLD_PX`, `TRIM_HANDLE_MIN_CLIP_WIDTH_PX`, `WAVEFORM_LANE_HEIGHT`, `STEM_LANE_HEIGHT`, `WAVEFORM_LANE_BG`, `WAVEFORM_BTN_NORMAL`, `WAVEFORM_BTN_HIGHLIGHTED`, `WAVEFORM_BTN_PRESSED`, `WAVEFORM_REMOVE_HIGHLIGHTED`, `WAVEFORM_REMOVE_PRESSED`, `WAVEFORM_EXPAND_HIGHLIGHTED`, `WAVEFORM_EXPAND_PRESSED`, `STEM_LANE_BG_DRUMS`, `STEM_LANE_BG_BASS`, `STEM_LANE_BG_OTHER`, `STEM_LANE_BG_VOCALS`, `WAVEFORM_CENTER_LINE`, `CLIP_MIN_WIDTH`, `INSPECTOR_GAP`, `SPACE_XS`, `SPACE_XXL`, `MAGNET_RADIUS_PX`, `BITMAP_SCROLL_SPEED`, `LAYER_CTRL_TYPE_BADGE_SIZE`, `LAYER_CTRL_INFO_ROW_HEIGHT`, `LAYER_CTRL_FOLDER_BTN_WIDTH`, `LAYER_CTRL_NEW_CLIP_BTN_WIDTH`, `LAYER_CTRL_ADD_GEN_CLIP_BTN_WIDTH`, `LAYER_CTRL_GEN_TYPE_ROW_HEIGHT`, `LAYER_CTRL_MIDI_LABEL_WIDTH`, `LAYER_CTRL_CHANNEL_LABEL_WIDTH`, `LAYER_CTRL_SMALL_FONT_SIZE`, `LAYER_CTRL_NAME_FONT_SIZE`, `LAYER_CTRL_HANDLE_FONT_SIZE`, `MUTE_BTN_ACTIVE`, `SOLO_BTN_ACTIVE`, `MUTE_SOLO_BTN_INACTIVE`.
@@ -344,7 +344,7 @@ $ rg -n 'CoordinateMapper' crates -g '*.rs' -l                           # the m
 
 ## app-ui-036
 
-- `SIDEBAR_WIDTH` (ui/src/panels/graph_editor.rs:33): 4 hit(s); code: none; docs: docs/GRAPH_EDITOR_REDESIGN.md, docs/HEADLESS_UI_HARNESS.md, docs/archive/EDITOR_REORG_BUILD_BRIEF.md; corpus: 0
+- `SIDEBAR_WIDTH` (ui/src/panels/graph_editor.rs:33): 4 hit(s); code: none; docs: docs/GRAPH_EDITOR_REDESIGN.md, docs/HEADLESS_UI_HARNESS.md, EDITOR_REORG_BUILD_BRIEF.md (deleted); corpus: 0
 - `EDITOR_CARD_LANE_WIDTH` (ui/src/panels/graph_editor.rs:40): 4 hit(s); code: none; docs: .claude/skills/ui-headless-png-verification/SKILL.md, docs/GRAPH_EDITOR_REDESIGN.md, docs/HEADLESS_UI_HARNESS.md; corpus: 0
 ```
 $ rg -n -w -e SIDEBAR_WIDTH -e EDITOR_CARD_LANE_WIDTH .claude/skills/ui-headless-png-verification/SKILL.md docs/HEADLESS_UI_HARNESS.md docs/GRAPH_EDITOR_REDESIGN.md   # prose only
@@ -537,7 +537,7 @@ $ rg -n -w -e SHADOW -e SHADOW_BLUR -e SHADOW_OFFSET_Y -e draw_shadow crates -g 
 - `button_count` (ui/src/panels/drawer.rs:384): 10 hit(s); code: none; tests: ui/src/panels/param_card/mod.rs:1913, ui/src/panels/param_card/mod.rs:2879, ui/src/panels/param_card/mod.rs:2910, ui/src/panels/drawer.rs:711, ui/src/panels/drawer.rs:751, ui/src/panels/drawer.rs:838 (+3); corpus: 0
 - `is_split_reset_animating` (ui/src/layout.rs:343): 6 hit(s); code: none; tests: ui/src/layout.rs:491, ui/src/layout.rs:589, ui/src/layout.rs:593, ui/src/layout.rs:598; docs: docs/landings/2026-07-10-audio-dock-p1.md; corpus: 0
 - `has_flag` (ui/src/tree.rs:891): 14 hit(s); code: none; tests: ui/tests/chrome_param_card_proof.rs:247, ui/tests/chrome_param_card_proof.rs:288, ui/tests/chrome_param_card_proof.rs:292, ui/src/chrome/diff.rs:567, ui/src/chrome/diff.rs:573, ui/src/panels/export_progress.rs:391 (+7); corpus: 0
-- `clear_dirty` (ui/src/tree.rs:991): 18 hit(s); code: none; tests: ui-paint/src/ui_cache_manager.rs:510, ui-paint/src/ui_cache_manager.rs:523, ui/src/slider.rs:1244, ui/src/tree.rs:1424, ui/src/tree.rs:1580, ui/src/tree.rs:1691 (+6); docs: docs/FOOTER_OVERPAINT_INVESTIGATION.md, docs/archive/BUG_BACKLOG_CLOSED.md; corpus: 0
+- `clear_dirty` (ui/src/tree.rs:991): 18 hit(s); code: none; tests: ui-paint/src/ui_cache_manager.rs:510, ui-paint/src/ui_cache_manager.rs:523, ui/src/slider.rs:1244, ui/src/tree.rs:1424, ui/src/tree.rs:1580, ui/src/tree.rs:1691 (+6); docs: docs/FOOTER_OVERPAINT_INVESTIGATION.md, BUG_BACKLOG_CLOSED.md (deleted); corpus: 0
 - `offset_nodes` (ui/src/tree.rs:693): 4 hit(s); code: none; tests: ui/src/tree.rs:1527, ui/src/tree.rs:1533, ui/src/panels/inspector/mod.rs:1874; corpus: 0
 - `all_roots_are_regions` (ui/src/tree.rs:763): 12 hit(s); code: none; tests: app/src/ui_root/mod.rs:1749, app/src/ui_root/mod.rs:1766, app/src/ui_root/mod.rs:1783, app/src/ui_root/mod.rs:1795, ui/src/tree.rs:1488, ui/src/tree.rs:1500 (+2); comment-only: 2; docs: docs/landings/2026-07-08-ui-clip-z-p1.md; corpus: 0
 - `get_level` (ui/src/waveform_renderer.rs:199): 14 hit(s); code: none; tests: ui/src/waveform_renderer.rs:402, ui/src/waveform_renderer.rs:410, ui/src/waveform_renderer.rs:411, ui/src/waveform_renderer.rs:420, ui/src/waveform_renderer.rs:439, ui/src/waveform_renderer.rs:464 (+7); corpus: 0

@@ -835,7 +835,7 @@ pass (see section 0).
   is Phase-5 substrate work.
 
 ### Phase 5 — Layering inversion — **COMPLETE (2026-06-23)**
-> Sub-design `docs/archive/UI_LAYERING_INVERSION.md`. `manifold-ui` now depends only on
+> Sub-design `UI_LAYERING_INVERSION.md (deleted)`. `manifold-ui` now depends only on
 > the new zero-dep `manifold-foundation` crate (shared primitive vocabulary:
 > `Beats`/`Seconds`/`Bpm`, the typed string ids, `ParamId`), **not** on
 > `manifold-core`. `manifold-core` re-exports those primitives at their historic

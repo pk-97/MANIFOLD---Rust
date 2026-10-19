@@ -31,8 +31,8 @@ Authors read both; executors only need this one.
 - **Working guide** — how-to-think docs (`DECOMPOSING_GENERATORS.md`,
   `GROUPING_GRAPHS.md`). Governed by section 2 (skeleton where it fits) and section 7 (style); no
   phase briefs.
-- **Historical record** — shipped or closed work kept for archaeology. Move to
-  `docs/archive/` when no active doc references it as a contract. A record never
+- **Historical record** — shipped or closed work kept for archaeology. Delete (git holds it)
+  when no active doc references it as a contract. A record never
   says "TODO".
 
 ## 2. The skeleton
@@ -402,7 +402,7 @@ Rules:
   L<target> target`, label `verification-debt`), burned down or consciously
   carried every wave. Beads replaced the retired `VERIFICATION_DEBT.md` ledger
   2026-07-28 (folded per BUG-cu55 (fold debt registers into beads); frozen
-  history in `docs/archive/`, old `VD-NNN` ids preserved in bead titles). The
+  history in git, old `VD-NNN` ids preserved in bead titles). The
   pre-ledger failure mode the rule kills: "unverified interactively" notes in
   landing reports and memory decayed silently into "shipped" (automation lanes,
   preset picker — both gaps were recorded, neither was acted on, both were

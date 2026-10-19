@@ -78,4 +78,4 @@ DETECTOR_RUNTIME_DESIGN.md section 3 (The release path).
 P1 container + exporter + final model (Python, lead). P2 four parallel Rust lanes
 against the goldens: base features + candidates; the 54 extra features; the net;
 trees + stage + fires. P3 wire-in on a worker thread, delete the old detector,
-archive KICK_SWEEP_EVENT_DESIGN.md (now in `docs/archive/`). P4 parity, CPU measurement, Peter's live test, land.
+archive KICK_SWEEP_EVENT_DESIGN.md (deleted, in git history). P4 parity, CPU measurement, Peter's live test, land.

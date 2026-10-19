@@ -2,7 +2,7 @@
 
 <!-- index: Historical CPU FLIP integration and reference-engine contract; product liquids use GPU FLIP. -->
 
-**Status:** REFERENCE ONLY · 2026-10-07. CPU FLIP remains the GPU FLIP reference engine. The prototype playback contract below is historical; shared GPU contracts remain in LIQUID_SOLVER_SEAM_DESIGN.md.
+**Status:** DONE (reference only) · 2026-10-07. CPU FLIP remains the GPU FLIP reference engine. The prototype playback contract below is historical; shared GPU contracts remain in LIQUID_SOLVER_SEAM_DESIGN.md.
 
 ## Historical implementation contract — CPU FLIP reference
 
