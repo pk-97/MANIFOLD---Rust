@@ -382,7 +382,8 @@ fn uniform_environment_white_surface_returns_the_environment_radiance() {
 /// A flat albedo-1 ground plane under a `node.bake_environment` SOFTBOX bake
 /// with a SUN DISK — deliberately NOT the uniform sky the white-surface leg
 /// uses. `fill` lights a dim warm dome (0.3 at the zenith, falling toward the
-/// floor); the sun (direction `(0, 0.7, 0.4)`, elevation ~44°, inside the
+/// floor); the sun (a white Sun light wired only into the bake's `sun`, so
+/// it adds no direct light; direction `(0, 0.7, 0.4)`, elevation ~44°, inside the
 /// ground normal's upper hemisphere; peak radiance 4 * `sun_disc_intensity` =
 /// 40 at mip 0) sits ~130x brighter than the dome around it. At the shipping
 /// gi_spp (2, `GI_SAMPLES_PER_PIXEL` in render_scene.rs) a GI sample that
@@ -424,13 +425,20 @@ fn firefly_sun_disc_scene_json(sun_on: bool, rt_on: bool) -> String {
             "emitter_intensity":{{"type":"Float","value":0.0}},
             "emitter_elevation":{{"type":"Float","value":0.15}},
             "emitter_width":{{"type":"Float","value":0.05}},
-            "sun_x":{{"type":"Float","value":0.0}},
-            "sun_y":{{"type":"Float","value":0.7}},
-            "sun_z":{{"type":"Float","value":0.4}},
             "sun_disc_intensity":{{"type":"Float","value":{sun}}},
             "sun_disc_size":{{"type":"Float","value":0.08}},
             "fill":{{"type":"Float","value":0.3}},
             "uniform":{{"type":"Bool","value":false}}}}}},
+        {{"id":9,"typeId":"node.light","nodeId":"sky_sun","params":{{
+            "mode":{{"type":"Enum","value":0}},
+            "pos_x":{{"type":"Float","value":0.0}},
+            "pos_y":{{"type":"Float","value":0.7}},
+            "pos_z":{{"type":"Float","value":0.4}},
+            "aim_x":{{"type":"Float","value":0.0}},
+            "aim_y":{{"type":"Float","value":0.0}},
+            "aim_z":{{"type":"Float","value":0.0}},
+            "intensity":{{"type":"Float","value":1.0}},
+            "cast_shadows":{{"type":"Float","value":0.0}}}}}},
         {{"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
@@ -450,6 +458,7 @@ fn firefly_sun_disc_scene_json(sun_on: bool, rt_on: bool) -> String {
         {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
         {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
         {{"fromNode":8,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
+        {{"fromNode":9,"fromPort":"out","toNode":8,"toPort":"sun"}},
         {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
         ]}}"#
     )

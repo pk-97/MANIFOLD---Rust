@@ -5422,6 +5422,12 @@
       "toPort": "light_0"
     },
     {
+      "fromNode": 436,
+      "fromPort": "out",
+      "toNode": 435,
+      "toPort": "sun"
+    },
+    {
       "fromNode": 446,
       "fromPort": "vertices",
       "toNode": 449,

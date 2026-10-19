@@ -857,6 +857,9 @@ impl Command for AddSceneLightCommand {
                         render_id,
                         &format!("light_{k}"),
                     ));
+                    // A scene that had no Sun light gets its sky's sun from
+                    // this one.
+                    manifold_core::sky_sun::wire_sky_sun(nodes, wires);
 
                     (light_id, light_node_id, light_node_params, prev)
                 };
@@ -1902,8 +1905,12 @@ impl Command for RemoveSceneLightCommand {
                 };
 
                 nodes.retain(|n| n.id != light_id);
-                wires.retain(|w| !(w.to_node == render_id && w.to_port == format!("light_{k}")));
+                // Every wire touching the light goes with it (the sky's sun
+                // and any modulator, not only the renderer's `light_k`).
+                wires.retain(|w| w.from_node != light_id && w.to_node != light_id);
                 shift_indexed_ports_down(wires, render_id, "light", k);
+                // Removing the sky's sun hands the sky to the next Sun light.
+                manifold_core::sky_sun::wire_sky_sun(nodes, wires);
 
                 nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
                     "lights".to_string(),

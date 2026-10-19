@@ -1973,7 +1973,13 @@
         "WaterStillPoolMatter"
       ],
       "fusion": "boundary:cross_frame_state",
-      "inputs": [],
+      "inputs": [
+        {
+          "name": "sun",
+          "required": false,
+          "type": "Light"
+        }
+      ],
       "label": "Bake Environment (equirect)",
       "outputs": [
         {
@@ -2093,36 +2099,6 @@
         },
         {
           "default": "0",
-          "label": "Sun X",
-          "name": "sun_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Sun Y",
-          "name": "sun_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Sun Z",
-          "name": "sun_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
           "label": "Sun Disc Intensity",
           "name": "sun_disc_intensity",
           "range": [
@@ -2158,7 +2134,7 @@
           "type": "bool"
         }
       ],
-      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional directional sun disc at `sun_x/sun_y/sun_z` sized by `sun_disc_size` and `sun_disc_intensity` (0 = no disc). Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
@@ -53942,27 +53918,6 @@
         },
         {
           "default": "0",
-          "id": "1_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "1_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "1_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
-        },
-        {
-          "default": "0",
           "id": "1_sun_disc_intensity",
           "max": "50",
           "min": "0",
@@ -57454,27 +57409,6 @@
           "max": "0.5",
           "min": "0.001",
           "name": "Emitter Width"
-        },
-        {
-          "default": "0",
-          "id": "32_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "32_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "32_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
         },
         {
           "default": "0",
@@ -79436,27 +79370,6 @@
         },
         {
           "default": "0",
-          "id": "3_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
-        },
-        {
-          "default": "0",
           "id": "3_sun_disc_intensity",
           "max": "50",
           "min": "0",
@@ -88878,27 +88791,6 @@
           "max": "0.5",
           "min": "0.001",
           "name": "Emitter Width"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
         },
         {
           "default": "0",
@@ -102831,27 +102723,6 @@
         },
         {
           "default": "0",
-          "id": "3_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "3_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
-        },
-        {
-          "default": "0",
           "id": "3_sun_disc_intensity",
           "max": "50",
           "min": "0",
@@ -106147,27 +106018,6 @@
           "max": "0.5",
           "min": "0.001",
           "name": "Emitter Width"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
         },
         {
           "default": "0",
@@ -120453,27 +120303,6 @@
         },
         {
           "default": "0",
-          "id": "2_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
-        },
-        {
-          "default": "0",
           "id": "2_sun_disc_intensity",
           "max": "50",
           "min": "0",
@@ -130308,27 +130137,6 @@
           "max": "0.5",
           "min": "0.001",
           "name": "Emitter Width"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
         },
         {
           "default": "0",
@@ -144362,27 +144170,6 @@
         },
         {
           "default": "0",
-          "id": "2_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
-        },
-        {
-          "default": "0",
           "id": "2_sun_disc_intensity",
           "max": "50",
           "min": "0",
@@ -154273,27 +154060,6 @@
           "max": "0.5",
           "min": "0.001",
           "name": "Emitter Width"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "435_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
         },
         {
           "default": "0",
@@ -170501,27 +170267,6 @@
           "max": "0.5",
           "min": "0.001",
           "name": "Emitter Width"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_x",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun X"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_y",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Y"
-        },
-        {
-          "default": "0",
-          "id": "2_sun_z",
-          "max": "1",
-          "min": "-1",
-          "name": "Sun Z"
         },
         {
           "default": "0",
