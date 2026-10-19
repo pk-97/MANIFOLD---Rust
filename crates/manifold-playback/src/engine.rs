@@ -118,7 +118,7 @@ pub struct TickResult {
     pub stopped_clips: Vec<ClipId>,
     /// Video clips approaching the playhead that should be pre-warmed
     /// (decoder opened + first frame decoded before the clip becomes active).
-    /// The content thread passes these to VideoRenderer::pre_warm_clips().
+    /// The content thread passes these to VideoRenderer::pre_warm_from_candidates().
     pub prewarm_candidates:
         Option<std::collections::HashMap<String, crate::video_time::PrewarmCandidate>>,
     /// One `CommitRecordedGestureCommand` per automation recording gesture
@@ -1158,7 +1158,7 @@ impl PlaybackEngine {
 
         // Clear live clips on large seek
         let beat_delta = (self.current_beat - old_beat).abs();
-        // Note: live_clip_manager.clear_on_seek needs a stop callback.
+        // Note: clearing live slots needs a stop callback.
         // The engine's stop_clip handles renderer cleanup, but we can't call it here
         // due to borrow conflict. Instead, collect IDs and stop after the borrow.
         if beat_delta > 1.0

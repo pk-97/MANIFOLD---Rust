@@ -238,23 +238,6 @@ impl LiveClipManager {
         self.completed_control_refs.clear();
     }
 
-    /// Clear live slots on large seek. Only clears when seek_delta > 1.0.
-    /// Port of C# LiveClipManager.ClearOnSeek (lines 92-106).
-    /// `stop_clip_fn` is called for each live slot clip before clearing (avoids
-    /// self-referential borrow with LiveClipHost trait).
-    pub fn clear_on_seek(&mut self, seek_delta: f32, stop_clip_fn: &mut dyn FnMut(&str)) {
-        if seek_delta > 1.0 {
-            for (_, clip) in &self.live_slots_list {
-                stop_clip_fn(&clip.id);
-            }
-            self.live_slots.clear();
-            self.live_slots_list.clear();
-            self.live_slot_clip_ids.clear();
-            self.oneshot_ends.clear();
-            self.completed_control_refs.clear();
-        }
-    }
-
     /// Notify that a clip was stopped by the engine.
     /// Port of C# LiveClipManager.NotifyClipStopped (lines 108-111).
     /// Unity only removes from liveSlotClipIds — the slot entry persists
@@ -1262,11 +1245,6 @@ mod tests {
         manager.retain_completed_control(0, &generator_clip(Beats(1.0), Beats(1.0)), Beats(1.5));
         manager.clear_all();
         refs.clear();
-        manager.drain_completed_controls(&mut refs);
-        assert!(refs.is_empty());
-
-        manager.retain_completed_control(0, &generator_clip(Beats(1.0), Beats(1.0)), Beats(1.5));
-        manager.clear_on_seek(2.0, &mut |_| {});
         manager.drain_completed_controls(&mut refs);
         assert!(refs.is_empty());
     }
