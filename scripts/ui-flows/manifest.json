@@ -172,8 +172,7 @@
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
       "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo",
-      "scene-slider-range"
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
