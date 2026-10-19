@@ -1,0 +1,12 @@
+[
+  {"Assert": {"selector": {"Query": {"name": "inspector.effect_group.bypass", "text": "Bypass"}}, "check": "Exists"}},
+  "Snapshot",
+  {"Pointer": {"target": {"Query": {"name": "inspector.effect_group.bypass"}}, "gesture": {"Click": {"modifiers": {}}}}},
+  {"Step": {"frames": 10}},
+  "Snapshot",
+  {"Assert": {"selector": {"Query": {"name": "inspector.effect_group.bypass", "text": "Bypassed"}}, "check": "Exists"}},
+  {"Key": {"key": "Z", "modifiers": {"command": true}}},
+  {"Step": {"frames": 10}},
+  {"Assert": {"selector": {"Query": {"name": "inspector.effect_group.bypass", "text": "Bypass"}}, "check": "Exists"}},
+  "Dump"
+]

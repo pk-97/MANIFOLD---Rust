@@ -163,6 +163,14 @@ pub enum ValueRef {
     /// `ableton_mapping`. Distinct from the graph-param `Trim(TrimKind::Ableton,
     /// …)` family: this addresses a macro-bank slot, not a `GraphParamTarget`.
     AbletonMacroTrim(usize),
+    /// A rack header wet/dry slider (0..1). Addressed like the rack's other
+    /// header actions: the inspector tab, the layer for the layer tab, and the
+    /// group. The value rides `ScrubValue::Scalar` on Move.
+    RackWetDry {
+        tab: super::InspectorTab,
+        layer_id: Option<LayerId>,
+        group_id: manifold_foundation::EffectGroupId,
+    },
 }
 
 /// Captured-address lifecycle for a value scrub. The payload is host-owned

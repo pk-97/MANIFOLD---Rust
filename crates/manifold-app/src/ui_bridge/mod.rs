@@ -16,6 +16,7 @@ mod material_looks;
 mod material_colour;
 pub(crate) mod project;
 mod projection;
+mod rack_controls;
 pub use projection::timeline::sync_automation_lane_order;
 pub(crate) use projection::trigger_routing::modifier_label_for_param;
 #[cfg(test)]

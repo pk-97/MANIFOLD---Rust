@@ -56,6 +56,8 @@ fn rack_groups(
                 },
                 member_ids,
                 mask_effect_id: group.mask_effect_id.clone(),
+                enabled: group.enabled,
+                wet_dry: group.wet_dry,
             })
         })
         .collect()

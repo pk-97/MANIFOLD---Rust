@@ -45,9 +45,25 @@ pub enum Reconcile {
 /// re-emit their whole subtree every frame and so can't carry a stateful
 /// [`ChromeHost`]. Returns the `(key, id)` pairs for nodes that set a
 /// [`View::key`], letting the caller recover an interactive node id (e.g. a
-/// button) without hand-rolling `add_node`. Slider slots are not materialised
-/// here — these panels don't use them.
+/// button) without hand-rolling `add_node`. Slider slots are not built here;
+/// a caller with a [`View::slider_row`] uses [`materialize_sliders`].
 pub fn materialize(tree: &mut UITree, root: &View, rect: Rect) -> Vec<(u64, NodeId)> {
+    materialize_sliders(tree, root, rect).0
+}
+
+/// Nodes that set a [`View::key`], by key.
+pub type KeyedNodes = Vec<(u64, NodeId)>;
+/// Materialised slider ids, by their slot's key.
+pub type KeyedSliders = Vec<(u64, SliderNodeIds)>;
+
+/// [`materialize`] that also builds each [`View::slider_row`] slot, returning
+/// the keyed slider ids. The caller owns the value and drag through a
+/// `SliderDragState`, the same split as [`ChromeHost`].
+pub fn materialize_sliders(
+    tree: &mut UITree,
+    root: &View,
+    rect: Rect,
+) -> (KeyedNodes, KeyedSliders) {
     #[cfg(debug_assertions)]
     {
         let warnings = validate(root);
@@ -104,7 +120,28 @@ pub fn materialize(tree: &mut UITree, root: &View, rect: Rect) -> Vec<(u64, Node
         }
         ids.push(id);
     }
-    keyed
+    let mut sliders: Vec<(u64, SliderNodeIds)> = Vec::new();
+    for n in &scratch {
+        let (Some(spec), Some(key)) = (n.slider.as_ref(), n.key) else {
+            continue;
+        };
+        let built = BitmapSlider::build(
+            tree,
+            None,
+            n.rect,
+            spec.label.as_deref(),
+            spec.value,
+            &spec.value_text,
+            &spec.colors,
+            spec.font_size,
+            spec.label_width,
+            spec.default,
+            spec.reset.clone(),
+            None,
+        );
+        sliders.push((key, built.ids));
+    }
+    (keyed, sliders)
 }
 
 /// Retained reconciliation state for one panel built on the Chrome API.
