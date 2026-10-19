@@ -1,13 +1,3 @@
-/// Packed optical flow result per pixel: [flowX_uv, flowY_uv, confidence, validMask].
-/// Matches DepthEstimatorPlugin.cpp output layout.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FlowPixel {
-    pub flow_x: f32,
-    pub flow_y: f32,
-    pub confidence: f32,
-    pub valid_mask: f32,
-}
-
 /// Trait for depth estimation / optical flow / subject segmentation backends.
 ///
 /// Today: FFI to DepthEstimator.bundle (OpenCV DNN + Farneback).

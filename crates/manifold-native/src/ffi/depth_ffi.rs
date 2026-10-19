@@ -163,17 +163,6 @@ impl FfiDepthEstimator {
         }
         Some(Self { lib, handle })
     }
-
-    /// Returns true if the plugin supports parallel (specialized) worker creation.
-    pub fn supports_parallel() -> bool {
-        get_or_load_shared_lib()
-            .map(|lib| {
-                lib.fn_create_depth_only.is_some()
-                    && lib.fn_create_flow_only.is_some()
-                    && lib.fn_create_subject_only.is_some()
-            })
-            .unwrap_or(false)
-    }
 }
 
 impl DepthEstimator for FfiDepthEstimator {

@@ -35,18 +35,6 @@ def check(name, cond, detail=""):
         FAIL.append((name, detail))
 
 
-def with_orch_verdicts_dir(fn):
-    """Run `fn(orch_verdicts_dir)` with hook._ORCH_VERDICTS_DIR patched to a
-    scratch temp dir, restoring it afterward regardless of outcome."""
-    orig = hook._ORCH_VERDICTS_DIR
-    with tempfile.TemporaryDirectory() as td:
-        hook._ORCH_VERDICTS_DIR = Path(td)
-        try:
-            fn(Path(td))
-        finally:
-            hook._ORCH_VERDICTS_DIR = orig
-
-
 MAIN_CWD = str(hook._PROJECT_DIR)
 WORKTREE_CWD = str(hook._WORKTREES_DIR / "some-branch")
 
@@ -164,7 +152,7 @@ def run_hook_main(payload):
         sys.stdin, sys.stdout = orig_in, orig_out
 
 
-# --- worktree-ring guard (2026-07-15: pool capped at 6 slots; raw
+# --- worktree-ring guard (2026-07-15: pool capped at 10 slots; raw
 # `git worktree add` denied in every mode so the ring can't be bypassed) ---
 
 def test_worktree_add_denied_all_modes():
@@ -202,166 +190,6 @@ def test_worktree_read_and_remove_unaffected():
     })
     check("`git worktree remove --force` -> deny (slot ring)",
           '"deny"' in out and "slot ring" in out, out)
-
-
-# ---------------------------------------------------------------------------
-# Pre-land verdict-coverage guard (I1) — merge_verdict_guard
-# ---------------------------------------------------------------------------
-
-def _make_verdict(task_id, kind="gate", pass_value=True):
-    """Create a schema-1 verdict dict for testing."""
-    return {
-        "schema": 1, "task": task_id, "phase": "per-lane", "brief": "",
-        "branch": "lane/test", "commit": "abc123",
-        "gates": [] if kind == "no-gate" else [{"cmd": "true", "exit": 0, "duration_s": 0.1, "tail": ""}],
-        "scope": {"files_changed": [], "in_scope": True},
-        "pass": pass_value, "kind": kind, "reason": None if kind == "gate" else "test bypass",
-        "runner": "gate_runner.py@lead", "ts": "2026-07-25T12:00:00Z",
-    }
-
-
-def _setup_mock_run(diff_output="crates/foo/src/lib.rs\n", log_output="feat\n\nBUG-abc123\n"):
-    """Create a configured subprocess.run mock returning specific diff/log."""
-    mock_run = unittest.mock.MagicMock()
-
-    def side_effect(cmd, *args, **kwargs):
-        result = unittest.mock.MagicMock()
-        result.returncode = 0
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
-        if "diff" in cmd_str:
-            result.stdout = diff_output
-        elif "log" in cmd_str:
-            result.stdout = log_output
-        else:
-            result.stdout = ""
-        return result
-
-    mock_run.side_effect = side_effect
-    return mock_run
-
-
-def test_merge_denied_missing_verdict():
-    """Merge blocked when source branch BUG- ids lack passing verdicts."""
-    def run(orch_vd):
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nBUG-abc123\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/feat-x", MAIN_CWD
-            )
-            check("merge denied when verdict missing", reason is not None, reason)
-            check("deny names missing task", reason and "BUG-abc123" in reason, reason)
-            check("deny mentions gate_runner no-gate", reason and "no-gate" in reason, reason)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
-
-
-def test_merge_passes_with_gate_verdict():
-    """Merge passes when a passing gate verdict exists in the trail."""
-    def run(orch_vd):
-        # Write a passing gate verdict
-        vpath = orch_vd / "BUG-abc123.jsonl"
-        vpath.write_text(json.dumps(_make_verdict("BUG-abc123", "gate", True)) + "\n")
-
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nBUG-abc123\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/feat-x", MAIN_CWD
-            )
-            check("merge passes with gate verdict", reason is None, reason)
-            check("context confirms passing", context and "passing" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
-
-
-def test_merge_passes_with_no_gate_verdict():
-    """Merge passes when a no-gate verdict exists in the trail."""
-    def run(orch_vd):
-        # Write a no-gate verdict
-        vpath = orch_vd / "BUG-abc123.jsonl"
-        vpath.write_text(json.dumps(_make_verdict("BUG-abc123", "no-gate", True)) + "\n")
-
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nBUG-abc123\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/feat-x", MAIN_CWD
-            )
-            check("merge passes with no-gate verdict", reason is None, reason)
-            check("context confirms passing", context and "passing" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
-
-
-def test_merge_passes_no_bug_ids():
-    """Merge passes when merged branch has no BUG- ids in log."""
-    def run(orch_vd):
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nNo bug ids here.\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/infra-fix", MAIN_CWD
-            )
-            check("merge passes with no BUG- ids", reason is None, reason)
-            check("context mentions pre-trail", context and "pre-trail" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
-
-
-def test_merge_passes_docs_only():
-    """Docs-only merge passes without verdict check."""
-    def run(orch_vd):
-        mock_run = _setup_mock_run(
-            diff_output="docs/GATE_RUNTIME_DESIGN.md\n",
-            log_output="",  # never reached
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/doc-fix", MAIN_CWD
-            )
-            check("docs-only merge passes", reason is None, reason)
-            check("context names docs-only", context and "Docs-only" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
 
 
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
@@ -492,6 +320,59 @@ def test_commit_message_quoted_safely_unaffected():
         check(f"{cmd!r} -> no substitution deny", hook.commit_substitution_guard(cmd) is None, cmd)
 
 
+AUTO_DENIED_SHAPES = [
+    "fd -e rs -x rm",
+    "fd -e rs --exec rm",
+    "fd -e rs -X rm",
+    "fd -e rs --exec-batch rm",
+    "rg --pre ./filter pattern",
+    "git -c core.pager=evil log",
+    "git checkout -- .",
+    "git branch -D old-branch",
+    "fd -Hx rm",
+    "git branch -d -f foo",
+    "git branch -df foo",
+    "git branch --delete --force foo",
+    "git checkout .",
+    "git checkout -- ./",
+    "git checkout -- :/",
+]
+AUTO_SAFE_NEIGHBOURS = [
+    "fd -e rs",
+    "rg pattern",
+    "git commit -m 'x' -- file.rs",
+    "git checkout -- path/file.rs",
+    "git branch -d old-branch",
+    "git checkout -- crates/foo.rs; rg -n pattern .",
+    "rg -n -- --pre path",
+    "rg -e --pre path",
+    "fd -e rs -- -x",
+    "fd -e xml",
+]
+
+
+def _auto_decision(cmd, mode="auto"):
+    out = run_hook_main({"tool_input": {"command": cmd}, "cwd": MAIN_CWD, "permission_mode": mode})
+    return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else None
+
+
+def test_auto_mode_exec_shapes_denied():
+    for cmd in AUTO_DENIED_SHAPES:
+        check(f"auto mode denies `{cmd}`", _auto_decision(cmd) == "deny", _auto_decision(cmd))
+
+
+def test_auto_mode_safe_neighbours_allowed():
+    for cmd in AUTO_SAFE_NEIGHBOURS:
+        check(f"auto mode does not deny `{cmd}`", _auto_decision(cmd) != "deny", _auto_decision(cmd))
+
+
+def test_auto_mode_shapes_only_in_auto():
+    for mode in ("default", "acceptEdits", "bypassPermissions"):
+        for cmd in AUTO_DENIED_SHAPES:
+            got = _auto_decision(cmd, mode)
+            check(f"{mode} mode leaves `{cmd}` pre-approved", got == "allow", got)
+
+
 def test_rg_replace_bundled_rn_fires():
     reason = hook.rg_replace_lint("rg -rn pattern file")
     check("rg -rn (bundled) -> warns", reason is not None, reason)
@@ -566,51 +447,6 @@ def test_trailing_comment_no_hash_does_not_fire():
 def test_trailing_comment_hash_inside_quotes_does_not_fire():
     reason = hook.trailing_comment_swallow_lint('echo "price: #1" && echo done')
     check("`#` inside quoted string -> no warning", reason is None, reason)
-
-
-def test_compound_landing_merge_unverified_denies():
-    orig = hook._current_branch
-    hook._current_branch = lambda cwd: "main"
-    try:
-        cmd = "git fetch && git merge origin/main && git merge --no-ff feat/x && git push"
-        reason = hook.detect_unverified_compound_landing_merge(cmd, MAIN_CWD)
-        check("unverified compound landing merge -> denies", reason is not None, reason)
-    finally:
-        hook._current_branch = orig
-
-
-def test_compound_landing_merge_verified_in_between_unaffected():
-    orig = hook._current_branch
-    hook._current_branch = lambda cwd: "main"
-    try:
-        cmd = ("git fetch && git merge origin/main && git branch --show-current "
-               "&& git merge --no-ff feat/x && git push")
-        reason = hook.detect_unverified_compound_landing_merge(cmd, MAIN_CWD)
-        check("verify segment in between -> unaffected", reason is None, reason)
-    finally:
-        hook._current_branch = orig
-
-
-def test_single_landing_merge_not_compound_unaffected():
-    orig = hook._current_branch
-    hook._current_branch = lambda cwd: "main"
-    try:
-        reason = hook.detect_unverified_compound_landing_merge("git merge --no-ff feat/x", MAIN_CWD)
-        check("single (non-compound) landing merge -> unaffected", reason is None, reason)
-    finally:
-        hook._current_branch = orig
-
-
-def test_compound_landing_merge_worktree_unaffected():
-    orig = hook._current_branch
-    hook._current_branch = lambda cwd: "main"
-    try:
-        cmd = (f'git -C "{WORKTREE_CWD}" fetch && git -C "{WORKTREE_CWD}" merge origin/main '
-               f'&& git -C "{WORKTREE_CWD}" merge --no-ff feat/x && git -C "{WORKTREE_CWD}" push')
-        reason = hook.detect_unverified_compound_landing_merge(cmd, MAIN_CWD)
-        check("compound targeting a worktree dir -> unaffected", reason is None, reason)
-    finally:
-        hook._current_branch = orig
 
 
 def test_cd_guard():
@@ -700,98 +536,6 @@ def test_sed_write_guard_file_operands_are_not_scripts():
               hook.sed_write_guard(cmd) is not None, cmd)
     check("heredoc bodies stripped before parsing",
           "Peter's" not in hook._strip_heredoc_bodies("x <<'EOF'\nPeter's call\nEOF\ny"))
-
-
-# ---------------------------------------------------------------------------
-# Pre-land flow-gate guard — flow_gate_guard
-# ---------------------------------------------------------------------------
-
-TIP_SHA = "a" * 40
-
-
-def _run_flow_gate(diff_output, marker=None, cmd="git merge --no-ff lane/x"):
-    """Run flow_gate_guard with mocked git + temp manifest/marker paths."""
-    mock_run = unittest.mock.MagicMock()
-
-    def side_effect(argv, *args, **kwargs):
-        result = unittest.mock.MagicMock()
-        result.returncode = 0
-        joined = " ".join(argv) if isinstance(argv, list) else argv
-        if "diff" in joined:
-            result.stdout = diff_output
-        elif "rev-parse" in joined:
-            result.stdout = TIP_SHA + "\n"
-        else:
-            result.stdout = ""
-        return result
-
-    mock_run.side_effect = side_effect
-    orig_branch = hook._current_branch
-    orig_marker = hook._FLOW_MARKER_PATH
-    orig_manifest = hook._FLOW_MANIFEST_PATH
-    hook._current_branch = lambda cwd: "main"
-    with tempfile.TemporaryDirectory() as td:
-        manifest_path = Path(td) / "manifest.json"
-        manifest_path.write_text(json.dumps(
-            {"path_triggers": {"crates/manifold-ui/": ["scene-setup"]}}))
-        hook._FLOW_MANIFEST_PATH = manifest_path
-        marker_path = Path(td) / "flow-gate-marker.json"
-        if marker is not None:
-            marker_path.write_text(json.dumps(marker))
-        hook._FLOW_MARKER_PATH = marker_path
-        patcher = unittest.mock.patch.object(hook.subprocess, "run", mock_run)
-        patcher.start()
-        try:
-            return hook.flow_gate_guard(cmd, MAIN_CWD)
-        finally:
-            patcher.stop()
-            hook._current_branch = orig_branch
-            hook._FLOW_MARKER_PATH = orig_marker
-            hook._FLOW_MANIFEST_PATH = orig_manifest
-
-
-def test_flow_gate_unmapped_branch_unaffected():
-    reason, context = _run_flow_gate("crates/manifold-core/src/lib.rs\n")
-    check("flow gate: unmapped branch -> silent",
-          reason is None and context is None, (reason, context))
-
-
-def test_flow_gate_denies_missing_marker():
-    reason, _ = _run_flow_gate("crates/manifold-ui/src/panels/foo.rs\n")
-    check("flow gate: mapped + no marker -> deny", reason is not None, reason)
-    check("flow gate: deny names run_ui_flows",
-          reason and "run_ui_flows.py --touched" in reason, reason)
-
-
-def test_flow_gate_denies_stale_marker():
-    reason, _ = _run_flow_gate(
-        "crates/manifold-ui/src/panels/foo.rs\n",
-        marker={"head": "b" * 40, "pass": True})
-    check("flow gate: stale marker -> deny",
-          reason is not None and "stale" in reason, reason)
-
-
-def test_flow_gate_denies_red_marker():
-    reason, _ = _run_flow_gate(
-        "crates/manifold-ui/src/panels/foo.rs\n",
-        marker={"head": TIP_SHA, "pass": False})
-    check("flow gate: red marker -> deny",
-          reason is not None and "RED" in reason, reason)
-
-
-def test_flow_gate_passes_green_marker_at_tip():
-    reason, context = _run_flow_gate(
-        "crates/manifold-ui/src/panels/foo.rs\n",
-        marker={"head": TIP_SHA, "pass": True})
-    check("flow gate: green marker at tip -> allow", reason is None, reason)
-    check("flow gate: allow carries context",
-          context is not None and "green" in context.lower(), context)
-
-
-def test_flow_gate_touched_flow_file_is_mapped():
-    reason, _ = _run_flow_gate("scripts/ui-flows/some-flow.json\n")
-    check("flow gate: touched flow file counts as mapped",
-          reason is not None, reason)
 
 
 def test_inline_python_heredoc_denied():
@@ -1440,11 +1184,6 @@ def main():
     test_trailing_comment_no_hash_does_not_fire()
     test_trailing_comment_hash_inside_quotes_does_not_fire()
 
-    test_compound_landing_merge_unverified_denies()
-    test_compound_landing_merge_verified_in_between_unaffected()
-    test_single_landing_merge_not_compound_unaffected()
-    test_compound_landing_merge_worktree_unaffected()
-
     test_worktree_add_denied_all_modes()
     test_worktree_add_in_compound_denied()
     test_worktree_read_and_remove_unaffected()
@@ -1452,19 +1191,6 @@ def main():
     test_sed_write_guard_asks_on_w_command()
     test_sed_write_guard_ignores_read_only_sed()
     test_sed_write_guard_file_operands_are_not_scripts()
-
-    test_merge_denied_missing_verdict()
-    test_merge_passes_with_gate_verdict()
-    test_merge_passes_with_no_gate_verdict()
-    test_merge_passes_no_bug_ids()
-    test_merge_passes_docs_only()
-
-    test_flow_gate_unmapped_branch_unaffected()
-    test_flow_gate_denies_missing_marker()
-    test_flow_gate_denies_stale_marker()
-    test_flow_gate_denies_red_marker()
-    test_flow_gate_passes_green_marker_at_tip()
-    test_flow_gate_touched_flow_file_is_mapped()
 
     test_settings_allowed_segments_compose()
     test_settings_allow_parser_shapes()
@@ -1483,6 +1209,9 @@ def main():
     test_commit_message_substitution_denied()
     test_commit_message_quoted_safely_unaffected()
 
+    test_auto_mode_exec_shapes_denied()
+    test_auto_mode_safe_neighbours_allowed()
+    test_auto_mode_shapes_only_in_auto()
 
     for name in PASS:
         print(f"PASS: {name}")

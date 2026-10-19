@@ -77,6 +77,10 @@ def tooling_checks(repo, paths):
         tooling["scripts/test_codex_regressions.py"].add(str(Path(item["source"]).relative_to(repo)))
     checks = [{"name": test, "argv": ["python3", "-B", str(repo / test)], "cwd": str(repo)}
               for test, triggers in tooling.items() if set(paths) & triggers]
+    if any(p.startswith(".claude/hooks/") for p in paths):
+        checks += [{"name": f".claude/hooks/{test.name}", "argv": ["python3", "-B", str(test)],
+                    "cwd": str(repo)}
+                   for test in sorted((Path(repo) / ".claude/hooks").glob("test_*.py"))]
     if any(p in ("Cargo.toml", "scripts/feature_matrix.py") or
            (p.startswith("crates/") and p.endswith("/Cargo.toml")) for p in paths):
         checks.append({"name": "feature-coverage",

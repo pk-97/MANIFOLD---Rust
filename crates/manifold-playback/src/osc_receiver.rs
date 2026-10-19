@@ -367,26 +367,6 @@ impl OscReceiver {
     pub fn subscribe_stamped(&mut self, address: &str, callback: OscStampedCallback) {
         self.stamped.entry(address.to_string()).or_default().push(callback);
     }
-
-    /// Subscribe with a stable integer key for later removal.
-    /// Returns the key that must be passed to unsubscribe_keyed().
-    pub fn subscribe_keyed(&mut self, address: &str, callback: OscCallback) -> usize {
-        let list = self.subscribers.entry(address.to_string()).or_default();
-        let key = list.len(); // index within this address's callback list
-        list.push(callback);
-        key
-    }
-
-    /// Remove the callback at the given key (index) for an address.
-    /// Uses swap_remove for O(1) removal; ordering of remaining callbacks
-    /// is not preserved (matches Unity semantics — order is unspecified).
-    pub fn unsubscribe_keyed(&mut self, address: &str, key: usize) {
-        if let Some(list) = self.subscribers.get_mut(address)
-            && key < list.len()
-        {
-            let _ = list.swap_remove(key);
-        }
-    }
 }
 
 impl Default for OscReceiver {

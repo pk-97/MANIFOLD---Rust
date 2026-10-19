@@ -100,11 +100,6 @@ impl OscParamRouter {
         }
     }
 
-    /// Number of registered OSC parameter addresses.
-    pub fn route_count(&self) -> usize {
-        self.registered_addresses.len()
-    }
-
     /// Rebuild all OSC parameter routes for the current project state.
     /// Unsubscribes old addresses, subscribes new ones on the receiver.
     /// Call on project load and after structural changes (layer/effect add/remove).

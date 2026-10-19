@@ -188,55 +188,6 @@ impl VideoRenderer {
         format!("\u{1}poster\u{1}{clip_id}")
     }
 
-    /// section 24 5c P2b: request a one-shot POSTER decode for a PARKED video clip — its
-    /// first frame, into an isolated render target that is NEVER composited (so a
-    /// parked clip never appears in the live output). Idempotent: a clip that's
-    /// active or already posted is skipped. The frame arrives asynchronously; read
-    /// it via [`Self::poster_texture`] once ready. `video_clip_id` resolves the file
-    /// path via the loaded library. Returns true if a poster was submitted/exists.
-    pub fn request_clip_poster(&mut self, clip_id: &str, video_clip_id: &str) -> bool {
-        let key = Self::poster_key(clip_id);
-        if self.active_clips.contains_key(clip_id) || self.poster_clips.contains_key(key.as_str()) {
-            return true;
-        }
-        let (path, duration) = {
-            let Some(ref library) = self.video_library else {
-                return false;
-            };
-            let Some(vc) = library.find_clip_by_id(video_clip_id) else {
-                return false;
-            };
-            (vc.file_path.clone(), vc.duration)
-        };
-        let rt = self.acquire_rt();
-        self.poster_clips.insert(
-            ClipId::new(&key),
-            ActiveVideoClip {
-                video_clip_id: video_clip_id.to_string(),
-                render_target: rt,
-                playing: false,
-                ready: false,
-                has_frame: false,
-                playback_time: 0.0,
-                media_length: duration,
-                frame_rate: 30.0,
-                looping: false,
-                playback_rate: 1.0,
-                decode_pending: true,
-                pending_seek_time: None,
-                time_accumulator: 0.0,
-            },
-        );
-        // Decode jobs use the prefixed key — an isolated decoder handle, distinct
-        // from this clip's active-playback decoder.
-        self.scheduler.submit(DecodeJob::Open {
-            clip_id: key.clone(),
-            path,
-        });
-        self.scheduler.submit(DecodeJob::Prepare { clip_id: key });
-        true
-    }
-
     /// Whether a poster decode has been requested for this clip (pending or ready).
     pub fn has_poster(&self, clip_id: &str) -> bool {
         self.poster_clips

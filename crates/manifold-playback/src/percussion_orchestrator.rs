@@ -53,7 +53,6 @@ use crate::process_runner::{ExternalProcessRunner, ProcessHandle, ProcessRunnerI
 // ──────────────────────────────────────
 
 const PERCUSSION_PROGRESS_UNKNOWN: f32 = -1.0;
-const PERCUSSION_NUDGE_STEP_BEATS: f32 = 0.25;
 
 /// Unity: StemAudioController.StemCount = 4
 const STEM_COUNT: usize = 4;
@@ -188,24 +187,12 @@ impl PercussionImportOrchestrator {
         self.percussion_import_status_color
     }
 
-    pub fn status_animating(&self) -> bool {
-        self.percussion_import_status_animate
-    }
-
     pub fn status_progress01(&self) -> f32 {
         self.percussion_import_status_progress01
     }
 
     pub fn show_progress_bar(&self) -> bool {
         self.percussion_import_status_show_progress
-    }
-
-    pub fn is_import_in_progress(&self) -> bool {
-        self.percussion_import_in_progress
-    }
-
-    pub fn nudge_step_beats() -> f32 {
-        PERCUSSION_NUDGE_STEP_BEATS
     }
 
     // ──────────────────────────────────────
@@ -1155,18 +1142,6 @@ impl PercussionImportOrchestrator {
         }
 
         None
-    }
-
-    /// Port of Unity EscapeJsonValue().
-    pub fn escape_json_value(value: &str) -> String {
-        if value.is_empty() {
-            return String::new();
-        }
-        value
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
     }
 }
 

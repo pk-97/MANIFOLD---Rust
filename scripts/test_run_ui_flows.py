@@ -244,8 +244,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(events, [])
 
     def test_bare_run_selects_only_touched_flows_and_all_selects_everything(self):
-        with patch.object(run_ui_flows, "filters_for_touched", return_value=([], {})) as touched, \
-                patch.object(run_ui_flows, "write_gate_marker"):
+        with patch.object(run_ui_flows, "filters_for_touched", return_value=([], {})) as touched:
             code, events, _ = self.exercise({"flow-a": "timeline"}, argv=["--build-only"])
         self.assertEqual(code, 0)
         self.assertEqual(events, [])

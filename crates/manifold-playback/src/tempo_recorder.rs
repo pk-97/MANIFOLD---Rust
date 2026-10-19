@@ -1,7 +1,5 @@
-use manifold_core::ClipId;
-use std::collections::HashMap;
 
-use manifold_core::recording::{RecordedClipProvenance, RecordedTempoChange, RecordingProvenance};
+use manifold_core::recording::{RecordedTempoChange, RecordingProvenance};
 use manifold_core::tempo::TempoMap;
 use manifold_core::types::TempoPointSource;
 use manifold_core::units::{Beats, Bpm};
@@ -15,26 +13,12 @@ pub struct TempoRecorder {
     last_recorded_beat: f32,
     last_recorded_bpm: f32,
     session_active: bool,
-
-    clip_starts: HashMap<ClipId, RecordingClipStartInfo>,
 }
 
 /// Constants matching Unity TempoRecorder.cs.
 impl TempoRecorder {
     pub const BPM_THRESHOLD: f32 = 0.05;
     const MIN_BEAT_SPACING: f32 = 0.125;
-}
-
-struct RecordingClipStartInfo {
-    clip_id: ClipId,
-    video_clip_id: String,
-    layer_index: i32,
-    midi_note: i32,
-    start_time_seconds: f32,
-    start_beat: f32,
-    start_absolute_tick: i32,
-    start_bpm: f32,
-    start_tempo_source: TempoPointSource,
 }
 
 // =================================================================
@@ -53,7 +37,6 @@ impl TempoRecorder {
             last_recorded_beat: f32::NEG_INFINITY,
             last_recorded_bpm: -1.0,
             session_active: false,
-            clip_starts: HashMap::new(),
         }
     }
 
@@ -71,10 +54,6 @@ impl TempoRecorder {
         self.last_recorded_bpm = -1.0;
     }
 
-    pub fn clear_clip_starts(&mut self) {
-        self.clip_starts.clear();
-    }
-
     // =================================================================
     // SESSION STATE
     // =================================================================
@@ -83,35 +62,6 @@ impl TempoRecorder {
     pub fn start_session(&mut self) {
         self.session_active = true;
         self.reset_tracking();
-    }
-
-    /// Called each frame from the update loop. Transitions recording session
-    /// active/inactive based on transport state.
-    /// Port of Unity TempoRecorder.cs UpdateSessionState lines 51-65.
-    pub fn update_session_state(
-        &mut self,
-        should_be_recording: bool,
-        provenance: &mut RecordingProvenance,
-        tempo_map: &mut TempoMap,
-        default_bpm: f32,
-        get_source_at_beat: &dyn Fn(f32) -> TempoPointSource,
-    ) {
-        if should_be_recording && !self.session_active {
-            self.session_active = true;
-            self.reset_tracking();
-            return;
-        }
-
-        if !should_be_recording && self.session_active {
-            self.session_active = false;
-            self.capture_tempo_lane_snapshot(
-                provenance,
-                tempo_map,
-                default_bpm,
-                get_source_at_beat,
-            );
-            self.reset_tracking();
-        }
     }
 
     /// End the recording session if active (called from Stop/Pause).
@@ -223,123 +173,5 @@ impl TempoRecorder {
             let bpm_at_zero = tempo_map.get_bpm_at_beat(Beats::ZERO, Bpm(default_bpm));
             provenance.set_recorded_project_bpm(bpm_at_zero, source_at_zero, true);
         }
-    }
-
-    // =================================================================
-    // CLIP PROVENANCE
-    // =================================================================
-
-    /// Track the start of a live clip for provenance recording.
-    /// Port of Unity TempoRecorder.cs TrackClipStart lines 163-189.
-    pub fn track_clip_start(
-        &mut self,
-        provenance: &mut RecordingProvenance,
-        clip_id: &str,
-        video_clip_id: &str,
-        layer_index: i32,
-        midi_note: i32,
-        start_beat: f32,
-        start_absolute_tick: i32,
-        start_time: f32,
-        start_bpm: f32,
-        start_source: TempoPointSource,
-        ticks_per_beat: i32,
-    ) {
-        Self::capture_project_bpm(provenance, start_bpm, start_source, false);
-
-        let resolved_start_tick = if start_absolute_tick >= 0 {
-            start_absolute_tick
-        } else {
-            (start_beat * ticks_per_beat as f32).round() as i32
-        };
-
-        self.clip_starts.insert(
-            ClipId::new(clip_id),
-            RecordingClipStartInfo {
-                clip_id: ClipId::new(clip_id),
-                video_clip_id: video_clip_id.to_string(),
-                layer_index,
-                midi_note,
-                start_time_seconds: start_time,
-                start_beat,
-                start_absolute_tick: resolved_start_tick,
-                start_bpm,
-                start_tempo_source: start_source,
-            },
-        );
-    }
-
-    /// Finalize a live clip's provenance entry on NoteOff/commit.
-    /// Port of Unity TempoRecorder.cs FinalizeClip lines 195-237.
-    pub fn finalize_clip(
-        &mut self,
-        provenance: &mut RecordingProvenance,
-        live_clip_id: &str,
-        recorded_clip: Option<&manifold_core::clip::TimelineClip>,
-        end_beat: f32,
-        end_absolute_tick: i32,
-        midi_note: i32,
-        end_time: f32,
-        end_bpm: f32,
-        end_source: TempoPointSource,
-        ticks_per_beat: i32,
-    ) {
-        let start = match self.clip_starts.remove(live_clip_id) {
-            Some(s) => s,
-            None => return,
-        };
-
-        let resolved_end_tick = if end_absolute_tick >= 0 {
-            end_absolute_tick
-        } else {
-            (end_beat * ticks_per_beat as f32).round() as i32
-        };
-        let resolved_midi_note = if midi_note >= 0 {
-            midi_note
-        } else {
-            start.midi_note
-        };
-
-        let (saved_clip_id, saved_video_id, saved_layer) = match recorded_clip {
-            Some(clip) => (
-                clip.id.clone(),
-                clip.video_clip_id.clone(),
-                start.layer_index, // layer_index captured at NoteOn time
-            ),
-            None => (
-                start.clip_id.clone(),
-                start.video_clip_id.clone(),
-                start.layer_index,
-            ),
-        };
-
-        let entry = RecordedClipProvenance {
-            clip_id: saved_clip_id,
-            video_clip_id: saved_video_id,
-            layer_index: saved_layer,
-            layer_id: None,
-            midi_note: resolved_midi_note,
-            start_time_seconds: start.start_time_seconds,
-            end_time_seconds: end_time,
-            start_beat: Beats::from_f32(start.start_beat),
-            end_beat: Beats::from_f32(end_beat),
-            start_absolute_tick: start.start_absolute_tick,
-            end_absolute_tick: resolved_end_tick,
-            start_bpm: Bpm(start.start_bpm),
-            end_bpm: Bpm(end_bpm),
-            start_tempo_source: start.start_tempo_source,
-            end_tempo_source: end_source,
-        };
-
-        provenance.add_recorded_clip(entry);
-    }
-
-    /// Remove a clip start tracking entry (e.g. on cancellation).
-    /// Port of Unity TempoRecorder.cs RemoveClipStart lines 241-245.
-    pub fn remove_clip_start(&mut self, clip_id: &str) {
-        if clip_id.is_empty() {
-            return;
-        }
-        self.clip_starts.remove(clip_id);
     }
 }

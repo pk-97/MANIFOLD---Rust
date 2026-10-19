@@ -470,10 +470,6 @@ impl AbletonBridge {
         self.connected
     }
 
-    pub fn has_send_socket(&self) -> bool {
-        self.send_socket.is_some()
-    }
-
     pub fn session(&self) -> &AbletonSession {
         &self.session
     }

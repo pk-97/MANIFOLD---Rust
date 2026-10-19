@@ -34,7 +34,7 @@ There is no dispatcher seat. The clerical loop (pop queue, run gates, park failu
 
 Lanes commit once and stop; the lead commits, pushes and lands (CLAUDE.md section Hard rules). The lead lands a reviewed branch with `scripts/land_branch.py <branch> --worktree <path> --message '...' [--close-bead <id> ...]`: it merges `origin/main` in, gates, merges `--no-ff` to main, pushes and closes the beads in one command. Follow it with `scripts/watch_land.py --kind land`. Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
 
-- Land each reviewed branch on its own. `scripts/land_wave.py --batch` (one gate over several branches) is a fallback for a pile-up of ready branches, not the standard path.
+- Landing is per branch by default. Batch only while review keeps up: merge the reviewed branches into one merge branch and land that once with `land_branch.py`.
 - Never force-push and never `branch -f` main.
 
 The lead acts on a red within two minutes of `scripts/watch_land.py` firing.
@@ -60,7 +60,7 @@ within five minutes.
 
 ## Lead token economy
 
-Lead context is the scarcest resource in the rig. The lead does no hands-on work and reads only to review; agents do every search, read, edit and run.
+Lead context is the scarcest resource in the rig. What the lead does itself and what it delegates is in CLAUDE.md section How every session works.
 
 Briefs and reports stay short. An agent re-reads its whole context on every call, and most calls write prose, so every padded line in a brief or a report is paid again on each later step. A brief carries findings and scope, not background; a report carries outcome, evidence and blockers, not narration.
 
@@ -88,7 +88,7 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 - **Established findings** with file:line anchors. Never send an agent exploring for what the lead already knows.
 - **Exact scope**: the files it may touch; read-only profile for investigations.
 - **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing. UI flows: a lane runs only the flows its change adds or edits, by name, never a family (`scene`) or the full suite; the landing gate runs the mapped set once. A flow red on main sits in the manifest's `expected_fail` with its bead, so it never forces a named-red rerun.
-- **Prescriptive imperatives** ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
+- **Prescriptive imperatives** ("Run `cargo nextest run -p manifold-ui <filter>`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
 - **The reference to port from**, when one exists, and the instruction to name every deviation.
 - **The source and everything made from it.** Name the file that defines the contract and every file generated from or checked against it: builder, shipped JSON, catalog, UI flows, goldens. Regenerate from the source. A golden is refreshed only for a change the brief names, never because it fails.
 - **The fixes a merge must keep.** Name the other branch's fixes and the tests that prove them. After merging main, run those tests, even when the merge was clean.
@@ -96,6 +96,26 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 ## Verification
 
 One strong verify pass per lane before landing: refute the diff against the brief and the gate, check citations, rerun the gate. Verification never delegates to the seat that wrote the diff. Two weak passes don't sum to a strong one. Small lanes, frequent landing: 2–3 commits per phase beats one hours-long wave.
+
+## Lead discipline
+
+- A bisect needs a green control: run the base alongside rung one. A uniform-red bisect means the baseline assumption is wrong.
+- Lane gate reports are claims. Re-run the gates on the committed tree before accepting; the lane's build warmed the target dir, so it costs seconds.
+- Check the commit file list against the brief's deliverables, then verify the deliverable is live on main (the test runs, the feature is reachable). A lane's reported sha is verified with `git cat-file -t <sha>` and the branch tip before anything is built on it.
+- Files over 3000 lines: the lead writes a line-anchored implementation map into the brief; exploration briefs and giant files do not mix.
+- A gate or verifier tooling change is re-run against the real commit it fixes, not only its synthetic self-test.
+- Enumeration briefs are type-shaped: every constructor and consumer of the changed type, found by the type's own registry, never every file matching a string. The compiler or a typed test is the complete oracle.
+- Outputs judged by reading (briefs, reviews, records) can be one-shot calls; outputs judged by running go to a lane.
+- A lane never runs `git checkout` or `restore` on a file with the lead's uncommitted work. Commit lead work before delegating into the same file; scope reverts to the lane's own edits.
+- A mispinned lane (the denial names a slot that is not its own) re-pins with `EnterWorktree(path=<slot>)` and verifies the tip, and never edits the tree it landed in.
+- The lead records Peter's rulings itself, first-hand, the turn he states them, as plain rules; agents never write a ruling from a relayed brief.
+- Check a bead title, report or summary at the source (`git show`, the code, the test output) before relaying it.
+- Stamps come from a `date` run in its own call.
+- Performance and physics changes are verified the way Peter runs them: in the app, or frame time on his project at its saved settings, against the main he last ran.
+- A result that destroys the instrument (water explodes, frame goes black) stops the line: no landings on top until it is fixed or Peter calls it. An absolute ruling that cannot hold under overload gets one push-back with the physics before anything is built on it.
+- Never land over a named red until a complete gate run's logs are read, every leg.
+- Every landing or test failure gets a typed bead the same session, with symptom, cost and root cause or suspects.
+- Briefs for temporary or diagnostic tooling carry a line budget and name what to leave out.
 
 ## Unattended multi-slice runs
 
