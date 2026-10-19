@@ -12,6 +12,7 @@
 //! project_tool scene set-model <file.manifold> <model_path>
 //!     --layer <index> [--layer-name <name>]
 //! project_tool project new <file.manifold> [--bpm <f64>]
+//! project_tool project upgrade <in.manifold> <out.manifold>
 //! project_tool layer add <file.manifold> --name <N> --type audio|trigger|group|generator
 //!     [--parent <name>] [--color <#rrggbb>] [--collapsed]
 //! project_tool clip add-bulk <file.manifold> --layer <name> --json <clips.json>
@@ -40,6 +41,11 @@
 //! history snapshots, and the atomic temp-file rename all behave exactly
 //! like an in-app save. A V1 plain-JSON file is upgraded to a V2 archive on
 //! its first mutation, matching app behavior.
+//!
+//! `project upgrade` is the one deliberate typed round-trip: it opens a file
+//! with the bundled registry linked and saves it to a new path in the current
+//! format, so every load migration lands in the file. Files with embedded
+//! presets or a 3D scene need the app's own open passes and are refused.
 //!
 //! `tempo set` replaces the whole tempo map from a JSON array of points
 //! (`[{"beat": 0.0, "bpm": 132.0, "source": 4}, ...]` — `TempoPoint` serde,
@@ -123,6 +129,7 @@ USAGE:
   project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
       --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
   project_tool project new <file.manifold> [--bpm <f64>]
+  project_tool project upgrade <in.manifold> <out.manifold>   (typed open + save in the current format)
   project_tool layer add <file.manifold> --name <N> --type audio|trigger|group|generator
       [--parent <name>] [--color <#rrggbb>] [--collapsed]          (prints the layer id)
   project_tool clip add-bulk <file.manifold> --layer <name> --json <clips.json>
