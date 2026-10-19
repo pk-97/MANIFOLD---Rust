@@ -449,7 +449,8 @@
     "rt-dynamic-modifier": "mushroomscene",
     "work-browser-search": "inspector",
     "work-perform-exit": "timeline",
-    "trigger-lane-sibling": "envmod"
+    "trigger-lane-sibling": "envmod",
+    "card-collapse-all": "gltfscene"
   },
   "expected_fail": {
     "scene-forces-controls": {

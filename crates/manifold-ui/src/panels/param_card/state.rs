@@ -287,6 +287,27 @@ impl ParamCardPanel {
             && row.clip_trigger.as_ref().is_some_and(|source| source.target == *target))
     }
 
+    /// Whether the card has any drawer sections to fold.
+    pub fn has_sections(&self) -> bool {
+        self.rows.iter().any(|row| row.spec.section.is_some())
+    }
+
+    /// Fold or unfold every drawer section in one pass, through the same
+    /// `section_folded` state a header click flips. Returns the sections
+    /// whose state changed, in card order.
+    pub fn set_all_sections_folded(&mut self, folded: bool) -> Vec<String> {
+        let mut changed = Vec::new();
+        for row in &self.rows {
+            let Some(section) = &row.spec.section else { continue };
+            let slot = self.section_folded.entry(section.clone()).or_insert(false);
+            if *slot != folded && !changed.contains(section) {
+                *slot = folded;
+                changed.push(section.clone());
+            }
+        }
+        changed
+    }
+
     /// Unfold the card and the row's section and open its active response
     /// tab, without changing anything authored. `false` when the row is not
     /// on this card.

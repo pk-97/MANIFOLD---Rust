@@ -1993,6 +1993,16 @@ impl UIRoot {
                         self.inspector.gen_has_graph_mod()
                     }
                 };
+                if self.inspector.card_has_sections(gpt) {
+                    if let Some(last) = items.last_mut() {
+                        last.separator_after = true;
+                    }
+                    for (label, folded) in [("Collapse all sections", true), ("Expand all sections", false)] {
+                        items.push(DropdownItem::new(label).with_action(PanelAction::Params(
+                            ParamsAction::SetCardSectionsFolded(gpt.clone(), folded),
+                        )));
+                    }
+                }
                 items.extend(preset_menu_items(has_graph_mod, |kind| {
                     use manifold_ui::panels::actions::PresetActionKind::*;
                     match kind {

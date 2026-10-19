@@ -151,7 +151,7 @@ fn restyle_as_heading(tree: &mut UITree, first_slot: usize, title: &str) {
     for slot in first_slot..tree.count() {
         let id = tree.id_at(slot);
         let Some(node) = tree.get_node(id) else { continue };
-        let mut style = node.style.clone();
+        let mut style = node.style;
         if slot == first_slot {
             style.bg_color = color::HEADER_BG;
         } else if node.text.as_deref() == Some(title) {

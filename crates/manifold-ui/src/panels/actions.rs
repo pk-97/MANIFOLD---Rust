@@ -530,6 +530,8 @@ pub enum ParamsAction {
     /// A scene card section title was clicked; carries the section's rows in
     /// card order. The Scene tab picks which one to reveal (D10).
     RevealSectionInSceneTab(GraphParamTarget, Vec<ParamId>),
+    /// Card menu: fold (`true`) or unfold every drawer section on the card.
+    SetCardSectionsFolded(GraphParamTarget, bool),
     /// section 6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.

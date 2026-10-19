@@ -788,3 +788,33 @@ impl InspectorCompositePanel {
         }
     }
 }
+
+impl InspectorCompositePanel {
+    fn card_for_target_mut(&mut self, gpt: &crate::GraphParamTarget) -> Option<&mut ParamCardPanel> {
+        match gpt {
+            crate::GraphParamTarget::Effect(id) => self.effects.iter_mut().flatten()
+                .chain(self.modifier_cards.iter_mut())
+                .find(|card| card.effect_id() == id),
+            crate::GraphParamTarget::Generator | crate::GraphParamTarget::GeneratorOf(_) => self.gen_params.as_mut(),
+        }
+    }
+
+    /// Whether the card `gpt` names has drawer sections to fold (the card
+    /// menu offers collapse-all only then).
+    pub fn card_has_sections(&mut self, gpt: &crate::GraphParamTarget) -> bool {
+        self.card_for_target_mut(gpt).is_some_and(|card| card.has_sections())
+    }
+
+    /// Fold or unfold every drawer section on the card in one pass, through
+    /// the card's own fold state; one view bump, so one rebuild. Returns the
+    /// changed sections and whether the card saves its folds (a scene card).
+    pub fn set_card_sections_folded(&mut self, gpt: &crate::GraphParamTarget, folded: bool) -> (Vec<String>, bool) {
+        let Some(card) = self.card_for_target_mut(gpt) else { return (Vec::new(), false) };
+        let changed = card.set_all_sections_folded(folded);
+        let saved = card.is_scene_card();
+        if !changed.is_empty() {
+            self.view_version += 1;
+        }
+        (changed, saved)
+    }
+}

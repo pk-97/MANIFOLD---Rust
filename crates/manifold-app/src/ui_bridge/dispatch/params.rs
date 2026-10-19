@@ -366,6 +366,18 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             });
             DispatchResult::handled()
         }
+        ParamsAction::SetCardSectionsFolded(gpt, folded) => {
+            // The inspector flips every section in the card's own fold state
+            // (one view bump, one rebuild); a scene card also saves each fold
+            // like a header click does.
+            let (changed, saved) = ctx.ui.inspector.set_card_sections_folded(gpt, *folded);
+            if saved {
+                for section in changed {
+                    dispatch_params(&ParamsAction::CardSectionFolded { target: gpt.clone(), section, folded: *folded }, ctx);
+                }
+            }
+            DispatchResult::handled()
+        }
         ParamsAction::ModConfigTabChanged | ParamsAction::SectionFoldToggled => {
             // The card or Scene tab already flipped its own UI-only state (D5:
             // fold state is workspace-local, never serialized); the view
