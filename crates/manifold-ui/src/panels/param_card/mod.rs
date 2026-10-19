@@ -3650,6 +3650,29 @@ pub(super) mod tests {
         }
     }
 
+    /// A switch row and a pick-list row keep the right-click mapping menu
+    /// their slider had: label and button both open `ParamLabelRightClick`
+    /// for that row's param, the menu a slider row's label opens.
+    #[test]
+    fn button_rows_open_the_mapping_menu_on_right_click() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&gen_config_with_choice_and_float_switch());
+        panel.set_scene_sections(Some(&[]));
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 300.0));
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+        let menu_for = |node| match reg.resolve(&tree, Some(node), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(_, param_id))) => Some(param_id.to_string()),
+            _ => None,
+        };
+        for (row, param) in [(0, "speed"), (1, "invert"), (2, "scale")] {
+            let ids = panel.row_host.toggle_ids[row].as_ref().expect("a button row");
+            assert_eq!(menu_for(ids.button_id).as_deref(), Some(param), "{param} button");
+            assert_eq!(menu_for(ids.label_id.expect("label")).as_deref(), Some(param), "{param} label");
+        }
+    }
+
     #[test]
     fn build_gen_param() {
         let mut tree = UITree::new();

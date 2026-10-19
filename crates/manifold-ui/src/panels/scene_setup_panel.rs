@@ -1176,7 +1176,7 @@ impl ScenePanel {
         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
         self.properties_card
             .row_host
-            .register_param_menus(&self.properties_card.rows, &target, intents, |_| false);
+            .register_param_menus(&self.properties_card.rows, &target, intents);
         for card in &self.object_modifier_cards {
             card.register_intents(intents);
         }
