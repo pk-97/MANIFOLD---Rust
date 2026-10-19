@@ -201,9 +201,14 @@
       "audio-setup-hygiene"
     ],
     "crates/manifold-app/src/ui_bridge/dispatch/audio_setup.rs": [
-      "audio-new-source-starts-on-none"
+      "audio-new-source-starts-on-none",
+      "audio-add-source-keeps-system-default"
     ],
     "crates/manifold-editing/src/commands/audio_setup.rs": [
+      "audio-new-source-starts-on-none",
+      "audio-add-source-keeps-system-default"
+    ],
+    "crates/manifold-app/src/project_io.rs": [
       "audio-new-source-starts-on-none"
     ],
     "crates/manifold-app/src/ui_bridge/editing.rs": [
@@ -322,6 +327,7 @@
     "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
     "audio-new-source-starts-on-none": "audiosendsnone",
+    "audio-add-source-keeps-system-default": "audiosendsdefault",
     "audio-new-layer-routes-to-sole-source": "audiosendsone",
     "audio-new-layer-no-source-with-two-sources": "audiosends",
     "automation-placeholder-first-click": "automationplaceholder",

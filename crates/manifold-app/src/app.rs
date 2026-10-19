@@ -841,7 +841,10 @@ impl Application {
     }
 
     pub(crate) fn create_default_project() -> Project {
-        let mut project = Project::default();
+        let mut project = Project {
+            audio_setup: manifold_core::audio_setup::AudioSetup::for_new_project(),
+            ..Default::default()
+        };
         project.settings.bpm = manifold_core::Bpm(120.0);
         project.settings.time_signature_numerator = 4;
 

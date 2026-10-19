@@ -160,10 +160,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 "Audio {}",
                 ctx.project.audio_setup.sends.len() + 1
             ));
-            audio_setup_command(
-                &mut ctx.project,
-                Box::new(AddAudioSendCommand::new(send).starting_on_none()),
-            )
+            audio_setup_command(&mut ctx.project, Box::new(AddAudioSendCommand::new(send)))
         }
         AudioSetupAction::AudioRemoveSend(id) => audio_setup_command(
             &mut ctx.project,

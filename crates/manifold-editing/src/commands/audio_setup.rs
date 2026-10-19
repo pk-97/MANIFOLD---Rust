@@ -45,41 +45,21 @@ impl Command for SetAudioInputDeviceCommand {
 #[derive(Debug)]
 pub struct AddAudioSendCommand {
     send: AudioSend,
-    start_on_none: bool,
-    /// Set on execute when this command moved the device to "None (layers only)".
-    switched_device: bool,
 }
 
 impl AddAudioSendCommand {
     pub fn new(send: AudioSend) -> Self {
-        Self { send, start_on_none: false, switched_device: false }
-    }
-
-    /// The first source of a project that never picked a device starts on
-    /// "None (layers only)" instead of silently opening the system input.
-    /// A picked device (or an existing source) is left alone.
-    pub fn starting_on_none(mut self) -> Self {
-        self.start_on_none = true;
-        self
+        Self { send }
     }
 }
 
 impl Command for AddAudioSendCommand {
     fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
     fn do_execute(&mut self, project: &mut Project) {
-        self.switched_device = self.start_on_none
-            && project.audio_setup.device.is_none()
-            && project.audio_setup.sends.is_empty();
-        if self.switched_device {
-            project.audio_setup.device = Some(AudioDeviceRef::none());
-        }
         project.audio_setup.sends.push(self.send.clone());
     }
 
     fn do_undo(&mut self, project: &mut Project) {
-        if self.switched_device {
-            project.audio_setup.device = None;
-        }
         let id = self.send.id.clone();
         project.audio_setup.sends.retain(|s| s.id != id);
     }
@@ -400,25 +380,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_source_starting_on_none_leaves_a_picked_device_alone_and_undoes() {
-        let mut fresh = Project::default();
-        let mut cmd = AddAudioSendCommand::new(AudioSend::new("A")).starting_on_none();
-        cmd.execute(&mut fresh);
-        assert_eq!(fresh.audio_setup.device, Some(AudioDeviceRef::none()));
-        cmd.undo(&mut fresh);
-        assert_eq!(fresh.audio_setup.device, None);
-
-        let mut picked = Project::default();
-        picked.audio_setup.device = Some(AudioDeviceRef::new("uid", "Mic"));
-        let mut cmd = AddAudioSendCommand::new(AudioSend::new("A")).starting_on_none();
-        cmd.execute(&mut picked);
-        assert_eq!(picked.audio_setup.device, Some(AudioDeviceRef::new("uid", "Mic")));
-
-        let mut second = Project::default();
-        second.audio_setup.sends.push(AudioSend::new("First"));
-        let mut cmd = AddAudioSendCommand::new(AudioSend::new("B")).starting_on_none();
-        cmd.execute(&mut second);
-        assert_eq!(second.audio_setup.device, None);
+    fn adding_a_send_never_touches_the_device() {
+        for device in [None, Some(AudioDeviceRef::none()), Some(AudioDeviceRef::new("uid", "Mic"))] {
+            let mut project = Project::default();
+            project.audio_setup.device = device.clone();
+            let mut cmd = AddAudioSendCommand::new(AudioSend::new("A"));
+            cmd.execute(&mut project);
+            assert_eq!(project.audio_setup.device, device);
+            cmd.undo(&mut project);
+            assert_eq!(project.audio_setup.device, device);
+        }
     }
 
     #[test]
