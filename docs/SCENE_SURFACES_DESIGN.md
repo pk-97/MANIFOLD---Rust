@@ -301,12 +301,11 @@ pub enum ParamKey<'a> {
     Node { type_id: &'a str, param: &'a str, scene_radius: Option<f32> },
     Modifier { recipe: &'a PresetTypeId, param: &'a str },
 }
-/// The node half: today's SceneExposureMetadataProvider, renamed and widened to every node type.
-pub trait NodeParamProvider: Send + Sync {
-    fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata>; // was SceneParamMetadata, + scene, unit, limit
-}
-/// Once, at startup, beside the PRESET_DEFINITIONS fill (manifold-nodes registration). Read-only after.
-pub fn install(provider: Box<dyn NodeParamProvider>);
+/// The node half: every param of every node type, registered once by manifold-nodes-scene (D18).
+pub struct NodeParamSource { pub params_for_type: fn(&str) -> Vec<NodeParamMetadata> }
+/// The source read as-is, and minus the scene table's Hidden params (what scene nodes stamp).
+pub fn node_params(type_id: &str) -> Vec<NodeParamMetadata>;
+pub fn stamped_node_params(type_id: &str) -> Vec<NodeParamMetadata>;
 /// What the code declares about one control: name, unit, slider range, hard limit, scene descriptor,
 /// value labels, angle/toggle/trigger flags. Never a user choice.
 pub fn describe(key: ParamKey<'_>) -> Option<ParamSpecDef>;
@@ -458,7 +457,7 @@ Every reader below either already reads the joined manifest (no change) or reads
 | `meta.params` copies as generator authority; `inline_graph_spec` | the join; id stubs | `rg -n 'inline_graph_spec|fn gather_known_params' crates/manifold-core` |
 | Passes 2 and 4 of `migrate_scene_exposures`; `scene_scale` range writes | `describe` | `rg -n 'Repair pass|apply_scene_scale' crates/` |
 | `Param.calibrated`, `BindingMappingEdit::apply_to_manifest_spec` writes | `ParamChoices` | `rg -n 'calibrated|apply_to_manifest_spec' crates/ -g '*.rs'` |
-| `SceneExposureMetadataProvider` passed as an argument | `NodeParamProvider` installed once | `rg -n 'SceneExposureMetadataProvider' crates/` |
+| `SceneExposureMetadataProvider` passed as an argument | `param_lookup::stamped_node_params` over the registered `NodeParamSource` | `rg -n 'SceneExposureMetadataProvider|NodeParamProvider' crates/` |
 | `card_visible_for(type, param)` (core `scene_exposure.rs:66`), 3 non-test call sites: core `:289`, `:555`, `scene_performance.rs:416` | `spec.scene` from the join | `rg -n 'card_visible_for\(' crates/ -g '*.rs'` |
 | Stamp filter chain (`nodes-scene scene_exposure.rs:115-130`) | params whose role is Hidden are not stamped | read the function |
 | `look_metadata` relabel (`:184-189`) | `ParamDef.label` edit | `rg -n 'look_metadata' crates/` |
@@ -552,7 +551,7 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
 - **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/archive/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
 - **Deliverables:**
   - foundation `param_range.rs` and the `CardPin` enum (3.1).
-  - core `param_lookup.rs` (3.2): `NodeParamProvider` is the renamed `SceneExposureMetadataProvider`, installed by `manifold-nodes` registration beside the `PRESET_DEFINITIONS` fill.
+  - core `param_lookup.rs` (3.2): `NodeParamSource`, registered by `manifold-nodes-scene` (D18), read through `node_params` and `stamped_node_params`.
   - The join in `gather_known_params` / `build_param_manifest`.
   - `ParamChoices`, `SpecSource`, `ParamSpecDef.limit` / `unit` / `scene` fields, and stub-parsable defaults (3.4). `Param.calibrated` is replaced by `choices`, and the calibration wire maps to the slider range with its key and shape unchanged.
   - `ParamEntryWire` gains `rename`, `section`, `pin`; `PresetInstance.folded_sections`.

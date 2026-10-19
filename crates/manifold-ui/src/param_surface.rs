@@ -499,7 +499,7 @@ impl ParamSurface {
     /// The card's wire identity — derived, never stored twice.
     pub fn target(&self) -> GraphParamTarget {
         match self.kind {
-            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
+            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_id.clone()),
             ParamCardKind::Generator => GraphParamTarget::Generator,
         }
     }

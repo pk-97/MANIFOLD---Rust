@@ -1759,9 +1759,9 @@ impl UIRoot {
                 // "Remove Ableton Mapping" when param is already mapped — the
                 // only kind-specific read; the menu + context are unified.
                 let is_ableton_mapped = match gpt {
-                    GraphParamTarget::Effect(fx_idx) => self.inspector.is_effect_ableton_mapped(
+                    GraphParamTarget::Effect(effect_id) => self.inspector.is_effect_ableton_mapped(
                         self.inspector.last_effect_tab(),
-                        *fx_idx,
+                        effect_id,
                         param_id.as_ref(),
                     ),
                     // `is_gen_ableton_mapped` reads the inspector's own
@@ -1942,24 +1942,23 @@ impl UIRoot {
                 // Typed (2b.11): each item carries its action keyed by the card's
                 // target, so the dispatch runs one path for effects + generators.
                 let mut items = Vec::new();
-                if let GraphParamTarget::Effect(clicked_idx) = gpt {
-                    self.inspector.select_effect_for_context_menu(*clicked_idx);
+                if let GraphParamTarget::Effect(clicked_id) = gpt {
+                    self.inspector.select_effect_for_context_menu(clicked_id);
                     self.inspector.apply_selection_visuals(&mut self.tree);
                     items.extend(card_edit_menu_items(self.effect_clipboard.has_content(), true, self.inspector.selection_has_group()));
                     let selected = self.inspector.get_selected_effect_indices();
-                    let selected_indices = if selected.contains(clicked_idx) {
-                        selected
-                    } else {
-                        vec![*clicked_idx]
-                    };
-                    items.extend(mask_menu_items("Add Mask", &self.clip_detect_layers, |preset_id, source_layer| {
-                        ParamsAction::AddMask {
-                            target: gpt.clone(),
-                            selected_indices: selected_indices.clone(),
-                            preset_id,
-                            source_layer,
-                        }
-                    }));
+                    // A stale id (the effect left this chain) offers no mask action.
+                    if let Some(idx) = self.inspector.effect_position(self.inspector.active_tab(), clicked_id) {
+                        let selected_indices = if selected.contains(&idx) { selected } else { vec![idx] };
+                        items.extend(mask_menu_items("Add Mask", &self.clip_detect_layers, |preset_id, source_layer| {
+                            ParamsAction::AddMask {
+                                target: gpt.clone(),
+                                selected_indices: selected_indices.clone(),
+                                preset_id,
+                                source_layer,
+                            }
+                        }));
+                    }
                 }
                 if matches!(gpt, GraphParamTarget::Generator) {
                     if let Some(layer) = self.inspector.modifier_scope_id().cloned()
@@ -1981,8 +1980,8 @@ impl UIRoot {
                     }
                 }
                 let has_graph_mod = match gpt {
-                    GraphParamTarget::Effect(fx_idx) => {
-                        self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), *fx_idx)
+                    GraphParamTarget::Effect(effect_id) => {
+                        self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), effect_id)
                     }
                     // Same rationale as `is_ableton_mapped` above: card-only
                     // state, `GeneratorOf` doesn't reach `CardRightClicked` in

@@ -1039,7 +1039,7 @@ impl Runner {
             AutomationAction::SetParam { param, value } => {
                 self.set_param(ui, data, index, action_desc, param, *value, render)
             }
-            AutomationAction::SetSliderRange { param, range } => match flow_value_ref(data, param) {
+            AutomationAction::SetSliderRange { param, range } => match flow_value_ref(data, &|ei| crate::editor_bridge::effect_card_id(ui.inspector.last_effect_tab(), &data.project, self.active_layer.as_ref(), &data.selection, ei), param) {
                 Ok((manifold_ui::panels::ValueRef::Param(target, id), _)) => {
                     let action = PanelAction::Params(manifold_ui::panels::ParamsAction::SetSliderRange(target, id, *range));
                     self.apply_panel_actions(ui, data, &[action]);
@@ -1427,11 +1427,7 @@ impl Runner {
                 }
                 KeyOutcome::Consumed | KeyOutcome::Filtered => {}
                 KeyOutcome::Committed(field, text) => {
-                    if !self.commit_text(ui, data, field, &text) {
-                        return self.fail(index, action_desc, ui, out_dir, format!(
-                            "{field:?} commits on Application (graph editor, automation point or preset save), not reached headless"
-                        ));
-                    }
+                    self.commit_text(ui, data, field, &text);
                     committed = Some((field, text));
                 }
             }
@@ -1451,8 +1447,9 @@ impl Runner {
     }
 
     /// Commits a session through the shared seam with the runner's dispatch
-    /// context. False for a field only `Application` commits.
-    fn commit_text(&mut self, ui: &mut UIRoot, data: &mut SceneData, field: crate::text_input::TextInputField, text: &str) -> bool {
+    /// context. The runner has no watched graph or GPU, so graph-editor and
+    /// preset-save commits do nothing here.
+    fn commit_text(&mut self, ui: &mut UIRoot, data: &mut SceneData, field: crate::text_input::TextInputField, text: &str) {
         let mut dctx = crate::ui_bridge::DispatchCtx {
             project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
             content_tx: &self.content_tx,
@@ -1465,10 +1462,9 @@ impl Runner {
             scrub: &mut self.scrub,
             dialogs: Default::default(),
         };
-        let handled = crate::text_session::commit(&mut self.text_input, field, text, &mut dctx);
+        crate::text_session::commit(&mut self.text_input, field, text, &mut dctx, &crate::text_session::EditorCommitCtx::none());
         data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
-        println!("ui-snap --script: commit {field:?} {text:?} -> {}", if handled { "seam" } else { "not reached" });
-        handled
+        println!("ui-snap --script: commit {field:?} {text:?}");
     }
 
     /// One step in the graph editor window. `None` hands the step to the
@@ -2910,7 +2906,7 @@ impl Runner {
         render: &mut RenderState,
     ) -> StepResult {
         use manifold_ui::panels::ScrubPhase;
-        let (value_ref, range) = match flow_value_ref(data, param) {
+        let (value_ref, range) = match flow_value_ref(data, &|ei| crate::editor_bridge::effect_card_id(ui.inspector.last_effect_tab(), &data.project, self.active_layer.as_ref(), &data.selection, ei), param) {
             Ok(v) => v,
             Err(e) => return StepResult { index, action: action_desc, status: "fail", detail: e, artifact: None },
         };
@@ -2946,7 +2942,7 @@ impl Runner {
         render: &mut RenderState,
     ) -> StepResult {
         use manifold_ui::panels::ScrubPhase;
-        let (value_ref, range) = match flow_value_ref(data, param) {
+        let (value_ref, range) = match flow_value_ref(data, &|ei| crate::editor_bridge::effect_card_id(ui.inspector.last_effect_tab(), &data.project, self.active_layer.as_ref(), &data.selection, ei), param) {
             Ok(v) => v,
             Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
         };
@@ -3231,13 +3227,15 @@ fn text_key(chars: &str, key: Option<Key>) -> crate::text_session::TextKey<'_> {
 /// carry a `(min, max)` range rather than a scalar.
 fn flow_value_ref(
     data: &SceneData,
+    effect_at: &dyn Fn(usize) -> Option<manifold_core::EffectId>,
     param: &manifold_ui::automation::FlowScrubTarget,
 ) -> Result<(manifold_ui::panels::ValueRef, bool), String> {
     use manifold_ui::automation::FlowScrubTarget as F;
     use manifold_ui::panels::{GraphParamTarget, ValueRef};
+    let fx = |i: usize| effect_at(i).ok_or_else(|| format!("scrub address names effect {i}; the active chain has no such effect"));
     let target = |effect: &Option<usize>| match effect {
-        Some(i) => GraphParamTarget::Effect(*i),
-        None => GraphParamTarget::Generator,
+        Some(i) => fx(*i).map(GraphParamTarget::Effect),
+        None => Ok(GraphParamTarget::Generator),
     };
     let pid = |p: &String| std::borrow::Cow::Owned(p.clone());
     let layer = |i: usize| {
@@ -3249,11 +3247,11 @@ fn flow_value_ref(
         F::LedBrightness => (ValueRef::LedBrightness, false),
         F::LayerOpacity => (ValueRef::LayerOpacity, false),
         F::Macro(idx) => (ValueRef::Macro(*idx), false),
-        F::EffectParam { effect, param } => (ValueRef::Param(GraphParamTarget::Effect(*effect), pid(param)), false),
+        F::EffectParam { effect, param } => (ValueRef::Param(GraphParamTarget::Effect(fx(*effect)?), pid(param)), false),
         F::GeneratorParam { param } => (ValueRef::Param(GraphParamTarget::Generator, pid(param)), false),
-        F::Trim { kind, effect, param } => (ValueRef::Trim(*kind, target(effect), pid(param)), true),
-        F::EnvelopeTarget { effect, param } => (ValueRef::EnvelopeTarget(target(effect), pid(param)), false),
-        F::AudioModShape { effect, param, shape } => (ValueRef::AudioModShape(target(effect), pid(param), *shape), false),
+        F::Trim { kind, effect, param } => (ValueRef::Trim(*kind, target(effect)?, pid(param)), true),
+        F::EnvelopeTarget { effect, param } => (ValueRef::EnvelopeTarget(target(effect)?, pid(param)), false),
+        F::AudioModShape { effect, param, shape } => (ValueRef::AudioModShape(target(effect)?, pid(param), *shape), false),
         F::AudioTriggerShape { layer: l, index, shape } => (ValueRef::AudioTriggerShape(layer(*l)?, *index, *shape), false),
         F::LayerAudioGain { layer: l } => (ValueRef::LayerAudioGain(layer(*l)?), false),
         F::AudioSendGain { send } => {

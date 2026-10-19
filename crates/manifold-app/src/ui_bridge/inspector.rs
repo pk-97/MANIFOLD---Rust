@@ -3104,6 +3104,14 @@ mod scene_card_convergence_tests {
                 });
             }
 
+            /// The card-side address for the effect the editor `target` names.
+            fn fx_gpt(target: &manifold_core::GraphTarget) -> manifold_ui::GraphParamTarget {
+                match target {
+                    manifold_core::GraphTarget::Effect(id) => manifold_ui::GraphParamTarget::Effect(id.clone()),
+                    other => panic!("not an effect target: {other:?}"),
+                }
+            }
+
             /// Dispatch `action` against `target` via `editor_target`, drain
             /// into a fresh `ContentSide`, and assert the atomic-gesture
             /// undo-cycle shape `atomic_cycle` proves for the generator
@@ -3163,7 +3171,7 @@ mod scene_card_convergence_tests {
                         s.project,
                         &target,
                         PanelAction::Modulation(ModulationAction::DriverToggle(
-                            manifold_ui::GraphParamTarget::Effect(0),
+                            fx_gpt(&target),
                             pid.clone(),
                         )),
                         move |p| {
@@ -3190,7 +3198,7 @@ mod scene_card_convergence_tests {
                     s.project,
                     &s.layer_target,
                     PanelAction::Modulation(ModulationAction::AudioModToggle(
-                        manifold_ui::GraphParamTarget::Effect(0), pid.clone(),
+                        fx_gpt(&target), pid.clone(),
                     )),
                     move |project| {
                         project.preset_instance(&target)
@@ -3212,7 +3220,7 @@ mod scene_card_convergence_tests {
                     s.project,
                     &s.master_target,
                     PanelAction::Modulation(ModulationAction::AudioModToggle(
-                        manifold_ui::GraphParamTarget::Effect(0), pid.clone(),
+                        fx_gpt(&target), pid.clone(),
                     )),
                     move |project| project.preset_instance(&target)
                         .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
@@ -3233,7 +3241,7 @@ mod scene_card_convergence_tests {
                         s.project,
                         &target,
                         PanelAction::Modulation(ModulationAction::AudioModToggle(
-                            manifold_ui::GraphParamTarget::Effect(0),
+                            fx_gpt(&target),
                             pid.clone(),
                         )),
                         move |p| {
@@ -3261,7 +3269,7 @@ mod scene_card_convergence_tests {
                     s.project,
                     &s.layer_target,
                     PanelAction::Modulation(ModulationAction::EnvelopeToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
+                        fx_gpt(&s.layer_target),
                         pid.clone(),
                     )),
                     move |p| {
@@ -3285,7 +3293,7 @@ mod scene_card_convergence_tests {
                     s.project,
                     &s.master_target,
                     PanelAction::Modulation(ModulationAction::EnvelopeToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
+                        fx_gpt(&s.master_target),
                         pid.clone(),
                     )),
                     move |p| {
@@ -3317,7 +3325,7 @@ mod scene_card_convergence_tests {
                         s.project,
                         &target,
                         PanelAction::Params(ParamsAction::ParamToggle(
-                            manifold_ui::GraphParamTarget::Effect(0),
+                            fx_gpt(&target),
                             pid.clone(),
                         )),
                         move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
@@ -3344,7 +3352,7 @@ mod scene_card_convergence_tests {
                         s.project,
                         &target,
                         PanelAction::Params(ParamsAction::ParamFire(
-                            manifold_ui::GraphParamTarget::Effect(0),
+                            fx_gpt(&target),
                             pid.clone(),
                         )),
                         move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
@@ -3363,7 +3371,7 @@ mod scene_card_convergence_tests {
                 let mut h = Harness::new(None);
                 let ui_snapshot = serde_json::to_value(&project).unwrap();
                 let action = PanelAction::Params(ParamsAction::ParamFire(
-                    manifold_ui::GraphParamTarget::Effect(0),
+                    fx_gpt(&target),
                     pid.clone(),
                 ));
                 h.dispatch_with_editor(&action, &mut project, Some(&target));
@@ -3409,7 +3417,7 @@ mod scene_card_convergence_tests {
                         s.project,
                         &target,
                         PanelAction::Modulation(ModulationAction::DriverConfig(
-                            manifold_ui::GraphParamTarget::Effect(0),
+                            fx_gpt(&target),
                             pid.clone(),
                             DriverConfigAction::BeatDiv(4), // -> Half
                         )),
@@ -3441,7 +3449,7 @@ mod scene_card_convergence_tests {
                         s.project,
                         &target,
                         PanelAction::Modulation(ModulationAction::DriverConfig(
-                            manifold_ui::GraphParamTarget::Effect(0),
+                            fx_gpt(&target),
                             pid.clone(),
                             DriverConfigAction::ToggleFrameAligned,
                         )),
@@ -3485,7 +3493,7 @@ mod scene_card_convergence_tests {
                 let mut h = Harness::new(None);
                 h.dispatch_with_editor(
                     &PanelAction::Mapping(MappingAction::AbletonInvertToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
+                        fx_gpt(target),
                         pid,
                     )),
                     &mut project,

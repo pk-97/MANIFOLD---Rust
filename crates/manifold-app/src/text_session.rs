@@ -7,9 +7,9 @@
 //!
 //! What differs is input presence only. The App reads winit keys and measures
 //! text once its renderer exists; the runner reads its script and always has
-//! a renderer. Fields whose commit reads the graph editor's watched graph, an
-//! automation lane or the GPU stay on `Application::handle_text_input_commit`,
-//! and [`commit`] reports them unhandled.
+//! a renderer. The graph editor's watched graph and the GPU reach [`commit`]
+//! through [`EditorCommitCtx`]; the runner has neither and passes
+//! [`EditorCommitCtx::none`], so those commits are no-ops there.
 
 use manifold_core::project::Project;
 use manifold_core::Bpm;
@@ -558,15 +558,38 @@ fn byte_at(text_input: &mut TextInputState, tree: Option<&UITree>, pos: Vec2) ->
     with_measure(text_input, tree, |ti, m| ti.byte_at_point(pos.x, pos.y, m)).unwrap_or(len)
 }
 
-/// Commits `text` into `field` through the dispatch context. False for the
-/// fields `Application::handle_text_input_commit` keeps: they read the graph
-/// editor's watched graph, an automation lane or the GPU.
-pub(crate) fn commit(
+/// What a graph-editor or preset-save commit reads beyond the dispatch
+/// context: the editor's watched graph (target, catalog default, open group
+/// scope) and the UI-side GPU for the save-time thumbnail.
+pub(crate) struct EditorCommitCtx<'a> {
+    pub target: Option<&'a manifold_core::GraphTarget>,
+    pub catalog_default: Option<&'a manifold_core::effect_graph_def::EffectGraphDef>,
+    pub scope: &'a [u32],
+    pub gpu: Option<&'a manifold_node_engine::gpu::context::GpuContext>,
+}
+
+impl EditorCommitCtx<'_> {
+    #[cfg(any(test, feature = "ui-snapshot"))]
+    pub(crate) const fn none() -> Self {
+        EditorCommitCtx { target: None, catalog_default: None, scope: &[], gpu: None }
+    }
+
+    /// The watched target and its catalog default, both or neither.
+    fn graph(&self) -> Option<(manifold_core::GraphTarget, manifold_core::effect_graph_def::EffectGraphDef)> {
+        Some((self.target?.clone(), self.catalog_default?.clone()))
+    }
+}
+
+/// Commits `text` into `field` through the dispatch context. The graph
+/// canvas renders from the content thread's snapshot, so graph fields send to
+/// the content thread only.
+pub(crate) fn commit<'a>(
     text_input: &mut TextInputState,
     field: TextInputField,
     text: &str,
-    cx: &mut crate::ui_bridge::DispatchCtx<'_>,
-) -> bool {
+    cx: &mut crate::ui_bridge::DispatchCtx<'a>,
+    ed: &EditorCommitCtx<'a>,
+) {
     match field {
         TextInputField::Bpm => {
             if let Ok(new_bpm) = text.parse::<f32>() {
@@ -699,7 +722,7 @@ pub(crate) fn commit(
             } else if let Ok(v) = trimmed.parse::<f32>() {
                 if v > 0.0 { v.clamp(20.0, 300.0) } else { 0.0 }
             } else {
-                return true;
+                return;
             };
             if let Some(clip_id) = cx.selection.primary_selected_clip_id() {
                 let clip_id = clip_id.clone();
@@ -846,17 +869,171 @@ pub(crate) fn commit(
                 }
             }
         }
-        TextInputField::AutomationPointValue
-        | TextInputField::AutomationPointTime
-        | TextInputField::GraphGroupRename(_)
-        | TextInputField::GraphStringParam(_)
-        | TextInputField::GraphWgsl(_)
-        | TextInputField::GraphNumericParam(_)
-        | TextInputField::GraphNodeSearch
-        | TextInputField::GraphTableCell
-        | TextInputField::SavePresetName => return false,
+        TextInputField::AutomationPointValue | TextInputField::AutomationPointTime => {
+            crate::app::automation_point_input::commit(text_input, cx, field, text);
+        }
+        TextInputField::GraphGroupRename(group_node_id) => {
+            let new_handle = text.trim().to_string();
+            if !new_handle.is_empty()
+                && let Some((target, default)) = ed.graph()
+            {
+                let cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
+                    target,
+                    ed.scope.to_vec(),
+                    group_node_id,
+                    new_handle,
+                    default,
+                );
+                ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
+        }
+        TextInputField::GraphStringParam(node_id) => {
+            if let Some(param_name) = text_input.graph_param_name.take()
+                && let Some((target, default)) = ed.graph()
+            {
+                let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                    target,
+                    node_id,
+                    param_name,
+                    manifold_core::effect_graph_def::SerializedParamValue::String { value: text.to_string() },
+                    default,
+                )
+                .with_scope(ed.scope.to_vec());
+                ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
+        }
+        TextInputField::GraphWgsl(node_id) => {
+            if let Some((target, default)) = ed.graph() {
+                let cmd = manifold_editing::commands::graph::SetWgslSourceCommand::new(
+                    target,
+                    node_id,
+                    text.to_string(),
+                    default,
+                )
+                .with_scope(ed.scope.to_vec());
+                ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
+        }
+        TextInputField::GraphNumericParam(node_id) => {
+            if let Some(ctx) = text_input.graph_numeric_param.take() {
+                // Lenient parse, same convention as InspectorParam: keep only
+                // the numeric head so a value typed with a unit suffix commits.
+                let cleaned: String = text
+                    .trim()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+                    .collect();
+                if let Ok(parsed) = cleaned.parse::<f32>() {
+                    let mut v = parsed.clamp(ctx.min, ctx.max);
+                    if ctx.whole_numbers {
+                        v = v.round();
+                    }
+                    if let Some(outer_param_id) = ctx.outer_param_id {
+                        // A group-face mirror row writes through the outer card
+                        // param's own path, the same dispatch
+                        // `GraphEditCommand::SetOuterParam` uses.
+                        if let Some(target) = ed.target {
+                            use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
+                            let gpt = match target {
+                                manifold_core::GraphTarget::Effect(eid) => GraphParamTarget::Effect(eid.clone()),
+                                manifold_core::GraphTarget::Generator(_)
+                                | manifold_core::GraphTarget::SceneModifier { .. } => GraphParamTarget::Generator,
+                            };
+                            let action = PanelAction::Scrub(
+                                ValueRef::Param(gpt, manifold_core::effects::ParamId::from(outer_param_id)),
+                                ScrubPhase::Move(ScrubValue::Scalar(v)),
+                            );
+                            let prev = cx.editor_target.replace(target);
+                            let _ = crate::ui_bridge::dispatch(&action, cx);
+                            cx.editor_target = prev;
+                        }
+                    } else if let Some((target, default)) = ed.graph() {
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            target,
+                            node_id,
+                            ctx.param_name,
+                            manifold_core::effect_graph_def::SerializedParamValue::Float { value: v },
+                            default,
+                        )
+                        .with_scope(ed.scope.to_vec());
+                        ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+            }
+        }
+        // Live-filtered while typing (see the editor key handler); the final
+        // query persists as the canvas highlight. Nothing to commit.
+        TextInputField::GraphNodeSearch => {}
+        TextInputField::GraphTableCell => {
+            if let Some(edit) = text_input.graph_table_edit.take()
+                && let Ok(v) = text.trim().parse::<f32>()
+                && let Some((target, default)) = ed.graph()
+            {
+                let mut rows = edit.rows;
+                if let Some(cell) = rows.get_mut(edit.row).and_then(|r| r.get_mut(edit.col)) {
+                    // A no-op edit skips the command so a stray click + Enter
+                    // doesn't push an empty undo step.
+                    if (*cell - v).abs() > f32::EPSILON {
+                        *cell = v;
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            target,
+                            edit.node_id,
+                            edit.param_name,
+                            manifold_core::effect_graph_def::SerializedParamValue::Table { rows },
+                            default,
+                        )
+                        .with_scope(ed.scope.to_vec());
+                        ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+            }
+        }
+        TextInputField::SavePresetName => {
+            // Save to Library / Save to Project. The ctx carries the target's
+            // effective definition, resolved when the prompt opened; this only
+            // mints the name and writes or upserts it.
+            if let Some(ctx) = text_input.save_preset.take() {
+                let typed = text.trim();
+                if typed.is_empty() {
+                    log::warn!("[preset] Save to {:?} cancelled: empty name", ctx.destination);
+                } else {
+                    match ctx.destination {
+                        crate::text_input::SavePresetDestination::Library => {
+                            let lib = crate::user_library::UserLibrary::new();
+                            match lib.save(ctx.kind, typed, &ctx.def) {
+                                Ok(id) => {
+                                    log::info!("[preset] saved '{}' to the user library", id.as_str());
+                                    // The only thumbnail render: save-time, once. The
+                                    // browser reads this PNG back off disk.
+                                    if let Some(gpu) = ed.gpu {
+                                        let png_path = lib.thumbnail_path(ctx.kind, id.as_str());
+                                        if let Err(e) = manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file(
+                                            &gpu.device,
+                                            ctx.kind,
+                                            &ctx.def,
+                                            manifold_compositor::preset_thumbnail::THUMBNAIL_WIDTH,
+                                            manifold_compositor::preset_thumbnail::THUMBNAIL_HEIGHT,
+                                            &png_path,
+                                        ) {
+                                            log::error!("[preset] thumbnail render failed for '{}': {e}", id.as_str());
+                                        }
+                                    }
+                                }
+                                Err(e) => log::error!("[preset] Save to Library failed: {e}"),
+                            }
+                        }
+                        crate::text_input::SavePresetDestination::Project => {
+                            let mut def = ctx.def;
+                            if let Some(meta) = def.preset_metadata.as_mut() {
+                                meta.display_name = typed.to_string();
+                            }
+                            cx.execute(Box::new(manifold_editing::commands::preset::SaveToProjectCommand::new(ctx.kind, def)));
+                        }
+                    }
+                }
+            }
+        }
     }
-    true
 }
 
 #[cfg(test)]
@@ -903,7 +1080,7 @@ mod tests {
             scrub: &mut scrub,
             dialogs: Default::default(),
         };
-        assert!(commit(&mut text_input, field, &text, &mut cx));
+        commit(&mut text_input, field, &text, &mut cx, &EditorCommitCtx::none());
         assert!(matches!(rx.try_recv(), Ok(ContentCommand::ExecuteOnContent(_))));
     }
 
@@ -931,21 +1108,25 @@ mod tests {
         assert_eq!((field, text.as_str()), (TextInputField::LayerName, "Bass"));
     }
 
-    /// The commit seam leaves the graph editor's fields to the App.
-    #[test]
-    fn graph_fields_stay_on_the_app() {
+    /// One commit through the seam with the given editor context: the content
+    /// commands it sent, and the project afterwards.
+    fn commit_collect(
+        text_input: &mut TextInputState,
+        project: &mut Project,
+        field: TextInputField,
+        text: &str,
+        ed: &EditorCommitCtx<'_>,
+    ) -> (Vec<ContentCommand>, UIRoot, SelectionState) {
         let mut ui = UIRoot::new();
-        let mut project = Project::default();
         let mut selection = SelectionState::default();
-        let mut text_input = TextInputState::new();
-        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::unbounded();
         let mut edits = crate::gesture_preview::UiEdits::default();
         let content_state = crate::content_state::ContentState::default();
         let mut active_layer = None;
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = crate::ui_bridge::ScrubState::default();
         let mut cx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &tx),
+            project: crate::ui_bridge::ProjectRef::new(project, &mut edits, &tx),
             content_tx: &tx,
             content_state: &content_state,
             ui: &mut ui,
@@ -956,6 +1137,168 @@ mod tests {
             scrub: &mut scrub,
             dialogs: Default::default(),
         };
-        assert!(!commit(&mut text_input, TextInputField::GraphWgsl(3), "x", &mut cx));
+        commit(text_input, field, text, &mut cx, ed);
+        (rx.try_iter().collect(), ui, selection)
+    }
+
+    fn empty_def() -> manifold_core::effect_graph_def::EffectGraphDef {
+        serde_json::from_str(r#"{"version":1,"nodes":[],"wires":[]}"#).expect("minimal graph def")
+    }
+
+    fn watched_ctx<'a>(
+        target: &'a manifold_core::GraphTarget,
+        default: &'a manifold_core::effect_graph_def::EffectGraphDef,
+    ) -> EditorCommitCtx<'a> {
+        EditorCommitCtx { target: Some(target), catalog_default: Some(default), scope: &[], gpu: None }
+    }
+
+    fn executes(cmds: &[ContentCommand]) -> usize {
+        cmds.iter().filter(|c| matches!(c, ContentCommand::Execute(_))).count()
+    }
+
+    /// Each graph-editor field commits exactly one `Execute` to the content
+    /// thread through the seam, and nothing without a watched graph.
+    #[test]
+    fn graph_fields_execute_on_the_content_thread() {
+        use crate::text_input::{GraphNumericParamCtx, TableCellEdit};
+        let target = manifold_core::GraphTarget::Generator(manifold_core::LayerId::new("g"));
+        let default = empty_def();
+        let ed = watched_ctx(&target, &default);
+        let mut project = Project::default();
+
+        let mut ti = TextInputState::new();
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphGroupRename(3), " Core ", &ed);
+        assert_eq!(executes(&cmds), 1, "group rename");
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphGroupRename(3), "   ", &ed);
+        assert!(cmds.is_empty(), "an empty rename sends nothing");
+
+        ti.graph_param_name = Some("label".into());
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphStringParam(3), "hi", &ed);
+        assert_eq!(executes(&cmds), 1, "string param");
+        assert!(ti.graph_param_name.is_none(), "the param name is taken");
+
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphWgsl(3), "fn main() {}", &ed);
+        assert_eq!(executes(&cmds), 1, "wgsl source");
+
+        ti.graph_numeric_param = Some(GraphNumericParamCtx {
+            param_name: "gain".into(),
+            min: 0.0,
+            max: 1.0,
+            whole_numbers: false,
+            outer_param_id: None,
+        });
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphNumericParam(3), "0.5x", &ed);
+        assert_eq!(executes(&cmds), 1, "numeric param keeps its numeric head");
+
+        ti.graph_table_edit = Some(TableCellEdit {
+            node_id: 3,
+            param_name: "table".into(),
+            row: 0,
+            col: 1,
+            rows: vec![vec![0.0, 1.0]],
+        });
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphTableCell, "1.0", &ed);
+        assert!(cmds.is_empty(), "an unchanged cell pushes no undo step");
+        ti.graph_table_edit = Some(TableCellEdit {
+            node_id: 3,
+            param_name: "table".into(),
+            row: 0,
+            col: 1,
+            rows: vec![vec![0.0, 1.0]],
+        });
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphTableCell, "2.0", &ed);
+        assert_eq!(executes(&cmds), 1, "table cell");
+
+        let none = EditorCommitCtx::none();
+        ti.graph_param_name = Some("label".into());
+        for field in [TextInputField::GraphGroupRename(3), TextInputField::GraphStringParam(3), TextInputField::GraphWgsl(3)] {
+            let (cmds, ..) = commit_collect(&mut ti, &mut project, field, "x", &none);
+            assert!(cmds.is_empty(), "{field:?} without a watched graph");
+        }
+    }
+
+    /// The node search keeps its query as the canvas highlight: nothing to
+    /// commit, and it reaches the seam.
+    #[test]
+    fn graph_node_search_commits_nothing() {
+        let mut project = Project::default();
+        let mut ti = TextInputState::new();
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphNodeSearch, "blur", &EditorCommitCtx::none());
+        assert!(cmds.is_empty());
+    }
+
+    /// Save to Project mints a project preset through one undoable command;
+    /// an empty name saves nothing.
+    #[test]
+    fn save_preset_name_to_project_executes_one_command() {
+        use crate::text_input::{SavePresetCtx, SavePresetDestination};
+        let mut project = Project::default();
+        let mut ti = TextInputState::new();
+        let ctx = || SavePresetCtx {
+            kind: manifold_core::preset_def::PresetKind::Effect,
+            def: empty_def(),
+            destination: SavePresetDestination::Project,
+        };
+        ti.save_preset = Some(ctx());
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::SavePresetName, "  ", &EditorCommitCtx::none());
+        assert!(cmds.is_empty() && project.embedded_presets.is_empty(), "empty name cancels");
+        ti.save_preset = Some(ctx());
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::SavePresetName, "My Look", &EditorCommitCtx::none());
+        assert_eq!(executes(&cmds), 1);
+        assert_eq!(project.embedded_presets.len(), 1, "the local project is written too");
+        assert!(ti.save_preset.is_none());
+    }
+
+    /// An automation point's value and time commit through `MoveAutomationPoint`
+    /// and re-select the moved point; bad text reopens the field and changes
+    /// nothing.
+    #[test]
+    fn automation_point_fields_commit_through_the_seam() {
+        use crate::text_input::AutomationPointEditCtx;
+        use manifold_core::effects::{AutomationLane, AutomationPoint, PresetInstance, SegmentShape};
+        use manifold_core::Beats;
+
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+        fx.init_defaults();
+        let target = manifold_ui::view::UiGraphTarget::Effect(fx.id.clone());
+        let (min, max) = fx.params.get("amount").unwrap().slider_span();
+        let at = |beat: f64, value: f32| AutomationPoint { beat: Beats(beat), value, shape: SegmentShape::Linear };
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![at(0.0, min), at(4.0, min + (max - min) * 0.5)],
+        }]);
+        let mut project = Project::default();
+        project.settings.master_effects.push(fx);
+        let value_norm = 0.5;
+        let open = |ti: &mut TextInputState, field: TextInputField| {
+            ti.begin(field, "x", AnchorRect::zero(), 11.0);
+            ti.automation_point_edit = Some(AutomationPointEditCtx {
+                target: target.clone(),
+                param_id: "amount".into(),
+                original_beat: Beats(4.0),
+                original_value_norm: value_norm,
+                param_min: min,
+                param_max: max,
+                whole_numbers: false,
+                beats_per_bar: 4,
+            });
+        };
+        let lane_points = |p: &Project| p.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0].points.clone();
+        let none = EditorCommitCtx::none();
+
+        let mut ti = TextInputState::new();
+        open(&mut ti, TextInputField::AutomationPointValue);
+        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::AutomationPointValue, "nope", &none);
+        assert!(cmds.is_empty() && ti.active && ti.automation_point_edit.is_some(), "bad value reopens the field");
+        assert_eq!(lane_points(&project)[1].beat, Beats(4.0));
+
+        ti.cancel();
+        open(&mut ti, TextInputField::AutomationPointTime);
+        let (cmds, _, selection) = commit_collect(&mut ti, &mut project, TextInputField::AutomationPointTime, "3.1.000", &none);
+        assert_eq!(executes(&cmds), 1, "time commit");
+        assert_eq!(lane_points(&project)[1].beat, Beats(8.0), "bar 3 beat 1 at 4/4");
+        assert_eq!(selection.selected_automation_point.as_ref().map(|p| p.beat), Some(Beats(8.0)));
+        assert!(ti.automation_point_edit.is_none());
     }
 }

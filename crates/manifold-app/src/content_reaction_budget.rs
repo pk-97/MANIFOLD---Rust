@@ -243,7 +243,8 @@ impl Bench {
 #[test]
 fn content_reaction_budget() {
     let mut bench = Bench::new();
-    let fx = |i| GraphParamTarget::Effect(i);
+    let fx_ids: Vec<_> = bench.ui.project.timeline.layers[0].effects.as_ref().unwrap().iter().map(|e| e.id.clone()).collect();
+    let fx = |i: usize| GraphParamTarget::Effect(fx_ids[i].clone());
     let lfo_params = param_ids(&bench.ui.project.timeline.layers[0].effects.as_ref().unwrap()[0]);
     let mod_params = param_ids(&bench.ui.project.timeline.layers[0].effects.as_ref().unwrap()[1]);
     let p = |s: &str| std::borrow::Cow::Owned(s.to_string());
@@ -409,7 +410,8 @@ fn content_mutate_publishes() {
     assert_eq!(mapping_status(&snap), manifold_core::ableton_mapping::AbletonMappingStatus::Dormant);
 
     // Undo of a Values edit (slider) and of a Shapes edit (driver trim).
-    let fx = |i| GraphParamTarget::Effect(i);
+    let fx_ids: Vec<_> = bench.ui.project.timeline.layers[0].effects.as_ref().unwrap().iter().map(|e| e.id.clone()).collect();
+    let fx = |i: usize| GraphParamTarget::Effect(fx_ids[i].clone());
     let p = |s: &str| std::borrow::Cow::Owned(s.to_string());
     let lfo = param_ids(&bench.ui.project.timeline.layers[0].effects.as_ref().unwrap()[0]);
     let modp = param_ids(&bench.ui.project.timeline.layers[0].effects.as_ref().unwrap()[1]);

@@ -338,7 +338,6 @@ pub fn insert_scene_template(
     graph: &EffectGraphDef,
     scene: &SceneNodeRef,
     template: &SceneTemplate,
-    metadata: &dyn NodeParamProvider,
 ) -> Result<SceneGraphEdit, SceneGraphEditError>;
 ```
 
@@ -353,12 +352,11 @@ impl InsertSceneTemplateCommand {
     pub fn new(
         project: &Project, target: GraphTarget, scene: SceneNodeRef,
         template: SceneTemplate, catalog_default: &EffectGraphDef,
-        metadata: &dyn NodeParamProvider,
     ) -> Result<Self, SceneGraphEditError>;
 }
 ```
 
-The constructor prepares immediately and stores no provider reference. App dispatch resolves the current scene reference from the snapshot and submits the command through `ContentCommand` to EditingService. The expected-owner check catches stale preparation. Existing async imports retain their worker result handoff, then prepare against the current owner; they do not mutate the project from the worker.
+The constructor prepares immediately; node params come from `param_lookup::stamped_node_params`. App dispatch resolves the current scene reference from the snapshot and submits the command through `ContentCommand` to EditingService. The expected-owner check catches stale preparation. Existing async imports retain their worker result handoff, then prepare against the current owner; they do not mutate the project from the worker.
 
 ### 5.2 One scene-object model
 

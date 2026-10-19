@@ -824,9 +824,9 @@ impl WaterScene {
             "bindings":bindings
         })).expect("family visibility metadata"));
         let metadata = def.preset_metadata.as_mut().expect("family metadata");
-        let look_metadata: Vec<_> = manifold_node_engine::scene::exposure_source::metadata_for_node_type("node.platonic_solid_mesh")
+        let look_metadata: Vec<_> = manifold_core::param_lookup::stamped_node_params("node.platonic_solid_mesh")
             .into_iter().filter(|param| param.name == "radius").collect();
-        let visible_metadata: Vec<_> = manifold_node_engine::scene::exposure_source::metadata_for_node_type("node.scene_object")
+        let visible_metadata: Vec<_> = manifold_core::param_lookup::stamped_node_params("node.scene_object")
             .into_iter().filter(|param| param.name == "visible").collect();
         for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
             for (suffix, param_id, descriptors) in [

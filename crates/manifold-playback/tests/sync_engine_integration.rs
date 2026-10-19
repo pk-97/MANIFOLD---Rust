@@ -278,3 +278,236 @@ fn clip_start_anchors_recently_started_gate_on_real_clock_not_zero_epoch() {
          epoch silently defeats"
     );
 }
+
+/// A video renderer whose clips stay not-ready until the test releases them,
+/// like a real decoder that is still opening the file. Wraps `StubRenderer`,
+/// which is ready the moment a clip starts and so hides any bug that lives in
+/// the gap between start and first frame.
+struct DeferredReadyVideo {
+    inner: StubRenderer,
+    held: std::collections::HashSet<manifold_core::ClipId>,
+}
+
+impl DeferredReadyVideo {
+    fn new() -> Self {
+        Self { inner: StubRenderer::new_video(), held: std::collections::HashSet::new() }
+    }
+}
+
+impl ClipRenderer for DeferredReadyVideo {
+    fn can_handle(&self, clip: &manifold_core::clip::TimelineClip) -> bool {
+        self.inner.can_handle(clip)
+    }
+    fn start_clip(
+        &mut self,
+        clip: &manifold_core::clip::TimelineClip,
+        current_time: Seconds,
+        layers: &[manifold_core::layer::Layer],
+        layer_index: i32,
+        fire_clip_edge: bool,
+    ) -> bool {
+        self.held.insert(clip.id.clone());
+        self.inner.start_clip(clip, current_time, layers, layer_index, fire_clip_edge)
+    }
+    fn stop_clip(&mut self, clip_id: &str) {
+        self.held.remove(clip_id);
+        self.inner.stop_clip(clip_id);
+    }
+    fn release_all(&mut self) {
+        self.held.clear();
+        self.inner.release_all();
+    }
+    fn is_clip_ready(&self, clip_id: &str) -> bool {
+        !self.held.contains(clip_id) && self.inner.is_clip_ready(clip_id)
+    }
+    fn is_active(&self, clip_id: &str) -> bool {
+        self.inner.is_active(clip_id)
+    }
+    fn is_clip_playing(&self, clip_id: &str) -> bool {
+        self.inner.is_clip_playing(clip_id)
+    }
+    fn needs_prepare_phase(&self) -> bool {
+        self.inner.needs_prepare_phase()
+    }
+    fn needs_drift_correction(&self) -> bool {
+        self.inner.needs_drift_correction()
+    }
+    fn needs_pending_pause(&self) -> bool {
+        self.inner.needs_pending_pause()
+    }
+    fn get_clip_playback_time(&self, clip_id: &str) -> f32 {
+        self.inner.get_clip_playback_time(clip_id)
+    }
+    fn get_clip_media_length(&self, clip_id: &str) -> f32 {
+        self.inner.get_clip_media_length(clip_id)
+    }
+    fn resume_clip(&mut self, clip_id: &str) {
+        self.inner.resume_clip(clip_id);
+    }
+    fn pause_clip(&mut self, clip_id: &str) {
+        self.inner.pause_clip(clip_id);
+    }
+    fn seek_clip(&mut self, clip_id: &str, video_time: f32) {
+        self.inner.seek_clip(clip_id, video_time);
+    }
+    fn set_clip_looping(&mut self, clip_id: &str, looping: bool) {
+        self.inner.set_clip_looping(clip_id, looping);
+    }
+    fn set_clip_playback_rate(&mut self, clip_id: &str, rate: f32) {
+        self.inner.set_clip_playback_rate(clip_id, rate);
+    }
+    fn pre_render(&mut self, time: Seconds, beat: Beats, dt: f32) {
+        self.inner.pre_render(time, beat, dt);
+    }
+    fn resize(&mut self, width: i32, height: i32) {
+        self.inner.resize(width, height);
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// BUG-mmct0.1 (new video clips never seek to their start): a video clip
+/// started while playing must play from its in-point plus the time since its
+/// start once the decoder is ready, on the tick it becomes ready, not two
+/// seconds later when drift correction comes round. A trimmed clip or a split
+/// tail otherwise shows the head of the file first.
+#[test]
+fn new_video_clip_seeks_to_in_point_when_ready() {
+    let in_point = 3.0_f32;
+    let mut project = single_video_clip_project(120.0);
+    project.timeline.layers[0].clips[0].in_point = Seconds(in_point as f64);
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+
+    let renderers: Vec<Box<dyn ClipRenderer>> =
+        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let mut engine = PlaybackEngine::new(renderers);
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+
+    let mut realtime = 0.0_f64;
+    let mut frame = 0_u64;
+    for _ in 0..10 {
+        tick(&mut engine, &mut realtime, &mut frame, 1);
+    }
+    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+
+    // The decoder finishes opening; the next tick must seek the player.
+    engine.renderers_mut()[1]
+        .as_any_mut()
+        .downcast_mut::<DeferredReadyVideo>()
+        .expect("renderer index 1 is the deferred video renderer")
+        .held
+        .clear();
+    tick(&mut engine, &mut realtime, &mut frame, 1);
+
+    let expected = in_point + engine.current_time().as_f32();
+    let played = engine.renderers_mut()[1].get_clip_playback_time(&clip_id);
+    assert!(
+        (played - expected).abs() < 0.05,
+        "a newly ready clip must seek to in_point + elapsed ({expected:.3}s); it sits at {played:.3}s"
+    );
+}
+
+/// Runs an untrimmed video clip that starts at realtime 0 and whose decoder
+/// is ready after `hold_ticks` ticks. Returns (realtime the decoder became
+/// ready, realtime the clip first reached the compositor).
+fn untrimmed_clip_ready_and_visible_times(hold_ticks: u32) -> (f64, f64) {
+    let project = single_video_clip_project(120.0);
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+
+    let renderers: Vec<Box<dyn ClipRenderer>> =
+        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let mut engine = PlaybackEngine::new(renderers);
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+
+    let mut realtime = 0.0_f64;
+    let mut frame = 0_u64;
+    for _ in 0..hold_ticks {
+        let result = tick(&mut engine, &mut realtime, &mut frame, 1);
+        assert!(
+            !result.ready_clips.iter().any(|r| r.clip_id == clip_id),
+            "a clip whose decoder is still opening must not reach the compositor"
+        );
+    }
+    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+
+    engine.renderers_mut()[1]
+        .as_any_mut()
+        .downcast_mut::<DeferredReadyVideo>()
+        .expect("renderer index 1 is the deferred video renderer")
+        .held
+        .clear();
+    let ready_at = realtime;
+    for _ in 0..60 {
+        let now = realtime;
+        let result = tick(&mut engine, &mut realtime, &mut frame, 1);
+        if result.ready_clips.iter().any(|r| r.clip_id == clip_id) {
+            return (ready_at, now);
+        }
+    }
+    panic!("the clip never reached the compositor within a second of its decoder being ready");
+}
+
+/// An untrimmed clip (in point 0) is already where it should start when its
+/// decoder opens, so becoming ready must not restart its first-frame gate: it
+/// shows at max(ready, start + 100 ms), never ready + 100 ms, or every video
+/// cut lands late by the decoder's open time.
+#[test]
+fn untrimmed_clip_visible_at_later_of_ready_and_start_gate() {
+    let gate = manifold_playback::engine::RECENTLY_STARTED_TIME as f64;
+    let one_tick = 1.0 / 60.0 + 1e-6;
+    // hold 10 ticks: ready after the start gate expired; hold 2: before it.
+    for hold in [10_u32, 2] {
+        let (ready_at, visible_at) = untrimmed_clip_ready_and_visible_times(hold);
+        let expected = ready_at.max(gate);
+        assert!(
+            visible_at <= expected + one_tick,
+            "hold {hold}: decoder ready at {ready_at:.3}s, start gate ends at {gate:.3}s, so \
+             the clip must show by {expected:.3}s; it first showed at {visible_at:.3}s"
+        );
+    }
+}
+
+/// An untrimmed clip that starts mid-way, here because the transport jumped
+/// into it, is not on its start when the decoder opens: it must still seek
+/// to the playhead on the ready tick, not play the file head until drift
+/// correction comes round.
+#[test]
+fn untrimmed_clip_started_mid_way_seeks_when_ready() {
+    let project = single_video_clip_project(120.0);
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+
+    let renderers: Vec<Box<dyn ClipRenderer>> =
+        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let mut engine = PlaybackEngine::new(renderers);
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+    engine.seek_to(Seconds(5.0));
+
+    let mut realtime = 0.0_f64;
+    let mut frame = 0_u64;
+    for _ in 0..10 {
+        tick(&mut engine, &mut realtime, &mut frame, 1);
+    }
+    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+
+    engine.renderers_mut()[1]
+        .as_any_mut()
+        .downcast_mut::<DeferredReadyVideo>()
+        .expect("renderer index 1 is the deferred video renderer")
+        .held
+        .clear();
+    tick(&mut engine, &mut realtime, &mut frame, 1);
+
+    let expected = engine.current_time().as_f32();
+    let played = engine.renderers_mut()[1].get_clip_playback_time(&clip_id);
+    assert!(
+        (played - expected).abs() < 0.05,
+        "a clip started mid-way must seek to the playhead ({expected:.3}s) when ready; it sits at {played:.3}s"
+    );
+}

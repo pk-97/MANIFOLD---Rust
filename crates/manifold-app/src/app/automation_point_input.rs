@@ -11,7 +11,8 @@ use manifold_ui::view::{UiGraphTarget, UiLaneDisplay};
 use manifold_ui::slider::BitmapSlider;
 
 use crate::app::Application;
-use crate::text_input::{AnchorRect, AutomationPointEditCtx, TextInputField};
+use crate::text_input::{AnchorRect, AutomationPointEditCtx, TextInputField, TextInputState};
+use crate::ui_root::UIRoot;
 
 const INPUT_WIDTH: f32 = 128.0;
 const INPUT_HEIGHT: f32 = 21.0;
@@ -25,7 +26,7 @@ pub(crate) fn begin_value(
     value_norm: f32,
 ) {
     let Some((point, param)) = point_and_param(app, target, param_id, beat, value_norm) else {
-        invalid(app, "Automation point is no longer available");
+        invalid(&mut app.ws.ui_root, "Automation point is no longer available");
         return;
     };
     let ctx = AutomationPointEditCtx {
@@ -40,11 +41,11 @@ pub(crate) fn begin_value(
     };
     // The editor opens on the value as the inspector slider prints it.
     let mut buf = manifold_ui::panels::param_slider_shared::ParamValueText::default();
-    let initial = lane_display(app, target, param_id)
+    let initial = lane_display(&app.ws.ui_root, target, param_id)
         .format_value(&mut buf, point.value, ctx.param_min, ctx.whole_numbers)
         .to_owned();
     let Some(anchor) = point_anchor(app, target, param_id, beat, value_norm) else {
-        invalid(app, "Automation point is off-screen");
+        invalid(&mut app.ws.ui_root, "Automation point is off-screen");
         return;
     };
     app.text_input.begin(
@@ -65,7 +66,7 @@ pub(crate) fn begin_time(
     value_norm: f32,
 ) {
     let Some((_, param)) = point_and_param(app, target, param_id, beat, value_norm) else {
-        invalid(app, "Automation point is no longer available");
+        invalid(&mut app.ws.ui_root, "Automation point is no longer available");
         return;
     };
     let bpb = beats_per_bar(app);
@@ -81,7 +82,7 @@ pub(crate) fn begin_time(
     };
     let initial = format_bar_beat(beat, bpb);
     let Some(anchor) = point_anchor(app, target, param_id, beat, value_norm) else {
-        invalid(app, "Automation point is off-screen");
+        invalid(&mut app.ws.ui_root, "Automation point is off-screen");
         return;
     };
     app.text_input.begin(
@@ -95,17 +96,22 @@ pub(crate) fn begin_time(
 
 /// Commit either automation point field. Invalid text leaves the project and
 /// selection untouched while the existing toast overlay reports the reason.
-pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
-    let Some(ctx) = app.text_input.automation_point_edit.take() else {
-        invalid(app, "Automation point edit context expired");
+pub(crate) fn commit(
+    text_input: &mut TextInputState,
+    cx: &mut crate::ui_bridge::DispatchCtx<'_>,
+    field: TextInputField,
+    text: &str,
+) {
+    let Some(ctx) = text_input.automation_point_edit.take() else {
+        invalid(cx.ui, "Automation point edit context expired");
         return;
     };
     let new_value = if field == TextInputField::AutomationPointValue {
-        let display = lane_display(app, &ctx.target, &ctx.param_id);
+        let display = lane_display(cx.ui, &ctx.target, &ctx.param_id);
         match parse_value(text, ctx.param_min, ctx.param_max, ctx.whole_numbers, &display) {
             Ok(value) => value,
             Err(reason) => {
-                reject_edit(app, field, text, ctx, reason);
+                reject_edit(text_input, cx.ui, field, text, ctx, reason);
                 return;
             }
         }
@@ -114,15 +120,15 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
         match parse_bar_beat(text, ctx.beats_per_bar) {
             Ok(_) => 0.0,
             Err(reason) => {
-                reject_edit(app, field, text, ctx, reason);
+                reject_edit(text_input, cx.ui, field, text, ctx, reason);
                 return;
             }
         }
     };
 
     let graph_target = crate::editing_host::to_graph_target(&ctx.target);
-    let Some(old_point) = find_point(app, &graph_target, &ctx.param_id, ctx.original_beat, ctx.original_value_norm) else {
-        invalid(app, "Automation point moved before the edit was committed");
+    let Some(old_point) = find_point(&cx.project, &graph_target, &ctx.param_id, ctx.original_beat, ctx.original_value_norm) else {
+        invalid(cx.ui, "Automation point moved before the edit was committed");
         return;
     };
     let new_beat = if field == TextInputField::AutomationPointValue {
@@ -133,7 +139,7 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
         parse_bar_beat(text, ctx.beats_per_bar).expect("validated automation time")
     };
     if !new_beat.0.is_finite() || new_beat.0 < 0.0 {
-        invalid(app, "Automation time must be finite and non-negative");
+        invalid(cx.ui, "Automation time must be finite and non-negative");
         return;
     }
     let value = if field == TextInputField::AutomationPointValue {
@@ -149,20 +155,18 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
     if old_point.beat == new_point.beat && old_point.value == new_point.value {
         return;
     }
-    app.execute_local(Box::new(MoveAutomationPointCommand::new(
+    cx.execute(Box::new(MoveAutomationPointCommand::new(
         graph_target, ctx.param_id.as_ref(), old_point, new_point,
     )));
     let new_value_norm = BitmapSlider::value_to_normalized(value, ctx.param_min, ctx.param_max);
-    if field == TextInputField::AutomationPointTime || field == TextInputField::AutomationPointValue {
-        app.selection.selected_automation_point = Some(manifold_ui::view::UiAutomationPointRef {
-            target: ctx.target,
-            param_id: ctx.param_id,
-            beat: new_beat,
-            value_norm: new_value_norm,
-        });
-        app.selection.selected_automation_points.clear();
-    }
-    app.ws.ui_root.mark_overlay_dirty();
+    cx.selection.selected_automation_point = Some(manifold_ui::view::UiAutomationPointRef {
+        target: ctx.target,
+        param_id: ctx.param_id,
+        beat: new_beat,
+        value_norm: new_value_norm,
+    });
+    cx.selection.selected_automation_points.clear();
+    cx.ui.mark_overlay_dirty();
 }
 
 fn point_and_param<'a>(
@@ -188,13 +192,13 @@ fn point_and_param<'a>(
 }
 
 fn find_point(
-    app: &Application,
+    project: &manifold_core::project::Project,
     target: &GraphTarget,
     param_id: &ParamId,
     beat: Beats,
     value_norm: f32,
 ) -> Option<AutomationPoint> {
-    let inst = app.local_project.preset_instance(target)?;
+    let inst = project.preset_instance(target)?;
     let param = inst.params.get(param_id.as_ref())?;
     inst
         .automation_lanes
@@ -283,8 +287,8 @@ pub(crate) fn parse_bar_beat(text: &str, beats_per_bar: u32) -> Result<Beats, &'
 }
 
 /// How the lane prints this parameter; plain numbers when the lane is gone.
-fn lane_display(app: &Application, target: &UiGraphTarget, param_id: &ParamId) -> UiLaneDisplay {
-    app.ws.ui_root.viewport.automation_lane_screens()
+fn lane_display(ui: &UIRoot, target: &UiGraphTarget, param_id: &ParamId) -> UiLaneDisplay {
+    ui.viewport.automation_lane_screens()
         .iter()
         .find(|lane| &lane.target == target && lane.param_id == *param_id)
         .map(|lane| lane.display.clone())
@@ -334,29 +338,26 @@ pub(crate) fn parse_value(
     Ok(value)
 }
 
-fn invalid(app: &mut Application, message: impl Into<String>) {
-    app.ws
-        .ui_root
-        .toast
-        .show_with_accent(message.into(), manifold_ui::color::RED_BASE);
-    app.ws.ui_root.mark_overlay_dirty();
+fn invalid(ui: &mut UIRoot, message: impl Into<String>) {
+    ui.toast.show_with_accent(message.into(), manifold_ui::color::RED_BASE);
+    ui.mark_overlay_dirty();
 }
 
+/// Reopen the same session with the rejected text so the field stays visible
+/// and the user can correct it in place.
 fn reject_edit(
-    app: &mut Application,
+    text_input: &mut TextInputState,
+    ui: &mut UIRoot,
     field: TextInputField,
     text: &str,
     ctx: AutomationPointEditCtx,
     message: &str,
 ) {
-    // `window_input` has already called the shared commit method by the time
-    // validation runs. Reopen the same session with the rejected text so the
-    // field remains visible and the user can correct it in place.
-    let anchor = app.text_input.anchor;
-    let font_size = app.text_input.font_size;
-    app.text_input.begin(field, text, anchor, font_size);
-    app.text_input.automation_point_edit = Some(ctx);
-    invalid(app, message);
+    let anchor = text_input.anchor;
+    let font_size = text_input.font_size;
+    text_input.begin(field, text, anchor, font_size);
+    text_input.automation_point_edit = Some(ctx);
+    invalid(ui, message);
 }
 
 #[cfg(test)]
