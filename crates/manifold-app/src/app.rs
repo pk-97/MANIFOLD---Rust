@@ -957,302 +957,41 @@ impl Application {
         self.cursor_manager.set_default();
     }
 
-    /// Commits a text session. The shared seam (`text_session::commit`) takes
-    /// every field the dispatch context can serve; the fields below read the
-    /// graph editor's watched graph, an automation lane or the GPU.
+    /// Commits a text session through the shared seam (`text_session::commit`).
     pub(crate) fn handle_text_input_commit(
         &mut self,
         field: crate::text_input::TextInputField,
         text: &str,
     ) {
-        use crate::text_input::TextInputField;
-        {
-            // Without a content thread (tests before one starts) edits go to a
-            // closed channel, as `send_content_cmd` drops them.
-            let closed;
-            let content_tx = match self.content_tx.as_ref() {
-                Some(tx) => tx,
-                None => {
-                    closed = crossbeam_channel::bounded(0).0;
-                    &closed
-                }
-            };
-            let mut cx = crate::ui_bridge::DispatchCtx {
-                project: self.local_project.edit(&mut self.ui_edits, content_tx),
-                content_tx,
-                content_state: &self.content_state,
-                ui: &mut self.ws.ui_root,
-                selection: &mut self.selection,
-                active_layer: &mut self.active_layer_id,
-                user_prefs: &mut self.user_prefs,
-                editor_target: None,
-                scrub: &mut self.scrub,
-                dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-            };
-            if crate::text_session::commit(&mut self.text_input, field, text, &mut cx) {
-                return;
+        // Without a content thread (tests before one starts) edits go to a
+        // closed channel, as `send_content_cmd` drops them.
+        let closed;
+        let content_tx = match self.content_tx.as_ref() {
+            Some(tx) => tx,
+            None => {
+                closed = crossbeam_channel::bounded(0).0;
+                &closed
             }
-        }
-        match field {
-            TextInputField::AutomationPointValue | TextInputField::AutomationPointTime => {
-                crate::app::automation_point_input::commit(self, field, text);
-            }
-            // ── Graph-editor fields ──────────────────────────────────────
-            // The graph canvas renders from `content_state.active_graph_snapshot`
-            // (the content thread owns the authoritative graph), so these
-            // dispatch to the content thread only — no local_project execute.
-            TextInputField::GraphGroupRename(group_node_id) => {
-                let new_handle = text.trim().to_string();
-                if !new_handle.is_empty()
-                    && let (Some(target), Some(default)) = (
-                        self.watched_graph_target.clone(),
-                        self.watched_catalog_default.clone(),
-                    )
-                {
-                    let scope = self
-                        .graph_canvas
-                        .as_ref()
-                        .map(|c| c.scope_path().to_vec())
-                        .unwrap_or_default();
-                    let cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
-                        target,
-                        scope,
-                        group_node_id,
-                        new_handle,
-                        default,
-                    );
-                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            TextInputField::GraphStringParam(node_id) => {
-                if let (Some(param_name), Some(target), Some(default)) = (
-                    self.text_input.graph_param_name.take(),
-                    self.watched_graph_target.clone(),
-                    self.watched_catalog_default.clone(),
-                ) {
-                    let scope = self
-                        .graph_canvas
-                        .as_ref()
-                        .map(|c| c.scope_path().to_vec())
-                        .unwrap_or_default();
-                    let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                        target,
-                        node_id,
-                        param_name,
-                        manifold_core::effect_graph_def::SerializedParamValue::String {
-                            value: text.to_string(),
-                        },
-                        default,
-                    )
-                    .with_scope(scope);
-                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            TextInputField::GraphWgsl(node_id) => {
-                if let (Some(target), Some(default)) = (
-                    self.watched_graph_target.clone(),
-                    self.watched_catalog_default.clone(),
-                ) {
-                    let scope = self
-                        .graph_canvas
-                        .as_ref()
-                        .map(|c| c.scope_path().to_vec())
-                        .unwrap_or_default();
-                    let cmd = manifold_editing::commands::graph::SetWgslSourceCommand::new(
-                        target,
-                        node_id,
-                        text.to_string(),
-                        default,
-                    )
-                    .with_scope(scope);
-                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            TextInputField::GraphNumericParam(node_id) => {
-                if let Some(ctx) = self.text_input.graph_numeric_param.take() {
-                    // Lenient parse, same convention as InspectorParam: keep
-                    // only the numeric head so a value typed with a unit
-                    // suffix still commits.
-                    let cleaned: String = text
-                        .trim()
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
-                        .collect();
-                    if let Ok(parsed) = cleaned.parse::<f32>() {
-                        let mut v = parsed.clamp(ctx.min, ctx.max);
-                        if ctx.whole_numbers {
-                            v = v.round();
-                        }
-                        if let Some(outer_param_id) = ctx.outer_param_id {
-                            // D4/D6 parity: a group-face mirror row writes
-                            // through the outer card param's own path — the
-                            // SAME dispatch `GraphEditCommand::SetOuterParam`
-                            // uses (app_render.rs), never `SetGraphNodeParam`
-                            // on the inner node.
-                            if let Some(target) = self.watched_graph_target.as_ref() {
-                                use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
-                                let gpt = match target {
-                                    manifold_core::GraphTarget::Effect(eid) => {
-                                        manifold_ui::panels::GraphParamTarget::Effect(eid.clone())
-                                    }
-                                    manifold_core::GraphTarget::Generator(_) => {
-                                        manifold_ui::panels::GraphParamTarget::Generator
-                                    }
-                                    manifold_core::GraphTarget::SceneModifier { .. } => {
-                                        manifold_ui::panels::GraphParamTarget::Generator
-                                    }
-                                };
-                                let action = PanelAction::Scrub(
-                                    ValueRef::Param(
-                                        gpt,
-                                        manifold_core::effects::ParamId::from(outer_param_id),
-                                    ),
-                                    ScrubPhase::Move(ScrubValue::Scalar(v)),
-                                );
-                                let content_tx = self.content_tx.as_ref().unwrap();
-                                let editor_target = self.watched_graph_target.as_ref();
-                                let mut dctx = crate::ui_bridge::DispatchCtx {
-                                    project: self.local_project.edit(&mut self.ui_edits, content_tx),
-                                    content_tx,
-                                    content_state: &self.content_state,
-                                    ui: &mut self.ws.ui_root,
-                                    selection: &mut self.selection,
-                                    active_layer: &mut self.active_layer_id,
-                                    user_prefs: &mut self.user_prefs,
-                                    editor_target,
-                                    scrub: &mut self.scrub,
-                                    dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                                };
-                                let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
-                            }
-                        } else if let (Some(target), Some(default)) = (
-                            self.watched_graph_target.clone(),
-                            self.watched_catalog_default.clone(),
-                        ) {
-                            let scope = self
-                                .graph_canvas
-                                .as_ref()
-                                .map(|c| c.scope_path().to_vec())
-                                .unwrap_or_default();
-                            let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                target,
-                                node_id,
-                                ctx.param_name,
-                                manifold_core::effect_graph_def::SerializedParamValue::Float {
-                                    value: v,
-                                },
-                                default,
-                            )
-                            .with_scope(scope);
-                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                        }
-                    }
-                }
-            }
-            TextInputField::GraphNodeSearch => {
-                // Live-filtered while typing (see the editor key handler); the
-                // final query persists as the canvas highlight. Nothing to
-                // commit to the model.
-            }
-            TextInputField::GraphTableCell => {
-                if let Some(edit) = self.text_input.graph_table_edit.take()
-                    && let Ok(v) = text.trim().parse::<f32>()
-                    && let (Some(target), Some(default)) = (
-                        self.watched_graph_target.clone(),
-                        self.watched_catalog_default.clone(),
-                    )
-                {
-                    let mut rows = edit.rows;
-                    if let Some(cell) = rows.get_mut(edit.row).and_then(|r| r.get_mut(edit.col)) {
-                        // No-op edits skip the command so an accidental click +
-                        // Enter doesn't push an empty undo step.
-                        if (*cell - v).abs() > f32::EPSILON {
-                            *cell = v;
-                            let scope = self
-                                .graph_canvas
-                                .as_ref()
-                                .map(|c| c.scope_path().to_vec())
-                                .unwrap_or_default();
-                            let cmd =
-                                manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                    target,
-                                    edit.node_id,
-                                    edit.param_name,
-                                    manifold_core::effect_graph_def::SerializedParamValue::Table {
-                                        rows,
-                                    },
-                                    default,
-                                )
-                                .with_scope(scope);
-                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                        }
-                    }
-                }
-            }
-            TextInputField::SavePresetName => {
-                // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN
-                // D4, P3). The ctx carries the target's CURRENT effective
-                // definition, already resolved (and values-snapshotted) at
-                // the point the prompt opened — this arm only mints the name
-                // and writes/upserts it.
-                if let Some(ctx) = self.text_input.save_preset.take() {
-                    let typed = text.trim();
-                    if typed.is_empty() {
-                        log::warn!("[preset] Save to {:?} cancelled: empty name", ctx.destination);
-                    } else {
-                        match ctx.destination {
-                            crate::text_input::SavePresetDestination::Library => {
-                                let lib = crate::user_library::UserLibrary::new();
-                                match lib.save(ctx.kind, typed, &ctx.def) {
-                                    Ok(id) => {
-                                        log::info!(
-                                            "[preset] saved '{}' to the user library",
-                                            id.as_str()
-                                        );
-                                        // PRESET_LIBRARY_DESIGN P6/D7: the ONLY
-                                        // render — save-time, once, here. The
-                                        // browser only ever reads this PNG back
-                                        // off disk (never renders).
-                                        if let Some(gpu) = self.gpu.as_ref() {
-                                            let png_path =
-                                                lib.thumbnail_path(ctx.kind, id.as_str());
-                                            if let Err(e) =
-                                                manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file(
-                                                    &gpu.device,
-                                                    ctx.kind,
-                                                    &ctx.def,
-                                                    manifold_compositor::preset_thumbnail::THUMBNAIL_WIDTH,
-                                                    manifold_compositor::preset_thumbnail::THUMBNAIL_HEIGHT,
-                                                    &png_path,
-                                                )
-                                            {
-                                                log::error!(
-                                                    "[preset] thumbnail render failed for '{}': {e}",
-                                                    id.as_str()
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => log::error!("[preset] Save to Library failed: {e}"),
-                                }
-                            }
-                            crate::text_input::SavePresetDestination::Project => {
-                                let mut def = ctx.def;
-                                if let Some(meta) = def.preset_metadata.as_mut() {
-                                    meta.display_name = typed.to_string();
-                                }
-                                let cmd =
-                                    manifold_editing::commands::preset::SaveToProjectCommand::new(
-                                        ctx.kind, def,
-                                    );
-                                self.execute_local(Box::new(cmd));
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
+        };
+        let mut cx = crate::ui_bridge::DispatchCtx {
+            project: self.local_project.edit(&mut self.ui_edits, content_tx),
+            content_tx,
+            content_state: &self.content_state,
+            ui: &mut self.ws.ui_root,
+            selection: &mut self.selection,
+            active_layer: &mut self.active_layer_id,
+            user_prefs: &mut self.user_prefs,
+            editor_target: None,
+            scrub: &mut self.scrub,
+            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+        };
+        let ed = crate::text_session::EditorCommitCtx {
+            target: self.watched_graph_target.as_ref(),
+            catalog_default: self.watched_catalog_default.as_ref(),
+            scope: self.graph_canvas.as_ref().map_or(&[], |c| c.scope_path()),
+            gpu: self.gpu.as_ref(),
+        };
+        crate::text_session::commit(&mut self.text_input, field, text, &mut cx, &ed);
     }
 
     // tick_and_render() and present_all_windows() moved to app_render.rs

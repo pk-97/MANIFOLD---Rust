@@ -1427,11 +1427,7 @@ impl Runner {
                 }
                 KeyOutcome::Consumed | KeyOutcome::Filtered => {}
                 KeyOutcome::Committed(field, text) => {
-                    if !self.commit_text(ui, data, field, &text) {
-                        return self.fail(index, action_desc, ui, out_dir, format!(
-                            "{field:?} commits on Application (graph editor, automation point or preset save), not reached headless"
-                        ));
-                    }
+                    self.commit_text(ui, data, field, &text);
                     committed = Some((field, text));
                 }
             }
@@ -1451,8 +1447,9 @@ impl Runner {
     }
 
     /// Commits a session through the shared seam with the runner's dispatch
-    /// context. False for a field only `Application` commits.
-    fn commit_text(&mut self, ui: &mut UIRoot, data: &mut SceneData, field: crate::text_input::TextInputField, text: &str) -> bool {
+    /// context. The runner has no watched graph or GPU, so graph-editor and
+    /// preset-save commits do nothing here.
+    fn commit_text(&mut self, ui: &mut UIRoot, data: &mut SceneData, field: crate::text_input::TextInputField, text: &str) {
         let mut dctx = crate::ui_bridge::DispatchCtx {
             project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
             content_tx: &self.content_tx,
@@ -1465,10 +1462,9 @@ impl Runner {
             scrub: &mut self.scrub,
             dialogs: Default::default(),
         };
-        let handled = crate::text_session::commit(&mut self.text_input, field, text, &mut dctx);
+        crate::text_session::commit(&mut self.text_input, field, text, &mut dctx, &crate::text_session::EditorCommitCtx::none());
         data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
-        println!("ui-snap --script: commit {field:?} {text:?} -> {}", if handled { "seam" } else { "not reached" });
-        handled
+        println!("ui-snap --script: commit {field:?} {text:?}");
     }
 
     /// One step in the graph editor window. `None` hands the step to the
