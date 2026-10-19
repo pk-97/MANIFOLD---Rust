@@ -443,6 +443,11 @@ impl ContentThread {
     /// cancelled export unwinds.
     #[cfg(target_os = "macos")]
     fn poll_export_cancel(&mut self, cmd_rx: &Receiver<ContentCommand>) -> bool {
+        // A cancel or quit can already be held, sent during the warmup the
+        // export was queued behind.
+        if self.quit_is_held() || self.take_held_export_cancel() {
+            return true;
+        }
         while let Ok(cmd) = cmd_rx.try_recv() {
             match cmd {
                 ContentCommand::CancelExport => return true,
@@ -450,7 +455,7 @@ impl ContentThread {
                     self.held_commands.push_back(cmd);
                     return true;
                 }
-                cmd => self.held_commands.push_back(cmd),
+                cmd => self.hold_command(cmd),
             }
         }
         false
@@ -1855,10 +1860,37 @@ mod tests {
         cmd_tx.send(ContentCommand::SetSdrPreview(false)).expect("send");
         cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
         assert!(!poll(&mut thread, &cmd_rx), "edits do not cancel an export");
+        // A long export: every frame the UI wakes the surface wait and
+        // reports a stage present. Neither may pile up in the held queue.
+        let now = std::time::Instant::now();
+        for id in 0..1000u64 {
+            cmd_tx.send(ContentCommand::SurfaceReady).expect("send");
+            cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at: now }).expect("send");
+            assert!(!poll(&mut thread, &cmd_rx));
+        }
+        assert!(thread.held_commands.len() <= 3, "held queue grew to {}", thread.held_commands.len());
         cmd_tx.send(ContentCommand::Shutdown).expect("send");
         assert!(poll(&mut thread, &cmd_rx), "a quit cancels the export");
 
         assert!(thread.drain_commands(&cmd_rx, &state_tx), "the quit proceeds after the export");
         assert!(thread.content_pipeline.sdr_preview(), "the held edits ran, in arrival order");
+    }
+
+    /// Export then Cancel pressed while a show warms up are both held; the
+    /// export that starts from the held queue must see its held cancel.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_cancel_held_behind_its_export_cancels_it() {
+        let mut thread = crate::headless_harness::headless_content_thread(
+            manifold_core::project::Project::default(), 64, 64,
+        );
+        let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+        thread.held_commands.push_back(ContentCommand::StartExport(Box::new(meta_config(false))));
+        thread.held_commands.push_back(ContentCommand::CancelExport);
+
+        let started = thread.next_command(&cmd_rx);
+        assert!(matches!(started, Ok(ContentCommand::StartExport(_))));
+        assert!(poll(&mut thread, &cmd_rx), "the held cancel stops the export");
+        assert!(thread.held_commands.is_empty(), "the cancel is spent on its export");
     }
 }

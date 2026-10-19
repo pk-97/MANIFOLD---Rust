@@ -304,6 +304,36 @@ impl ContentThread {
         }
     }
 
+    /// Hold a command taken off the channel while warmup or an export owns
+    /// the thread. Two per-frame signals stay out of the queue so it stays
+    /// bounded, and neither loses anything: a stage present is a timing
+    /// sample of a frame already shown, so it is recorded now, as the drain
+    /// loops do; a surface wake carries no data (readiness is re-read from
+    /// the pipeline every time), so one held wake stands for any number.
+    pub(crate) fn hold_command(&mut self, cmd: ContentCommand) {
+        match cmd {
+            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
+            ContentCommand::SurfaceReady
+                if self.held_commands.iter().any(|c| matches!(c, ContentCommand::SurfaceReady)) => {}
+            cmd => self.held_commands.push_back(cmd),
+        }
+    }
+
+    /// A quit is already waiting in the held queue.
+    pub(crate) fn quit_is_held(&self) -> bool {
+        self.held_commands.iter().any(|c| matches!(c, ContentCommand::Shutdown))
+    }
+
+    /// Spend a held cancel on the running export: the first CancelExport
+    /// held before any later StartExport (a cancel behind a later export
+    /// belongs to that one).
+    pub(crate) fn take_held_export_cancel(&mut self) -> bool {
+        let position = self.held_commands.iter()
+            .take_while(|c| !matches!(c, ContentCommand::StartExport(_)))
+            .position(|c| matches!(c, ContentCommand::CancelExport));
+        position.and_then(|i| self.held_commands.remove(i)).is_some()
+    }
+
     /// Drains every queued command, coalescing consecutive seeks. During
     /// scrubbing the UI sends a SeekTo/SeekToBeat per mouse move; only the
     /// last seek of a burst matters, so it waits and is overwritten. GPU
