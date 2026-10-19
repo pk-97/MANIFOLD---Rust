@@ -133,10 +133,14 @@ impl GraphCanvas {
     /// the selection on emit so the next frame doesn't double-fire. Multiple
     /// selected nodes each emit one action (and one undo entry apiece).
     pub fn request_delete_selected(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
         for id in std::mem::take(&mut self.selected) {
             self.pending_actions
                 .push(GraphEditCommand::RemoveGraphNode { node_id: id });
         }
+        self.bump_view();
     }
 
     /// Emit `AddGraphNodeAt` for a node picked via keyboard (Enter /
@@ -257,17 +261,19 @@ impl GraphCanvas {
         self.format_on_enter = true;
         // Frame the entered level once its nodes are laid out.
         self.fit_pending = true;
+        self.bump_view();
     }
 
     /// Pop one level back toward the root. Returns `true` if it moved (there
-    /// was a level to leave), so the caller can mark the editor dirty. Clears
-    /// selection for the same reason as `enter_group`.
+    /// was a level to leave). Clears selection for the same reason as
+    /// `enter_group`.
     pub fn exit_group(&mut self) -> bool {
         if let Some(left) = self.scope.pop() {
             self.scope_titles.pop();
             group_log!("exit group {left}: scope now {:?}", self.scope);
             self.selected.clear();
             self.fit_pending = true;
+            self.bump_view();
             true
         } else {
             false
@@ -284,6 +290,7 @@ impl GraphCanvas {
             self.scope_titles.truncate(depth);
             self.selected.clear();
             self.fit_pending = true;
+            self.bump_view();
         }
     }
 
@@ -291,6 +298,7 @@ impl GraphCanvas {
     /// the backtick key in the editor window.
     pub fn toggle_debug_overlay(&mut self) {
         self.debug_overlay = !self.debug_overlay;
+        self.bump_view();
         group_log!("debug overlay -> {}", self.debug_overlay);
     }
 
@@ -327,6 +335,7 @@ impl GraphCanvas {
         // otherwise treated as a fresh hit-test).
         if self.mapping_popover.is_open() && !self.mapping_popover.contains_point(sx, sy) {
             self.mapping_popover.close();
+            self.bump_view();
         }
         let hit = self.param_row_under(viewport, sx, sy)?;
         let (node_id, pi) = hit;
@@ -419,6 +428,7 @@ impl GraphCanvas {
             target, binding_id, label, min, max, invert, curve, scale, offset, range, is_angle, section, anchor,
             clip,
         );
+        self.bump_view();
     }
 
     /// Forward a left-button press to the open popover. Returns `true`
@@ -430,6 +440,7 @@ impl GraphCanvas {
         if !self.mapping_popover.is_open() {
             return false;
         }
+        self.bump_view();
         if self.mapping_popover.on_press(sx, sy) {
             true
         } else {
@@ -441,13 +452,19 @@ impl GraphCanvas {
     /// Forward pointer motion to the open popover (drives the live range
     /// drag + handle hover). No-op when closed.
     pub fn popover_on_move(&mut self, sx: f32, sy: f32) {
-        self.mapping_popover.on_move(sx, sy);
+        if self.mapping_popover.is_open() {
+            self.mapping_popover.on_move(sx, sy);
+            self.bump_view();
+        }
     }
 
     /// Forward a left-button release to the open popover (commits a range
     /// drag). No-op when closed.
     pub fn popover_on_left_release(&mut self) {
-        self.mapping_popover.on_release();
+        if self.mapping_popover.is_open() {
+            self.mapping_popover.on_release();
+            self.bump_view();
+        }
     }
 
     /// `true` while the mapping popover is open. The host checks this so a
@@ -457,7 +474,10 @@ impl GraphCanvas {
     }
 
     pub fn close_mapping_popover(&mut self) {
-        self.mapping_popover.close();
+        if self.mapping_popover.is_open() {
+            self.mapping_popover.close();
+            self.bump_view();
+        }
     }
 
     /// `true` while a popover value field is being typed into — the host routes
@@ -469,26 +489,35 @@ impl GraphCanvas {
     /// Feed one typed character into the popover's active numeric field.
     pub fn popover_on_text_char(&mut self, c: char) {
         self.mapping_popover.on_text_char(c);
+        self.bump_view();
     }
 
     /// Delete the last typed character in the popover's active field.
     pub fn popover_on_backspace(&mut self) {
         self.mapping_popover.on_backspace();
+        self.bump_view();
     }
 
     /// Commit the popover's typed value (Enter).
     pub fn popover_commit_edit(&mut self) {
         self.mapping_popover.commit_edit();
+        self.bump_view();
     }
 
     /// Cancel the popover's numeric edit (Esc).
     pub fn popover_cancel_edit(&mut self) {
         self.mapping_popover.cancel_edit();
+        self.bump_view();
     }
 
     // ── Input handlers ──────────────────────────────────────────────
 
     pub fn on_pointer_move(&mut self, viewport: Rect, sx: f32, sy: f32) {
+        // The tooltip, row lifts, ghost wire and marquee follow the cursor,
+        // and every drag below moves with it.
+        if self.cursor != (sx, sy) {
+            self.bump_view();
+        }
         self.cursor = (sx, sy);
         let pos = crate::node::Vec2::new(sx, sy);
         let Some(session) = self.drag.track(pos) else {
@@ -599,11 +628,13 @@ impl GraphCanvas {
             CanvasDrag::Pan { pan_at_grab: self.pan },
             crate::node::Vec2::new(sx, sy),
         );
+        self.bump_view();
     }
 
     pub fn on_pan_button_up(&mut self) {
         if matches!(self.drag.payload(), Some(CanvasDrag::Pan { .. })) {
             self.drag.cancel();
+            self.bump_view();
         }
     }
 
@@ -626,6 +657,7 @@ impl GraphCanvas {
                 | CanvasDrag::ParamScrub { .. }
                 | CanvasDrag::VecScrub { .. }
         );
+        self.bump_view();
         if commit_on_release {
             let (sx, sy) = self.cursor;
             self.on_left_button_up(viewport, sx, sy);
@@ -647,6 +679,9 @@ impl GraphCanvas {
         now: f32,
         shift: bool,
     ) {
+        // Every press resolves to something the canvas draws: a dropdown or
+        // editor closing, a selection, a drag starting, a popover opening.
+        self.bump_view();
         // An open enum dropdown is modal over the canvas — it gets first crack.
         // Any press closes it (taken here); a press on an option sets the value,
         // a press elsewhere just dismisses and falls through to normal handling.
@@ -1302,6 +1337,7 @@ impl GraphCanvas {
         let Some(prev) = self.drag.release() else {
             return;
         };
+        self.bump_view();
         match prev {
             CanvasDrag::Pan { .. } => {
                 // A left-press that didn't actually pan (cursor barely moved) is

@@ -13,14 +13,13 @@ use crate::app::Application;
 
 impl Application {
     /// Hover hit-test for the exit button. Returns true if perform mode
-    /// consumed the event.
+    /// consumed the event. The hover is a `PerformHudInputs` field, so a
+    /// change draws on the next HUD frame.
     pub(crate) fn perform_handle_cursor_moved(&mut self, cursor_pos: Vec2) -> bool {
         if !self.perform.active {
             return false;
         }
-        if frame::pointer_moved(&mut self.perform, cursor_pos) {
-            self.ws.offscreen_dirty = true;
-        }
+        frame::pointer_moved(&mut self.perform, cursor_pos);
         true
     }
 
@@ -50,9 +49,7 @@ impl Application {
         if !self.perform.active {
             return false;
         }
-        if frame::pointer_left(&mut self.perform) {
-            self.ws.offscreen_dirty = true;
-        }
+        frame::pointer_left(&mut self.perform);
         true
     }
 

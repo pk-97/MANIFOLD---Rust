@@ -79,17 +79,14 @@ pub(crate) fn take_pending_exit(
 }
 
 /// The cursor moved over the perform screen: the exit button's hover follows
-/// it. True when the hover changed and the screen must redraw.
-pub(crate) fn pointer_moved(perform: &mut PerformModeState, pos: Vec2) -> bool {
-    let hover = perform.exit_button_rect.contains(pos);
-    let changed = hover != perform.exit_button_hover;
-    perform.exit_button_hover = hover;
-    changed
+/// it. The hover is a HUD input, so a change redraws the HUD.
+pub(crate) fn pointer_moved(perform: &mut PerformModeState, pos: Vec2) {
+    perform.exit_button_hover = perform.exit_button_rect.contains(pos);
 }
 
-/// The cursor left the window. True when that cleared the hover.
-pub(crate) fn pointer_left(perform: &mut PerformModeState) -> bool {
-    std::mem::take(&mut perform.exit_button_hover)
+/// The cursor left the window, which clears the hover.
+pub(crate) fn pointer_left(perform: &mut PerformModeState) {
+    perform.exit_button_hover = false;
 }
 
 /// A left-button release: over the exit button it asks to leave. Every other
