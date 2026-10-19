@@ -4,8 +4,8 @@
 //! node (transform, material, light, camera, atmosphere, bake_environment,
 //! modifiers, scene_object.visible) gets all of its params exposed as outer-card
 //! sliders at creation time. This module is the crate-neutral stamping surface:
-//! it knows the `EffectGraphDef` shape but not renderer `ParamDef`s, so the
-//! metadata source is injected by callers.
+//! it knows the `EffectGraphDef` shape but not renderer `ParamDef`s, so it
+//! reads node params through `param_lookup::stamped_node_params`.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +17,7 @@ use crate::effect_graph_def::{
 use crate::effects::ParamConvert;
 
 /// Metadata for one inner-node parameter, produced from the primitive's own
-/// `ParamDef` by the renderer-side provider.
+/// `ParamDef` by the registered `param_lookup::NodeParamSource`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeParamMetadata {
     pub name: String,
@@ -42,15 +42,6 @@ pub struct NodeParamMetadata {
     pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
     pub unit: Option<manifold_foundation::scene_surface::Unit>,
     pub limit: manifold_foundation::param_range::HardLimit,
-}
-
-/// Source of per-type param metadata used by the creation-site commands and the
-/// load-time migration. Implemented by `manifold_nodes_scene` using
-/// `PrimitiveRegistry`.
-pub trait NodeParamProvider: Send + Sync {
-    /// The params `type_id` stamps, in card order: every param except those
-    /// the scene table marks Hidden. Empty when the type is unknown.
-    fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata>;
 }
 
 /// A stamped control is on the curated card only when the scene table gives
@@ -373,13 +364,12 @@ type VocabNodeEntry = (
 /// unique across the def by construction, so this never collides with a
 /// top-level exposure.
 ///
-/// The vocabulary and section naming live in the caller (`manifold_nodes`)
+/// The vocabulary and section naming live in the caller (`manifold_nodes_scene`)
 /// because this module intentionally has no primitive registry dependency.
 pub fn migrate_scene_exposures<F>(
     def: &mut EffectGraphDef,
     vocabulary: &[&str],
     mut section_name: F,
-    provider: &dyn NodeParamProvider,
 ) -> bool
 where
     F: FnMut(&EffectGraphNode) -> String,
@@ -402,7 +392,7 @@ where
 
     let mut changed = false;
     for (node_doc_id, node_id, type_id, section, node_params, wired_inputs) in &found {
-        let metadata = provider.params_for_type(type_id);
+        let metadata = crate::param_lookup::stamped_node_params(type_id);
         let fresh_metadata: Vec<_> = metadata
             .into_iter()
             .filter(|entry| {
@@ -433,7 +423,7 @@ where
     // because a binding already targets `(node_id, param)` — re-seed those in
     // place whenever the node still has a stamped value that disagrees.
     for (_, node_id, type_id, _, node_params, _) in &found {
-        let metadata = provider.params_for_type(type_id);
+        let metadata = crate::param_lookup::stamped_node_params(type_id);
         for meta_entry in &metadata {
             let Some(stamped) = node_params.get(&meta_entry.name) else {
                 // No stamped value for this param — nothing to repair against.
@@ -485,7 +475,7 @@ where
     // exposure on the same node authored. Idempotent: a second run
     // re-derives `true` and writes nothing.
     for (_, node_id, type_id, _, _, _) in &found {
-        let metadata = provider.params_for_type(type_id);
+        let metadata = crate::param_lookup::stamped_node_params(type_id);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter_mut().find(|b| {
                 !b.user_added
@@ -547,7 +537,7 @@ fn collect_vocab_nodes<F>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
@@ -568,7 +558,7 @@ mod tests {
         }
     }
 
-    fn float_meta(name: &str, label: &str) -> NodeParamMetadata {
+    pub(crate) fn float_meta(name: &str, label: &str) -> NodeParamMetadata {
         NodeParamMetadata {
             name: name.to_string(),
             label: label.to_string(),
@@ -719,17 +709,6 @@ mod tests {
 
     #[test]
     fn migrate_skips_unknown_nodes_and_is_idempotent() {
-        struct TestProvider;
-        impl NodeParamProvider for TestProvider {
-            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
-                if type_id == "node.light" {
-                    vec![float_meta("intensity", "Intensity")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
         let mut def = EffectGraphDef {
             version: 1,
             name: None,
@@ -746,15 +725,13 @@ mod tests {
         assert!(migrate_scene_exposures(
             &mut def,
             &vocab,
-            section,
-            &TestProvider
+            section
         ));
         let after_first = def.clone();
         assert!(!migrate_scene_exposures(
             &mut def,
             &vocab,
-            |_n| "Light".to_string(),
-            &TestProvider
+            |_n| "Light".to_string()
         ));
         assert_eq!(def, after_first);
     }
@@ -817,17 +794,6 @@ mod tests {
         (spec, binding)
     }
 
-    struct LightProvider;
-    impl NodeParamProvider for LightProvider {
-        fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
-            if type_id == "node.light" {
-                vec![float_meta("intensity", "Intensity")]
-            } else {
-                Vec::new()
-            }
-        }
-    }
-
     fn def_with_exposures(exposures: Vec<(ParamSpecDef, BindingDef)>) -> EffectGraphDef {
         let (params, bindings) = exposures.into_iter().unzip();
         let mut meta = empty_scene_preset_metadata();
@@ -857,7 +823,7 @@ mod tests {
         let vocab = ["node.light"];
 
         assert!(
-            migrate_scene_exposures(&mut def, &vocab, |_n| "Light".to_string(), &LightProvider),
+            migrate_scene_exposures(&mut def, &vocab, |_n| "Light".to_string()),
             "a pre-fix auto exposure must be repaired"
         );
         let binding = &def.preset_metadata.as_ref().unwrap().bindings[0];
@@ -870,7 +836,7 @@ mod tests {
 
         let after_first = def.clone();
         assert!(
-            !migrate_scene_exposures(&mut def, &vocab, |_n| "Light".to_string(), &LightProvider),
+            !migrate_scene_exposures(&mut def, &vocab, |_n| "Light".to_string()),
             "second run must report no change"
         );
         assert_eq!(def, after_first, "second run must not touch a single byte");
@@ -893,8 +859,7 @@ mod tests {
         assert!(migrate_scene_exposures(
             &mut def,
             &["node.light"],
-            |_n| "Light".to_string(),
-            &LightProvider
+            |_n| "Light".to_string()
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
@@ -928,17 +893,6 @@ mod tests {
     fn migrate_exposes_grouped_node_param_targeting_inner_node_id() {
         use crate::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface};
 
-        struct TestProvider;
-        impl NodeParamProvider for TestProvider {
-            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
-                if type_id == "node.transform_3d" {
-                    vec![float_meta("pos_x", "X")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
         let inner_node_id = NodeId::new("transform_0");
         let mut inner = make_node(10, "node.transform_3d");
         inner.node_id = inner_node_id.clone();
@@ -969,8 +923,7 @@ mod tests {
         assert!(migrate_scene_exposures(
             &mut def,
             &vocab,
-            |_n| "Object 1 — Transform".to_string(),
-            &TestProvider
+            |_n| "Object 1 — Transform".to_string()
         ));
 
         let meta = def
@@ -994,8 +947,7 @@ mod tests {
         assert!(!migrate_scene_exposures(
             &mut def,
             &vocab,
-            |_n| "Object 1 — Transform".to_string(),
-            &TestProvider
+            |_n| "Object 1 — Transform".to_string()
         ));
         assert_eq!(def, after_first, "second run is idempotent");
     }
@@ -1003,17 +955,6 @@ mod tests {
     #[test]
     fn migration_skips_wired_fallbacks_and_scopes_group_wires_locally() {
         use crate::effect_graph_def::{EffectGraphWire, GroupDef, GroupInterface};
-
-        struct TestProvider;
-        impl NodeParamProvider for TestProvider {
-            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
-                if type_id == "node.light" {
-                    vec![float_meta("intensity", "Intensity")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
 
         let mut driven = make_node(7, "node.light");
         driven.node_id = NodeId::new("driven");
@@ -1100,8 +1041,7 @@ mod tests {
         assert!(migrate_scene_exposures(
             &mut def,
             &vocabulary,
-            |_node| "Light".to_string(),
-            &TestProvider,
+            |_node| "Light".to_string()
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
@@ -1162,8 +1102,7 @@ mod tests {
         assert!(!migrate_scene_exposures(
             &mut def,
             &vocabulary,
-            |_node| "Light".to_string(),
-            &TestProvider,
+            |_node| "Light".to_string()
         ));
         assert_eq!(def, after_first, "second run is idempotent");
     }
@@ -1264,17 +1203,6 @@ mod tests {
     /// stays idempotent: a second run is a no-op.
     #[test]
     fn migrate_repairs_pre_fix_binding_default_from_stamped_node_value() {
-        struct TestProvider;
-        impl NodeParamProvider for TestProvider {
-            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
-                if type_id == "node.transform_3d" {
-                    vec![float_meta("pos_x", "X")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
         let mut node = make_node(7, "node.transform_3d");
         node.params.insert(
             "pos_x".to_string(),
@@ -1357,8 +1285,7 @@ mod tests {
         assert!(migrate_scene_exposures(
             &mut def,
             &vocab,
-            |_n| "Transform".to_string(),
-            &TestProvider
+            |_n| "Transform".to_string()
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
@@ -1383,8 +1310,7 @@ mod tests {
             !migrate_scene_exposures(
                 &mut def,
                 &vocab,
-                |_n| "Transform".to_string(),
-                &TestProvider
+                |_n| "Transform".to_string()
             ),
             "second migration run is a no-op once repaired"
         );
