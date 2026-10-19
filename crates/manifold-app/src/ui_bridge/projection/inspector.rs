@@ -2028,7 +2028,7 @@ mod fire_meter_roundtrip_tests {
 
         // Open every fixture drawer. (a)/(b)/(c) need no explicit "open": an
         // armed audio mod's drawer builds automatically — a toggle/trigger
-        // row's drawer whenever its mod is enabled (`build_toggle_trigger_row`),
+        // row's drawer whenever its mod is enabled (`build_button_row`),
         // a slider row's whenever Audio is its only (or resolved) active
         // mod-tab (`build_param_row`), both in `param_slider_shared.rs`. Only
         // the AUDIO TRIGGERS section's clip-trigger row (d) is gated behind

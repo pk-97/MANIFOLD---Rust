@@ -182,7 +182,7 @@ impl ParamCardPanel {
             // `SceneSetupParamChanged` (INV-M7), addressed by the row's
             // ParamAddr sidecar, never the plain manifest-param toggle wire.
             if role == RowRole::ToggleBtn
-                && !self.rows[row].spec.is_trigger
+                && self.row_host.toggle_ids[row].as_ref().is_some_and(|ids| ids.kind == crate::param_surface::RowKind::Switch)
                 && let (Some(m), Some(addr)) = (&self.modifier, &self.rows[row].scene_addr)
             {
                 let current = self.rows[row].value.base;

@@ -158,7 +158,7 @@ pub struct RowSpec {
     pub whole_numbers: bool,
     /// Display-only: storage stays radians; the value cell shows degrees.
     pub is_angle: bool,
-    /// Renders as a boolean ON/OFF button row instead of a slider.
+    /// A boolean; draws as the switch ([`ParamRow::kind`]).
     pub is_toggle: bool,
     /// Momentary "fire once" button row.
     pub is_trigger: bool,
@@ -343,7 +343,64 @@ pub struct ParamRow {
     pub material_attached: bool,
 }
 
+/// How a row draws. Decided once, by [`ParamRow::kind`]; every row builder,
+/// value sync and click route reads that answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowKind {
+    /// A slider.
+    Number,
+    /// The one on/off switch (`chrome::components::toggle_style`).
+    Switch,
+    /// A pick list: shows the current label; a click opens the shared dropdown.
+    Choice,
+    /// A momentary fire button.
+    Trigger,
+}
+
 impl ParamRow {
+    /// The one kind decision, from what the manifest spec declares: a trigger
+    /// fires, a toggle switches, value labels over whole numbers are a
+    /// choice, anything else is a number. Two labels over a float (Cast
+    /// Shadows: Off, On) are a switch kept a float so a modulator can move it;
+    /// the node reads it past 0.5.
+    ///
+    /// `scene` is the surface's fact. The scene card and the Scene tab draw
+    /// labelled params as switches and pick lists; other cards keep them
+    /// sliders, whose driver lane is a performance tool there. A labelled row
+    /// with a modulator or mapping attached stays a slider anywhere, so what
+    /// moves it stays in view.
+    pub fn kind(&self, scene: bool) -> RowKind {
+        let spec = &self.spec;
+        if spec.is_trigger {
+            return RowKind::Trigger;
+        }
+        if spec.is_toggle {
+            return RowKind::Switch;
+        }
+        let labels = spec.value_labels.as_deref().map_or(0, <[String]>::len);
+        if !scene || labels < 2 || self.is_attached() {
+            return RowKind::Number;
+        }
+        if spec.whole_numbers {
+            RowKind::Choice
+        } else if labels == 2 {
+            RowKind::Switch
+        } else {
+            RowKind::Number
+        }
+    }
+
+    /// Whether the row can open a modulation drawer under itself: a slider
+    /// and a fire button can, and so can a trigger-gate switch (its audio
+    /// drawer); a plain switch and a pick list cannot.
+    pub fn grows_drawer(&self, scene: bool) -> bool {
+        match self.kind(scene) {
+            RowKind::Number | RowKind::Trigger => true,
+            RowKind::Switch => self.spec.is_trigger_gate,
+            RowKind::Choice => false,
+        }
+    }
+
     /// A driver, envelope, automation lane, audio mod or Ableton mapping on
     /// the row. Hiding such a row hides a live control from the performer, so
     /// the Scene tab shows it whatever its role; the card keeps it through
@@ -416,7 +473,8 @@ pub enum RowRole {
     EnvelopeBtn,
     /// "A" audio-mod arm/disarm button.
     AudioBtn,
-    /// Toggle / trigger button row (`is_toggle` / `is_trigger` decide the action).
+    /// The button of a button row: a switch, a pick list or a fire button.
+    /// The row's [`RowKind`], recorded on its button ids, decides the action.
     ToggleBtn,
     /// Driver config drawer (all its sub-buttons; retained drawer actions).
     DriverConfig,

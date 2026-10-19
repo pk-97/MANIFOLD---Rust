@@ -55,11 +55,11 @@ use super::param_card::{ParamCardPanel, RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
     ROW_ROLE_TOGGLE, param_row_key_base,
-    build_toggle_trigger_row, toggle_btn_style, ToggleParamIds,
+    build_button_row, toggle_btn_style,
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping,
+    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowKind, RowMapping,
     RowRole, RowSpec,
 };
 use crate::slider::GAP;
