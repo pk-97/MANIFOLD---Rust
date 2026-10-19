@@ -143,38 +143,6 @@ pub struct TimelineClip {
     // moved onto each clip effect's `PresetInstance.envelopes` in the
     // v1.5→v1.6 migration — see envelope-home unification. No standalone
     // clip envelope field remains.
-
-    // ── Legacy flat generator params (V1.0.0 clips) ──
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genRotSpeedXY"
-    )]
-    pub legacy_gen_rot_speed_xy: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genRotSpeedZW"
-    )]
-    pub legacy_gen_rot_speed_zw: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genRotSpeedXW"
-    )]
-    pub legacy_gen_rot_speed_xw: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genLineThickness"
-    )]
-    pub legacy_gen_line_thickness: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genProjDistance"
-    )]
-    pub legacy_gen_proj_distance: Option<f32>,
 }
 
 impl TimelineClip {
@@ -396,11 +364,6 @@ impl Default for TimelineClip {
             has_start_absolute_tick: false,
             effects: Vec::new(),
             effect_groups: None,
-            legacy_gen_rot_speed_xy: None,
-            legacy_gen_rot_speed_zw: None,
-            legacy_gen_rot_speed_xw: None,
-            legacy_gen_line_thickness: None,
-            legacy_gen_proj_distance: None,
         }
     }
 }

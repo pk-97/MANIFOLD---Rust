@@ -10,10 +10,8 @@ use super::*;
 //
 // PARAM_STORAGE_DESIGN.md D4/D12: the typed loader understands ONLY the V1.4
 // id-keyed `params` shape, and the manifest is the single authority. The four
-// historical positional/keyed value shapes are gone — `manifold-io`'s
-// `migrations::param_storage_v14` converts every preset instance to the V1.4
-// shape BEFORE typed deserialization runs (V1 JSON + V2 ZIP), so that module is
-// the only place positional param knowledge survives.
+// older positional/keyed value shapes only exist in files below the 1.11.0
+// floor, which the loader refuses.
 //
 // Save is trivial: iterate the manifest, emit each entry by its own id
 // ([`ManifestSer`]). Load is the section 4 reconcile: seed bundled + user-added
@@ -578,8 +576,8 @@ impl Serialize for PresetInstance {
         use serde::ser::SerializeStruct;
 
         // Generator-kind serializes the legacy `PresetInstance` shape
-        // (generatorType + the generator-keyed param maps + envelopes +
-        // genParamVersion) so existing generator fixtures stay byte-identical.
+        // (generatorType + the generator-keyed param maps + envelopes)
+        // so existing generator fixtures stay byte-identical.
         if self.is_generator() {
             return self.serialize_as_generator(serializer);
         }
@@ -608,18 +606,6 @@ impl Serialize for PresetInstance {
             field_count += 1;
         }
         if self.graph.is_some() {
-            field_count += 1;
-        }
-        if self.legacy_param0.is_some() {
-            field_count += 1;
-        }
-        if self.legacy_param1.is_some() {
-            field_count += 1;
-        }
-        if self.legacy_param2.is_some() {
-            field_count += 1;
-        }
-        if self.legacy_param3.is_some() {
             field_count += 1;
         }
         if self.relight {
@@ -681,18 +667,6 @@ impl Serialize for PresetInstance {
                 "graph",
                 &GraphWithDerivedParams { preset: &self.effect_type, graph, manifest: &self.params, joined: self.is_generator() },
             )?;
-        }
-        if let Some(v) = self.legacy_param0 {
-            s.serialize_field("param0", &v)?;
-        }
-        if let Some(v) = self.legacy_param1 {
-            s.serialize_field("param1", &v)?;
-        }
-        if let Some(v) = self.legacy_param2 {
-            s.serialize_field("param2", &v)?;
-        }
-        if let Some(v) = self.legacy_param3 {
-            s.serialize_field("param3", &v)?;
         }
         if self.relight {
             s.serialize_field("relight", &self.relight)?;
@@ -789,14 +763,6 @@ impl<'de> Deserialize<'de> for PresetInstance {
             group_id: Option<EffectGroupId>,
             #[serde(default)]
             graph: Option<EffectGraphDef>,
-            #[serde(default, rename = "param0")]
-            legacy_param0: Option<f32>,
-            #[serde(default, rename = "param1")]
-            legacy_param1: Option<f32>,
-            #[serde(default, rename = "param2")]
-            legacy_param2: Option<f32>,
-            #[serde(default, rename = "param3")]
-            legacy_param3: Option<f32>,
             #[serde(default)]
             relight: bool,
             #[serde(default)]
@@ -843,11 +809,6 @@ impl<'de> Deserialize<'de> for PresetInstance {
             graph: raw.graph,
             graph_version: 0,
             graph_structure_version: 0,
-            legacy_param0: raw.legacy_param0,
-            legacy_param1: raw.legacy_param1,
-            legacy_param2: raw.legacy_param2,
-            legacy_param3: raw.legacy_param3,
-            legacy_param_version: None,
             relight: raw.relight,
             relight_params: raw.relight_params,
             folded_sections: raw.folded_sections,
@@ -889,8 +850,6 @@ struct GeneratorInstanceRaw {
     /// the load migration relocates it here.
     #[serde(default)]
     graph: Option<EffectGraphDef>,
-    #[serde(default, rename = "genParamVersion")]
-    legacy_param_version: Option<i32>,
     #[serde(default)]
     relight: bool,
     #[serde(default)]
@@ -933,11 +892,6 @@ impl GeneratorInstanceRaw {
             graph: self.graph,
             graph_version: 0,
             graph_structure_version: 0,
-            legacy_param0: None,
-            legacy_param1: None,
-            legacy_param2: None,
-            legacy_param3: None,
-            legacy_param_version: self.legacy_param_version,
             relight: self.relight,
             relight_params: self.relight_params,
             folded_sections: self.folded_sections,

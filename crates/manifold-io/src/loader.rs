@@ -149,18 +149,16 @@ fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
 }
 
 /// Parse `projectVersion` out of raw JSON without deserializing the full
-/// `Project` (D5 site 1 — the same cheap `serde_json::Value` read
-/// `migrate_if_needed` already does). Never panics: malformed JSON or a
-/// missing/non-string field both degrade to `"1.0.0"`, matching migrate's
-/// own default — a legacy pre-`projectVersion` V1 file is never too new.
-fn raw_project_version(json: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(json)
-        .ok()
-        .and_then(|v| {
-            v.get("projectVersion")
-                .and_then(|pv| pv.as_str().map(str::to_string))
-        })
-        .unwrap_or_else(|| "1.0.0".to_string())
+/// `Project` (D5 site 1). `None` when the text is not JSON, so the
+/// deserializer reports the real parse error. A missing or non-string field
+/// reads as `"1.0.0"`: a file from before versioning, below the floor.
+fn raw_project_version(json: &str) -> Option<String> {
+    let root = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    Some(
+        root.get("projectVersion")
+            .and_then(|pv| pv.as_str().map(str::to_string))
+            .unwrap_or_else(|| "1.0.0".to_string()),
+    )
 }
 
 /// Load from raw JSON string. Runs steps 1-2 of post-load validation.
@@ -181,17 +179,21 @@ pub fn load_project_from_json_with(
     json: &str,
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
 ) -> Result<Project, LoadError> {
-    // Forward-compat guard (PROJECT_FILE_INTEGRITY_DESIGN D1/D5) — MUST run
-    // before migrate_if_needed: migrate is forward-only and would silently
-    // pass a too-new file straight to deserialize, which drops fields this
-    // build doesn't recognize (BUG-062).
-    let file_version = raw_project_version(json);
-    if migrate::is_version_less_than(manifold_core::project::CURRENT_PROJECT_VERSION, &file_version)
-    {
-        return Err(LoadError::TooNew {
-            file_version,
-            this_version: manifold_core::project::CURRENT_PROJECT_VERSION.to_string(),
-        });
+    // Version guards (PROJECT_FILE_INTEGRITY_DESIGN D1/D5) run before
+    // migrate_if_needed: migrate is forward-only, would pass a too-new file
+    // to deserialize, which drops fields this build doesn't know (BUG-062),
+    // and has no rungs below the floor.
+    if let Some(file_version) = raw_project_version(json) {
+        use manifold_core::project::{CURRENT_PROJECT_VERSION, OLDEST_LOADABLE_PROJECT_VERSION};
+        if migrate::is_version_less_than(CURRENT_PROJECT_VERSION, &file_version) {
+            return Err(LoadError::TooNew {
+                file_version,
+                this_version: CURRENT_PROJECT_VERSION.to_string(),
+            });
+        }
+        if migrate::is_version_less_than(&file_version, OLDEST_LOADABLE_PROJECT_VERSION) {
+            return Err(LoadError::TooOld { file_version });
+        }
     }
 
     // Run version migration
@@ -556,6 +558,9 @@ pub enum LoadError {
         file_version: String,
         this_version: String,
     },
+    /// The file's project format is below
+    /// [`manifold_core::project::OLDEST_LOADABLE_PROJECT_VERSION`].
+    TooOld { file_version: String },
 }
 
 impl std::fmt::Display for LoadError {
@@ -570,6 +575,12 @@ impl std::fmt::Display for LoadError {
             } => write!(
                 f,
                 "This project was saved by a newer version of MANIFOLD (project format {file_version}) than this build can open ({this_version}). Update MANIFOLD to open it."
+            ),
+            LoadError::TooOld { file_version } => write!(
+                f,
+                "This project uses project format {file_version}, older than {}, which this build no longer opens. Open it with the MANIFOLD build on branch {} and save it once to convert it.",
+                manifold_core::project::OLDEST_LOADABLE_PROJECT_VERSION,
+                manifold_core::project::LEGACY_LOADER_BRANCH,
             ),
         }
     }
@@ -888,7 +899,7 @@ mod layer_type_dmx_round_trip_tests {
     #[test]
     fn hand_built_json_layer_type_led_string_loads_as_dmx() {
         let json = r#"{
-            "version": 1,
+            "projectVersion": "1.21.0",
             "timeline": {
                 "layers": [{
                     "layerId": "hand-built-led",

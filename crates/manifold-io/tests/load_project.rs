@@ -28,10 +28,10 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn load_burn_v5_project() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     assert!(path.exists(), "Test fixture not found: {}", path.display());
 
-    let project = loader::load_project(&path).expect("Failed to load Burn V5.manifold");
+    let project = loader::load_project(&path).expect("Failed to load Burn V5 1.21.manifold");
 
     // Basic project-level assertions
     assert_eq!(project.project_name, "Burn V5");
@@ -80,7 +80,7 @@ fn load_burn_v5_project() {
 
 #[test]
 fn load_burn_v5_clips_have_valid_beats() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     for (li, layer) in project.timeline.layers.iter().enumerate() {
@@ -118,7 +118,7 @@ fn load_burn_v5_clips_have_valid_beats() {
 
 #[test]
 fn load_burn_v5_timeline_duration() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     let duration = project.timeline.duration_beats();
@@ -131,7 +131,7 @@ fn load_burn_v5_timeline_duration() {
 
 #[test]
 fn load_burn_v5_clip_lookup_works() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let mut project = loader::load_project(&path).unwrap();
 
     // Grab a clip ID from the first layer
@@ -148,7 +148,7 @@ fn load_burn_v5_clip_lookup_works() {
 
 #[test]
 fn load_burn_v5_roundtrip_json() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     // Serialize back to JSON
@@ -177,7 +177,7 @@ fn load_burn_v5_roundtrip_json() {
 fn driver_beat_divisions_survive_load() {
     use manifold_core::types::BeatDivision;
 
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     // Collect all driver param ids + beat divisions after Rust load.
@@ -249,7 +249,7 @@ fn driver_beat_divisions_survive_load() {
 
 #[test]
 fn driver_beat_divisions_survive_roundtrip() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     // Roundtrip: serialize to JSON then reload
@@ -289,12 +289,12 @@ fn driver_beat_divisions_survive_roundtrip() {
 
 #[test]
 fn load_burn_v4_project() {
-    let path = fixture_path("Burn V4.manifold");
+    let path = fixture_path("Burn V4 1.21.manifold");
     if !path.exists() {
         return;
     } // Skip if fixture not available
 
-    let project = loader::load_project(&path).expect("Failed to load Burn V4.manifold");
+    let project = loader::load_project(&path).expect("Failed to load Burn V4 1.21.manifold");
 
     assert_eq!(project.project_name, "Burn V4");
     assert!((project.settings.bpm.0 - 138.0).abs() < 0.01);
@@ -315,12 +315,12 @@ fn load_burn_v4_project() {
 /// with no per-instance graph) — same posture as the path-missing guard.
 #[test]
 fn graphtestsv4_reconciles_desynced_generator_identity() {
-    let path = fixture_path("GraphTestsV4.manifold");
+    let path = fixture_path("GraphTestsV4 1.21.manifold");
     if !path.exists() {
         return;
     }
 
-    let project = loader::load_project(&path).expect("Failed to load GraphTestsV4.manifold");
+    let project = loader::load_project(&path).expect("Failed to load GraphTestsV4 1.21.manifold");
 
     // The desync scenario needs a generator layer carrying a per-instance
     // graph override whose metadata names a preset. Skip if the fixture no
@@ -431,7 +431,7 @@ fn load_liveschool_live_show_v6() {
     }
 
     let project =
-        loader::load_project(&path).expect("Failed to load Liveschool Live Show V6 LEDS.manifold");
+        loader::load_project(&path).expect("Failed to load Liveschool Live Show V6 LEDS 1.21.manifold");
 
     // Settings — 4K output @ 150.83 BPM.
     assert!(
@@ -599,7 +599,7 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
         AudioBand, AudioFeature, AudioFeatureKind, AudioModSource, ParameterAudioMod,
     };
 
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     if !path.exists() {
         return; // gitignored personal fixture — same guard as the other tests
     }

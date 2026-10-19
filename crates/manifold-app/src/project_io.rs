@@ -1602,7 +1602,7 @@ mod tests {
     #[test]
     fn liveschool_snapshot_on_save_size_delta_stays_bounded() {
         let mut fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS.manifold");
+        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS 1.21.manifold");
         if !fixture.exists() {
             return;
         }
@@ -1660,7 +1660,7 @@ mod tests {
         use manifold_playback::osc_param_router::OscParamRouter;
         use manifold_playback::osc_receiver::OscReceiver;
         let mut fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS.manifold");
+        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS 1.21.manifold");
         if !fixture.exists() {
             return;
         }

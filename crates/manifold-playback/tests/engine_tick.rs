@@ -312,7 +312,7 @@ fn stopped_tick_pushes_the_level_and_fires_no_clip() {
 
 #[test]
 fn engine_initializes_with_project() {
-    let project = load_project("Burn V5.manifold");
+    let project = load_project("Burn V5 1.21.manifold");
     let mut engine = create_engine();
 
     engine.initialize(project);
@@ -419,7 +419,7 @@ fn trigger_child_is_excluded_from_renderer_admission_for_every_owner_kind() {
 
 #[test]
 fn engine_advances_time_when_playing() {
-    let project = load_project("Burn V5.manifold");
+    let project = load_project("Burn V5 1.21.manifold");
     let mut engine = create_engine();
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
@@ -454,7 +454,7 @@ fn engine_advances_time_when_playing() {
 
 #[test]
 fn engine_schedules_clips_at_correct_beats() {
-    let project = load_project("Burn V5.manifold");
+    let project = load_project("Burn V5 1.21.manifold");
     let mut engine = create_engine();
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
@@ -494,7 +494,7 @@ fn engine_schedules_clips_at_correct_beats() {
 
 #[test]
 fn engine_tick_1000_frames_no_panic() {
-    let project = load_project("Burn V5.manifold");
+    let project = load_project("Burn V5 1.21.manifold");
     let mut engine = create_engine();
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
@@ -519,7 +519,7 @@ fn engine_tick_1000_frames_no_panic() {
 
 #[test]
 fn engine_seek_updates_beat() {
-    let project = load_project("Burn V5.manifold");
+    let project = load_project("Burn V5 1.21.manifold");
     let mut engine = create_engine();
     engine.initialize(project);
 
@@ -536,7 +536,7 @@ fn engine_seek_updates_beat() {
 
 #[test]
 fn engine_beat_time_conversion_roundtrip() {
-    let project = load_project("Burn V5.manifold");
+    let project = load_project("Burn V5 1.21.manifold");
     let mut engine = create_engine();
     engine.initialize(project);
 
