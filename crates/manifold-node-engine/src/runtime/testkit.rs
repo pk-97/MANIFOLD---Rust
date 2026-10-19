@@ -36,7 +36,7 @@ pub fn prepare_surface(def: &mut EffectGraphDef) {
     );
 }
 #[cfg(feature = "gpu-proofs")]
-pub fn build_segment_cards(indices: &[usize], effects: &[(usize, &manifold_core::effects::PresetInstance)], registry: &PrimitiveRegistry) -> Vec<(EffectGraphDef, std::sync::Arc<LoadedPresetView>)> { super::segments::build_segment_cards(indices, effects, registry) }
+pub fn build_segment_cards(indices: &[usize], effects: &[(usize, &manifold_core::effects::PresetInstance)]) -> Vec<(EffectGraphDef, std::sync::Arc<LoadedPresetView>)> { super::segments::build_segment_cards(indices, effects) }
 
 #[cfg(feature = "gpu-proofs")]
 pub fn metal_backend(runtime: &mut PresetRuntime) -> &mut crate::exec::metal_backend::MetalBackend {

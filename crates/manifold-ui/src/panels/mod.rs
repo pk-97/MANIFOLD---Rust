@@ -124,30 +124,6 @@ pub enum GraphParamTarget {
     GeneratorOf(LayerId),
 }
 
-/// D3's six "3D Shading" relight knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
-/// P5b), identified without depending on `manifold-core`/`manifold-editing`
-/// (`ui` depends only on `foundation`) — mirrors
-/// `manifold_editing::commands::effects::RelightField` one-for-one;
-/// translated at the `ui_translate.rs` boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum UiRelightField {
-    LightX,
-    LightY,
-    Relief,
-    AoIntensity,
-    ShadowSoftness,
-    Gain,
-}
-
-/// D4's height-origin override, mirroring
-/// `manifold_core::effects::RelightHeightFrom`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UiRelightHeightFrom {
-    Auto,
-    Luminance,
-    InvertedLuminance,
-}
-
 /// Which scalar of an audio modulation's [`AudioModShape`] a drawer slider drag
 /// is editing. The three share one drag path, snapshot slot, and commit command;
 /// this records which field the live edit and the commit write.

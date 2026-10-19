@@ -608,12 +608,6 @@ impl Serialize for PresetInstance {
         if self.graph.is_some() {
             field_count += 1;
         }
-        if self.relight {
-            field_count += 1;
-        }
-        if !self.relight_params.is_default() {
-            field_count += 1;
-        }
         if !self.folded_sections.is_empty() {
             field_count += 1;
         }
@@ -667,12 +661,6 @@ impl Serialize for PresetInstance {
                 "graph",
                 &GraphWithDerivedParams { preset: &self.effect_type, graph, manifest: &self.params, joined: self.is_generator() },
             )?;
-        }
-        if self.relight {
-            s.serialize_field("relight", &self.relight)?;
-        }
-        if !self.relight_params.is_default() {
-            s.serialize_field("relightParams", &self.relight_params)?;
         }
         if !self.folded_sections.is_empty() {
             s.serialize_field("foldedSections", &self.folded_sections)?;
@@ -764,10 +752,6 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             graph: Option<EffectGraphDef>,
             #[serde(default)]
-            relight: bool,
-            #[serde(default)]
-            relight_params: RelightParams,
-            #[serde(default)]
             folded_sections: Vec<String>,
             #[serde(default)]
             unfolded_sections: Vec<String>,
@@ -809,8 +793,6 @@ impl<'de> Deserialize<'de> for PresetInstance {
             graph: raw.graph,
             graph_version: 0,
             graph_structure_version: 0,
-            relight: raw.relight,
-            relight_params: raw.relight_params,
             folded_sections: raw.folded_sections,
             unfolded_sections: raw.unfolded_sections,
         })
@@ -851,10 +833,6 @@ struct GeneratorInstanceRaw {
     #[serde(default)]
     graph: Option<EffectGraphDef>,
     #[serde(default)]
-    relight: bool,
-    #[serde(default)]
-    relight_params: RelightParams,
-    #[serde(default)]
     folded_sections: Vec<String>,
     #[serde(default)]
     unfolded_sections: Vec<String>,
@@ -892,8 +870,6 @@ impl GeneratorInstanceRaw {
             graph: self.graph,
             graph_version: 0,
             graph_structure_version: 0,
-            relight: self.relight,
-            relight_params: self.relight_params,
             folded_sections: self.folded_sections,
             unfolded_sections: self.unfolded_sections,
         }

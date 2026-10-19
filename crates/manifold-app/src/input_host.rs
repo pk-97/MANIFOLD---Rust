@@ -1891,7 +1891,6 @@ mod automation_clipboard_host_tests {
                     effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                     has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
                     rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-                    relight: Default::default(),
                 }
             }).collect::<Vec<_>>();
             layer.effects = Some(effects);
@@ -1939,7 +1938,7 @@ mod automation_clipboard_host_tests {
                 title: "Card".into(), collapsed: false, enabled: true,
                 effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                 has_graph_mod: false, layer_id: None, modifier: None,
-                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(), relight: Default::default(),
+                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
             }
         }).collect::<Vec<_>>();
         h.ui_root.inspector.configure_master_effects(&surfaces(&h.project.settings.master_effects));
@@ -1989,7 +1988,6 @@ mod automation_clipboard_host_tests {
                 effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                 has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
                 rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-                relight: Default::default(),
             }
         }).collect::<Vec<_>>();
         layer.effects = Some(effects);
@@ -2108,7 +2106,6 @@ mod automation_clipboard_host_tests {
             effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
             has_graph_mod: false, layer_id: None, modifier: None,
             rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-            relight: Default::default(),
         };
         h.project.timeline.find_layer_by_id_mut(&destination_id).unwrap().1.effects = Some(vec![effect]);
         h.active_layer = Some(destination_id.clone());
@@ -2157,7 +2154,7 @@ mod automation_clipboard_host_tests {
             effect_index: 0,
             effect_id: manifold_core::EffectId::new(format!("scene_modifier:{modifier_id}")),
             enabled: true, collapsed: false, supports_envelopes: true, has_graph_mod: false,
-            layer_id: None, relight: Default::default(),
+            layer_id: None,
         };
         h.ui_root.inspector.configure_modifier_cards(std::slice::from_ref(&surface), Some(&layer_id), true, Vec::new());
         assert!(h.ui_root.inspector.select_all_modifiers());
@@ -2203,7 +2200,6 @@ mod automation_clipboard_host_tests {
             effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
             has_graph_mod: false, layer_id: None, modifier: None,
             rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-            relight: Default::default(),
         };
         let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
         let layer_id = layer.layer_id.clone();
@@ -2265,7 +2261,6 @@ mod automation_clipboard_host_tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
-            relight: Default::default(),
         };
         h.ui_root
             .inspector

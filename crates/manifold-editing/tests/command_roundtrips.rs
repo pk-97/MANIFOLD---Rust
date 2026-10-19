@@ -745,34 +745,6 @@ fn restore_tempo_lane_undo_roundtrip() {
 // ─── Effect Commands ───
 
 #[test]
-fn set_relight_height_from_undo_roundtrip() {
-    let mut project = make_test_project();
-    project
-        .settings
-        .master_effects
-        .push(PresetInstance::new(PresetTypeId::BLOOM));
-    let effect_id = project.settings.master_effects[0].id.clone();
-    let target = manifold_core::GraphTarget::Effect(effect_id);
-
-    let mut cmd = SetRelightHeightFromCommand::new(
-        target,
-        RelightHeightFrom::Auto,
-        RelightHeightFrom::InvertedLuminance,
-    );
-    cmd.execute(&mut project);
-    assert_eq!(
-        project.settings.master_effects[0].relight_params.height_from,
-        RelightHeightFrom::InvertedLuminance
-    );
-
-    cmd.undo(&mut project);
-    assert_eq!(
-        project.settings.master_effects[0].relight_params.height_from,
-        RelightHeightFrom::Auto
-    );
-}
-
-#[test]
 fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
     {
@@ -2524,23 +2496,6 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
             name: "toggle effect",
             build: |p| Box::new(ToggleEffectCommand::new(push_master_bloom(p), true, false)),
             applied: |p| !p.settings.master_effects[0].enabled,
-        },
-        SetterCase {
-            name: "toggle relight",
-            build: |p| {
-                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
-                Box::new(ToggleRelightCommand::new(target, p.settings.master_effects[0].relight, true))
-            },
-            applied: |p| p.settings.master_effects[0].relight,
-        },
-        SetterCase {
-            name: "relight param",
-            build: |p| {
-                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
-                let relief = p.settings.master_effects[0].relight_params.relief;
-                Box::new(SetRelightParamCommand::new(target, RelightField::Relief, relief, 0.9))
-            },
-            applied: |p| p.settings.master_effects[0].relight_params.relief == 0.9,
         },
         SetterCase {
             name: "toggle driver",

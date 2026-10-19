@@ -321,7 +321,6 @@ fn empty_generator_surface(inst: &PresetInstance) -> ParamSurface {
         rows: vec![],
         string_params: vec![],
         audio_sends: Vec::new(),
-        relight: crate::ui_translate::relight_card_config_from(inst),
     }
 }
 
@@ -655,7 +654,6 @@ fn param_surface(
         rows,
         has_graph_mod,
         audio_sends: Vec::new(),
-        relight: crate::ui_translate::relight_card_config_from(inst),
     })
 }
 
@@ -917,7 +915,6 @@ pub(crate) fn modifier_surfaces(
             supports_envelopes: true,
             has_graph_mod: crate::modifier_preset::has_graph_mod(def, &instance.graph),
             layer_id: None,
-            relight: crate::ui_translate::relight_card_config_from(gp),
         })
     }).collect()
 }

@@ -88,7 +88,7 @@ manifold_node_engine::primitive! {
     aliases: ["surface bumps", "heightmap to normal", "normal map", "bump map", "heightmap"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/heightmap_to_normal_body.wgsl"),
-    // D6(a) follow-up (DEPTH_RELIGHT_DESIGN.md, root-cause fix requested
+    // D6(a) follow-up (root-cause fix requested
     // after the P4 audit): converted from `Gather` (filtering-sampler
     // `textureSampleLevel`) to `GatherTexel` (exact integer `textureLoad`,
     // manual ClampToEdge) — the 4 central-difference taps always land on
@@ -157,7 +157,7 @@ impl Primitive for HeightmapToNormal {
     }
 }
 
-/// D6(a) follow-up (`docs/DEPTH_RELIGHT_DESIGN.md`): proves the `Gather` →
+/// D6(a) follow-up: proves the `Gather` →
 /// `GatherTexel` conversion is value-preserving, and that the generated
 /// (GatherTexel) kernel matches the hand-maintained oracle
 /// `heightmap_to_normal.wgsl`.

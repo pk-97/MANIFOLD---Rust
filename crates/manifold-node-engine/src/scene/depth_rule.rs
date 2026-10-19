@@ -1,11 +1,8 @@
-//! Depth-companion-channel propagation classification (design doc
-//! `docs/DEPTH_RELIGHT_DESIGN.md` D1).
+//! Depth-companion-channel propagation classification.
 //!
-//! The "3D Shading" toggle (P3) synthesizes a depth companion channel
-//! alongside a graph's normal color output. Every primitive declares a
-//! [`DepthRule`] describing how it propagates that channel through itself —
-//! the compiler walks the graph once, threads the depth path per these
-//! rules, and dead-codes the whole thing when the toggle is off.
+//! Every primitive declares a [`DepthRule`] describing how it would propagate
+//! a depth companion channel through itself. No compiler pass reads it today;
+//! it stays a required declaration so the classification remains truthful.
 //!
 //! Unlike [`FusionKind`](crate::node_graph::freeze::classify::FusionKind),
 //! which defaults to `Boundary` when unset, `DepthRule` has **no default**:

@@ -1520,9 +1520,8 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
-    /// How this node propagates the depth companion channel the "3D
-    /// Shading" toggle synthesizes (design doc `docs/DEPTH_RELIGHT_DESIGN.md`
-    /// D1) — `Inherit`, `Warp`, `CombineNearest`, `SourceHeight`, or
+    /// How this node propagates a depth companion channel (no compiler pass
+    /// reads it today) — `Inherit`, `Warp`, `CombineNearest`, `SourceHeight`, or
     /// `Terminal`; see [`DepthRule`](crate::node_graph::depth_rule::DepthRule)
     /// for the full semantics of each. **No default** — unlike
     /// [`fusion_kind`](Self::fusion_kind), every `EffectNode` impl must
@@ -1649,7 +1648,7 @@ pub trait EffectNode: Send + AsAny {
     }
 
     /// Names of texture inputs whose consumption differentiates or
-    /// horizon-tests the value (`docs/DEPTH_RELIGHT_DESIGN.md` D6(a)) — see
+    /// horizon-tests the value — see
     /// the doc comment on
     /// [`PrimitiveSpec::PRECISION_CRITICAL_INPUTS`](crate::node_graph::primitive::PrimitiveSpec::PRECISION_CRITICAL_INPUTS).
     /// Default empty; the macro forwards `P::PRECISION_CRITICAL_INPUTS`.

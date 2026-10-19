@@ -966,7 +966,6 @@
             string_params: Vec::new(),
             modifier: None,
             audio_sends: Vec::new(),
-            relight: crate::panels::param_card::RelightCardConfig::default(),
         };
         (vm, surface)
     }

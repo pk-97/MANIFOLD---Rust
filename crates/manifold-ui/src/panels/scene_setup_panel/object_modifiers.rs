@@ -57,7 +57,6 @@ impl ScenePanel {
                     rows,
                     has_graph_mod: false,
                     audio_sends: full.audio_sends.clone(),
-                    relight: full.relight,
                 };
                 let address = ObjectModifierCardInfo {
                     layer_id: vm.layer_id.clone(),
@@ -636,7 +635,7 @@ impl ScenePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::param_card::{ParamCardKind, RelightCardConfig};
+    use crate::panels::param_card::{ParamCardKind};
     use crate::param_surface::{ParamRow, RowMapping, RowSpec, RowValue};
     use crate::tree::UITree;
 
@@ -690,7 +689,6 @@ mod tests {
             }],
             has_graph_mod: false,
             audio_sends: Vec::new(),
-            relight: RelightCardConfig::default(),
         }
     }
 
@@ -715,7 +713,6 @@ mod tests {
         assert_eq!(card.rows[0].id.as_ref(), "70_amount");
         assert!(card.toggle_node_id().is_none(), "object cards hide enable chrome");
         assert!(card.modifier_objects_node_id().is_none(), "object cards hide OBJ chrome");
-        assert!(card.relight_node_id().is_none(), "object cards hide relight chrome");
         assert!(card.modifier_remove_node_id().is_some(), "object cards retain remove");
     }
 

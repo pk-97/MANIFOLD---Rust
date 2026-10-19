@@ -1,4 +1,4 @@
-/// BUG-216 (`docs/BUG_BACKLOG.md`, D6(b) of `docs/DEPTH_RELIGHT_DESIGN.md`):
+/// BUG-216 (`docs/BUG_BACKLOG.md`):
 /// a `node.feedback` loop whose blend output feeds `system.final_output`
 /// DIRECTLY (the natural authoring wiring) used to freeze at one frame of
 /// history — the boundary output's resource is pre-bound as a borrowed

@@ -156,7 +156,7 @@ impl EffectNode for Source {
         Some(crate::freeze::classify::BoundaryReason::NonGpu)
     }
     // depth_rule: the host pre-binds an externally-supplied frame to this
-    // node's output slot every frame (design doc DEPTH_RELIGHT_DESIGN.md D1)
+    // node's output slot every frame
     // — there is no upstream to inherit FROM, but it is the depth chain's
     // entry point, not a dead end, so `Inherit` (not `Terminal`) per the
     // task brief's explicit boundary-node ruling.

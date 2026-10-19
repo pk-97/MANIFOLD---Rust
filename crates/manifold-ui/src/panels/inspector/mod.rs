@@ -1584,7 +1584,7 @@ fn in_range(idx: usize, first: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::param_card::{ParamCardKind, RelightCardConfig, RowMod};
+    use crate::panels::param_card::{ParamCardKind, RowMod};
     use crate::tree::UITree;
 
     /// INV-15: the inspector view version moves only when a view value changes.
@@ -1822,7 +1822,6 @@ mod tests {
             layer_id: None,
             modifier: None,
             audio_sends: Vec::new(),
-            relight: RelightCardConfig::default(),
         }
     }
 

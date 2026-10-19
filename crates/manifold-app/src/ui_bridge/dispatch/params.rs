@@ -19,7 +19,7 @@ use manifold_core::GraphTarget;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
-    SetRelightHeightFromCommand, ToggleEffectCommand, ToggleRelightCommand,
+    ToggleEffectCommand,
 };
 use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
@@ -930,36 +930,6 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                         param_id: param_id.clone(),
                     },
                 );
-            }
-            DispatchResult::handled()
-        }
-
-        // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md D8/P7) ─────
-        // The toggle and `height_from` change template topology: undoable
-        // commands whose stamps rebuild the inspector. The D3 float knobs are
-        // live uniforms: a drag is a Shapes write, pushed in place.
-        ParamsAction::RelightToggle(gpt) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
-            {
-                let old = ctx.project.with_preset_graph(&target, |inst| inst.relight).unwrap_or(false);
-                let cmd = ToggleRelightCommand::new(target, old, !old);
-                ctx.execute(Box::new(cmd));
-            }
-            DispatchResult::handled()
-        }
-        // Relight-knob scrub trio migrated to `PanelAction::Scrub`
-        // (`ValueRef::RelightParam`, P-I / D4).
-        ParamsAction::RelightHeightFromChanged(gpt, height_from) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
-            {
-                let old = ctx.project
-                    .with_preset_graph(&target, |inst| inst.relight_params.height_from)
-                    .unwrap_or_default();
-                let new = crate::ui_translate::relight_height_from_to_core(*height_from);
-                let cmd = SetRelightHeightFromCommand::new(target, old, new);
-                ctx.execute(Box::new(cmd));
             }
             DispatchResult::handled()
         }

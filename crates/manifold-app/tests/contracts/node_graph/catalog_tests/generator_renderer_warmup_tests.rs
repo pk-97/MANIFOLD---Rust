@@ -66,7 +66,6 @@
                 THUMB_H,
                 false,
                 None,
-                None,
             )
             .expect("Plasma thumbnail runtime");
         let rt = RenderTarget::new(
@@ -192,8 +191,6 @@
             0,
             BTreeMap::new(),
             None,
-            false,
-            manifold_core::effects::RelightParams::default(),
         ));
         insert_test_thumb(
             &mut renderer,

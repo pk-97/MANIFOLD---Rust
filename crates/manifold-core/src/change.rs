@@ -153,7 +153,6 @@ pub const LIVE_SCALAR_CONSUMERS: &[ConsumerRow] = &[
     ("driver, envelope and audio-mod shapes", Part::Shapes, &[("modulation", Reads::Fresh)]),
     ("clip-trigger shape", Part::Shapes, &[("live trigger", Reads::Fresh)]),
     ("param-mapping reshape", Part::Shapes, &[("modulation", Reads::Fresh), ("render", Reads::Fresh)]),
-    ("relight_params", Part::Shapes, &[("render", Reads::Fresh)]),
     ("unbound graph node param values", Part::Shapes, &[("render", Reads::Fresh)]),
     ("layer.audio_gain_db", Part::Shapes, &[("audio layer playback", Reads::Fresh)]),
     ("audio send gain_db", Part::Shapes, &[("modulation", Reads::Fresh), ("capture GainBank", Reads::CachedWithRow)]),

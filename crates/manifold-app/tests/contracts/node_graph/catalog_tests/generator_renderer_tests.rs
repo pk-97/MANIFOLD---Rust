@@ -70,8 +70,6 @@
                 0,
                 std::collections::BTreeMap::new(),
                 None,
-                false,
-                manifold_core::effects::RelightParams::default(),
             ),
             "seed install of Plasma must succeed",
         );
@@ -208,8 +206,6 @@
                 0,
                 std::collections::BTreeMap::new(),
                 None,
-                false,
-                manifold_core::effects::RelightParams::default(),
             ),
             "seed install must succeed",
         );
@@ -228,8 +224,6 @@
             true,
             None,
             None,
-            false,
-            manifold_core::effects::RelightParams::default(),
         ));
         assert!(renderer.acquire_clip(
             "clip-2",
@@ -243,8 +237,6 @@
             true,
             None,
             None,
-            false,
-            manifold_core::effects::RelightParams::default(),
         ));
         assert_eq!(
             renderer.layer_generators.get(&layer_id).unwrap().clip_count,
@@ -276,8 +268,6 @@
             false,
             None,
             None,
-            false,
-            manifold_core::effects::RelightParams::default(),
         ));
         assert_eq!(
             renderer.layer_generators.get(&layer_id).unwrap().clip_count,

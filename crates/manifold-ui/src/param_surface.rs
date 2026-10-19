@@ -21,7 +21,7 @@
 //! forbidden (WIDGET_TREE_DESIGN section 5b, Peter's standing rule, INV-8).
 
 use crate::panels::GraphParamTarget;
-use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RelightCardConfig, RowMod};
+use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
 use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, AudioSendChoice};
 use manifold_foundation::{EffectId, LayerId, ParamId};
 
@@ -380,7 +380,7 @@ pub struct ParamSurface {
 
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: `Some` on a scene modifier card
     /// (an effect-shell card whose rows are the kind's stamped exposures).
-    /// Drives the chrome differences (no drag handle / relight chip, the
+    /// Drives the chrome differences (no drag handle, the
     /// common enable toggle, ordered-stack controls, and remove ×) and the
     /// `GeneratorOf(layer)` write addressing. `None` everywhere else.
     pub modifier: Option<ModifierCardInfo>,
@@ -391,8 +391,6 @@ pub struct ParamSurface {
     pub string_params: Vec<ParamCardStringInfo>,
     /// Card-level available audio sends.
     pub audio_sends: Vec<AudioSendChoice>,
-    /// "3D Shading" toggle + knobs.
-    pub relight: RelightCardConfig,
 }
 
 /// Every interactive element class a row can build — the vocabulary the
@@ -437,13 +435,6 @@ pub enum RowRole {
     /// A scene card section's title (row = first row of the section): opens
     /// the Scene tab on the item that owns that row.
     SectionTitle,
-    /// Relight: header toggle ("3D Shading") — row is unused (card-level).
-    RelightToggle,
-    /// Relight: one of the Height From option buttons (0..3; index resolved
-    /// positionally by the relight bundle).
-    RelightHeightBtn,
-    /// Relight: one of the six knob slider bundles.
-    RelightSlider,
     /// Colour swatch over the row's `rgb_members`: opens the colour menu.
     ColourSwatch(ColourGroup),
     /// Optional material feature header/toggle.

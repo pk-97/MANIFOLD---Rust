@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 390 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -137,7 +137,7 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | — | `node.simplex_noise_2d` | Source | Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
-### Mask (11)
+### Mask (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -145,7 +145,6 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | Circle Mask | `node.circle_mask` | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
 | CoC Dilate | `node.coc_dilate` | Map | Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a h… |
 | CoC From Depth | `node.coc_from_depth` | Map | Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens. |
-| Heightfield Shadow | `node.heightfield_shadow` | Map | Casts a soft screen-space shadow across a height map toward a light direction. Multiply it into a Lambert term for relief-lit terrain. |
 | Mask Extrema | `node.mask_extrema` | Filter | Expands or erodes a coverage mask along one image axis. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | Region Mask | `node.region_mask` | Filter | Turns observed tracked region labels into a pixel-accurate mask with optional box filling. |

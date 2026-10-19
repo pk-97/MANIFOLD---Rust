@@ -58,7 +58,6 @@ CINEMATIC_POST_DESIGN.md:crates/manifold-nodes/src/node_graph/freeze/codegen.rs
 CINEMATIC_POST_DESIGN.md:freeze/codegen.rs
 DECOMPOSING_GENERATORS.md:/crates/manifold-nodes/src/node_graph/primitives/plasma_pattern_2d.rs
 DECOMPOSING_GENERATORS.md:wireframe_shape.rs
-DEPTH_RELIGHT_DESIGN.md:preset_runtime.rs
 EDITOR_WINDOW_UNIFICATION_DESIGN.md:/crates/manifold-app/src/ui_root.rs
 EDITOR_WINDOW_UNIFICATION_DESIGN.md:ui_root.rs
 EFFECT_RUNTIME_UNIFICATION.md:/crates/manifold-nodes/src/effect_chain.rs

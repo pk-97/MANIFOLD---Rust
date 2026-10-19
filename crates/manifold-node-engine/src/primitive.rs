@@ -161,8 +161,8 @@ pub trait PrimitiveSpec: Send {
     /// Names of texture inputs whose CONSUMPTION differentiates or
     /// horizon-tests the value — a finite-difference gradient, a raymarch
     /// penetration test, a thin-lens CoC derivation — where fp16's ~10-bit
-    /// mantissa quantizes into visible contours (`docs/DEPTH_RELIGHT_DESIGN.md`
-    /// D6(a)). The freeze compiler's format-selection seam
+    /// mantissa quantizes into visible contours.
+    /// The freeze compiler's format-selection seam
     /// (`execution_plan::compile`) promotes a materialized intermediate to
     /// `Rgba32Float` when at least one consumer names it here AND no consumer
     /// reads it through a FILTERING sampler (`InputAccess::Coincident` /
@@ -250,10 +250,10 @@ pub trait PrimitiveSpec: Send {
     const BUFFER_INDEX: Option<&'static str> = None;
     const DENSE_BUFFER_FUSION: Option<crate::exec::effect_node::DenseBufferFusion> = None;
 
-    /// How this primitive propagates the depth companion channel the "3D
-    /// Shading" toggle synthesizes (design doc `docs/DEPTH_RELIGHT_DESIGN.md`
-    /// D1). **No default** — unlike [`FUSION_KIND`](Self::FUSION_KIND), every
-    /// primitive must declare this explicitly via the macro's REQUIRED
+    /// How this primitive propagates a depth companion channel (no compiler
+    /// pass reads it today). **No default** — unlike
+    /// [`FUSION_KIND`](Self::FUSION_KIND), every primitive must declare this
+    /// explicitly via the macro's REQUIRED
     /// `depth_rule:` field; a primitive that omits it fails to compile. Kept
     /// required (rather than defaulting to the conservative `Terminal`) so
     /// the classification stays truthful as new primitives are added — no

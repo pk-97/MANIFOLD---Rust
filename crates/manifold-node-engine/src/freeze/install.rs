@@ -455,8 +455,8 @@ pub fn fused_generator_view_for(def: &EffectGraphDef) -> Option<Arc<FusedGenerat
     compiled
 }
 
-/// Per-card fused-view selection for the chain build (BUG-j8gy): the relight
-/// default-augment, the Ready/Pending/Refused lookup, and the one-line FUSED
+/// Per-card fused-view selection for the chain build (BUG-j8gy): the
+/// Ready/Pending/Refused lookup and the one-line FUSED
 /// attribution log. Returns the fused view when Ready, and whether the card is
 /// waiting on the worker (Pending) so the runtime arms the swap-in handshake.
 /// `is_watched` = the editor's preview target, kept unfused so node-output
@@ -464,7 +464,6 @@ pub fn fused_generator_view_for(def: &EffectGraphDef) -> Option<Arc<FusedGenerat
 pub fn select_card_fused_view(
     fx: &manifold_core::effects::PresetInstance,
     base_view: &LoadedPresetView,
-    primitives: &PrimitiveRegistry,
     is_watched: bool,
 ) -> (Option<Arc<LoadedPresetView>>, bool) {
     // Fusion is on-demand and keyed by the def's CONTENT, so ANY shape —
@@ -476,23 +475,10 @@ pub fn select_card_fused_view(
     // bindings lines are shape-identical either way.
     let effective_def: &EffectGraphDef =
         fx.graph.as_ref().unwrap_or(base_view.canonical_def.as_ref());
-    // D8/P7: relight fuses — augment with DEFAULT knob values before fusion so
-    // the cache key (and generated WGSL) is knob-invariant; live values write
-    // per-frame via `EffectSlot::relight_writes`. `height_from` changes
-    // template topology, so it legitimately recompiles.
-    let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight_active() {
-        std::borrow::Cow::Owned(crate::load::augmentation::relight_augment(
-            effective_def,
-            primitives,
-            &manifold_core::effects::RelightParams::default(),
-        ))
-    } else {
-        std::borrow::Cow::Borrowed(effective_def)
-    };
     if !should_render_fused(is_watched) {
         return (None, false);
     }
-    match fused_effect_view_for(&effective_def_for_fusion, base_view) {
+    match fused_effect_view_for(effective_def, base_view) {
         FusedEffectLookup::Ready(v) => {
             // One line per chain rebuild so the operator can confirm a card is
             // rendering through the fused kernel. Editing-time event
@@ -1029,9 +1015,8 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
 
 /// Segment lookup for the chain builder. Hit → `Ready`/`Refused`; miss →
 /// enqueue on the worker and report `Pending` (the chain splices per-card this
-/// build). Content thread only. `cards` carries owned defs so relight-on
-/// members can be augmented before fusion while keeping the view references
-/// for bindings.
+/// build). Content thread only. `cards` carries owned defs and the view
+/// references for bindings.
 pub fn fused_segment_view_for(
     cards: &[(EffectGraphDef, Arc<LoadedPresetView>)],
 ) -> SegmentLookup {
@@ -2302,7 +2287,7 @@ pub(crate) fn fuse_canonical_def_masked(
             // access and precision-criticality those members declared — else
             // the executor's fp32 promotion (D6(a), `wants_fp32_intermediate`)
             // sees a default filtering consumer and vetoes the upstream fp32
-            // the unfused chain would have allocated (the fp16-height relight
+            // the unfused chain would have allocated (an fp16-height
             // divergence). Per slot: filtering wins across members (fp32 is
             // non-filterable, so one true sampler read makes the veto correct);
             // precision_critical is emitted only for texel-exact reads.

@@ -23,7 +23,7 @@ use manifold_core::work_count::{thread_work_snapshot, WorkKind, WorkSnapshot};
 use manifold_core::{Beats, Bpm, LayerId, Seconds};
 use manifold_ui::panels::{
     AudioShapeParam, BandDivider, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, TrimKind,
-    UiRelightField, ValueRef,
+    ValueRef,
 };
 
 use crate::content_command::ContentCommand;
@@ -313,7 +313,6 @@ fn content_reaction_budget() {
     cases.push(("layer_gain_tick", bench.scrub_tick(ValueRef::LayerAudioGain(glow.clone()), ScrubValue::Scalar(-6.0))));
     cases.push(("send_gain_tick", bench.scrub_tick(ValueRef::AudioSendGain(send_id), ScrubValue::Scalar(-3.0))));
     cases.push(("band_split_tick", bench.scrub_tick(ValueRef::AudioCrossover(BandDivider::Low), ScrubValue::Scalar(300.0))));
-    cases.push(("relight_tick", bench.scrub_tick(ValueRef::RelightParam(fx(0), UiRelightField::Gain), ScrubValue::Scalar(0.8))));
     {
         // The editor canvas's unbound node-param scrub (`app_render.rs`
         // `GraphEditCommand` arm): one `MutateProject` per move, first move `Overrides | Shapes`. The graph
@@ -620,10 +619,6 @@ fn shapes_fields_reach_consumers() {
     }));
     assert_eq!(v(&seen), 0.5, "the modulated value must land inside the reshaped range on the next tick");
     covered.push("param-mapping reshape");
-
-    let seen = tick_and_capture(&mut bench, touch::SHAPES, Box::new(|p| glow(p).effects.as_mut().unwrap()[1].relight_params.light_x = 0.25));
-    assert_eq!(seen.timeline.layers[0].effects.as_ref().unwrap()[1].relight_params.light_x, 0.25);
-    covered.push("relight_params");
 
     let target = manifold_core::GraphTarget::Effect(fx_id(&bench, 1));
     let seed = crate::editor_bridge::seed_def_for_project(bench.content.engine.project().unwrap(), &target).expect("Bloom has a catalog graph");

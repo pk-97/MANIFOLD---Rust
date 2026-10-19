@@ -1187,7 +1187,7 @@ mod scene_card_convergence_tests {
         /// clean and when a full snapshot stomps the project mid-drag.
         #[test]
         fn every_slider_gesture_undoes_cleanly_even_under_snapshot_stomp() {
-            let cases: [fn(bool); 16] = [
+            let cases: [fn(bool); 15] = [
                 master_opacity_case,
                 led_brightness_case,
                 macro_case,
@@ -1201,7 +1201,6 @@ mod scene_card_convergence_tests {
                 audio_trigger_shape_case,
                 audio_send_gain_case,
                 audio_crossover_case,
-                relight_param_case,
                 ableton_macro_trim_case,
                 audio_mod_step_amount_case,
             ];
@@ -1990,53 +1989,6 @@ mod scene_card_convergence_tests {
                     )
                 },
                 |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
-                before,
-                after,
-                stomp,
-            );
-        }
-
-        // ── Relight knobs ────────────────────────────────────────
-
-        fn relight_param_case(stomp: bool) {
-            let (mut project, layer_id) = scene_layer_project();
-            let mut h = Harness::new(Some(layer_id.clone()));
-            let _pid = materialized_param(&mut h, &mut project, &layer_id);
-            let field = manifold_ui::panels::UiRelightField::Gain;
-            let core_field = crate::ui_translate::relight_field_to_editing(field);
-            let before = core_field.get(&gen_inst(&project, &layer_id).relight_params);
-            let after = before + 0.5;
-            let probe_lid = layer_id.clone();
-            trio_cycle(
-                "relight_param",
-                project,
-                &mut h,
-                |h, p| {
-                    h.dispatch(
-                        &PanelAction::Scrub(
-                            ValueRef::RelightParam(gpt(), field),
-                            ScrubPhase::Begin,
-                        ),
-                        p,
-                    );
-                    h.dispatch(
-                        &PanelAction::Scrub(
-                            ValueRef::RelightParam(gpt(), field),
-                            ScrubPhase::Move(ScrubValue::Scalar(after)),
-                        ),
-                        p,
-                    );
-                },
-                |h, p| {
-                    h.dispatch(
-                        &PanelAction::Scrub(
-                            ValueRef::RelightParam(gpt(), field),
-                            ScrubPhase::Commit,
-                        ),
-                        p,
-                    )
-                },
-                move |p| core_field.get(&gen_inst(p, &probe_lid).relight_params),
                 before,
                 after,
                 stomp,

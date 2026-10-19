@@ -1,7 +1,6 @@
 use crate::bundled_presets::{bundled_preset_def, bundled_preset_json, bundled_preset_type_ids};
 use {manifold_nodes_scene::node_graph::primitives::gltf_texture_source::GltfTextureSource, manifold_nodes_scene::node_graph::primitives::render_scene::RenderScene, manifold_nodes_scene::node_graph::primitives::scatter_on_mesh::ScatterOnMesh, manifold_nodes_image::node_graph::primitives::seed_particles_from_texture::SeedParticlesFromTexture};
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_core::effects::RelightParams;
 use manifold_core::preset_def::PresetKind;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -109,7 +108,7 @@ impl GeneratorRegistry {
     ) -> Option<Box<PresetRuntime>> {
         // No override or watch context: use the normal fusion policy and the
         // definition's own parameter metadata.
-        self.create_with_override(device, gen_type, None, width, height, false, None, None)
+        self.create_with_override(device, gen_type, None, width, height, false, None)
     }
 
     /// Same as [`Self::create`] but routes a per-layer
@@ -122,11 +121,6 @@ impl GeneratorRegistry {
     /// when present. Non-instance callers use the definition metadata.
     ///
     /// Returns `None` if neither the override nor the catalog definition loads.
-    ///
-    /// `relight` is the "3D Shading" toggle at the compile level:
-    /// `Some(params)` augments the effective def with default relight knobs
-    /// before `from_def_for_render`; live knobs are applied afterward by
-    /// `PresetRuntime::set_relight_params`. `None` leaves the def unchanged.
     pub fn create_with_override(
         &self,
         device: std::sync::Arc<GpuDevice>,
@@ -136,7 +130,6 @@ impl GeneratorRegistry {
         height: u32,
         is_watched: bool,
         manifest: Option<&manifold_core::params::ParamManifest>,
-        relight: Option<&RelightParams>,
     ) -> Option<Box<PresetRuntime>> {
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -163,23 +156,10 @@ impl GeneratorRegistry {
                 )
             });
 
-            // Augment with default relight values before fusion so the fused
-            // cache key and generated WGSL are knob-invariant. Live values are
-            // written afterward through `PresetRuntime::set_relight_params`.
-            let def_for_fusion = if relight.is_some() {
-                manifold_nodes_scene::node_graph::relight::relight_augment(
-                    &def,
-                    &registry,
-                    &RelightParams::default(),
-                )
-            } else {
-                def
-            };
             // Watched graphs stay unfused for live editing; otherwise the
             // shared render policy may use the fused view for this exact def.
-            // Relight augmentation above does not change that policy.
             match PresetRuntime::from_def_for_render(
-                def_for_fusion,
+                def,
                 &registry,
                 manifest,
                 manifold_node_engine::freeze::install::should_render_fused(is_watched),

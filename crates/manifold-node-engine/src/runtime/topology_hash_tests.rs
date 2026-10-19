@@ -1,6 +1,6 @@
     //! Regression: the topology hash must include only structure-
-    //! affecting fields (`enabled`, `graph_structure_version`, relight
-    //! toggle, etc.). Per-frame param values, including `amount`, must
+    //! affecting fields (`enabled`, `graph_structure_version`,
+    //! etc.). Per-frame param values, including `amount`, must
     //! NOT affect the hash — otherwise live modulation rebuilds the
     //! chain and wipes primitive state.
     use super::*;
@@ -70,47 +70,6 @@
             hash_at_zero, hash_at_half,
             "amount is a value, not structure: sweeping through zero must not change the topology hash"
         );
-    }
-
-
-
-    /// D8/P7: float relight knobs are live uniforms, so dragging them must NOT
-    /// change the topology hash (no chain rebuild). `height_from` changes
-    /// template topology and legitimately rebuilds.
-    #[test]
-    fn relight_float_knobs_do_not_change_topology_hash() {
-        let mut fx = hash_fixture(PresetTypeId::MIRROR);
-        fx.relight = true;
-        let base = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-
-        fx.relight_params.light_x += 0.1;
-        fx.relight_params.light_y += 0.1;
-        fx.relight_params.relief += 0.1;
-        fx.relight_params.ao_intensity += 0.1;
-        fx.relight_params.shadow_softness += 0.1;
-        fx.relight_params.gain += 0.1;
-        let knobs_moved = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        assert_eq!(
-            base, knobs_moved,
-            "float relight knob drags must not change the topology hash",
-        );
-
-        fx.relight_params.height_from = manifold_core::effects::RelightHeightFrom::Luminance;
-        let height_from_changed = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        if manifold_foundation::RELIGHT_FEATURE_ENABLED {
-            assert_ne!(
-                base, height_from_changed,
-                "height_from changes template topology and must rebuild",
-            );
-        } else {
-            // Feature disabled app-wide: `relight_active()` is false, so the
-            // relight template is never spliced and no relight field — knob or
-            // height_from — touches the topology hash.
-            assert_eq!(
-                base, height_from_changed,
-                "with the relight feature disabled, height_from must not affect the hash",
-            );
-        }
     }
 
     #[test]

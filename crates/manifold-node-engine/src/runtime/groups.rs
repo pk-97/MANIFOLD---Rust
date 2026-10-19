@@ -137,9 +137,6 @@ pub(crate) enum SplicedDef {
     CanonicalFallback,
 }
 
-/// `canonical_relight` is the relight toggle for the canonical fallback: a
-/// fused primary carries its relight template inside the fused def, the
-/// canonical def does not.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn splice_card_with_canonical_fallback(
     graph: &mut Graph,
@@ -149,8 +146,6 @@ pub(crate) fn splice_card_with_canonical_fallback(
     canonical_def: &EffectGraphDef,
     canonical_mesh_rules: &PreparedMeshRules,
     primitives: &PrimitiveRegistry,
-    relight_params: Option<&RelightParams>,
-    canonical_relight: Option<&RelightParams>,
     divergent: Option<(EffectId, PresetTypeId)>,
     preserve_authored_cpu_flip_graph: bool,
     errors: &mut Vec<ChainError>,
@@ -160,7 +155,6 @@ pub(crate) fn splice_card_with_canonical_fallback(
         card_input,
         splice_def,
         primitives,
-        relight_params,
         mesh_rules,
     ) {
         return Some((r, SplicedDef::Primary));
@@ -182,7 +176,6 @@ pub(crate) fn splice_card_with_canonical_fallback(
         card_input,
         canonical_def,
         primitives,
-        canonical_relight,
         canonical_mesh_rules,
     ) {
         Some(r) => Some((r, SplicedDef::CanonicalFallback)),

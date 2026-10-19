@@ -32,7 +32,6 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-core/src/effects/mod.rs", 250),
     ("crates/manifold-core/src/effects/param_defs.rs", 200),
     ("crates/manifold-core/src/effects/bindings.rs", 600),
-    ("crates/manifold-core/src/effects/relight.rs", 300),
     ("crates/manifold-core/src/effects/instance.rs", 2550),
     // Tightened 1550 → 1100 (2026-10-14): the tests moved to a sibling file
     // when the SCENE_SURFACES_DESIGN.md D2 (one live lookup) join grew it.

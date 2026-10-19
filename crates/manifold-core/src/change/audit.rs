@@ -354,9 +354,6 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     }
     // Materializing bumps the structure version, so it rides with the graph.
     fp.graph.write_u32(inst.graph_structure_version);
-
-    fp.put(Part::Effects, &inst.relight);
-    fp.put(Part::Shapes, &inst.relight_params);
 }
 
 /// The part of a fire action that decides which drawer rows exist and which

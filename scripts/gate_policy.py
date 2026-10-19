@@ -426,10 +426,6 @@ DOC_SUFFIXES = (".md", ".txt")
 # in preset_runtime's tests, so its row names both modules.
 PRESET_RUNTIME_DIR = ENGINE_SRC + "runtime/"
 LIB_PROOF_ROWS = {
-    # Retained legacy shader; the owning primitive holds its proof coverage.
-    "crates/manifold-nodes-image/src/node_graph/primitives/shaders/heightfield_shadow.wgsl": [
-        "node_graph::primitives::heightfield_shadow::",
-    ],
     ENGINE_SRC + "runtime/layer_skin.rs": ["runtime::layer_skin::", "runtime::layer_skin_tests::"],
     # The whitewater step's proofs (across frames, the pool passes, the
     # handoff, the golden fingerprints that prove its output unchanged) live
@@ -622,7 +618,6 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade", True),
     ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade_project", True),
     ("crates/manifold-nodes-scene/src/node_graph/gltf_load", "gltf_import", True),
-    ("crates/manifold-nodes-scene/src/node_graph/relight", "relight", True),
     ("crates/manifold-nodes-scene/src/node_graph/scene_vm", "scene_vm", True),
     ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "scene_exposure", True),
     ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "fluid_objects", True),

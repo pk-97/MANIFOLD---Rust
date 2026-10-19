@@ -108,7 +108,7 @@ use manifold_node_engine::freeze::classify::FusionKind;
         );
     }
 
-    /// `docs/DEPTH_RELIGHT_DESIGN.md` D6(a): a `precision_critical` input
+    /// A `precision_critical` input
     /// declares that its producer benefits from an `Rgba32Float` intermediate
     /// — but that promotion is only safe if THIS atom itself reads the input
     /// via an exact `textureLoad` (`InputAccess::is_texel_exact`), never a

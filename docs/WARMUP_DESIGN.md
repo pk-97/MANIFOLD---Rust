@@ -98,7 +98,7 @@ survives only as D4's quiescence query.
 
 **D3 — Generator pre-build reuses the production path.** Warmup populates
 `GeneratorRenderer::layer_generators` via the existing `install_layer_generator`
-(`generator_renderer.rs:1021`) with the layer's real override/manifest/relight inputs.
+(`generator_renderer.rs:1021`) with the layer's real override/manifest inputs.
 `acquire_clip`'s `needs_create` check (`generator_renderer.rs:441`) then hits on first
 launch — no parallel construction path, no warmup-only instance shape. Precedent for
 reaching the renderer from the content thread: the downcast at `content_thread.rs:756`.

@@ -1211,7 +1211,6 @@ mod tests {
                 layer_id: None,
                 modifier: None,
                 audio_sends: Vec::new(),
-                relight: Default::default(),
             }
         }
 
