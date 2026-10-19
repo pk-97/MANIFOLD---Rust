@@ -157,10 +157,6 @@ VERBS = [
      "mgpcg-ref", "mgpcg_reference.py", "GPU FLIP pressure solve oracle"),
     ("CPU reference oracles (f64, seconds, no GPU)",
      "lentine-ref", "lentine_reference.py", "Lentine block projection oracle"),
-    ("CPU reference oracles (f64, seconds, no GPU)",
-     "narrow-band-ref", "narrow_band_reference.py", "narrow-band particle lifecycle oracle"),
-    ("CPU reference oracles (f64, seconds, no GPU)",
-     "narrow-band-grid-ref", "narrow_band_grid_reference.py", "narrow-band grid pass oracle"),
 
     ("Live UI (opt-in connection to a running app)",
      "live-ui-launch", "launch_live_ui.py", "launch the separate macOS test app"),
@@ -194,8 +190,8 @@ VERBS = [
 # Importable modules, self-tests and retired probes: not verbs, still accounted for.
 INTERNAL = {
     "gate_readiness.py", "gate_workspace.py", "gate_policy.py", "gate_cancellation.py", "dev.py", "cpu_scope.py", "diff_scope.py", "gate_passes.py", "codex_checks.py",
-    "audit_rename.py", "rt_a2_term_cost.py", "rt_a3_term_cost.py",
     "gate_runner_selftest.sh", "uninstall-abletonosc-patch.sh",
+    "narrow_band_reference.py", "narrow_band_grid_reference.py",
 }
 
 
@@ -206,7 +202,6 @@ INTERNAL = {
 # share the table so dev verbs and direct cargo runs agree.
 COST_CLASSES = {
     "agent-worktree.py": "unit",
-    "audit_rename.py": "unit",
     "blob_v2_native_bench.py": "focused",
     "bridge_probe_gate.py": "broad",
     "claude-pane.sh": "unit",
@@ -261,8 +256,6 @@ COST_CLASSES = {
     "pick_probe_regions.py": "unit",
     "points_pixel_probe.py": "unit",
     "repair_audio_fixture.py": "focused",
-    "rt_a2_term_cost.py": "broad",
-    "rt_a3_term_cost.py": "broad",
     "rt_dynamic_acceptance.py": "broad",
     "rt_noise_gate.py": "broad",
     "rt_quality_matrix.py": "broad",

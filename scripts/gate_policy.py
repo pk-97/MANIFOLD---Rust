@@ -4,12 +4,6 @@ from pathlib import Path
 import json
 import re
 
-def is_inert_plan_path(path):
-    """Committed crate-move plans are replay data, never live build inputs."""
-    root = ".claude/orchestration/crate-split"
-    return path == root or path.startswith(root + "/")
-
-
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
     "manifold-nodes-water": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",

@@ -39,7 +39,7 @@ from gate_policy import (
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS, CONTRACT_ROOT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
     GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS,
-    GPU_FILTER_TARGETS, UI_PROJECTION_PATHS, is_inert_plan_path,
+    GPU_FILTER_TARGETS, UI_PROJECTION_PATHS,
 )
 from gate_workspace import Workspace, module_mounts
 
@@ -114,8 +114,6 @@ _CPU_PLAN_UNSET = object()
 
 def is_gpu_path(path, workspace=None):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
-    if is_inert_plan_path(path):
-        return False
     if path.endswith('.rs') and any(
             path == prefix or (prefix.endswith('/') and path.startswith(prefix))
             for prefix in UI_PROJECTION_PATHS):
@@ -462,7 +460,6 @@ def changed_test_filters(path, repo, base, patch=None):
 def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace=None,
                    cpu_plan=_CPU_PLAN_UNSET):
     """Map touched `paths` to a Plan. Never returns an implicit 'everything'."""
-    paths = [path for path in paths if not is_inert_plan_path(path)]
     workspace = workspace or Workspace(repo)
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
