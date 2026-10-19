@@ -1067,6 +1067,40 @@ fn get_clips_in_region() {
     assert_eq!(results.len(), 2);
 }
 
+/// Census bug 19 (region edits land on layer 0): once both edge layers of a
+/// region are deleted, the region covers no layer, so region edits never
+/// reach layer 0's clips.
+#[test]
+fn region_with_deleted_edge_layers_touches_no_clips() {
+    let mut project = make_project();
+    project
+        .timeline
+        .insert_layer(2, Layer::new("Video 3".into(), LayerType::Video, 2));
+    project
+        .timeline
+        .insert_layer(3, Layer::new("Video 4".into(), LayerType::Video, 3));
+    let outside = [add_clip(&mut project, 0, 0.0, 8.0)];
+    add_clip(&mut project, 2, 0.0, 8.0);
+    let region = make_region(&project, 2.0, 6.0, 1, 3);
+
+    project.timeline.remove_layer(3);
+    project.timeline.remove_layer(1);
+    project.timeline.rebuild_clip_lookup();
+
+    let in_region = EditingService::get_clips_in_region(&project, &region);
+    assert!(in_region.is_empty(), "region clips: {in_region:?}");
+    let (splits, interior) =
+        EditingService::split_clips_at_region_boundaries_with_interior(&project, &region);
+    assert!(splits.is_empty() && interior.is_empty(), "split reached {interior:?}");
+    let deletes = EditingService::delete_clips(&project, &outside, Some(&region));
+    assert!(deletes.is_empty(), "delete built {} commands", deletes.len());
+    let dupes = EditingService::duplicate_clips(&project, &outside, &region);
+    assert!(dupes.is_empty(), "duplicate built {} commands", dupes.len());
+    let mut service = EditingService::new();
+    service.copy_clips(&project, &outside, Some(&region));
+    assert!(!service.has_clipboard(), "copy filled the clipboard");
+}
+
 // ─── Trim clip to region ───
 
 #[test]

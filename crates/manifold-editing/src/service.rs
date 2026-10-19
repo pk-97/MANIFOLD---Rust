@@ -346,6 +346,16 @@ impl EditingService {
 
     // ─── Selection helpers ───
 
+    /// The region's layer index range, clamped to the layer list. `None` when
+    /// neither edge layer exists any more: the region then covers no layer,
+    /// never a stand-in one.
+    fn region_layer_span(project: &Project, region: &SelectionRegion) -> Option<(usize, usize)> {
+        let last = project.timeline.layers.len().checked_sub(1)?;
+        region
+            .layer_index_range(&project.timeline.layers)
+            .map(|(lo, hi)| (lo.min(last), hi.min(last)))
+    }
+
     /// Get clips in a selection region.
     pub fn get_clips_in_region(
         project: &Project,
@@ -354,9 +364,9 @@ impl EditingService {
         if !region.is_active {
             return Vec::new();
         }
-        let (min_layer, max_layer) = region
-            .layer_index_range(&project.timeline.layers)
-            .unwrap_or((0, 0));
+        let Some((min_layer, max_layer)) = Self::region_layer_span(project, region) else {
+            return Vec::new();
+        };
         let mut results = Vec::new();
 
         let region_start = region.start_beat;
@@ -501,6 +511,9 @@ impl EditingService {
         {
             let region_start = region.start_beat;
             let region_end = region.end_beat;
+            let Some((min_layer, _)) = Self::region_layer_span(project, region) else {
+                return;
+            };
 
             // Find overlapping clips in region (matching Unity CopySelectedClips)
             let overlapping: Vec<(&TimelineClip, usize)> = project
@@ -521,9 +534,6 @@ impl EditingService {
             }
 
             let origin_beat = region_start;
-            let (min_layer, _) = region
-                .layer_index_range(&project.timeline.layers)
-                .unwrap_or((0, 0));
 
             for (clip, clip_layer_idx) in overlapping {
                 let trimmed = Self::trim_clip_to_region(clip, region, &project.source_clock());
@@ -702,16 +712,9 @@ impl EditingService {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
         let mut interior_ids: Vec<(usize, ClipId)> = Vec::new();
 
-        let layer_count = project.timeline.layers.len();
-        let (start_layer, end_layer) = region
-            .layer_index_range(&project.timeline.layers)
-            .map(|(lo, hi)| {
-                (
-                    lo.min(layer_count.saturating_sub(1)),
-                    hi.min(layer_count.saturating_sub(1)),
-                )
-            })
-            .unwrap_or((0, 0));
+        let Some((start_layer, end_layer)) = Self::region_layer_span(project, region) else {
+            return (commands, interior_ids);
+        };
 
         let region_start = region.start_beat;
         let region_end = region.end_beat;
@@ -852,10 +855,9 @@ impl EditingService {
             let offset = region.duration_beats();
             let region_start = region.start_beat;
             let region_end = region.end_beat;
-            let (start_layer, end_layer) = region
-                .layer_index_range(&project.timeline.layers)
-                .map(|(lo, hi)| (lo, hi.min(project.timeline.layers.len().saturating_sub(1))))
-                .unwrap_or((0, 0));
+            let Some((start_layer, end_layer)) = Self::region_layer_span(project, region) else {
+                return commands;
+            };
 
             for li in start_layer..=end_layer {
                 let layer = &project.timeline.layers[li];
