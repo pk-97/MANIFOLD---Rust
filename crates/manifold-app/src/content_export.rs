@@ -2075,16 +2075,23 @@ mod tests {
         thread.reactions.publish_pending = true;
         thread.publish_snapshot_if_dirty(&state_tx);
         let published = state_rx.try_iter().filter_map(|s| s.project_snapshot).last().expect("first publish");
-        let mut ui_copy = (*published).clone();
-        let content_rate = ui_copy.settings.frame_rate;
-        ui_copy.settings.frame_rate = content_rate + 12.0;
+        let content_rate = published.settings.frame_rate;
+        // The UI took the first publish, then a direct edit changed its copy
+        // and its command was dropped by the export.
+        let mut ui_project = (*published).clone();
+        let mut last_arc = Some(published);
+        let mut stamps = crate::frame_plan::UiStamps::default();
+        ui_project.settings.frame_rate = content_rate + 12.0;
+        let before = stamps.parts();
 
         thread.run_export(meta_config(false), &cmd_rx, &state_tx);
         thread.publish_snapshot_if_dirty(&state_tx);
         let after = state_rx.try_iter().filter_map(|s| s.project_snapshot).last()
             .expect("the export end republishes the project");
-        ui_copy = (*after).clone();
-        assert_eq!(ui_copy.settings.frame_rate, content_rate, "the divergent edit is gone");
+        // The UI's own intake function; data version and stamps unmoved.
+        assert!(crate::frame_plan::take_project_snapshot(&mut ui_project, &mut stamps, &mut last_arc, after, false));
+        assert_eq!(ui_project.settings.frame_rate, content_rate, "the divergent edit is gone from the UI copy");
+        assert_ne!(stamps.parts(), before, "panels re-project from the corrected copy");
     }
 
     /// Export then Cancel pressed while a show warms up are both held; the
