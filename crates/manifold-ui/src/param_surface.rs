@@ -510,8 +510,8 @@ pub enum RowRole {
     MappingChevron,
     /// D5 section fold header (row = first row of the section).
     SectionHeader,
-    /// A scene card section's title (row = first row of the section): opens
-    /// the Scene tab on the item that owns that row.
+    /// A scene card section's row-end "Open in Scene" button (row = first row
+    /// of the section): opens the Scene tab on the item that owns that row.
     SectionTitle,
     /// Colour swatch over the row's `rgb_members`: opens the colour menu.
     ColourSwatch(ColourGroup),
