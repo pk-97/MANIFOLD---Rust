@@ -9,6 +9,54 @@ Compiled test-inventory validation necessarily happens after compilation.
 Exit 0 iff all required checks pass; exit CHECKS_RED
 only when every required check ran and some were red; exit 1 on a
 refusal, a crash, or a `--fail-fast` stop.
+
+Gate mechanics:
+
+Cheap reds are collected before flows and GPU proofs. Any cheap red stops at
+that boundary; every red prints its `rerun:` command. `--fail-fast` stops at
+the first red; `--keep-going` is an explicit diagnostic run. A named red never
+waives an unrun leg. Fix the reds with their printed commands.
+
+Follow background runs with `scripts/watch_land.py --pid PID --log PATH`
+(`--kind land` for `land_branch.py`). It reads the active leg's live transcript
+and exits on a red, refusal, hang or completion; `--hang-seconds` sets silence
+tolerance. SIGINT/SIGTERM stop children and preserve an incomplete log.
+Campaigns defer nightly work with `scripts/gpu_queue.py reserve --owner NAME
+--reason TEXT --seconds N`; `clear` releases it early.
+
+The gate gates only what the branch touched: design-status housekeeping
+(`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines land
+in the same merge as the code), docs-index freshness when docs were
+added/renamed (`scripts/gen_docs_index.py`), the UI flow gate
+(`scripts/run_ui_flows.py --touched`, path-scoped via the flow manifest's
+`path_triggers`), `cargo deny check bans`, changed-code clippy `--tests` +
+module-scoped nextest filtersets (including sibling test modules and mapped
+integration binaries), and `scripts/gpu_proofs_gate.py` when the diff touches
+GPU paths (scoped: mapped tests + smoke set from `scripts/gpu_scope.py`,
+unmapped GPU path fails, `glb_conformance` only for glTF paths; the whole
+suite is `--all`, nightly). Comment/blank-only and docs-only diffs skip the
+build, clippy, CPU-test, and GPU-proof legs. The selected CPU tests retain the
+GPU lock because device use cannot be known cheaply; builds run outside that
+hold. Full touched-crate and workspace CPU suites run nightly through
+`trunk_health.py`.
+
+Successful legs are stored in the Git common directory, shared by every slot.
+Keys cover content, dependency crates, test selection, features, toolchain,
+environment, fixtures and gate scripts. An unchanged leg prints `[REUSED]` with
+its original commit and time. Failed or unidentifiable legs run again.
+Standalone proof-gate runs and equivalent serial cargo proof commands through
+`gpu_queue.py` share these records. Only exact selections match; a different
+filter, target or skip list needs its own pass. Raw cargo runs longer than the
+minimum hang allowance need the instrumented proof gate before they can count
+as landing passes. A fully reused test set needs no build or GPU lock. Build
+results alone are not reusable after a slot cache is reclaimed. Nightly sweeps
+never reuse.
+
+Lanes run `--cheap` before their commit: it gates the uncommitted working tree
+against the base, and the landing gate reuses its passes for the same content.
+The full gate requires a clean committed tree. `land_branch.py` checks the
+proposed merge tree before committing it. If main changed that tree, it merges
+main into the slot and gates again; only changed inputs need new checks.
 """
 
 import argparse
