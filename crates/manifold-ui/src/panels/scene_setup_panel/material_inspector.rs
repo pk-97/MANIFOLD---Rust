@@ -279,6 +279,7 @@ impl ScenePanel {
         self.properties_card.rows.iter().find_map(|row| {
             row.rgb_members
                 .as_ref()
+                .filter(|members| members.editable)
                 .map(|members| &members.ids)
                 .filter(|members| members.contains(param_id))
                 .cloned()
@@ -591,6 +592,53 @@ impl ScenePanel {
             })
     }
 
+    /// One properties-card row as the Scene tab walks them: a colour row
+    /// draws its header then, when open, its three channel sliders; a G or B
+    /// channel under a colour row on this card draws there, not here.
+    pub(super) fn build_properties_block(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        cy: f32,
+        slot: usize,
+        label_width: f32,
+        slider_w: f32,
+        target: GraphParamTarget,
+    ) -> f32 {
+        let rows = &self.properties_card.rows;
+        if self.properties_card.row_host.is_colour_tail(rows, slot, true) {
+            return cy;
+        }
+        if rows[slot].kind(true) != RowKind::Colour {
+            return self.build_properties_row(tree, inner_x, cy, slot, label_width, slider_w, target);
+        }
+        let host = &self.properties_card.row_host;
+        let open = host.colour_open(&rows[slot]);
+        let rgb = host.swatch_rgb_of(slot).unwrap_or([0.0; 3]);
+        let Some(ids) = build_colour_row(
+            tree,
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            slider_w,
+            label_width,
+            &rows[slot],
+            rgb,
+            open,
+            Some(param_row_key_base(rows[slot].id.as_ref())),
+        ) else {
+            return cy;
+        };
+        let mut cy = ids.new_cy;
+        if open {
+            for channel in RowHost::colour_channels(rows, slot).into_iter().flatten() {
+                cy = self.build_properties_row(tree, inner_x, cy, channel, label_width, slider_w, target.clone());
+            }
+        }
+        self.properties_card.row_host.install_colour_row(tree, slot, &ids);
+        cy
+    }
+
     /// One properties-card row, built through the SAME shared core every
     /// effect/generator card row uses — no synthesis, no `RowAddr`: `slot`
     /// indexes `self.properties_card.rows` directly, whose
@@ -640,6 +688,11 @@ impl ScenePanel {
             }
         }
         let mut info = self.properties_card.rows[slot].clone();
+        // The colour row's R channel draws here as its plain slider; the
+        // header is `build_properties_block`'s.
+        if info.kind(true) == RowKind::Colour {
+            info.rgb_members = None;
+        }
         if info.spec.material_role.is_some() {
             info.spec.inactive_reason = None;
         }
@@ -1217,6 +1270,7 @@ impl ScenePanel {
 
     pub(super) fn properties_row_action(
         &mut self,
+        tree: &UITree,
         row: usize,
         role: RowRole,
         node: NodeId,
@@ -1259,6 +1313,7 @@ impl ScenePanel {
         let card = &mut self.properties_card;
         let mut copied_flash = CopyToClipboardLabelState::default();
         card.row_host.row_action(
+            tree,
             target,
             row,
             role,
@@ -1284,6 +1339,7 @@ mod tests {
             group: crate::param_surface::ColourGroup::Material(crate::param_surface::MaterialColour::Base),
             ids,
             values: [1.0; 3],
+            editable: true,
         }
     }
 
@@ -1393,6 +1449,7 @@ mod tests {
         });
         let target = GraphParamTarget::GeneratorOf(LayerId::new("layer"));
         let actions = panel.properties_row_action(
+            &UITree::new(),
             0,
             RowRole::MaterialFeatureToggle(feature),
             NodeId::PLACEHOLDER,
@@ -1561,9 +1618,19 @@ mod tests {
         let target = GraphParamTarget::GeneratorOf(LayerId::new("layer"));
         let mut tree = UITree::new();
         panel.content_parent = tree.add_panel(None, 0.0, 0.0, 400.0, 800.0, UIStyle::default());
+        panel.properties_card.row_host.index_swatches(&panel.properties_card.rows);
         let mut y = 0.0;
         for slot in 0..3 {
-            y = panel.build_properties_row(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
+            y = panel.build_properties_block(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
+        }
+        assert!(panel.properties_card.row_host.slider_ids.iter().all(Option::is_none), "an editable colour starts folded");
+        let fold = panel.properties_card.row_host.colour_ids[0].expect("the R row is the colour row").fold;
+        panel.properties_row_action(&tree, 0, RowRole::ColourFold, fold, target.clone());
+        let mut tree = UITree::new();
+        panel.content_parent = tree.add_panel(None, 0.0, 0.0, 400.0, 800.0, UIStyle::default());
+        let mut y = 0.0;
+        for slot in 0..3 {
+            y = panel.build_properties_block(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
         }
         assert!(
             panel

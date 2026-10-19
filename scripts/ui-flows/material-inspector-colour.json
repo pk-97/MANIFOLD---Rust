@@ -45,6 +45,29 @@
     "ScrollTo": {
       "target": {
         "Query": {
+          "name": "param_row.10_color_r.colour"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.10_color_r.colour"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
           "name": "param_row.10_color_r.slider"
         }
       }

@@ -134,6 +134,7 @@ impl ScenePanel {
         if let Some(section) = section {
             self.section_folded.insert(section, false);
         }
+        self.properties_card.row_host.open_colour_of(&self.properties_card.rows, param.as_ref());
         let active = active_mod_tabs(
             &self.properties_card.mod_state,
             &self.properties_card.rows[index],

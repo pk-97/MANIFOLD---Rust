@@ -184,8 +184,13 @@ pub(crate) struct RowHost {
     /// their own, so the value sync feeds them by id through
     /// `swatch_members`.
     pub(crate) swatch_ids: Vec<Option<(NodeId, ColourGroup)>>,
-    swatch_rgb: Vec<[f32; 3]>,
-    swatch_members: ahash::AHashMap<String, (usize, usize)>,
+    pub(super) swatch_rgb: Vec<[f32; 3]>,
+    pub(super) swatch_members: ahash::AHashMap<String, (usize, usize)>,
+    /// Per-row colour-row fold and hex nodes (`colour_row`).
+    pub(crate) colour_ids: Vec<Option<ColourRowNodes>>,
+    /// Colour folds the user flipped this session, by colour row id. A
+    /// colour with no entry follows its default (`RowHost::colour_open`).
+    pub(super) colour_open: ahash::AHashMap<String, bool>,
     /// WidgetId → (row, role) reverse map, rebuilt every `build()` from the
     /// same rows being rendered (D5, `docs/WIDGET_TREE_DESIGN.md` P2) — the
     /// ONLY sanctioned way `handle_click`/`handle_pointer_down`/`handle_drag`
@@ -220,6 +225,8 @@ impl RowHost {
             swatch_ids: Vec::new(),
             swatch_rgb: Vec::new(),
             swatch_members: ahash::AHashMap::new(),
+            colour_ids: Vec::new(),
+            colour_open: ahash::AHashMap::new(),
             row_index: RowIndex::default(),
             gesture: ScrubGesture::new(),
         }
@@ -249,6 +256,7 @@ impl RowHost {
         self.mapping_chevron_ids.resize_with(n, || None);
         self.swatch_ids.resize_with(n, || None);
         self.swatch_rgb.resize(n, [0.0; 3]);
+        self.colour_ids.resize_with(n, || None);
 
     }
 
@@ -278,6 +286,7 @@ impl RowHost {
         none(&mut self.toggle_ids);
         none(&mut self.mapping_chevron_ids);
         none(&mut self.swatch_ids);
+        none(&mut self.colour_ids);
         self.mod_tab_ids.iter_mut().for_each(Vec::clear);
         self.section_header_ids.clear();
         self.row_index.clear();
@@ -1181,7 +1190,7 @@ impl RowHost {
                     tree.set_text(ids.button_id, label);
                 }
             }
-            RowKind::Trigger | RowKind::Number => {}
+            RowKind::Trigger | RowKind::Number | RowKind::Colour => {}
         }
     }
 
@@ -1508,7 +1517,8 @@ impl RowHost {
     /// `RowHost` (the `SceneCardState` unification). Well under `clippy.toml`'s
     /// `too-many-arguments-threshold` (20).
     pub(crate) fn row_action(
-        &self,
+        &mut self,
+        tree: &UITree,
         target: GraphParamTarget,
         row: usize,
         role: RowRole,
@@ -1651,9 +1661,12 @@ impl RowHost {
                     vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(target, section))]
                 })
                 .unwrap_or_default(),
+            // A colour one RGB write cannot own only shows; its channels are
+            // edited on their sliders.
             RowRole::ColourSwatch(_) => rows
                 .get(row)
                 .and_then(|r| r.rgb_members.as_ref())
+                .filter(|members| members.editable)
                 .map(|members| {
                     vec![PanelAction::Root(RootAction::OpenColourMenu {
                         target,
@@ -1662,53 +1675,28 @@ impl RowHost {
                     })]
                 })
                 .unwrap_or_default(),
+            // The typing path commits the hex as one RGB scrub: one undo step.
+            RowRole::ColourHex => rows
+                .get(row)
+                .and_then(|r| r.rgb_members.as_ref())
+                .filter(|members| members.editable)
+                .map(|members| {
+                    vec![PanelAction::Root(RootAction::BeginColourTextInput {
+                        target,
+                        param_ids: members.ids.clone(),
+                        anchor: tree.get_bounds(node),
+                        value: self.swatch_rgb.get(row).copied().unwrap_or(members.values),
+                    })]
+                })
+                .unwrap_or_default(),
+            RowRole::ColourFold => match rows.get(row) {
+                Some(info) => {
+                    self.toggle_colour(info);
+                    vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]
+                }
+                None => Vec::new(),
+            },
             RowRole::MaterialFeatureToggle(_) | RowRole::MaterialPlacement(_) => Vec::new(),
-        }
-    }
-
-    /// Index the swatch channels of `rows` by id and seed each swatch with
-    /// its projected colour. Call whenever the rows are reconfigured.
-    pub(crate) fn index_swatches(&mut self, rows: &[ParamRow]) {
-        self.swatch_members.clear();
-        self.swatch_rgb.resize(rows.len(), [0.0; 3]);
-        for (row, info) in rows.iter().enumerate() {
-            let Some(members) = &info.rgb_members else { continue };
-            self.swatch_rgb[row] = members.values;
-            for (channel, id) in members.ids.iter().enumerate() {
-                self.swatch_members.insert(id.to_string(), (row, channel));
-            }
-        }
-    }
-
-    /// Take one live value from the value sync; ignored unless `id` is a
-    /// swatch channel.
-    pub(crate) fn feed_swatch_channel(&mut self, id: &str, value: f32) {
-        if let Some(&(row, channel)) = self.swatch_members.get(id)
-            && let Some(rgb) = self.swatch_rgb.get_mut(row)
-        {
-            rgb[channel] = value;
-        }
-    }
-
-    /// Set a swatch row's live colour directly (hosts whose channels are
-    /// rows of their own).
-    pub(crate) fn set_swatch_rgb(&mut self, row: usize, rgb: [f32; 3]) {
-        if let Some(slot) = self.swatch_rgb.get_mut(row) {
-            *slot = rgb;
-        }
-    }
-
-    /// Repaint every built swatch whose shown colour differs from its live
-    /// channels. Only changed nodes are touched.
-    pub(crate) fn paint_swatches(&self, tree: &mut UITree) {
-        for (swatch, rgb) in self.swatch_ids.iter().zip(&self.swatch_rgb) {
-            let Some((node, _)) = swatch else { continue };
-            let colour = swatch_colour(*rgb);
-            if tree.get_node(*node).is_some_and(|n| n.style.bg_color != colour) {
-                let mut style = tree.get_node(*node).map(|n| n.style).unwrap_or_default();
-                style.bg_color = colour;
-                tree.set_style(*node, style);
-            }
         }
     }
 }

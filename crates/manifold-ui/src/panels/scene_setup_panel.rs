@@ -54,7 +54,7 @@ use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{ParamCardPanel, RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
-    ROW_ROLE_TOGGLE, param_row_key_base,
+    ROW_ROLE_TOGGLE, build_colour_row, param_row_key_base,
     build_button_row, toggle_btn_style,
 };
 use crate::param_surface::{
@@ -747,6 +747,7 @@ impl SceneCardState {
         let prev_pushed = std::mem::take(&mut self.last_pushed_values);
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
+        self.row_host.index_swatches(&self.rows);
         self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
         self.last_pushed_values = self
             .rows
@@ -1729,7 +1730,7 @@ impl ScenePanel {
             if !folded {
                 cy = self.build_material_section_sources(tree, inner_x, inner_w, cy, &name);
                 for row in i..run_end {
-                    cy = self.build_properties_row(tree, inner_x, cy, row, label_width, slider_w, target.clone());
+                    cy = self.build_properties_block(tree, inner_x, cy, row, label_width, slider_w, target.clone());
                 }
             }
             i = run_end;
@@ -2155,7 +2156,7 @@ impl ScenePanel {
                         // its panel is docked to, which can differ from the
                         // app's active layer.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        for mut action in self.properties_row_action(row, role, *node_id, target) {
+                        for mut action in self.properties_row_action(tree, row, role, *node_id, target) {
                             if let PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. }) = &mut action {
                                 *anchor = tree.get_bounds(*node_id);
                                 *value = self.properties_card.mod_state.driver_effective_period(row);

@@ -2415,7 +2415,7 @@ pub(super) mod tests {
         use crate::view::UiParamSlot as ParamSlot;
         let ids = ["7_color_r", "7_color_g", "7_color_b"].map(manifold_foundation::ParamId::from);
         let mut config = gen_config();
-        config.rows[0].rgb_members = Some(RgbMembers { group: ColourGroup::Light, ids: ids.clone(), values: [1.0, 0.5, 0.25] });
+        config.rows[0].rgb_members = Some(RgbMembers { group: ColourGroup::Light, ids: ids.clone(), values: [1.0, 0.5, 0.25], editable: true });
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         panel.configure(&config);

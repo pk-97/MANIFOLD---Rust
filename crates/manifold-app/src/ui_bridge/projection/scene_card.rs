@@ -97,6 +97,17 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
     }
     placed.sort_by_key(|(key, _)| *key);
     *rows = placed.into_iter().map(|(_, row)| row).collect();
+    super::material::colour_rows(rows, inst, def);
+    // A light colour shown on the card as its own colour row takes the
+    // swatch off the light's fader: one swatch per colour.
+    for index in 0..rows.len() {
+        let Some(ids) = rows[index].rgb_members.as_ref().filter(|m| m.ids[0] != rows[index].id).map(|m| m.ids.clone()) else {
+            continue;
+        };
+        if rows.iter().any(|row| row.rgb_members.as_ref().is_some_and(|m| m.ids == ids && m.ids[0] == row.id)) {
+            rows[index].rgb_members = None;
+        }
+    }
     true
 }
 
@@ -876,5 +887,41 @@ mod tests {
         pinned.choices.pin = Some(CardPin::Shown);
         assert!(Placement::of(&pinned, None, false, true).is_some(), "Show on Card and attaches (D6) win");
         assert!(Placement::of(&param, None, false, false).is_some(), "authored controls keep card visibility");
+    }
+
+    /// A light's three colour channels group onto its R row, which every
+    /// scene surface draws as the one colour row. A modulator stored on a
+    /// channel keeps the group, so the row still opens on that channel's
+    /// slider and lane, but takes away the single RGB write.
+    #[test]
+    fn a_light_colour_groups_and_a_modulated_channel_keeps_it() {
+        use manifold_ui::param_surface::{ColourGroup, RgbChannel, RowKind};
+        let mut project = project("PhysicsBoxes");
+        let def = catalog_def("PhysicsBoxes");
+        let grouped = |project: &Project| {
+            let mut rows = surface(project, SurfaceVisibility::All);
+            super::super::material::colour_rows(&mut rows, project.timeline.layers[0].gen_params().unwrap(), &def);
+            rows
+        };
+        let rows = grouped(&project);
+        let red = rows
+            .iter()
+            .find(|row| row.spec.scene.and_then(|scene| scene.colour) == Some(RgbChannel::R))
+            .expect("a light colour channel");
+        let members = red.rgb_members.clone().expect("the R row carries its colour");
+        assert_eq!((members.group, members.editable, red.kind(true)), (ColourGroup::Light, true, RowKind::Colour));
+        assert!(rows.iter().filter(|row| row.rgb_members.is_some()).all(|row| row.kind(true) == RowKind::Colour), "only R rows carry one");
+
+        let mut driver = manifold_core::effects::ParameterDriver::new(
+            members.ids[1].clone(),
+            manifold_core::types::BeatDivision::Quarter,
+            manifold_core::types::DriverWaveform::Sine,
+        );
+        driver.enabled = false;
+        project.timeline.layers[0].gen_params_mut().unwrap().drivers = Some(vec![driver]);
+        let rows = grouped(&project);
+        let red = rows.iter().find(|row| row.id == members.ids[0]).unwrap();
+        let after = red.rgb_members.as_ref().expect("a modulated channel keeps the colour row");
+        assert!(!after.editable, "one RGB write no longer owns a modulated channel");
     }
 }
