@@ -262,7 +262,7 @@ fn run_flow(
     // `paramsteps`/`gltfscene` pre-armed-state pattern above (BUG-073: a
     // script harness has no per-frame tick to drive a reveal tween, so state
     // that needs to already be settled is constructed, not clicked into).
-    if scene == "audiosends" {
+    if matches!(scene, "audiosends" | "audiosendsnone" | "audiosendsone") {
         ui.audio_setup_panel.open();
         ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
         ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);

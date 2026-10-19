@@ -135,6 +135,20 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         "automationenum" => Some(automation_enum_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
+        // Audio-default flows: no source at all, and exactly one source (unrouted).
+        "audiosendsnone" => {
+            let mut scene = audio_sends_scene();
+            scene.project.audio_setup.sends.clear();
+            Some(scene)
+        }
+        "audiosendsone" => {
+            let mut scene = audio_sends_scene();
+            scene.project.audio_setup.sends.truncate(1);
+            let send = &mut scene.project.audio_setup.sends[0];
+            send.label = "Master".into();
+            send.source.layers.clear();
+            Some(scene)
+        }
         // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
         // timeline content; the panel itself is pre-opened in script.rs.
         "rtquality" => Some(timeline_scene()),

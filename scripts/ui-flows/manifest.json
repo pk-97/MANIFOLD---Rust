@@ -200,6 +200,20 @@
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
       "audio-setup-hygiene"
     ],
+    "crates/manifold-app/src/ui_bridge/dispatch/audio_setup.rs": [
+      "audio-new-source-starts-on-none"
+    ],
+    "crates/manifold-editing/src/commands/audio_setup.rs": [
+      "audio-new-source-starts-on-none"
+    ],
+    "crates/manifold-app/src/ui_bridge/editing.rs": [
+      "audio-new-layer-routes-to-sole-source",
+      "audio-new-layer-no-source-with-two-sources"
+    ],
+    "crates/manifold-editing/src/commands/layer.rs": [
+      "audio-new-layer-routes-to-sole-source",
+      "audio-new-layer-no-source-with-two-sources"
+    ],
     "crates/manifold-ui/src/panels/rt_quality_panel.rs": [
       "rt-quality-panel-demo"
     ],
@@ -307,6 +321,9 @@
     "scene-photoscan-modifiers": "gltfscene",
     "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
+    "audio-new-source-starts-on-none": "audiosendsnone",
+    "audio-new-layer-routes-to-sole-source": "audiosendsone",
+    "audio-new-layer-no-source-with-two-sources": "audiosends",
     "automation-placeholder-first-click": "automationplaceholder",
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
