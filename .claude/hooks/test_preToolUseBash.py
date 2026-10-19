@@ -152,7 +152,7 @@ def run_hook_main(payload):
         sys.stdin, sys.stdout = orig_in, orig_out
 
 
-# --- worktree-ring guard (2026-07-15: pool capped at 6 slots; raw
+# --- worktree-ring guard (2026-07-15: pool capped at 10 slots; raw
 # `git worktree add` denied in every mode so the ring can't be bypassed) ---
 
 def test_worktree_add_denied_all_modes():
@@ -329,6 +329,13 @@ AUTO_DENIED_SHAPES = [
     "git -c core.pager=evil log",
     "git checkout -- .",
     "git branch -D old-branch",
+    "fd -Hx rm",
+    "git branch -d -f foo",
+    "git branch -df foo",
+    "git branch --delete --force foo",
+    "git checkout .",
+    "git checkout -- ./",
+    "git checkout -- :/",
 ]
 AUTO_SAFE_NEIGHBOURS = [
     "fd -e rs",
@@ -336,6 +343,11 @@ AUTO_SAFE_NEIGHBOURS = [
     "git commit -m 'x' -- file.rs",
     "git checkout -- path/file.rs",
     "git branch -d old-branch",
+    "git checkout -- crates/foo.rs; rg -n pattern .",
+    "rg -n -- --pre path",
+    "rg -e --pre path",
+    "fd -e rs -- -x",
+    "fd -e xml",
 ]
 
 
@@ -355,9 +367,10 @@ def test_auto_mode_safe_neighbours_allowed():
 
 
 def test_auto_mode_shapes_only_in_auto():
-    for cmd in AUTO_DENIED_SHAPES:
-        check(f"default mode leaves `{cmd}` to the permission system",
-              _auto_decision(cmd, "default") != "deny", _auto_decision(cmd, "default"))
+    for mode in ("default", "acceptEdits", "bypassPermissions"):
+        for cmd in AUTO_DENIED_SHAPES:
+            got = _auto_decision(cmd, mode)
+            check(f"{mode} mode leaves `{cmd}` pre-approved", got == "allow", got)
 
 
 def test_rg_replace_bundled_rn_fires():

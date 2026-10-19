@@ -614,7 +614,7 @@ def _main(stack):
                       help="stop at the first red")
     mode.add_argument("--cheap", action="store_true",
                       help="run only the legs before the expensive boundary, record their "
-                           "passes for reuse, publish no gate verdict; lanes run it before "
+                           "passes for reuse, never a landing pass; lanes run it before "
                            "their commit, on the uncommitted working tree")
     parser.add_argument('--plan-only', action='store_true', help='read-only plan including working-tree changes; no build, test or receipt writes')
     parser.add_argument('--paths-json', type=Path, help='plan-only path fixture with paths/base/head')
@@ -1113,7 +1113,7 @@ def finish(repo, base_sha, results):
     changed = gate_passes.changed_passes(gate_passes.accepted_passes())
     if changed:
         RAN_EVERY_CHECK.set(False)
-        tail = ['inputs changed before verdict publication: ' + ', '.join(changed),
+        tail = ['inputs changed before the gate finished: ' + ', '.join(changed),
                 'rerun: ' + rerun_command(['scripts/landing_gate.py', '--repo', str(repo),
                                            '--base', base_sha], repo)]
         results.append(('FAIL', 'stable-inputs', None, tail))
