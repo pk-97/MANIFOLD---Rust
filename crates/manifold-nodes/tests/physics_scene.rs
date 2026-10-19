@@ -41,6 +41,25 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
         (0.0, 4000.0, 256.0)
     );
     assert!(count.whole_numbers && count.card_visible);
+    // The box spawner is the copies body's: all four stamp there, none on
+    // the world or on the bodies that are not copied.
+    let targets = binding_targets(&def);
+    for param in ["copy_count", "copy_spacing", "copy_columns", "copy_layout"] {
+        assert!(targets.contains(&(121, param.to_string())), "copies body 121.{param} must be exposed");
+    }
+    assert_eq!(
+        targets.iter().filter(|(_, param)| param.starts_with("copy_")).count(),
+        4,
+        "{targets:?}"
+    );
+    // One id plan: the controls keep the ids they had on the world, so a
+    // saved value and anything attached to it still land, and the stamp adds
+    // no duplicate under the body's own doc id.
+    for id in ["40_copy_count", "40_copy_spacing", "40_copy_columns", "40_copy_layout"] {
+        assert!(metadata.params.iter().any(|p| p.id == id), "{id}");
+    }
+    assert!(!metadata.params.iter().any(|p| p.id.starts_with("121_copy_")));
+    assert!(metadata.param_aliases.is_empty(), "no renames: {:?}", metadata.param_aliases);
     assert!(
         metadata
             .params
@@ -97,6 +116,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         fragment_parent: None,
         release_count: 0.0,
         wall: false,
+        spawn: Default::default(),
     };
     let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
@@ -108,10 +128,10 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         sim.advance_with_copy_layout(
             bodies.clone(),
             prototype.clone(),
-            scalar(40, "copy_count"),
-            scalar(40, "copy_spacing"),
-            scalar(40, "copy_columns"),
-            scalar(40, "copy_layout"),
+            scalar(121, "copy_count"),
+            scalar(121, "copy_spacing"),
+            scalar(121, "copy_columns"),
+            scalar(121, "copy_layout"),
             [0.0, -9.81, 0.0],
             Seconds(f64::from(frame) / 60.0),
             1.0,
@@ -255,6 +275,11 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
             "world 40.{param} must be exposed"
         );
     }
+    // No copies body, so no box sliders anywhere.
+    assert!(
+        !targets.iter().any(|(_, param)| param.starts_with("copy_")),
+        "a scene without boxes shows no box controls"
+    );
 
     let metadata = migrated.preset_metadata.as_ref().expect("metadata");
     let reset_specs: Vec<_> = metadata
@@ -304,4 +329,87 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
         ));
     }
     assert_eq!(nodes[&40].type_id, "node.physics_world");
+}
+
+/// An edited Physics Boxes saved before the box spawner moved: its own
+/// graph (not the catalog's) with the four controls and their cards on the
+/// world, a Spacing value of 3 and an LFO on Spacing. After load the value
+/// drives the copies body under the same id and the LFO still resolves, so
+/// the boxes come back laid out the same. The Physics Boxes rename table
+/// applies to every instance of the preset before any migration, so a
+/// rename there would drop the value and orphan the LFO.
+#[test]
+fn edited_physics_boxes_keep_box_values_and_drivers_through_load() {
+    use manifold_core::effects::ParameterDriver;
+    use manifold_core::layer::Layer;
+    use manifold_core::preset_type_id::PresetTypeId;
+    use manifold_core::project::Project;
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+
+    // The old shape, rebuilt from the bundled file: values and cards on the
+    // world (doc id 40), none on the box body.
+    let mut old: serde_json::Value = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
+    let nodes = old["nodes"].as_array_mut().unwrap();
+    let body = nodes.iter().position(|n| n["nodeId"] == "physics_demo_121").unwrap();
+    let world = nodes.iter().position(|n| n["nodeId"] == "physics_demo_40").unwrap();
+    for param in manifold_core::copies_body::COPY_PARAMS {
+        let value = nodes[body]["params"].as_object_mut().unwrap().remove(param).unwrap();
+        nodes[world]["params"][param] = value;
+    }
+    nodes[body].as_object_mut().unwrap().remove("exposedParams");
+    nodes[world]["exposedParams"] = serde_json::json!(["copy_count", "reset"]);
+    // The cards a saved show carries: the authored Count plus the stamped
+    // Spacing, Columns and Arrangement, all on the world under 40_ ids.
+    let meta = &mut old["presetMetadata"];
+    let is_spawner = |id: &serde_json::Value| {
+        id.as_str().is_some_and(|id| id.starts_with("40_copy_") && id != "40_copy_count")
+    };
+    meta["params"].as_array_mut().unwrap().retain(|p| !is_spawner(&p["id"]));
+    meta["bindings"].as_array_mut().unwrap().retain(|b| !is_spawner(&b["id"]));
+    for (param, name, default, convert) in [
+        ("copy_spacing", "Spacing", 1.85, "Float"),
+        ("copy_columns", "Columns", 24.0, "IntRound"),
+        ("copy_layout", "Arrangement", 1.0, "EnumRound"),
+    ] {
+        let id = format!("40_{param}");
+        meta["params"].as_array_mut().unwrap().push(serde_json::json!(
+            {"id": id, "name": name, "min": 0.0, "max": 100.0, "defaultValue": default, "cardVisible": false}));
+        meta["bindings"].as_array_mut().unwrap().push(serde_json::json!(
+            {"id": id, "label": name, "defaultValue": default,
+             "target": {"kind": "node", "nodeId": "physics_demo_40", "param": param}, "convert": {"type": convert}}));
+    }
+    for binding in meta["bindings"].as_array_mut().unwrap() {
+        if binding["id"] == "40_copy_count" {
+            binding["target"]["nodeId"] = "physics_demo_40".into();
+        }
+    }
+    meta.as_object_mut().unwrap().remove("paramAliases");
+    let old: EffectGraphDef = serde_json::from_value(old).unwrap();
+    assert!(manifold_core::copies_body::carries_world_copies(&old));
+
+    let mut layer = Layer::new_generator("Boxes".into(), PresetTypeId::from_string("PhysicsBoxes".into()), 0);
+    let fx = layer.gen_params_mut().unwrap();
+    fx.graph = Some(old);
+    fx.refresh_manifest_from_graph();
+    assert!(fx.set_base_param("40_copy_spacing", 3.0), "the old graph has a Spacing card");
+    fx.drivers = Some(vec![ParameterDriver::new("40_copy_spacing", BeatDivision::Quarter, DriverWaveform::Sine)]);
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+
+    let saved = serde_json::to_string(&project).unwrap();
+    let mut loaded: Project = serde_json::from_str(&saved).unwrap();
+    loaded.on_after_deserialize();
+
+    let fx = loaded.timeline.layers[0].gen_params().unwrap();
+    assert!((fx.get_base_param("40_copy_spacing") - 3.0).abs() < 1e-6, "the saved Spacing survives");
+    let driver = &fx.drivers.as_ref().unwrap()[0];
+    assert_eq!(driver.param_id, "40_copy_spacing", "the LFO still points at Spacing");
+    assert!(fx.params.iter().any(|p| p.id() == "40_copy_spacing"), "and Spacing exists");
+    let def = fx.graph.as_ref().unwrap();
+    let binding = def.preset_metadata.as_ref().unwrap().bindings.iter().find(|b| b.id == "40_copy_spacing").unwrap();
+    assert!(
+        matches!(&binding.target, BindingTarget::Node { node_id, param }
+            if node_id.as_str() == "physics_demo_121" && param == "copy_spacing"),
+        "Spacing drives the copies body"
+    );
 }

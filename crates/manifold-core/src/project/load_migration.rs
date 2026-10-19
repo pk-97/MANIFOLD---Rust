@@ -75,6 +75,14 @@ impl Project {
         // section 9 U2/D3.
         self.migrate_step_random_audio_mods_to_envelopes();
 
+        // The sky's sun follows the Sun light: saved scenes lose the World's
+        // own sun position and get the Sun light wired into the bake.
+        self.migrate_world_sun_to_light();
+
+        // The physics box spawner lives on the copies body: saved scenes
+        // move Count, Spacing, Columns and Arrangement off the world.
+        self.migrate_world_copies_to_body();
+
         // Validate tempo map data
         self.tempo_map.ensure_valid();
         self.tempo_map

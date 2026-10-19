@@ -55,15 +55,15 @@ use super::param_card::{ParamCardPanel, RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
     ROW_ROLE_TOGGLE, param_row_key_base,
-    build_toggle_trigger_row, toggle_btn_style, ToggleParamIds,
+    build_button_row, toggle_btn_style,
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping,
+    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowKind, RowMapping,
     RowRole, RowSpec,
 };
 use crate::slider::GAP;
-use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
+use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, SurfaceRole};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -865,7 +865,7 @@ fn placeholder_param_info() -> ParamRow {
         },
         scene_addr: None,
         rgb_members: None,
-        material_attached: false,
+        modulator_stored: false,
     }
 }
 
@@ -1176,7 +1176,7 @@ impl ScenePanel {
         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
         self.properties_card
             .row_host
-            .register_param_menus(&self.properties_card.rows, &target, intents, |_| false);
+            .register_param_menus(&self.properties_card.rows, &target, intents);
         for card in &self.object_modifier_cards {
             card.register_intents(intents);
         }
@@ -1570,7 +1570,11 @@ impl ScenePanel {
 
     /// The selected item's controls (D8): the rows it owns, in manifest
     /// order, grouped by control group in declaration order, one fold
-    /// section per group. Hidden rows are left out unless attached (D6).
+    /// section per group, each group's switch first. Hidden rows are left
+    /// out unless attached or holding a stored modulator, armed or not;
+    /// rows the item's current mode does not read are left out unless
+    /// attached (D6), and an attached unread row stays, dimmed with the
+    /// reason.
     /// Material rows keep the material inspector's own sections inside the
     /// Material group, framed by its header and feature actions. Every row
     /// goes through the shared `build_param_row`/`RowHost` core, and
@@ -1584,7 +1588,7 @@ impl ScenePanel {
         mut cy: f32,
         rows: PropertyRows<'_>,
     ) -> f32 {
-        let Some(config) = self.full_params.clone() else {
+        let Some(mut config) = self.full_params.clone() else {
             self.properties_card.resize(0);
             return cy;
         };
@@ -1595,16 +1599,43 @@ impl ScenePanel {
         };
         self.property_fallback_group = rows.fallback;
         let imported_selection = rows.object.is_some_and(|object| object.physics_imported);
+        // The item's mode switches, read from their base values (D12).
+        let modes: Vec<(Feature, u32)> = config
+            .rows
+            .iter()
+            .filter(|row| rows.owned.iter().any(|id| id == row.id.as_ref()))
+            .filter_map(|row| {
+                let feature = row.spec.scene?.switch.filter(|feature| feature.has_modes())?;
+                Some((feature, row.value.base.round().max(0.0) as u32))
+            })
+            .collect();
         let mut retained: Vec<usize> = Vec::new();
-        for (i, p) in config.rows.iter().enumerate() {
+        for i in 0..config.rows.len() {
+            let unread = match config.rows[i].spec.scene.and_then(|scene| scene.gate) {
+                Some(Gate::Only(feature, read_in)) => modes
+                    .iter()
+                    .find(|(switch, _)| *switch == feature)
+                    .is_some_and(|&(_, mode)| !read_in.contains(mode))
+                    .then_some(feature),
+                _ => None,
+            };
+            if let Some(feature) = unread
+                && config.rows[i].is_attached()
+            {
+                config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
+            }
+            let p = &config.rows[i];
             let selected_material_id = p.spec.material_role.is_some()
                 && self.active_material_info.as_ref().is_some_and(|info| {
                     info.params.iter().any(|(_, id)| id == &p.id)
                 });
             let owned = selected_material_id || rows.owned.iter().any(|id| id == p.id.as_ref());
             let excluded = !selected_material_id && rows.excluded.iter().any(|id| id == p.id.as_ref());
-            let hidden = p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden)
-                && !p.is_attached()
+            // A Hidden control shows while a modulator is stored on it, armed
+            // or not: the row is the only way back to a disarmed one.
+            let hidden_role = p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden)
+                && !(p.modulator_stored || p.is_attached());
+            let hidden = (hidden_role || (unread.is_some() && !p.is_attached()))
                 && !self.property_explicitly_revealed(p);
             // Imported bodies keep their own collider shape; only they offer
             // the collider detail control.
@@ -1619,7 +1650,10 @@ impl ScenePanel {
                 retained.push(i);
             }
         }
-        retained.sort_by_key(|&index| self.property_group(&config.rows[index]) as usize);
+        retained.sort_by_key(|&index| {
+            let row = &config.rows[index];
+            (self.property_group(row) as usize, row.spec.scene.is_none_or(|scene| scene.switch.is_none()))
+        });
         // Material rows use the material inspector's stable buckets, inside
         // the Material group's positions.
         let material_positions: Vec<usize> = retained

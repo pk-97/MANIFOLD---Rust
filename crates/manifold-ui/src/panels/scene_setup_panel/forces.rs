@@ -279,7 +279,7 @@ mod tests {
                 },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: false,
             }],
             string_params: Vec::new(),
             audio_sends: Vec::new(),

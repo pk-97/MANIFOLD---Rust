@@ -478,8 +478,7 @@ impl ParamCardPanel {
     /// for rows whose drawer the card height counts (`compute_height`).
     pub(crate) fn reveal_for_build(&mut self, i: usize) -> Option<f32> {
         let reveal = self.animated_drawer_height(i);
-        let spec = &self.rows[i].spec;
-        if (!spec.is_toggle || spec.is_trigger_gate)
+        if self.rows[i].grows_drawer(self.scene_sections)
             && let Some(shown) = self.drawer_shown.get_mut(i)
         {
             *shown = reveal;

@@ -84,22 +84,6 @@ const TARGETED_ACCELERATION_PORTS: [&str; 65] = [
     "copies_acceleration",
 ];
 
-fn read_copy_layout(ctx: &EffectNodeContext<'_, '_>) -> f32 {
-    let wired = ctx
-        .inputs
-        .scalar("copy_layout")
-        .and_then(|value| match value {
-            ParamValue::Float(value) => Some(value),
-            ParamValue::Enum(value) => Some(value as f32),
-            _ => None,
-        });
-    wired.unwrap_or_else(|| match ctx.params.get("copy_layout") {
-        Some(ParamValue::Enum(value)) => *value as f32,
-        Some(ParamValue::Float(value)) => *value,
-        _ => 0.0,
-    })
-}
-
 pub struct InstanceUploadState {
     data: Vec<InstanceTransform>,
     snapshot: InstanceSnapshotUpload,
@@ -206,7 +190,6 @@ body_62: RigidBody optional,
 body_63: RigidBody optional,
 copies: RigidBody optional,
 gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional,
-copy_count: ScalarF32 optional, copy_spacing: ScalarF32 optional, copy_columns: ScalarF32 optional, copy_layout: ScalarF32 optional,
 acceleration_field: VectorField optional,
 body_acceleration_0: VectorField optional,
 body_acceleration_1: VectorField optional,
@@ -349,13 +332,9 @@ ParamDef { name: Cow::Borrowed("gravity_y"), label: "Gravity Y", ty: ParamType::
 ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(1.25), range: Some((0.01, 100.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_layout"), label: "Arrangement", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Grid", "Pile"] },
  ],
  depth_rule: Terminal,
- composition_notes: "Connect body_N to its matching pose_N consumer and body_acceleration_N to that body's optional acceleration field. The global acceleration_field is added to every body, then the matching targeted field is added to body_N; copies_acceleration is added to every reset-latched copy. A targeted field without its matching body or copies prototype is an error and holds outputs pending. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Preview batches use the project frame interval as a CPU work budget and retain all unprocessed ticks. Preview may lag under overload; the Physics Lag HUD shows remaining work. Export/offline renders process every pending tick. Both paths use identical fixed steps. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
+ composition_notes: "Connect body_N to its matching pose_N consumer and body_acceleration_N to that body's optional acceleration field. The global acceleration_field is added to every body, then the matching targeted field is added to body_N; copies_acceleration is added to every reset-latched copy. A targeted field without its matching body or copies prototype is an error and holds outputs pending. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; the copies body carries its own box spawner (count, spacing, columns, arrangement), read on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Preview batches use the project frame interval as a CPU work budget and retain all unprocessed ticks. Preview may lag under overload; the Physics Lag HUD shows remaining work. Export/offline renders process every pending tick. Both paths use identical fixed steps. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Physics World", category: Atom },
  summary: "Simulate colliding objects together under gravity, global and per-body acceleration fields, with speed and reset controls.",
@@ -430,10 +409,11 @@ impl PhysicsWorldNode {
         ];
         let speed = ctx.scalar_or_param("speed", 1.0);
         let reset = ctx.scalar_or_param("reset", 0.0);
-        let copy_count = ctx.scalar_or_param("copy_count", 100.0);
-        let copy_spacing = ctx.scalar_or_param("copy_spacing", 1.25);
-        let copy_columns = ctx.scalar_or_param("copy_columns", 16.0);
-        let copy_layout = read_copy_layout(ctx);
+        // The copies body carries its own spawner; with no copies body the
+        // world makes none, so the defaults only pass validation.
+        let spawn = prototype.as_ref().map(|body| body.spawn).unwrap_or_default();
+        let (copy_count, copy_spacing, copy_columns, copy_layout) =
+            (spawn.count, spawn.spacing, spawn.columns, spawn.layout);
         if validate_controls {
             if !ctx.time.seconds.0.is_finite()
                 || !speed.is_finite()
@@ -838,6 +818,7 @@ mod tests {
         backend.cpu_values_mut().set(body_slot, body.clone());
         let mut prototype = body.clone();
         prototype.transform.pos = [4.0, 8.0, 0.0];
+        prototype.spawn = crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0 };
         let prototype_slot = acquire_mock_wire(
             &mut backend,
             &mut wire_slots,
@@ -854,10 +835,6 @@ mod tests {
             ("gravity_z", 0.0),
             ("speed", if invalid_speed { f32::NAN } else { 1.0 }),
             ("reset", 0.0),
-            ("copy_count", 2.0),
-            ("copy_spacing", 2.0),
-            ("copy_columns", 2.0),
-            ("copy_layout", 1.0),
         ] {
             let slot = acquire_mock_wire(
                 &mut backend,
@@ -910,10 +887,6 @@ mod tests {
             ("gravity_z", ParamValue::Float(0.0)),
             ("speed", ParamValue::Float(1.0)),
             ("reset", ParamValue::Float(0.0)),
-            ("copy_count", ParamValue::Float(2.0)),
-            ("copy_spacing", ParamValue::Float(2.0)),
-            ("copy_columns", ParamValue::Float(2.0)),
-            ("copy_layout", ParamValue::Enum(0)),
         ] {
             params.insert(Cow::Borrowed(name), value);
         }
@@ -1067,7 +1040,7 @@ mod tests {
         assert_eq!(first.inputs.copy_count, 2.0);
         assert_eq!(first.inputs.copy_spacing, 2.0);
         assert_eq!(first.inputs.copy_columns, 2.0);
-        assert_eq!(first.inputs.layout, 1.0, "wired layout shadows the enum parameter");
+        assert_eq!(first.inputs.layout, 1.0, "the copies body carries its spawner to the world");
         assert_eq!(first.inputs.gravity, [0.0; 3]);
         assert_eq!(first.inputs.acceleration_field, Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()));
         assert_eq!(first.inputs.targeted_fields[0], Some(FieldValue::uniform([2.0, 0.0, 0.0]).unwrap()));

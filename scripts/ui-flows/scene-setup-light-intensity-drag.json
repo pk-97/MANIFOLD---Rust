@@ -208,9 +208,9 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_cast_shadows.value",
+          "name": "param_row.7_cast_shadows",
           "under_name": "scene_setup",
-          "text": "On"
+          "text": "ON"
         }
       },
       "check": "Exists"
@@ -220,7 +220,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.7_cast_shadows.value",
+          "name": "param_row.7_cast_shadows",
           "under_name": "scene_setup"
         }
       }
@@ -230,7 +230,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.7_cast_shadows.value",
+          "name": "param_row.7_cast_shadows",
           "under_name": "scene_setup"
         }
       },
@@ -246,9 +246,9 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_cast_shadows.value",
+          "name": "param_row.7_cast_shadows",
           "under_name": "scene_setup",
-          "text": "Off"
+          "text": "OFF"
         }
       },
       "check": "Exists"
@@ -269,7 +269,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.7_shadow_softness.value",
+          "name": "param_row.7_shadow_softness",
           "under_name": "scene_setup"
         }
       }
@@ -279,7 +279,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.7_shadow_softness.value",
+          "name": "param_row.7_shadow_softness",
           "under_name": "scene_setup"
         }
       },

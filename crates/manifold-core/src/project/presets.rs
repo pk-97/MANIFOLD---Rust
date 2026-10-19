@@ -139,7 +139,7 @@ impl Project {
     /// A diverged instance still deserializes its own `params` wire map and
     /// still needs it reconciled, so this walker doesn't filter by
     /// `graph.is_none()` the way `tracking_preset_ids` does.
-    pub(super) fn for_each_preset_instance_mut(
+    pub(crate) fn for_each_preset_instance_mut(
         &mut self,
         mut f: impl FnMut(&mut crate::effects::PresetInstance),
     ) {

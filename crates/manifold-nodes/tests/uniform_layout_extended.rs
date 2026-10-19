@@ -219,7 +219,17 @@ mod custom {
         for case in custom_abi_cases::CASES {
             let result = (|| {
                 let source_path = resolve_source_path(case.source)?;
-                let source = std::fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
+                let mut source = std::fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
+                // A file module `x.rs` with a sibling `x/` directory is one host:
+                // its submodules may hold the shader's include site.
+                let submodules = source_path.with_extension("");
+                if submodules.is_dir() {
+                    let mut files = Vec::new();
+                    source_files(&submodules, &mut files);
+                    for file in files {
+                        source.push_str(&std::fs::read_to_string(&file).map_err(|e| e.to_string())?);
+                    }
+                }
                 if !source.contains(case.shader) {
                     return Err("mapped shader no longer appears in host source".into());
                 }

@@ -182,7 +182,7 @@ impl ParamCardPanel {
             // `SceneSetupParamChanged` (INV-M7), addressed by the row's
             // ParamAddr sidecar, never the plain manifest-param toggle wire.
             if role == RowRole::ToggleBtn
-                && !self.rows[row].spec.is_trigger
+                && self.row_host.toggle_ids[row].as_ref().is_some_and(|ids| ids.kind == crate::param_surface::RowKind::Switch)
                 && let (Some(m), Some(addr)) = (&self.modifier, &self.rows[row].scene_addr)
             {
                 let current = self.rows[row].value.base;
@@ -339,11 +339,8 @@ impl ParamCardPanel {
         // adds the card-chrome intents (border claim above,
         // per-param mapping menus below).
         self.row_host.register_intents(intents);
-        // Per-param menu. Generator toggle/trigger rows have no map gesture —
-        // they fall through to the card claim like any other dead zone.
-        let generator = matches!(self.kind, ParamCardKind::Generator);
-        self.row_host.register_param_menus(&self.rows, &target, intents, |row| {
-            generator && (row.spec.is_toggle || row.spec.is_trigger)
-        });
+        // Per-param menu on slider, switch and pick-list rows. A fire button
+        // has no map gesture and folds to the card claim like a dead zone.
+        self.row_host.register_param_menus(&self.rows, &target, intents);
     }
 }

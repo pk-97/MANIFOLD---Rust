@@ -262,7 +262,7 @@ mod tests {
         meta.bindings = vec![
             binding("1_orbit", "camera", "orbit"),
             binding("4_intensity", "sun", "intensity"),
-            binding("40_copy_count", "world", "copy_count"),
+            binding("40_copy_count", "box_body", "copy_count"),
             binding("121_shape", "box_body", "shape"),
             binding("120_pos_x", "box_transform", "pos_x"),
             binding("30_rt_enabled", "scene", "rt_enabled"),

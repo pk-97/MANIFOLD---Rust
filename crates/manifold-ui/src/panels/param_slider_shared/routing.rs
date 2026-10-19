@@ -28,8 +28,7 @@ pub(crate) fn enum_value_cell_actions(
     if count == 0 {
         return Vec::new();
     }
-    let current_index =
-        ((current_value - min).round() as i32).clamp(0, count as i32 - 1) as usize;
+    let current_index = label_index(current_value, min, count);
     if count <= 2 {
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
@@ -42,14 +41,39 @@ pub(crate) fn enum_value_cell_actions(
             PanelAction::Scrub(ValueRef::Param(target, param_id), ScrubPhase::Commit),
         ]
     } else {
-        vec![PanelAction::Root(RootAction::ParamEnumDropdown {
-            target,
-            param_id,
-            labels: labels.to_vec(),
-            current_index: current_index as u32,
-            cell_node_id,
-        })]
+        vec![enum_dropdown(target, param_id, labels, current_index, cell_node_id)]
     }
+}
+
+/// A pick list's click: the shared dropdown over the row's labels, anchored
+/// under the pick list, checked at the current value. Every label count
+/// opens the list (a pick list never cycles). `None` for a row without labels.
+pub(crate) fn pick_list_action(
+    target: crate::panels::GraphParamTarget,
+    param_id: manifold_foundation::ParamId,
+    spec: &crate::param_surface::RowSpec,
+    current_value: f32,
+    button: NodeId,
+) -> Option<crate::panels::PanelAction> {
+    let labels = spec.value_labels.as_deref().filter(|labels| !labels.is_empty())?;
+    let current_index = label_index(current_value, spec.min, labels.len());
+    Some(enum_dropdown(target, param_id, labels, current_index, button))
+}
+
+fn enum_dropdown(
+    target: crate::panels::GraphParamTarget,
+    param_id: manifold_foundation::ParamId,
+    labels: &[String],
+    current_index: usize,
+    cell_node_id: NodeId,
+) -> crate::panels::PanelAction {
+    crate::panels::PanelAction::Root(RootAction::ParamEnumDropdown {
+        target,
+        param_id,
+        labels: labels.to_vec(),
+        current_index: current_index as u32,
+        cell_node_id,
+    })
 }
 
 

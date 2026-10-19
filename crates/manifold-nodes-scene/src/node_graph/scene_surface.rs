@@ -16,7 +16,8 @@ use manifold_core::liquid_domain::{
 };
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{
-    CardBand, CardLabel, ControlGroup, Feature, Gate, RgbChannel, SceneParamDesc, SurfaceRole, Unit,
+    CardBand, CardLabel, ControlGroup, Feature, Gate, Modes, RgbChannel, SceneParamDesc, SurfaceRole,
+    Unit,
 };
 
 use crate::node_graph::material_inspector::material_param_role;
@@ -94,6 +95,13 @@ impl SceneParamFacts {
     }
 }
 
+/// `node.light`'s `mode` values (`LIGHT_MODES`): Sun 0, Point 1, Spot 2.
+const POINT_AND_SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b110));
+const SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b100));
+/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1.
+const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b01));
+const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b10));
+
 const AT_LEAST_ZERO: HardLimit = HardLimit::AtLeast(0.0);
 /// Field of view, 1° to 179°, in radians.
 const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
@@ -152,6 +160,12 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
         | "fragment_count" | "fragment_index" | "fragment_parent" | "compound_materials" => {
             hidden(Body)
         }
+        // The box spawner. Only a copies body stamps these
+        // (`copies_body::is_copies_body_param`), and the copies body belongs
+        // to its physics world's item, so they sit with the world's controls.
+        "copy_count" => card(ControlGroup::PhysicsWorld, CardBand::Scene, 0),
+        "copy_spacing" => setup(ControlGroup::PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+        "copy_columns" | "copy_layout" => setup(ControlGroup::PhysicsWorld),
         _ => return None,
     })
 }
@@ -159,14 +173,11 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
 fn physics_world(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::PhysicsWorld;
     Some(match param {
-        "copy_count" => card(PhysicsWorld, CardBand::Scene, 0),
         "reset" => card(PhysicsWorld, CardBand::Scene, 1),
         "gravity_x" | "gravity_y" | "gravity_z" => {
             setup(PhysicsWorld).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
         }
-        "copy_spacing" => setup(PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
-        "copy_columns" | "copy_layout" => setup(PhysicsWorld),
         _ => return None,
     })
 }
@@ -224,8 +235,11 @@ fn cel_material(param: &str) -> Option<SceneParamFacts> {
     .then_some(setup(ControlGroup::Material))
 }
 
+/// Gates follow what `LightNode::run` passes each type: only Spot gets the
+/// cone angles, and only Point and Spot get the falloff. Sun reads `range`
+/// as its shadow frustum's half-extent, so `range` is never gated.
 fn light(param: &str) -> Option<SceneParamFacts> {
-    use ControlGroup::{Light, Shadows};
+    use ControlGroup::{Light, Shadows, ShadowsAdvanced};
     Some(match param {
         // One fader per light, named after the light, after Exposure and
         // Environment (D4).
@@ -239,10 +253,11 @@ fn light(param: &str) -> Option<SceneParamFacts> {
         "color_r" => setup(Light).colour(RgbChannel::R),
         "color_g" => setup(Light).colour(RgbChannel::G),
         "color_b" => setup(Light).colour(RgbChannel::B),
-        "mode" | "falloff" | "inner_cone_angle" | "outer_cone_angle" => setup(Light),
-        "cast_shadows" | "shadow_softness" | "shadow_bias" | "shadow_resolution" => {
-            setup(Shadows)
-        }
+        "mode" => setup(Light).switch(Feature::LightType),
+        "falloff" => setup(Light).gate(POINT_AND_SPOT),
+        "inner_cone_angle" | "outer_cone_angle" => setup(Light).gate(SPOT),
+        "cast_shadows" | "shadow_softness" => setup(Shadows),
+        "shadow_bias" | "shadow_resolution" => setup(ShadowsAdvanced),
         _ => return None,
     })
 }
@@ -290,15 +305,15 @@ fn look_at_camera(param: &str) -> Option<SceneParamFacts> {
 }
 
 /// Look band order: depth of field rows 0..10, motion blur rows from 10.
+/// Each switch leads the rows it controls.
 fn camera_lens(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::{DepthOfField, Lens, MotionBlur};
     Some(match param {
-        // Focus sits after every camera type's own rows.
-        "focus_distance" => card(DepthOfField, CardBand::Camera, 10)
+        "focus_distance" => card(DepthOfField, CardBand::Look, 1)
             .gate(Gate::Dim(Feature::DepthOfField))
             .unit(Unit::Metres)
             .limit(AT_LEAST_ZERO),
-        "f_stop" => card(DepthOfField, CardBand::Look, 1)
+        "f_stop" => card(DepthOfField, CardBand::Look, 2)
             .gate(Gate::Fold(Feature::DepthOfField))
             .limit(HardLimit::AtLeast(0.5)),
         "shutter_angle" => card(MotionBlur, CardBand::Look, 11)
@@ -315,7 +330,7 @@ fn bokeh_gather(param: &str) -> Option<SceneParamFacts> {
         "enabled" => card(DepthOfField, CardBand::Look, 0).switch(Feature::DepthOfField),
         "aperture" | "quality" => setup(DepthOfField),
         // D4's depth of field Max Blur, shown while depth of field is on.
-        "max_radius" => card(DepthOfField, CardBand::Look, 2)
+        "max_radius" => card(DepthOfField, CardBand::Look, 3)
             .gate(Gate::Fold(Feature::DepthOfField))
             .unit(Unit::Pixels)
             .limit(AT_LEAST_ZERO),
@@ -346,17 +361,21 @@ fn atmosphere(param: &str) -> Option<SceneParamFacts> {
     })
 }
 
+/// Gates follow `bake_equirect_envmap.wgsl`: the gradient branch reads only
+/// the horizon and variation, the softbox branch only the strips, sun disc
+/// and fill. Size and intensity apply in both.
 fn bake_environment(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Environment;
     Some(match param {
         "intensity" => card(Environment, CardBand::Lighting, 1)
             .label(CardLabel::GroupName)
             .limit(AT_LEAST_ZERO),
-        "width" | "height" | "horizon_strength" | "azimuth_variation" | "mode"
-        | "emitter_count" | "emitter_intensity" | "emitter_elevation" | "emitter_width"
-        | "sun_x" | "sun_y" | "sun_z" | "sun_disc_intensity" | "sun_disc_size" | "fill" => {
-            setup(Environment)
-        }
+        "mode" => setup(Environment).switch(Feature::EnvironmentMode),
+        "width" | "height" => setup(Environment),
+        "horizon_strength" | "azimuth_variation" => setup(Environment).gate(GRADIENT),
+        // The disc's direction and hue come from the Sun light itself.
+        "emitter_count" | "emitter_intensity" | "emitter_elevation" | "emitter_width"
+        | "sun_disc_intensity" | "sun_disc_size" | "fill" => setup(Environment).gate(SOFTBOX),
         // White Furnace is a lighting test, not a look.
         "uniform" => hidden(Environment),
         _ => return None,
@@ -396,13 +415,14 @@ fn render_scene(param: &str) -> Option<SceneParamFacts> {
 }
 
 fn whitewater(param: &str) -> Option<SceneParamFacts> {
-    use ControlGroup::Whitewater;
+    use ControlGroup::{Whitewater, WhitewaterAdvanced};
     Some(match param {
-        "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence"
-        | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate"
-        | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay" => {
+        "enabled" | "amount" | "inside_emission" | "dust_emission" | "boundary_dust" => {
             setup(Whitewater)
         }
+        "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence"
+        | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base"
+        | "influence_decay" => setup(WhitewaterAdvanced),
         "capacity" | "min_energy" | "max_energy" | "preserve_foam" => hidden(Whitewater),
         _ => return None,
     })
@@ -462,7 +482,14 @@ mod tests {
             .collect();
         assert!(orbit.iter().all(|(band, _)| *band == CardBand::Camera));
         assert!(orbit.windows(2).all(|w| w[0].1 < w[1].1));
-        assert!(orbit[4].1 < order("node.camera_lens", "focus_distance").1);
+        // Each Look switch leads the rows it controls.
+        let dof = ["node.bokeh_gather:enabled", "node.camera_lens:focus_distance", "node.camera_lens:f_stop", "node.bokeh_gather:max_radius"];
+        let blur = ["node.motion_blur:enabled", "node.camera_lens:shutter_angle", "node.motion_blur:max_blur_px"];
+        for run in [&dof[..], &blur[..]] {
+            let look: Vec<_> = run.iter().map(|key| key.split_once(':').unwrap()).map(|(t, p)| order(t, p)).collect();
+            assert!(look.iter().all(|(band, _)| *band == CardBand::Look), "{run:?}");
+            assert!(look.windows(2).all(|w| w[0].1 < w[1].1), "{run:?}");
+        }
         assert_eq!(order("node.light", "intensity").0, CardBand::Lighting);
         assert_eq!(
             scene_param_facts("node.light", "intensity").unwrap().desc.card_label,
@@ -476,5 +503,64 @@ mod tests {
             scene_param_facts("node.camera_lens", "f_stop").unwrap().desc.gate,
             Some(Gate::Fold(Feature::DepthOfField))
         );
+    }
+
+    /// Which modes read each gated light and environment param.
+    #[test]
+    fn mode_gates_follow_what_each_mode_reads() {
+        let reads = |t: &str, p: &str, feature: Feature, mode: u32| match scene_param_facts(t, p).unwrap().desc.gate {
+            Some(Gate::Only(gated, modes)) => {
+                assert_eq!(gated, feature, "{t}.{p}");
+                modes.contains(mode)
+            }
+            _ => true,
+        };
+        let light = |p: &str| [0, 1, 2].map(|mode| reads("node.light", p, Feature::LightType, mode));
+        assert_eq!(scene_param_facts("node.light", "mode").unwrap().desc.switch, Some(Feature::LightType));
+        assert_eq!(light("inner_cone_angle"), [false, false, true]);
+        assert_eq!(light("outer_cone_angle"), [false, false, true]);
+        assert_eq!(light("falloff"), [false, true, true]);
+        for shared in ["range", "intensity", "pos_x", "aim_x", "cast_shadows", "shadow_bias", "light_size"] {
+            assert_eq!(light(shared), [true; 3], "{shared}");
+        }
+        let env = |p: &str| [0, 1].map(|mode| reads("node.bake_environment", p, Feature::EnvironmentMode, mode));
+        assert_eq!(
+            scene_param_facts("node.bake_environment", "mode").unwrap().desc.switch,
+            Some(Feature::EnvironmentMode)
+        );
+        for gradient in ["horizon_strength", "azimuth_variation"] {
+            assert_eq!(env(gradient), [true, false], "{gradient}");
+        }
+        for softbox in [
+            "emitter_count", "emitter_intensity", "emitter_elevation", "emitter_width", "sun_disc_intensity",
+            "sun_disc_size", "fill",
+        ] {
+            assert_eq!(env(softbox), [false, true], "{softbox}");
+        }
+        for shared in ["width", "height", "intensity"] {
+            assert_eq!(env(shared), [true; 2], "{shared}");
+        }
+    }
+
+    /// Detail settings sit in a group of their own that starts folded.
+    #[test]
+    fn detail_settings_sit_under_advanced() {
+        let group = |t: &str, p: &str| scene_param_facts(t, p).unwrap().desc.group;
+        for p in ["shadow_bias", "shadow_resolution"] {
+            assert_eq!(group("node.light", p), ControlGroup::ShadowsAdvanced, "{p}");
+        }
+        assert_eq!(group("node.light", "cast_shadows"), ControlGroup::Shadows);
+        for p in ["enabled", "amount", "inside_emission", "dust_emission", "boundary_dust"] {
+            assert_eq!(group("node.whitewater_step", p), ControlGroup::Whitewater, "{p}");
+        }
+        for p in [
+            "wavecrest_emission", "turbulence_emission", "min_turbulence", "max_turbulence", "dust_rate",
+            "spray_speed", "generation_rate", "influence_base", "influence_decay",
+        ] {
+            assert_eq!(group("node.whitewater_step", p), ControlGroup::WhitewaterAdvanced, "{p}");
+        }
+        for advanced in [ControlGroup::ShadowsAdvanced, ControlGroup::WhitewaterAdvanced] {
+            assert!(advanced.title().starts_with("Advanced · "), "{advanced:?}");
+        }
     }
 }

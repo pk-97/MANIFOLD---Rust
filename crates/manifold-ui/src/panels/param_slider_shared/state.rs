@@ -522,8 +522,7 @@ pub fn param_value_text<'a>(
 ) -> &'a str {
     use std::fmt::Write;
     if let Some(labels) = value_labels {
-        let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
-        return &labels[idx];
+        return &labels[label_index(val, min, labels.len())];
     }
     buf.clear();
     let _ = if is_angle {
@@ -631,11 +630,12 @@ pub(crate) struct ParamRowIds {
 }
 
 
-/// Toggle/trigger row node IDs (button + its label). Shared by both card
-/// kinds.
+/// A button row's node ids (button + its label) and the kind of button it
+/// was built as, which the click route and the value sync read.
 pub(crate) struct ToggleParamIds {
     pub(crate) label_id: Option<NodeId>,
     pub(crate) button_id: NodeId,
+    pub(crate) kind: crate::param_surface::RowKind,
 }
 
 
@@ -658,10 +658,11 @@ pub(crate) fn format_beats(b: f32) -> String {
 }
 
 
-/// Node IDs produced by [`build_toggle_trigger_row`].
+/// Node IDs produced by [`build_button_row`].
 pub(crate) struct ToggleTriggerRowIds {
     pub(crate) label_id: Option<NodeId>,
     pub(crate) button_id: NodeId,
+    pub(crate) kind: crate::param_surface::RowKind,
     /// The "A" audio-mod button — `Some` for `is_trigger` (D5b) AND
     /// `is_trigger_gate` (section 9) rows alike; both reach the SAME per-param
     /// drawer mechanism now. Plain toggles never build one (`None`, zero
@@ -675,11 +676,35 @@ pub(crate) struct ToggleTriggerRowIds {
     /// show the mode on the collapsed card row"). `Some` only for
     /// `is_trigger_gate` rows; text is set (or left blank for the default
     /// `ClipEdge` mode) by the caller from the live `mod_state` — see
-    /// `build_toggle_trigger_row`.
+    /// `build_button_row`.
     pub(crate) mode_badge_id: Option<NodeId>,
     /// The audio drawer's reveal clip, as [`ParamRowIds::drawer_clip`].
     pub(crate) drawer_clip: Option<NodeId>,
     pub(crate) new_cy: f32,
+}
+
+impl ToggleTriggerRowIds {
+    /// The ids the row host keeps for this row.
+    pub(crate) fn button_ids(&self) -> ToggleParamIds {
+        ToggleParamIds { label_id: self.label_id, button_id: self.button_id, kind: self.kind }
+    }
+}
+
+/// Which of `count` value labels `value` shows: index = value - min. The one
+/// encoding the readout, the pick list and the dropdown share.
+pub(crate) fn label_index(value: f32, min: f32, count: usize) -> usize {
+    ((value - min).round() as i32).clamp(0, count as i32 - 1) as usize
+}
+
+/// The label a pick list shows for `value`. `None` for a row without labels.
+pub(crate) fn choice_label(spec: &crate::param_surface::RowSpec, value: f32) -> Option<&str> {
+    let labels = spec.value_labels.as_deref().filter(|labels| !labels.is_empty())?;
+    Some(&labels[label_index(value, spec.min, labels.len())])
+}
+
+/// A switch's button text.
+pub(crate) fn switch_text(on: bool) -> &'static str {
+    if on { "ON" } else { "OFF" }
 }
 
 #[cfg(test)]

@@ -237,6 +237,17 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     // GPU FLIP always publishes the native padded grid; old graphs' solid
     // producers are rewired at load (graph_loader `wire_gpu_flip_grid`).
     ("node.liquid_frame", "native_mesh_grid"),
+    // The sky's sun disc follows the Sun light wired into the bake's `sun`
+    // input; project load rewires saved scenes (`sky_sun::migrate_world_sun`).
+    ("node.bake_environment", "sun_x"),
+    ("node.bake_environment", "sun_y"),
+    ("node.bake_environment", "sun_z"),
+    // The box spawner lives on the copies body; graph-shape migration moves
+    // saved values there first (`copies_body::migrate_world_copies`).
+    ("node.physics_world", "copy_count"),
+    ("node.physics_world", "copy_spacing"),
+    ("node.physics_world", "copy_columns"),
+    ("node.physics_world", "copy_layout"),
 ];
 
 /// Whether any param of `type_id` is listed in [`RETIRED_PARAMS`].

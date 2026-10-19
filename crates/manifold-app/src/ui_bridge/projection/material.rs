@@ -273,22 +273,6 @@ fn unique_node<'a>(
     }
 }
 
-pub(crate) fn external_attachment(inst: &PresetInstance, id: &str) -> bool {
-    inst.drivers.iter().flatten().any(|x| x.param_id == id)
-        || inst.envelopes.iter().flatten().any(|x| x.param_id == id)
-        || inst.audio_mods.iter().flatten().any(|x| x.param_id == id)
-        || inst
-            .ableton_mappings
-            .iter()
-            .flatten()
-            .any(|x| x.param_id == id)
-        || inst
-            .automation_lanes
-            .iter()
-            .flatten()
-            .any(|x| x.param_id == id)
-}
-
 fn direct_binding<'a>(
     inst: &PresetInstance,
     def: &'a EffectGraphDef,
@@ -352,7 +336,6 @@ pub(super) fn enrich_surface(
         if row.spec.material_role.is_none() {
             continue;
         }
-        row.material_attached = external_attachment(inst, &row.id);
         if let Some((id, param)) = direct_binding(inst, def, &row.id) {
             if let Some((node, wires)) = unique_node(def, id) {
                 row.value.driven |= wires
@@ -361,7 +344,7 @@ pub(super) fn enrich_surface(
                 if row.value.driven {
                     row.spec.inactive_reason = Some("Driven by a graph wire".into());
                 } else if matches!(row.spec.material_role, Some(Role::Placement(..)))
-                    && external_attachment(inst, &row.id)
+                    && row.modulator_stored
                 {
                     row.spec.inactive_reason =
                         Some("Mapped placement — edit individual matrix values".into());
@@ -462,7 +445,7 @@ fn rgb_ids_editable(
     let mut owner: Option<&NodeId> = None;
     let mut colour = None;
     for (index, id) in ids.iter().enumerate() {
-        if ids[..index].contains(id) || external_attachment(inst, id) {
+        if ids[..index].contains(id) || inst.modulator_stored(id) {
             return false;
         }
         let Some((c, channel)) = inst.params.get(id).and_then(|p| rgb_channel(&p.spec)) else {

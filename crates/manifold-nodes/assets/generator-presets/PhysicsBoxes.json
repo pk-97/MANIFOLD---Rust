@@ -36,6 +36,46 @@
         "oscSuffix": "reset",
         "section": "Physics",
         "cardVisible": true
+      },
+      {
+        "id": "40_copy_spacing",
+        "name": "Spacing",
+        "min": 0.01,
+        "max": 100,
+        "defaultValue": 1.85,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Physics",
+        "cardVisible": false
+      },
+      {
+        "id": "40_copy_columns",
+        "name": "Columns",
+        "min": 1,
+        "max": 64,
+        "defaultValue": 24,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Physics",
+        "cardVisible": false
+      },
+      {
+        "id": "40_copy_layout",
+        "name": "Arrangement",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Physics",
+        "cardVisible": false,
+        "valueLabels": [
+          "Grid",
+          "Pile"
+        ]
       }
     ],
     "bindings": [
@@ -45,7 +85,7 @@
         "defaultValue": 256,
         "target": {
           "kind": "node",
-          "nodeId": "physics_demo_40",
+          "nodeId": "physics_demo_121",
           "param": "copy_count"
         },
         "convert": {
@@ -64,6 +104,45 @@
         "convert": {
           "type": "Trigger"
         }
+      },
+      {
+        "id": "40_copy_spacing",
+        "label": "Spacing",
+        "defaultValue": 1.85,
+        "target": {
+          "kind": "node",
+          "nodeId": "physics_demo_121",
+          "param": "copy_spacing"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "40_copy_columns",
+        "label": "Columns",
+        "defaultValue": 24,
+        "target": {
+          "kind": "node",
+          "nodeId": "physics_demo_121",
+          "param": "copy_columns"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "40_copy_layout",
+        "label": "Arrangement",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "physics_demo_121",
+          "param": "copy_layout"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
       }
     ]
   },
@@ -79,26 +158,8 @@
       "nodeId": "physics_demo_40",
       "typeId": "node.physics_world",
       "handle": "Boxes \u2014 Apply Count with Reset",
-      "params": {
-        "copy_count": {
-          "type": "Float",
-          "value": 256
-        },
-        "copy_columns": {
-          "type": "Float",
-          "value": 24
-        },
-        "copy_spacing": {
-          "type": "Float",
-          "value": 1.85
-        },
-        "copy_layout": {
-          "type": "Enum",
-          "value": 1
-        }
-      },
+      "params": {},
       "exposedParams": [
-        "copy_count",
         "reset"
       ]
     },
@@ -375,8 +436,27 @@
         "bounce": {
           "type": "Float",
           "value": 0.38
+        },
+        "copy_count": {
+          "type": "Float",
+          "value": 256
+        },
+        "copy_columns": {
+          "type": "Float",
+          "value": 24
+        },
+        "copy_spacing": {
+          "type": "Float",
+          "value": 1.85
+        },
+        "copy_layout": {
+          "type": "Enum",
+          "value": 1
         }
-      }
+      },
+      "exposedParams": [
+        "copy_count"
+      ]
     },
     {
       "id": 120,
@@ -711,6 +791,12 @@
       "fromPort": "out",
       "toNode": 30,
       "toPort": "light_0"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "sun"
     },
     {
       "fromNode": 30,

@@ -1797,6 +1797,46 @@ fn scene_modifier_explicit_object_delete_rejects_without_history_or_mutation() {
     );
 }
 
+/// The sky's sun follows the scene's Sun light through light edits: the
+/// first Sun light added feeds the environment bake's `sun`, and removing
+/// it hands the sky to the next Sun light without leaving a wire to the
+/// removed node.
+#[test]
+fn sky_sun_follows_scene_light_add_and_remove() {
+    let mut graph = render_scene_graph(0, 0);
+    graph.nodes.push(serde_json::from_value(serde_json::json!({
+        "id": 50, "nodeId": "envmap", "typeId": "node.bake_environment", "handle": "envmap"
+    })).unwrap());
+    let (mut project, fx) = project_with_graph(graph);
+    let add = |project: &mut Project, k: u32| {
+        AddSceneLightCommand::new(GraphTarget::Effect(fx.clone()), vec![], 0, k, (0.0, 0.0), Vec::new(), mirror_catalog_default())
+            .execute(project);
+    };
+    let sky_sun = |def: &EffectGraphDef| {
+        let feeds: Vec<_> = def.wires.iter().filter(|w| w.to_node == 50 && w.to_port == "sun").map(|w| w.from_node).collect();
+        assert!(feeds.len() <= 1, "one sky sun at most: {feeds:?}");
+        feeds.first().copied()
+    };
+    let light_at = |def: &EffectGraphDef, port: &str| {
+        def.wires.iter().find(|w| w.to_node == 0 && w.to_port == port).map(|w| w.from_node)
+    };
+
+    add(&mut project, 0);
+    add(&mut project, 1);
+    let def = graph_of(&project, &fx).clone();
+    let (first, second) = (light_at(&def, "light_0").unwrap(), light_at(&def, "light_1").unwrap());
+    assert_eq!(sky_sun(&def), Some(first), "the first Sun light feeds the sky");
+
+    let mut remove = RemoveSceneLightCommand::new(GraphTarget::Effect(fx.clone()), vec![], 0, 0, mirror_catalog_default());
+    remove.execute(&mut project);
+    let after = graph_of(&project, &fx);
+    assert!(!after.wires.iter().any(|w| w.from_node == first || w.to_node == first), "no wire outlives the light");
+    assert_eq!(sky_sun(after), Some(second), "the next Sun light takes the sky");
+
+    remove.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &def);
+}
+
 #[test]
 fn remove_scene_light_only_light_removes_node_and_zeroes_count() {
     let (mut project, fx) = project_with_graph(render_scene_graph(0, 1));

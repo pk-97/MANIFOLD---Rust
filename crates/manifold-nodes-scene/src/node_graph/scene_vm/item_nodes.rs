@@ -59,6 +59,8 @@ pub(super) fn world_nodes(
 /// Each physics world with the body it copies (wired into `copies`) and that
 /// body's transform: the copy body draws no object of its own, so its
 /// controls are the world's (Physics Boxes' box shape and spawn transform).
+/// A shared value wired into the world is the world's control too: Add Fluid
+/// routes gravity, speed and reset through values that also drive the water.
 pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
     level
         .nodes
@@ -70,6 +72,14 @@ pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
                 ids.push(body);
                 ids.extend(level.producer(body, "transform").map(|(transform, _)| transform));
             }
+            ids.extend(
+                level
+                    .wires
+                    .iter()
+                    .filter(|wire| wire.to_node == world.id)
+                    .filter(|wire| level.node(wire.from_node).is_some_and(|node| node.type_id == "node.value"))
+                    .map(|wire| wire.from_node),
+            );
             stable_ids(level, ids)
         })
         .collect()

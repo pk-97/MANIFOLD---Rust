@@ -476,6 +476,7 @@ fn param_surface(
             } else {
                 Some(p.spec.value_labels.clone())
             };
+            let stored = inst.modulator_stored(&id);
             ParamRow {
                 id: std::borrow::Cow::Owned(id),
                 spec: RowSpec {
@@ -507,7 +508,7 @@ fn param_surface(
                 mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: stored,
                 audio: Default::default(),
                 clip_trigger: None,
             }

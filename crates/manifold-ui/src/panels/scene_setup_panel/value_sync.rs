@@ -56,12 +56,8 @@ impl ScenePanel {
             card.current_values[i] = value;
             if value != prev || prev.is_nan() {
                 card.last_pushed_values[i] = value;
-                if card.rows[i].spec.is_toggle {
-                    if let Some(ids) = &card.row_host.toggle_ids[i] {
-                        let on = value > 0.5;
-                        tree.set_style(ids.button_id, toggle_btn_style(on));
-                        tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
-                    }
+                if card.row_host.toggle_ids[i].is_some() {
+                    card.row_host.push_button_value(tree, i, value, &card.rows[i].spec);
                 } else {
                     card.row_host
                         .push_slider_value(tree, i, value, &card.rows[i].spec, None);
