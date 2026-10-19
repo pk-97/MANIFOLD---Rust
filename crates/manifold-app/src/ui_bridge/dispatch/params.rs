@@ -443,9 +443,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // `ParamCommit`) migrated to the unified `PanelAction::Scrub` wire
         // (`ui_bridge/scrub.rs`, P-I / D4). Right-click reset still rides the
         // generic `SliderReset` — its three boxed actions are now `Scrub`
-        // gestures. (The old bespoke reset dropped the eased snap-back fill
-        // `begin_value_snapback` drove; that helper stays in manifold-ui with
-        // no production caller.)
+        // gestures.
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
         // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.

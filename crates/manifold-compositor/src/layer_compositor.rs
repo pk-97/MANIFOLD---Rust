@@ -5,7 +5,6 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
-use manifold_node_engine::gpu::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
 use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupCap, WarmupOutcome, WarmupPass, WarmupRun};
@@ -111,13 +110,11 @@ impl BlendResources {
     fn blend_pass(
         &self,
         gpu: &mut GpuEncoder,
-        arena: &mut UniformArena,
         source_texture: &GpuTexture,
         blend_texture: &GpuTexture,
         target_texture: &GpuTexture,
         uniforms: &BlendUniforms,
     ) {
-        let _offset = arena.push(uniforms);
 
         let pipeline = self
             .pipelines
@@ -474,10 +471,6 @@ pub struct LayerCompositor {
     layer_buf_last_used_frame: AHashMap<LayerId, u64>,
     /// GPU resources for blend operations (pipeline, sampler).
     blend: BlendResources,
-    /// Per-frame uniform sub-allocator — batches all blend uniform writes into
-    /// a single buffer. On native path, arena buffer is not read (uses inline
-    /// set_bytes), but offset tracking is preserved.
-    uniform_arena: UniformArena,
     /// Per-layer effect chain processors, keyed by `LayerId`. Each
     /// chain stays bound to its layer for the lifetime of the project,
     /// so its cached `PresetRuntime` (primitive instances + state)
@@ -738,7 +731,6 @@ impl LayerCompositor {
             layer_bufs: AHashMap::default(),
             layer_buf_last_used_frame: AHashMap::default(),
             blend: BlendResources::new(device, width, height),
-            uniform_arena: UniformArena::new(device),
             effect_chains: AHashMap::default(),
             chain_last_used_frame: AHashMap::default(),
             frame_counter: 0,
@@ -1028,11 +1020,9 @@ impl LayerCompositor {
                 break;
             }
 
-            self.uniform_arena.reset();
             let mut native_enc = device.create_encoder("warmup chain");
             {
                 let mut gpu = GpuEncoder::new(&mut native_enc, device);
-                gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
                 gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
                 let ctx = PresetContext {
                     time: frame as f64 * DT,
@@ -1082,7 +1072,6 @@ impl LayerCompositor {
                 log::error!("Effect-chain warmup GPU failure: {err}");
                 return WarmupOutcome::GpuFailed;
             }
-            self.uniform_arena.flush(device);
 
             let pending = self
                 .effect_chains
@@ -1244,7 +1233,6 @@ impl LayerCompositor {
                     break;
                 }
                 outcome = Self::pump_chain_warmup(
-                    &mut self.uniform_arena,
                     &mut slot,
                     device,
                     &scratch_target.texture,
@@ -1344,7 +1332,6 @@ impl LayerCompositor {
     /// Pump a single effect-chain slot against a cleared stand-in input until
     /// its async work quiesces or the per-layer budget is exhausted.
     fn pump_chain_warmup(
-        uniform_arena: &mut UniformArena,
         chain: &mut ChainSlot,
         device: &GpuDevice,
         input_texture: &GpuTexture,
@@ -1368,11 +1355,9 @@ impl LayerCompositor {
                 break;
             }
 
-            uniform_arena.reset();
             let mut native_enc = device.create_encoder("warmup chain");
             {
                 let mut gpu = GpuEncoder::new(&mut native_enc, device);
-                gpu.uniform_arena = Some(uniform_arena as *mut UniformArena);
                 gpu.clear_texture(input_texture, 0.0, 0.0, 0.0, 0.0);
                 Self::apply_effects(
                     chain,
@@ -1398,7 +1383,6 @@ impl LayerCompositor {
                 log::error!("Effect-chain warmup GPU failure: {err}");
                 return WarmupOutcome::GpuFailed;
             }
-            uniform_arena.flush(device);
 
             let pending = chain.as_ref().is_some_and(|cg| cg.warmup_pending());
             let installed = chain.is_some();
@@ -1478,7 +1462,6 @@ impl LayerCompositor {
             trigger_count: 0,
         };
         let outcome = Self::pump_chain_warmup(
-            &mut self.uniform_arena,
             &mut self.master_effect_chain,
             device,
             &scratch.texture,
@@ -1536,7 +1519,6 @@ impl LayerCompositor {
             trigger_count: 0,
         };
         let led_outcome = Self::pump_chain_warmup(
-            &mut self.uniform_arena,
             led_ec,
             device,
             led_main.source_texture(),
@@ -1626,7 +1608,6 @@ impl LayerCompositor {
                     break;
                 };
                 outcome = Self::pump_chain_warmup(
-                    &mut self.uniform_arena,
                     group_chain,
                     device,
                     group_buf.source_texture(),
@@ -1706,7 +1687,6 @@ impl LayerCompositor {
                     break;
                 };
                 led_outcome = Self::pump_chain_warmup(
-                    &mut self.uniform_arena,
                     led_group_chain,
                     device,
                     led_group_buf.source_texture(),
@@ -2313,7 +2293,6 @@ impl LayerCompositor {
                     };
                     self.blend.blend_pass(
                         gpu,
-                        &mut self.uniform_arena,
                         layer_buf.source_texture(),
                         clip.texture,
                         layer_buf.target_texture(),
@@ -2435,7 +2414,6 @@ impl LayerCompositor {
             };
             self.blend.blend_pass(
                 gpu,
-                &mut self.uniform_arena,
                 self.main.source_texture(),
                 output.texture(),
                 self.main.target_texture(),
@@ -2668,7 +2646,6 @@ impl LayerCompositor {
                             };
                             self.blend.blend_pass(
                                 gpu,
-                                &mut self.uniform_arena,
                                 group_buf.source_texture(),
                                 src_tex,
                                 group_buf.target_texture(),
@@ -2730,7 +2707,6 @@ impl LayerCompositor {
                         };
                         self.blend.blend_pass(
                             gpu,
-                            &mut self.uniform_arena,
                             led_main.source_texture(),
                             unsafe { &*group_source },
                             led_main.target_texture(),
@@ -2759,7 +2735,6 @@ impl LayerCompositor {
                         };
                         self.blend.blend_pass(
                             gpu,
-                            &mut self.uniform_arena,
                             led_main.source_texture(),
                             unsafe { &*black_tex_ptr },
                             led_main.target_texture(),
@@ -2801,7 +2776,6 @@ impl LayerCompositor {
                 };
                 self.blend.blend_pass(
                     gpu,
-                    &mut self.uniform_arena,
                     led_main.source_texture(),
                     src_tex,
                     led_main.target_texture(),
@@ -2895,7 +2869,6 @@ impl LayerCompositor {
                 };
                 self.blend.blend_pass(
                     gpu,
-                    &mut self.uniform_arena,
                     group_buf.source_texture(),
                     output.texture(),
                     group_buf.target_texture(),
@@ -3010,7 +2983,6 @@ impl LayerCompositor {
     /// Serial composite path: single encoder for all work.
     /// Used when only 1 active layer (no parallel benefit).
     fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
-        self.uniform_arena.reset();
         self.generate_layers(gpu, frame);
         gpu.checkpoint();
         // Route LED-routed layers BEFORE folding groups so child layers inside
@@ -3627,11 +3599,6 @@ impl Compositor for LayerCompositor {
         // Publish only after every consumer, including master and LED effects,
         // has read the previous frame. Snapshots also retain grouped children.
         self.publish_layer_skins(gpu, frame);
-
-        // Flush uniform arena (recreates buffer if capacity grew).
-        // On native path, arena buffer is not read by GPU dispatches (uses inline
-        // set_bytes), but we still flush to handle capacity growth.
-        self.uniform_arena.flush(gpu.device);
 
         // Trim pool entries: drop chains for layers that have been
         // removed from the project (immediate, event-based) AND chains

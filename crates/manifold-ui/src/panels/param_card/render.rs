@@ -224,9 +224,6 @@ impl ParamCardPanel {
         self.range_cache = vec![f32::NAN; n * 2]; // (min, max) pairs per param
         self.value_flash.resize_with(n, Transient::default);
         self.value_flash.truncate(n);
-        self.value_snapback
-            .resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS).with_curve(crate::anim::Curve::Snap));
-        self.value_snapback.truncate(n);
 
         // Reapply any row gesture that survived this structural snapshot.
         // RowHost resolves the captured ParamId against the rebuilt rows and
@@ -2218,22 +2215,9 @@ impl ParamCardPanel {
                 flash.fire(color::MOTION_SLOW_MS);
             }
             self.param_cache[i] = val;
-            // P2 value snap-back (D15): a reset just retargeted this row's
-            // `value_snapback` (`begin_value_snapback`, same frame, before this
-            // poll) — draw the FILL at its just-`snap()`ped starting point
-            // instead of jumping straight to the value's normalized position;
-            // `tick_value_flash` eases it forward every frame after. Any other
-            // value change (drag commit, automation, undo) has no animating
-            // snapback here, so the override is `None` and the fill draws the
-            // value exactly as before. The normalize→format→update math itself
-            // is the shared section 5.6 push both cards use (`RowHost::push_slider_value`).
-            let display_norm_override = self
-                .value_snapback
-                .get(i)
-                .filter(|a| a.is_animating())
-                .map(|a| a.value());
+            // Shared section 5.6 push both cards use (`RowHost::push_slider_value`).
             self.row_host
-                .push_slider_value(tree, i, val, &info.spec, display_norm_override);
+                .push_slider_value(tree, i, val, &info.spec, None);
         }
     }
 

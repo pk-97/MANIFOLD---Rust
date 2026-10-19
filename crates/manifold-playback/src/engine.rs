@@ -316,10 +316,6 @@ pub struct PlaybackEngine {
     // Re-entrancy guard
     is_ticking: bool,
 
-    // Logging (optional). Port of C# PlaybackEngine lines 248-253.
-    pub log_warning: Option<Box<dyn Fn(&str) + Send>>,
-    pub log_error: Option<Box<dyn Fn(&str) + Send>>,
-
     // Callback delegates. Port of C# PlaybackEngine lines 254-275.
     pub beat_snapped_beat_resolver: Option<Box<dyn Fn() -> f32 + Send>>,
     pub absolute_tick_resolver: Option<Box<dyn Fn() -> i32 + Send>>,
@@ -412,8 +408,6 @@ impl PlaybackEngine {
             next_prewarm_at: 0.0,
             last_prewarm_ids: AHashSet::with_capacity(16),
             is_ticking: false,
-            log_warning: None,
-            log_error: None,
             beat_snapped_beat_resolver: None,
             absolute_tick_resolver: None,
             show_debug_logs: false,
@@ -1268,8 +1262,8 @@ impl PlaybackEngine {
             )
         };
         if let Err(error) = result {
-            if !was_failed && let Some(log_error) = &self.log_error {
-                log_error(&format!("[PlaybackEngine] trigger delivery stopped: {error}"));
+            if !was_failed {
+                log::error!("[PlaybackEngine] trigger delivery stopped: {error}");
             }
             pulses.clear();
         }
@@ -2132,9 +2126,7 @@ impl PlaybackEngine {
             );
             if !complete && self.trigger_delivery.failure().is_none() {
                 let error = self.trigger_delivery.reject_input_overflow();
-                if let Some(log_error) = &self.log_error {
-                    log_error(&format!("[PlaybackEngine] session control interval stopped: {error}"));
-                }
+                log::error!("[PlaybackEngine] session control interval stopped: {error}");
             }
         }
         if !self.session_wrap_restart_scratch.is_empty() {
@@ -3217,11 +3209,7 @@ impl PlaybackEngine {
                 self.renderers[*renderer_idx].seek_clip(clip_id, expected_video_time);
                 self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
                 self.renderers[*renderer_idx].resume_clip(clip_id);
-                if let Some(ref log_warn) = self.log_warning {
-                    log_warn(&format!(
-                        "[PlaybackEngine] Restarted stopped player: {clip_id}"
-                    ));
-                }
+                log::warn!("[PlaybackEngine] Restarted stopped player: {clip_id}");
                 continue;
             }
 
@@ -3231,11 +3219,7 @@ impl PlaybackEngine {
                 self.renderers[*renderer_idx].seek_clip(clip_id, expected_video_time);
                 self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
                 self.drift_correction_count += 1;
-                if let Some(ref log_warn) = self.log_warning {
-                    log_warn(&format!(
-                        "[PlaybackEngine] Drift correction: {clip_id} ({drift:.3}s)"
-                    ));
-                }
+                log::debug!("[PlaybackEngine] Drift correction: {clip_id} ({drift:.3}s)");
             }
         }
 
