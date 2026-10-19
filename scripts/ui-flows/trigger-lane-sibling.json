@@ -1,0 +1,11 @@
+[
+  {"Pointer":{"target":{"Query":{"text":"Main lane","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"text":"Create trigger lane","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"text":"Trigger 1","type":"Button"}},"check":"Exists"}},
+  {"Pointer":{"target":{"Query":{"text":"Trigger 1","type":"Button","nth":0}},"gesture":{"RightClick":null}}},
+  {"Assert":{"selector":{"Query":{"text":"Add trigger lane","type":"Button"}},"check":"Exists"}},
+  {"Pointer":{"target":{"Query":{"text":"Add trigger lane","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"text":"Trigger 2","type":"Button"}},"check":"Exists"}},
+  {"Key":{"key":"Z","modifiers":{"command":true}}},
+  {"Assert":{"selector":{"Query":{"text":"Trigger 2","type":"Button"}},"check":{"Count":0}}}
+]
