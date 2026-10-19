@@ -99,6 +99,78 @@ fn build_video_import_batch(
     (video_clips, commands, failures)
 }
 
+/// The one video import path, shared by Cmd+I, Finder drag-drop and Finder
+/// paste: places the files at `insert_beat` on the active layer (the first
+/// layer when none is active). Probing runs off-thread, and the library
+/// entries reach the content thread before the clips that use them, so a
+/// clip never plays black for want of its source. Returns the receiver for
+/// probe failures, or `None` when there is nothing to import into.
+pub(crate) fn start_video_import(
+    paths: &[std::path::PathBuf],
+    project: &manifold_core::project::Project,
+    active_layer: Option<&LayerId>,
+    insert_beat: f32,
+    content_tx: &crossbeam_channel::Sender<ContentCommand>,
+) -> Option<std::sync::mpsc::Receiver<Vec<String>>> {
+    if paths.is_empty() {
+        return None;
+    }
+    let layer_id = active_layer
+        .and_then(|lid| {
+            project
+                .timeline
+                .layer_index_for_id(lid)
+                .and_then(|i| project.timeline.layers.get(i))
+                .map(|l| l.layer_id.clone())
+        })
+        .or_else(|| project.timeline.layers.first().map(|l| l.layer_id.clone()))?;
+
+    let bpm = project.settings.bpm.0;
+    let paths = paths.to_vec();
+    let content_tx = content_tx.clone();
+
+    // BUG-133: the file-dialog filter deliberately stays broad (mp4/mov/
+    // webm/avi) — trimming it was considered and rejected. AVFoundation
+    // (the only decoder) generally can't open webm (no VP8/VP9) and has
+    // patchy avi support, so the probe below is the real gate: a
+    // probe-failing file must reject the import with a clear message,
+    // never just a log line the user never sees (no-silent-fallbacks).
+    let (failure_tx, failure_rx) = std::sync::mpsc::channel::<Vec<String>>();
+
+    std::thread::spawn(move || {
+        let (video_clips, commands, failures) =
+            build_video_import_batch(&paths, bpm, insert_beat, &layer_id);
+
+        if video_clips.is_empty() {
+            // Every file in this batch failed to probe — nothing to add,
+            // but the caller still needs to know (never a silent no-op).
+            let _ = failure_tx.send(failures);
+            return;
+        }
+
+        // Send library update FIRST so content thread has the VideoClip
+        // entries before AddClipCommand triggers sync_clips_to_time.
+        let _ = content_tx.send(ContentCommand::mutate(crate::content_command::touch::MEDIA, Box::new(move |p| {
+            for vc in video_clips {
+                p.video_library.add_clip(vc);
+            }
+        })));
+
+        // Then send AddClipCommands
+        for cmd in commands {
+            let _ = content_tx.send(cmd);
+        }
+
+        // Surface any partial-batch probe failures alongside the
+        // successful imports (BUG-133) — never dropped just because
+        // some files in the same drop/dialog batch succeeded.
+        if !failures.is_empty() {
+            let _ = failure_tx.send(failures);
+        }
+    });
+    Some(failure_rx)
+}
+
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
 
@@ -411,87 +483,21 @@ impl Application {
         self.import_video_files(&paths);
     }
 
-    /// Import video files at the playhead position on the active layer.
-    /// Shared by Cmd+I file dialog and drag-drop.
-    /// Non-blocking: metadata probe runs on a background thread, commands are
-    /// sent directly to the content thread. UI picks up new clips via
-    /// project_snapshot sync.
+    /// Import video files at the playhead position on the active layer, for
+    /// Cmd+I and Finder drag-drop (`start_video_import`).
     pub(crate) fn import_video_files(&mut self, paths: &[std::path::PathBuf]) {
-        if paths.is_empty() {
-            return;
-        }
-
         let Some(ref content_tx) = self.content_tx else {
             return;
         };
-        let content_tx = content_tx.clone();
-
-        let bpm = self.local_project.settings.bpm.0;
-        let insert_beat = self.content_state.current_beat.as_f32();
-        let layer_id = self
-            .active_layer_id
-            .as_ref()
-            .and_then(|lid| {
-                self.local_project
-                    .timeline
-                    .layer_index_for_id(lid)
-                    .and_then(|i| self.local_project.timeline.layers.get(i))
-                    .map(|l| l.layer_id.clone())
-            })
-            .or_else(|| {
-                self.local_project
-                    .timeline
-                    .layers
-                    .first()
-                    .map(|l| l.layer_id.clone())
-            });
-
-        let Some(layer_id) = layer_id else {
-            return;
-        };
-
-        let paths = paths.to_vec();
-
-        // BUG-133: the file-dialog filter deliberately stays broad (mp4/mov/
-        // webm/avi) — trimming it was considered and rejected. AVFoundation
-        // (the only decoder) generally can't open webm (no VP8/VP9) and has
-        // patchy avi support, so the probe below is the real gate: a
-        // probe-failing file must reject the import with a clear message,
-        // never just a log line the user never sees (no-silent-fallbacks).
-        let (failure_tx, failure_rx) = std::sync::mpsc::channel::<Vec<String>>();
-        self.import_failures_rx = Some(failure_rx);
-
-        std::thread::spawn(move || {
-            let (video_clips, commands, failures) =
-                build_video_import_batch(&paths, bpm, insert_beat, &layer_id);
-
-            if video_clips.is_empty() {
-                // Every file in this batch failed to probe — nothing to add,
-                // but the caller still needs to know (never a silent no-op).
-                let _ = failure_tx.send(failures);
-                return;
-            }
-
-            // Send library update FIRST so content thread has the VideoClip
-            // entries before AddClipCommand triggers sync_clips_to_time.
-            let _ = content_tx.send(ContentCommand::mutate(crate::content_command::touch::MEDIA, Box::new(move |p| {
-                for vc in video_clips {
-                    p.video_library.add_clip(vc);
-                }
-            })));
-
-            // Then send AddClipCommands
-            for cmd in commands {
-                let _ = content_tx.send(cmd);
-            }
-
-            // Surface any partial-batch probe failures alongside the
-            // successful imports (BUG-133) — never dropped just because
-            // some files in the same drop/dialog batch succeeded.
-            if !failures.is_empty() {
-                let _ = failure_tx.send(failures);
-            }
-        });
+        if let Some(rx) = start_video_import(
+            paths,
+            &self.local_project,
+            self.active_layer_id.as_ref(),
+            self.content_state.current_beat.as_f32(),
+            content_tx,
+        ) {
+            self.import_failures_rx = Some(rx);
+        }
     }
 
     /// Poll the in-flight video-import probe-failure channel (BUG-133) and

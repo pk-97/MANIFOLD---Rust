@@ -46,6 +46,9 @@ pub struct AppInputHost<'a> {
     /// D5 (docs/TIMELINE_INGEST_DESIGN.md): Finder-pasted files route through
     /// the same ingest path a Finder drag-drop uses.
     pub project_io: &'a mut crate::project_io::ProjectIOService,
+    /// Probe failures of a pasted video import, polled with the app's own
+    /// imports (`Application::tick_import_failures`).
+    pub import_failures_rx: &'a mut Option<std::sync::mpsc::Receiver<Vec<String>>>,
     /// D4: the general pasteboard's changeCount snapshotted at the last
     /// internal clip copy. Read/written only on macOS — the underlying
     /// AppKit pasteboard type doesn't exist elsewhere, and the arbitration
@@ -1507,10 +1510,27 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn paste_pasteboard_files(&mut self, file_paths: &[std::path::PathBuf], target_beat: f32) {
-        // D5: same target resolution as a Finder drag-drop onto the active
-        // lane (app.rs's DroppedFile arm) — the active layer if it exists,
-        // joined only when it's audio; never auto-creates a typed lane
-        // beyond what `process_dropped_files` already does for drops.
+        // D5: the same routes as a Finder drag-drop (app.rs's DroppedFile
+        // arm). Videos take the one video import path; the rest resolve the
+        // target like a drop onto the active lane — the active layer if it
+        // exists, joined only when it's audio.
+        let (videos, file_paths): (Vec<_>, Vec<_>) = file_paths
+            .iter()
+            .cloned()
+            .partition(|p| crate::project_io::is_supported_video_extension(p));
+        if let Some(rx) = crate::app_lifecycle::start_video_import(
+            &videos,
+            &self.project,
+            self.active_layer.as_ref(),
+            target_beat,
+            self.content_tx,
+        ) {
+            *self.import_failures_rx = Some(rx);
+        }
+        if file_paths.is_empty() {
+            return;
+        }
+        let file_paths = file_paths.as_slice();
         let drop_layer_index = self
             .active_layer
             .as_ref()
@@ -1524,7 +1544,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .find(|l| l.layer_id == *id && l.is_audio())
                 .map(|l| l.layer_id.clone())
         });
-        let spb = 60.0 / self.project.settings.bpm.0.max(1.0);
         let project_io = &mut *self.project_io;
         let action = self.project.with_sent(|project| {
             let action = project_io.process_dropped_files(
@@ -1533,7 +1552,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 drop_layer_index,
                 join_audio_layer,
                 project,
-                spb,
             );
             let touches = crate::gesture_preview::touches_of(&action.record_commands);
             (action, touches)
@@ -1735,6 +1753,7 @@ mod automation_clipboard_host_tests {
         pending_close_output: bool,
         pending_export: bool,
         project_io: crate::project_io::ProjectIOService,
+        import_failures_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
         #[cfg(target_os = "macos")]
         internal_clipboard_change_count: Option<i64>,
     }
@@ -1777,6 +1796,7 @@ mod automation_clipboard_host_tests {
                 edits: Default::default(),
                 current_project_path: None, pending_close_output: false, pending_export: false,
                 project_io: crate::project_io::ProjectIOService::new(&crate::user_prefs::UserPrefs::in_memory()),
+                import_failures_rx: None,
                 #[cfg(target_os = "macos")]
                 internal_clipboard_change_count: None,
             }
@@ -1794,6 +1814,7 @@ mod automation_clipboard_host_tests {
                 pending_close_output: &mut self.pending_close_output,
                 pending_export: &mut self.pending_export,
                 project_io: &mut self.project_io,
+                import_failures_rx: &mut self.import_failures_rx,
                 #[cfg(target_os = "macos")]
                 internal_clipboard_change_count: &mut self.internal_clipboard_change_count,
             }
@@ -2558,4 +2579,58 @@ mod automation_clipboard_host_tests {
         ), "family-parent delete remains the group removal path");
     }
 
+    /// Census bug 23 (pasted video plays black): a Finder paste of a video
+    /// never writes the screen's copy directly, and the content thread never
+    /// gets a clip whose library entry it lacks.
+    #[test]
+    fn finder_paste_of_a_video_never_writes_the_screen_copy_only() {
+        let mut h = Harness::new();
+        let index = h.project.timeline.add_layer("Video", manifold_core::types::LayerType::Video, PresetTypeId::NONE);
+        h.active_layer = Some(h.project.timeline.layers[index].layer_id.clone());
+        let mut content = h.project.clone();
+        let file = std::env::temp_dir().join(format!("manifold-paste-{}.mp4", std::process::id()));
+        std::fs::write(&file, b"not a real video").expect("write fixture");
+
+        h.host().paste_pasteboard_files(std::slice::from_ref(&file), 0.0);
+        let _ = std::fs::remove_file(&file);
+
+        assert!(h.project.video_library.clips.is_empty(), "the paste wrote the screen's copy directly");
+        while let Ok(cmd) = h.rx.try_recv() {
+            match cmd {
+                ContentCommand::Execute(mut cmd) => { cmd.execute(&mut content); }
+                ContentCommand::ExecuteBatch(cmds, _) => cmds.into_iter().for_each(|mut c| { c.execute(&mut content); }),
+                ContentCommand::MutateProject { f, .. } => f(&mut content),
+                _ => {}
+            }
+        }
+        for clip in content.timeline.layers.iter().flat_map(|l| &l.clips) {
+            assert!(
+                content.video_library.clips.iter().any(|v| v.id == clip.video_clip_id),
+                "content thread got clip {} with no library entry",
+                clip.video_clip_id
+            );
+        }
+    }
+
+    /// A pasted video takes the drag-drop import path, so a file the decoder
+    /// cannot open is reported, never dropped in silence (BUG-133).
+    #[test]
+    fn finder_paste_of_an_unreadable_video_reports_the_failure() {
+        let mut h = Harness::new();
+        let index = h.project.timeline.add_layer("Video", manifold_core::types::LayerType::Video, PresetTypeId::NONE);
+        h.active_layer = Some(h.project.timeline.layers[index].layer_id.clone());
+        let file = std::env::temp_dir().join(format!("manifold-paste-fail-{}.mp4", std::process::id()));
+        std::fs::write(&file, b"not a real video").expect("write fixture");
+
+        h.host().paste_pasteboard_files(std::slice::from_ref(&file), 0.0);
+        let failures = h
+            .import_failures_rx
+            .take()
+            .expect("the paste started a video import")
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the import reports its probe failure");
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(h.rx.is_empty(), "nothing reaches the content thread for an unreadable file");
+    }
 }

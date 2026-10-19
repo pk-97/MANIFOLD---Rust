@@ -2788,6 +2788,7 @@ impl Runner {
                 // as a bridge no-op loses clipboard state while reporting success.
                 let mut scratch = [false; 2];
                 let mut project_io = crate::project_io::ProjectIOService::new(&self.user_prefs);
+                let mut import_failures_rx = None;
                 #[cfg(target_os = "macos")]
                 let mut clipboard_change_count = None;
                 let mut host = crate::input_host::AppInputHost::detached(
@@ -2801,6 +2802,7 @@ impl Runner {
                     &mut self.edits,
                     &mut scratch,
                     &mut project_io,
+                    &mut import_failures_rx,
                     #[cfg(target_os = "macos")]
                     &mut clipboard_change_count,
                 );

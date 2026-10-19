@@ -20,6 +20,7 @@ impl crate::app::Application {
             pending_close_output: &mut self.pending_close_output,
             pending_export: &mut self.pending_export,
             project_io: &mut self.project_io,
+            import_failures_rx: &mut self.import_failures_rx,
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: &mut self.internal_clipboard_change_count,
         };
@@ -43,6 +44,7 @@ impl<'a> AppInputHost<'a> {
         edits: &'a mut crate::gesture_preview::UiEdits,
         scratch: &'a mut [bool; 2],
         project_io: &'a mut crate::project_io::ProjectIOService,
+        import_failures_rx: &'a mut Option<std::sync::mpsc::Receiver<Vec<String>>>,
         #[cfg(target_os = "macos")] clipboard_change_count: &'a mut Option<i64>,
     ) -> Self {
         let [pending_close_output, pending_export] = scratch;
@@ -59,6 +61,7 @@ impl<'a> AppInputHost<'a> {
             pending_close_output,
             pending_export,
             project_io,
+            import_failures_rx,
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: clipboard_change_count,
         }

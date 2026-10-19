@@ -2308,9 +2308,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;
-                    let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
-                        self.local_project.settings.bpm.0,
-                    );
                     let Some(tx) = self.content_tx.as_ref() else { return };
                     let project_io = &mut self.project_io;
                     let action = self.local_project.edit(&mut self.ui_edits, tx).with_sent(|project| {
@@ -2320,7 +2317,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             drop_layer,
                             join_audio_layer,
                             project,
-                            spb,
                         );
                         let touches = crate::gesture_preview::touches_of(&action.record_commands);
                         (action, touches)
