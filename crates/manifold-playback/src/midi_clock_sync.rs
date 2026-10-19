@@ -970,4 +970,48 @@ mod tests {
             "an unchanged sixteenth position must not re-trigger a seek"
         );
     }
+
+    /// D20 seed: a filter with no estimate starts from the tempo map's tempo
+    /// at the armed position, read through the content snapshot, never from
+    /// settings.bpm. A song-position jump into a slower section otherwise
+    /// starts the filter at the wrong tempo.
+    #[test]
+    fn clock_filter_seeds_from_map_tempo_at_armed_beat() {
+        use manifold_core::types::TempoPointSource;
+        use manifold_core::units::Bpm;
+
+        let mut project = Project::default();
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(Beats(64.0), Bpm(90.0), TempoPointSource::Manual, 0.001);
+        project.settings.bpm = Bpm(120.0);
+        let mut engine = crate::engine::PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        let snapshot = crate::sync::SyncTargetSnapshot::from_engine(&engine);
+
+        let (tx, rx) = mpsc::channel();
+        let mut ctrl = MidiClockSyncController::new();
+        ctrl.is_midi_clock_enabled = true;
+        ctrl.receiver = Some(MidiClockReceiver { events: Some(rx), connection: None });
+        let origin = ctrl.origin;
+        let mut arbiter = SyncArbiter::new();
+        let mut arb_target = FakeArbTarget::default();
+        let mut update = |ctrl: &mut MidiClockSyncController, now: f64| {
+            ctrl.update(Seconds(now), &mut arbiter, &mut arb_target, &snapshot, ClockAuthority::MidiClock, false);
+        };
+
+        // Song position: beat 128 (512 sixteenths), in the 90 BPM section.
+        tx.send(ClockEvent { kind: ClockKind::SongPosition(512), at: origin + Duration::from_millis(10) })
+            .unwrap();
+        update(&mut ctrl, 0.01);
+        tx.send(ClockEvent { kind: ClockKind::Continue, at: origin + Duration::from_millis(20) }).unwrap();
+        tx.send(ClockEvent { kind: ClockKind::Tick, at: origin + Duration::from_millis(21) }).unwrap();
+        update(&mut ctrl, 0.03);
+
+        assert_eq!(ctrl.tracker.landed_tick(), Some(512 * 6));
+        let seeded = ctrl.current_clock_bpm();
+        assert!(
+            (seeded - 90.0).abs() < 1e-3,
+            "the filter must seed from the map's 90 BPM at beat 128, not settings.bpm 120; it seeded {seeded}"
+        );
+    }
 }
