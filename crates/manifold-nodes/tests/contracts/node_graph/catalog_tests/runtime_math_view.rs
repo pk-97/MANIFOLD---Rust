@@ -647,7 +647,7 @@ fn math_view_arrows_draw_after_every_mesh_modifier() {
         let recipe: EffectGraphDef = serde_json::from_str(
             &std::fs::read_to_string(format!("{dir}{name}.json")).unwrap(),
         ).unwrap();
-        owner.scene_modifiers[0].graph = Box::new(recipe);
+        *owner.scene_modifiers[0].graph = recipe;
         let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
             &owner, &NodeId::new("vortex_a"),
         ).unwrap().graph;

@@ -723,7 +723,8 @@ pub fn segment_key(cards: &[(&EffectGraphDef, &LoadedPresetView)]) -> u64 {
 /// Key of a cached fused view: the def's structure plus every binding fact the
 /// compiled view carries (the base view's type and bindings). Two views that
 /// share WGSL but carry different bindings are different cache entries, so a
-/// card never runs with another card's binding list.
+/// card never runs with another card's binding list. The label is not a
+/// binding fact: names come from the live lookup (INV-S16), never the view.
 pub fn fused_effect_cache_key(def: &EffectGraphDef, base: &LoadedPresetView) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
@@ -732,7 +733,6 @@ pub fn fused_effect_cache_key(def: &EffectGraphDef, base: &LoadedPresetView) -> 
     base.bindings.len().hash(&mut h);
     for b in &base.bindings {
         b.id.as_ref().hash(&mut h);
-        b.label.hash(&mut h);
         format!("{:?}|{:?}|{:?}", b.target, b.convert, b.curve).hash(&mut h);
         for v in [b.default_value, b.scale, b.offset, b.min, b.max] {
             v.to_bits().hash(&mut h);

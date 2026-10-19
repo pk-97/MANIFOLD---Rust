@@ -53,7 +53,7 @@ pub(crate) fn binding(domain_node_id: &str) -> Value {
         "defaultMirrorsNodeParam": true,
         "defaultValue": 0.0,
         "id": PARAM,
-        "label": "Solve Level",
+        "label": "Coarse Solve",
         "target": {"kind": "node", "nodeId": domain_node_id, "param": PARAM}
     })
 }
@@ -67,7 +67,7 @@ pub(crate) fn card() -> Value {
         "isTrigger": false,
         "max": 4.0,
         "min": 0.0,
-        "name": "Solve Level",
+        "name": "Coarse Solve",
         "section": "Fluid",
         "wholeNumbers": true
     })

@@ -402,6 +402,12 @@ mod emitter_oracle {
     use manifold_water_liquid::grid::face_len;
     use manifold_node_engine::primitive::Primitive;
     use manifold_water_liquid::whitewater::KnownValue;
+    // The GPU spawn record is layout-asserted against the native one, so its
+    // buffers read back as native spawns.
+    use manifold_water_liquid::fluid_particles::WhitewaterSpawn as GpuSpawn;
+    use std::time::Instant;
+
+    const EMISSION_FRAMES: usize = 150;
 
     /// The whitewater grid: the surface's solid lattice, its cells and box, and
     /// the face grid centred in it.
@@ -588,8 +594,8 @@ mod emitter_oracle {
             let wavecrest = h.array::<f32>(&[], slots);
             let counts = h.array::<u32>(&[], slots);
             let offsets = h.array::<u32>(&[], slots);
-            let spawns = h.array::<WhitewaterSpawn>(&[], CAPACITY as usize);
-            let typed = h.array::<WhitewaterSpawn>(&[], CAPACITY as usize);
+            let spawns = h.array::<GpuSpawn>(&[], CAPACITY as usize);
+            let typed = h.array::<GpuSpawn>(&[], CAPACITY as usize);
             Self {
                 harness: h,
                 grid,

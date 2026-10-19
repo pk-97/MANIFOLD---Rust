@@ -62,6 +62,9 @@ const RT_SCENE_JSON: &str = r#"{"version":3,"name":"RtDynamicExport","presetMeta
 {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
 "objects":{"type":"Int","value":1},"lights":{"type":"Int","value":1},
 "rt_enabled":{"type":"Bool","value":true}}},
+{"id":10,"typeId":"node.bake_environment","nodeId":"environment","params":{
+"width":{"type":"Int","value":16},"height":{"type":"Int","value":8},
+"intensity":{"type":"Float","value":0.0}}},
 {"id":99,"typeId":"system.final_output","nodeId":"out"}],"wires":[
 {"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
 {"fromNode":2,"fromPort":"out","toNode":3,"toPort":"in"},
@@ -73,6 +76,7 @@ const RT_SCENE_JSON: &str = r#"{"version":3,"name":"RtDynamicExport","presetMeta
 {"fromNode":5,"fromPort":"object","toNode":20,"toPort":"object_0"},
 {"fromNode":6,"fromPort":"out","toNode":20,"toPort":"camera"},
 {"fromNode":7,"fromPort":"out","toNode":20,"toPort":"light_0"},
+{"fromNode":10,"fromPort":"envmap","toNode":20,"toPort":"envmap"},
 {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}]}"#;
 
 const BPM: f32 = 120.0;
