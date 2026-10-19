@@ -120,7 +120,7 @@ pub use macro_bank::{
 };
 pub use marker::TimelineMarker;
 pub use math::{BeatQuantizer, MathUtils, short_id};
-pub use selection::{SelectionRegion, SelectionRegionTarget};
+pub use selection::SelectionRegion;
 pub use session::{ClipSequence, Scene, SessionGrid, SessionSlot};
 pub use stage::{
     DerivedStage, DisplayIdentity, DisplayPlacement, Island, OutputAdvanced, OutputId, Rotation,

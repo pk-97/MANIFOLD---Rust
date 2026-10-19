@@ -3,12 +3,6 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-pub trait ExternalProcessRunner {
-    fn run_async(command: &str, arguments: &[&str]) -> ProcessHandle
-    where
-        Self: Sized;
-}
-
 #[derive(Debug, Clone)]
 pub struct ProcessOutputLine {
     pub line: String,
@@ -125,10 +119,10 @@ impl ProcessHandle {
 
 pub struct ProcessRunnerImpl;
 
-impl ExternalProcessRunner for ProcessRunnerImpl {
+impl ProcessRunnerImpl {
     /// Spawn the process asynchronously, returning a handle that can be polled each frame.
     /// Equivalent to `RunAsync` / `RunExternalProcessAsync` in Unity.
-    fn run_async(command: &str, arguments: &[&str]) -> ProcessHandle {
+    pub fn run_async(command: &str, arguments: &[&str]) -> ProcessHandle {
         let mut child = match Command::new(command)
             .args(arguments)
             .stdin(Stdio::null())

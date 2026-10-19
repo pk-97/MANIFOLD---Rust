@@ -2715,17 +2715,6 @@ impl Application {
 
 }
 
-// ── BUG-060 surface dump (env-gated debug instrumentation) ──────────────────
-// The stale-sliver artifact (docs/BUG_BACKLOG.md BUG-060) reproduces only on
-// the live rig; every headless probe of the atlas has come back clean. These
-// dumps attribute observed dirt to a surface: present in the atlas PNG → the
-// cache/clear layer; in the offscreen PNG only → composite/blit; on screen but
-// in neither → IOSurface/present. Readback + PNG encode stall the render
-// thread — they run only under MANIFOLD_BUG060_DUMP. Remove with BUG-060.
-
-
-
-
 /// Build the graph editor's bottom mini-timeline view-model from a project +
 /// playhead beat: `(clips, layer_labels, row_count, total_beats,
 /// beats_per_bar, readout)`. Every layer becomes a row (and a gutter label);
