@@ -348,6 +348,17 @@ impl ScrollContainer {
         self.viewport
     }
 
+    /// Resize the viewport after its content is built, for a column that
+    /// takes only the height its content needs up to a cap. Call before
+    /// `set_content_height` (which clamps the scroll to both) and
+    /// `build_scrollbar`.
+    pub fn set_viewport_height(&mut self, tree: &mut UITree, height: f32) {
+        self.viewport.height = height.max(0.0);
+        if let Some(clip) = self.clip_node_id {
+            tree.set_bounds(clip, self.viewport);
+        }
+    }
+
     /// The built clip, content and scrollbar moved by `(dx, dy)` with their
     /// region: the viewport moves with them.
     pub fn translate(&mut self, dx: f32, dy: f32) {

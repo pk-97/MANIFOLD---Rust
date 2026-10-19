@@ -130,14 +130,14 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
         );
     }
 
-    // The failed flow clicked Foam after scrolling down to Whitewater Amount.
-    // Selector lookup can find an offscreen node; pointer hit-testing cannot.
+    // The tree has its own pane: scrolling the settings down to Whitewater
+    // Amount leaves Foam where a pointer can click it.
     assert!(ui.scene_setup_panel.handle_scroll(-10_000.0));
     let scrolled_tree = build_scene_tree(&mut ui);
     let foam = tree_row(&scrolled_tree, "Foam");
     let rect = scrolled_tree.get_bounds(foam);
     let center = manifold_ui::Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
-    assert_ne!(scrolled_tree.hit_test(center), Some(foam), "clipped Foam cannot receive the click");
+    assert_eq!(scrolled_tree.hit_test(center), Some(foam), "the tree stays clickable while the settings scroll");
 
     for (name, size_id) in [("Foam", "foam_size"), ("Spray", "spray_size"), ("Bubbles", "bubble_size")] {
         // ScrollTo in the repaired flow brings the outliner target back into view.

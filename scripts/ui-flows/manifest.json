@@ -92,7 +92,8 @@
       "scene-colour-row-hex",
       "scene-light-swatch",
       "scene-fluid-role-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "scene-two-panes"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup-add-object",
@@ -106,7 +107,8 @@
       "scene-colour-row-hex",
       "scene-light-swatch",
       "scene-fluid-role-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "scene-two-panes"
     ],
     "crates/manifold-editing/src/commands/graph/scene/fluid": [
       "scene-fluid-authoring",
@@ -372,6 +374,7 @@
     "scene-use-this-view": "gltfscene",
     "scene-light-swatch": "gltfscene",
     "scene-colour-row-hex": "gltfscene",
+    "scene-two-panes": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
     "work-node-param-drag": "paramsteps",
