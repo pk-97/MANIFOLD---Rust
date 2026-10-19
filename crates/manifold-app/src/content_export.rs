@@ -631,6 +631,10 @@ impl ContentThread {
     ) {
         self.send_export_phase(state_tx, true, 0.0, "Preparing export...", false);
         self.run_export_inner(config, cmd_rx, state_tx);
+        // Edits sent while it ran were dropped, but a direct UI write may
+        // still show one: publish the project once so the UI copy is replaced
+        // by this thread's (the existing publish_pending path, no data_version bump).
+        self.reactions.publish_pending = true;
         self.send_export_phase(state_tx, false, 1.0, "Export finished", true);
     }
 
@@ -2054,6 +2058,33 @@ mod tests {
         thread.drain_commands(&cmd_rx, &state_tx);
         assert!(thread.engine.is_playing(), "control: Play runs in the normal loop");
         assert!(edited.load(Ordering::SeqCst), "control: the edit runs in the normal loop");
+    }
+
+    /// BUG-v2o9y: an edit the UI applied locally during an export had its
+    /// command dropped; when the export ends the content thread publishes its
+    /// project so the UI copy is replaced and the divergent edit is gone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn export_end_republishes_the_project_over_a_divergent_ui_copy() {
+        let mut thread = crate::headless_harness::headless_content_thread(
+            manifold_core::project::Project::default(), 64, 64,
+        );
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+        drop(cmd_tx);
+        let (state_tx, state_rx) = crate::content_state::state_channel();
+        thread.reactions.publish_pending = true;
+        thread.publish_snapshot_if_dirty(&state_tx);
+        let published = state_rx.try_iter().filter_map(|s| s.project_snapshot).last().expect("first publish");
+        let mut ui_copy = (*published).clone();
+        let content_rate = ui_copy.settings.frame_rate;
+        ui_copy.settings.frame_rate = content_rate + 12.0;
+
+        thread.run_export(meta_config(false), &cmd_rx, &state_tx);
+        thread.publish_snapshot_if_dirty(&state_tx);
+        let after = state_rx.try_iter().filter_map(|s| s.project_snapshot).last()
+            .expect("the export end republishes the project");
+        ui_copy = (*after).clone();
+        assert_eq!(ui_copy.settings.frame_rate, content_rate, "the divergent edit is gone");
     }
 
     /// Export then Cancel pressed while a show warms up are both held; the
