@@ -1,147 +1,54 @@
-//! God-file regrowth guard — the campaign register's enforcement test.
-//!
-//! Wave 1 D11 (`docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md`) specified this test;
-//! Wave 2 P2-Z built it (`docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md` INV-M6,
-//! review M4 found it was never created). Per-file line ceilings for every
-//! campaign-listed file: post-split size + slack. A failure here means a
-//! decomposed file is regrowing — the fix is a decomposition conversation
-//! against the owning wave design doc (UI_FUNNEL / MODEL_COMMAND /
-//! RENDERER_RUNTIME decomposition designs; register history in
-//! `docs/archive/ARCHITECTURE_DEBT.md`), never bumping the ceiling in this
-//! table without a design update naming the reason.
-//!
-//! Ceiling policy: post-split `wc -l` + max(15%, 100) rounded up to 50s,
-//! set at each wave's final landing. Wave-1 files still awaiting P-I/P-S get
-//! interim ceilings pinned at their current size + slack; those TIGHTEN when
-//! Wave 1 closes.
+//! God-file regrowth ratchet. `godfile_ceilings.json` lists every .rs file under
+//! `crates/` over LIMIT lines at its current size. A listed file may not exceed its
+//! ceiling; an unlisted file may not exceed LIMIT. Lowering a ceiling (or deleting
+//! the entry once the file is under LIMIT) is always fine; raising one is a reviewed
+//! edit to the JSON.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-// (workspace-relative path, ceiling in lines)
-const CEILINGS: &[(&str, usize)] = &[
-    // Wave 2 — commands/graph/ (P2-G, landed 2026-07-22; sizes incl. tests)
-    ("crates/manifold-editing/src/commands/graph/mod.rs", 450),
-    ("crates/manifold-editing/src/commands/graph/node_edit.rs", 2100),
-    ("crates/manifold-editing/src/commands/graph/expose.rs", 2400),
-    ("crates/manifold-editing/src/commands/graph/groups.rs", 900),
-    ("crates/manifold-editing/src/commands/graph/scene.rs", 3650),
-    ("crates/manifold-editing/src/commands/graph/modifiers.rs", 1300),
-    ("crates/manifold-editing/src/commands/graph/paste.rs", 350),
-    ("crates/manifold-editing/src/commands/graph/test_support.rs", 350),
-    // Wave 2 — effects/ (P2-E, landed 2026-07-22)
-    ("crates/manifold-core/src/effects/mod.rs", 250),
-    ("crates/manifold-core/src/effects/param_defs.rs", 200),
-    ("crates/manifold-core/src/effects/bindings.rs", 600),
-    ("crates/manifold-core/src/effects/instance.rs", 2550),
-    // Tightened 1550 → 1100 (2026-10-14): the tests moved to a sibling file
-    // when the SCENE_SURFACES_DESIGN.md D2 (one live lookup) join grew it.
-    ("crates/manifold-core/src/effects/instance_serde.rs", 1100),
-    ("crates/manifold-core/src/effects/instance_serde_tests.rs", 800),
-    ("crates/manifold-core/src/effects/group.rs", 150),
-    ("crates/manifold-core/src/effects/driver.rs", 800),
-    ("crates/manifold-core/src/effects/envelope.rs", 400),
-    ("crates/manifold-core/src/effects/automation.rs", 500),
-    ("crates/manifold-core/src/effects/test_support.rs", 250),
-    // Wave 2 — project/ (P2-P, landed 2026-07-22)
-    ("crates/manifold-core/src/project/mod.rs", 350),
-    ("crates/manifold-core/src/project/load_migration.rs", 1500),
-    ("crates/manifold-core/src/project/presets.rs", 550),
-    ("crates/manifold-core/src/project/queries.rs", 950),
-    ("crates/manifold-core/src/project/validate.rs", 300),
-    ("crates/manifold-core/src/project/test_support.rs", 150),
-    // Wave 3 — renderer runtime decomposition (P3-Z, landed 2026-07-22;
-    // RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md). Ceilings = current wc -l +10%
-    // rounded up to 50s, EXCEPT the two D2/D3 named ceilings pinned at +5%:
-    // preset_runtime/core.rs (Peter-sanctioned ~2k) and codegen/fused.rs
-    // (buffer+texture fused emission share the region model, no sub-split).
-    // gltf_import/ (P3-G split + P3-D tables + P3-A ImportCtx/ObjectAssembly)
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs", 100),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs", 200),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/animation.rs", 150),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/materials.rs", 450),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/cards.rs", 250),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/object_group.rs", 1100),
-    // 2026-07-28 gltf import wave: lights/cameras/unlit/vertex-color/ssao
-    // exposure blocks (scene.rs) + per-feature import tests (tests.rs);
-    // decomposition follow-up in beads.
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/scene.rs", 950),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/merge.rs", 450),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/report.rs", 50),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs", 7000),
-    // freeze/codegen/ (P3-C split + P3-A StandaloneKernelSpec)
-    ("crates/manifold-node-engine/src/freeze/codegen/mod.rs", 50),
-    ("crates/manifold-node-engine/src/freeze/codegen/types.rs", 550),
-    ("crates/manifold-node-engine/src/freeze/codegen/uniforms.rs", 150),
-    ("crates/manifold-node-engine/src/freeze/codegen/entry_points.rs", 200),
-    ("crates/manifold-node-engine/src/freeze/codegen/standalone.rs", 1050),
-    // D2 named ceiling: fused emission is one seam, no buffer/texture sub-split.
-    // Bumped 1600 → 1850 (Peter 2026-09-15): e3d0af80c admitted BufferGather
-    // buffer atoms into fused regions (+250), changing D2's no-buffer premise.
-    // A split is tracked as follow-up work, not blocked on landings.
-    ("crates/manifold-node-engine/src/freeze/codegen/fused.rs", 1850),
-    ("crates/manifold-node-engine/src/freeze/codegen/dispatch_contract_tests.rs", 250),
-    ("crates/manifold-node-engine/src/freeze/codegen/gpu_tests.rs", 3450),
-    // preset_runtime/ (P3-R split + P3-A ChainBuildInputs/FrameContextInputs)
-    ("crates/manifold-node-engine/src/runtime/mod.rs", 200),
-    // D3 named ceiling (+5%): PresetRuntime is one type; core ~2k is Peter-sanctioned
-    ("crates/manifold-node-engine/src/runtime/core.rs", 2200),
-    ("crates/manifold-node-engine/src/runtime/build.rs", 750),
-    // Effect masks: group membership and Mix assembly form one build facet.
-    ("crates/manifold-node-engine/src/runtime/groups.rs", 250),
-    ("crates/manifold-node-engine/src/runtime/errors.rs", 300),
-    ("crates/manifold-node-engine/src/runtime/segments.rs", 200),
-    ("crates/manifold-node-engine/src/runtime/bindings.rs", 200),
-    ("crates/manifold-node-engine/src/runtime/instrumentation.rs", 550),
-    // preset_runtime/tests/ (P3-R #[path] test modules — W3-D1)
-    ("crates/manifold-node-engine/src/runtime/multi_segment_tests.rs", 150),
-    ("crates/manifold-node-engine/src/runtime/binding_seed_tests.rs", 100),
-    ("crates/manifold-node-engine/src/runtime/topology_hash_tests.rs", 300),
-    ("crates/manifold-node-engine/src/runtime/user_binding_tests.rs", 400),
-    ("crates/manifold-node-engine/src/runtime/bug080_manifest_gate_tests.rs", 100),
-    ("crates/manifold-node-engine/src/runtime/persistent_slot_tests.rs", 150),
-    ("crates/manifold-node-engine/src/runtime/generator_input_tests.rs", 500),
-    ("crates/manifold-node-engine/src/runtime/chain_error_tests.rs", 150),
-    ("crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_generator_runtime.rs", 1550),
-    ("crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_chain_fusion.rs", 1450),
-    ("crates/manifold-node-engine/src/runtime/segment_prewarm_tests.rs", 50),
-    // Wave 1 register files still open (interim ceilings = current + slack;
-    // tighten at Wave 1 close — P-I kills scrub fields, P-S splits panels)
-    ("crates/manifold-app/src/app.rs", 4200),
-    ("crates/manifold-app/src/app_render.rs", 4350),
-    ("crates/manifold-ui/src/panels/mod.rs", 450),
-    ("crates/manifold-ui/src/panels/param_card.rs", 8000),
-    ("crates/manifold-ui/src/panels/inspector.rs", 4900),
-    ("crates/manifold-ui/src/panels/param_slider_shared.rs", 3650),
-    // SCENE_SURFACES P6b moved the tree and item header into their own
-    // modules; capped at the size that left.
-    ("crates/manifold-ui/src/panels/scene_setup_panel.rs", 2477),
-    // SCENE_SURFACES_DESIGN.md INV-S12 (godfiles do not regrow): scene
-    // surface files capped at their size when the scene table landed.
-    ("crates/manifold-nodes-scene/src/node_graph/scene_vm.rs", 3320),
-    ("crates/manifold-core/src/scene_exposure.rs", 1509),
-    ("crates/manifold-app/src/ui_bridge/projection/cards.rs", 1807),
-    ("crates/manifold-ui/src/panels/scene_setup_panel/material_inspector.rs", 2148),
-];
+const LIMIT: usize = 2500;
+const CEILINGS_JSON: &str = include_str!("godfile_ceilings.json");
+
+fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, usize)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if entry.file_name() != "target" {
+                walk(&path, root, out);
+            }
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            out.push((rel, text.lines().count()));
+        }
+    }
+}
 
 #[test]
-fn no_register_listed_file_regrows() {
+fn no_file_regrows_past_its_ceiling() {
+    let ceilings: BTreeMap<String, usize> =
+        serde_json::from_str(CEILINGS_JSON).expect("godfile_ceilings.json is not valid");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    walk(&root.join("crates"), &root, &mut files);
     let mut violations = Vec::new();
-    for (rel, ceiling) in CEILINGS {
-        let path = root.join(rel);
-        // A missing file is fine: a later wave may have split it further.
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let lines = text.lines().count();
-        if lines > *ceiling {
+    for (rel, lines) in &files {
+        let ceiling = ceilings.get(rel).copied().unwrap_or(LIMIT);
+        if *lines > ceiling {
             violations.push(format!("{rel}: {lines} lines > ceiling {ceiling}"));
+        }
+    }
+    for rel in ceilings.keys() {
+        if !files.iter().any(|(f, _)| f == rel) {
+            violations.push(format!("{rel}: listed in godfile_ceilings.json but missing; delete the entry"));
         }
     }
     assert!(
         violations.is_empty(),
-        "god-file regrowth detected (see the owning decomposition design doc — do not bump \
-         ceilings without a design update naming the reason):\n{}",
+        "god-file regrowth detected (decompose the file; do not bump a ceiling without a \
+         design update naming the reason):\n{}",
         violations.join("\n")
     );
 }

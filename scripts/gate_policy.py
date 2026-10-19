@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Semantic gate ownership and assets that Cargo metadata cannot describe."""
 from pathlib import Path
+import json
 import re
 
 def is_inert_plan_path(path):
@@ -494,15 +495,19 @@ for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_press
     ]
 
 
+GODFILE_CEILINGS = "crates/manifold-app/tests/godfile_ceilings.json"
+
+
 def godfile_paths():
-    """Read the source-of-truth CEILINGS table; reject unparsed entries."""
-    source = Path(__file__).resolve().parent.parent / "crates/manifold-app/tests/godfile_regrowth.rs"
-    text = re.sub(r"//[^\n]*", "", source.read_text())
-    table = re.search(r"const CEILINGS\b[^=]*=\s*&\[(.*?)\];", text, re.S)
-    entry = re.compile(r'\(\s*"([^"]+)"\s*,\s*\d[\d_]*\s*,?\s*\)\s*,?')
-    if table is None or not entry.search(table[1]) or entry.sub("", table[1]).strip():
+    """Read the source-of-truth ceilings JSON; reject missing or empty tables."""
+    source = Path(__file__).resolve().parent.parent / GODFILE_CEILINGS
+    try:
+        table = json.loads(source.read_text())
+    except ValueError:
+        table = None
+    if not isinstance(table, dict) or not table:
         raise ValueError(f"cannot parse CEILINGS in {source}")
-    return entry.findall(table[1])
+    return [GODFILE_CEILINGS, *table]
 
 
 # Cross-file contracts: path -> (owning package, integration binaries).

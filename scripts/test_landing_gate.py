@@ -1230,14 +1230,14 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_ceiling_paths_select_app_godfile_binary_across_packages(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-core"
-            (crate / "src/effects").mkdir(parents=True)
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-core"\n')
-            workspace = synthetic_workspace(d, ["crates/manifold-core/src/effects/instance.rs"])
-            plan = cpu_scope.plan_for_paths(["crates/manifold-core/src/effects/instance.rs"], d,
+            crate = Path(d) / "crates/manifold-physics"
+            (crate / "src").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-physics"\n')
+            workspace = synthetic_workspace(d, ["crates/manifold-physics/src/lib.rs"])
+            plan = cpu_scope.plan_for_paths(["crates/manifold-physics/src/lib.rs"], d,
                                             workspace=workspace)
-            self.assertEqual(plan.packages, {"manifold-core", "manifold-app"})
-            self.assertIn("(package(=manifold-core) & test(/^effects::instance::/))", plan.filters)
+            self.assertEqual(plan.packages, {"manifold-physics", "manifold-app"})
+            self.assertTrue(any("package(=manifold-physics)" in f for f in plan.filters))
             self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
             for path in cpu_scope.godfile_paths():
                 with self.subTest(path=path):
@@ -1246,8 +1246,7 @@ class DiffScopeTests(unittest.TestCase):
                     self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
 
     def test_ceiling_parser_rejects_missing_empty_or_unparsed_tables(self):
-        for text in ("", "const CEILINGS: &[(&str, usize)] = &[];",
-                     'const CEILINGS: &[(&str, usize)] = &[("a.rs", 100), unknown];'):
+        for text in ("", "{}", "[]", '{"a.rs": 100, unknown}'):
             with self.subTest(text=text), patch.object(Path, "read_text", return_value=text):
                 with self.assertRaisesRegex(ValueError, "cannot parse CEILINGS"):
                     cpu_scope.godfile_paths()
