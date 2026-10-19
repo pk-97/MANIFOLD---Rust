@@ -1,0 +1,352 @@
+1
+00:00:00,000 --> 00:00:05,280
+ okay hey Claude I'm just gonna walk through manifold and point out some
+
+2
+00:00:05,280 --> 00:00:09,000
+ things that bother me and it's probably gonna be a whole bunch of unrelated
+
+3
+00:00:09,000 --> 00:00:14,320
+ things but we can go through it and understand it together first of all
+
+4
+00:00:14,320 --> 00:00:21,560
+ insert generator is pretty quick which is nice so that works well cool creating
+
+5
+00:00:21,560 --> 00:00:31,880
+ this is fine scroll is working well now so that's all good clips are nice this is
+
+6
+00:00:31,880 --> 00:00:36,460
+ okay it's a bit messy a lot of the thumbnails are missing for some reason
+
+7
+00:00:36,460 --> 00:00:47,600
+ they're on black but it's not too big of a deal let's create a 3d scene so yeah this
+
+8
+00:00:47,600 --> 00:00:55,580
+ is where things start to become a problem the the card for 3d scenes is a
+
+9
+00:00:55,580 --> 00:01:03,140
+ bit clunky like it's got some useful stuff in here this one isn't too bad but it's
+
+10
+00:01:03,140 --> 00:01:14,120
+ not fantastic this one's actually okay when I go to the scene it's a bit it's
+
+11
+00:01:14,120 --> 00:01:23,240
+ just a bit clunky it's hard to explain like this is okay this is okay the
+
+12
+00:01:23,240 --> 00:01:30,620
+ materials is really ugly like hard to use like if I add iridescence okay it's here
+
+13
+00:01:30,620 --> 00:01:40,400
+ and I can remove it if I add glass let's go this but I have this like enabled thing
+
+14
+00:01:40,400 --> 00:01:49,380
+ that works okay okay so this is working okay it's just not fantastic if I go maybe
+
+15
+00:01:49,380 --> 00:01:57,580
+ oh this is uh one thing I did notice is for this I think this is like some custom 3d scene or
+
+16
+00:01:57,580 --> 00:02:03,680
+ something which isn't great we have all these weird custom like dev scenes almost that make it into the
+
+17
+00:02:03,680 --> 00:02:08,540
+ the app but like all of the stuff about the physics boxes in here is under the
+
+18
+00:02:08,540 --> 00:02:15,080
+ physics scene so it's like is this for general scenes or what like how does this
+
+19
+00:02:15,080 --> 00:02:22,700
+ work like spacing columns like if I wanted to add a bunch of boxes with physics in a
+
+20
+00:02:22,700 --> 00:02:35,600
+ normal scene how would like that work and yeah okay um what else is a bit confusing uh so if we remove the boxes
+
+21
+00:02:35,600 --> 00:02:52,460
+ maybe let's remove everything okay let's add water okay so now we've got water what do we do add coat what does that do nope okay
+
+22
+00:02:52,460 --> 00:03:01,440
+ like there's a lot of parameters here that just are kind of confusing like the board is pretty bad because it's been
+
+23
+00:03:01,440 --> 00:03:09,320
+ mostly thrown together lately and this is out of date as well the lattice thing is out of out of date doesn't seem to be correct
+
+24
+00:03:09,320 --> 00:03:23,220
+ um some things have tooltips some things don't like i've seen them show up before also this is weird like the base color thing i can no longer type a hex directly
+
+25
+00:03:23,220 --> 00:03:27,380
+ and it's now on just the r like that's weird to me
+
+26
+00:03:27,380 --> 00:03:34,760
+ overall it just feels like sloppy it doesn't feel like professional ui it's about 50 of the way there
+
+27
+00:03:34,760 --> 00:03:43,880
+ um what else have we got it's it's like a bit hard to tell between like a draw and like a thing that
+
+28
+00:03:43,880 --> 00:03:49,480
+ you're going to click on i sometimes just close close things by accident um
+
+29
+00:03:49,480 --> 00:03:57,440
+ right click menus they're pretty good they're pretty good
+
+30
+00:03:57,440 --> 00:04:04,640
+ um oh insert trigger lane i know like now i i don't have the option here
+
+31
+00:04:04,640 --> 00:04:11,760
+ if i insert a trigger lane um like right click a trigger lane i have to click the main one which is pretty annoying
+
+32
+00:04:11,760 --> 00:04:19,600
+ also i can't have trigger lanes like i can't have a small top layer thing
+
+33
+00:04:19,600 --> 00:04:25,760
+ um if i want to work on the trigger lanes which is maybe actually sensible
+
+34
+00:04:25,760 --> 00:04:30,640
+ because then kind of focuses you into what you're working on the group so that's probably nothing too big
+
+35
+00:04:30,640 --> 00:04:39,760
+ um what else is there it's mostly just like it's hard to explain um
+
+36
+00:04:39,760 --> 00:04:47,280
+ stuff like uh one of the uh sort of scroll in the graph editor is horrible also like
+
+37
+00:04:47,280 --> 00:04:51,760
+ all the 3d scenes always have these like mega gigantic
+
+38
+00:04:51,760 --> 00:04:59,520
+ crazy huge nodes all the time um i don't really use the graph editor much at the moment so i haven't
+
+39
+00:04:59,520 --> 00:05:06,640
+ really noticed it's been building but it's pretty horrible and clunky and i don't know how it gets
+
+40
+00:05:06,640 --> 00:05:14,880
+ fixed or why it happens um but like i said i don't use it too often but it is horrible when i do it go in
+
+41
+00:05:14,880 --> 00:05:22,640
+ um so i yeah the scroll the scroll okay it looks to work but not with the scroll wheel so something's
+
+42
+00:05:22,640 --> 00:05:29,760
+ broken it's very broken actually um the mapping panel is okay it's quite nice it would be nice to
+
+43
+00:05:29,760 --> 00:05:36,880
+ have access to this without opening the the um the graph editor so like right clicking
+
+44
+00:05:38,240 --> 00:05:45,120
+ and i'll set slider range yeah it'd be nice to have the like mapping panel here instead of this
+
+45
+00:05:45,120 --> 00:05:49,840
+ i did not even know this existed this is crazy this is this is like an example of things that are
+
+46
+00:05:49,840 --> 00:06:00,320
+ just in here that are whack and kind of just clunky um i think with the 3d scenes in particular it seems like
+
+47
+00:06:00,320 --> 00:06:07,680
+ if i automate this stuff i think it gets added which is okay but
+
+48
+00:06:10,000 --> 00:06:16,240
+ now now it's gone so it's kind of confusing um the lights
+
+49
+00:06:19,280 --> 00:06:22,400
+ like i don't know what this is doing now like why
+
+50
+00:06:25,440 --> 00:06:26,800
+ why does my camera
+
+51
+00:06:30,000 --> 00:06:32,160
+ i mean the water looks not too bad
+
+52
+00:06:34,880 --> 00:06:37,920
+ the little water actually looks pretty nice um wow
+
+53
+00:06:39,520 --> 00:06:44,240
+ uh for the sun what are we doing here i was playing around intensity it doesn't seem to be
+
+54
+00:06:44,240 --> 00:06:51,200
+ really doing oh no it's doing a bit but like sun type got these cool intensity range fall off legacy
+
+55
+00:06:51,200 --> 00:06:56,400
+ inverse square i didn't know this was a thing like there's so many parameters here that are just like
+
+56
+00:06:56,400 --> 00:07:02,000
+ they're just dumped on the user and it's not clear how they work or what they are and i think it's just
+
+57
+00:07:02,000 --> 00:07:06,960
+ because we've been building this so quickly like shadow bias like what is this stuff
+
+58
+00:07:08,080 --> 00:07:17,920
+ like shadow softness yes i know what that is uh that's fine but like where is my environment stuff now like
+
+59
+00:07:19,200 --> 00:07:26,880
+ uh what i have to go to world and now there's like all this horizon strength stuff with like what is
+
+60
+00:07:26,880 --> 00:07:35,040
+ i don't know what this is um okay so this is the main light okay softbox gradient like what is that
+
+61
+00:07:36,320 --> 00:07:40,320
+ uh is this just like a gradient lighting thing i guess
+
+62
+00:07:41,200 --> 00:07:46,000
+ emit account like what is a mid account i have an eight i mean it is here is this like
+
+63
+00:07:47,200 --> 00:07:55,680
+ the water is like what is this uh emitter intensity like what's emitter intensity first intensity like
+
+64
+00:07:56,480 --> 00:08:01,040
+ there's just so much stuff going on here that doesn't make sense sun is here again like what's
+
+65
+00:08:01,040 --> 00:08:08,800
+ going on sun disk intensity uh this guy like i just don't understand how to use whoa a lot of this stuff
+
+66
+00:08:09,840 --> 00:08:17,840
+ um but wow that is a cool looking piece of water now i don't know what's going on here
+
+67
+00:08:20,400 --> 00:08:26,160
+ wow that actually looks beautiful uh but yeah i don't know there's a lot i've just kind of
+
+68
+00:08:27,040 --> 00:08:34,640
+ slopped through a bit um audio is kind of annoying because like okay i want to add a source add a source
+
+69
+00:08:34,640 --> 00:08:40,800
+ okay and now i have to change to like none layers if i don't use the system audio so it should probably
+
+70
+00:08:40,800 --> 00:08:47,600
+ default to just the layers and then unless you pick system audio uh but then like if i add an audio layer
+
+71
+00:08:49,120 --> 00:08:56,880
+ i have to then route this uh which is kind of okay but it's kind of annoying and confusing like if you
+
+72
+00:08:56,880 --> 00:09:04,400
+ have an audio if i add an audio track and on a new project and i go like add source i have to i have to
+
+73
+00:09:04,400 --> 00:09:10,720
+ manually manually manually configure all this stuff and there's like obvious just defaults to be used
+
+74
+00:09:10,720 --> 00:09:14,800
+ and i'm still kind of mesmerized by how good this water looks at the moment i have no idea how i made
+
+75
+00:09:14,800 --> 00:09:28,160
+ this water look so good it's a beautifully glowing okay um what else is there um the inspector kind of
+
+76
+00:09:28,160 --> 00:09:34,320
+ feels a bit awkward and inconsistent sometimes like how you can kind of click on things that
+
+77
+00:09:35,440 --> 00:09:42,240
+ don't feel like sometimes you can like here like i can click on the clip but there's nothing um
+
+78
+00:09:46,080 --> 00:09:51,360
+ it all just feels a bit amateur almost uh like automation button up here okay that's kind of cool
+
+79
+00:09:52,160 --> 00:10:01,520
+ raw i don't like what is this draw button doing restore all um this is a little confusing here but it's not
+
+80
+00:10:02,080 --> 00:10:09,440
+ super important um oh there used to be like a little cog or something that let you
+
+81
+00:10:10,480 --> 00:10:19,760
+ hide the drawers like if you add heaps of uh automation there used to be something that let you
+
+82
+00:10:21,920 --> 00:10:26,560
+ collapse like all the drawers or something to reduce the clutter but overall i just like i don't know what
+
+83
+00:10:26,560 --> 00:10:32,720
+ i just did there okay i click what happened there i clicked physics see i didn't even know i could do that
+
+84
+00:10:33,920 --> 00:10:41,120
+ i don't know i could do that overall it just the ui feels very cluttered and clunky and like it's been
+
+85
+00:10:41,120 --> 00:10:49,840
+ kind of puzzled together and slopped together and not fully built with a strong design goal and strong
+
+86
+00:10:49,840 --> 00:10:53,040
+ user-facing interaction goal like um
+
+87
+00:10:55,920 --> 00:11:00,400
+ yeah it's hard to explain we probably need to talk more about this but maybe this is a good entry point
+
+88
+00:11:00,400 --> 00:11:02,400
+ all right cheers claude
+
