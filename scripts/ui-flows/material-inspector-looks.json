@@ -3,7 +3,9 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene", "type": "Button", "under_name": "inspector"
+          "text": "Scene",
+          "type": "Button",
+          "under_name": "inspector"
         }
       },
       "gesture": {
@@ -31,7 +33,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "QS1694-W02-1-1"
+          "name": "scene_tree.item",
+          "text": "QS1694-W02-1-1"
         }
       },
       "gesture": {
@@ -45,7 +48,21 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "Coated"
+          "name": "material.preset"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "material.preset"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
         }
       }
     }
@@ -61,6 +78,18 @@
         "Click": {
           "modifiers": {}
         }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "material.preset"
+        }
+      },
+      "check": {
+        "TextEquals": "Coated"
       }
     }
   },
@@ -144,7 +173,21 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "Default"
+          "name": "material.preset"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "material.preset"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
         }
       }
     }
@@ -160,6 +203,18 @@
         "Click": {
           "modifiers": {}
         }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "material.preset"
+        }
+      },
+      "check": {
+        "TextEquals": "Default"
       }
     }
   },

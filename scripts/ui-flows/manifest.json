@@ -105,6 +105,10 @@
       "scene-setup-empty-states",
       "scene-skin",
       "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
       "scene-colour-row-hex",
       "scene-light-swatch",
       "scene-fluid-role-lifecycle",
@@ -120,6 +124,10 @@
       "scene-setup-empty-states",
       "scene-skin",
       "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
       "scene-colour-row-hex",
       "scene-light-swatch",
       "scene-fluid-role-lifecycle",
@@ -255,6 +263,8 @@
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_looks.rs": [
@@ -263,6 +273,8 @@
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
@@ -402,6 +414,8 @@
     "material-inspector-features": "gltfscene",
     "material-inspector-looks": "gltfscene",
     "material-inspector-textures": "gltfscene",
+    "material-preset-menu": "gltfscene",
+    "material-add-feature-menu": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",

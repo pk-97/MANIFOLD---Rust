@@ -251,7 +251,7 @@ impl ScenePanel {
                 .is_none_or(|info| info.params.iter().any(|(_, id)| id == &row.id))
     }
 
-    fn selected_material_rows(&self) -> Vec<ParamRow> {
+    pub(super) fn selected_material_rows(&self) -> Vec<ParamRow> {
         self.full_params
             .as_ref()
             .map(|surface| {
@@ -504,7 +504,7 @@ impl ScenePanel {
         }
     }
 
-    fn material_feature_writes(
+    pub(super) fn material_feature_writes(
         &self,
         rows: &[ParamRow],
         feature: crate::param_surface::MaterialFeature,
@@ -1048,42 +1048,7 @@ impl ScenePanel {
             cy += ROW_H;
         }
         if info.shared_object_count.is_some() {
-            let looks = [
-                (MaterialLook::Default, "Default", 4_u64),
-                (MaterialLook::Matte, "Matte", 0_u64),
-                (MaterialLook::Coated, "Coated", 1_u64),
-                (MaterialLook::BrushedMetal, "Brushed Metal", 2_u64),
-                (MaterialLook::Glass, "Glass", 3_u64),
-            ];
-            let gap = ROW_GAP;
-            let min_button_w = looks
-                .iter()
-                .map(|(_, label, _)| {
-                    tree.text_width(
-                        label,
-                        btn_style().font_size,
-                        crate::node::FontWeight::Regular,
-                    ) + 2.0 * GAP
-                })
-                .fold(0.0_f32, f32::max);
-            let columns =
-                (((inner_w + gap) / (min_button_w + gap)).floor() as usize).clamp(1, looks.len());
-            let button_w = ((inner_w - gap * (columns - 1) as f32) / columns as f32).max(0.0);
-            for (position, (look, label, offset)) in looks.into_iter().enumerate() {
-                let id = tree.add_button_keyed(
-                    Some(self.content_parent),
-                    inner_x + (position % columns) as f32 * (button_w + gap),
-                    cy + (position / columns) as f32 * (ROW_H + gap),
-                    button_w,
-                    ROW_H,
-                    btn_style(),
-                    label,
-                    MATERIAL_LOOK_KEY_BASE + offset,
-                );
-                self.material_look_ids
-                    .push((id, look, info.object.clone(), info.material.clone()));
-            }
-            cy += (looks.len().div_ceil(columns) - 1) as f32 * (ROW_H + gap);
+            self.build_material_preset_row(tree, inner_x, inner_w, cy, info);
         } else {
             tree.add_label(
                 Some(self.content_parent),
@@ -1096,69 +1061,6 @@ impl ScenePanel {
             );
         }
         cy + ROW_H + ROW_GAP
-    }
-
-    pub(super) fn build_material_feature_actions(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        info: &MaterialInspectorInfo,
-    ) -> f32 {
-        let feature_rows = self.selected_material_rows();
-        let features = crate::param_surface::MATERIAL_FEATURES;
-        let mut add_features = Vec::new();
-        for &feature in features {
-            if self.material_feature_visible(&feature_rows, feature) {
-                continue;
-            }
-            let Some(mode_row) = feature_rows.iter().find(|row| {
-                row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
-            }) else {
-                continue;
-            };
-            add_features.push((feature, mode_row.id.clone()));
-        }
-        if add_features.is_empty() {
-            return cy;
-        }
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Optional Features",
-            section_label_style(),
-        );
-        cy += ROW_H;
-        let button_w = ((inner_w - ROW_GAP * 2.0) / 3.0).max(0.0);
-        let feature_count = add_features.len();
-        for (index, (feature, mode_id)) in add_features.into_iter().enumerate() {
-            let col = (index % 3) as f32;
-            let row = (index / 3) as f32;
-            let label = format!("+ Add {}", Self::material_feature_label(feature));
-            let id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + col * (button_w + ROW_GAP),
-                cy + row * (ROW_H + ROW_GAP),
-                button_w,
-                ROW_H,
-                btn_style(),
-                &label,
-                MATERIAL_LOOK_KEY_BASE + 32 + feature as u64,
-            );
-            let writes = self.material_feature_writes(&feature_rows, feature, &mode_id);
-            self.material_feature_ids.push((
-                id,
-                feature,
-                writes,
-                info.object.clone(),
-                info.material.clone(),
-            ));
-        }
-        cy + feature_count.div_ceil(3) as f32 * (ROW_H + ROW_GAP)
     }
 
     pub(super) fn build_material_inspector(
@@ -1441,6 +1343,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![(
                 "coat_mode".into(),
@@ -1562,6 +1465,53 @@ mod tests {
             "Undo removal restores the section"
         );
     }
+
+    fn order_panel(coat: f32, iridescence: f32) -> ScenePanel {
+        use crate::param_surface::MaterialFeature;
+        let (_, mut surface) = super::super::tests::world_transform_vm();
+        let mode = |feature, name: &str, base| {
+            material_test_row(name, MaterialParamRole::FeatureMode(feature), base, 0.0)
+        };
+        surface.rows = vec![
+            mode(MaterialFeature::Coat, "51_coat_mode", coat),
+            mode(MaterialFeature::Iridescence, "51_iridescence_mode", iridescence),
+        ];
+        let mut panel = ScenePanel::new();
+        panel.full_params = Some(surface);
+        panel
+    }
+
+    #[test]
+    fn material_inspector_readded_feature_goes_last_but_undone_remove_keeps_its_slot() {
+        use crate::param_surface::MaterialFeature::{Coat, Iridescence};
+        let mut panel = order_panel(2.0, 2.0);
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Coat, Iridescence]);
+        // Coat removed, then undone: back in its slot.
+        let mut gone = order_panel(3.0, 2.0);
+        panel.full_params = gone.full_params.take();
+        panel.sync_material_feature_order();
+        panel.full_params = order_panel(2.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Coat, Iridescence]);
+        // Coat removed, then re-added from the menu: last.
+        panel.full_params = order_panel(3.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        let writes = vec![MaterialParamWrite { param_id: "51_coat_mode".into(), value: 2.0 }];
+        panel.material_menus.push((
+            panel_node(),
+            material_menus::MaterialMenu::AddFeature(vec![(Coat, writes.clone())]),
+        ));
+        panel.note_material_feature_added(&writes);
+        panel.full_params = order_panel(2.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Iridescence, Coat]);
+    }
+
+    fn panel_node() -> NodeId {
+        UITree::new().add_label(None, 0.0, 0.0, 1.0, 1.0, "x", label_style())
+    }
+
 
     #[test]
     fn material_inspector_new_features_follow_existing_sections() {
@@ -1751,6 +1701,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![("clearcoat".into(), row.id.clone())],
         });
@@ -1797,6 +1748,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![("clearcoat".into(), custom_id)],
         });
@@ -1976,6 +1928,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![
                 ("coat_mode".into(), mode_51.id.clone()),

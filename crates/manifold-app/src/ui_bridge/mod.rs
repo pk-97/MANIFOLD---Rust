@@ -260,6 +260,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::PreviewSceneModifierObject(..)
             | RootAction::SceneSetupSkinSourceClicked { .. }
             | RootAction::SceneSetupSkinTargetMapClicked { .. }
+            | RootAction::SceneSetupActionMenuClicked { .. }
             | RootAction::AudioSendGainBeginTextInput(..)
             | RootAction::CopyOscAddress(_)
             | RootAction::OpenGraphEditor(_)

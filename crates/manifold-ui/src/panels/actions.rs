@@ -1163,6 +1163,14 @@ pub enum RootAction {
         current_target_map: crate::panels::scene_setup_panel::SkinTargetMap,
         button_node_id: crate::node::NodeId,
     },
+    /// The Material section's preset pick list and "+ Add feature" menu: the
+    /// app opens the shared dropdown anchored to `button_node_id`; every item
+    /// already carries the action it fires, so the opener holds no material
+    /// knowledge.
+    SceneSetupActionMenuClicked {
+        button_node_id: crate::node::NodeId,
+        items: Vec<super::dropdown::DropdownItem>,
+    },
     // ── Graph-editor mapping-sidebar drags (`EffectMappingRange*` /
     // `EffectMappingAffine*`) are FRAME-RESIDENT (UI_FUNNEL_DECOMPOSITION P-I,
     // Fork-2): they stay `RootAction` variants dispatched from `app_render`'s
