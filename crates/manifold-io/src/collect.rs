@@ -2138,8 +2138,7 @@ mod tests {
         ];
         // Bookkeeping fields, explicitly exempt:
         // - `last_saved_path` — the .manifold file's own path, never collected.
-        // - `legacy_perc_audio_path` — a legacy percent-analysis path, inert.
-        let exempt = ["last_saved_path", "legacy_perc_audio_path"];
+        let exempt = ["last_saved_path"];
         let covered = [
             "file_path",
             "relative_file_path",

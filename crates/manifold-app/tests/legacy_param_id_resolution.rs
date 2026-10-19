@@ -1,17 +1,12 @@
-//! End-to-end registry-resolution test for the V1.1 → V1.2 driver
-//! migration (step 8 of `docs/EFFECT_RUNTIME_UNIFICATION.md` section 11).
+//! Registry-backed addressing checks on the converted canonical fixtures
+//! (Burn V5 and Liveschool V6 LEDS at 1.21): every driver, envelope,
+//! Ableton and macro mapping names a param id the live registry knows, and
+//! instances save as id-keyed `params` maps.
 //!
-//! Lives in `manifold-app/tests/` rather than `manifold-io/tests/`
-//! because the post-load resolver depends on `inventory::submit!`
-//! entries from `manifold-nodes/src/effects/*.rs` and
-//! `manifold-nodes/src/generators/*.rs`. `manifold-app` is the
-//! one crate that links all of them, so this is the only place the
-//! registry is fully populated outside a running binary.
-//!
-//! The `manifold-io` round-trip test still covers shape preservation
-//! (counts, beat divisions, byte-equal driver tuples). This test
-//! covers the missing piece: that legacy `paramIndex: i32` actually
-//! resolves to the correct stable `param_id` via the live registry.
+//! Lives in `manifold-app/tests/` because the registry depends on
+//! `inventory::submit!` entries from `manifold-nodes`; `manifold-app` is the
+//! one crate that links all of them outside a running binary. The
+//! `manifold-io` round-trip tests cover shape preservation with no registry.
 
 // Force the linker to keep manifold-nodes's `inventory::submit!`
 // blocks. Without a reference into the crate, dead-code elimination
@@ -111,7 +106,7 @@ fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
 
 #[test]
 fn burn_v5_drivers_resolve_to_stable_param_ids() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     if !path.exists() {
         return; // fixtures are gitignored; skip on CI without them
     }
@@ -180,7 +175,7 @@ fn burn_v5_drivers_resolve_to_stable_param_ids() {
 
 #[test]
 fn liveschool_envelopes_resolve_to_stable_param_ids() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }
@@ -258,7 +253,7 @@ fn liveschool_envelopes_resolve_to_stable_param_ids() {
 
 #[test]
 fn liveschool_ableton_mappings_resolve_to_stable_param_ids() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }
@@ -353,7 +348,7 @@ fn liveschool_ableton_mappings_resolve_to_stable_param_ids() {
 
 #[test]
 fn liveschool_full_registry_resolution() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }
@@ -455,7 +450,7 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
     // as a Map keyed by the generator's stable param ids — the only wire
     // shape the typed (de)serialize understands now (the old positional
     // Array fallback is gone entirely, not just de-preferred).
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }
@@ -516,14 +511,12 @@ fn liveschool_param_values_save_as_id_keyed_map() {
     // Step 12 (superseded by PARAM_STORAGE_DESIGN.md P1): with
     // `manifold-nodes` linked, the registry IS populated; saving an
     // effect must emit `params` as an id-keyed Map. Loading Liveschool
-    // (a real V1.1-era fixture, positional Array on disk) exercises the
-    // full one-time migration path (`migrations::param_storage_v14`)
-    // before this typed round-trip.
+    // (converted to 1.21) exercises the typed round-trip.
     //
     // Round-trip: load Liveschool, serialize one master effect, deserialize
     // back, assert the values survive the trip with identical positional
     // contents.
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }
@@ -580,7 +573,7 @@ fn liveschool_param_values_save_as_id_keyed_map() {
 
 #[test]
 fn liveschool_macro_mappings_resolve_to_stable_param_ids() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }
@@ -665,7 +658,7 @@ fn liveschool_mirror_mode_values_migrate_after_curation_drop() {
     // to `{FoldX=6, FoldY=7, FoldBoth=8}` to preserve the same
     // visual behavior. Liveschool V6 has 6 Mirror instances; verify
     // every one's `mode` slot lands in {6, 7, 8} after load.
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path("Liveschool Live Show V6 LEDS 1.21.manifold");
     if !path.exists() {
         return;
     }

@@ -1245,7 +1245,7 @@ fn add_envelope_undo_roundtrip() {
 
 #[test]
 fn commands_work_on_loaded_project() {
-    let mut project = load_project("Burn V5.manifold");
+    let mut project = load_project("Burn V5 1.21.manifold");
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
 

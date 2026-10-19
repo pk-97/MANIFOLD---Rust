@@ -34,9 +34,6 @@ inventory::collect!(LoadedSceneModifierPresetSource);
 /// - `PresetDef::index_for_param`, which `build_effect_param_values` /
 ///   `build_generator_param_values` call while placing an instance's V1.4
 ///   `params` map entries onto its positional slots.
-/// - `manifold-io`'s `migrations::param_storage_v14`, against its own
-///   frozen historical alias snapshot, when resolving a legacy keyed
-///   `paramValues` id during the one-time V1.4 migration.
 ///
 /// Renames and drops compose: an alias table can chain
 /// `("old_a", Some("old_b")) → ("old_b", Some("current"))` so each

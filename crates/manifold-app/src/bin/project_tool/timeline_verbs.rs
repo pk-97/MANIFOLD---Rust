@@ -164,8 +164,42 @@ fn layer_type_of(layer: &Value) -> LayerType {
 pub(crate) fn run_project(rest: &[String]) -> ExitCode {
     match rest.split_first() {
         Some((sub, rest)) if sub == "new" => finish(project_new(rest)),
-        _ => finish(Err(Fail::Usage("project subcommand required: new".into()))),
+        Some((sub, rest)) if sub == "upgrade" => finish(project_upgrade(rest)),
+        _ => finish(Err(Fail::Usage("project subcommand required: new|upgrade".into()))),
     }
+}
+
+/// Open a file the way the app does and save it to a new path in the current
+/// format. This is the one verb that is a typed round-trip on purpose: every
+/// load migration writes into the saved file. The binary links the bundled
+/// preset registry, so legacy param addressing resolves to ids. The app's
+/// embedded-preset install and its 3D scene passes live in the app binary, so a
+/// file that needs them is refused: open and save it in the app instead.
+fn project_upgrade(rest: &[String]) -> Result<(), Fail> {
+    let [src, dst] = rest else {
+        return Err(Fail::Usage("usage: project upgrade <in.manifold> <out.manifold>".into()));
+    };
+    if Path::new(dst).exists() {
+        return Err(Fail::Invalid(format!("'{dst}' exists; refusing to overwrite")));
+    }
+    let root = load_root(src)?;
+    let embedded = root.get("embeddedPresets").and_then(Value::as_array).map_or(0, Vec::len);
+    let raw = serde_json::to_string(&root).unwrap_or_default();
+    if embedded > 0 || raw.contains("node.render_scene") {
+        return Err(Fail::Invalid(format!(
+            "'{src}' carries embedded presets or a 3D scene; open and save it in the app"
+        )));
+    }
+    let mut project = manifold_io::loader::load_project(Path::new(src))
+        .map_err(|e| Fail::Invalid(format!("failed to load '{src}': {e}")))?;
+    manifold_node_engine::load::binding_migration::migrate_user_param_bindings_to_node_id(&mut project);
+    for line in project.load_report.human_lines() {
+        eprintln!("repair: {line}");
+    }
+    manifold_io::saver::save_project(&mut project, Path::new(dst), Some("project_tool upgrade"), false)
+        .map_err(|e| Fail::Usage(format!("failed to save '{dst}': {e}")))?;
+    eprintln!("saved: {dst} ({})", manifold_core::project::CURRENT_PROJECT_VERSION);
+    Ok(())
 }
 
 fn project_new(rest: &[String]) -> Result<(), Fail> {
