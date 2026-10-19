@@ -1763,6 +1763,13 @@ impl PlaybackEngine {
                     self.looping_clip_ids.insert(clip.id.clone());
                 }
 
+                // A player opens at the file head. `check_preparing_clips`
+                // seeks it to in-point plus elapsed time once it is ready;
+                // the seek and drift paths skip it until then.
+                if self.renderers[idx].needs_prepare_phase() {
+                    self.preparing_clips.insert(clip.id.clone());
+                }
+
                 // Pending pause for video renderers
                 if self.renderers[idx].needs_pending_pause() {
                     self.pending_pauses
