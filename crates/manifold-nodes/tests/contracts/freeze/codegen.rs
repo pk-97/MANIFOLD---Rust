@@ -198,10 +198,11 @@ fn dispatch_tail_census_is_stable() {
     // The ocean (docs/OCEAN_SURFACE_DESIGN.md) adds ocean_spectrum,
     // projected_grid, ocean_displace and cut_out_box (buffer atoms), over
     // (texture, manual), and camera_sky and sea_horizon_env (texture,
-    // canonical).
-    assert_eq!(total, 246, "standalone atom census drifted");
+    // canonical). Deleting UI soft shadows removes heightfield_shadow, a
+    // canonical texture atom.
+    assert_eq!(total, 245, "standalone atom census drifted");
     assert_eq!(
-        qualifying, 95,
+        qualifying, 94,
         "canonical texture-path population drifted"
     );
 }
