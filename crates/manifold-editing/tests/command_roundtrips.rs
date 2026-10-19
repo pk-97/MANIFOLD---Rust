@@ -745,34 +745,6 @@ fn restore_tempo_lane_undo_roundtrip() {
 // ─── Effect Commands ───
 
 #[test]
-fn set_relight_height_from_undo_roundtrip() {
-    let mut project = make_test_project();
-    project
-        .settings
-        .master_effects
-        .push(PresetInstance::new(PresetTypeId::BLOOM));
-    let effect_id = project.settings.master_effects[0].id.clone();
-    let target = manifold_core::GraphTarget::Effect(effect_id);
-
-    let mut cmd = SetRelightHeightFromCommand::new(
-        target,
-        RelightHeightFrom::Auto,
-        RelightHeightFrom::InvertedLuminance,
-    );
-    cmd.execute(&mut project);
-    assert_eq!(
-        project.settings.master_effects[0].relight_params.height_from,
-        RelightHeightFrom::InvertedLuminance
-    );
-
-    cmd.undo(&mut project);
-    assert_eq!(
-        project.settings.master_effects[0].relight_params.height_from,
-        RelightHeightFrom::Auto
-    );
-}
-
-#[test]
 fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
     {
@@ -2526,23 +2498,6 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
             applied: |p| !p.settings.master_effects[0].enabled,
         },
         SetterCase {
-            name: "toggle relight",
-            build: |p| {
-                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
-                Box::new(ToggleRelightCommand::new(target, p.settings.master_effects[0].relight, true))
-            },
-            applied: |p| p.settings.master_effects[0].relight,
-        },
-        SetterCase {
-            name: "relight param",
-            build: |p| {
-                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
-                let relief = p.settings.master_effects[0].relight_params.relief;
-                Box::new(SetRelightParamCommand::new(target, RelightField::Relief, relief, 0.9))
-            },
-            applied: |p| p.settings.master_effects[0].relight_params.relief == 0.9,
-        },
-        SetterCase {
             name: "toggle driver",
             build: |p| {
                 let effect_id = push_master_bloom(p);
@@ -2900,29 +2855,4 @@ fn first_add_into_each_optional_list_undoes_to_the_same_saved_bytes() {
     let (project, _) = with_master_bloom();
     assert_undo_restores_saved_bytes("master effect group", project,
         Box::new(GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Group".into())));
-}
-
-/// BUG-8639v and BUG-zeid5 (generator instances made on first edit): a file
-/// whose generator layer has no saved instance gets one at load, so the
-/// first edit writes only what it declares and undo restores the save.
-#[test]
-fn legacy_generator_layer_loads_with_its_instance() {
-    use manifold_core::GraphTarget;
-    let mut project = make_test_project();
-    project.timeline.layers[1] = Layer::new_generator("Plasma".into(), PresetTypeId::PLASMA, 1);
-    let mut json = serde_json::to_value(&project).unwrap();
-    let layer = json
-        .pointer_mut("/timeline/layers/1")
-        .and_then(|layer| layer.as_object_mut())
-        .expect("the generator layer");
-    assert!(layer.remove("genParams").is_some(), "the save carried an instance");
-    layer.insert("generatorType".into(), serde_json::to_value(PresetTypeId::PLASMA).unwrap());
-
-    let loaded = manifold_io::loader::load_project_from_json(&json.to_string()).unwrap();
-    let generator = &loaded.timeline.layers[1];
-    assert_eq!(generator.gen_params().map(|gp| gp.generator_type()), Some(&PresetTypeId::PLASMA));
-
-    let target = GraphTarget::Generator(generator.layer_id.clone());
-    assert_undo_restores_saved_bytes("first edit on a loaded generator", loaded,
-        Box::new(AddEnvelopeCommand::new(target, make_envelope())));
 }

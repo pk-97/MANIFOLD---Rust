@@ -46,7 +46,6 @@ Render and measure:
   clay-probe              region-mean convergence probe for the Solid render mode  [scripts/clay_region_probe.py]  (cost: unit)
   points-probe            non-zero-pixel probe for the Points render mode  [scripts/points_pixel_probe.py]  (cost: unit)
   pick-probe-regions      choose probe rects from RT captures  [scripts/pick_probe_regions.py]  (cost: unit)
-  depth-relight           append the 2.5D relight tail to a preset JSON  [scripts/depth_relight_sweep.py]  (cost: unit)
   gltf-def-capture        capture importer def-JSON dumps for the equivalence gate  [scripts/gltf_def_capture.py]  (cost: focused)
   blob-bench              measure the BlobDetector V2 C ABI  [scripts/blob_v2_native_bench.py]  (cost: focused)
   kick-labels             ground-truth kick times from drum stems  [scripts/kick_label_extract.py]  (cost: focused)

@@ -100,7 +100,7 @@ manifold_node_engine::primitive! {
     aliases: ["gradient", "edge slope", "gradient central diff", "derivative", "sobel"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/gradient_central_diff_body.wgsl"),
-    // D6(a) follow-up (DEPTH_RELIGHT_DESIGN.md, root-cause fix requested
+    // D6(a) follow-up (root-cause fix requested
     // after the P4 audit): converted from `Gather` (filtering-sampler
     // `textureSampleLevel`) to `GatherTexel` (exact integer `textureLoad`,
     // boundary policy resolved manually in-body from `wrap_mode` — see
@@ -244,7 +244,7 @@ impl Primitive for GradientCentralDiff {
     }
 }
 
-/// D6(a) follow-up (`docs/DEPTH_RELIGHT_DESIGN.md`): proves the `Gather` →
+/// D6(a) follow-up: proves the `Gather` →
 /// `GatherTexel` conversion is value-preserving for BOTH boundary policies
 /// (Clamp and — the load-bearing one, FluidSim2D ships `wrap_mode = Repeat`
 /// — Repeat), and that the generated kernel matches the hand-maintained

@@ -1,8 +1,8 @@
 //! The live push's Shapes and MappingRanges group (UI_INVALIDATION D22):
 //! every display of a user-set live scalar, written in place with no
 //! projection and no rebuild. Drawers and handles on every row card, the
-//! layer-header and Audio Setup gains, clip-trigger sensitivity, the relight
-//! knobs and the Ableton range bands on cards and macros. Reaches the same
+//! layer-header and Audio Setup gains, clip-trigger sensitivity, and the
+//! Ableton range bands on cards and macros. Reaches the same
 //! cards `sync_card_values` does. Allocation-free when nothing moved.
 
 use manifold_core::audio_mod::TriggerAction;
@@ -69,7 +69,6 @@ pub fn sync_live_shapes(ui: &mut UIRoot, project: &Project, active_layer: Option
     for (i, effect) in project.settings.master_effects.iter().enumerate() {
         if let Some(card) = ui.inspector.master_effect_mut(i) {
             card.sync_live_shapes(tree, &mut |id| row_shapes(effect, id));
-            card.sync_relight_values(tree, &crate::ui_translate::relight_card_config_from(effect));
         }
     }
     let layer = active_layer.and_then(|idx| project.timeline.layers.get(idx));
@@ -77,14 +76,12 @@ pub fn sync_live_shapes(ui: &mut UIRoot, project: &Project, active_layer: Option
         for (i, effect) in effects.iter().enumerate() {
             if let Some(card) = ui.inspector.layer_effect_mut(i) {
                 card.sync_live_shapes(tree, &mut |id| row_shapes(effect, id));
-                card.sync_relight_values(tree, &crate::ui_translate::relight_card_config_from(effect));
             }
         }
     }
     if let Some(gp) = layer.and_then(|l| l.gen_params()) {
         if let Some(card) = ui.inspector.gen_params_mut() {
             card.sync_live_shapes(tree, &mut |id| row_shapes(gp, id));
-            card.sync_relight_values(tree, &crate::ui_translate::relight_card_config_from(gp));
         }
         for card in ui.inspector.modifier_cards_mut() {
             card.sync_live_shapes(tree, &mut |id| row_shapes(gp, id));

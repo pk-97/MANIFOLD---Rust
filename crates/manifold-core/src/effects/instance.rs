@@ -123,21 +123,6 @@ pub struct PresetInstance {
     /// Not serialized; resets to 0 on load.
     pub graph_structure_version: u32,
 
-    /// The "3D Shading" compile-level toggle (`docs/DEPTH_RELIGHT_DESIGN.md`
-    /// D2, phase P5). `false` (default) is the exact graph that ships today,
-    /// byte-identical — every existing project loads unchanged. `true` makes
-    /// the renderer splice `relight_augment`'s D3 template before
-    /// `final_output` on next rebuild. Shared by both kinds (effects and
-    /// generators are both `PresetInstance`s), so one flag + one command path
-    /// covers both cards. `PresetInstance` has custom Serialize/Deserialize
-    /// impls below (not derived) — this field's wire handling lives there,
-    /// not in a field attribute.
-    pub relight: bool,
-    /// The D3 relight-stage knobs. Always present (see
-    /// [`RelightParams`]'s doc) — the toggle gates whether they're wired
-    /// into the compiled graph, not whether they exist. Same custom-impl
-    /// note as `relight` above.
-    pub relight_params: RelightParams,
     /// Card section titles the user folded (SCENE_SURFACES_DESIGN.md D7 (one
     /// saved choice set)). View state; skipped on the wire when empty.
     pub folded_sections: Vec<String>,
@@ -175,12 +160,6 @@ impl PresetInstance {
             field_count += 1;
         }
         if self.graph.is_some() {
-            field_count += 1;
-        }
-        if self.relight {
-            field_count += 1;
-        }
-        if !self.relight_params.is_default() {
             field_count += 1;
         }
         if !self.folded_sections.is_empty() {
@@ -224,12 +203,6 @@ impl PresetInstance {
                 &GraphWithDerivedParams { preset: &self.effect_type, graph: g, manifest: &self.params, joined: true },
             )?;
         }
-        if self.relight {
-            s.serialize_field("relight", &self.relight)?;
-        }
-        if !self.relight_params.is_default() {
-            s.serialize_field("relightParams", &self.relight_params)?;
-        }
         if !self.folded_sections.is_empty() {
             s.serialize_field("foldedSections", &self.folded_sections)?;
         }
@@ -242,16 +215,6 @@ impl PresetInstance {
 
 
 impl PresetInstance {
-    /// Whether the relight stage should actually be compiled/rendered for this
-    /// instance. Gated by [`manifold_foundation::RELIGHT_FEATURE_ENABLED`] so
-    /// the disabled feature is inert even for projects that saved
-    /// `relight: true`. All renderer compile/fusion/hash decisions consult
-    /// this, never the raw field.
-    #[inline]
-    pub fn relight_active(&self) -> bool {
-        manifold_foundation::RELIGHT_FEATURE_ENABLED && self.relight
-    }
-
     /// The per-instance graph override (`None` ⇒ use the catalog default).
     /// One home for both effects and generators after the graph-home
     /// unification (the generator graph used to live on `Layer`).
@@ -316,8 +279,6 @@ impl PresetInstance {
             graph: None,
             graph_version: 0,
             graph_structure_version: 0,
-            relight: false,
-            relight_params: RelightParams::default(),
             folded_sections: Vec::new(),
             unfolded_sections: Vec::new(),
         }
@@ -345,8 +306,6 @@ impl PresetInstance {
             graph: None,
             graph_version: 0,
             graph_structure_version: 0,
-            relight: false,
-            relight_params: RelightParams::default(),
             folded_sections: Vec::new(),
             unfolded_sections: Vec::new(),
         };

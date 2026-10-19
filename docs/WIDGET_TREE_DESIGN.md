@@ -85,7 +85,6 @@ pub struct ParamSurface {
     pub collapsed: bool,
     pub rows: Vec<ParamRow>,        // manifest order == render order
     pub string_rows: Vec<ParamCardStringInfo>,   // existing type, unchanged
-    pub relight: RelightCardConfig,              // existing type, unchanged
     pub audio_sends: Vec<AudioSendChoice>,     // card-level paired IDs and labels
 }
 
@@ -172,7 +171,7 @@ fn row_action(surface: &ParamSurface, row: usize, role: RowRole, gesture: RowGes
 
 Build populates `RowIndex` as it mints keyed widgets. Event handling becomes:
 
-1. `handle_click(node_id)` → `tree.widget_of(node_id)` → `row_index.get(widget)` → `row_action(...)`. The relight/section/header specials become roles, not field matches.
+1. `handle_click(node_id)` → `tree.widget_of(node_id)` → `row_index.get(widget)` → `row_action(...)`. The section/header specials become roles, not field matches.
 2. `RowHost::install_row` exhaustively consumes every `ParamRowIds` field and registers it. Both inspector and Scene Setup delegate pointer-down, drag, release and live-preview restoration to `RowHost`; hosts never copy row bundles or implement individual row gesture kinds. The shared gesture captures `GraphParamTarget` + `ParamId`, resolves the current row and track bounds on movement, and commits once to the captured address. Trim, envelope and audio drawer controls use this same path. `ScrubGesture` also owns the captured-address lifecycle for Audio Setup and clip-trigger controls, whose domain layouts remain separate.
 3. Card-level chrome (toggle/chevron/cog/drag-handle) stays on `register_intents`/existing paths — those are per-card, not per-row, and are not part of the disease.
 4. `register_intents` (:4668–4760 — the right-click contract layer) is re-pointed at rows in P2: today it reads the id-hoards being deleted. Right-click reset/mapping stays on the widget-contract path (widget-unification D5); `RowIndex` never absorbs it.

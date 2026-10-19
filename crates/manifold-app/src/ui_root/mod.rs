@@ -1869,7 +1869,6 @@ mod tick_parity_tests {
             layer_id: None,
             modifier: None,
             audio_sends: Vec::new(),
-            relight: manifold_ui::RelightCardConfig::default(),
         }
     }
 

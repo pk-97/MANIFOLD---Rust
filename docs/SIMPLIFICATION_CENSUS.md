@@ -174,7 +174,7 @@ The walkthrough's six water entries are bundled generator presets: WaterDamBreak
 
 **Traps:** gates enable features from `scripts/` and `.config/`, which `features.tsv` searches. `scripts/feature_matrix.py` builds every non-default feature, which keeps dead features compiling, not used. Debug knobs named for a bug (`MANIFOLD_BUG060_TRACE`) are candidates once that bug is closed. Knobs Peter sets in his own launch commands are not in the repo: `ask`.
 
-2026-10-19 screen: two kill switches are off. `RELIGHT_FEATURE_ENABLED = false` (`crates/manifold-foundation/src/feature_flags.rs`) turns off depth relight ("3D Shading") in renderer and UI; relight code appears in 79 files and tests branch on the flag. `SHADOWS_ENABLED = false` in `crates/manifold-ui/src/color.rs`. The crates read 135 environment variables.
+2026-10-19 screen: two kill switches were off, `RELIGHT_FEATURE_ENABLED` (depth relight, "3D Shading") and `SHADOWS_ENABLED` (UI shadows). Both features were deleted whole on 2026-10-20. The crates read 135 environment variables.
 
 **Tier:** Sonnet lists them per crate group; Opus judges switches and modes.
 
@@ -331,7 +331,7 @@ The method was piloted on manifold-foundation (2,552 lines of source, 137 `pub` 
 **Found:**
 - `uv_transform.rs` (111 lines): `decompose_uv_affine`, `compose_uv_affine` and `UvDecomposition` are used only by their own tests. Commit 61b52dcef ("Simplify scene material controls and make colour editing direct") deleted their only caller, `material_placement.rs` in manifold-ui, and the module survived because `pub` kept the compiler quiet. `UvDecomposition` read CRATE-ONLY: a cascade. Grade A, delete.
 - `WorkKind::from_name` (3 lines): only its own round-trip test calls it. Grade A, delete with the assert.
-- `RELIGHT_FEATURE_ENABLED = false` since 2026-07-18 (section 3.9). Peter's call: delete depth relight or turn it back on.
+- `RELIGHT_FEATURE_ENABLED = false` since 2026-07-18 (section 3.9). Deleted whole 2026-10-20 with the feature.
 
 **Kept, correctly:**
 - `PhysicsSettings::legacy()` and `SimRate::legacy()`: 168 of 182 projects have no physics block and load through this default.
@@ -354,7 +354,7 @@ For the lead:
 - The tools live in `/tmp` with their source in the evidence folder. Promote them to `scripts/` with a dev.py verb only if the census becomes recurring.
 
 For Peter:
-- Already visible from the screens, each to be confirmed by its sweep: depth relight (delete or turn back on); dropping old project formats (convert the old shows once, then cut the migration steps); the LED generators; the six water test scenes in the generator browser; the World node's own sun.
+- Already visible from the screens, each to be confirmed by its sweep: dropping old project formats (convert the old shows once, then cut the migration steps); the LED generators; the six water test scenes in the generator browser; the World node's own sun.
 
 ## 11. Sweep briefs
 

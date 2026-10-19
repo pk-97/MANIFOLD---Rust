@@ -23,7 +23,7 @@
 use ahash::AHashMap;
 use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
-use manifold_core::effects::{EffectGroup, PresetInstance, RelightField, RelightParams};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
@@ -44,7 +44,7 @@ pub use errors::{ChainError, JsonGeneratorLoadError};
 use errors::record_chain_error;
 
 mod bindings;
-use bindings::{StringBindingResolution, def_string_param_value, RelightParamWrite, build_relight_writes};
+use bindings::{StringBindingResolution, def_string_param_value};
 
 manifold_core::testkit_visible! {
 #[doc(hidden)]

@@ -328,20 +328,7 @@ pub(crate) struct EffectSlot {
     /// the right namespace for BOTH a surviving node (via `node_map`) and a
     /// fused-away one (via `fused_retarget`) — BUG-111.
     pub(crate) card_prefix: String,
-    /// Live D3 relight knob → runtime param/uniform-field writes, applied
-    /// every frame when the card's toggle is on. Empty when relight is off.
-    pub(super) relight_writes: Vec<RelightParamWrite>,
 }
-}
-
-impl EffectSlot {
-    /// Push the live relight knob values into the spliced graph. No-op if the
-    /// card had relight off at build time (the template was never spliced).
-    pub(super) fn apply_relight_params(&self, graph: &mut Graph, params: &RelightParams) {
-        for w in &self.relight_writes {
-            w.apply(graph, params);
-        }
-    }
 }
 
 manifold_core::testkit_visible! {
@@ -645,7 +632,7 @@ impl PresetRuntime {
                     i = j;
                     continue;
                 }
-                let cards = build_segment_cards(&fuse_idxs, &active_effects, primitives);
+                let cards = build_segment_cards(&fuse_idxs, &active_effects);
                 match freeze_install::fused_segment_view_for(&cards) {
                     freeze_install::SegmentLookup::Ready(view) => {
                         let card_refs: Vec<_> =
@@ -709,12 +696,6 @@ impl PresetRuntime {
                         (prev_node, prev_out_port),
                         &view.def,
                         primitives,
-                        // No per-member toggle to honor here — a
-                        // relight-on card is excluded from fusion
-                        // eligibility (`classify_segment_member`), so
-                        // every member folded into `view.def` has
-                        // `relight == false`.
-                        None,
                         // The segment sidecar is keyed by generated
                         // node id in the same `c{i}.`-prefixed
                         // address space as `view.def`'s node ids
@@ -782,13 +763,6 @@ impl PresetRuntime {
                                 .filter(|(name, _)| name.starts_with(prefix.as_str()))
                                 .cloned()
                                 .collect();
-                        let relight_writes = build_relight_writes(
-                            fx.relight_active(),
-                            &card_handles,
-                            &node_map,
-                            &bound.fused_retarget,
-                            &prefix,
-                        );
                         effect_nodes.push(EffectSlot {
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
@@ -803,7 +777,6 @@ impl PresetRuntime {
                             def_content_key: 0,
                             generator_input_node,
                             card_prefix: prefix.clone(),
-                            relight_writes,
                         });
                     }
                     prev_node = output.0;
@@ -884,7 +857,7 @@ impl PresetRuntime {
                 return None;
             };
             // Freeze compiler (design section 12, step 2): fusion selection
-            // (relight augment, watched-target gate, async worker lookup,
+            // (watched-target gate, async worker lookup,
             // FUSED attribution log) lives in `select_card_fused_view`. The
             // "effective def" is the user's edited graph when present, else the
             // canonical preset — also the splice source when unfused.
@@ -894,16 +867,13 @@ impl PresetRuntime {
                 crate::freeze::install::select_card_fused_view(
                     fx,
                     base_view.as_ref(),
-                    primitives,
                     preview_effect == Some(&fx.id),
                 );
             pending_fused_effects |= fused_pending;
             let view: &LoadedPresetView =
                 fused_view.as_deref().unwrap_or(base_view.as_ref());
             // The def actually spliced into the chain:
-            //   - fused  → the fused def (already contains the relight template
-            //              with default params if the toggle is on; live values
-            //              are pushed per-frame via `relight_writes`);
+            //   - fused  → the fused def;
             //   - else, an edited override → the user's wiring, materialized
             //              directly (the watched / non-fusable case);
             //   - else   → the canonical preset.
@@ -916,14 +886,6 @@ impl PresetRuntime {
                 def
             } else {
                 view.canonical_def.as_ref()
-            };
-            // D8/P7: when the card is fused, the relight template is already
-            // folded into `splice_def`; do NOT re-augment. On the unfused path
-            // the template is spliced here with the live knob values.
-            let relight_params = if fused_view.is_some() {
-                None
-            } else {
-                fx.relight_active().then_some(&fx.relight_params)
             };
             let is_mask =
                 fx_group.is_some_and(|group| group.mask_effect_id.as_ref() == Some(&fx.id));
@@ -948,8 +910,6 @@ impl PresetRuntime {
                 base_view.canonical_def.as_ref(),
                 &base_view.mesh_rules,
                 primitives,
-                relight_params,
-                fx.relight_active().then_some(&fx.relight_params),
                 (fx.graph.is_some() || fused_view.is_some())
                     .then(|| (fx.id.clone(), fx.effect_type().clone())),
                 preserve_authored_cpu_flip_graph,
@@ -1162,13 +1122,6 @@ impl PresetRuntime {
             // The user tail lives in the graph now, so its rebuild signal
             // is the graph version (a binding add/remove/reshape bumps it).
             let user_bindings_version = fx.graph_version;
-            let relight_writes = build_relight_writes(
-                fx.relight_active(),
-                &handles,
-                &node_map,
-                &bound.fused_retarget,
-                "",
-            );
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
@@ -1183,7 +1136,6 @@ impl PresetRuntime {
                 def_content_key: crate::freeze::install::def_content_key(effective_def),
                 generator_input_node: generator_input_id,
                 card_prefix: String::new(),
-                relight_writes,
             });
             if is_mask {
                 open_group.as_mut()?.mask_output = Some(output);
@@ -1599,12 +1551,6 @@ impl PresetRuntime {
             for extension in &mut self.extensions {
                 extension.after_slot_bindings(&mut self.graph, slot_index, fx);
             }
-            // Push the "3D Shading" D3 relight knobs into the spliced graph
-            // every frame. Float-knob edits are no longer structural (D8/P7),
-            // so the chain doesn't rebuild on a drag; these writes keep the
-            // live values reaching the template nodes (unfused) or the fused
-            // kernel's uniform fields (fused).
-            slot.apply_relight_params(&mut self.graph, &fx.relight_params);
             // If the preset includes a `system.generator_input` node,
             // push every frame-context scalar (time / beat / aspect /
             // output dims / trigger_count / anim_progress) into its

@@ -18,8 +18,7 @@ scenes."* On stage: you arm it, and whatever passes through whatever melts.
 
 Companion docs: SCENE_MODIFIER_FRAMEWORK (modifier shape — the card, the plan,
 the toggle), DECOMPOSING_GENERATORS.md section 2.5 (audit by analogy) — the
-audit this doc's section 1 completes, DEPTH_RELIGHT (nearest shipped
-screen-space-depth feature), ADDING_PRIMITIVES.md (primitive authoring +
+audit this doc's section 1 completes, ADDING_PRIMITIVES.md (primitive authoring +
 parity-test pattern), RAYTRACING_DESIGN.md (the RT pass chain the merge
 orders itself into).
 
@@ -35,7 +34,7 @@ Classification: exists / one wire away / genuinely new.
 | RT pass chain rides the raster G-buffer: `rt_enabled` forces `depth`+`velocity` into it | `render_scene.rs:3965` | exists — Merge orders itself before every RT consumer |
 | RT shadow trace (half-res dispatch, TLAS, per-instance caster masks) | `manifold-gpu/src/metal/raytrace.rs:11`, `:275` | exists — its miss path is where goo casting hooks (D10); its per-instance masks are what transmissive goo excludes (D13) |
 | Per-object BLAS (RT) — closest-point query target for the bake | `raytrace.rs:67` | exists — the bake walks it |
-| Screen-space depth-raymarch pattern precedent (consume depth + camera, emit a per-pixel term) | `heightfield_shadow.rs:38`, `ssao_gtao.rs:116` | exists — Merge's march is the same family, writing G-buffer instead of a shadow term |
+| Screen-space depth-raymarch pattern precedent (consume depth + camera, emit a per-pixel term) | `ssao_gtao.rs:116` | exists — Merge's march is the same family, writing G-buffer instead of an AO term |
 | `Texture3D` channel type + slice/gradient/blur atoms; 3D simplex noise atoms | purposes surveyed in `crates/manifold-nodes/src/node_graph/primitives/` | exists — SDF field texture + growth-noise vocabulary |
 | Material atoms (flat / phong / cook_torrance / cel) + `mix`/`mux` | NODE_CATALOG.md material family | exists — re-shade composes from shipped material vocabulary |
 | glTF morph support | `gltf_morph_deltas_source.rs` | exists — the morph guard has real weights to read |

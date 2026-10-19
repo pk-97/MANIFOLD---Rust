@@ -280,7 +280,6 @@
     "work-envelope-drag": "envmod",
     "work-audio-mod-range": "inspector",
     "work-trigger-shape": "inspector",
-    "work-relight-drag": "inspector",
     "work-layer-gain": "inspector",
     "work-send-gain": "audiosends",
     "work-band-split": "audiosends",

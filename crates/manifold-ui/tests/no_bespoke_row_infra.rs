@@ -34,12 +34,6 @@ const BITMAP_SLIDER_ALLOWLIST: &[&str] = &[
     // shaping sliders) — THE sanctioned entry point for manifest-backed rows.
     // (`param_slider_shared/builders.rs` since the P-S1 directory-module split.)
     "builders.rs",
-    // The row model's card host — relight knobs (D9: out of `RowIndex`
-    // scope, but still a manifest-backed per-instance control, built through
-    // this file, not a new system). (`param_card/render.rs` since the P-S4
-    // directory-module split — the surface-builder half of the card host,
-    // where the relight sliders are actually constructed.)
-    "param_card/render.rs",
     // The generic declarative-drawer API (`docs/AUDIO_MODULATION_DESIGN.md`
     // section 10.2) — `DrawerRow::Slider` materialises through the SAME widget, one
     // call site, shared by every drawer kind.

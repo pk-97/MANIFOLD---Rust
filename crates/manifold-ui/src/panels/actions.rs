@@ -8,7 +8,7 @@
 //! `.claude/orchestration/pd-partition.md`.
 
 use super::PanelAction;
-use super::{DriverConfigAction, GraphParamTarget, InspectorTab, UiRelightHeightFrom};
+use super::{DriverConfigAction, GraphParamTarget, InspectorTab};
 use super::{browser_popup, picker_core};
 use crate::param_surface::ModifierObjectRef;
 use crate::input::Modifiers;
@@ -553,15 +553,6 @@ pub enum ParamsAction {
     /// Fire a monotonic `isTrigger` param's "▶" button — increments the
     /// underlying counter by one instead of flipping it.
     ParamFire(GraphParamTarget, ParamId),
-    /// Toggle the "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md`
-    /// D2/P5). Atomic like `ParamToggle` — a click, not a drag.
-    RelightToggle(GraphParamTarget),
-    // Relight-knob scrub trio migrated to `PanelAction::Scrub`
-    // (`ValueRef::RelightParam`, P-I / D4). Always-live behaviour (the knob
-    // takes effect even while the toggle is off) is preserved on the wire.
-    /// D4 "Height From" enum row click (Auto / Luminance / Inverted
-    /// Luminance) — atomic like `ParamToggle`.
-    RelightHeightFromChanged(GraphParamTarget, UiRelightHeightFrom),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),

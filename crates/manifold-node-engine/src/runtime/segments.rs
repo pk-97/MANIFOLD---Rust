@@ -6,30 +6,20 @@ use std::sync::Arc;
 
 use super::*;
 
-/// Build the `(def, view)` slice for a fused segment, augmenting relight-on
-/// members with DEFAULT knob values so the segment content key (and fused
-/// WGSL) is knob-invariant.
+/// Build the `(def, view)` slice for a fused segment.
 pub(super) fn build_segment_cards(
     fuse_idxs: &[usize],
     active_effects: &[(usize, &PresetInstance)],
-    primitives: &PrimitiveRegistry,
 ) -> Vec<(EffectGraphDef, Arc<LoadedPresetView>)> {
     let mut cards = Vec::with_capacity(fuse_idxs.len());
     for &k in fuse_idxs {
         let fx = active_effects[k].1;
         let view = loaded_preset_view_by_id(fx.effect_type()).expect("eligibility implies view");
-        let def = if fx.relight_active() {
-            crate::load::augmentation::relight_augment(
-                fx.graph.as_ref().unwrap_or(view.canonical_def.as_ref()),
-                primitives,
-                &RelightParams::default(),
-            )
-        } else {
-            fx.graph
-                .as_ref()
-                .unwrap_or(view.canonical_def.as_ref())
-                .clone()
-        };
+        let def = fx
+            .graph
+            .as_ref()
+            .unwrap_or(view.canonical_def.as_ref())
+            .clone();
         cards.push((def, view));
     }
     cards
@@ -126,7 +116,7 @@ pub fn prewarm_chain_segments(
         }
         let (j, fuse_idxs) = segment_run(&members, i);
         if fuse_idxs.len() >= 2 {
-            let cards = build_segment_cards(&fuse_idxs, &active, primitives);
+            let cards = build_segment_cards(&fuse_idxs, &active);
             let _ = freeze_install::fused_segment_view_for(&cards);
         }
         i = j.max(i + 1);

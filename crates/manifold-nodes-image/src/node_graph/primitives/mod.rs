@@ -102,7 +102,6 @@ mod gradient_ramp;
 mod grid_uv_field;
 mod hash_field_by_seed;
 mod hdr_retention_mix;
-mod heightfield_shadow;
 mod heightmap_to_normal;
 mod hue_saturation;
 mod image_folder;

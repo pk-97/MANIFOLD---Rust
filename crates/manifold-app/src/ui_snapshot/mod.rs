@@ -1817,8 +1817,7 @@ mod overlay_fidelity_proof {
     //! `UIRoot::build_overlays` mints each open overlay as its own region and
     //! records `(start, end)` with `start = tree.count()` taken AFTER
     //! `begin_region` — so the region's own root sits at `start - 1`,
-    //! deliberately OUTSIDE the recorded range (the shadow-peek heuristic in
-    //! the overlay pass depends on `start` being the first REAL node). That
+    //! deliberately OUTSIDE the recorded range. That
     //! makes the render-call choice load-bearing:
     //!
     //! - `render_tree_range(start, end)` is a ROOT scan (`traverse_range`): it

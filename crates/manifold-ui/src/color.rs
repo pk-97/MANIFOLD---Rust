@@ -132,18 +132,6 @@ pub const GROOVE: Color32 = Color32::new(8, 8, 10, 255); // section A: tracks th
 // (The purple-tinted generator-card border stays its own identity tint.)
 pub const BORDER: Color32 = Color32::new(64, 64, 68, 255); // section A: more visible element outline
 
-// ── Elevation shadow (section 17) ──────────────────────────────────────────
-// One soft step under FLOATING surfaces only (dropdowns, popovers, modals).
-// A lift, not a glow: dark + low alpha. In-panel grouping stays fill-level.
-pub const SHADOW: Color32 = Color32::new(0, 0, 0, 110);
-pub const SHADOW_BLUR: f32 = 18.0;
-pub const SHADOW_OFFSET_Y: f32 = 4.0;
-
-/// no shadows anywhere for now — dark-on-dark shadows read
-/// as smudge, not elevation. Flip to re-enable; call sites are gated, the
-/// draw_shadow primitive stays.
-pub const SHADOWS_ENABLED: bool = false;
-
 // ── Semantic colour ramp (section 15) ──────────────────────────────────────
 // One definition per role-hue, three steps each (idle · base · active).
 // The state colours below ALIAS onto these, so the same red/green/amber
@@ -246,11 +234,6 @@ pub const CLIP_BORDER_SELECTED_WIDTH: f32 = 2.0;
 /// over the base colour, fading to the base at the bottom. Gives the body a
 /// soft top-lit roundness. 0 = flat.
 pub const CLIP_GRADIENT_LIGHTEN: u8 = 14;
-/// Soft drop-shadow under the *selected* clip (lift-on-select, section 17). Subtler
-/// than the overlay-panel shadow — a clip rises a little, it doesn't float.
-pub const CLIP_SHADOW: Color32 = Color32::new(0, 0, 0, 90);
-pub const CLIP_SHADOW_BLUR: f32 = 6.0;
-pub const CLIP_SHADOW_OFFSET_Y: f32 = 2.0;
 /// Clip name label: dark text on a light body, light text on a dark one (chosen
 /// by body luminance so the label reads on any layer colour). Min width below
 /// which the label is dropped (too narrow to be legible).

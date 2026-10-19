@@ -698,7 +698,7 @@ fn infrared_centre_rgb(palette: f32, fill: [f32; 4]) -> [f32; 3] {
     let mut graph = Graph::new();
     let src = graph.add_node(Box::new(Source::new()));
     let result =
-        splice_def_into_chain(&mut graph, (src, "out"), def.as_ref(), &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("splice");
+        splice_def_into_chain(&mut graph, (src, "out"), def.as_ref(), &registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("splice");
     let find = |name: &str| -> Option<NodeInstanceId> {
         result
             .handles

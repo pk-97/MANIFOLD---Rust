@@ -377,13 +377,6 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
-        source: "heightfield_shadow.rs",
-        rust_struct: "HeightfieldShadowUniforms",
-        type_id: "node.heightfield_shadow",
-        shader_struct: "Params",
-        aliases: &[],
-    },
-    TextureAbiCase {
         source: "heightmap_to_normal.rs",
         rust_struct: "HeightmapNormalUniforms",
         type_id: "node.surface_bumps",

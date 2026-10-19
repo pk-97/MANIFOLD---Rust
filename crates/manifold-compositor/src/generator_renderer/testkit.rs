@@ -21,10 +21,6 @@ pub trait GeneratorRendererTestkit {
         // `install_layer_generator` when this clip start triggers a build so
         // the reshape sources from the manifest, not the stale shadow (BUG-078).
         manifest: Option<&ParamManifest>,
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5) — the layer's live
-        // toggle + knobs.
-        relight: bool,
-        relight_params: manifold_core::effects::RelightParams,
     ) -> bool;
     #[allow(clippy::too_many_arguments)]
     fn install_layer_generator(
@@ -43,9 +39,6 @@ pub trait GeneratorRendererTestkit {
         // authority, not the graph's stale `preset_metadata.params` shadow
         // (BUG-078). `None` for the type-swap path (fresh bundled build).
         manifest: Option<&ParamManifest>,
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5).
-        relight: bool,
-        relight_params: manifold_core::effects::RelightParams,
     ) -> bool;
 }
 
@@ -67,12 +60,8 @@ impl GeneratorRendererTestkit for GeneratorRenderer {
         // `install_layer_generator` when this clip start triggers a build so
         // the reshape sources from the manifest, not the stale shadow (BUG-078).
         manifest: Option<&ParamManifest>,
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5) — the layer's live
-        // toggle + knobs.
-        relight: bool,
-        relight_params: manifold_core::effects::RelightParams,
     ) -> bool {
-        GeneratorRenderer::acquire_clip(self, clip_id, gen_type, layer_id, layer_index, clip_index, override_def, override_version, param_version, clip_edge_enabled, modifier_event, manifest, relight, relight_params)
+        GeneratorRenderer::acquire_clip(self, clip_id, gen_type, layer_id, layer_index, clip_index, override_def, override_version, param_version, clip_edge_enabled, modifier_event, manifest)
     }
     #[allow(clippy::too_many_arguments)]
     fn install_layer_generator(
@@ -91,10 +80,7 @@ impl GeneratorRendererTestkit for GeneratorRenderer {
         // authority, not the graph's stale `preset_metadata.params` shadow
         // (BUG-078). `None` for the type-swap path (fresh bundled build).
         manifest: Option<&ParamManifest>,
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5).
-        relight: bool,
-        relight_params: manifold_core::effects::RelightParams,
     ) -> bool {
-        GeneratorRenderer::install_layer_generator(self, layer_id, gen_type, override_def, override_version, param_version, clip_count, audio_count, layer_string_defaults, manifest, relight, relight_params)
+        GeneratorRenderer::install_layer_generator(self, layer_id, gen_type, override_def, override_version, param_version, clip_count, audio_count, layer_string_defaults, manifest)
     }
 }

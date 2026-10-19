@@ -26,7 +26,6 @@ mod group;
 mod instance;
 mod instance_serde;
 mod param_defs;
-mod relight;
 #[cfg(test)]
 mod test_support;
 
@@ -38,7 +37,6 @@ pub use group::EffectGroup;
 pub use instance::PresetInstance;
 pub use instance_serde::{deserialize_generator_instance, deserialize_opt_generator_instance};
 pub use param_defs::{RangeContract, RangeReason, RegistryParamDef};
-pub use relight::{RelightField, RelightHeightFrom, RelightParams};
 
 
 

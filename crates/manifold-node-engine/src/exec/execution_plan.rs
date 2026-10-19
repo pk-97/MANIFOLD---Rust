@@ -379,7 +379,7 @@ manifold_core::testkit_visible! {
     }
 }
 
-/// D6(a) (`docs/DEPTH_RELIGHT_DESIGN.md`): whether a materialized Texture2D
+/// Whether a materialized Texture2D
 /// intermediate should be allocated `Rgba32Float` instead of the backend
 /// default, given ALL of its consumers.
 ///
@@ -624,7 +624,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // aligned — the runtime normalizes non-texture formats to
             // `None` when constructing the pool key.
             //
-            // D6(a) (`docs/DEPTH_RELIGHT_DESIGN.md`): an explicit producer
+            // An explicit producer
             // format (e.g. `node.edge_slope`'s per-instance fp32 opt-in)
             // always wins — this seam only fills in the "no opinion" case.
             // When the producer has no opinion AND the output is a
@@ -2207,7 +2207,7 @@ mod tests {
         assert_eq!(step_b.inputs[0].0, "required");
     }
 
-    // D6(a) (`docs/DEPTH_RELIGHT_DESIGN.md`): the format-selection seam
+    // The format-selection seam
     // promotes a materialized Texture2D intermediate to Rgba32Float when a
     // consumer needs it, gated by the mixed-consumer sampler-safety rule.
 

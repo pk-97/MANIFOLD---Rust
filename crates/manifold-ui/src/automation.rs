@@ -224,8 +224,6 @@ pub enum FlowScrubTarget {
     AudioTriggerShape { layer: usize, index: usize, shape: crate::panels::AudioShapeParam },
     /// `ValueRef::LayerAudioGain(layer)`; `layer` indexes the timeline.
     LayerAudioGain { layer: usize },
-    /// `ValueRef::RelightParam(target, field)`.
-    Relight { effect: Option<usize>, field: crate::panels::UiRelightField },
     /// `ValueRef::AudioSendGain(send)`; `send` indexes `audio_setup.sends`.
     AudioSendGain { send: usize },
     /// `ValueRef::AudioCrossover(divider)`.

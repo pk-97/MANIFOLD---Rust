@@ -280,7 +280,6 @@ Phasing-completeness check: every D1 crate appears in exactly one phase's delive
 14. P1 cuts eight registration seams before the pure move, each with registration parity coverage:
     - Catalog access: `PresetCatalogSource` supplies JSON, cached definitions and enumeration; providers sort by name, first lookup hit wins, visits enumerate all, and duplicate type ids fail tests.
     - Metadata reload: invoke fresh loaders from the existing effect, generator and scene-modifier inventories; preserve merged publication before generation advances. Provider names are required for deterministic ordering.
-    - Relight augmentation: scene registers graph augmentation and static parameter targets; runtime resolves bindings during preparation.
     - Array scratch: families register checked private-array sizing, resolved during budget preparation with cutter/fused attribution preserved.
     - Pipeline prewarm: scene registers Math View pipelines; retain the existing Math View installation call; do not move it to general device installation or startup.
     - Mesh assets: scene registers decoding, selection, fitting and translation; engine retains fragment selection and collider preparation.

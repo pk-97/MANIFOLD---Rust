@@ -106,7 +106,6 @@ mod particle_publication_gpu_tests;
 mod seed_particles_from_texture;
 
 
-mod relight;
 
 mod scene_vm;
 

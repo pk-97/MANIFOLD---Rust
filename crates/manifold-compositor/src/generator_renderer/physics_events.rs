@@ -59,7 +59,6 @@ impl GeneratorRenderer {
                 .map(|_| layer.generator_graph_structure_version())
             || state.event_owner.as_ref() != Some(&params.id)
             || state.generator_type != *layer.generator_type()
-            || state.applied_relight != (params.relight_active(), params.relight_params)
             || state.generator.awaiting_forced_outputs_rebuild()
             || !state.generator.is_scene_impulse_param(param)
         {

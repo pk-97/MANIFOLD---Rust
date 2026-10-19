@@ -23,7 +23,7 @@ use manifold_foundation::{AudioSendId, LayerId, ParamId};
 use crate::drag::DragController;
 use crate::node::Vec2;
 
-use super::{AudioShapeParam, BandDivider, GraphParamTarget, PanelAction, TrimKind, UiRelightField};
+use super::{AudioShapeParam, BandDivider, GraphParamTarget, PanelAction, TrimKind};
 
 /// One edge of a scrub gesture — maps 1:1 onto the retired
 /// `*Snapshot`/`*Changed`/`*Commit` trio (D4). The scrubbed value rides
@@ -107,9 +107,6 @@ pub enum ValueRef {
     /// A layer's audio-input gain (layer header) — was `AudioGain{Snapshot,
     /// Changed,Commit}`. Keyed by the layer id.
     LayerAudioGain(LayerId),
-    /// A "3D Shading" relight knob on an effect/generator graph — was
-    /// `RelightParam{Snapshot,Changed,Commit}`.
-    RelightParam(GraphParamTarget, UiRelightField),
     /// A modulation trim-range handle (driver / audio-mod / Ableton sub-range
     /// bars) — was `Trim{Snapshot,Changed,Commit}`. `TrimKind` selects the
     /// backing store; the `(min, max)` value rides `ScrubValue::Range` on Move.

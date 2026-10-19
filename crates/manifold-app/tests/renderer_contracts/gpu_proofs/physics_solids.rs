@@ -339,7 +339,7 @@ fn imported_flower_empty_scene_clears_and_restores() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut visible = manifold_nodes::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &imported.preset_metadata.as_ref().unwrap().id,
-            Some(&imported), h.width, h.height, false, None, None)
+            Some(&imported), h.width, h.height, false, None)
     .expect("visible flower graph builds");
     let metadata = imported.preset_metadata.as_ref().unwrap();
     let shown_params = ParamManifest::from_params(
@@ -450,7 +450,7 @@ fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
     };
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = manifold_nodes::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
-        .create_with_override(h.device.clone(), &metadata.id, Some(&imported), h.width, h.height, false, None, None).unwrap();
+        .create_with_override(h.device.clone(), &metadata.id, Some(&imported), h.width, h.height, false, None).unwrap();
     let target = h.make_target("flower-submesh-controls");
     warm_imported_runtime(&mut runtime, &target, &shown);
     let original = h.readback(&target.texture);
@@ -579,7 +579,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let runtime = manifold_nodes::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &enabled_graph.preset_metadata.as_ref().unwrap().id,
-            Some(&enabled_graph), h.width, h.height, false, None, None)
+            Some(&enabled_graph), h.width, h.height, false, None)
     .expect("physics-off flower graph builds");
     let target = h.make_target("imported-flower-physics-off");
     let mut runtime = runtime;
