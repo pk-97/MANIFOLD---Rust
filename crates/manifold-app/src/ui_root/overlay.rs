@@ -149,10 +149,8 @@ impl UIRoot {
     /// each tier, so relative overlay stacking is unchanged. Every overlay
     /// mints into the Overlays arena (UI_INVALIDATION_DESIGN.md D7), and
     /// `overlay_draw` holds that arena's slots. The region's own root is
-    /// deliberately kept OUT of the `(start, end)` range — the shadow-peek
-    /// heuristic in `tree_passes` (skip a leading full-screen scrim) reads the
-    /// node at `start` expecting the first REAL overlay node, not a region
-    /// wrapper — so these ranges render via `render_sub_region` (ancestor-
+    /// deliberately kept OUT of the `(start, end)` range, so these ranges
+    /// render via `render_sub_region` (ancestor-
     /// aware: it walks the parent chain from `start` and picks up the
     /// region's `CLIPS_CHILDREN`), not `render_tree_range`.
     pub(crate) fn build_overlays(&mut self) {

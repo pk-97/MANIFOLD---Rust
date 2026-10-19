@@ -425,8 +425,7 @@ manifold_core::testkit_visible! {
 ///
 /// `BindingTarget::Composite` targets are skipped for every check that
 /// needs to resolve a target to a concrete inner param — composite
-/// routing (`CompositeHandle::inner_routing_for`, see
-/// `node_graph/composites/mod.rs`) is built at live-graph construction
+/// routing (see `CompositeHandle` in `param_binding/composite_handle.rs`) is built at live-graph construction
 /// time from a runtime handle, not statically derivable from the
 /// `EffectGraphDef` alone. No bundled preset uses a Composite target
 /// today, so this is a documented gap, not an observed miss.

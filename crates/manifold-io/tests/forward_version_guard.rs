@@ -81,12 +81,42 @@ fn opens_a_file_at_exactly_the_current_version() {
     std::fs::remove_file(&path).ok();
 }
 
+/// Files below the 1.11.0 floor get one error that names their format and
+/// the build that still opens them, never an empty or partial project.
 #[test]
-fn migrates_an_older_file_forward() {
-    let path = temp_path("older.manifold");
-    write_project_with_version("1.5.0", &path);
+fn refuses_a_file_below_the_format_floor() {
+    let path = temp_path("too_old.manifold");
+    write_project_with_version("1.10.0", &path);
 
-    loader::load_project(&path).expect("an older file must still migrate and open");
+    let err = loader::load_project(&path).expect_err("a pre-1.11 file must be refused");
+    match &err {
+        LoadError::TooOld { file_version } => assert_eq!(file_version, "1.10.0"),
+        other => panic!("expected LoadError::TooOld, got {other:?}"),
+    }
+    let message = err.to_string();
+    assert!(message.contains("1.10.0"), "message: {message}");
+    assert!(message.contains("legacy/pre-1.11-loader"), "message: {message}");
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// A file with no `projectVersion` predates versioning, so it is below the floor too.
+#[test]
+fn refuses_a_file_with_no_project_version() {
+    let err = loader::load_project_from_json(r#"{ "projectName": "old" }"#)
+        .expect_err("an unversioned file must be refused");
+    match err {
+        LoadError::TooOld { file_version } => assert_eq!(file_version, "1.0.0"),
+        other => panic!("expected LoadError::TooOld, got {other:?}"),
+    }
+}
+
+#[test]
+fn opens_a_file_at_the_format_floor() {
+    let path = temp_path("floor.manifold");
+    write_project_with_version("1.11.0", &path);
+
+    loader::load_project(&path).expect("a 1.11.0 file must still migrate and open");
 
     std::fs::remove_file(&path).ok();
 }

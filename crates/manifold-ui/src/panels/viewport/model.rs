@@ -430,11 +430,6 @@ impl AutomationLaneScreen {
         self.strip_rect.x + (beat - self.visible_beat_start) * self.pixels_per_beat
     }
 
-    /// Alias for callers that describe the left edge as the mapping origin.
-    pub fn visible_beat_origin(&self) -> f32 {
-        self.visible_beat_start
-    }
-
     /// Bottom resize handle: only the first 120 px of the strip is reserved.
     pub fn resize_rect(&self) -> Rect {
         Rect::new(

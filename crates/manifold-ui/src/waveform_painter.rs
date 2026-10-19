@@ -7,19 +7,9 @@
 //! Follows the same patterns as `bitmap_painter.rs` — operates on
 //! `&mut [Color32]` arrays, no allocations, bounds-checked.
 
-use crate::bitmap_painter::fill_rect;
 use crate::color;
 use crate::node::Color32;
 use crate::waveform_renderer::WaveformLevel;
-
-/// The on-screen pixel X range `[x_start, x_end)` a waveform occupies, clamped to
-/// the buffer. `left_px` is the (scroll-adjusted) left edge in content space.
-/// Shared by the waveform lane and the stem lanes, which computed it identically.
-pub fn visible_x_range(left_px: f32, width_px: f32, buf_w: i32) -> (i32, i32) {
-    let draw_left = left_px as i32;
-    let draw_right = ((left_px + width_px) as i32).min(buf_w);
-    (draw_left.max(0), draw_right.min(buf_w))
-}
 
 /// Draw a visible region of a waveform into a pixel buffer.
 ///
@@ -172,83 +162,6 @@ fn straight_alpha_over(dst: Color32, src: Color32) -> Color32 {
     let g = blend(src.g, dst.g);
     let b = blend(src.b, dst.b);
     Color32::new(r, g, b, (a * 255.0).round() as u8) // design-token-exempt: computed straight-alpha compositing
-}
-
-/// Draw a small text-style button overlay at a position.
-///
-/// Used for import/remove/expand/reanalyze buttons overlaid on the waveform lane.
-/// In the bitmap UI, these are drawn as colored rectangles with text labels.
-pub fn draw_waveform_button(
-    buffer: &mut [Color32],
-    buf_w: usize,
-    buf_h: usize,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    bg_color: Color32,
-    is_hovered: bool,
-    is_pressed: bool,
-    hover_color: Color32,
-    pressed_color: Color32,
-) {
-    let color = if is_pressed {
-        pressed_color
-    } else if is_hovered {
-        hover_color
-    } else {
-        bg_color
-    };
-    fill_rect(buffer, buf_w, buf_h, x, y, w, h, color);
-}
-
-/// Draw the empty state label background (centered in lane).
-///
-/// Unity: emptyStateLabel "Click to import audio" centered in viewport.
-pub fn draw_empty_state_bg(
-    buffer: &mut [Color32],
-    buf_w: usize,
-    buf_h: usize,
-    y_offset: i32,
-    lane_height: i32,
-    lane_bg: Color32,
-) {
-    fill_rect(
-        buffer,
-        buf_w,
-        buf_h,
-        0,
-        y_offset,
-        buf_w as i32,
-        lane_height,
-        lane_bg,
-    );
-}
-
-/// Draw mute/solo button indicator.
-///
-/// Unity: StemWaveformLane.SetMuteState/SetSoloState (lines 210-222).
-pub fn draw_mute_solo_button(
-    buffer: &mut [Color32],
-    buf_w: usize,
-    buf_h: usize,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    is_active: bool,
-    is_mute: bool,
-) {
-    let color = if is_active {
-        if is_mute {
-            color::MUTE_BTN_ACTIVE
-        } else {
-            color::SOLO_BTN_ACTIVE
-        }
-    } else {
-        color::MUTE_SOLO_BTN_INACTIVE
-    };
-    fill_rect(buffer, buf_w, buf_h, x, y, w, h, color);
 }
 
 #[cfg(test)]

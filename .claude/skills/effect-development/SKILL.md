@@ -56,50 +56,9 @@ If other code needs to reference this effect's type ID, add a const to
 
 ## Pattern A: Simple Stateless Effect (Mirror template)
 
-```rust
-use manifold_gpu::{GpuDevice, GpuEncoder, GpuTexture, GpuComputePipeline};
-use crate::effects::compute_blit_helper::ComputeBlitHelper;
+Compute work lives in a primitive (`docs/ADDING_PRIMITIVES.md`): its `run` method binds the source, target and uniform bytes and submits one dispatch on the `GpuEncoder`. Pad uniform structs to 16 bytes.
 
-const SHADER: &str = include_str!("shaders/my_effect.wgsl");
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct MyUniforms {
-    amount: f32,
-    mode: u32,
-    _pad: [f32; 2],    // Pad to 16-byte boundary
-}
-
-pub struct MyEffectFX {
-    helper: ComputeBlitHelper,
-}
-
-impl MyEffectFX {
-    pub fn new(device: &GpuDevice) -> Self {
-        Self { helper: ComputeBlitHelper::new(device, SHADER, "My Effect") }
-    }
-}
-
-impl PostProcessEffect for MyEffectFX {
-    fn effect_type(&self) -> &EffectTypeId { &EffectTypeId::MY_EFFECT }
-
-    fn apply(&mut self, gpu: &mut GpuEncoder, source: &GpuTexture, target: &GpuTexture,
-             fx: &EffectInstance, ctx: &EffectContext) {
-        let amount = fx.param_values.first().copied().unwrap_or(0.5);
-        let mode = fx.param_values.get(1).copied().unwrap_or(0.0).round() as u32;
-
-        let uniforms = MyUniforms { amount, mode, _pad: [0.0; 2] };
-
-        self.helper.dispatch(
-            gpu, source, target,
-            bytemuck::bytes_of(&uniforms),
-            "My Effect", ctx.width, ctx.height,
-        );
-    }
-}
-```
-
-**Matching WGSL shader:**
+**WGSL compute layout:**
 ```wgsl
 struct Uniforms { amount: f32, mode: u32, _pad0: f32, _pad1: f32 }
 
@@ -123,18 +82,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 Additional elements beyond Pattern A:
 
-```rust
-pub struct BloomFX {
-    helper: ComputeDualBlitHelper,    // Dual-source (two input textures)
-    pipeline_prefilter: GpuComputePipeline,   // Specialized per mode
-    pipeline_downsample: GpuComputePipeline,
-    pipeline_upsample: GpuComputePipeline,
-    pipeline_composite: GpuComputePipeline,
-    states: AHashMap<i64, BloomState>,  // Per-owner state
-    width: u32, height: u32,
-}
-```
-
 **Key patterns:**
 - **Function constants**: Create specialized pipelines per mode at init time:
   `device.create_specialized_compute_pipeline(SHADER, "cs_main", &[("uniforms.mode", "0u")], label)`
@@ -143,20 +90,6 @@ pub struct BloomFX {
 - **State cleanup**: Implement `StatefulEffect` trait for `cleanup_owner()` / `clear_state_for_owner()`
 - **Each dispatch uses its own uniform values** — never share a single buffer across passes
 
-## ComputeBlitHelper Dispatch
-
-```rust
-// Single-source (read source, write target):
-helper.dispatch(gpu, source, target, uniform_bytes, label, width, height);
-
-// With specific pipeline (for specialized variants):
-helper.dispatch_with(&pipeline, gpu, source, target, uniform_bytes, label, w, h);
-```
-
-**ComputeDualBlitHelper** adds a second source texture:
-```rust
-// Dual-source (read source_a + source_b, write target):
-helper.dispatch_with(&pipeline, gpu, source_a, source_b, target, uniform_bytes, label, w, h);
-```
+## Dispatch
 
 Workgroup dispatch is always `[width.div_ceil(16), height.div_ceil(16), 1]`.

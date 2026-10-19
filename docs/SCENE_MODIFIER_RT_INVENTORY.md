@@ -67,7 +67,7 @@ The current glTF/import path wires skin/morph/raw mesh output into `node.scene_o
 
 The lossy generator accessors are exact: `fused_generator_def_for` returns only `Arc<EffectGraphDef>` (`freeze/install.rs:406-418`); `fuse_generator_def_masked` unwraps only `view.def` (`1188-1194`). The richer `FusedGeneratorView` carries `def`, `retarget`, and `node_retarget`, but not `expected_spaces` or any mesh metadata (`420-428`). `fuse_generator_view_masked` consumes `expected_spaces` only for build validation and returns the three fields (`1196-1225`).
 
-Runtime consumers: generator registry passes its canonical/relight-augmented definition into `PresetRuntime::from_def_for_render` (the nearby def-only-fusion comment is stale) (`generators/registry.rs:245-276`); scene-modifier `modifier_runtime` uses the richer view, swaps `view.def`, installs `view.retarget`, and uses `view.node_retarget` for prepared buffer/control state (`preset_runtime/modifier_runtime.rs:107-160`). Per-card effect chain selection chooses a fused `LoadedPresetView` (`preset_runtime/core.rs:832-860`) and carries `view.fused_retarget` into `BoundGraph` (`core.rs:1091-1121`); segment splicing carries only `SegmentView.def`, card bindings, and `retarget` (`freeze/install.rs:641-657`, with runtime installation in `core.rs:700-750`). `LoadedPresetView` itself has only `canonical_def`, bindings, and `fused_retarget` (`loaded_preset_view.rs:54-83`); plain canonical construction leaves the map empty (`140-165`). These view/segment structs are the existing no-serialization runtime-carrier seam; the def-only generator APIs and `SegmentView` currently drop any additional sidecar.
+Runtime consumers: generator registry passes its canonical definition into `PresetRuntime::from_def_for_render` (the nearby def-only-fusion comment is stale) (`generators/registry.rs:245-276`); scene-modifier `modifier_runtime` uses the richer view, swaps `view.def`, installs `view.retarget`, and uses `view.node_retarget` for prepared buffer/control state (`preset_runtime/modifier_runtime.rs:107-160`). Per-card effect chain selection chooses a fused `LoadedPresetView` (`preset_runtime/core.rs:832-860`) and carries `view.fused_retarget` into `BoundGraph` (`core.rs:1091-1121`); segment splicing carries only `SegmentView.def`, card bindings, and `retarget` (`freeze/install.rs:641-657`, with runtime installation in `core.rs:700-750`). `LoadedPresetView` itself has only `canonical_def`, bindings, and `fused_retarget` (`loaded_preset_view.rs:54-83`); plain canonical construction leaves the map empty (`140-165`). These view/segment structs are the existing no-serialization runtime-carrier seam; the def-only generator APIs and `SegmentView` currently drop any additional sidecar.
 
 ## Re-derivation commands
 
@@ -255,7 +255,6 @@ PYCOUNT
 * `crates/manifold-node-engine/src/freeze/space.rs:52`
 * `crates/manifold-node-engine/src/load/graph_loader.rs:689,1719,1728,1756,1799,1872,1918,1949,1982,2568,2612`
 * `crates/manifold-node-engine/src/persistence.rs:576`
-* `crates/manifold-nodes-scene/src/node_graph/relight.rs:696`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/runtime_bound_param_survives_rebuild.rs:109`
 
 ### `into_graph`
@@ -291,7 +290,6 @@ PYCOUNT
 * `crates/manifold-nodes/src/node_graph/bundled_presets.rs:448,518,615,795,987`
 * `crates/manifold-node-engine/src/load/chain_spec.rs:83`
 * `crates/manifold-nodes/src/engine_contract_tests/freeze_proof.rs:1330`
-* `crates/manifold-nodes-scene/src/node_graph/relight.rs:686`
 * `crates/manifold-node-engine/src/runtime/core.rs:615,879,897`
 * `crates/manifold-nodes/tests/card_binding_shadow_corpus.rs:40,161`
 

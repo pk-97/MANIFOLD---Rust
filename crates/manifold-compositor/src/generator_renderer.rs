@@ -597,10 +597,6 @@ impl GeneratorRenderer {
         // `install_layer_generator` when this clip start triggers a build so
         // the reshape sources from the manifest, not the stale shadow (BUG-078).
         manifest: Option<&ParamManifest>,
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5) — the layer's live
-        // toggle + knobs.
-        relight: bool,
-        relight_params: manifold_core::effects::RelightParams,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
             return true;
@@ -609,9 +605,8 @@ impl GeneratorRenderer {
         // Compare against the layer's current generator state. Rebuild
         // when: (a) no generator yet, (b) type changed, (c) the override
         // version differs from what we last built against (graph-editor edit
-        // landed), or (d) the "3D Shading" toggle/knobs changed (P5 — the
-        // relight template is synthesized at splice time, invisible to the
-        // override/param version counters). `None` here means "no override
+        // landed), or (d) the watched state changed (the generator flips
+        // fused ⇄ unfused). `None` here means "no override
         // present this frame"; `Some(v)` means "override is at v". Encoding
         // "no override" as `None` lets us distinguish the initial
         // bundled-preset path from a v0 override.
@@ -630,8 +625,6 @@ impl GeneratorRenderer {
                 ls.generator_type != gen_type
                     || ls.override_version != current_override_version
                     || ls.built_watched != is_watched_now
-                    || ls.applied_relight.0 != relight
-                    || ls.applied_relight.1.height_from != relight_params.height_from
             });
 
         if needs_create {
@@ -661,8 +654,6 @@ impl GeneratorRenderer {
                 preserved_audio_count,
                 std::collections::BTreeMap::new(),
                 manifest,
-                relight,
-                relight_params,
             ) {
                 return false;
             }
@@ -800,15 +791,8 @@ impl GeneratorRenderer {
             // counter is the only signal that edit produces.
             let current_param_version: Option<u32> =
                 layer.gen_params().map(|_| layer.generator_graph_version());
-            // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5): compared
-            // below alongside `override_version`/`built_watched` — see
-            // `acquire_clip`'s doc comment on the same comparison.
-            let (current_relight, current_relight_params) = layer
-                .gen_params()
-                .map(|gp| (gp.relight_active(), gp.relight_params))
-                .unwrap_or_default();
             // Rebuild only on a *structure* change (override structure-version
-            // bump), a "3D Shading" toggle/knob change, OR when the layer's
+            // bump), OR when the layer's
             // watched state flipped (editor opened/closed — swaps the
             // generator fused ⇄ unfused). A value-only edit lands in place
             // below, with no rebuild and no state reset.
@@ -816,7 +800,6 @@ impl GeneratorRenderer {
             let needs_rebuild = self.layer_generators.get(layer_id).is_some_and(|ls| {
                 ls.override_version != current_override_version
                     || ls.built_watched != is_watched_now
-                    || ls.applied_relight != (current_relight, current_relight_params)
                     // BUG-18l: a live forced-outputs change (rt_enabled /
                     // temporal_upscale) is a topology change — the compiled
                     // plan can't honor it, so rebuild the runtime here, the
@@ -868,8 +851,6 @@ impl GeneratorRenderer {
                 preserved_audio_count,
                 std::collections::BTreeMap::new(),
                 manifest,
-                current_relight,
-                current_relight_params,
             );
         }
         layer_ids_to_check.clear();
@@ -1016,13 +997,6 @@ impl GeneratorRenderer {
                 // on a `graph_version` bump, not here.
                 let empty = ParamManifest::default();
                 let params = layer.gen_params().map(|gp| &gp.params).unwrap_or(&empty);
-                let relight_params = layer
-                    .gen_params()
-                    .map(|gp| gp.relight_params)
-                    .unwrap_or_default();
-                layer_state
-                    .generator
-                    .set_relight_params(&relight_params);
                 layer_state.generator.set_rt_quality(self.rt_quality);
                 layer_state.generator.set_sim_step(self.sim_step);
                 layer_state
@@ -1187,15 +1161,6 @@ impl GeneratorRenderer {
                 // Fresh type → bundled build; the old instance's manifest
                 // describes the old param set, so no manifest to honor here.
                 None,
-                // Same reasoning for "3D Shading": a type swap installs a
-                // fresh `PresetInstance` (`ChangeGeneratorTypeCommand`), so
-                // there's no live relight state to carry over here. If the
-                // new instance actually does carry a toggle, the very next
-                // per-frame sweep compares against it and rebuilds again —
-                // a harmless one-frame redundancy, same shape as the `None`
-                // manifest above.
-                false,
-                manifold_core::effects::RelightParams::default(),
             );
         }
     }
@@ -1246,9 +1211,6 @@ impl GeneratorRenderer {
         // authority, not the graph's stale `preset_metadata.params` shadow
         // (BUG-078). `None` for the type-swap path (fresh bundled build).
         manifest: Option<&ParamManifest>,
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5).
-        relight: bool,
-        relight_params: manifold_core::effects::RelightParams,
     ) -> bool {
         // A layer open in the graph editor renders unfused (per-node preview +
         // live edits). The registry's fuse gate consults this; the rebuild
@@ -1263,7 +1225,6 @@ impl GeneratorRenderer {
             self.height,
             is_watched,
             manifest,
-            relight.then_some(&relight_params),
         ) else {
             return false;
         };
@@ -1292,7 +1253,6 @@ impl GeneratorRenderer {
                 merged_string_params: std::collections::BTreeMap::new(),
                 string_params_dirty: true,
                 built_watched: is_watched,
-                applied_relight: (relight, relight_params),
                 rendered_pass: None,
             },
         );
@@ -1356,10 +1316,7 @@ impl GeneratorRenderer {
                 THUMB_H,
                 false,
                 // Cold-start thumbnail shows the bundled default look, not
-                // live override/calibration state (see fn doc) — no manifest,
-                // and no "3D Shading" either (`docs/DEPTH_RELIGHT_DESIGN.md`
-                // P5): same policy as the manifest above, same reasoning.
-                None,
+                // live override/calibration state (see fn doc) — no manifest.
                 None,
             )?;
             let rt = RenderTarget::new(
@@ -1522,12 +1479,6 @@ impl ClipRenderer for GeneratorRenderer {
         // authority a first-clip build must honor over the graph shadow
         // (BUG-078). Borrowed from the external `layers` slice, not `self`.
         let manifest = layer.and_then(|l| l.gen_params()).map(|gp| &gp.params);
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5): the toggle +
-        // knobs live on `gen_params` alongside the manifest above.
-        let (relight, relight_params) = layer
-            .and_then(|l| l.gen_params())
-            .map(|gp| (gp.relight_active(), gp.relight_params))
-            .unwrap_or_default();
         let acquired = self.acquire_clip(
             &clip.id,
             gen_type,
@@ -1540,8 +1491,6 @@ impl ClipRenderer for GeneratorRenderer {
             clip_edge_enabled,
             layer.and_then(|layer| layer.gen_params()).map(|host| (host, fire_clip_edge)),
             manifest,
-            relight,
-            relight_params,
         );
 
         // Populate layer string defaults by scanning ALL clips on this layer.
@@ -1604,10 +1553,6 @@ impl ClipRenderer for GeneratorRenderer {
         let override_version = layer.generator_graph_structure_version();
         let param_version = layer.generator_graph_version();
         let current_override_version: Option<u32> = override_def.map(|_| override_version);
-        let (relight, relight_params) = layer
-            .gen_params()
-            .map(|gp| (gp.relight_active(), gp.relight_params))
-            .unwrap_or_default();
         let manifest = layer.gen_params().map(|gp| &gp.params);
         let current_param_version: Option<u32> = manifest.map(|_| param_version);
 
@@ -1633,8 +1578,6 @@ impl ClipRenderer for GeneratorRenderer {
             0,
             layer_string_defaults.clone(),
             manifest,
-            relight,
-            relight_params,
         ) {
             return manifold_core::WarmupOutcome::InstallFailed;
         }
@@ -1699,7 +1642,6 @@ impl ClipRenderer for GeneratorRenderer {
                         .map(|gp| &gp.params)
                         .unwrap_or(&default_manifest);
                     ls.generator.set_string_params(Some(&ls.merged_string_params));
-                    ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
                     ls.generator.set_sim_step(self.sim_step);
                     ls.generator.set_project_tempo(None);

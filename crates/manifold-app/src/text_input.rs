@@ -11,19 +11,7 @@
 use manifold_ui::text_edit;
 
 /// What kind of field is being edited.
-// FIXME(dead-code-audit): EffectParam/GroupRename/GenParam are matched on in app.rs
-// but no path constructs them — begin() callers don't reach these branches.
-//
-// Phase 2 wire-format rule (see `docs/archive/BINDINGS_UNIFICATION_PLAN.md`): when
-// these variants are revived, the per-param identifier must be `ParamId`,
-// not positional `usize`. Today these arms still carry `usize` because
-// they're dead; the handler in `app.rs` was left untouched. Converting
-// in place will require dropping `Copy` from the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    dead_code,
-    reason = "arms revive when the app.rs handler converts usize→ParamId per the phase-2 wire-format rule (comment above); un-suppress: that migration"
-)]
 pub enum TextInputField {
     Bpm,
     Fps,
@@ -34,15 +22,6 @@ pub enum TextInputField {
     LayerName,
     ClipBpm,
     MacroLabel(usize),
-    /// Effect parameter: (effect_index, param_index). DEAD. On revival,
-    /// switch to `(effect_index, ParamId)` per the Phase 2 contract or
-    /// the user-tier slots will silently no-op on commit.
-    EffectParam(usize, usize),
-    /// Effect group rename: group index.
-    GroupRename(usize),
-    /// Generator parameter: param_index. DEAD. On revival, switch to
-    /// `ParamId` per the Phase 2 contract.
-    GenParam(usize),
     /// Generator string parameter: (string_param_index).
     GenStringParam(usize),
     /// Inspector param value type-in (effect / generator), opened by a

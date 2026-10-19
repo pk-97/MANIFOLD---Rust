@@ -28,10 +28,10 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn load_burn_v5_project() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     assert!(path.exists(), "Test fixture not found: {}", path.display());
 
-    let project = loader::load_project(&path).expect("Failed to load Burn V5.manifold");
+    let project = loader::load_project(&path).expect("Failed to load Burn V5 1.21.manifold");
 
     // Basic project-level assertions
     assert_eq!(project.project_name, "Burn V5");
@@ -80,7 +80,7 @@ fn load_burn_v5_project() {
 
 #[test]
 fn load_burn_v5_clips_have_valid_beats() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     for (li, layer) in project.timeline.layers.iter().enumerate() {
@@ -118,7 +118,7 @@ fn load_burn_v5_clips_have_valid_beats() {
 
 #[test]
 fn load_burn_v5_timeline_duration() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     let duration = project.timeline.duration_beats();
@@ -131,7 +131,7 @@ fn load_burn_v5_timeline_duration() {
 
 #[test]
 fn load_burn_v5_clip_lookup_works() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let mut project = loader::load_project(&path).unwrap();
 
     // Grab a clip ID from the first layer
@@ -148,7 +148,7 @@ fn load_burn_v5_clip_lookup_works() {
 
 #[test]
 fn load_burn_v5_roundtrip_json() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     // Serialize back to JSON
@@ -177,7 +177,7 @@ fn load_burn_v5_roundtrip_json() {
 fn driver_beat_divisions_survive_load() {
     use manifold_core::types::BeatDivision;
 
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     // Collect all driver param ids + beat divisions after Rust load.
@@ -249,7 +249,7 @@ fn driver_beat_divisions_survive_load() {
 
 #[test]
 fn driver_beat_divisions_survive_roundtrip() {
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     let project = loader::load_project(&path).unwrap();
 
     // Roundtrip: serialize to JSON then reload
@@ -289,12 +289,12 @@ fn driver_beat_divisions_survive_roundtrip() {
 
 #[test]
 fn load_burn_v4_project() {
-    let path = fixture_path("Burn V4.manifold");
+    let path = fixture_path("Burn V4 1.21.manifold");
     if !path.exists() {
         return;
     } // Skip if fixture not available
 
-    let project = loader::load_project(&path).expect("Failed to load Burn V4.manifold");
+    let project = loader::load_project(&path).expect("Failed to load Burn V4 1.21.manifold");
 
     assert_eq!(project.project_name, "Burn V4");
     assert!((project.settings.bpm.0 - 138.0).abs() < 0.01);
@@ -315,12 +315,12 @@ fn load_burn_v4_project() {
 /// with no per-instance graph) — same posture as the path-missing guard.
 #[test]
 fn graphtestsv4_reconciles_desynced_generator_identity() {
-    let path = fixture_path("GraphTestsV4.manifold");
+    let path = fixture_path("GraphTestsV4 1.21.manifold");
     if !path.exists() {
         return;
     }
 
-    let project = loader::load_project(&path).expect("Failed to load GraphTestsV4.manifold");
+    let project = loader::load_project(&path).expect("Failed to load GraphTestsV4 1.21.manifold");
 
     // The desync scenario needs a generator layer carrying a per-instance
     // graph override whose metadata names a preset. Skip if the fixture no
@@ -348,15 +348,14 @@ fn graphtestsv4_reconciles_desynced_generator_identity() {
     assert_eq!(*gen_layer.generator_type(), graph_id);
 }
 
-// ── Liveschool Live Show V6 — canonical regression for steps 8-14 ──
+// ── Liveschool Live Show V6 — the canonical serialization fixture ──
 //
-// 20-minute live show with 52 layers, ~2828 clips, 155 effects across
-// master + layer chains, 130 drivers, 35 envelopes, 29 Ableton mappings.
-// Every addressing-site migration (steps 8-11 wire up `param_id` for
-// drivers / envelopes / Ableton / macros; step 12 changes `paramValues`
-// to map shape; step 14 bumps `projectVersion`) must preserve every
-// count below. If a future migration regresses any of these, this test
-// is the gate that catches it.
+// A 20-minute live show: 52 layers, 2828 clips, 160 effects, 130 drivers,
+// 33 envelopes, 29 Ableton mappings, on both effect chains and
+// `layer.gen_params()`. This is the show converted to the current format
+// with `project_tool project upgrade` (local and gitignored, like every
+// personal fixture); any load, save or migration change must keep these counts.
+const CANONICAL_FIXTURE: &str = "Liveschool Live Show V6 LEDS 1.21.manifold";
 
 /// Walk every effect chain in a project and call `f` on each PresetInstance.
 /// Covers master effects + layer effects.
@@ -426,13 +425,13 @@ fn count_effects(project: &manifold_core::project::Project) -> usize {
 
 #[test]
 fn load_liveschool_live_show_v6() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path(CANONICAL_FIXTURE);
     if !path.exists() {
         return;
     }
 
     let project =
-        loader::load_project(&path).expect("Failed to load Liveschool Live Show V6 LEDS.manifold");
+        loader::load_project(&path).expect("Failed to load Liveschool Live Show V6 LEDS 1.21.manifold");
 
     // Settings — 4K output @ 150.83 BPM.
     assert!(
@@ -443,16 +442,9 @@ fn load_liveschool_live_show_v6() {
     assert_eq!(project.settings.output_width, 3840);
     assert_eq!(project.settings.output_height, 2160);
 
-    // Timeline — 52 layers, ~2828 clips. The clip count assertion is
-    // exact: post-load repair removes overlapping clips, so this count
-    // is the after-repair canonical state. If load behavior changes,
-    // bump it intentionally — never silently.
+    // Exact counts: if load behavior changes, bump them on purpose.
     assert_eq!(project.timeline.layers.len(), 52, "expected 52 layers");
-    assert_eq!(
-        project.timeline.total_clip_count(),
-        2828,
-        "expected 2828 clips after load repair"
-    );
+    assert_eq!(project.timeline.total_clip_count(), 2828, "expected 2828 clips");
 
     // Master effect count — exposes any drift in MasterEffects deserialization.
     assert_eq!(
@@ -461,17 +453,11 @@ fn load_liveschool_live_show_v6() {
         "expected 5 master effects"
     );
 
-    // Effect / driver / envelope / Ableton-mapping totals — these are
-    // the counts every migration step (8-11, 12, 14) must preserve.
-    // Drivers and Ableton mappings include both effect-targeted and
-    // generator-targeted (via `layer.genParams`).
+    // Drivers and Ableton mappings count both effect-targeted and
+    // generator-targeted sites (`layer.gen_params()`).
     assert_eq!(count_effects(&project), 160, "effects total drifted");
     assert_eq!(count_drivers(&project), 130, "drivers total drifted");
-    // Envelope-home unification (v1.5→v1.6): the 15 layer-level envelopes
-    // distribute onto their matching effect instance; 2 of them targeted a
-    // `WireframeDepth` effect absent from their layer (BLACK HOLE MAIN) — those
-    // were inert before (the evaluator found no target) and are dropped by the
-    // migration. 13 effect envelopes + 20 generator envelopes = 33.
+    // 13 effect envelopes + 20 generator envelopes.
     assert_eq!(count_envelopes(&project), 33, "envelopes total drifted");
     assert_eq!(
         count_ableton_mappings(&project),
@@ -487,7 +473,7 @@ fn load_liveschool_live_show_v6() {
         }
         assert!(
             !layer.has_overlapping_clips(),
-            "Layer {:?} still has overlapping clips after load repair",
+            "Layer {:?} has overlapping clips",
             layer.layer_id
         );
     }
@@ -495,36 +481,12 @@ fn load_liveschool_live_show_v6() {
 
 #[test]
 fn liveschool_roundtrip_preserves_addressing_sites() {
-    // Save → reload → counts must match. This is the gate that future
-    // ParamId migrations (steps 8-14) will run against. If the custom
-    // Deserialize for ParameterDriver / ParamEnvelope / AbletonParamMapping
-    // / paramValues drops or reshapes anything, one of the count
-    // assertions below will fail.
-    //
-    // **Test scope:** this test runs in `manifold-io`'s test target,
-    // which intentionally does NOT link `manifold-nodes`. The
-    // effect/generator registries are therefore EMPTY here. Concretely:
-    //
-    // - Driver/envelope/Ableton mappings load with `param_id = ""`,
-    //   `legacy_param_index = Some(idx)` (RegistryMissing path; the
-    //   resolver preserves the parked index for next-load recovery —
-    //   see `Project::resolve_legacy_param_ids`).
-    // - The custom `Serialize` on those types re-emits `paramIndex`
-    //   from the parked index, so the round-trip preserves addressing
-    //   verbatim — this test would FAIL before the recovery-loop
-    //   hardening landed.
-    // - Effect/generator `paramValues` come in as V1.x `Array` shape
-    //   from the on-disk fixture, never enter the Map path here, so
-    //   the registry-missing branch on `into_positional` doesn't fire
-    //   in this test.
-    //
-    // The semantic contract — that `param_id` actually resolves to the
-    // intended parameter slot — is verified by
-    // `manifold-app/tests/legacy_param_id_resolution.rs`, which DOES
-    // link the renderer. **Do not interpret a green run of this test
-    // as confirming `param_id` resolution; this test only confirms
-    // shape preservation.**
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    // Save, reload, and every count and driver tuple must match. This test
+    // target does not link `manifold-nodes`, so the preset registries are
+    // empty: it proves the custom serde for drivers, envelopes, Ableton
+    // mappings and `paramValues` keeps their shape with no registry, not
+    // that a `param_id` names the right slot.
+    let path = fixture_path(CANONICAL_FIXTURE);
     if !path.exists() {
         return;
     }
@@ -600,7 +562,7 @@ fn liveschool_roundtrip_preserves_addressing_sites() {
 /// no panic, grid empty).
 #[test]
 fn liveschool_reload_omits_empty_session_field() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path(CANONICAL_FIXTURE);
     if !path.exists() {
         return;
     }
@@ -637,7 +599,7 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
         AudioBand, AudioFeature, AudioFeatureKind, AudioModSource, ParameterAudioMod,
     };
 
-    let path = fixture_path("Burn V5.manifold");
+    let path = fixture_path("Burn V5 1.21.manifold");
     if !path.exists() {
         return; // gitignored personal fixture — same guard as the other tests
     }
@@ -724,7 +686,7 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
 // saving, and reloading is lossless and doesn't panic on real data.
 #[test]
 fn liveschool_v6_leds_clip_trigger_migration_round_trips_cleanly() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path(CANONICAL_FIXTURE);
     assert!(path.exists(), "Test fixture not found: {}", path.display());
 
     let project = loader::load_project(&path).expect("canonical fixture loads clean");
@@ -818,7 +780,7 @@ fn archive_project_json(path: &std::path::Path) -> serde_json::Value {
 /// would break the references between clips, layers and effects.
 #[test]
 fn liveschool_old_ids_round_trip_unchanged() {
-    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    let path = fixture_path(CANONICAL_FIXTURE);
     assert!(path.exists(), "Test fixture not found: {}", path.display());
 
     let before = id_strings(&archive_project_json(&path));

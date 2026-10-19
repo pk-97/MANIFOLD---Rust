@@ -48,15 +48,6 @@ pub(crate) fn compute_topology_hash(
         fx.id.as_str().hash(&mut h);
         fx.effect_type().as_str().hash(&mut h);
         fx.enabled.hash(&mut h);
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` D8/P7): the toggle and
-        // `height_from` change template topology (relight off = no template;
-        // height_from changes the height tap), so they stay in the rebuild key.
-        // The float D3 knobs are now live uniforms written per-frame, so they
-        // must NOT be hashed — otherwise a knob drag would rebuild the chain.
-        fx.relight_active().hash(&mut h);
-        if fx.relight_active() {
-            fx.relight_params.height_from.hash(&mut h);
-        }
         // Watched (open-in-editor) target: folded into the rebuild key so
         // opening or closing the editor rebuilds exactly the chain holding this
         // effect, flipping it fused ⇄ unfused (the gate at `should_render_fused`
@@ -603,7 +594,6 @@ manifold_core::testkit_visible! {
             def_content_key: 0,
             generator_input_node: Some(generator_input_id),
             card_prefix: String::new(),
-            relight_writes: Vec::new(),
         };
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();

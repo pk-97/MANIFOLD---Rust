@@ -19,7 +19,6 @@ manifold-foundation = { path = "../manifold-foundation" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
-png = "0.18"
 serde = { workspace = true }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"

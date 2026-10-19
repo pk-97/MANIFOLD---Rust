@@ -33,11 +33,6 @@ impl ProjectTempo {
     }
 }
 
-/// Maximum generator parameters per type.
-/// FluidSim3D has 26 params (the most of any generator).
-/// Set to 32 for alignment and future headroom.
-pub const MAX_GEN_PARAMS: usize = 32;
-
 /// Per-frame rendering context shared by effects and generators.
 ///
 /// This is the single unified context for the preset runtime — the union

@@ -200,7 +200,6 @@ pub enum ContentCommand {
     /// Re-place a clip's triggers from its cached analysis (no backend run).
     /// Driven by the inspector's live config knobs (per-instrument UI is a P4
     /// follow-up; the command + content path are in place).
-    #[allow(dead_code)]
     ReplanClip(ClipId),
     /// Remove every trigger a given audio clip produced (one undoable step).
     /// Produced by the inspector Clear button (P4).

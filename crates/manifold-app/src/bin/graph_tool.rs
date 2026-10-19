@@ -69,7 +69,7 @@ fn print_usage() {
         "usage: graph_tool validate <file.json> --kind effect|generator [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool fusion <file.json> [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool migrate <file.json> [--in-place]\n\
-         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png] [--relight] [--linear]\n\
+         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png] [--linear]\n\
          \n\
          validate: runs a graph document JSON file through the same load +\n\
          compile pipeline the runtime loader takes. Exit codes: 0 valid,\n\
@@ -152,6 +152,7 @@ fn run_validate(args: &[String]) -> ExitCode {
     };
 
     let registry = PrimitiveRegistry::with_builtin();
+
     let device = std::sync::Arc::new(GpuDevice::new_queued("graph-tool"));
     let report = validate_def(&def, &registry, kind, &device);
 
@@ -184,16 +185,11 @@ fn run_render(args: &[String]) -> ExitCode {
     let mut kind: Option<manifold_core::preset_def::PresetKind> = None;
     let mut size: u32 = 512;
     let mut out: Option<PathBuf> = None;
-    let mut relight = false;
     let mut linear = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--relight" => {
-                relight = true;
-                i += 1;
-            }
             "--linear" => {
                 linear = true;
                 i += 1;
@@ -259,18 +255,6 @@ fn run_render(args: &[String]) -> ExitCode {
             eprintln!("error: {}: parse failed: {e}", file.display());
             return ExitCode::from(2);
         }
-    };
-    // `--relight`: the "3D Shading" toggle (DEPTH_RELIGHT_DESIGN.md P5) —
-    // renders with the proven-recipe defaults; there's no live instance here
-    // to source live knobs from.
-    let def = if relight {
-        manifold_nodes_scene::node_graph::relight::relight_augment(
-            &def,
-            &PrimitiveRegistry::with_builtin(),
-            &manifold_core::effects::RelightParams::default(),
-        )
-    } else {
-        def
     };
 
     let device = std::sync::Arc::new(GpuDevice::new_queued("graph-tool"));

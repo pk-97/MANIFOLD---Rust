@@ -246,16 +246,6 @@ pub(crate) fn lease_for_buffer(
     lease_for_allocation(sender, allocation)
 }
 
-pub(crate) fn lease_for_heap(
-    sender: &ResidencySender,
-    raw: &ProtocolObject<dyn objc2_metal::MTLHeap>,
-) -> Arc<GpuResidencyLease> {
-    let ptr = raw as *const ProtocolObject<dyn objc2_metal::MTLHeap>
-        as *mut ProtocolObject<dyn MTLAllocation>;
-    let allocation = unsafe { Retained::retain(ptr) }.expect("Metal heap retain returned nil");
-    lease_for_allocation(sender, allocation)
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "residency_tests.rs"]
 mod tests;

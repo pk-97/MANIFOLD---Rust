@@ -560,7 +560,7 @@ impl InspectorCompositePanel {
     }
 
     /// Force every card's tweens (drawer height, tab-ink, collapse, spawn
-    /// pop, delete fade, value flash, value snap-back) to their settled end
+    /// pop, delete fade, value flash) to their settled end
     /// state — BUG-073 fix shape (b): a headless `--script` driver has no
     /// per-frame timer, so a tween a step arms mid-script would otherwise
     /// never advance unless that step happens to insert a `Step` afterward.
@@ -943,8 +943,8 @@ impl InspectorCompositePanel {
     /// `master_effect_mut`/`layer_effect_mut`, picked by `tab` — mirrors
     /// `is_effect_ableton_mapped`'s Master vs Layer|Group|Clip split. The one
     /// accessor a `GraphParamTarget::Effect(idx)` dispatch arm needs when it
-    /// wants to reach into the specific card's own UI-only state (e.g. P2
-    /// `begin_value_snapback`) rather than just mutate the model.
+    /// wants to reach into the specific card's own UI-only state rather than
+    /// just mutate the model.
     pub fn effect_card_mut(&mut self, tab: InspectorTab, idx: usize) -> Option<&mut ParamCardPanel> {
         self.cards_for_tab_mut(tab).get_mut(idx)
     }
@@ -1584,7 +1584,7 @@ fn in_range(idx: usize, first: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::param_card::{ParamCardKind, RelightCardConfig, RowMod};
+    use crate::panels::param_card::{ParamCardKind, RowMod};
     use crate::tree::UITree;
 
     /// INV-15: the inspector view version moves only when a view value changes.
@@ -1822,7 +1822,6 @@ mod tests {
             layer_id: None,
             modifier: None,
             audio_sends: Vec::new(),
-            relight: RelightCardConfig::default(),
         }
     }
 

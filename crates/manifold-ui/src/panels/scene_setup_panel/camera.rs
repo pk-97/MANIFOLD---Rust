@@ -18,7 +18,7 @@ impl ScenePanel {
             CameraRowVm::Custom if owned.is_empty() => Some("Custom (edit in graph)"),
             CameraRowVm::Custom => Some("Movement: controlled by camera graph"),
             CameraRowVm::None => Some("No camera wired"),
-            CameraRowVm::Orbit(_) | CameraRowVm::Free(_) | CameraRowVm::LookAt(_) => None,
+            CameraRowVm::Orbit | CameraRowVm::Free | CameraRowVm::LookAt => None,
         };
         if let Some(message) = message {
             tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, message, label_style());

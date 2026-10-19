@@ -1,7 +1,7 @@
 //! Catalog-owned generator construction, resolved once by the compositor.
 
 use std::sync::{Arc, LazyLock};
-use manifold_core::{PresetTypeId, effect_graph_def::EffectGraphDef, effects::RelightParams, params::ParamManifest};
+use manifold_core::{PresetTypeId, effect_graph_def::EffectGraphDef, params::ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use super::PresetRuntime;
 
@@ -14,7 +14,6 @@ pub type CreateGenerator = fn(
     u32,
     bool,
     Option<&ParamManifest>,
-    Option<&RelightParams>,
 ) -> Option<Box<PresetRuntime>>;
 
 pub struct GeneratorProvider {
@@ -42,7 +41,7 @@ mod tests {
 
     const PROVIDER: GeneratorProvider = GeneratorProvider {
         prewarm: |_, _| panic!("selection must not prewarm"),
-        create: |_, _, _, _, _, _, _, _, _| panic!("selection must not construct"),
+        create: |_, _, _, _, _, _, _, _| panic!("selection must not construct"),
     };
 
     #[test]

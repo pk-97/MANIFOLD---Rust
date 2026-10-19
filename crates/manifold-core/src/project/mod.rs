@@ -67,6 +67,14 @@ impl EmbeddedPreset {
 /// final target and the forward-compat guard both read it. Single source of truth.
 pub const CURRENT_PROJECT_VERSION: &str = "1.21.0";
 
+/// The oldest schema version this build opens. Older files are refused with
+/// one error; the build on branch [`LEGACY_LOADER_BRANCH`] still opens and
+/// resaves them. Raising the floor deletes the migrations below it.
+pub const OLDEST_LOADABLE_PROJECT_VERSION: &str = "1.11.0";
+
+/// The branch whose build opens files below [`OLDEST_LOADABLE_PROJECT_VERSION`].
+pub const LEGACY_LOADER_BRANCH: &str = "legacy/pre-1.11-loader";
+
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,44 +128,6 @@ pub struct Project {
     /// `docs/SESSION_MODE_DESIGN.md`.
     #[serde(default, skip_serializing_if = "SessionGrid::is_empty")]
     pub session: SessionGrid,
-
-    // ── Legacy top-level fields from V1.0.0 (before percussionImport nesting) ──
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "importedPercussionAudioPath"
-    )]
-    pub legacy_perc_audio_path: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "importedPercussionAudioStartBeat"
-    )]
-    pub legacy_perc_audio_start_beat: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "importedPercussionClipPlacements"
-    )]
-    pub legacy_perc_clip_placements: Option<serde_json::Value>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "percussionEnergyEnvelope"
-    )]
-    pub legacy_perc_energy_envelope: Option<Vec<f32>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "importedStemPaths"
-    )]
-    pub legacy_imported_stem_paths: Option<Vec<String>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "importedPercussionAudioHash"
-    )]
-    pub legacy_perc_audio_hash: Option<String>,
 }
 
 impl Project {
@@ -195,12 +165,6 @@ impl Default for Project {
             load_report: LoadReport::default(),
             embedded_presets: Vec::new(),
             session: SessionGrid::default(),
-            legacy_perc_audio_path: None,
-            legacy_perc_audio_start_beat: None,
-            legacy_perc_clip_placements: None,
-            legacy_perc_energy_envelope: None,
-            legacy_imported_stem_paths: None,
-            legacy_perc_audio_hash: None,
         }
     }
 }

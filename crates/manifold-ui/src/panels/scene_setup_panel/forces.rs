@@ -283,7 +283,6 @@ mod tests {
             }],
             string_params: Vec::new(),
             audio_sends: Vec::new(),
-            relight: Default::default(),
         }
     }
 

@@ -419,11 +419,6 @@ class ScopeTests(unittest.TestCase):
         self.assertIn(("manifold-nodes-scene", "gpu_proofs"), selected.required_binaries)
 
 
-    def test_image_legacy_heightfield_shader_routes_to_owning_primitive(self):
-        selected = plan(["crates/manifold-nodes-image/src/node_graph/primitives/shaders/heightfield_shadow.wgsl"])
-        self.assertIn("node_graph::primitives::heightfield_shadow::", selected.filters)
-
-
     def folded_glb_workspace(self, repo, module='glb_conformance'):
         workspace = fixture_workspace(repo)
         renderer = workspace.packages['manifold-nodes']

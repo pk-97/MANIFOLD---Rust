@@ -420,25 +420,6 @@ pub fn drag_write(mode: GizmoMode, axis: GizmoAxis, target: &GizmoTarget) -> Opt
     Some((addr, current, driven))
 }
 
-/// World-space (Move) / raw multiplier (Scale) delta along `axis` for a
-/// screen-space mouse delta, computed by projecting the origin and a small
-/// offset along the axis through `cam` and taking the mouse delta's
-/// component along the resulting screen-space direction, scaled by the
-/// projected pixels-per-world-unit — the standard translate-gizmo drag
-/// technique (equivalent to intersecting the drag with the view-aligned
-/// plane containing the axis, without the extra ray-plane math). `None` if
-/// the origin or its axis-offset point falls behind the camera.
-pub fn move_drag_delta(
-    origin: [f32; 3],
-    axis: GizmoAxis,
-    cam: &Camera,
-    width: u32,
-    height: u32,
-    mouse_delta: (f32, f32),
-) -> Option<f32> {
-    direction_drag_delta(origin, axis.unit(), cam, width, height, mouse_delta)
-}
-
 fn direction_drag_delta(origin: [f32; 3], direction: [f32; 3], cam: &Camera, width: u32, height: u32, mouse_delta: (f32, f32)) -> Option<f32> {
     const EPS: f32 = 1.0;
     let p0 = cam.project_to_pixel(origin, width, height)?;
@@ -452,26 +433,6 @@ fn direction_drag_delta(origin: [f32; 3], direction: [f32; 3], cam: &Camera, wid
     let along_px = mouse_delta.0 * dir_n.0 + mouse_delta.1 * dir_n.1;
     Some(along_px / px_per_unit)
 }
-
-/// Scale delta for `axis` — same projection technique as
-/// [`move_drag_delta`], multiplied by [`SCALE_SENSITIVITY`] so a full
-/// [`GIZMO_HANDLE_LEN`]-length drag reads as roughly a 1x change (feels
-/// comparable to Move rather than needing a much longer drag).
-pub const SCALE_SENSITIVITY: f32 = 1.0;
-pub fn scale_drag_delta(
-    origin: [f32; 3],
-    axis: GizmoAxis,
-    cam: &Camera,
-    width: u32,
-    height: u32,
-    mouse_delta: (f32, f32),
-) -> Option<f32> {
-    move_drag_delta(origin, axis, cam, width, height, mouse_delta).map(|d| d * SCALE_SENSITIVITY)
-}
-
-/// Radians per screen pixel of horizontal+vertical drag, for
-/// [`rotate_drag_delta`]'s screen-space approximation.
-pub const ROTATE_SENSITIVITY: f32 = 0.012;
 
 /// Rotation delta (radians) for dragging `axis`'s ring: the screen-space
 /// angle swept around the origin's projected point from `prev_mouse` to
@@ -818,23 +779,6 @@ mod tests {
         let target = gizmo_target_for(&scene, 1).unwrap();
         let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
         assert_eq!(pick_axis(GizmoMode::Move, &target, &cam, 640, 480, (0.0, 0.0)), None);
-    }
-
-    #[test]
-    fn move_drag_delta_along_axis_is_positive_when_dragging_toward_projected_axis_direction() {
-        let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-        let origin = [0.0, 0.0, -5.0];
-        // Looking down -Z with up=+Y, the camera's `right` is +X, so a
-        // rightward screen drag should read as a positive X-axis delta.
-        let d = move_drag_delta(origin, GizmoAxis::X, &cam, 640, 480, (10.0, 0.0)).unwrap();
-        assert!(d > 0.0, "rightward drag should move +X, got {d}");
-    }
-
-    #[test]
-    fn move_drag_delta_is_zero_for_zero_mouse_delta() {
-        let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-        let d = move_drag_delta([0.0, 0.0, -5.0], GizmoAxis::Y, &cam, 640, 480, (0.0, 0.0)).unwrap();
-        assert!(d.abs() < 1e-4);
     }
 
     #[test]

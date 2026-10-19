@@ -14,7 +14,6 @@ pub mod cursors;
 pub mod drag;
 pub mod dock;
 pub mod draw;
-pub mod driver_waveform_icons;
 pub mod fmt;
 pub mod mini_timeline;
 pub mod graph_canvas;
@@ -47,7 +46,6 @@ pub mod value_cell;
 pub mod view;
 pub mod waveform_painter;
 pub mod waveform_renderer;
-pub mod widget_layout;
 
 pub use automation::{
     AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo, ResolveError,
@@ -81,7 +79,7 @@ pub use panels::layer_header::{LayerHeaderPanel, LayerInfo};
 pub use panels::master_chrome::MasterChromePanel;
 pub use panels::param_card::{
     ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
-    RelightCardConfig, RowMod,
+    RowMod,
 };
 pub use panels::transport::TransportPanel;
 pub use panels::viewport::{
@@ -91,8 +89,7 @@ pub use panels::{
     AudioSetupAction, AudioShapeParam, BandDivider, BrowserAction, ClipAction, DriverConfigAction,
     EditingAction, GraphParamTarget, HitRegion, InspectorTab, LayerAction, MappingAction,
     MarkerAction, ModulationAction, Panel, PanelAction, ParamsAction, ProjectAction, RootAction,
-    ScrubPhase, ScrubValue, SyncSource, TransportAction, TrimKind, UiRelightField,
-    UiRelightHeightFrom, ValueRef,
+    ScrubPhase, ScrubValue, SyncSource, TransportAction, TrimKind, ValueRef,
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use transform2d::Affine2;

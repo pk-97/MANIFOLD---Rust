@@ -918,10 +918,6 @@ impl RowHost {
         self.gesture.is_active()
     }
 
-    pub(crate) fn cancel_drag(&mut self) {
-        self.gesture.cancel();
-    }
-
     /// Reapply an in-flight live value after a structural snapshot rebuild.
     pub(crate) fn restore_live(&self, ctx: RowInteraction<'_>) {
         let Some(payload) = self.gesture.payload() else { return };
@@ -1235,7 +1231,7 @@ impl RowHost {
     /// main rows AND every drawer slider (audio-shape Amount/Attack/Release,
     /// envelope Decay). This is the ROW half of the card's intent
     /// registration; the owning panel's `register_intents` calls it and then
-    /// adds the card-chrome intents (border claim, relight resets, per-param
+    /// adds the card-chrome intents (border claim, per-param
     /// mapping menus) it keeps. Mirrors `SceneCardState::register_intents`.
     pub(crate) fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::slider::BitmapSlider;
@@ -1619,12 +1615,6 @@ impl RowHost {
                     vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(target, section))]
                 })
                 .unwrap_or_default(),
-            RowRole::RelightToggle | RowRole::RelightHeightBtn | RowRole::RelightSlider => {
-                // Never inserted into `row_index` (relight has no `rows` slot) —
-                // the top-of-`handle_click` checks own these. Kept here only for
-                // match exhaustiveness.
-                Vec::new()
-            }
             RowRole::ColourSwatch(_) => rows
                 .get(row)
                 .and_then(|r| r.rgb_members.as_ref())

@@ -4,7 +4,7 @@
 
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLCompareFunction, MTLPixelFormat, MTLPrimitiveType,
-    MTLSamplerAddressMode, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLStorageMode,
+    MTLSamplerAddressMode, MTLSamplerMinMagFilter, MTLSamplerMipFilter,
     MTLTextureType, MTLTextureUsage, MTLTriangleFillMode, MTLVertexFormat,
 };
 
@@ -32,15 +32,6 @@ pub(crate) fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> MTLT
     match dim {
         GpuTextureDimension::D2 => MTLTextureType::Type2D,
         GpuTextureDimension::D3 => MTLTextureType::Type3D,
-    }
-}
-
-pub(crate) fn to_mtl_storage_mode(mode: GpuStorageMode) -> MTLStorageMode {
-    match mode {
-        GpuStorageMode::Private => MTLStorageMode::Private,
-        GpuStorageMode::Shared => MTLStorageMode::Shared,
-        GpuStorageMode::Managed => MTLStorageMode::Managed,
-        GpuStorageMode::Memoryless => MTLStorageMode::Memoryless,
     }
 }
 

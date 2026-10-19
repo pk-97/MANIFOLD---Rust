@@ -57,7 +57,7 @@ pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
 pub use texture_pool::TexturePool;
 pub use types::{
-    GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter, GpuHeap,
+    GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter,
     GpuRenderPipeline, GpuSampler, GpuTexture,
 };
 

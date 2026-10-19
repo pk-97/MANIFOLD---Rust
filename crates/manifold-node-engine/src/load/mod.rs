@@ -1,4 +1,3 @@
-pub mod augmentation;
 pub mod binding_migration;
 pub mod catalog_source;
 manifold_core::testkit_visible! { pub(crate) mod chain_spec; }

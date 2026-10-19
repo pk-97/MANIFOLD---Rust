@@ -841,10 +841,6 @@ impl ClipChromePanel {
         Vec::new()
     }
 
-    pub fn detect_instruments(&self) -> &[DetectInstrumentRow] {
-        &self.cached_instruments
-    }
-
     pub fn bpm_button_rect(&self, tree: &UITree) -> Rect {
         self.host
             .node_id_for_key(KEY_BPM)

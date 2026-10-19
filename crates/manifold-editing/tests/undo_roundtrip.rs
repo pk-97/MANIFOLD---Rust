@@ -41,7 +41,7 @@ fn load_project(name: &str) -> manifold_core::project::Project {
 
 #[test]
 fn move_clip_undo_restores_position() {
-    let mut project = load_project("Burn V5.manifold");
+    let mut project = load_project("Burn V5 1.21.manifold");
 
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
@@ -75,7 +75,7 @@ fn move_clip_undo_restores_position() {
 
 #[test]
 fn trim_clip_undo_restores_duration() {
-    let mut project = load_project("Burn V5.manifold");
+    let mut project = load_project("Burn V5 1.21.manifold");
 
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
     let original_start = project.timeline.layers[0].clips[0].start_beat;
@@ -104,7 +104,7 @@ fn trim_clip_undo_restores_duration() {
 
 #[test]
 fn add_delete_clip_undo_roundtrip() {
-    let mut project = load_project("Burn V5.manifold");
+    let mut project = load_project("Burn V5 1.21.manifold");
 
     let initial_count = project.timeline.total_clip_count();
     let new_clip = TimelineClip::default();
@@ -140,7 +140,7 @@ fn add_delete_clip_undo_roundtrip() {
 
 #[test]
 fn undo_manager_multi_command_roundtrip() {
-    let mut project = load_project("Burn V5.manifold");
+    let mut project = load_project("Burn V5 1.21.manifold");
     let mut undo_mgr = UndoRedoManager::new();
 
     let original_bpm = project.settings.bpm.0;

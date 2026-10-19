@@ -4,7 +4,6 @@
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
-use manifold_core::effects::SegmentShape;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::commands::effect_target::EffectTarget;
@@ -14,7 +13,6 @@ use manifold_ui::InspectorTab;
 use manifold_ui::cursor_nav;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 use manifold_ui::ui_state::UIState;
-use manifold_ui::view::UiSegmentShape;
 
 use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
@@ -1618,32 +1616,6 @@ fn clear_export_range(p: &mut manifold_core::project::Project) {
     p.timeline.export_range_enabled = false;
 }
 
-#[allow(dead_code, unreachable_patterns)]
-fn from_core_segment_shape(shape: SegmentShape) -> UiSegmentShape {
-    match shape {
-        SegmentShape::Linear => UiSegmentShape::Linear,
-        SegmentShape::Hold => UiSegmentShape::Hold,
-        SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
-        SegmentShape::CurvedRange { bend, start, end } => {
-            UiSegmentShape::CurvedRange { bend, start, end }
-        }
-        _ => UiSegmentShape::Linear,
-    }
-}
-
-#[allow(dead_code, unreachable_patterns)]
-fn to_core_segment_shape(shape: UiSegmentShape) -> SegmentShape {
-    match shape {
-        UiSegmentShape::Linear => SegmentShape::Linear,
-        UiSegmentShape::Hold => SegmentShape::Hold,
-        UiSegmentShape::Curved(bend) => SegmentShape::Curved(bend),
-        UiSegmentShape::CurvedRange { bend, start, end } => {
-            SegmentShape::CurvedRange { bend, start, end }
-        }
-        _ => SegmentShape::Linear,
-    }
-}
-
 // ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──
 
 fn resolve_effect_target(
@@ -1919,7 +1891,6 @@ mod automation_clipboard_host_tests {
                     effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                     has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
                     rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-                    relight: Default::default(),
                 }
             }).collect::<Vec<_>>();
             layer.effects = Some(effects);
@@ -1967,7 +1938,7 @@ mod automation_clipboard_host_tests {
                 title: "Card".into(), collapsed: false, enabled: true,
                 effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                 has_graph_mod: false, layer_id: None, modifier: None,
-                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(), relight: Default::default(),
+                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
             }
         }).collect::<Vec<_>>();
         h.ui_root.inspector.configure_master_effects(&surfaces(&h.project.settings.master_effects));
@@ -2017,7 +1988,6 @@ mod automation_clipboard_host_tests {
                 effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                 has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
                 rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-                relight: Default::default(),
             }
         }).collect::<Vec<_>>();
         layer.effects = Some(effects);
@@ -2136,7 +2106,6 @@ mod automation_clipboard_host_tests {
             effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
             has_graph_mod: false, layer_id: None, modifier: None,
             rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-            relight: Default::default(),
         };
         h.project.timeline.find_layer_by_id_mut(&destination_id).unwrap().1.effects = Some(vec![effect]);
         h.active_layer = Some(destination_id.clone());
@@ -2185,7 +2154,7 @@ mod automation_clipboard_host_tests {
             effect_index: 0,
             effect_id: manifold_core::EffectId::new(format!("scene_modifier:{modifier_id}")),
             enabled: true, collapsed: false, supports_envelopes: true, has_graph_mod: false,
-            layer_id: None, relight: Default::default(),
+            layer_id: None,
         };
         h.ui_root.inspector.configure_modifier_cards(std::slice::from_ref(&surface), Some(&layer_id), true, Vec::new());
         assert!(h.ui_root.inspector.select_all_modifiers());
@@ -2231,7 +2200,6 @@ mod automation_clipboard_host_tests {
             effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
             has_graph_mod: false, layer_id: None, modifier: None,
             rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-            relight: Default::default(),
         };
         let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
         let layer_id = layer.layer_id.clone();
@@ -2293,7 +2261,6 @@ mod automation_clipboard_host_tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
-            relight: Default::default(),
         };
         h.ui_root
             .inspector

@@ -100,21 +100,6 @@ impl ShadowSoftness {
             Self::Contact { .. } => -1,
         }
     }
-
-    /// Total tap count = (2N+1)². Useful for the divisor when averaging
-    /// PCF results. `Contact`'s tap count is dynamic (per-fragment PCF
-    /// half-width, plus the fixed 16-tap PCSS blocker search) — 0 here
-    /// since no caller derives a fixed divisor from it.
-    pub fn tap_count(self) -> u32 {
-        match self {
-            Self::Contact { .. } => 0,
-            _ => {
-                let n = self.kernel_half_width() as u32;
-                let k = 2 * n + 1;
-                k * k
-            }
-        }
-    }
 }
 
 /// Light struct flowing through [`PortType::Light`](crate::node_graph::ports::PortType::Light)

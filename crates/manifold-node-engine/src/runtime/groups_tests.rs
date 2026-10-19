@@ -38,8 +38,6 @@ fn failed_fused_splice_reports_canonical_fallback() {
         &canonical,
         &PreparedMeshRules::default(),
         &primitives,
-        None,
-        None,
         Some((EffectId::new("fx"), PresetTypeId::new("Probe"))),
         false,
         &mut errors,

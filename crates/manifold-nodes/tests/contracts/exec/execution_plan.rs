@@ -1,7 +1,7 @@
 mod tests {
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::exec::execution_plan::compile;
-    /// D6(a) follow-up (`docs/DEPTH_RELIGHT_DESIGN.md`): end-to-end proof
+    /// D6(a) follow-up: end-to-end proof
     /// using the REAL registered primitives, now that `node.edge_slope`
     /// (aliased "gradient" — a gradient-producing central-difference atom)
     /// and `node.surface_bumps` have both been converted to `GatherTexel` +

@@ -85,12 +85,6 @@ pub fn fingerprint(project: &Project) -> Fingerprint {
         load_report,
         embedded_presets,
         session,
-        legacy_perc_audio_path,
-        legacy_perc_audio_start_beat,
-        legacy_perc_clip_placements,
-        legacy_perc_energy_envelope,
-        legacy_imported_stem_paths,
-        legacy_perc_audio_hash,
     } = project;
     fp.put(Part::Settings, project_name);
     fp.put(Part::Settings, project_version);
@@ -103,12 +97,6 @@ pub fn fingerprint(project: &Project) -> Fingerprint {
     unowned(load_report);
     fp.put(Part::EmbeddedPresets, embedded_presets);
     fp.put(Part::Session, session);
-    fp.put(Part::Settings, legacy_perc_audio_path);
-    fp.put(Part::Settings, legacy_perc_audio_start_beat);
-    fp.put(Part::Settings, legacy_perc_clip_placements);
-    fp.put(Part::Settings, legacy_perc_energy_envelope);
-    fp.put(Part::Settings, legacy_imported_stem_paths);
-    fp.put(Part::Settings, legacy_perc_audio_hash);
 
     let crate::audio_setup::AudioSetup { device, sends, low_hz, mid_hz, .. } = audio_setup;
     fp.put(Part::AudioSetup, device);
@@ -195,27 +183,7 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         layer_chrome_collapsed,
         clip_chrome_collapsed,
         audio_triggers_collapsed,
-        legacy_bloom_amount,
-        legacy_feedback_amount,
-        legacy_pixel_sort_amount,
-        legacy_kaleidoscope_amount,
-        legacy_kaleidoscope_segments,
-        legacy_edge_stretch_amount,
-        legacy_edge_stretch_source_width,
-        legacy_infinite_zoom_amount,
-        legacy_infinite_zoom_sharpness,
-        legacy_voronoi_prism_amount,
-        legacy_voronoi_prism_cell_count,
-        legacy_quad_mirror_amount,
-        legacy_dither_amount,
-        legacy_dither_algorithm,
-        legacy_strobe_amount,
-        legacy_strobe_rate,
-        legacy_strobe_mode,
-        legacy_master_effect_order,
     } = settings;
-    fp.put(Part::Settings, &(legacy_infinite_zoom_amount, legacy_infinite_zoom_sharpness, legacy_voronoi_prism_amount, legacy_voronoi_prism_cell_count, legacy_quad_mirror_amount));
-    fp.put(Part::Settings, &(legacy_dither_amount, legacy_dither_algorithm, legacy_strobe_amount, legacy_strobe_rate, legacy_strobe_mode, legacy_master_effect_order));
     fp.put(Part::Settings, physics);
     fp.put(Part::Settings, &(output_width, output_height, frame_rate, vsync_enabled, export_hdr, split_at_markers));
     fp.put(Part::Media, &(video_library_paths, video_player_pool_size));
@@ -246,8 +214,6 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
     fp.put(Part::ViewPrefs, &(inspector_width, timeline_height_percent, effect_browser_width, effect_browser_open));
     fp.put(Part::ViewPrefs, &(viewport_scroll_x_beats, viewport_scroll_y_px, viewport_pixels_per_beat));
     fp.put(Part::ViewPrefs, &(macros_collapsed, master_chrome_collapsed, layer_chrome_collapsed, clip_chrome_collapsed, audio_triggers_collapsed));
-    fp.put(Part::Settings, &(legacy_bloom_amount, legacy_feedback_amount, legacy_pixel_sort_amount, legacy_kaleidoscope_amount));
-    fp.put(Part::Settings, &(legacy_kaleidoscope_segments, legacy_edge_stretch_amount, legacy_edge_stretch_source_width));
 }
 
 fn layer_fp(fp: &mut Fp, layer: &Layer) {
@@ -281,20 +247,6 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
         duration_mode,
         source_clip_ids,
         clip_triggers,
-        legacy_generator_type,
-        legacy_gen_param_values,
-        legacy_gen_drivers,
-        legacy_gen_param_version,
-        legacy_gen_anim_speed,
-        legacy_gen_animate_edges,
-        legacy_gen_line_thickness,
-        legacy_gen_proj_distance,
-        legacy_gen_rot_speed_xy,
-        legacy_gen_rot_speed_zw,
-        legacy_gen_rot_speed_xw,
-        legacy_gen_show_vertices,
-        legacy_gen_vertex_size,
-        legacy_gen_window_size,
         clips_sorted,
         clips_by_end_indices,
         clips_by_end_sorted,
@@ -320,10 +272,6 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
         fp.put(Part::Effects, &(enabled, source, one_shot_beats));
         fp.put(Part::Shapes, shape);
     }
-    fp.put(Part::Layers, &(legacy_generator_type, legacy_gen_param_values, legacy_gen_drivers, legacy_gen_param_version));
-    fp.put(Part::Layers, &(legacy_gen_anim_speed, legacy_gen_animate_edges, legacy_gen_line_thickness, legacy_gen_proj_distance));
-    fp.put(Part::Layers, &(legacy_gen_rot_speed_xy, legacy_gen_rot_speed_zw, legacy_gen_rot_speed_xw));
-    fp.put(Part::Layers, &(legacy_gen_show_vertices, legacy_gen_vertex_size, legacy_gen_window_size));
 }
 
 fn mapping_fp(fp: &mut Fp, m: &crate::ableton_mapping::AbletonParamMapping) {
@@ -406,9 +354,6 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     }
     // Materializing bumps the structure version, so it rides with the graph.
     fp.graph.write_u32(inst.graph_structure_version);
-    fp.put(Part::Effects, &(inst.legacy_param0, inst.legacy_param1, inst.legacy_param2, inst.legacy_param3, inst.legacy_param_version));
-    fp.put(Part::Effects, &inst.relight);
-    fp.put(Part::Shapes, &inst.relight_params);
 }
 
 /// The part of a fire action that decides which drawer rows exist and which

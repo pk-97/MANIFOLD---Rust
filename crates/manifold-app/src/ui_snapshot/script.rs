@@ -3256,7 +3256,6 @@ fn flow_value_ref(
         F::AudioModShape { effect, param, shape } => (ValueRef::AudioModShape(target(effect), pid(param), *shape), false),
         F::AudioTriggerShape { layer: l, index, shape } => (ValueRef::AudioTriggerShape(layer(*l)?, *index, *shape), false),
         F::LayerAudioGain { layer: l } => (ValueRef::LayerAudioGain(layer(*l)?), false),
-        F::Relight { effect, field } => (ValueRef::RelightParam(target(effect), *field), false),
         F::AudioSendGain { send } => {
             let id = data.project.audio_setup.sends.get(*send).map(|s| s.id.clone())
                 .ok_or_else(|| format!("scrub address names send {send}; the fixture has {}", data.project.audio_setup.sends.len()))?;

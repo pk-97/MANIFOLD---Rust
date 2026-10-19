@@ -71,7 +71,7 @@ enough to fit in one screen of solver.
 ### Intent at build
 
 A view carries its gesture intents directly (`on_click`, `on_right_click`,
-`on_double_click`, `claims_area`). After layout assigns node ids, the host
+`claims_area`). After layout assigns node ids, the host
 populates the `IntentRegistry` from the laid tree — so `register_intents`
 becomes a one-line delegation, and a panel can no longer attach an intent to the
 wrong id. Drag / scroll / hover stay in the stateful `handle_event` path

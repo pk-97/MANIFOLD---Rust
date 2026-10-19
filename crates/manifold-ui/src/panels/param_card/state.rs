@@ -54,110 +54,6 @@ pub struct ParamCardStringInfo {
     pub display_value: Option<String>,
 }
 
-/// Config for the "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
-/// P5b) — the union `ParamSurface` carries for both effect and generator
-/// cards. Always present (mirrors `PresetInstance.relight`/`relight_params`
-/// always being live on the instance): the card renders the six knobs +
-/// Height From row greyed rather than hidden when `enabled` is false
-/// (no-conditionally-visible-ui), so the values must survive a
-/// toggle-off/toggle-on round trip.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RelightCardConfig {
-    pub enabled: bool,
-    pub light_x: f32,
-    pub light_y: f32,
-    pub relief: f32,
-    pub ao_intensity: f32,
-    pub shadow_softness: f32,
-    pub gain: f32,
-    pub height_from: UiRelightHeightFrom,
-}
-
-/// One D3 knob's static shape — label + clamp range + reset default. The
-/// SINGLE source both `build_relight_rows` (rendering) and the drag hit-test
-/// in `handle_pointer_down` read, so the two can't drift out of range.
-pub(crate) struct RelightFieldSpec {
-    pub(crate) field: UiRelightField,
-    pub(crate) label: &'static str,
-    pub(crate) min: f32,
-    pub(crate) max: f32,
-    pub(crate) default: f32,
-}
-
-/// D3's proven ranges, in `RelightField` declaration order — mirror the
-/// underlying atoms' own `ParamDef` ranges (`lambert_directional`/
-/// `heightfield_shadow`'s light_x/y, `ssao_gtao`'s relief/intensity,
-/// `heightfield_shadow`'s softness, `node.gain`'s gain). `ui` cannot read the
-/// registry directly (`RelightCardConfig`'s doc), so these are pinned here.
-pub(crate) const RELIGHT_FIELD_SPECS: [RelightFieldSpec; 6] = [
-    RelightFieldSpec { field: UiRelightField::LightX, label: "Light X", min: -1.0, max: 1.0, default: 0.4 },
-    RelightFieldSpec { field: UiRelightField::LightY, label: "Light Y", min: -1.0, max: 1.0, default: 0.6 },
-    RelightFieldSpec { field: UiRelightField::Relief, label: "Relief", min: 0.01, max: 2.0, default: 0.25 },
-    RelightFieldSpec {
-        field: UiRelightField::AoIntensity,
-        label: "AO Intensity",
-        min: 0.0,
-        max: 4.0,
-        default: 1.3,
-    },
-    RelightFieldSpec {
-        field: UiRelightField::ShadowSoftness,
-        label: "Shadow Softness",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-    },
-    RelightFieldSpec { field: UiRelightField::Gain, label: "Gain", min: 0.0, max: 4.0, default: 1.4 },
-];
-
-impl RelightCardConfig {
-    /// Read one knob's current value by field — the single accessor the
-    /// row-drag path uses so it never has to match on `RelightField` itself.
-    pub(crate) fn value(&self, field: UiRelightField) -> f32 {
-        match field {
-            UiRelightField::LightX => self.light_x,
-            UiRelightField::LightY => self.light_y,
-            UiRelightField::Relief => self.relief,
-            UiRelightField::AoIntensity => self.ao_intensity,
-            UiRelightField::ShadowSoftness => self.shadow_softness,
-            UiRelightField::Gain => self.gain,
-        }
-    }
-
-    /// Live-preview write for a mid-drag update (never committed here — the
-    /// app layer owns the undo-tracked commit on release, mirroring every
-    /// other slider row).
-    pub(crate) fn set_value(&mut self, field: UiRelightField, value: f32) {
-        match field {
-            UiRelightField::LightX => self.light_x = value,
-            UiRelightField::LightY => self.light_y = value,
-            UiRelightField::Relief => self.relief = value,
-            UiRelightField::AoIntensity => self.ao_intensity = value,
-            UiRelightField::ShadowSoftness => self.shadow_softness = value,
-            UiRelightField::Gain => self.gain = value,
-        }
-    }
-}
-
-impl Default for RelightCardConfig {
-    /// D3's proven v6 recipe defaults — mirrors
-    /// `manifold_core::effects::RelightParams::default()` field-for-field.
-    /// `ui` cannot depend on `manifold-core`; kept in sync by
-    /// `preset_to_config`'s (manifold-app) doc comment pointing back here.
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            light_x: 0.4,
-            light_y: 0.6,
-            relief: 0.25,
-            ao_intensity: 1.3,
-            shadow_softness: 0.5,
-            gain: 1.4,
-            height_from: UiRelightHeightFrom::Auto,
-        }
-    }
-}
-
 /// One param row's driver/envelope/automation modulation facts — carried as
 /// `ParamRow::modulation`. Collapses the former fourteen parallel per-param
 /// vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per row.
@@ -385,31 +281,6 @@ impl ParamCardPanel {
             && !self.collapse_anim.is_animating()
     }
 
-    /// P2 "value snap-back" (D15): meant to be called by the app-side dispatch
-    /// the instant the RIGHT-CLICK reset-to-default gesture commits — the
-    /// model has ALREADY snapped to `to` (raw param value) by the time this
-    /// runs; this only retargets the row's `value_snapback` `AnimF32`
-    /// (Curve::Snap) so the slider FILL eases from `from` to `to` instead of
-    /// jumping — the data is never delayed behind this. BUG-061 folded the
-    /// param right-click reset into the generic `SliderReset` trio (plain
-    /// `ParamChanged`, no easing) — no production call site remains; kept
-    /// for its own unit tests below. A no-op if `param_id` isn't one of this
-    /// card's rows (stale/mismatched target).
-    pub fn begin_value_snapback(&mut self, param_id: &manifold_foundation::ParamId, from: f32, to: f32) {
-        let Some(pi) = self.rows.iter().position(|p| &p.id == param_id) else {
-            return;
-        };
-        let Some(info) = self.rows.get(pi) else {
-            return;
-        };
-        let from_norm = BitmapSlider::value_to_normalized(from, info.spec.min, info.spec.max);
-        let to_norm = BitmapSlider::value_to_normalized(to, info.spec.min, info.spec.max);
-        if let Some(anim) = self.value_snapback.get_mut(pi) {
-            anim.snap(from_norm);
-            anim.set_target(to_norm);
-        }
-    }
-
     /// Whether this card holds `param` routed from a clip trigger on `target`.
     pub fn routes_clip_trigger(&self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
         self.rows.iter().any(|row| row.id == *param
@@ -471,7 +342,7 @@ impl ParamCardPanel {
     }
 
     /// Force every per-card tween (drawer height, tab-ink slide, collapse,
-    /// spawn pop, delete fade, value flash, value snap-back) to its settled
+    /// spawn pop, delete fade, value flash) to its settled
     /// end state in one call (BUG-073 fix shape (b)): a headless `--script`
     /// driver has no per-frame timer, so a tween armed mid-script — e.g. a
     /// newly-armed drawer growing a card's row count — would otherwise never
@@ -487,8 +358,7 @@ impl ParamCardPanel {
             || self.delete_fade.as_ref().is_some_and(|f| f.progress().is_some())
             || self.drawer_height_anim.iter().any(|a| a.is_animating())
             || self.mod_tab_ink.iter().any(|a| a.is_animating())
-            || self.value_flash.iter().any(|f| f.progress().is_some())
-            || self.value_snapback.iter().any(|a| a.is_animating());
+            || self.value_flash.iter().any(|f| f.progress().is_some());
         if was_animating {
             const HUGE_DT_MS: f32 = 1.0e9;
             self.tick_drawers(HUGE_DT_MS);
@@ -520,7 +390,7 @@ impl ParamCardPanel {
         any
     }
 
-    /// P2 value-change flash + value snap-back: advance every param's
+    /// P2 value-change flash: advance every param's
     /// one-shot `Transient` and paint the value-text color accordingly — an
     /// accent while `progress()` is `Some`, reverted to the normal slider
     /// text color the instant it finishes. A plain style write to an
@@ -528,14 +398,6 @@ impl ParamCardPanel {
     /// never needs the app's forced-rebuild poll; it just needs to run every
     /// frame, which it already does from the same
     /// `InspectorCompositePanel::update()` call site.
-    ///
-    /// Also drives P2 "value snap-back" (D15, `value_snapback`/
-    /// `begin_value_snapback`): `sync_values`'s dirty-check only calls
-    /// `BitmapSlider::update_value` the ONE frame the model value actually
-    /// changes, so a settling fill needs its own per-frame repaint here for
-    /// every frame after that — `tick`ing `value_snapback[i]` and
-    /// re-positioning just the fill/thumb (never the text, which is already
-    /// correct — the data snapped instantly) at the eased normalized value.
     pub fn tick_value_flash(&mut self, tree: &mut UITree, dt_ms: f32) -> bool {
         let mut any = false;
         for (i, flash) in self.value_flash.iter_mut().enumerate() {
@@ -561,23 +423,6 @@ impl ParamCardPanel {
                 color::SLIDER_TEXT_C32
             };
             tree.set_style(ids.value_text, style);
-        }
-        for (i, anim) in self.value_snapback.iter_mut().enumerate() {
-            if !anim.is_animating() {
-                continue;
-            }
-            any |= anim.tick(dt_ms);
-            let Some(ref ids) = self.row_host.slider_ids[i] else {
-                continue;
-            };
-            // Re-derive the (already-settled) value text rather than touch
-            // it — only the fill/thumb position eases; `update_value` writes
-            // all three, so pass the unchanged text back through unmodified.
-            let Some(text) = tree.get_node(ids.value_text).map(|n| n.text.clone().unwrap_or_default())
-            else {
-                continue;
-            };
-            BitmapSlider::update_value(tree, ids, anim.value(), &text);
         }
         any
     }

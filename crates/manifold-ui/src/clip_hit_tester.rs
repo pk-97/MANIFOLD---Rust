@@ -139,53 +139,6 @@ impl ClipHitTester {
 
         None
     }
-
-    /// Collect all clip IDs that overlap the given beat/layer rectangle.
-    /// Used for box/region selection.
-    ///
-    /// Port of Unity ClipHitTester.BoxSelect (lines 105-129).
-    ///
-    /// `min_beat`/`max_beat`: horizontal extent in beats.
-    /// `min_layer`/`max_layer`: vertical extent in layer indices.
-    /// `clips_for_layer`: returns the clips for a given layer index.
-    /// `layer_count`: total number of layers.
-    /// `is_group_layer`: closure returning true for group layers.
-    pub fn box_select<'a>(
-        min_beat: f32,
-        max_beat: f32,
-        min_layer: usize,
-        max_layer: usize,
-        clips_for_layer: impl Fn(usize) -> &'a [ViewportClip],
-        layer_count: usize,
-        is_group_layer: impl Fn(usize) -> bool,
-    ) -> Vec<ClipId> {
-        let mut results = Vec::new();
-
-        // Unity lines 111-113: clamp layer bounds
-        let lo = min_layer;
-        let hi = if max_layer < layer_count {
-            max_layer
-        } else {
-            layer_count - 1
-        };
-
-        // Unity lines 115-128: iterate per-layer clips within layer range
-        for layer_idx in lo..=hi {
-            if is_group_layer(layer_idx) {
-                continue;
-            }
-            for clip in clips_for_layer(layer_idx) {
-                let clip_start_f32 = clip.start_beat.as_f32();
-                let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-                // Interval overlap with the selection's beat span.
-                if Span::new(clip_start_f32, clip_end).overlaps(Span::new(min_beat, max_beat)) {
-                    results.push(clip.clip_id.clone());
-                }
-            }
-        }
-
-        results
-    }
 }
 
 /// Pixel gap from `clips[self_idx]` to its nearest left/right neighbor in the
@@ -555,49 +508,6 @@ mod tests {
             no_groups,
         );
         assert_eq!(result.unwrap().clip_id, "last");
-    }
-
-    #[test]
-    fn box_select_collects_overlapping() {
-        let clips = vec![
-            make_clip("c1", 0, 0.0, 2.0), // beats 0-2
-            make_clip("c2", 0, 3.0, 2.0), // beats 3-5
-            make_clip("c3", 1, 1.0, 3.0), // beats 1-4, layer 1
-            make_clip("c4", 2, 0.0, 1.0), // beats 0-1, layer 2 (outside)
-        ];
-        let by_layer = bucket(&clips, 3);
-        // Region: beats 1-4, layers 0-1
-        let result = ClipHitTester::box_select(
-            1.0,
-            4.0,
-            0,
-            1,
-            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
-            3,
-            no_groups,
-        );
-        assert!(result.contains(&ClipId::new("c1"))); // 0-2 overlaps 1-4
-        assert!(result.contains(&ClipId::new("c2"))); // 3-5 overlaps 1-4
-        assert!(result.contains(&ClipId::new("c3"))); // 1-4 overlaps 1-4
-        assert!(!result.contains(&ClipId::new("c4"))); // layer 2 outside
-    }
-
-    #[test]
-    fn box_select_skips_groups() {
-        let clips = vec![make_clip("c1", 0, 0.0, 4.0), make_clip("c2", 1, 0.0, 4.0)];
-        let by_layer = bucket(&clips, 2);
-        // Layer 0 is a group
-        let result = ClipHitTester::box_select(
-            0.0,
-            4.0,
-            0,
-            1,
-            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
-            2,
-            |i| i == 0,
-        );
-        assert!(!result.contains(&ClipId::new("c1"))); // group layer skipped
-        assert!(result.contains(&ClipId::new("c2"))); // non-group collected
     }
 
     // ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────

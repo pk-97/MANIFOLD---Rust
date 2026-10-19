@@ -76,6 +76,8 @@ pub struct MidiInputController {
     // ── Serialized config (matches Unity [SerializeField] fields) ──
     midi_channel: i32,
     show_debug_logs: bool,
+    /// True while the current MIDI backlog episode has already been logged.
+    backlog_warned: bool,
     /// When CLK is the active clock authority, track native path for telemetry.
     /// Port of Unity: useNativeClockNoteEvents field.
     use_native_clock_note_events: bool,
@@ -119,6 +121,7 @@ impl MidiInputController {
         Self {
             midi_channel: -1,
             show_debug_logs: false,
+            backlog_warned: false,
             use_native_clock_note_events: true,
             midi_config: None,
             registered_devices: Vec::new(),
@@ -386,15 +389,15 @@ impl MidiInputController {
         // In the midir path we have no drop counter from a native plugin,
         // so we leave native_clock_dropped_events = 0 when not on native CLK path.
 
-        if self.show_debug_logs
-            && processed == MAX_NATIVE_CLOCK_EVENTS_PER_FRAME
-            && self.native_clock_pending_events > 0
-        {
+        // The per-frame cap was hit, so more events may still be queued. Warn
+        // once per backlog episode, not every frame it lasts.
+        let backlogged = processed >= MAX_NATIVE_CLOCK_EVENTS_PER_FRAME;
+        if backlogged && !self.backlog_warned {
             log::warn!(
-                "[MidiInputController] MIDI note backlog: {} event(s) still queued.",
-                self.native_clock_pending_events
+                "[MidiInputController] MIDI note backlog: {processed} event(s) hit the per-frame cap; more may be queued."
             );
         }
+        self.backlog_warned = backlogged;
     }
 
     // ── Device management ────────────────────────────────────────────

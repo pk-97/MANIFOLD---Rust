@@ -15,7 +15,7 @@ use manifold_nodes as _;
 
 use manifold_node_engine::freeze::region::census::{FixtureCorpus, build_census_report};
 
-const FIXTURE: &str = "Liveschool Live Show V6 LEDS.manifold";
+const FIXTURE: &str = "Liveschool Live Show V6 LEDS 1.21.manifold";
 
 /// The fixtures are gitignored, so a worktree checkout lacks them; resolve
 /// through `--git-common-dir` to the main checkout first.

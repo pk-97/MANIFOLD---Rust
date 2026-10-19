@@ -646,13 +646,6 @@ impl ProjectIOService {
         }
     }
 
-    /// Unity ProjectIOService.LastOpenedProjectPath (line 49).
-    // Ported service method; its Application wrapper isn't wired yet.
-    #[allow(dead_code)]
-    pub fn last_opened_project_path(&self) -> Option<&str> {
-        self.last_opened_project_path.as_deref()
-    }
-
     /// Recent project paths, most-recent first, filtered to those that still
     /// exist on disk. Drives the File → Open Recent submenu.
     pub fn recent_projects(&self) -> Vec<PathBuf> {
@@ -1151,17 +1144,6 @@ impl ProjectIOService {
             ProjectIOAction::default()
         }
     }
-
-    /// Process a project file drop (routes through shared open_project_from_path).
-    // Ported drop handler; its Application wrapper isn't wired yet.
-    #[allow(dead_code)]
-    pub fn process_dropped_project_file(
-        &mut self,
-        path: &Path,
-        user_prefs: &mut UserPrefs,
-    ) -> ProjectIOAction {
-        self.open_project_from_path(path, user_prefs)
-    }
 }
 
 /// Move `path` to the front of a most-recent-first list: removes any existing
@@ -1602,7 +1584,7 @@ mod tests {
     #[test]
     fn liveschool_snapshot_on_save_size_delta_stays_bounded() {
         let mut fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS.manifold");
+        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS 1.21.manifold");
         if !fixture.exists() {
             return;
         }
@@ -1660,7 +1642,7 @@ mod tests {
         use manifold_playback::osc_param_router::OscParamRouter;
         use manifold_playback::osc_receiver::OscReceiver;
         let mut fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS.manifold");
+        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS 1.21.manifold");
         if !fixture.exists() {
             return;
         }

@@ -275,8 +275,7 @@ impl AbletonPickerPopup {
         let pw = POPUP_W;
         let ph = self.popup_h;
 
-        // Scrim + modal container via the shared shell (section 17 lifts it with a
-        // soft shadow). All content is parented to the container, which clips
+        // Scrim + modal container via the shared shell. All content is parented to the container, which clips
         // children by construction — a list taller than the popup can neither
         // paint nor take clicks outside it.
         let shell = popup_shell::build(

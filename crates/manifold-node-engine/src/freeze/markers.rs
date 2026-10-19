@@ -95,8 +95,8 @@ pub enum Marker {
     /// actually read it (`coincident` / `coincident_texel` / `gather` /
     /// `gather_texel`). Without it `node.wgsl_compute` reports the default
     /// (filtering) access and the executor's mixed-consumer rule wrongly
-    /// vetoes fp32 promotion of a shared upstream intermediate (P7/D8: the
-    /// relight height field read fp16 by the fused kernel while GTAO asked
+    /// vetoes fp32 promotion of a shared upstream intermediate (a
+    /// height field read fp16 by the fused kernel while GTAO asked
     /// for fp32).
     InputAccess { port: String, token: String },
     /// `// @precision_critical: <port>` — fused texture codegen (install), one

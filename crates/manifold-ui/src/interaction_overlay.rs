@@ -28,8 +28,8 @@ use crate::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 // ── Constants ───────────────────────────────────────────────────
 // Unity InteractionOverlay lines 78-79.
 
-// Note: SNAP_THRESHOLD_PX and MAX_SNAP_BEATS live on TimelineViewportPanel
-// (viewport.rs magnetic_snap). These overlay constants will be needed when
+// Note: SNAP_THRESHOLD_PX lives in `snap.rs`; the live snap is
+// `TimelineViewportPanel::magnetic_snap` (viewport/coordinate.rs). These overlay constants will be needed when
 // overlay-level snapping is ported (Unity InteractionOverlay lines 78-79).
 
 // ── Shift+Click region selection ─────────────────────────────────
@@ -717,16 +717,6 @@ struct TrimDrag {
     clip_id: ClipId,
     original_start_beat: Beats,
     original_duration_beats: Beats,
-    // Doc-committed shape (UI_WIDGET_UNIFICATION_DESIGN.md P7.4) — mirrors
-    // `original_start_beat`/`original_duration_beats`'s role for the grabbed
-    // clip, but no current handler consults it (the per-clip fan-over reads
-    // `TrimOriginal::in_point` on `originals` instead). Was equally unread
-    // as the pre-fold loose field it replaces — carried forward for shape
-    // parity, not new dead weight. Un-suppression trigger: wire it into a
-    // grabbed-clip-specific in_point read, or delete in a follow-up hygiene
-    // pass if P7.5+ never needs it.
-    #[allow(dead_code)]
-    original_in_point: Seconds,
     originals: Vec<TrimOriginal>,
 }
 
@@ -837,9 +827,7 @@ pub struct InteractionOverlay {
     // — is correct, not an approximation.
     /// Grab lift (D17): targets 1.0 while `drag_mode == Move`, 0.0
     /// otherwise. The render loop reads [`Self::lift_amount`] for a 1-2px
-    /// rise on every dragged clip (the shadow itself is unconditional on
-    /// `selected` already — see `clip_draw::emit_clip_shadows` — so lift
-    /// only adds the rise + lets the caller boost that shadow's opacity).
+    /// rise on every dragged clip.
     lift_anim: AnimF32,
     /// Duplicate-drag ghost (D17): targets 0.5 while alt-dragging
     /// (`drag_mode == Move && duplicate_on_release`), 1.0 otherwise — eases
@@ -1323,7 +1311,6 @@ impl InteractionOverlay {
             clip_id,
             original_start_beat: clip.start_beat,
             original_duration_beats: clip.duration_beats,
-            original_in_point: clip.in_point,
             originals,
         }
     }
@@ -2793,13 +2780,6 @@ impl InteractionOverlay {
                 host.set_cursor(TimelineCursor::Default);
             }
         }
-    }
-
-    /// Port of Unity InteractionOverlay.OnPointerExit (lines 259-272).
-    pub fn on_pointer_exit(&mut self, host: &mut dyn TimelineEditingHost, ui_state: &mut UIState) {
-        let had_hover = ui_state.hovered_clip_id.take().is_some();
-        if ui_state.automation_feedback.take().is_some() || had_hover { host.redraw(); }
-        host.set_cursor(TimelineCursor::Default);
     }
 
     // ────────────────────────────────────────────────────────────

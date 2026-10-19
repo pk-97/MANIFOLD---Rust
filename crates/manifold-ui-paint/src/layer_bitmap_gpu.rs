@@ -395,13 +395,6 @@ impl LayerBitmapGpu {
 
         encoder.end_render_pass();
     }
-
-    /// Remove textures for layers that no longer exist.
-    pub fn trim_to_layer_count(&mut self, count: usize) {
-        if self.textures.len() > count {
-            self.textures.truncate(count);
-        }
-    }
 }
 
 #[cfg(test)]

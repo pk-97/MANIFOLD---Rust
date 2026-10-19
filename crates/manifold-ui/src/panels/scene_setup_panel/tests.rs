@@ -31,13 +31,6 @@
         (mrow(rx), mrow(ry), mrow(rz))
     }
 
-    /// C-P1c: wrap a plain `EnumRowValue`-shaped `(RowValue, labels)` pair in
-    /// an idle `ModulatedEnumRow` — the shape `LightKnownRow`'s Mode/Cast
-    /// Shadows/Shadow Softness now carry.
-    fn menum(row: RowValue, labels: Vec<&'static str>) -> ModulatedEnumRow {
-        ModulatedEnumRow { row: mrow(row), labels }
-    }
-
     /// Rebuild a fixture's tree items from its rows, in `scene_items` order
     /// (Camera, Known lights, Known objects, forces, physics, World), keeping
     /// the ids and kinds of items that already exist.
@@ -232,40 +225,12 @@
                     index: 0,
                     node_doc_id: 60,
                     name: "Sun".to_string(),
-                    mode: menum(
-                        RowValue { addr: RowAddr::root(60, "mode"), value: 0.0, min: 0.0, max: 1.0, driven: false, exposed: false },
-                        vec!["Sun", "Point"],
-                    ),
-                    color: mtriplet(60, 1.0, 1.0, 1.0, 0.0, 1.0),
-                    intensity: mrow(RowValue { addr: RowAddr::root(60, "intensity"), value: 2.5, min: 0.0, max: 10.0, driven: false, exposed: false }),
-                    pos: mtriplet(60, 5.0, 2.0, 3.0, -100.0, 100.0),
-                    aim: mtriplet(60, 0.0, 0.0, 0.0, -100.0, 100.0),
-                    cast_shadows: menum(
-                        RowValue { addr: RowAddr::root(60, "cast_shadows"), value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
-                        vec!["Off", "On"],
-                    ),
-                    shadow_softness: menum(
-                        RowValue { addr: RowAddr::root(60, "shadow_softness"), value: 3.0, min: 0.0, max: 3.0, driven: false, exposed: false },
-                        vec!["Hard", "Soft", "VerySoft", "Contact"],
-                    ),
-                    light_size: mrow(RowValue { addr: RowAddr::root(60, "light_size"), value: 4.0, min: 0.0, max: 20.0, driven: false, exposed: false }),
                 })),
                 LightRowVm::Custom { index: 1 },
             ],
             forces: Vec::new(),
             force_picker: Vec::new(),
-            camera: CameraRowVm::Orbit(Box::new(OrbitCameraRowVm {
-                orbit: mrow(RowValue { addr: RowAddr::root(70, "orbit"), value: 0.7, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
-                tilt: mrow(RowValue { addr: RowAddr::root(70, "tilt"), value: 0.3, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
-                distance: mrow(RowValue { addr: RowAddr::root(70, "distance"), value: 4.0, min: 0.01, max: 100.0, driven: false, exposed: false }),
-                fov_y: mrow(RowValue { addr: RowAddr::root(70, "fov_y"), value: 0.9, min: 0.05, max: 2.5, driven: false, exposed: false }),
-                lens: Some(LensRowVm {
-                    focus_distance: mrow(RowValue { addr: RowAddr::root(71, "focus_distance"), value: 0.0, min: 0.0, max: 1000.0, driven: false, exposed: false }),
-                    f_stop: mrow(RowValue { addr: RowAddr::root(71, "f_stop"), value: 1000.0, min: 0.5, max: 1000.0, driven: false, exposed: false }),
-                    shutter_angle: mrow(RowValue { addr: RowAddr::root(71, "shutter_angle"), value: 0.0, min: 0.0, max: 360.0, driven: false, exposed: false }),
-                    exposure_ev: mrow(RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false, exposed: false }),
-                }),
-            })),
+            camera: CameraRowVm::Orbit,
             camera_setup_needed: false,
             items: Vec::new(),
             scene_bounds: None,
@@ -1001,7 +966,6 @@
             string_params: Vec::new(),
             modifier: None,
             audio_sends: Vec::new(),
-            relight: crate::panels::param_card::RelightCardConfig::default(),
         };
         (vm, surface)
     }

@@ -6,12 +6,8 @@ use super::super::test_support::*;
 // ── PresetInstance `params` wire format (V1.4, PARAM_STORAGE_DESIGN.md section 4) ──
 //
 // The typed (de)serialize understands ONLY the id-keyed `params` map —
-// the four historical `paramValues` shapes (positional/keyed × bare-f32/
-// {value,exposed}) are deleted, not reimplemented here (D4); their
-// conversion tests now live in `manifold-io`'s
-// `migrations::param_storage_v14`, which runs before typed deserialize
-// ever sees the JSON. These tests cover what's left on this side: the
-// V1.4 shape itself, `base` folding, and unregistered-type degradation.
+// files below the 1.11.0 floor, which carried the older `paramValues`
+// shapes, are refused by the loader. These tests cover the V1.4 shape itself, `base` folding, and unregistered-type degradation.
 //
 // "TestCreateDefaultUntouched" (registered below, single param
 // "amount", default 0.42) and "TestTwoParamRoundTrip" (registered
@@ -106,13 +102,6 @@ fn effect_instance_serialize_omits_params_without_registry() {
         graph: None,
         graph_version: 0,
         graph_structure_version: 0,
-        legacy_param0: None,
-        legacy_param1: None,
-        legacy_param2: None,
-        legacy_param3: None,
-        legacy_param_version: None,
-        relight: false,
-        relight_params: RelightParams::default(),
         folded_sections: Vec::new(),
         unfolded_sections: Vec::new(),
     };
@@ -146,13 +135,6 @@ fn effect_instance_serialize_round_trips_hidden_and_visible_params() {
         graph: None,
         graph_version: 0,
         graph_structure_version: 0,
-        legacy_param0: None,
-        legacy_param1: None,
-        legacy_param2: None,
-        legacy_param3: None,
-        legacy_param_version: None,
-        relight: false,
-        relight_params: RelightParams::default(),
         folded_sections: Vec::new(),
         unfolded_sections: Vec::new(),
     };
@@ -302,71 +284,6 @@ fn trigger_source_survives_graph_manifest_refresh() {
     loaded.reconcile_manifest();
     assert!(!loaded.template_unresolved());
     assert_eq!(loaded.params.get("force").unwrap().clip_trigger_source, param.clip_trigger_source);
-}
-
-/// `docs/DEPTH_RELIGHT_DESIGN.md` P5: a pre-P5 project file — no
-/// `relight`/`relightParams` keys at all — must load with the toggle off
-/// and every knob at its proven-recipe default (D2's "every existing
-/// project loads unchanged" contract), and a freshly-constructed instance
-/// must serialize with NEITHER key present (byte-identical old projects).
-#[test]
-fn relight_defaults_false_and_omits_from_wire_when_untouched() {
-    let fx = PresetInstance::new(PresetTypeId::from_string("Mirror".to_string()));
-    assert!(!fx.relight, "relight must default to false");
-    assert_eq!(
-        fx.relight_params,
-        RelightParams::default(),
-        "relight_params must default to the D3 proven recipe"
-    );
-    let json = serde_json::to_string(&fx).unwrap();
-    assert!(!json.contains("\"relight\""), "untouched instance must not emit `relight`: {json}");
-    assert!(
-        !json.contains("relightParams"),
-        "untouched instance must not emit `relightParams`: {json}"
-    );
-
-    // A pre-P5 project's raw JSON (no relight keys at all) still loads —
-    // the field-less shape is exactly what an old saved project looks
-    // like on disk.
-    let legacy_json = r#"{"id":"abc12345","effectType":"Mirror","enabled":true,"collapsed":false,"params":{}}"#;
-    let back: PresetInstance = serde_json::from_str(legacy_json).unwrap();
-    assert!(!back.relight);
-    assert_eq!(back.relight_params, RelightParams::default());
-
-    // Toggling on + editing a knob DOES round-trip.
-    let mut on = fx;
-    on.relight = true;
-    on.relight_params.relief = 0.8;
-    let json_on = serde_json::to_string(&on).unwrap();
-    assert!(json_on.contains("\"relight\":true"));
-    assert!(json_on.contains("relightParams"));
-    let back_on: PresetInstance = serde_json::from_str(&json_on).unwrap();
-    assert!(back_on.relight);
-    assert_eq!(back_on.relight_params.relief, 0.8);
-}
-
-#[test]
-fn effect_instance_legacy_param0_through_param3_round_trip() {
-    // V1.0 had flat param0..param3 fields alongside the param wire.
-    // The custom Deserialize must continue to capture them so the
-    // existing align_to_definition migration sees both shapes.
-    let json = r#"{
-        "effectType": "TestCreateDefaultUntouched",
-        "enabled": true,
-        "collapsed": false,
-        "params": {},
-        "param0": 0.5,
-        "param1": 1.0
-    }"#;
-    let fx: PresetInstance = serde_json::from_str(json).unwrap();
-    assert_eq!(fx.legacy_param0, Some(0.5));
-    assert_eq!(fx.legacy_param1, Some(1.0));
-    assert_eq!(fx.legacy_param2, None);
-    assert_eq!(fx.legacy_param3, None);
-    // Round-trip preserves them.
-    let json = serde_json::to_string(&fx).unwrap();
-    assert!(json.contains("\"param0\":0.5"));
-    assert!(json.contains("\"param1\":1.0"));
 }
 
 #[test]

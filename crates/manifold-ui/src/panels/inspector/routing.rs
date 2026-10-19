@@ -331,10 +331,6 @@ impl InspectorCompositePanel {
         set.len()
     }
 
-    pub fn selected_modifier_count(&self) -> usize {
-        self.selected_modifier_ids.len()
-    }
-
     pub fn has_modifier_selection(&self) -> bool {
         !self.selected_modifier_ids.is_empty()
     }

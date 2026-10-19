@@ -1159,11 +1159,6 @@ impl TimelineViewportPanel {
         self.rebuild_automation_lane_screens();
     }
 
-    pub fn set_zoom_index(&mut self, index: usize) {
-        self.mapper.set_zoom_by_index(index);
-        self.rebuild_automation_lane_screens();
-    }
-
     /// New ppb after stepping `delta` discrete zoom levels from the nearest current
     /// level (the +/- buttons / keyboard). See [`CoordinateMapper::zoom_level_stepped`].
     pub fn zoom_level_stepped(&self, delta: i32) -> f32 {
@@ -1414,10 +1409,6 @@ impl TimelineViewportPanel {
         self.selection_region = region;
     }
 
-    pub fn set_selected_clip_ids(&mut self, ids: Vec<ClipId>) {
-        self.selected_clip_ids = ids;
-    }
-
     /// Update selection sets only when selection_version has changed.
     /// Avoids per-frame Vec allocation when selection is stable.
     pub fn sync_selection(
@@ -1431,10 +1422,6 @@ impl TimelineViewportPanel {
             self.selected_clip_ids = clip_ids();
             self.selected_marker_ids = marker_ids();
         }
-    }
-
-    pub fn set_hovered_clip_id(&mut self, id: Option<ClipId>) {
-        self.hovered_clip_id = id;
     }
 
     /// Set the focused layer's track index — its lane lifts one ramp step (section 19
@@ -1490,13 +1477,6 @@ impl TimelineViewportPanel {
             return true;
         }
         false
-    }
-
-    /// Marker positions and colors for bitmap rendering (beat, color with line alpha).
-    /// Cached — rebuilt when markers change via set_markers(). Returns owned Vec
-    /// (from cache) so the caller can use it without borrowing the viewport.
-    pub fn marker_line_data(&self) -> Vec<(f32, Color32)> {
-        self.marker_line_cache.clone()
     }
 
     pub fn set_selected_marker_ids(&mut self, ids: Vec<MarkerId>) {

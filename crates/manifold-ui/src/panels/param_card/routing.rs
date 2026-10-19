@@ -7,24 +7,6 @@ impl ParamCardPanel {
     pub fn handle_click(&mut self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
         let id = node_id;
 
-        // "3D Shading" header toggle + D4 Height From row — card-level chrome,
-        // not row-indexed: relight has no `self.rows` slot to key against
-        // (RowRole::RelightToggle/RelightHeightBtn/RelightSlider stay outside
-        // `row_index`; see the P2 landing report).
-        if self.relight_btn_id == Some(id) {
-            return vec![PanelAction::Params(ParamsAction::RelightToggle(self.param_target()))];
-        }
-        for (i, btn) in self.relight_height_btn_ids.iter().enumerate() {
-            if *btn == Some(id) {
-                let opt = [
-                    UiRelightHeightFrom::Auto,
-                    UiRelightHeightFrom::Luminance,
-                    UiRelightHeightFrom::InvertedLuminance,
-                ][i];
-                return vec![PanelAction::Params(ParamsAction::RelightHeightFromChanged(self.param_target(), opt))];
-            }
-        }
-
         // Card-level chrome — per-card, not per-row, and kind-specific
         // (D5's "not part of the disease": these are folded here, before the
         // row lookup, rather than migrated into `RowIndex`).
@@ -255,7 +237,6 @@ impl ParamCardPanel {
     /// live bounds, never the build-time cache — in-place scroll shifts node
     /// y without refreshing panel caches (BUG-257).
     pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2, tree: &UITree) -> Vec<PanelAction> {
-        self.relight_drag.cancel();
         let target = self.param_target();
         let row_actions = self.row_host.handle_pointer_down(
             node_id,
@@ -273,30 +254,6 @@ impl ParamCardPanel {
             return row_actions;
         }
 
-        // Relight is card chrome rather than a parameter row. Its address and
-        // field are captured so a layer/selection change cannot retarget the
-        // gesture while it is in flight.
-        for (slider, spec) in self.relight_slider_ids.iter().zip(RELIGHT_FIELD_SPECS.iter()) {
-            if let Some(ids) = slider
-                && node_id == ids.track
-            {
-                let field = spec.field;
-                self.row_host.cancel_drag();
-                let begin = self.relight_drag.begin(
-                    ValueRef::RelightParam(target.clone(), field),
-                    field,
-                    pos,
-                );
-                let norm = BitmapSlider::x_to_normalized(
-                    TrackSpan::of(tree.get_bounds(ids.track)),
-                    pos.x,
-                );
-                let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
-                let moved = self.relight_drag.update(pos, ScrubValue::Scalar(val));
-                self.relight.set_value(field, val);
-                return [Some(begin), moved].into_iter().flatten().collect();
-            }
-        }
         Vec::new()
     }
 
@@ -324,30 +281,6 @@ impl ParamCardPanel {
             );
         }
 
-        if let Some(&field) = self.relight_drag.payload()
-            && let Some(i) = RELIGHT_FIELD_SPECS.iter().position(|s| s.field == field)
-            && let Some(ids) = self.relight_slider_ids[i].as_ref()
-        {
-            let current_address = ValueRef::RelightParam(self.param_target(), field);
-            if self.relight_drag.address() != Some(&current_address) {
-                return Vec::new();
-            }
-            let spec = &RELIGHT_FIELD_SPECS[i];
-            let norm = BitmapSlider::x_to_normalized(
-                TrackSpan::of(tree.get_bounds(ids.track)),
-                pos.x,
-            );
-            let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
-            self.relight.set_value(field, val);
-            let display_norm = BitmapSlider::value_to_normalized(val, spec.min, spec.max);
-            BitmapSlider::update_value(tree, ids, display_norm, &format!("{val:.2}"));
-            return self
-                .relight_drag
-                .update(pos, ScrubValue::Scalar(val))
-                .into_iter()
-                .collect();
-        }
-
         Vec::new()
     }
 
@@ -358,7 +291,7 @@ impl ParamCardPanel {
         if self.row_host.is_dragging() {
             return self.row_host.handle_drag_end();
         }
-        self.relight_drag.end().into_iter().collect()
+        Vec::new()
     }
 
     /// Node-intent dispatch for this card's right-click gestures. The sole
@@ -403,17 +336,9 @@ impl ParamCardPanel {
         // `audio_configs[pi]` regardless, so this pass reaches them directly
         // instead of piggybacking on the main-slider loop below. The row-level
         // reset replay lives on `RowHost` (it owns those id bundles); the panel
-        // adds the card-chrome intents (border claim above, relight resets +
+        // adds the card-chrome intents (border claim above,
         // per-param mapping menus below).
         self.row_host.register_intents(intents);
-        // D3 relight-knob resets (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — same
-        // pattern as the main-row loop above.
-        for (ids, reset) in self.relight_slider_ids.iter().zip(self.relight_slider_resets.iter()) {
-            if let (Some(ids), Some(reset)) = (ids, reset) {
-                BitmapSlider::register_track_reset(ids, reset, intents);
-            }
-        }
-
         // Per-param menu. Generator toggle/trigger rows have no map gesture —
         // they fall through to the card claim like any other dead zone.
         let generator = matches!(self.kind, ParamCardKind::Generator);

@@ -1830,7 +1830,7 @@ Symptom: importing a glTF scene (and scene placement generally) puts every objec
 - BUG-241 (stage1-dsp-onset-frontend-misses-loud-real-kicks-track-dependent) — FIXED 2026-07-18 (Fable, same-day follow-up on the lane) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-224 (scene-setup-close-button-bypasses-shared-toggle-action) — FIXED 2026-07-17 (`lane/panel-interaction-bugs`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-223 (scene-setup-dock-scroll-state-updates-but-never-repaints) — FIXED 2026-07-17 (`lane/panel-interaction-bugs`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
-- BUG-216 (feedback-loop-into-final-output-freezes-at-depth-one) — FIXED @ f2684402 (DEPTH_RELIGHT_DESIGN.md P4, D6(b)). — full history in docs/archive/BUG_BACKLOG_CLOSED.md
+- BUG-216 (feedback-loop-into-final-output-freezes-at-depth-one) — FIXED @ f2684402. — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-218 (modifier-commands-splice-at-dead-group-output-vertices-port) — FIXED 2026-07-17 (lane/scene-bugfixes) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-212 (duplicate-scene-object-string-bindings-dangle-on-imported-mesh) — FIXED 2026-07-17 (lane/scene-bugfixes) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-185 (e6-texture-completion-invalidates-two-stale-goldens) — FIXED with BUG-211's landing (2026-07-17) — full history in docs/archive/BUG_BACKLOG_CLOSED.md

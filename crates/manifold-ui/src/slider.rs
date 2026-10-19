@@ -110,14 +110,6 @@ impl Slider {
     pub fn register_intents(&self, reg: &mut IntentRegistry) {
         BitmapSlider::register_track_reset(&self.ids, &self.reset, reg);
     }
-
-    /// As [`Slider::register_intents`], plus the D14 build-time label-mapping
-    /// twin ([`BitmapSlider::register_label_mapping`]) when this host has a
-    /// mapping surface for the param.
-    pub fn register_intents_with_mapping(&self, mapping: &PanelAction, reg: &mut IntentRegistry) {
-        BitmapSlider::register_track_reset(&self.ids, &self.reset, reg);
-        BitmapSlider::register_label_mapping(&self.ids, mapping, reg);
-    }
 }
 
 // ── The gesture contract (UI_WIDGET_UNIFICATION_DESIGN.md section 3) ──────────
@@ -762,13 +754,6 @@ impl SliderDragState {
         self.cached_value = f32::NAN;
     }
 
-    /// Update range (e.g. when clip_chrome recalculates max_slip).
-    pub fn set_range(&mut self, min: f32, max: f32, whole_numbers: bool) {
-        self.min = min;
-        self.max = max;
-        self.whole_numbers = whole_numbers;
-    }
-
     /// Node IDs (for panels that need the track span / node ids, etc.).
     pub fn ids(&self) -> Option<&SliderNodeIds> {
         self.ids.as_ref()
@@ -825,43 +810,6 @@ impl SliderDragState {
         BitmapSlider::update_value(tree, ids, display_norm, &fmt(val));
         self.cached_value = val;
         Some(val)
-    }
-
-    /// Continue drag with caller-computed value (for custom snapping etc.).
-    /// `norm` is the display-normalized value, `val` is the actual value.
-    pub fn apply_drag_custom(
-        &mut self,
-        val: f32,
-        norm: f32,
-        tree: &mut UITree,
-        text: &str,
-    ) -> bool {
-        if !self.drag.is_active() {
-            return false;
-        }
-        if let Some(ref ids) = self.ids {
-            BitmapSlider::update_value(tree, ids, norm, text);
-            self.cached_value = val;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get raw normalized value from position (for callers that need custom
-    /// value computation, e.g. snap_quarter_note).
-    pub fn raw_norm(&self, pos_x: f32) -> f32 {
-        self.ids
-            .as_ref()
-            .map(|ids| BitmapSlider::x_to_normalized(ids.track_span, pos_x))
-            .unwrap_or(0.0)
-    }
-
-    /// Grab x for the in-flight drag — the anchor a fine-mode scrub scales its
-    /// pointer delta around (D8). `None` when idle; the scene panel's
-    /// `slider_drag_value` reads it to recover the grab value.
-    pub fn drag_start_x(&self) -> Option<f32> {
-        self.drag.session().map(|s| s.start.x)
     }
 
     /// End drag. Returns `true` if this slider was dragging (caller should

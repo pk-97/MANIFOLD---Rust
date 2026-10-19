@@ -5,13 +5,8 @@
 //! used to hand-roll its own shell: three different scrim dims, two border
 //! techniques (a real 1px `border_width` vs a fake outer+inner panel pair), and
 //! per-file bg/border literals. They now all call [`build`], so the popup look
-//! lives in **one** place — the future visual upgrade (gradient body, heavier
-//! shadow) changes this function, not three call sites.
-//!
-//! The section 17 overlay loop ([`app_render`]) draws the soft drop-shadow under the
-//! container automatically: it skips the leading full-screen scrim and shadows
-//! the next node (the container). So the shell deliberately does *not* paint its
-//! own shadow.
+//! lives in **one** place — the future visual upgrade (gradient body) changes
+//! this function, not three call sites.
 //!
 //! Two surface kinds, [`PopupStyle::DROPDOWN`] (light, barely dims) and
 //! [`PopupStyle::MODAL`] (darker well, dims the screen to focus it) — the only
@@ -82,8 +77,7 @@ pub fn build(tree: &mut UITree, screen: (f32, f32), rect: Rect, style: &PopupSty
         "",
     );
 
-    // One rounded, 1px-bordered container. The section 17 overlay loop lifts it with a
-    // soft shadow; this panel carries no shadow of its own.
+    // One rounded, 1px-bordered container.
     let container = tree.add_panel(
         None,
         rect.x,

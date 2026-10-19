@@ -21,9 +21,8 @@ use super::instance_serde::{
 ///   `{ id: { value, exposed, base? } }`, `base` present iff
 ///   `base_tracked`. This is the ONLY wire shape the typed (de)serialize
 ///   understands — the historical positional/keyed value duo (a values
-///   container plus a parallel pre-modulation-base container) is gone;
-///   `manifold-io`'s `migrations::param_storage_v14` converts every
-///   legacy shape to `params` before typed deserialization ever runs.
+///   container plus a parallel pre-modulation-base container) lives only in
+///   files below the 1.11.0 floor, which the loader refuses.
 /// - `build_effect_param_values` places incoming `params` entries onto
 ///   `[static prefix | user tail]` positional slots on load;
 ///   `ParamsSer` walks the same order in reverse on save.
@@ -36,9 +35,8 @@ pub struct PresetInstance {
     /// Whether this instance is an effect (transforms an input) or a
     /// generator (produces from nothing). The single discriminator that
     /// carries every effect/generator behavioral difference — kind-aware
-    /// serde, the generator registry clamp on `set_param*`, and the
-    /// generator-only fields below. Effects ignore `legacy_param_version`;
-    /// generators ignore `id`/`enabled`/`collapsed`/`group_id` — those are
+    /// serde and the generator registry clamp on `set_param*`. Generators
+    /// ignore `id`/`enabled`/`collapsed`/`group_id` — those are
     /// chain-membership fields with no generator meaning. (`envelopes` and
     /// `graph` are now shared homes for both kinds — envelope-home + graph-home
     /// unification.)
@@ -125,31 +123,6 @@ pub struct PresetInstance {
     /// Not serialized; resets to 0 on load.
     pub graph_structure_version: u32,
 
-    // Legacy flat param fields (V1.0.0 format).
-    pub legacy_param0: Option<f32>,
-    pub legacy_param1: Option<f32>,
-    pub legacy_param2: Option<f32>,
-    pub legacy_param3: Option<f32>,
-
-    /// Generator-only legacy flat field from V1.0.0 (before genParams
-    /// nesting); serialized as `genParamVersion` for generator kind.
-    pub legacy_param_version: Option<i32>,
-
-    /// The "3D Shading" compile-level toggle (`docs/DEPTH_RELIGHT_DESIGN.md`
-    /// D2, phase P5). `false` (default) is the exact graph that ships today,
-    /// byte-identical — every existing project loads unchanged. `true` makes
-    /// the renderer splice `relight_augment`'s D3 template before
-    /// `final_output` on next rebuild. Shared by both kinds (effects and
-    /// generators are both `PresetInstance`s), so one flag + one command path
-    /// covers both cards. `PresetInstance` has custom Serialize/Deserialize
-    /// impls below (not derived) — this field's wire handling lives there,
-    /// not in a field attribute.
-    pub relight: bool,
-    /// The D3 relight-stage knobs. Always present (see
-    /// [`RelightParams`]'s doc) — the toggle gates whether they're wired
-    /// into the compiled graph, not whether they exist. Same custom-impl
-    /// note as `relight` above.
-    pub relight_params: RelightParams,
     /// Card section titles the user folded (SCENE_SURFACES_DESIGN.md D7 (one
     /// saved choice set)). View state; skipped on the wire when empty.
     pub folded_sections: Vec<String>,
@@ -187,15 +160,6 @@ impl PresetInstance {
             field_count += 1;
         }
         if self.graph.is_some() {
-            field_count += 1;
-        }
-        if self.legacy_param_version.is_some() {
-            field_count += 1;
-        }
-        if self.relight {
-            field_count += 1;
-        }
-        if !self.relight_params.is_default() {
             field_count += 1;
         }
         if !self.folded_sections.is_empty() {
@@ -239,15 +203,6 @@ impl PresetInstance {
                 &GraphWithDerivedParams { preset: &self.effect_type, graph: g, manifest: &self.params, joined: true },
             )?;
         }
-        if let Some(v) = self.legacy_param_version {
-            s.serialize_field("genParamVersion", &v)?;
-        }
-        if self.relight {
-            s.serialize_field("relight", &self.relight)?;
-        }
-        if !self.relight_params.is_default() {
-            s.serialize_field("relightParams", &self.relight_params)?;
-        }
         if !self.folded_sections.is_empty() {
             s.serialize_field("foldedSections", &self.folded_sections)?;
         }
@@ -260,16 +215,6 @@ impl PresetInstance {
 
 
 impl PresetInstance {
-    /// Whether the relight stage should actually be compiled/rendered for this
-    /// instance. Gated by [`manifold_foundation::RELIGHT_FEATURE_ENABLED`] so
-    /// the disabled feature is inert even for projects that saved
-    /// `relight: true`. All renderer compile/fusion/hash decisions consult
-    /// this, never the raw field.
-    #[inline]
-    pub fn relight_active(&self) -> bool {
-        manifold_foundation::RELIGHT_FEATURE_ENABLED && self.relight
-    }
-
     /// The per-instance graph override (`None` ⇒ use the catalog default).
     /// One home for both effects and generators after the graph-home
     /// unification (the generator graph used to live on `Layer`).
@@ -334,13 +279,6 @@ impl PresetInstance {
             graph: None,
             graph_version: 0,
             graph_structure_version: 0,
-            legacy_param0: None,
-            legacy_param1: None,
-            legacy_param2: None,
-            legacy_param3: None,
-            legacy_param_version: None,
-            relight: false,
-            relight_params: RelightParams::default(),
             folded_sections: Vec::new(),
             unfolded_sections: Vec::new(),
         }
@@ -368,13 +306,6 @@ impl PresetInstance {
             graph: None,
             graph_version: 0,
             graph_structure_version: 0,
-            legacy_param0: None,
-            legacy_param1: None,
-            legacy_param2: None,
-            legacy_param3: None,
-            legacy_param_version: None,
-            relight: false,
-            relight_params: RelightParams::default(),
             folded_sections: Vec::new(),
             unfolded_sections: Vec::new(),
         };

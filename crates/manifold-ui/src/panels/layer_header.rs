@@ -1270,33 +1270,8 @@ impl LayerHeaderPanel {
             .and_then(|r| r.id(LayerControl::ChDropdown))
     }
 
-    pub fn midi_input_node_id(&self, index: usize) -> Option<NodeId> {
-        self.rows
-            .get(index)
-            .and_then(|r| r.id(LayerControl::MidiInput))
-    }
-
-    pub fn midi_device_node_id(&self, index: usize) -> Option<NodeId> {
-        self.rows
-            .get(index)
-            .and_then(|r| r.id(LayerControl::DevDropdown))
-    }
-
-    pub fn midi_mode_node_id(&self, index: usize) -> Option<NodeId> {
-        self.rows
-            .get(index)
-            .and_then(|r| r.id(LayerControl::MidiMode))
-    }
-
     pub fn name_node_id(&self, index: usize) -> Option<NodeId> {
         self.rows.get(index).and_then(|r| r.id(LayerControl::Name))
-    }
-
-    pub fn get_node_bounds(&self, tree: &UITree, node_id: Option<NodeId>) -> Rect {
-        match node_id {
-            Some(id) => tree.get_bounds(id),
-            None => Rect::ZERO,
-        }
     }
 
     // ── Push-based setters ──────────────────────────────────────────
@@ -1377,13 +1352,6 @@ impl LayerHeaderPanel {
                 tree.set_style(name_id, style);
             }
         }
-    }
-
-    pub fn set_layer_name(&mut self, tree: &mut UITree, index: usize, name: &str) {
-        if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::Name) {
-                tree.set_text(id, name);
-            }
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {

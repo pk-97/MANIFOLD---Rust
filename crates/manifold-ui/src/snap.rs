@@ -10,10 +10,6 @@ use manifold_foundation::Beats;
 /// Threshold in pixels — snap engages within this distance.
 pub const SNAP_THRESHOLD_PX: f32 = 12.0;
 
-/// Maximum snap range in beats — caps behavior at extreme zoom-out
-/// so snapping doesn't jump across beats unexpectedly.
-pub const MAX_SNAP_BEATS: f32 = 0.5;
-
 /// Compute the grid interval based on the current zoom level (pixels per beat).
 ///
 /// From Unity CoordinateMapper.cs:
@@ -50,75 +46,6 @@ pub fn floor_beat_to_grid(beat: Beats, grid_interval: Beats) -> Beats {
         return beat;
     }
     Beats(((beat.0 / grid_interval.0).floor() * grid_interval.0).max(0.0))
-}
-
-/// Magnetic snap: finds nearest candidate (grid line + neighbor clip edges)
-/// and snaps if within threshold.
-///
-/// Grid snap uses at least half the grid interval as threshold, ensuring clips
-/// always jump between grid positions (standard DAW behavior). Clip edge snap
-/// also benefits from this wider threshold so edges can override grid when closer.
-///
-/// # Arguments
-/// - `raw_beat`: the unsnapped beat position
-/// - `grid_interval`: current grid interval (from `grid_interval_for_zoom`)
-/// - `neighbor_edges`: start and end beats of clips on the same layer (excluding self)
-/// - `ppb`: pixels per beat (current zoom level)
-/// - `snap_threshold_px`: pixel distance threshold (default: 12.0)
-/// - `max_snap_beats`: beat-space cap (default: 0.5)
-///
-/// Returns the snapped beat, or `raw_beat` if nothing is within threshold.
-pub fn magnetic_snap_beat(
-    raw_beat: f32,
-    grid_interval: f32,
-    neighbor_edges: &[f32],
-    ppb: f32,
-    snap_threshold_px: f32,
-    max_snap_beats: f32,
-) -> f32 {
-    if ppb <= 0.0 {
-        return raw_beat;
-    }
-
-    // Pixel-based threshold converted to beats
-    let pixel_threshold = snap_threshold_px / ppb;
-    // Grid threshold: at least half the grid interval so the nearest grid line
-    // is always reachable. Capped by max_snap_beats for safety.
-    let half_grid = if grid_interval > 0.0 {
-        grid_interval / 2.0
-    } else {
-        0.0
-    };
-    let effective_threshold = pixel_threshold.max(half_grid).min(max_snap_beats);
-
-    let mut best_beat = raw_beat;
-    let mut best_distance = f32::MAX;
-
-    // Candidate 1: nearest grid line
-    if grid_interval > 0.0 {
-        let grid_beat = (raw_beat / grid_interval).round() * grid_interval;
-        let distance = (grid_beat - raw_beat).abs();
-        if distance <= effective_threshold && distance < best_distance {
-            best_distance = distance;
-            best_beat = grid_beat;
-        }
-    }
-
-    // Candidates 2+: neighbor clip edges (start and end beats)
-    for &edge in neighbor_edges {
-        let distance = (edge - raw_beat).abs();
-        if distance <= effective_threshold && distance < best_distance {
-            best_distance = distance;
-            best_beat = edge;
-        }
-    }
-
-    // Only snap if the best candidate is within the effective threshold
-    if best_distance <= effective_threshold {
-        best_beat
-    } else {
-        raw_beat
-    }
 }
 
 #[cfg(test)]
@@ -182,63 +109,5 @@ mod tests {
             snap_beat_to_grid(Beats::from_f32(4.3), Beats::from_f32(0.0)),
             Beats::from_f32(4.3)
         );
-    }
-
-    #[test]
-    fn magnetic_snap_to_grid_line() {
-        // At 120 ppb, threshold = 12/120 = 0.1 beats
-        let snapped = magnetic_snap_beat(4.05, 1.0, &[], 120.0, 12.0, 0.5);
-        assert_eq!(snapped, 4.0); // Grid line at 4.0 is within 0.1 beats
-    }
-
-    #[test]
-    fn magnetic_snap_to_neighbor_edge() {
-        // Neighbor clip ends at beat 8.0. Raw position is 7.95.
-        // At 120 ppb, threshold = 0.1 beats. Distance = 0.05 < 0.1.
-        let snapped = magnetic_snap_beat(7.95, 1.0, &[8.0], 120.0, 12.0, 0.5);
-        assert_eq!(snapped, 8.0); // Snaps to neighbor edge
-    }
-
-    #[test]
-    fn magnetic_snap_neighbor_wins_over_grid() {
-        // Grid at 8.0, neighbor at 7.9. Raw = 7.92.
-        // Distance to grid = 0.08, distance to neighbor = 0.02. Neighbor wins.
-        let snapped = magnetic_snap_beat(7.92, 1.0, &[7.9], 120.0, 12.0, 0.5);
-        assert!((snapped - 7.9).abs() < 0.001);
-    }
-
-    #[test]
-    fn magnetic_snap_grid_always_engages() {
-        // At 120 ppb, pixel threshold = 0.1 beats, but half_grid = 0.5.
-        // Effective threshold = max(0.1, 0.5) = 0.5.
-        // Raw = 4.2, grid at 4.0. Distance = 0.2 <= 0.5 → snaps.
-        let snapped = magnetic_snap_beat(4.2, 1.0, &[], 120.0, 12.0, 0.5);
-        assert_eq!(snapped, 4.0); // Grid snap covers full cell
-    }
-
-    #[test]
-    fn magnetic_snap_max_beat_cap() {
-        // At 2 ppb (zoomed way out), threshold = 12/2 = 6.0 beats.
-        // But max_snap_beats = 0.5 caps it.
-        // Raw = 4.4, grid at 4.0. Distance = 0.4 < 0.5.
-        let snapped = magnetic_snap_beat(4.4, 1.0, &[], 2.0, 12.0, 0.5);
-        assert_eq!(snapped, 4.0); // Snaps within 0.5 beat cap
-
-        // Raw = 4.6, grid at 5.0. Distance = 0.4 < 0.5.
-        let snapped2 = magnetic_snap_beat(4.6, 1.0, &[], 2.0, 12.0, 0.5);
-        assert_eq!(snapped2, 5.0); // Snaps within cap
-
-        // Raw = 3.0, grid at 4.0 or 3.0 — but grid at 3.0 is distance 0, so it snaps.
-        let snapped3 = magnetic_snap_beat(3.0, 1.0, &[], 2.0, 12.0, 0.5);
-        assert_eq!(snapped3, 3.0);
-    }
-
-    #[test]
-    fn no_snap_when_max_beat_cap_exceeded() {
-        // At low zoom (ppb=2), grid=4.0 (bar-level). half_grid=2.0 but
-        // max_snap_beats=0.5 caps it. Raw = 6.0, nearest grid = 4.0 (dist=2.0)
-        // and 8.0 (dist=2.0). Both exceed 0.5 cap → no snap.
-        let snapped = magnetic_snap_beat(6.0, 4.0, &[], 2.0, 12.0, 0.5);
-        assert_eq!(snapped, 6.0); // No snap — max beat cap
     }
 }

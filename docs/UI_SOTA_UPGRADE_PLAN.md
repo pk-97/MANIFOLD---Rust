@@ -17,7 +17,7 @@ Three moves carry the whole upgrade:
 1. **Colour means something** — chrome goes neutral grey; colour is reserved for *identity*
    (track/clip) and *state* (one ramp per hue).
 2. **Depth from value, not flatness** — header column, card headers, and the selected object lift
-   via value steps + one soft shadow for floating elements.
+   via value steps.
 3. **Clips you can read** — name strip + content preview + real boundary, on the GPU pipeline.
 
 **Honest caveat (carried from section 20):** Phases 1–5 get the *system* to SOTA-grade — consistent,
@@ -97,7 +97,7 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 | | |
 |---|---|
-| **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/**state_button**/button/icon_button/segment/dropdown_trigger/reset/mod_badge) now owns every **chrome-bar** button. Popups (`dropdown`/`browser_popup`/`ableton_picker`) still hand-roll their shells. |
+| **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/**state_button_skinned**/button_secondary_style/icon_button_style/segment/dropdown_trigger_style) now owns every **chrome-bar** button. Popups (`dropdown`/`browser_popup`/`ableton_picker`) still hand-roll their shells. |
 | **Changes** | ✅ transport / header / footer / layer_header buttons+toggles onto the kit; bespoke `*_style` fns deleted or collapsed to thin font/radius shims. ⬜ Popups onto one shared `popup_shell` (section 22.2), colours from section 15, depth from section 17. |
 | **Files** | ✅ `transport.rs`, `header.rs`, `footer.rs`, `layer_header.rs`. ⬜ the three popups. |
 | **Verify** | Harness snapshot per panel (panel-by-panel, one atomic cutover each); ratchet catches stray literals; tree assertions for layout. |
@@ -144,11 +144,10 @@ calls it yet, so zero visual change. Verified headless (`gradient_demo`). Benefi
 **5b — Clips → GPU. ✅ DONE.** Clips render entirely on the GPU now: rounded SDF body,
 the waveform painted INSIDE the body as a per-clip texture, and the timeline overlays as GPU rects. The
 per-layer CPU clip bitmap is gone end to end.
-- **Bodies:** [`clip_draw.rs`](../crates/manifold-ui-paint/src/clip_draw.rs) — `emit_clips` (lift
-  shadow on select → rounded gradient body → border, two-phase so a selected clip's shadow sits under
-  every neighbour) and `emit_clip_names` (overlay text, luminance-picked contrast, scissor-clipped;
+- **Bodies:** [`clip_draw.rs`](../crates/manifold-ui-paint/src/clip_draw.rs) — `emit_clips` (rounded
+  gradient body → border) and `emit_clip_names` (overlay text, luminance-picked contrast, scissor-clipped;
   ellipsis is a Phase-6 polish — currently a hard cut). Styling lives in design tokens (`CLIP_RADIUS`,
-  `CLIP_GRADIENT_LIGHTEN`, `CLIP_SHADOW*`, `CLIP_BORDER_*`, `CLIP_LABEL_*`) so the look is one-line
+  `CLIP_GRADIENT_LIGHTEN`, `CLIP_BORDER_*`, `CLIP_LABEL_*`) so the look is one-line
   tunable in the Phase-6 eye pass.
 - **In-clip waveform:** [`clip_content_gpu.rs`](../crates/manifold-ui-paint/src/clip_content_gpu.rs) —
   a per-`ClipId` texture pool. Each visible audio clip's waveform is rasterised into its own texture by
@@ -235,11 +234,8 @@ the Ableton macro picker, settings). Landed in the "professional pass" — `crat
 `panels/dropdown.rs`, `panels/browser_popup.rs`, `panels/ableton_picker.rs`, `panels/settings_popup.rs`,
 `panels/popup_shell.rs`, `crates/manifold-app/src/ui_frame.rs`, `crates/manifold-ui-paint/src/clip_draw.rs`.
 
-- **No shadows UI-wide, for now** (`color::SHADOWS_ENABLED = false`). On MANIFOLD's near-black stage
-  palette a dark drop-shadow doesn't read as elevation, it reads as a smudge under the panel. Gated at
-  both production call sites rather than deleted — the section 17 `draw_shadow` primitive and its constants
-  stay, so this is a one-line flip when a lighter theme or a different shadow treatment makes it worth
-  re-enabling.
+- **No shadows UI-wide.** On MANIFOLD's near-black stage palette a dark drop-shadow reads as a smudge
+  under the panel, not elevation. The shadow primitive, shader branch and constants are deleted.
 - **Instant popup open, no enter/exit motion.** The 0.98→1 scale + fade tween (`enter_anim`, D17) that
   every popup carried was removed outright, not just shortened — a menu that pops in a few frames late
   reads as latency on a live rig where every other surface reacts on the same frame as the input.

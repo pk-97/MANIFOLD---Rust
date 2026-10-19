@@ -215,25 +215,6 @@ impl PresetRuntime {
         Ok(Some(usage))
     }
 
-    /// Account and admit a prepared-array candidate against a captured GPU
-    /// memory snapshot. The snapshot belongs to the caller's admission
-    /// boundary; this method does no device query and performs no allocation.
-    pub fn prepared_modifier_buffer_usage_with_snapshot(
-        &self,
-        canvas: (u32, u32),
-        snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
-    ) -> Result<
-        Option<crate::load::expand::ModifierBufferUsage>,
-        crate::load::graph_loader::PreAllocationError,
-    > {
-        let Some(usage) = self.prepared_modifier_buffer_usage(canvas)? else {
-            return Ok(None);
-        };
-        crate::load::expand::admit_candidate_bytes(snapshot, usage.candidate_bytes)
-            .map_err(crate::load::graph_loader::PreAllocationError::ModifierAdmission)?;
-        Ok(Some(usage))
-    }
-
     pub fn is_modifier_trigger_param(&self, param: &str) -> bool {
         self.modifier_events
             .as_ref()

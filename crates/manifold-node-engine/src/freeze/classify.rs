@@ -451,7 +451,7 @@ impl InputAccess {
 
     /// Whether this access reads through an EXACT `textureLoad` (or the
     /// buffer-domain equivalent, an indexed storage-array read) rather than a
-    /// filtering sampler. `docs/DEPTH_RELIGHT_DESIGN.md` D6(a): only these
+    /// filtering sampler. Only these
     /// variants are safe to back with a non-filterable `Rgba32Float`
     /// intermediate on Apple GPUs — `Coincident`/`Gather` bind a real
     /// sampler (`textureSampleLevel`) that a non-filterable format can't

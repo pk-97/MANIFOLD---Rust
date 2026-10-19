@@ -4,9 +4,7 @@
 //! UI, editing, IO, media or the app.
 
 pub mod clip_trigger;
-pub mod line;
 pub mod platonic;
-pub mod stateful;
 pub mod mesh;
 pub mod atomic;
 pub mod bindings;

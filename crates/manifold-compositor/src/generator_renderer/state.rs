@@ -73,14 +73,6 @@ pub struct LayerGeneratorState {
     /// the rebuild sweeps so opening/closing the editor flips the generator
     /// fused ⇄ unfused — the registry's fuse gate only re-runs on rebuild.
     pub(super) built_watched: bool,
-    /// `docs/DEPTH_RELIGHT_DESIGN.md` P5: the "3D Shading" toggle + knobs
-    /// last reflected into this generator, as `(relight, RelightParams)`.
-    /// The template is synthesized at splice time from the live
-    /// `PresetInstance`, not authored into `generator_graph` — so neither
-    /// `override_version` nor `applied_param_version` sees a toggle flip or
-    /// a knob drag. Compared against the layer's current `gen_params` each
-    /// sweep to force exactly the rebuild those values need.
-    pub(super) applied_relight: (bool, manifold_core::effects::RelightParams),
     /// The `render_all` pass this layer last rendered in.
     pub(super) rendered_pass: Option<u64>,
 }

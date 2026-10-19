@@ -726,64 +726,6 @@ pub(crate) fn commit(
                 )));
             }
         }
-        TextInputField::EffectParam(effect_idx, param_idx) => {
-            if let Ok(parsed) = text.parse::<f32>() {
-                // The param's old value and stable id come off one manifest
-                // lookup. A typed value may exceed the slider's travel (D3).
-                let read = |fx: &manifold_core::effects::PresetInstance| {
-                    let param = fx.params.iter().nth(param_idx);
-                    let old = param.map(|p| if fx.base_tracked { p.base } else { p.value }).unwrap_or(0.0);
-                    (fx.id.clone(), old, param.map(|p| p.id().to_string()))
-                };
-                let effect_info = match cx.ui.inspector.last_effect_tab() {
-                    manifold_ui::InspectorTab::Master => cx.project.settings.master_effects.get(effect_idx).map(read),
-                    manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => cx
-                        .active_layer
-                        .as_ref()
-                        .and_then(|id| cx.project.timeline.find_layer_by_id(id))
-                        .and_then(|(_, l)| l.effects.as_ref())
-                        .and_then(|e| e.get(effect_idx))
-                        .map(read),
-                    manifold_ui::InspectorTab::Clip => cx
-                        .selection
-                        .primary_selected_clip_id()
-                        .and_then(|cid| cx.project.find_clip_by_id(cid))
-                        .and_then(|c| c.effects.get(effect_idx))
-                        .map(read),
-                };
-                if let Some((effect_id, old_val, Some(param_id))) = effect_info
-                    && (old_val - parsed).abs() > f32::EPSILON
-                {
-                    cx.execute(Box::new(manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                        manifold_core::GraphTarget::Effect(effect_id),
-                        param_id,
-                        old_val,
-                        parsed,
-                    )));
-                }
-            }
-        }
-        TextInputField::GenParam(param_idx) => {
-            if let Ok(parsed) = text.parse::<f32>()
-                && let Some(layer) = cx
-                    .active_layer
-                    .as_ref()
-                    .and_then(|id| cx.project.timeline.find_layer_by_id(id))
-                    .map(|(_, l)| l)
-                && let Some(gp) = layer.gen_params()
-            {
-                let param = gp.params.iter().nth(param_idx);
-                let old_val = param.map(|p| if gp.base_tracked { p.base } else { p.value }).unwrap_or(0.0);
-                if (old_val - parsed).abs() > f32::EPSILON
-                    && let Some(param_id) = param.map(|p| p.id().to_string())
-                {
-                    let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
-                    cx.execute(Box::new(manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                        target, param_id, old_val, parsed,
-                    )));
-                }
-            }
-        }
         TextInputField::GenStringParam(sp_idx) => {
             // The key comes from the generator's definition; the old value
             // from the selected clip on the active layer, else its first clip.
@@ -808,47 +750,6 @@ pub(crate) fn commit(
                 if old_value != new_value {
                     cx.execute(Box::new(manifold_editing::commands::clip::SetClipStringParamCommand::new(
                         clip_id, key, old_value, new_value,
-                    )));
-                }
-            }
-        }
-        TextInputField::GroupRename(group_idx) => {
-            let new_name = text.trim().to_string();
-            if !new_name.is_empty() {
-                let tab = cx.ui.inspector.last_effect_tab();
-                let group_info = match tab {
-                    manifold_ui::InspectorTab::Master => cx
-                        .project
-                        .settings
-                        .master_effect_groups
-                        .as_ref()
-                        .and_then(|groups| groups.get(group_idx))
-                        .map(|g| (g.id.clone(), g.name.clone())),
-                    manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => cx
-                        .active_layer
-                        .as_ref()
-                        .and_then(|id| cx.project.timeline.find_layer_by_id(id))
-                        .and_then(|(_, l)| l.effect_groups.as_ref())
-                        .and_then(|g| g.get(group_idx))
-                        .map(|g| (g.id.clone(), g.name.clone())),
-                    manifold_ui::InspectorTab::Clip => cx
-                        .selection
-                        .primary_selected_clip_id()
-                        .and_then(|cid| cx.project.find_clip_by_id(cid))
-                        .and_then(|c| c.effect_groups.as_ref())
-                        .and_then(|g| g.get(group_idx))
-                        .map(|g| (g.id.clone(), g.name.clone())),
-                };
-                if let Some((group_id, old_name)) = group_info
-                    && old_name != new_name
-                {
-                    use manifold_editing::commands::effect_target::EffectTarget;
-                    let target = match tab {
-                        manifold_ui::InspectorTab::Master => EffectTarget::Master,
-                        _ => EffectTarget::Layer { layer_id: cx.active_layer.clone().unwrap_or_default() },
-                    };
-                    cx.execute(Box::new(manifold_editing::commands::effect_groups::RenameGroupCommand::new(
-                        target, group_id, old_name, new_name,
                     )));
                 }
             }

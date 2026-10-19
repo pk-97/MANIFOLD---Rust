@@ -32,7 +32,6 @@ The port is further along than "add a Vulkan backend" suggests. Already true on 
 - The unused `metal/mps.rs` helper bank was removed. No primitive depended on it.
 - `metal/fft.rs` (`GpuFft`, MPSGraph) is live: `manifold-nodes-image` uses it in `node.inverse_fft_2d` for spectral ocean fields. Its eventual Vulkan implementation needs a separate design; the current backend remains Metal.
 - `metal/metalfx.rs` — `manifold-nodes/src/fsr1.rs` is the portable upscaler; MetalFX stays a macOS bonus
-- `GpuHeap` — no external consumers; heap sub-allocation was a deferred Metal optimization. Skip. If it lands later, the Vulkan twin is a `gpu-allocator` pool
 - Xcode capture scopes (`install_device_capture_scope` etc.) — no-ops on Vulkan; RenderDoc attaches externally
 
 ---
@@ -206,5 +205,5 @@ Each row is a separate future design; none block P1–P3.
 6. Timeline semaphores for all GPU↔GPU and GPU↔CPU sync; one waiter thread for callbacks.
 7. Dynamic rendering only; negative-viewport Y-flip; SPIR-V byte-identical across backends.
 8. `arrayLength` via native `OpArrayLength` — no sizes buffer on Vulkan.
-9. MPS / MPSGraph FFT / MetalFX / GpuHeap / capture scopes: not ported (no consumers or already-portable alternatives exist).
+9. MPS / MPSGraph FFT / MetalFX / capture scopes: not ported (no consumers or already-portable alternatives exist).
 10. Platform services (section 8) are separate designs gated behind P3, ONNX excepted (already designed).

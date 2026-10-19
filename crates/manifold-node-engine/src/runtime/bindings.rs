@@ -1,4 +1,4 @@
-//! String-typed outer-card bindings and D3 relight-knob writes for
+//! String-typed outer-card bindings for
 //! [`PresetRuntime`] (generators only for strings). Extracted from
 //! preset_runtime.rs (Wave 3 P3-R, design D3).
 
@@ -49,67 +49,6 @@ pub(super) fn def_string_param_value(
         }
         _ => None,
     }
-}
-
-/// One live D3 relight knob mapped to a runtime node param (unfused template
-/// node) or a fused kernel uniform field. Built at chain-graph construction
-/// and applied every frame so float-knob edits never need a structural
-/// rebuild (`docs/DEPTH_RELIGHT_DESIGN.md` D8/P7).
-#[derive(Clone, Debug)]
-pub(super) struct RelightParamWrite {
-    pub(super) field: RelightField,
-    pub(super) target_inst: NodeInstanceId,
-    pub(super) target_param: String,
-    pub(super) scale: f32,
-}
-
-impl RelightParamWrite {
-    pub(super) fn apply(&self, graph: &mut Graph, params: &RelightParams) {
-        let value = self.field.get(params) * self.scale;
-        let _ = graph.set_param(self.target_inst, &self.target_param, ParamValue::Float(value));
-    }
-}
-
-/// Build the per-frame relight write list for one card/segment-member.
-/// `fused_retarget` is the fused view's retarget map (single-card:
-/// `LoadedPresetView::fused_retarget`; segment: `SegmentView::retarget`).
-pub(super) fn build_relight_writes(
-    relight: bool,
-    handles: &[(std::borrow::Cow<'static, str>, NodeInstanceId)],
-    node_map: &[(NodeId, NodeInstanceId)],
-    fused_retarget: &AHashMap<(String, String), (NodeId, String)>,
-    card_prefix: &str,
-) -> Vec<RelightParamWrite> {
-    if !relight {
-        return Vec::new();
-    }
-    let mut writes = Vec::new();
-    for field in RelightField::ALL {
-        for target in crate::load::augmentation::relight_field_targets(*field) {
-            let handle = format!("{card_prefix}{}", target.node_handle);
-            let param = target.param_name;
-            if let Some((fused_node_id, fused_field)) =
-                fused_retarget.get(&(handle.clone(), param.to_string()))
-            {
-                if let Some((_, inst)) = node_map.iter().find(|(nid, _)| nid == fused_node_id) {
-                    writes.push(RelightParamWrite {
-                        field: *field,
-                        target_inst: *inst,
-                        target_param: fused_field.clone(),
-                        scale: target.scale,
-                    });
-                }
-            } else if let Some((_, inst)) = handles.iter().find(|(h, _)| h == &handle) {
-                writes.push(RelightParamWrite {
-                    field: *field,
-                    target_inst: *inst,
-                    target_param: param.to_string(),
-                    scale: target.scale,
-                });
-            }
-        }
-    }
-    writes
 }
 
 impl PresetRuntime {
@@ -186,15 +125,5 @@ impl PresetRuntime {
         params: Option<&std::collections::BTreeMap<String, String>>,
     ) {
         self.apply_string_params(params);
-    }
-
-    /// Push live "3D Shading" D3 relight knob values into the generator's
-    /// spliced graph. Called by `GeneratorRenderer` every frame before
-    /// `render` so float-knob edits never need a structural rebuild
-    /// (`docs/DEPTH_RELIGHT_DESIGN.md` D8/P7).
-    pub fn set_relight_params(&mut self, params: &RelightParams) {
-        if let Some(slot) = self.effect_nodes.first() {
-            slot.apply_relight_params(&mut self.graph, params);
-        }
     }
 }

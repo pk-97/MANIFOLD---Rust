@@ -1,12 +1,10 @@
-//! Quarantined one-time schema migrations that are big/self-contained
-//! enough to deserve their own module instead of a function in
-//! `crate::migrate`. See `docs/PARAM_STORAGE_DESIGN.md` section 4 (D4) for the
-//! first (and so far only) resident.
+//! One-time schema migrations big enough to deserve their own module
+//! instead of a function in `crate::migrate`. Each runs from one rung of
+//! the ladder at or above the 1.11.0 floor.
 
 use std::cell::RefCell;
 
 pub mod contacts_wire_v1200;
-pub mod param_storage_v14;
 pub mod reversed_depth_v1160;
 pub mod rigid_body_density_v1170;
 pub mod scene_cinematic_tail_v1130;

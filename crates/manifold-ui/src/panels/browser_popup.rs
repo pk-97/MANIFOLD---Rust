@@ -671,8 +671,7 @@ impl BrowserPopupPanel {
         session.layout.total_height = total_h;
         session.layout.grid_viewport_height = grid_vp_h;
 
-        // Scrim + modal container via the shared shell (section 17 lifts it with a
-        // soft shadow). All content is parented to the container, which clips
+        // Scrim + modal container via the shared shell. All content is parented to the container, which clips
         // children by construction — nothing can paint or take clicks outside it.
         let shell = popup_shell::build(
             tree,

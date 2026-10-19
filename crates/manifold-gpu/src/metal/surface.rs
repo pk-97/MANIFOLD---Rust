@@ -341,14 +341,6 @@ impl GpuDrawable {
         GpuTexture::from_raw(tex, w, h, 1, format)
     }
 
-    /// Present the drawable directly (for `presentsWithTransaction` mode).
-    pub fn present_after_scheduled(&self) {
-        unsafe {
-            let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
-            let _: () = msg_send![drawable_obj, present];
-        }
-    }
-
     /// Present the drawable immediately.
     pub fn present(self) {
         unsafe {

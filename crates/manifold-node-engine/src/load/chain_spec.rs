@@ -16,7 +16,6 @@
 use std::borrow::Cow;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::RelightParams;
 
 use crate::exec::effect_node::NodeInstanceId;
 use crate::graph::Graph;
@@ -69,31 +68,13 @@ pub struct SpliceResult {
 ///
 /// Returns `None` on malformed input (no Source / no FinalOutput /
 /// unknown type id / orphan wire).
-///
-/// `relight` is the "3D Shading" toggle at the compile level
-/// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5): `Some(params)` passes `def`
-/// through [`crate::node_graph::augmentation::relight_augment`] before splicing —
-/// the depth-companion synthesis + fixed relight template (parameterized by
-/// the instance's live `RelightParams`) appended before `final_output`.
-/// `None` is the exact unaugmented def, byte-identical to pre-P3 behavior —
-/// the wire this function's callers use for every def with no per-instance
-/// toggle in scope (tests, thumbnails, the no-override registry path).
 pub fn splice_def_into_chain(
     graph: &mut Graph,
     source: (NodeInstanceId, &'static str),
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-    relight: Option<&RelightParams>,
     mesh_rules: &crate::scene::mesh_change::PreparedMeshRules,
 ) -> Option<SpliceResult> {
-    let augmented;
-    let def = if let Some(params) = relight {
-        augmented = crate::load::augmentation::relight_augment(def, registry, params);
-        &augmented
-    } else {
-        def
-    };
-
     // Delegate every per-node + per-wire concern to the shared
     // graph_loader pipeline. The same pipeline runs for the generator
     // path (`persistence::into_graph`), so any per-node feature added

@@ -243,103 +243,6 @@ pub enum UIEvent {
 }
 
 impl UIEvent {
-    /// Create a copy with all position fields offset by (dx, dy).
-    /// Used to convert screen-space events to panel-local coordinates.
-    pub fn with_offset(&self, dx: f32, dy: f32) -> Self {
-        let off = |v: Vec2| Vec2::new(v.x + dx, v.y + dy);
-        match self {
-            Self::Click {
-                node_id,
-                pos,
-                modifiers,
-            } => Self::Click {
-                node_id: *node_id,
-                pos: off(*pos),
-                modifiers: *modifiers,
-            },
-            Self::DoubleClick {
-                node_id,
-                pos,
-                modifiers,
-            } => Self::DoubleClick {
-                node_id: *node_id,
-                pos: off(*pos),
-                modifiers: *modifiers,
-            },
-            Self::RightClick {
-                node_id,
-                pos,
-                modifiers,
-            } => Self::RightClick {
-                node_id: *node_id,
-                pos: off(*pos),
-                modifiers: *modifiers,
-            },
-            Self::Scroll {
-                pos,
-                delta,
-                modifiers,
-            } => Self::Scroll {
-                pos: off(*pos),
-                delta: *delta,
-                modifiers: *modifiers,
-            },
-            Self::PointerDown {
-                node_id,
-                pos,
-                modifiers,
-            } => Self::PointerDown {
-                node_id: *node_id,
-                pos: off(*pos),
-                modifiers: *modifiers,
-            },
-            Self::PointerUp { node_id, pos } => Self::PointerUp {
-                node_id: *node_id,
-                pos: off(*pos),
-            },
-            Self::HoverEnter { node_id, pos } => Self::HoverEnter {
-                node_id: *node_id,
-                pos: off(*pos),
-            },
-            Self::HoverExit { node_id } => Self::HoverExit { node_id: *node_id },
-            Self::DragBegin {
-                node_id,
-                pos,
-                origin,
-                modifiers,
-            } => Self::DragBegin {
-                node_id: *node_id,
-                pos: off(*pos),
-                origin: off(*origin),
-                modifiers: *modifiers,
-            },
-            Self::Drag {
-                node_id,
-                pos,
-                delta,
-                modifiers,
-            } => Self::Drag {
-                node_id: *node_id,
-                pos: off(*pos),
-                delta: *delta,
-                modifiers: *modifiers,
-            },
-            Self::DragEnd { node_id, pos } => Self::DragEnd {
-                node_id: *node_id,
-                pos: off(*pos),
-            },
-            Self::KeyDown {
-                node_id,
-                key,
-                modifiers,
-            } => Self::KeyDown {
-                node_id: *node_id,
-                key: *key,
-                modifiers: *modifiers,
-            },
-        }
-    }
-
     /// Extract the position from events that carry one, or None for position-less events.
     pub fn pos(&self) -> Option<Vec2> {
         match self {
@@ -507,11 +410,6 @@ impl UIInputSystem {
             let hit_id = tree.hit_test(pos);
             self.update_hover(tree, hit_id, pos);
         }
-    }
-
-    /// Clear keyboard focus.
-    pub fn clear_focus(&mut self) {
-        self.focused_widget = None;
     }
 
     /// Update modifier state (called by app on ModifiersChanged).

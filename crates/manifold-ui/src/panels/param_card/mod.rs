@@ -21,22 +21,18 @@ use crate::{ParamsAction, RootAction};
 use crate::panels::AudioDrawerClick;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::scrub::ScrubGesture;
-use super::{
-    GraphParamTarget, PanelAction, ScrubPhase, ScrubValue,
-    UiRelightField, UiRelightHeightFrom, ValueRef,
-};
+use super::{GraphParamTarget, PanelAction};
 #[cfg(test)]
-use super::{AudioShapeParam, TrimKind};
+use super::{AudioShapeParam, ScrubPhase, ScrubValue, TrimKind, ValueRef};
 use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
 use crate::param_surface::{CatalogAffordance, CatalogSurface, ParamRow, ParamSurface, RowRole};
-use crate::slider::{BitmapSlider, SliderColors, TrackSpan};
+use crate::slider::SliderColors;
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
-use manifold_foundation::{EffectId, LayerId, RELIGHT_FEATURE_ENABLED};
+use manifold_foundation::{EffectId, LayerId};
 
 // Stable keys for the host-owned card frame + header.
 const KEY_BORDER: u64 = 90_001;
@@ -49,11 +45,6 @@ const KEY_CHANGE: u64 = 90_007;
 const KEY_DRAG: u64 = 90_008;
 const KEY_NAME_CLIP: u64 = 90_009;
 const KEY_TOGGLE: u64 = 90_010;
-/// The "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) —
-/// sits right of the ON/OFF toggle, left of the cog, in both card kinds.
-/// Unconditional in both `CardContext`s (like the ON/OFF toggle) — it's a
-/// real per-instance flag, not editor-only chrome.
-const KEY_RELIGHT: u64 = 90_011;
 /// SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier card's remove ×
 /// (right of the collapse chevron's left neighbor — the fixed-slot card's
 /// structural inverse, dispatching `SceneModifierRemove`).
@@ -122,9 +113,6 @@ pub(crate) fn row_geometry(content_w: f32, reserve_chevron: bool) -> RowGeometry
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
 const TOGGLE_W: f32 = 30.0;
-/// Width of the "3D Shading" header icon — a short "3D" glyph, narrower than
-/// the ON/OFF toggle (no "OFF"-length text to fit).
-const RELIGHT_W: f32 = 24.0;
 // 3-letter chips (ABL/ENV/DRV/MOD) at FONT_CAPTION don't need 36px; the
 // narrower chip reclaims header width for the effect name when several show.
 const BADGE_W: f32 = 28.0;
@@ -176,9 +164,8 @@ mod state;
 
 pub use state::{
     CardContext, ParamCardKind, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
-    RelightCardConfig, RowMod,
+    RowMod,
 };
-pub(crate) use state::RELIGHT_FIELD_SPECS;
 
 // ── ParamCardPanel ───────────────────────────────────────────────
 
@@ -257,22 +244,6 @@ pub struct ParamCardPanel {
     name_clip_id: Option<NodeId>,
     chevron_btn_id: Option<NodeId>,
     cog_btn_id: Option<NodeId>,
-    /// The "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) —
-    /// shared shell, present on both card kinds.
-    relight_btn_id: Option<NodeId>,
-    /// D3/D4 relight card state — always present (see `RelightCardConfig`'s
-    /// doc), the source the always-visible-but-greyed rows below the normal
-    /// params read/write.
-    relight: RelightCardConfig,
-    /// The six D3 knob rows' slider ids, in `RelightField` declaration order
-    /// (Light X, Light Y, Relief, AO Intensity, Shadow Softness, Gain).
-    relight_slider_ids: [Option<crate::slider::SliderNodeIds>; 6],
-    /// The matching right-click reset action for each relight slider, same
-    /// order — mirrors `slider_resets`, registered in `register_intents`.
-    relight_slider_resets: [Option<PanelAction>; 6],
-    /// D4 "Height From" enum row — one button per option (Auto / Luminance /
-    /// Inverted Luminance), the active one tinted.
-    relight_height_btn_ids: [Option<NodeId>; 3],
 
     // ── Node IDs — effect shell ──
     drag_icon_id: Option<NodeId>,
@@ -320,12 +291,12 @@ pub struct ParamCardPanel {
     /// `Some` on a scene modifier card — stable instance identity, owning
     /// layer, authored enabled label, and ordered-stack position. Drives
     /// `param_target` (`GeneratorOf(owning layer)` — INV-M4/BUG-292's net),
-    /// the header differences (no relight), and the stack/remove
+    /// the header differences, and the stack/remove
     /// controls. `None` on every effect/generator card.
     modifier: Option<crate::param_surface::ModifierCardInfo>,
     /// Object-scoped modifier card address used by Scene Setup. This shares
     /// the effect row renderer but deliberately has slimmer chrome: object
-    /// enable/target/relight controls belong to the owning object card.
+    /// enable/target controls belong to the owning object card.
     object_modifier: Option<crate::param_surface::ObjectModifierCardInfo>,
     /// The card sits under a Scene tab item header that owns its name and
     /// delete (SCENE_SURFACES D8), so its own header shows neither.
@@ -407,8 +378,6 @@ pub struct ParamCardPanel {
 
     copied_flash: CopyToClipboardLabelState,
 
-    // Relight has no row identity, so it keeps its own captured scrub address.
-    relight_drag: ScrubGesture<UiRelightField>,
 
     // Caches (NaN = needs sync)
     param_cache: Vec<f32>,
@@ -424,20 +393,6 @@ pub struct ParamCardPanel {
     /// `drawer_height_anim` in `tick_drawers`; ties the value-text color back to
     /// normal once `progress()` returns `None`.
     value_flash: Vec<Transient>,
-
-    /// P2 "value snap-back" (D15) — per-param `AnimF32` (`Curve::Snap`) that
-    /// eases the slider FILL from its pre-reset position to the default after
-    /// the RIGHT-CLICK reset gesture (`begin_value_snapback`, meant to be
-    /// called by the app-side dispatch once the model has already snapped
-    /// instantly — D15: data first, visual follows). BUG-061 folded the
-    /// param right-click reset into the generic `SliderReset` trio, which
-    /// reuses the plain `ParamChanged` handler and does not call this — no
-    /// production path drives it today; only its own unit tests below do.
-    /// Settled (not animating) for every row until a reset targets it. Ticked in
-    /// `tick_value_flash` alongside the flash, which also repaints the fill
-    /// every frame it's mid-flight (the value-dirty-check in `sync_values`
-    /// only fires once, the frame the model value actually changes).
-    value_snapback: Vec<AnimF32>,
 
     /// D17 "spawn pop" — a brand-new card (no existing panel matched in
     /// `InspectorCompositePanel::reconcile_cards`) enters at scale 0.94→1
@@ -509,11 +464,6 @@ impl ParamCardPanel {
             name_clip_id: None,
             chevron_btn_id: None,
             cog_btn_id: None,
-            relight_btn_id: None,
-            relight: RelightCardConfig::default(),
-            relight_slider_ids: [None; 6],
-            relight_slider_resets: std::array::from_fn(|_| None),
-            relight_height_btn_ids: [None; 3],
             drag_icon_id: None,
             toggle_btn_id: None,
             abl_badge_bg_id: None,
@@ -560,13 +510,11 @@ impl ParamCardPanel {
             section_folded: ahash::AHashMap::new(),
             scene_sections: false,
             copied_flash: CopyToClipboardLabelState::default(),
-            relight_drag: ScrubGesture::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
             range_cache: Vec::new(),
             value_flash: Vec::new(),
-            value_snapback: Vec::new(),
             spawn_scale: AnimF32::new(1.0, color::MOTION_MED_MS),
             delete_fade: None,
             row_id_index: ahash::AHashMap::new(),
@@ -647,11 +595,6 @@ impl ParamCardPanel {
     #[cfg(test)]
     pub(crate) fn toggle_node_id(&self) -> Option<NodeId> {
         self.toggle_btn_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn relight_node_id(&self) -> Option<NodeId> {
-        self.relight_btn_id
     }
 
     /// The card ROOT's identity key (D4): cards are siblings under the
@@ -897,7 +840,7 @@ impl ParamCardPanel {
     }
 
     pub fn is_dragging(&self) -> bool {
-        self.row_host.is_dragging() || self.relight_drag.is_active()
+        self.row_host.is_dragging()
     }
 
     /// The header collapse-chevron node id, resolved during `build` (`None`
@@ -992,21 +935,6 @@ impl ParamCardPanel {
         }
     }
 
-    /// Rewrite the six "3D Shading" knobs in place (UI_INVALIDATION D22).
-    /// The toggle and Height From are discrete and rebuild.
-    pub fn sync_relight_values(&mut self, tree: &mut UITree, relight: &RelightCardConfig) {
-        for (i, spec) in RELIGHT_FIELD_SPECS.iter().enumerate() {
-            let value = relight.value(spec.field);
-            if self.relight.value(spec.field) == value {
-                continue;
-            }
-            self.relight.set_value(spec.field, value);
-            if let Some(ids) = self.relight_slider_ids[i].as_ref() {
-                let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
-                crate::slider::BitmapSlider::update_value(tree, ids, norm, &format!("{value:.2}"));
-            }
-        }
-    }
 
     /// Per-frame content sync (push_state — after build). Black↔Frame
     /// transitions and new readback versions update the band in place; a
@@ -1218,39 +1146,6 @@ impl ParamCardPanel {
         Some(tree.get_bounds(cid))
     }
 
-    /// Hit-test the param NAME labels (slider + toggle/trigger rows) and return
-    /// the [`ParamId`](manifold_foundation::ParamId) of the row whose label
-    /// contains `(sx, sy)`, or `None`. Read-only — no behaviour change and no
-    /// effect on the performance card; the graph-editor host calls it in Author
-    /// context to jump from a card param straight to the node that defines it.
-    pub fn label_hit(
-        &self,
-        tree: &UITree,
-        sx: f32,
-        sy: f32,
-    ) -> Option<manifold_foundation::ParamId> {
-        let pos = Vec2::new(sx, sy);
-        for (i, info) in self.rows.iter().enumerate() {
-            let label_id = self.row_host
-                .slider_ids
-                .get(i)
-                .and_then(|s| s.as_ref())
-                .and_then(|ids| ids.label)
-                .or_else(|| {
-                    self.row_host.toggle_ids
-                        .get(i)
-                        .and_then(|t| t.as_ref())
-                        .and_then(|ids| ids.label_id)
-                });
-            if let Some(lid) = label_id
-                && tree.get_bounds(lid).contains(pos)
-            {
-                return Some(info.id.clone());
-            }
-        }
-        None
-    }
-
     /// Get string param info for text input anchoring (generator kind).
     pub fn string_param(&self, index: usize) -> Option<&ParamCardStringInfo> {
         self.string_param_info.get(index)
@@ -1427,7 +1322,6 @@ pub(super) mod tests {
             ],
             has_graph_mod: false,
             audio_sends: Vec::new(),
-            relight: RelightCardConfig::default(),
         }
     }
 
@@ -2596,60 +2490,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn value_snapback_eases_fill_from_old_to_default_after_reset() {
-        // P2 "value snap-back" (D15), end to end: `begin_value_snapback` is
-        // called the instant the RIGHT-CLICK reset commits (data already
-        // snapped by that point, per the app-side dispatch handler) —
-        // `sync_values`'s next poll (simulating the model now reading the
-        // new default) must draw the fill at the EASED position, not jump
-        // straight to the final one, and it must reach the final width once
-        // the tween settles.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        use crate::view::UiParamSlot as ParamSlot;
-        // Row 0 is "radius", min 0 / max 100 / default 10.
-        panel.sync_values_positional(&mut tree, &[ParamSlot { value: 50.0, base: 50.0, exposed: true, min: 0.0, max: 100.0 }, ParamSlot::exposed(0.8)]);
-        let fill_id = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
-        let width_at_50 = tree.get_bounds(fill_id).width;
-
-        // The reset gesture: data goes 50 -> 10 instantly; this only starts
-        // the visual ease.
-        panel.begin_value_snapback(&std::borrow::Cow::Borrowed("radius"), 50.0, 10.0);
-        assert!(panel.value_snapback[0].is_animating(), "reset starts the row's own tween");
-
-        // The next poll sees the model already at the new default (10.0).
-        panel.sync_values_positional(&mut tree, &[ParamSlot { value: 10.0, base: 10.0, exposed: true, min: 0.0, max: 100.0 }, ParamSlot::exposed(0.8)]);
-        let width_just_after = tree.get_bounds(fill_id).width;
-        assert!(
-            (width_just_after - width_at_50).abs() < 0.5,
-            "the fill must NOT jump to the final width the instant the model value \
-             changes — it starts from wherever it was: {width_just_after} vs {width_at_50}"
-        );
-
-        // Tick forward: `tick_value_flash` (the only per-frame driver of
-        // `value_snapback`, since `sync_values` no longer sees a dirty value)
-        // must keep repainting the fill every frame until it settles at the
-        // final (smaller — 10 < 50) width.
-        for _ in 0..30 {
-            panel.tick_value_flash(&mut tree, color::MOTION_MED_MS / 20.0);
-        }
-        assert!(!panel.value_snapback[0].is_animating(), "tween settles");
-        let width_settled = tree.get_bounds(fill_id).width;
-        assert!(
-            width_settled < width_just_after,
-            "settled fill reflects the smaller default value: {width_settled} vs {width_just_after}"
-        );
-
-        // A reset that's a no-op (already-at-default) `begin_value_snapback`
-        // targeting the SAME value must not start an animation.
-        panel.begin_value_snapback(&std::borrow::Cow::Borrowed("radius"), 10.0, 10.0);
-        assert!(!panel.value_snapback[0].is_animating(), "same-value retarget is a no-op");
-    }
-
-    #[test]
     fn value_change_flash_suppressed_while_dragging() {
         // The drag itself is the feedback for the row being dragged — a flash
         // on top would be noise re-triggering every frame of the drag.
@@ -3365,8 +3205,7 @@ pub(super) mod tests {
     }
 
     /// Trailing header controls in left-to-right order on one row; the expand
-    /// chevron is always rightmost. The 3D Shading icon exists only when its
-    /// feature is on.
+    /// chevron is always rightmost.
     fn assert_header_order(config: &ParamSurface, lead: (&str, u64)) {
         use crate::panels::layout_order::{assert_left_to_right, assert_one_row};
         let mut tree = UITree::new();
@@ -3377,11 +3216,6 @@ pub(super) mod tests {
         let at = |key| tree.get_bounds(panel.host.node_id_for_key(key).unwrap());
 
         let mut cells = vec![(lead.0, at(lead.1))];
-        if RELIGHT_FEATURE_ENABLED {
-            cells.push(("relight", at(KEY_RELIGHT)));
-        } else {
-            assert!(panel.host.node_id_for_key(KEY_RELIGHT).is_none(), "relight icon hidden when feature off");
-        }
         cells.push(("cog", at(KEY_COG)));
         cells.push(("chevron", at(KEY_CHEVRON)));
         assert_one_row(&cells);
@@ -3715,7 +3549,6 @@ pub(super) mod tests {
             ],
             string_params: vec![],
             audio_sends: Vec::new(),
-            relight: RelightCardConfig::default(),
         }
     }
 

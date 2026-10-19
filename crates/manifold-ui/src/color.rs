@@ -114,9 +114,6 @@ pub const BG_1: Color32 = Color32::new(23, 23, 25, 255); // panel
 pub const BG_2: Color32 = Color32::new(33, 33, 36, 255); // card / section (on a panel)
 pub const BG_3: Color32 = Color32::new(48, 48, 52, 255); // control / input (on a section)
 // Hover = one notch up, pressed = one notch down. Same deltas everywhere.
-pub const BG_1_HOVER: Color32 = Color32::new(31, 31, 33, 255);
-pub const BG_2_HOVER: Color32 = Color32::new(42, 42, 45, 255);
-pub const BG_2_PRESSED: Color32 = Color32::new(28, 28, 30, 255);
 pub const BG_3_HOVER: Color32 = Color32::new(57, 57, 62, 255);
 pub const BG_3_PRESSED: Color32 = Color32::new(41, 41, 45, 255);
 
@@ -134,18 +131,6 @@ pub const GROOVE: Color32 = Color32::new(8, 8, 10, 255); // section A: tracks th
 // edge for surfaces that still want an outline + the floating-element border.
 // (The purple-tinted generator-card border stays its own identity tint.)
 pub const BORDER: Color32 = Color32::new(64, 64, 68, 255); // section A: more visible element outline
-
-// ── Elevation shadow (section 17) ──────────────────────────────────────────
-// One soft step under FLOATING surfaces only (dropdowns, popovers, modals).
-// A lift, not a glow: dark + low alpha. In-panel grouping stays fill-level.
-pub const SHADOW: Color32 = Color32::new(0, 0, 0, 110);
-pub const SHADOW_BLUR: f32 = 18.0;
-pub const SHADOW_OFFSET_Y: f32 = 4.0;
-
-/// no shadows anywhere for now — dark-on-dark shadows read
-/// as smudge, not elevation. Flip to re-enable; call sites are gated, the
-/// draw_shadow primitive stays.
-pub const SHADOWS_ENABLED: bool = false;
 
 // ── Semantic colour ramp (section 15) ──────────────────────────────────────
 // One definition per role-hue, three steps each (idle · base · active).
@@ -167,21 +152,11 @@ pub const RED_ACTIVE: Color32 = Color32::new(217, 64, 56, 255);
 pub const GREEN_IDLE: Color32 = Color32::new(51, 107, 61, 255);
 pub const GREEN_BASE: Color32 = Color32::new(64, 158, 89, 255);
 pub const GREEN_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
-pub const AMBER_IDLE: Color32 = Color32::new(156, 128, 40, 255);
 pub const AMBER_BASE: Color32 = Color32::new(204, 166, 38, 255);
 pub const AMBER_ACTIVE: Color32 = Color32::new(217, 191, 64, 255);
-pub const ORANGE_IDLE: Color32 = Color32::new(140, 82, 30, 255);
 pub const ORANGE_BASE: Color32 = Color32::new(199, 102, 56, 255);
-pub const ORANGE_ACTIVE: Color32 = Color32::new(209, 115, 56, 255);
-pub const BLUE_IDLE: Color32 = Color32::new(77, 122, 199, 255);
 pub const BLUE_BASE: Color32 = Color32::new(89, 148, 235, 255);
-pub const BLUE_ACTIVE: Color32 = Color32::new(120, 170, 245, 255);
-pub const CYAN_IDLE: Color32 = Color32::new(40, 120, 140, 255);
-pub const CYAN_BASE: Color32 = Color32::new(20, 166, 191, 255);
-pub const CYAN_ACTIVE: Color32 = Color32::new(64, 200, 224, 255);
-pub const PURPLE_IDLE: Color32 = Color32::new(90, 72, 120, 255);
 pub const PURPLE_BASE: Color32 = Color32::new(115, 115, 191, 255);
-pub const PURPLE_ACTIVE: Color32 = Color32::new(150, 130, 210, 255);
 
 // All UI color constants ported from UIConstants.cs.
 //
@@ -205,29 +180,17 @@ pub const TRACK_BG_ALT: Color32 = BG_1; // alternating lane
 // the blue family of `SELECTED_LAYER_RING` / the selection accent bar.
 pub const TRACK_BG_SELECTED: Color32 = Color32::new(30, 42, 64, 255);
 pub const INSPECTOR_BG: Color32 = BG_1;
-pub const INSPECTOR_BG_FOCUSED: Color32 = BG_1_HOVER;
 pub const HEADER_BG: Color32 = Color32::new(16, 16, 16, 255); // chrome
 pub const CONTROL_BG: Color32 = BG_2;
-pub const INPUT_FIELD_BG: Color32 = BG_3;
-pub const INPUT_FIELD_BG_ALT: Color32 = BG_2;
 pub const DARK_BG: Color32 = BG_0;
-pub const SCROLLBAR_BG: Color32 = Color32::new(18, 18, 19, 128);
 pub const DROPDOWN_BG: Color32 = BG_2;
-pub const DROPDOWN_ITEM_BG: Color32 = BG_3;
-pub const DROPDOWN_TEMPLATE_BG: Color32 = BG_2;
-pub const PICKER_BG: Color32 = Color32::new(14, 14, 15, 247); // overlay scrim
-pub const PROGRESS_BAR_BG: Color32 = Color32::new(31, 31, 33, 242); // BG_2 @ a242
-pub const OVERLAY_BG: Color32 = Color32::new(13, 13, 14, 237); // BG_0 @ a237
 pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 255); // HUD (below void)
 
 // ── Accent colors ─────────────────────────────────────────────────
 pub const ACCENT_BLUE: Color32 = BLUE_BASE;
-pub const ACCENT_BLUE_SLIDER: Color32 = Color32::new(89, 148, 235, 204);
-pub const ACCENT_BLUE_DIM: Color32 = Color32::new(77, 122, 199, 64);
 pub const ACCENT_BLUE_SELECTION: Color32 = Color32::new(89, 148, 235, 102);
 pub const PLAYHEAD_RED: Color32 = RED_ACTIVE;
 pub const INSERT_CURSOR_BLUE: Color32 = Color32::new(89, 148, 242, 230);
-pub const PROGRESS_FILL_BLUE: Color32 = Color32::new(89, 173, 235, 255);
 
 // ── Controls ────────────────────────────────────────────────────────
 pub const BUTTON_INACTIVE: Color32 = Color32::new(59, 59, 61, 255);
@@ -239,31 +202,16 @@ pub const TRACK_SEPARATOR_HEIGHT: f32 = 2.0;
 pub const GROUP_SEPARATOR_HEIGHT: f32 = 3.0;
 pub const GROUP_SEPARATOR_COLOR: Color32 = GROOVE; // group groove (heavier via height, not colour)
 pub const DIVIDER_COLOR: Color32 = DIVIDER;
-pub const HANDLE_BG: Color32 = Color32::new(59, 59, 61, 255);
 pub const CHEVRON_COLOR: Color32 = Color32::new(102, 102, 107, 179);
-pub const SCROLLBAR_HANDLE: Color32 = Color32::new(89, 89, 94, 204);
-pub const SLIDER_BG: Color32 = BG_2;
-pub const DRAG_HANDLE_HOVER: Color32 = Color32::new(46, 46, 48, 255);
-pub const SLIDER_HANDLE: Color32 = Color32::new(199, 199, 204, 255);
-pub const TOGGLE_HIGHLIGHTED: Color32 = Color32::new(217, 217, 222, 255);
-pub const TOGGLE_PRESSED: Color32 = Color32::new(158, 158, 163, 255);
 pub const DROPDOWN_HIGHLIGHT: Color32 = Color32::new(64, 64, 71, 255);
 pub const DROPDOWN_PRESSED_BG: Color32 = Color32::new(46, 46, 51, 255);
-pub const SELECTED_LAYER_CONTROL: Color32 = Color32::new(46, 77, 122, 255);
-pub const ACTIVE_SHORTCUT_KEY_BG: Color32 = Color32::new(56, 56, 66, 255);
 
 // ── Clip colors (video) ─────────────────────────────────────────────
 pub const CLIP_NORMAL: Color32 = Color32::new(173, 168, 163, 255);
-pub const CLIP_SELECTED: Color32 = Color32::new(217, 209, 199, 255);
-pub const CLIP_HOVER: Color32 = Color32::new(189, 184, 179, 255);
 pub const CLIP_LOCKED: Color32 = Color32::new(82, 79, 77, 128);
-pub const CLIP_SEPARATOR: Color32 = Color32::new(20, 20, 22, 255);
 
 // ── Clip colors (generator) ─────────────────────────────────────────
 pub const CLIP_GEN_NORMAL: Color32 = Color32::new(101, 252, 255, 255);
-pub const CLIP_GEN_SELECTED: Color32 = Color32::new(102, 140, 224, 255);
-pub const CLIP_GEN_HOVER: Color32 = Color32::new(77, 97, 153, 255);
-pub const GEN_TYPE_LABEL: Color32 = Color32::new(140, 179, 242, 255);
 
 // ── GPU clip body styling (section 24 5b) ──────────────────────────────────
 // Clips render as GPU SDF rounded rects (body gradient + border + lift). These
@@ -286,11 +234,6 @@ pub const CLIP_BORDER_SELECTED_WIDTH: f32 = 2.0;
 /// over the base colour, fading to the base at the bottom. Gives the body a
 /// soft top-lit roundness. 0 = flat.
 pub const CLIP_GRADIENT_LIGHTEN: u8 = 14;
-/// Soft drop-shadow under the *selected* clip (lift-on-select, section 17). Subtler
-/// than the overlay-panel shadow — a clip rises a little, it doesn't float.
-pub const CLIP_SHADOW: Color32 = Color32::new(0, 0, 0, 90);
-pub const CLIP_SHADOW_BLUR: f32 = 6.0;
-pub const CLIP_SHADOW_OFFSET_Y: f32 = 2.0;
 /// Clip name label: dark text on a light body, light text on a dark one (chosen
 /// by body luminance so the label reads on any layer colour). Min width below
 /// which the label is dropped (too narrow to be legible).
@@ -325,7 +268,6 @@ pub const CLIP_THUMB_INSET: f32 = 4.0;
 pub const CLIP_PREVIEW_WELL_SCALE: f32 = 0.5;
 
 // ── Group layer structural colors ───────────────────────────────────
-pub const COLLAPSED_GROUP_OVERLAY_BG: Color32 = Color32::new(20, 20, 28, 255);
 pub const DEFAULT_GROUP_ACCENT: Color32 = PURPLE_BASE;
 pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 
@@ -337,17 +279,12 @@ pub const TEXT_NORMAL: Color32 = Color32::new(230, 230, 235, 255);
 pub const TEXT_DIMMED: Color32 = Color32::new(178, 178, 184, 255);
 pub const TEXT_SUBTLE: Color32 = Color32::new(130, 130, 136, 255);
 pub const TEXT_FAINT: Color32 = Color32::new(104, 104, 110, 255);
-pub const PLACEHOLDER_TEXT: Color32 = Color32::new(107, 107, 112, 153);
 pub const TEXT_NEAR_WHITE: Color32 = Color32::new(209, 209, 214, 255);
-pub const DROPDOWN_INACTIVE_TEXT: Color32 = Color32::new(173, 173, 179, 255);
 
 // ── Status colors ───────────────────────────────────────────────────
 pub const STATUS_GOOD: Color32 = GREEN_ACTIVE;
 pub const STATUS_WARNING: Color32 = AMBER_ACTIVE;
 pub const STATUS_BAD: Color32 = RED_ACTIVE;
-pub const STATUS_NEUTRAL: Color32 = Color32::new(184, 184, 189, 255);
-pub const STATUS_ACTIVE: Color32 = ORANGE_ACTIVE;
-pub const STATUS_OFF: Color32 = Color32::new(89, 89, 94, 255);
 pub const STATUS_DOT_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
 pub const STATUS_DOT_GREEN: Color32 = GREEN_ACTIVE;
 pub const STATUS_DOT_YELLOW: Color32 = AMBER_BASE;
@@ -365,11 +302,8 @@ pub const RECORD_ACTIVE: Color32 = RED_ACTIVE;
 /// strobing). They bracket the button's static active red (180,40,40).
 pub const RECORD_PULSE_DIM: Color32 = Color32::new(150, 34, 34, 255);
 pub const RECORD_PULSE_BRIGHT: Color32 = Color32::new(216, 60, 56, 255);
-pub const SAVE_FLASH_GREEN: Color32 = GREEN_BASE;
-pub const TRANSPORT_FIELD_BG: Color32 = Color32::new(40, 40, 42, 255);
 pub const BPM_RESET_ACTIVE: Color32 = GREEN_IDLE;
 pub const BPM_CLEAR_ACTIVE: Color32 = RED_BASE;
-pub const MIDI_POPUP_ACTIVE: Color32 = Color32::new(89, 46, 89, 255);
 
 // ── Sync source colors ──────────────────────────────────────────────
 pub const SYNC_ACTIVE: Color32 = Color32::new(56, 158, 133, 255);
@@ -378,9 +312,6 @@ pub const MIDI_PURPLE: Color32 = Color32::new(148, 77, 148, 255);
 pub const ABLETON_LINK_BLUE: Color32 = Color32::new(56, 133, 179, 255);
 
 // ── Delete / Remove button ──────────────────────────────────────────
-pub const DELETE_BTN_NORMAL: Color32 = Color32::new(97, 46, 46, 255);
-pub const DELETE_BTN_HIGHLIGHTED: Color32 = Color32::new(128, 61, 61, 255);
-pub const DELETE_BTN_PRESSED: Color32 = Color32::new(64, 31, 31, 255);
 
 // ── Mute / Solo / LED / Analysis ────────────────────────────────────
 pub const MUTED_COLOR: Color32 = Color32::new(255, 0, 0, 255);
@@ -391,24 +322,6 @@ pub const LED_COLOR: Color32 = Color32::new(0, 200, 80, 255);
 pub const ANALYSIS_COLOR: Color32 = Color32::new(0, 178, 170, 255);
 
 // ── Effect rack ─────────────────────────────────────────────────────
-pub const RACK_BORDER: Color32 = BORDER;
-pub const RACK_BG: Color32 = BG_2;
-pub const CARD_BORDER: Color32 = BORDER;
-pub const RACK_HANDLE_BG: Color32 = Color32::new(37, 37, 43, 255);
-pub const RACK_HANDLE_TEXT: Color32 = Color32::new(122, 128, 158, 255);
-pub const EFFECT_HEADER_NAME: Color32 = Color32::new(184, 199, 235, 255);
-pub const EFFECT_CARD_INNER_BG: Color32 = BG_0; // dark well, recessed in the card
-pub const REMOVE_BTN_BG: Color32 = Color32::new(71, 33, 33, 255);
-pub const REMOVE_BTN_HIGHLIGHTED: Color32 = Color32::new(230, 191, 191, 255);
-pub const REMOVE_BTN_PRESSED: Color32 = Color32::new(184, 140, 140, 255);
-pub const REMOVE_BTN_TEXT: Color32 = Color32::new(204, 107, 107, 255);
-pub const ADD_BTN_BG: Color32 = Color32::new(40, 40, 42, 255);
-pub const ADD_BTN_HIGHLIGHTED: Color32 = Color32::new(217, 224, 242, 255);
-pub const ADD_BTN_PRESSED: Color32 = Color32::new(166, 184, 209, 255);
-pub const EFFECT_DRAG_GHOST_BLUE: Color32 = Color32::new(56, 97, 166, 204);
-pub const EFFECT_DRAG_GHOST_RACK: Color32 = Color32::new(61, 61, 107, 204);
-pub const EFFECT_DRAG_INDICATOR_UNGROUP: Color32 = Color32::new(209, 128, 56, 255);
-pub const EFFECT_DRAG_INDICATOR_REGROUP: Color32 = Color32::new(77, 158, 97, 255);
 
 // ── Selection ───────────────────────────────────────────────────────
 pub const SELECTED_BORDER: Color32 = BLUE_BASE;
@@ -418,10 +331,8 @@ pub const SELECTED_BORDER: Color32 = BLUE_BASE;
 /// hue and pairs with a small lift — the one distinct "this layer is selected"
 /// signal on a coloured header. See `docs/TIMELINE_UI_REDESIGN.md` section H.
 pub const SELECTED_LAYER_RING: Color32 = Color32::new(232, 240, 255, 255);
-pub const SELECTED_LAYER_RING_WIDTH: f32 = 2.0;
 
 // ── Trim handles (viewport clip edges) ─────────────────────────────
-pub const TRIM_HANDLE_COLOR: Color32 = Color32::new(255, 255, 255, 51);
 
 // ── Resize handle ───────────────────────────────────────────────────
 pub const RESIZE_HANDLE_IDLE: Color32 = Color32::new(89, 89, 94, 0);
@@ -429,16 +340,10 @@ pub const RESIZE_HANDLE_HOVER: Color32 = Color32::new(128, 128, 133, 128);
 pub const RESIZE_HANDLE_DRAG: Color32 = Color32::new(140, 140, 145, 179);
 
 // ── Driver indicator ────────────────────────────────────────────────
-pub const DRIVER_ACTIVE: Color32 = Color32::new(20, 166, 191, 255);
-pub const DRIVER_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
 
 // ── Envelope ────────────────────────────────────────────────────────
-pub const ENVELOPE_ACTIVE: Color32 = Color32::new(191, 115, 20, 255);
-pub const ENVELOPE_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
-pub const ENVELOPE_CARD_BG: Color32 = Color32::new(23, 23, 24, 255);
 
 // ── Param group ─────────────────────────────────────────────────────
-pub const PARAM_GROUP_BG: Color32 = BG_3;
 
 // ── Grid lines ──────────────────────────────────────────────────────
 pub const GRID_BAR_LINE: Color32 = Color32::new(107, 107, 112, 128);
@@ -450,7 +355,6 @@ pub const GRID_SIXTEENTH_LINE: Color32 = Color32::new(71, 71, 77, 20);
 // 7 columns × 10 rows = 70 high-contrast colors. Modeled after Ableton's
 // color grid: each column is a hue family, rows go from light → saturated → dark.
 pub const COLOR_GRID_COLS: usize = 7;
-pub const COLOR_GRID_ROWS: usize = 10;
 pub const COLOR_GRID: [Color32; 70] = [
     // Row 0 — pastels (light, desaturated)
     Color32::new(255, 148, 148, 255), // light red
@@ -535,36 +439,18 @@ pub const COLOR_GRID: [Color32; 70] = [
 ];
 
 // ── Legacy layer palette (overview strip fallback) ─────────────────
-pub const LAYER_PALETTE: [Color32; 8] = [
-    Color32::new(100, 148, 210, 220), // Slate blue
-    Color32::new(100, 180, 145, 220), // Sage green
-    Color32::new(200, 160, 100, 220), // Warm amber
-    Color32::new(175, 110, 158, 220), // Dusty rose
-    Color32::new(138, 138, 198, 220), // Soft violet
-    Color32::new(195, 128, 108, 220), // Terracotta
-    Color32::new(100, 185, 182, 220), // Muted teal
-    Color32::new(188, 182, 108, 220), // Olive gold
-];
 
 // ── Color grid layout constants ────────────────────────────────────
 pub const COLOR_SWATCH_SIZE: f32 = 16.0;
 pub const COLOR_SWATCH_GAP: f32 = 3.0;
 
 // ── Tempo lane ──────────────────────────────────────────────────────
-pub const TEMPO_LINE: Color32 = Color32::new(64, 199, 199, 166);
-pub const TEMPO_POINT: Color32 = Color32::new(230, 230, 235, 242);
 
 // ── Monitor / Export ────────────────────────────────────────────────
-pub const MONITOR_ACTIVE: Color32 = GREEN_IDLE;
-pub const EXPORT_ACTIVE: Color32 = RED_BASE;
 
 // ── Mute/Solo buttons ───────────────────────────────────────────────
-pub const MUTE_BTN_ACTIVE: Color32 = ORANGE_BASE;
-pub const SOLO_BTN_ACTIVE: Color32 = AMBER_ACTIVE;
-pub const MUTE_SOLO_BTN_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
 
 // ── Ruler ───────────────────────────────────────────────────────────
-pub const RULER_BG: Color32 = Color32::new(102, 102, 102, 255);
 
 // ── Dropdown item states ────────────────────────────────────────────
 pub const DROPDOWN_ITEM_SELECTED: Color32 = Color32::new(45, 65, 95, 255);
@@ -573,16 +459,10 @@ pub const DROPDOWN_BORDER: Color32 = BORDER;
 
 // ── Clip chrome ─────────────────────────────────────────────────────
 pub const LOOP_ON_COLOR: Color32 = Color32::new(50, 100, 180, 255);
-pub const LOOP_OFF_COLOR: Color32 = Color32::new(45, 45, 48, 255);
 pub const BPM_BTN_COLOR: Color32 = Color32::new(40, 40, 42, 255);
-pub const BPM_BTN_HOVER: Color32 = Color32::new(50, 50, 55, 255);
 pub const GEN_TYPE_COLOR: Color32 = Color32::new(100, 199, 140, 255);
-pub const GEN_TYPE_HOVER: Color32 = Color32::new(40, 40, 44, 255);
 
 // ── Master chrome ───────────────────────────────────────────────────
-pub const EXIT_PATH_BG: Color32 = Color32::new(48, 48, 51, 255);
-pub const EXIT_PATH_HOVER: Color32 = Color32::new(58, 58, 63, 255);
-pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
 
 // ── Overview strip ──────────────────────────────────────────────────
 pub const OVERVIEW_BG: Color32 = Color32::new(34, 34, 40, 255);
@@ -604,7 +484,6 @@ pub const MARKER_WHITE: Color32 = Color32::new(220, 220, 225, 255);
 pub const MARKER_LINE_ALPHA: u8 = 128;
 pub const MARKER_FLAG_WIDTH: f32 = 8.0;
 pub const MARKER_FLAG_HEIGHT: f32 = 14.0;
-pub const MARKER_LINE_WIDTH: f32 = 1.0;
 pub const MARKER_LABEL_WIDTH: f32 = 60.0;
 pub const MARKER_LABEL_HEIGHT: f32 = 12.0;
 pub const MARKER_LABEL_BG: Color32 = Color32::new(40, 40, 40, 200);
@@ -630,7 +509,6 @@ pub const PRESS_OVERLAY: Color32 = Color32::new(255, 255, 255, 25);
 pub const PANEL_BG_DARK: Color32 = BG_1;
 pub const TEXT_PRIMARY_C32: Color32 = Color32::new(230, 230, 235, 255); // section A: synced w/ TEXT_NORMAL
 pub const TEXT_WHITE_C32: Color32 = Color32::new(255, 255, 255, 255);
-pub const TEXT_LIGHT_C32: Color32 = Color32::new(226, 226, 231, 255); // section A
 pub const TEXT_DIMMED_C32: Color32 = Color32::new(178, 178, 184, 255); // section A: synced w/ TEXT_DIMMED
 pub const DIVIDER_C32: Color32 = DIVIDER;
 
@@ -658,25 +536,16 @@ pub const ACCENT_BLUE_C32: Color32 = Color32::new(89, 148, 235, 255);
 pub const ACCENT_BLUE_HOVER_C32: Color32 = Color32::new(109, 168, 255, 255);
 pub const ACCENT_BLUE_PRESS_C32: Color32 = Color32::new(69, 128, 215, 255);
 pub const BUTTON_INACTIVE_C32: Color32 = Color32::new(59, 59, 61, 255);
-pub const BUTTON_INACTIVE_HOVER_C32: Color32 = Color32::new(74, 74, 76, 255);
-pub const BUTTON_INACTIVE_PRESS_C32: Color32 = Color32::new(49, 49, 51, 255);
 
 // ── Bitmap Driver / Envelope Indicators ─────────────────────────────
 pub const DRIVER_ACTIVE_C32: Color32 = Color32::new(20, 166, 191, 255);
 // (DRIVER_ACTIVE_HOVER/PRESS removed — config buttons now derive hover/press
 //  from DRIVER_ACTIVE via the state-button skin, matching the colored variant.)
 pub const DRIVER_INACTIVE_C32: Color32 = Color32::new(72, 72, 78, 255);
-pub const DRIVER_INACTIVE_HOVER_C32: Color32 = Color32::new(87, 87, 93, 255);
-pub const DRIVER_INACTIVE_PRESS_C32: Color32 = Color32::new(62, 62, 68, 255);
 pub const ENVELOPE_ACTIVE_C32: Color32 = Color32::new(191, 115, 20, 255);
-pub const ENVELOPE_ACTIVE_HOVER_C32: Color32 = Color32::new(211, 135, 40, 255);
-pub const ENVELOPE_ACTIVE_PRESS_C32: Color32 = Color32::new(171, 95, 10, 255);
 
 // ── Bitmap Config Drawer ────────────────────────────────────────────
 pub const CONFIG_BG_C32: Color32 = BG_2;
-pub const CONFIG_BTN_INACTIVE_C32: Color32 = Color32::new(44, 44, 48, 255);
-pub const CONFIG_BTN_HOVER_C32: Color32 = Color32::new(54, 54, 58, 255);
-pub const CONFIG_BTN_PRESSED_C32: Color32 = Color32::new(38, 38, 42, 255);
 
 // ── Bitmap Trim / Target Handles ────────────────────────────────────
 pub const TRIM_FILL_C32: Color32 = Color32::new(20, 166, 191, 38);
@@ -699,7 +568,6 @@ pub const AUDIO_TRIM_FILL_C32: Color32 = Color32::new(72, 199, 116, 38);
 /// override (`PresetInstance.graph`) is set. Visually distinct from
 /// DRV/ENV/ABL.
 pub const MOD_BADGE_C32: Color32 = Color32::new(220, 60, 140, 255);
-pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);
 
 // ── Inspector identity accent ───────────────────────────────────────
 // ONE colour themes the inspector — card headers, the selected-card border, the
@@ -728,19 +596,13 @@ pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 // ── Bitmap Generator Card (purple-tinted to distinguish from effect cards) ───
 pub const GEN_CARD_BORDER_C32: Color32 = Color32::new(58, 45, 70, 255);
 pub const GEN_CARD_INNER_BG_C32: Color32 = Color32::new(20, 18, 24, 255);
-pub const GEN_CARD_HEADER_BG_C32: Color32 = Color32::new(38, 32, 48, 255);
 pub const GEN_CARD_HEADER_HOVER_C32: Color32 = Color32::new(50, 42, 62, 255);
-pub const GEN_CARD_HEADER_NAME_C32: Color32 = Color32::new(185, 160, 220, 255);
 
 // ── Panel-specific colors ────────────────────────────────────────────
 
 // Header panel
-pub const HEADER_BUTTON_DIM: Color32 = Color32::new(71, 71, 74, 255);
 pub const HEADER_BUTTON_HOVER: Color32 = Color32::new(90, 90, 94, 255);
 pub const HEADER_BUTTON_PRESSED: Color32 = Color32::new(55, 55, 58, 255);
-pub const HEADER_BUTTON_ACTIVE: Color32 = Color32::new(89, 173, 232, 255);
-pub const HEADER_BUTTON_ACTIVE_HOVER: Color32 = Color32::new(110, 190, 240, 255);
-pub const HEADER_BUTTON_ACTIVE_PRESSED: Color32 = Color32::new(70, 150, 210, 255);
 pub const HEADER_PROGRESS_FILL: Color32 = Color32::new(89, 173, 232, 255);
 
 // Graph editor header pills (Save to Library / Save to Project / Push to
@@ -750,21 +612,13 @@ pub const HEADER_PROGRESS_FILL: Color32 = Color32::new(89, 173, 232, 255);
 pub const GRAPH_SAVE_BUTTON_BG: Color32 = Color32::new(74, 96, 138, 230);
 
 // Footer panel
-pub const FOOTER_BTN_HOVER: Color32 = Color32::new(75, 75, 79, 255);
-pub const FOOTER_BTN_PRESSED: Color32 = Color32::new(50, 50, 53, 255);
 
 // Transport panel
-pub const TRANSPORT_BUTTON_HOVER: Color32 = Color32::new(78, 78, 82, 255);
-pub const TRANSPORT_SAVE_DIRTY_BG: Color32 = Color32::new(82, 68, 48, 255);
-pub const TRANSPORT_BPM_FIELD_HOVER: Color32 = Color32::new(50, 50, 53, 255);
 
 // Inspector panel
 pub const SCROLLBAR_TRACK_C32: Color32 = Color32::new(30, 30, 32, 180);
 pub const SCROLLBAR_THUMB_C32: Color32 = Color32::new(90, 90, 95, 200);
 pub const SCROLLBAR_THUMB_HOVER_C32: Color32 = Color32::new(110, 110, 115, 220);
-pub const ADD_EFFECT_BTN_BG_C32: Color32 = Color32::new(40, 45, 50, 255);
-pub const ADD_EFFECT_BTN_HOVER_C32: Color32 = Color32::new(55, 65, 75, 255);
-pub const ADD_EFFECT_BTN_TEXT_C32: Color32 = Color32::new(130, 170, 210, 255);
 
 // Layer header panel
 pub const LAYER_DRAG_SOURCE_DIM: Color32 = Color32::new(22, 22, 24, 255);
@@ -780,12 +634,6 @@ pub const LAYER_ROW_PRESSED_BG: Color32 = Color32::new(35, 35, 37, 255);
 // One dark neutral chip + a white hairline reads cleanly on any identity colour
 // (Ableton's pattern). Drives the type badge, M/S/L, blend, and routing-value
 // chips. Distinct from BUTTON_DIM (the grey chrome-bar chip) on purpose.
-pub const CHIP_BG: Color32 = Color32::new(27, 27, 33, 255);
-pub const CHIP_BG_HOVER: Color32 = Color32::new(40, 40, 47, 255);
-pub const CHIP_BG_PRESSED: Color32 = Color32::new(20, 20, 25, 255);
-/// Hairline edge on a chip — a low-alpha white so the chip separates from the
-/// identity colour behind it without a hard line.
-pub const CHIP_LINE: Color32 = Color32::new(255, 255, 255, 41);
 /// Hairline for a tonal header chip on a *light* identity header (section layer-header
 /// restyle): a faint dark line that re-seats the chip where the old white stroke
 /// would have glared. Omitted on dark headers, where the darkened chip separates
@@ -816,8 +664,6 @@ pub const LAYER_CHEVRON_HOVER: Color32 = Color32::new(255, 255, 255, 15);
 pub const LAYER_CHEVRON_PRESSED: Color32 = Color32::new(255, 255, 255, 8);
 
 // Viewport panel
-pub const CLIP_LABEL_BG: Color32 = Color32::new(20, 20, 22, 255);
-pub const CLIP_LABEL_BG_HOVER: Color32 = Color32::new(20, 20, 22, 220);
 
 // Dropdown panel (lightweight popup — barely dims; see `panels::popup_shell`).
 pub const DROPDOWN_SCRIM: Color32 = Color32::new(0, 0, 0, 1);
@@ -836,9 +682,6 @@ pub const MODAL_BORDER: Color32 = Color32::new(48, 48, 52, 255);
 // the label reads over arbitrary thumbnail content.
 pub const BROWSER_CELL_HOVER_OVER_IMAGE: Color32 = Color32::new(255, 255, 255, 40);
 pub const BROWSER_CELL_PRESSED_OVER_IMAGE: Color32 = Color32::new(0, 0, 0, 60);
-pub const BROWSER_CELL_CAPTION_BG: Color32 = Color32::new(0, 0, 0, 150);
-/// Origin/source badge text on a browser cell (Factory / My Library / …).
-pub const BROWSER_CELL_BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255);
 
 // ── Interaction thresholds ──────────────────────────────────────────
 pub const DRAG_THRESHOLD_PX: f32 = 4.0;
@@ -848,10 +691,6 @@ pub const DOUBLE_CLICK_TIME_SEC: f32 = 0.3;
 /// Equal to `DRAG_THRESHOLD_PX` by design (UI_WIDGET_UNIFICATION P4/I8) — one
 /// constant home for every gesture-timing/radius threshold in the app.
 pub const DOUBLE_CLICK_RADIUS_PX: f32 = DRAG_THRESHOLD_PX;
-pub const DRAG_EDGE_ZONE_PX: f32 = 72.0;
-pub const DRAG_SCROLL_SPEED_PX_PER_SEC: f32 = 900.0;
-pub const TRIM_HANDLE_THRESHOLD_PX: f32 = 8.0;
-pub const TRIM_HANDLE_MIN_CLIP_WIDTH_PX: f32 = 16.0;
 pub const RESIZE_EDGE_PX: f32 = 4.0;
 
 // ── Split ratio ────────────────────────────────────────────────────
@@ -860,30 +699,15 @@ pub const MIN_TIMELINE_SPLIT_RATIO: f32 = 0.15;
 pub const MAX_TIMELINE_SPLIT_RATIO: f32 = 0.70;
 
 // ── Waveform / stem lane heights ───────────────────────────────────
-pub const WAVEFORM_LANE_HEIGHT: f32 = 56.0;
-pub const STEM_LANE_HEIGHT: f32 = 56.0;
 
 // ── Waveform lane colors (from UIConstants.cs lines 218-255, 300-301) ──
-pub const WAVEFORM_LANE_BG: Color32 = Color32::new(28, 28, 28, 255); // Color(0.11, 0.11, 0.11, 1)
-pub const WAVEFORM_BTN_NORMAL: Color32 = Color32::new(48, 48, 51, 230); // Color(0.19, 0.19, 0.20, 0.9)
-pub const WAVEFORM_BTN_HIGHLIGHTED: Color32 = Color32::new(77, 97, 122, 255); // Color(0.30, 0.38, 0.48, 1)
-pub const WAVEFORM_BTN_PRESSED: Color32 = Color32::new(64, 115, 140, 255); // Color(0.25, 0.45, 0.55, 1)
-pub const WAVEFORM_REMOVE_HIGHLIGHTED: Color32 = Color32::new(107, 46, 46, 255); // Color(0.42, 0.18, 0.18, 1)
-pub const WAVEFORM_REMOVE_PRESSED: Color32 = Color32::new(140, 38, 38, 255); // Color(0.55, 0.15, 0.15, 1)
-pub const WAVEFORM_EXPAND_HIGHLIGHTED: Color32 = Color32::new(89, 115, 140, 255); // Color(0.35, 0.45, 0.55, 1)
-pub const WAVEFORM_EXPAND_PRESSED: Color32 = Color32::new(64, 140, 166, 255); // Color(0.25, 0.55, 0.65, 1)
 
 // ── Stem lane background colors (subtle per-stem tints, UIConstants.cs lines 247-250) ──
-pub const STEM_LANE_BG_DRUMS: Color32 = Color32::new(29, 26, 26, 255); // Color(0.115, 0.10, 0.10, 1)
-pub const STEM_LANE_BG_BASS: Color32 = Color32::new(26, 28, 26, 255); // Color(0.10, 0.11, 0.10, 1)
-pub const STEM_LANE_BG_OTHER: Color32 = Color32::new(26, 26, 29, 255); // Color(0.10, 0.10, 0.115, 1)
-pub const STEM_LANE_BG_VOCALS: Color32 = Color32::new(29, 26, 29, 255); // Color(0.115, 0.10, 0.115, 1)
 
 // Three-band waveform: low outer body, mid body, high inner detail.
 pub const WAVEFORM_LOW: Color32 = Color32::new(66, 151, 225, 255);
 pub const WAVEFORM_MID: Color32 = Color32::new(242, 176, 77, 255);
 pub const WAVEFORM_HIGH: Color32 = Color32::new(238, 244, 250, 255);
-pub const WAVEFORM_CENTER_LINE: Color32 = Color32::new(60, 60, 60, 80);
 
 // ── Insert cursor marker ───────────────────────────────────────────
 pub const INSERT_CURSOR_RULER_MARKER_SIZE: f32 = 6.0;
@@ -944,7 +768,6 @@ pub const PLAYHEAD_WIDTH: f32 = 2.0;
 /// Size of the playhead head marker — a downward triangle at the top of the
 /// ruler that makes the "now" position unmissable next to the insert cursor (section 24 5e).
 pub const PLAYHEAD_HEAD_SIZE: f32 = 13.0;
-pub const CLIP_MIN_WIDTH: f32 = 10.0;
 // section K14: tighter clip inset (12→6) so clip cards fill more of the lane, matching
 // the mockup's `top:6px; bottom:6px`. One token → viewport rects, hit-test, and
 // the GPU clip pass stay in agreement.
@@ -965,7 +788,6 @@ pub const MIN_INSPECTOR_WIDTH: f32 = 232.0;
 pub const MAX_INSPECTOR_WIDTH: f32 = 900.0;
 pub const DEFAULT_INSPECTOR_WIDTH: f32 = 500.0;
 pub const INSPECTOR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
-pub const INSPECTOR_GAP: f32 = 4.0;
 
 // ── Audio Setup dock (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN D1) ──
 // The Audio Setup panel is a fold-out column pinned to the inspector's LEFT
@@ -989,12 +811,10 @@ pub const GROUP_BOTTOM_BORDER_HEIGHT: f32 = 2.0;
 // ── Spacing scale ───────────────────────────────────────────────────
 // 4px base rhythm: 4 / 8 / 12 / 16 / 24. XS (2) is a half-step kept only for
 // genuinely tight chrome. One rhythm everywhere — no ad-hoc paddings.
-pub const SPACE_XS: f32 = 2.0;
 pub const SPACE_S: f32 = 4.0;
 pub const SPACE_M: f32 = 8.0;
 pub const SPACE_L: f32 = 12.0;
 pub const SPACE_XL: f32 = 16.0;
-pub const SPACE_XXL: f32 = 24.0;
 
 // The single left edge every inspector section-content row aligns to (section 14.2
 // rule 1), measured from the card/chrome rect. A bordered param card reaches it
@@ -1045,10 +865,6 @@ pub const MOTION_SLOW_MS: f32 = 240.0;
 /// — the doc's "≈25% overshoot". Confirmed at P2 entry (Peter's playground
 /// default, 25%) — do not retune without a new playground session.
 pub const EASE_SNAP_BACK_C1: f32 = 3.0;
-/// D15 magnetic-snap radius: screen-space px within which a drag target
-/// (clip edge → beat grid, wire end → port) snaps instead of tracking the
-/// cursor directly. Confirmed at P2 entry (Peter's playground default, 14px).
-pub const MAGNET_RADIUS_PX: f32 = 14.0;
 
 // ── Font sizes ──────────────────────────────────────────────────────
 // Semantic scale — all panel font sizes should reference these.
@@ -1075,7 +891,6 @@ pub const MAX_PIXELS_PER_BEAT: f32 = ZOOM_LEVELS[ZOOM_LEVELS.len() - 1];
 
 // ── Scroll ──────────────────────────────────────────────────────────
 pub const SCROLL_SENSITIVITY: f32 = 1.0;
-pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
 /// Continuous cursor-anchored zoom (section 24 5e): the zoom multiplier applied per
 /// wheel notch. Each notch scales pixels-per-beat by this factor (or its inverse
 /// when zooming out), so zoom is smooth instead of jumping between fixed levels.
@@ -1089,28 +904,15 @@ pub const ZOOM_PINCH_GAIN: f32 = 2.0;
 pub const LAYER_CTRL_PADDING: f32 = SPACE_M; // mockup edge gutter (8px) — tracks breathe
 pub const LAYER_CTRL_CHEVRON_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_DRAG_HANDLE_WIDTH: f32 = 18.0;
-/// Square type-badge chip in the layer name row (section 24 5d / section K3). 18px to match
-/// the mockup badge — a filled chip the glyph sits inside, not a bare glyph.
-pub const LAYER_CTRL_TYPE_BADGE_SIZE: f32 = 18.0;
 pub const LAYER_CTRL_NAME_ROW_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_ROW_STEP: f32 = 23.0;
 // section K5: M/S/L chips narrowed 28→20 to match the mockup iconbtn (frees width for
 // the blend chip + keeps the mix row uncrowded in the 230px column).
 pub const LAYER_CTRL_MUTE_SOLO_BTN_WIDTH: f32 = 20.0;
 pub const LAYER_CTRL_BTN_HEIGHT: f32 = 18.0;
-pub const LAYER_CTRL_INFO_ROW_HEIGHT: f32 = 14.0;
 pub const LAYER_CTRL_SEPARATOR_HEIGHT: f32 = 2.0;
 pub const LAYER_CTRL_RIGHT_GUTTER: f32 = 10.0;
 pub const LAYER_CTRL_TOP_ROW_GAP: f32 = 6.0; // mockup htop gap (chevron→badge→name)
-pub const LAYER_CTRL_FOLDER_BTN_WIDTH: f32 = 42.0;
-pub const LAYER_CTRL_NEW_CLIP_BTN_WIDTH: f32 = 62.0;
-pub const LAYER_CTRL_ADD_GEN_CLIP_BTN_WIDTH: f32 = 50.0;
-pub const LAYER_CTRL_GEN_TYPE_ROW_HEIGHT: f32 = 14.0;
-pub const LAYER_CTRL_MIDI_LABEL_WIDTH: f32 = 30.0;
-pub const LAYER_CTRL_CHANNEL_LABEL_WIDTH: f32 = 20.0;
-pub const LAYER_CTRL_SMALL_FONT_SIZE: u16 = 9;
-pub const LAYER_CTRL_NAME_FONT_SIZE: u16 = 11;
-pub const LAYER_CTRL_HANDLE_FONT_SIZE: u16 = 14;
 
 // ── Text editing (UI_WIDGET_UNIFICATION P5) ────────────────────────
 // The `TextEditModel`-backed caret + ranged-selection highlight, drawn by

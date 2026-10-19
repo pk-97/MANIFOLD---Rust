@@ -167,92 +167,6 @@ pub struct Layer {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clip_triggers: Vec<crate::audio_trigger::LayerClipTrigger>,
 
-    // ── Legacy flat generator fields (V1.0.0 format) ──
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "generatorType"
-    )]
-    pub legacy_generator_type: Option<PresetTypeId>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genParamValues"
-    )]
-    pub legacy_gen_param_values: Option<Vec<f32>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genDrivers"
-    )]
-    pub legacy_gen_drivers: Option<serde_json::Value>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genParamVersion"
-    )]
-    pub legacy_gen_param_version: Option<i32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genAnimSpeed"
-    )]
-    pub legacy_gen_anim_speed: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genAnimateEdges"
-    )]
-    pub legacy_gen_animate_edges: Option<serde_json::Value>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genLineThickness"
-    )]
-    pub legacy_gen_line_thickness: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genProjDistance"
-    )]
-    pub legacy_gen_proj_distance: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genRotSpeedXY"
-    )]
-    pub legacy_gen_rot_speed_xy: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genRotSpeedZW"
-    )]
-    pub legacy_gen_rot_speed_zw: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genRotSpeedXW"
-    )]
-    pub legacy_gen_rot_speed_xw: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genShowVertices"
-    )]
-    pub legacy_gen_show_vertices: Option<serde_json::Value>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genVertexSize"
-    )]
-    pub legacy_gen_vertex_size: Option<f32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genWindowSize"
-    )]
-    pub legacy_gen_window_size: Option<f32>,
-
     // ── Runtime caches (not serialized) ──
     #[serde(skip)]
     pub(crate) clips_sorted: bool,
@@ -440,15 +354,9 @@ impl Layer {
             || (any_solo_video && !self.is_solo && !parent.is_some_and(|p| p.is_solo))
     }
 
-    /// Get the generator type for this layer (from genParams or legacy field).
+    /// The generator type for this layer, or `NONE` without generator params.
     pub fn generator_type(&self) -> &PresetTypeId {
-        if let Some(gp) = &self.gen_params {
-            gp.generator_type()
-        } else {
-            self.legacy_generator_type
-                .as_ref()
-                .unwrap_or(&PresetTypeId::NONE)
-        }
+        self.gen_params.as_ref().map_or(&PresetTypeId::NONE, |gp| gp.generator_type())
     }
 
 
@@ -1078,20 +986,6 @@ impl Default for Layer {
             duration_mode: None,
             source_clip_ids: Vec::new(),
             clip_triggers: Vec::new(),
-            legacy_generator_type: None,
-            legacy_gen_param_values: None,
-            legacy_gen_drivers: None,
-            legacy_gen_param_version: None,
-            legacy_gen_anim_speed: None,
-            legacy_gen_animate_edges: None,
-            legacy_gen_line_thickness: None,
-            legacy_gen_proj_distance: None,
-            legacy_gen_rot_speed_xy: None,
-            legacy_gen_rot_speed_zw: None,
-            legacy_gen_rot_speed_xw: None,
-            legacy_gen_show_vertices: None,
-            legacy_gen_vertex_size: None,
-            legacy_gen_window_size: None,
             clips_sorted: false,
             clips_by_end_indices: Vec::new(),
             clips_by_end_sorted: false,

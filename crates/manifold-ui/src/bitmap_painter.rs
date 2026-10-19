@@ -7,12 +7,10 @@ use crate::color;
 use crate::node::Color32;
 
 // ── Color constants ──
-// Clip fills/borders/separators/trim-hints moved to the GPU clip pass (section 24 5b,
-// `manifold_nodes::clip_draw`); their constants left with them. Region
-// highlight + insert cursor are still bitmap-painted (front buffer).
+// Clip fills, borders and trim hints are drawn by the GPU clip pass
+// (`manifold_nodes::clip_draw`). Region highlight and the insert cursor are
+// painted with `fill_rect` from `panels/viewport/render.rs`.
 
-pub const REGION_HIGHLIGHT_COLOR: Color32 = color::ACCENT_BLUE_SELECTION;
-pub const INSERT_CURSOR_COLOR: Color32 = color::INSERT_CURSOR_BLUE;
 
 /// Scale a logical pixel value to texture pixels, minimum 1.
 /// Unity: `private static int S(int logicalPx, float renderScale)

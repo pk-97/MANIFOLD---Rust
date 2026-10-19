@@ -113,7 +113,7 @@ fn provider_prewarm_first_generator_frame_compiles_nothing(device: Arc<GpuDevice
     let provider = generator_provider();
     let mut generator = (provider.create)(
         device.clone(), FORMAT, &PresetTypeId::new("Plasma"), None,
-        16, 16, false, None, None,
+        16, 16, false, None,
     ).expect("bundled Plasma generator");
     let target = RenderTarget::new(&device, 16, 16, FORMAT, "provider first frame");
     let ctx = PresetContext {
