@@ -1,0 +1,39 @@
+[
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "None" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "System Default" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Source", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Audio 1" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "None" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "System Default" } },
+      "check": { "Count": 0 }
+    }
+  }
+]

@@ -5,6 +5,9 @@
 use super::*;
 use crate::param_surface::RowKind;
 
+/// The scene card section's row-end button that opens the Scene tab.
+const REVEAL_LABEL: &str = "Open in Scene";
+
 /// Packed right-aligned positions for the 0–4 header modulation badges.
 /// In display order [MOD, ABL, ENV, DRV]; `None` for a hidden badge.
 /// `name_right` is the right edge of the name cell (left edge of the badge
@@ -303,12 +306,7 @@ impl ParamCardPanel {
                     }
                 }
                 for i in start..start + len {
-                    h += ROW_HEIGHT + ROW_SPACING;
-                    h += self.inactive_reason_height(i);
-                    // Same rule as `effect_body_natural_height`.
-                    if self.rows[i].grows_drawer(self.scene_sections) {
-                        h += self.animated_drawer_height(i);
-                    }
+                    h += self.generator_row_height(i);
                 }
             }
             // String param rows (text fields)
@@ -318,6 +316,31 @@ impl ParamCardPanel {
             h += PADDING;
         }
         h + CARD_BOTTOM_MARGIN
+    }
+
+    /// The height row `i` adds to the generator body, matching
+    /// `build_generator`: a colour row counts its header and, when open, its
+    /// channel sliders; a channel drawn inside one counts nothing itself.
+    fn generator_row_height(&self, i: usize) -> f32 {
+        let slider = |i: usize| {
+            let mut h = ROW_HEIGHT + ROW_SPACING + self.inactive_reason_height(i);
+            // Same rule as `effect_body_natural_height`.
+            if self.rows[i].grows_drawer(self.scene_sections) {
+                h += self.animated_drawer_height(i);
+            }
+            h
+        };
+        if self.row_host.is_colour_tail(&self.rows, i, self.scene_sections) {
+            return 0.0;
+        }
+        if self.rows[i].kind(self.scene_sections) != RowKind::Colour {
+            return slider(i);
+        }
+        let mut h = ROW_HEIGHT + ROW_SPACING;
+        if self.row_host.colour_open(&self.rows[i]) {
+            h += RowHost::colour_channels(&self.rows, i).into_iter().flatten().map(slider).sum::<f32>();
+        }
+        h
     }
 
     /// The dimmed reason line a row draws under itself when it does nothing
@@ -1097,10 +1120,10 @@ impl ParamCardPanel {
         Self::build_section_header_with_title(tree, parent, rect, name, folded, row_count, key_base, false).0
     }
 
-    /// `build_section_header`, plus, when `title_navigates`, the title as its
-    /// own button sized to the text (`card_section.title`): the fold
-    /// triangle and the bar's empty space still fold, the title opens the
-    /// Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    /// `build_section_header`, plus, when `title_navigates`, an "Open in
+    /// Scene" button at the row end (`card_section.reveal`): the heading
+    /// (`card_section.title`), the triangle and the bar only fold, the button
+    /// opens the Scene tab (SCENE_SURFACES_DESIGN.md D10).
     pub(crate) fn build_section_header_with_title(
         tree: &mut UITree,
         parent: Option<NodeId>,
@@ -1154,28 +1177,37 @@ impl ParamCardPanel {
             ..UIStyle::default()
         };
         let mut title_id = None;
+        let mut label_room = title_room;
         if title_navigates {
             tree.set_name(header_id, "card_section.header");
-            let text_w = tree.text_width(name, FONT_SIZE, title_style.font_weight);
+            // The reveal button sits at the row end, left of the folded
+            // count chip; the heading itself only folds.
+            let reveal_w = (tree.text_width(REVEAL_LABEL, color::FONT_CAPTION, title_style.font_weight) + GAP * 2.0)
+                .min(title_room / 2.0);
+            label_room = (title_room - reveal_w - GAP).max(0.0);
             let id = tree.add_button_keyed(
                 Some(header_id),
-                title_x,
-                y,
-                (text_w + GAP).min(title_room),
-                row_h,
+                x + w - GAP - count_w - reveal_w,
+                y + 2.0,
+                reveal_w,
+                row_h - 4.0,
                 UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: color::FONT_CAPTION,
                     hover_bg_color: color::HOVER_OVERLAY,
                     pressed_bg_color: color::PRESS_OVERLAY,
                     corner_radius: color::SMALL_RADIUS,
-                    ..title_style
+                    ..UIStyle::default()
                 },
-                name,
+                REVEAL_LABEL,
                 key_base | ROW_ROLE_SECTION_TITLE,
             );
-            tree.set_name(id, "card_section.title");
+            tree.set_name(id, "card_section.reveal");
             title_id = Some(id);
-        } else {
-            tree.add_label(Some(header_id), title_x, y, title_room, row_h, name, title_style);
+        }
+        let title_label = tree.add_label(Some(header_id), title_x, y, label_room, row_h, name, title_style);
+        if title_navigates {
+            tree.set_name(title_label, "card_section.title");
         }
         if folded {
             tree.add_label(
@@ -1221,6 +1253,8 @@ impl ParamCardPanel {
         self.row_host.ableton_config_ids[i] = None;
         self.row_host.mapping_chevron_ids[i] = None;
         self.row_host.toggle_ids[i] = None;
+        self.row_host.swatch_ids[i] = None;
+        self.row_host.colour_ids[i] = None;
         self.row_host.mod_tab_ids[i] = Vec::new();
     }
 
@@ -1631,10 +1665,16 @@ impl ParamCardPanel {
                 }
 
             for i in start..start + len {
+                // A G or B channel draws inside its colour row's fold.
+                if self.row_host.is_colour_tail(&self.rows, i, self.scene_sections) {
+                    continue;
+                }
                 let info = self.rows[i].clone();
                 let kind = info.kind(self.scene_sections);
 
-                if kind != RowKind::Number {
+                if kind == RowKind::Colour {
+                    cy = self.build_generator_colour_row(tree, (cx, cy, content_w), slider_w, label_width, author, i);
+                } else if kind != RowKind::Number {
                     // Button row — the shared builder (see its doc comment):
                     // a switch, a pick list on a scene card, or a fire button,
                     // which additionally reaches the audio-mod "A" drawer (D5b).
@@ -1667,69 +1707,7 @@ impl ParamCardPanel {
                     self.row_host.reindex_row(tree, i);
                     cy = row.new_cy;
                 } else {
-                    // Slider row — shared per-param core. Generators parent rows
-                    // flat to the root (`None`), use the gen-param slider palette,
-                    // the body-size driver-config font, and always show the `E`
-                    // button (generators always support envelopes).
-                    let row_y = cy;
-                    let reveal = self.reveal_for_build(i);
-                    let row = build_param_row(
-                        tree,
-                        None,
-                        cx,
-                        cy,
-                        slider_w,
-                        &info,
-                        &self.state.mod_state,
-                        i,
-                        self.param_target(),
-                        &SliderColors::default_slider(),
-                        FONT_SIZE,
-                        true,
-                        label_width,
-                        self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
-                        !self.compact,
-                        Some(param_row_key_base(&info.id)),
-                        reveal,
-                        // Persistent card: the sync pushes every change
-                        // unconditionally, so rows build showing the default.
-                        None,
-                    );
-                    self.drawer_clips[i] = row.drawer_clip;
-                    let new_cy = self.row_host.install_row(tree, i, row);
-                    self.sync_mod_tab_ink(tree, i);
-                    // Mapping-drawer chevron at the row's right edge (Author +
-                    // mappable) — identical to the effect card. Opens the same
-                    // sideways range/scale/offset/invert/curve drawer; click
-                    // resolves via the shared `mapping_chevron_ids`.
-                    if author && info.mapping.mappable {
-                        let ch_x = cx + content_w - MAP_CHEVRON_W;
-                        let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                        self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
-                            None,
-                            ch_x,
-                            ch_y,
-                            MAP_CHEVRON_W,
-                            DE_BUTTON_SIZE,
-                            UIStyle {
-                                bg_color: Color32::TRANSPARENT,
-                                hover_bg_color: color::HOVER_OVERLAY,
-                                pressed_bg_color: color::PRESS_OVERLAY,
-                                text_color: color::CHEVRON_COLOR,
-                                font_size: FONT_SIZE,
-                                text_align: TextAlign::Center,
-                                corner_radius: color::SMALL_RADIUS,
-                                ..UIStyle::default()
-                            },
-                            "\u{203A}", // ›
-                            param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
-                        ));
-                        if let Some(id) = self.row_host.mapping_chevron_ids[i] {
-                            tree.set_name(id, "inspector.param_card.mapping_chevron");
-                        }
-                    }
-                    self.row_host.reindex_row(tree, i);
-                    cy = new_cy;
+                    cy = self.build_generator_slider_row(tree, (cx, cy, content_w), slider_w, label_width, author, i, info);
                 }
             }
             }
@@ -1764,6 +1742,117 @@ impl ParamCardPanel {
         } // end if !self.is_collapsed
 
         self.finish_node_range(tree);
+    }
+
+    /// One generator slider row at `(cx, cy)` in a row lane `content_w`
+    /// wide; returns the next row's y.
+    fn build_generator_slider_row(
+        &mut self,
+        tree: &mut UITree,
+        (cx, cy, content_w): (f32, f32, f32),
+        slider_w: f32,
+        label_width: f32,
+        author: bool,
+        i: usize,
+        info: ParamRow,
+    ) -> f32 {
+        // Slider row — shared per-param core. Generators parent rows
+        // flat to the root (`None`), use the gen-param slider palette,
+        // the body-size driver-config font, and always show the `E`
+        // button (generators always support envelopes).
+        let row_y = cy;
+        let reveal = self.reveal_for_build(i);
+        let row = build_param_row(
+            tree,
+            None,
+            cx,
+            cy,
+            slider_w,
+            &info,
+            &self.state.mod_state,
+            i,
+            self.param_target(),
+            &SliderColors::default_slider(),
+            FONT_SIZE,
+            true,
+            label_width,
+            self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
+            !self.compact,
+            Some(param_row_key_base(&info.id)),
+            reveal,
+            // Persistent card: the sync pushes every change
+            // unconditionally, so rows build showing the default.
+            None,
+        );
+        self.drawer_clips[i] = row.drawer_clip;
+        let new_cy = self.row_host.install_row(tree, i, row);
+        self.sync_mod_tab_ink(tree, i);
+        // Mapping-drawer chevron at the row's right edge (Author +
+        // mappable) — identical to the effect card. Opens the same
+        // sideways range/scale/offset/invert/curve drawer; click
+        // resolves via the shared `mapping_chevron_ids`.
+        if author && info.mapping.mappable {
+            let ch_x = cx + content_w - MAP_CHEVRON_W;
+            let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+            self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
+                None,
+                ch_x,
+                ch_y,
+                MAP_CHEVRON_W,
+                DE_BUTTON_SIZE,
+                UIStyle {
+                    bg_color: Color32::TRANSPARENT,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    pressed_bg_color: color::PRESS_OVERLAY,
+                    text_color: color::CHEVRON_COLOR,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Center,
+                    corner_radius: color::SMALL_RADIUS,
+                    ..UIStyle::default()
+                },
+                "\u{203A}", // ›
+                param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
+            ));
+            if let Some(id) = self.row_host.mapping_chevron_ids[i] {
+                tree.set_name(id, "inspector.param_card.mapping_chevron");
+            }
+        }
+        self.row_host.reindex_row(tree, i);
+        new_cy
+    }
+
+    /// A colour row on the scene card: its header, then, when open, the three
+    /// channel sliders, each with its own lane. Returns the next row's y.
+    fn build_generator_colour_row(
+        &mut self,
+        tree: &mut UITree,
+        (cx, cy, content_w): (f32, f32, f32),
+        slider_w: f32,
+        label_width: f32,
+        author: bool,
+        i: usize,
+    ) -> f32 {
+        let channels = RowHost::colour_channels(&self.rows, i);
+        for channel in channels.into_iter().flatten() {
+            self.clear_row_ids(channel);
+        }
+        let open = self.row_host.colour_open(&self.rows[i]);
+        let rgb = self.row_host.swatch_rgb_of(i).unwrap_or([0.0; 3]);
+        let key = Some(param_row_key_base(&self.rows[i].id));
+        let Some(ids) = build_colour_row(tree, None, cx, cy, slider_w, label_width, &self.rows[i], rgb, open, key) else {
+            return cy;
+        };
+        let mut cy = ids.new_cy;
+        if open {
+            for channel in channels.into_iter().flatten() {
+                // The R channel's own slider carries no second swatch.
+                let mut info = self.rows[channel].clone();
+                info.rgb_members = None;
+                cy = self.build_generator_slider_row(tree, (cx, cy, content_w), slider_w, label_width, author, channel, info);
+            }
+        }
+        self.row_host.install_colour_row(tree, i, &ids);
+        cy
     }
 
     /// Per-frame value sync from the manifest's id-keyed slot channel
@@ -2006,7 +2095,9 @@ impl ParamCardPanel {
             // Trigger button stays neutral — the counter value isn't
             // user-visible; nothing to re-render per frame.
             RowKind::Trigger => {}
-            RowKind::Number => self.sync_slider_value(tree, i, val),
+            // A colour row's value is its R channel slider's, when its fold
+            // is open; the swatch and hex follow `paint_swatches`.
+            RowKind::Number | RowKind::Colour => self.sync_slider_value(tree, i, val),
         }
     }
 
@@ -2314,3 +2405,7 @@ mod led_band_tests {
         assert_eq!(bitmap[10].a, 255, "interior texel untouched");
     }
 }
+
+#[cfg(test)]
+#[path = "colour_row_tests.rs"]
+mod colour_row_tests;

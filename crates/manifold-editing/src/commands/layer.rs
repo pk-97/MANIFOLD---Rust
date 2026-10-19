@@ -55,6 +55,8 @@ pub struct AddLayerCommand {
     parent_group_id: Option<LayerId>,
     applied: bool,
     rejection: Option<&'static str>,
+    /// Audio layers only: feed the project's send when exactly one exists.
+    route_to_sole_send: bool,
 }
 
 impl AddLayerCommand {
@@ -74,7 +76,16 @@ impl AddLayerCommand {
             parent_group_id,
             applied: false,
             rejection: None,
+            route_to_sole_send: false,
         }
+    }
+
+    /// A new audio layer feeds the project's send when exactly one exists,
+    /// and stays on "No source" with zero or several (guessing would be wrong).
+    /// Done in this command so creation and routing are one undo step.
+    pub fn routing_to_sole_send(mut self) -> Self {
+        self.route_to_sole_send = true;
+        self
     }
 
     /// Prepare insertion of an existing layer while preserving its stable ID,
@@ -89,6 +100,7 @@ impl AddLayerCommand {
             insert_index,
             applied: false,
             rejection: None,
+            route_to_sole_send: false,
         }
     }
 
@@ -107,7 +119,13 @@ impl AddLayerCommand {
 }
 
 impl Command for AddLayerCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
+    fn touches(&self) -> ChangeSet {
+        if self.route_to_sole_send {
+            crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::AudioSetup]))
+        } else {
+            crate::commands::WHOLE_LAYERS
+        }
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -145,13 +163,22 @@ impl Command for AddLayerCommand {
             self.rejection = Some(reason);
             return;
         }
+        let routed_id = layer.layer_id.clone();
+        let audio = layer.layer_type == LayerType::Audio;
         project.timeline.insert_layer(self.insert_index, layer);
+        if self.route_to_sole_send && audio && project.audio_setup.sends.len() == 1 {
+            let send = project.audio_setup.sends[0].id.clone();
+            project.audio_setup.bind_send_to_layer(&send, routed_id);
+        }
         self.applied = true;
     }
 
     fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
+        }
+        if self.route_to_sole_send && let Some(layer) = &self.layer {
+            project.audio_setup.unbind_layer(&layer.layer_id);
         }
         // Find the layer we inserted by ID
         if let Some(layer) = &self.layer
@@ -1319,6 +1346,33 @@ mod tests {
             &PresetTypeId::new("LED Fill"),
             "new LED layers default to the LED Fill preset",
         );
+    }
+
+    fn audio_layer_routing(sends: usize) -> (Project, Option<manifold_core::AudioSendId>) {
+        let mut project = Project::default();
+        for i in 0..sends {
+            project.audio_setup.sends.push(manifold_core::audio_setup::AudioSend::new(format!("S{i}")));
+        }
+        let mut cmd = AddLayerCommand::new("Audio".into(), LayerType::Audio, PresetTypeId::NONE, 0, None)
+            .routing_to_sole_send();
+        cmd.execute(&mut project);
+        let id = project.timeline.layers[0].layer_id.clone();
+        let routed = project.audio_setup.send_for_layer(&id).map(|s| s.id.clone());
+        cmd.undo(&mut project);
+        assert!(project.audio_setup.sends.iter().all(|s| s.source.layers.is_empty()));
+        (project, routed)
+    }
+
+    #[test]
+    fn new_audio_layer_routes_to_the_only_source() {
+        let (project, routed) = audio_layer_routing(1);
+        assert_eq!(routed, Some(project.audio_setup.sends[0].id.clone()));
+    }
+
+    #[test]
+    fn new_audio_layer_has_no_source_with_zero_or_several() {
+        assert_eq!(audio_layer_routing(0).1, None);
+        assert_eq!(audio_layer_routing(2).1, None);
     }
 
     // ── MVP-P3a: gen-carrying predicate (LED_STRIPS_DESIGN.md section 5b D16) ──

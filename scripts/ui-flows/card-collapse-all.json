@@ -1,0 +1,17 @@
+[
+  {"Assert":{"selector":{"Query":{"name":"param_row.5_orbit.value"}},"check":"Exists"}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.6_exposure_ev.value"}},"check":"Exists"}},
+  {"Pointer":{"target":{"Query":{"name":"param_card.graph_editor.cc0__oomurasaki_azalea_r._x_pulchrum"}},"gesture":"RightClick"}},
+  {"Step":{"frames":3}},
+  {"Assert":{"selector":{"Query":{"text":"Collapse all sections","type":"Button"}},"check":"Exists"}},
+  "Snapshot",
+  {"Pointer":{"target":{"Query":{"text":"Collapse all sections","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.5_orbit.value"}},"check":{"Count":0}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.6_exposure_ev.value"}},"check":{"Count":0}}},
+  "Snapshot",
+  {"Pointer":{"target":{"Query":{"name":"param_card.graph_editor.cc0__oomurasaki_azalea_r._x_pulchrum"}},"gesture":"RightClick"}},
+  {"Step":{"frames":3}},
+  {"Pointer":{"target":{"Query":{"text":"Expand all sections","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.5_orbit.value"}},"check":"Exists"}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.6_exposure_ev.value"}},"check":"Exists"}}
+]

@@ -309,7 +309,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 }
             }
             if !commands.is_empty() {
-                ctx.project.execute_batch(commands, "Toggle effects".into());
+                ctx.execute_batch(commands, "Toggle effects".into());
             }
             DispatchResult::handled()
         }
@@ -364,6 +364,18 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     }
                 }
             });
+            DispatchResult::handled()
+        }
+        ParamsAction::SetCardSectionsFolded(gpt, folded) => {
+            // The inspector flips every section in the card's own fold state
+            // (one view bump, one rebuild); a scene card also saves each fold
+            // like a header click does.
+            let (changed, saved) = ctx.ui.inspector.set_card_sections_folded(gpt, *folded);
+            if saved {
+                for section in changed {
+                    dispatch_params(&ParamsAction::CardSectionFolded { target: gpt.clone(), section, folded: *folded }, ctx);
+                }
+            }
             DispatchResult::handled()
         }
         ParamsAction::ModConfigTabChanged | ParamsAction::SectionFoldToggled => {
@@ -512,6 +524,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let command = manifold_editing::commands::effect_groups::SetGroupCollapsedCommand::new(target, group_id.clone(), *collapsed);
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::handled()
+        }
+        ParamsAction::EffectGroupBypass { tab, layer_id, group_id, enabled } => {
+            super::super::rack_controls::dispatch_bypass(*tab, layer_id, group_id, *enabled, ctx)
         }
         ParamsAction::EffectReorder(from_idx, to_idx) => {
             let tab = effective_tab;

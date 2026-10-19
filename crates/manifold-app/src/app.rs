@@ -841,7 +841,10 @@ impl Application {
     }
 
     pub(crate) fn create_default_project() -> Project {
-        let mut project = Project::default();
+        let mut project = Project {
+            audio_setup: manifold_core::audio_setup::AudioSetup::for_new_project(),
+            ..Default::default()
+        };
         project.settings.bpm = manifold_core::Bpm(120.0);
         project.settings.time_signature_numerator = 4;
 
@@ -907,12 +910,12 @@ impl Application {
         }
         self.ws.ui_root.set_audio_setup_handle_idle();
 
-        // Priority 2d (UX-P2, D3a of SCENE_PANEL_UX_DESIGN.md) — the Scene
-        // Setup drag-armable value-cell cursor lookup — is DELETED
-        // (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d): Modifier, the
-        // last family with a bespoke delta-drag value cell, converted onto
-        // the card row's own slider track, so `value_cell_at` has no
-        // producer left anywhere in the panel.
+        // The Scene tab's split between its tree and settings panes.
+        let scene_rect = self.ws.ui_root.inspector.scene_content_rect();
+        if self.ws.ui_root.scene_setup_panel.split_cursor(self.cursor_pos, scene_rect) {
+            self.cursor_manager.set(TimelineCursor::ResizeVertical);
+            return;
+        }
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).

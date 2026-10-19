@@ -251,7 +251,7 @@ impl ScenePanel {
                 .is_none_or(|info| info.params.iter().any(|(_, id)| id == &row.id))
     }
 
-    fn selected_material_rows(&self) -> Vec<ParamRow> {
+    pub(super) fn selected_material_rows(&self) -> Vec<ParamRow> {
         self.full_params
             .as_ref()
             .map(|surface| {
@@ -279,6 +279,7 @@ impl ScenePanel {
         self.properties_card.rows.iter().find_map(|row| {
             row.rgb_members
                 .as_ref()
+                .filter(|members| members.editable)
                 .map(|members| &members.ids)
                 .filter(|members| members.contains(param_id))
                 .cloned()
@@ -503,7 +504,7 @@ impl ScenePanel {
         }
     }
 
-    fn material_feature_writes(
+    pub(super) fn material_feature_writes(
         &self,
         rows: &[ParamRow],
         feature: crate::param_surface::MaterialFeature,
@@ -591,6 +592,53 @@ impl ScenePanel {
             })
     }
 
+    /// One properties-card row as the Scene tab walks them: a colour row
+    /// draws its header then, when open, its three channel sliders; a G or B
+    /// channel under a colour row on this card draws there, not here.
+    pub(super) fn build_properties_block(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        cy: f32,
+        slot: usize,
+        label_width: f32,
+        slider_w: f32,
+        target: GraphParamTarget,
+    ) -> f32 {
+        let rows = &self.properties_card.rows;
+        if self.properties_card.row_host.is_colour_tail(rows, slot, true) {
+            return cy;
+        }
+        if rows[slot].kind(true) != RowKind::Colour {
+            return self.build_properties_row(tree, inner_x, cy, slot, label_width, slider_w, target);
+        }
+        let host = &self.properties_card.row_host;
+        let open = host.colour_open(&rows[slot]);
+        let rgb = host.swatch_rgb_of(slot).unwrap_or([0.0; 3]);
+        let Some(ids) = build_colour_row(
+            tree,
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            slider_w,
+            label_width,
+            &rows[slot],
+            rgb,
+            open,
+            Some(param_row_key_base(rows[slot].id.as_ref())),
+        ) else {
+            return cy;
+        };
+        let mut cy = ids.new_cy;
+        if open {
+            for channel in RowHost::colour_channels(rows, slot).into_iter().flatten() {
+                cy = self.build_properties_row(tree, inner_x, cy, channel, label_width, slider_w, target.clone());
+            }
+        }
+        self.properties_card.row_host.install_colour_row(tree, slot, &ids);
+        cy
+    }
+
     /// One properties-card row, built through the SAME shared core every
     /// effect/generator card row uses — no synthesis, no `RowAddr`: `slot`
     /// indexes `self.properties_card.rows` directly, whose
@@ -640,6 +688,11 @@ impl ScenePanel {
             }
         }
         let mut info = self.properties_card.rows[slot].clone();
+        // The colour row's R channel draws here as its plain slider; the
+        // header is `build_properties_block`'s.
+        if info.kind(true) == RowKind::Colour {
+            info.rgb_members = None;
+        }
         if info.spec.material_role.is_some() {
             info.spec.inactive_reason = None;
         }
@@ -995,42 +1048,7 @@ impl ScenePanel {
             cy += ROW_H;
         }
         if info.shared_object_count.is_some() {
-            let looks = [
-                (MaterialLook::Default, "Default", 4_u64),
-                (MaterialLook::Matte, "Matte", 0_u64),
-                (MaterialLook::Coated, "Coated", 1_u64),
-                (MaterialLook::BrushedMetal, "Brushed Metal", 2_u64),
-                (MaterialLook::Glass, "Glass", 3_u64),
-            ];
-            let gap = ROW_GAP;
-            let min_button_w = looks
-                .iter()
-                .map(|(_, label, _)| {
-                    tree.text_width(
-                        label,
-                        btn_style().font_size,
-                        crate::node::FontWeight::Regular,
-                    ) + 2.0 * GAP
-                })
-                .fold(0.0_f32, f32::max);
-            let columns =
-                (((inner_w + gap) / (min_button_w + gap)).floor() as usize).clamp(1, looks.len());
-            let button_w = ((inner_w - gap * (columns - 1) as f32) / columns as f32).max(0.0);
-            for (position, (look, label, offset)) in looks.into_iter().enumerate() {
-                let id = tree.add_button_keyed(
-                    Some(self.content_parent),
-                    inner_x + (position % columns) as f32 * (button_w + gap),
-                    cy + (position / columns) as f32 * (ROW_H + gap),
-                    button_w,
-                    ROW_H,
-                    btn_style(),
-                    label,
-                    MATERIAL_LOOK_KEY_BASE + offset,
-                );
-                self.material_look_ids
-                    .push((id, look, info.object.clone(), info.material.clone()));
-            }
-            cy += (looks.len().div_ceil(columns) - 1) as f32 * (ROW_H + gap);
+            self.build_material_preset_row(tree, inner_x, inner_w, cy, info);
         } else {
             tree.add_label(
                 Some(self.content_parent),
@@ -1043,69 +1061,6 @@ impl ScenePanel {
             );
         }
         cy + ROW_H + ROW_GAP
-    }
-
-    pub(super) fn build_material_feature_actions(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        info: &MaterialInspectorInfo,
-    ) -> f32 {
-        let feature_rows = self.selected_material_rows();
-        let features = crate::param_surface::MATERIAL_FEATURES;
-        let mut add_features = Vec::new();
-        for &feature in features {
-            if self.material_feature_visible(&feature_rows, feature) {
-                continue;
-            }
-            let Some(mode_row) = feature_rows.iter().find(|row| {
-                row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
-            }) else {
-                continue;
-            };
-            add_features.push((feature, mode_row.id.clone()));
-        }
-        if add_features.is_empty() {
-            return cy;
-        }
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Optional Features",
-            section_label_style(),
-        );
-        cy += ROW_H;
-        let button_w = ((inner_w - ROW_GAP * 2.0) / 3.0).max(0.0);
-        let feature_count = add_features.len();
-        for (index, (feature, mode_id)) in add_features.into_iter().enumerate() {
-            let col = (index % 3) as f32;
-            let row = (index / 3) as f32;
-            let label = format!("+ Add {}", Self::material_feature_label(feature));
-            let id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + col * (button_w + ROW_GAP),
-                cy + row * (ROW_H + ROW_GAP),
-                button_w,
-                ROW_H,
-                btn_style(),
-                &label,
-                MATERIAL_LOOK_KEY_BASE + 32 + feature as u64,
-            );
-            let writes = self.material_feature_writes(&feature_rows, feature, &mode_id);
-            self.material_feature_ids.push((
-                id,
-                feature,
-                writes,
-                info.object.clone(),
-                info.material.clone(),
-            ));
-        }
-        cy + feature_count.div_ceil(3) as f32 * (ROW_H + ROW_GAP)
     }
 
     pub(super) fn build_material_inspector(
@@ -1217,6 +1172,7 @@ impl ScenePanel {
 
     pub(super) fn properties_row_action(
         &mut self,
+        tree: &UITree,
         row: usize,
         role: RowRole,
         node: NodeId,
@@ -1259,6 +1215,7 @@ impl ScenePanel {
         let card = &mut self.properties_card;
         let mut copied_flash = CopyToClipboardLabelState::default();
         card.row_host.row_action(
+            tree,
             target,
             row,
             role,
@@ -1284,6 +1241,7 @@ mod tests {
             group: crate::param_surface::ColourGroup::Material(crate::param_surface::MaterialColour::Base),
             ids,
             values: [1.0; 3],
+            editable: true,
         }
     }
 
@@ -1385,6 +1343,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![(
                 "coat_mode".into(),
@@ -1393,6 +1352,7 @@ mod tests {
         });
         let target = GraphParamTarget::GeneratorOf(LayerId::new("layer"));
         let actions = panel.properties_row_action(
+            &UITree::new(),
             0,
             RowRole::MaterialFeatureToggle(feature),
             NodeId::PLACEHOLDER,
@@ -1506,6 +1466,53 @@ mod tests {
         );
     }
 
+    fn order_panel(coat: f32, iridescence: f32) -> ScenePanel {
+        use crate::param_surface::MaterialFeature;
+        let (_, mut surface) = super::super::tests::world_transform_vm();
+        let mode = |feature, name: &str, base| {
+            material_test_row(name, MaterialParamRole::FeatureMode(feature), base, 0.0)
+        };
+        surface.rows = vec![
+            mode(MaterialFeature::Coat, "51_coat_mode", coat),
+            mode(MaterialFeature::Iridescence, "51_iridescence_mode", iridescence),
+        ];
+        let mut panel = ScenePanel::new();
+        panel.full_params = Some(surface);
+        panel
+    }
+
+    #[test]
+    fn material_inspector_readded_feature_goes_last_but_undone_remove_keeps_its_slot() {
+        use crate::param_surface::MaterialFeature::{Coat, Iridescence};
+        let mut panel = order_panel(2.0, 2.0);
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Coat, Iridescence]);
+        // Coat removed, then undone: back in its slot.
+        let mut gone = order_panel(3.0, 2.0);
+        panel.full_params = gone.full_params.take();
+        panel.sync_material_feature_order();
+        panel.full_params = order_panel(2.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Coat, Iridescence]);
+        // Coat removed, then re-added from the menu: last.
+        panel.full_params = order_panel(3.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        let writes = vec![MaterialParamWrite { param_id: "51_coat_mode".into(), value: 2.0 }];
+        panel.material_menus.push((
+            panel_node(),
+            material_menus::MaterialMenu::AddFeature(vec![(Coat, writes.clone())]),
+        ));
+        panel.note_material_feature_added(&writes);
+        panel.full_params = order_panel(2.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Iridescence, Coat]);
+    }
+
+    fn panel_node() -> NodeId {
+        UITree::new().add_label(None, 0.0, 0.0, 1.0, 1.0, "x", label_style())
+    }
+
+
     #[test]
     fn material_inspector_new_features_follow_existing_sections() {
         use crate::param_surface::MaterialFeature;
@@ -1561,9 +1568,19 @@ mod tests {
         let target = GraphParamTarget::GeneratorOf(LayerId::new("layer"));
         let mut tree = UITree::new();
         panel.content_parent = tree.add_panel(None, 0.0, 0.0, 400.0, 800.0, UIStyle::default());
+        panel.properties_card.row_host.index_swatches(&panel.properties_card.rows);
         let mut y = 0.0;
         for slot in 0..3 {
-            y = panel.build_properties_row(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
+            y = panel.build_properties_block(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
+        }
+        assert!(panel.properties_card.row_host.slider_ids.iter().all(Option::is_none), "an editable colour starts folded");
+        let fold = panel.properties_card.row_host.colour_ids[0].expect("the R row is the colour row").fold;
+        panel.properties_row_action(&tree, 0, RowRole::ColourFold, fold, target.clone());
+        let mut tree = UITree::new();
+        panel.content_parent = tree.add_panel(None, 0.0, 0.0, 400.0, 800.0, UIStyle::default());
+        let mut y = 0.0;
+        for slot in 0..3 {
+            y = panel.build_properties_block(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
         }
         assert!(
             panel
@@ -1684,6 +1701,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![("clearcoat".into(), row.id.clone())],
         });
@@ -1730,6 +1748,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![("clearcoat".into(), custom_id)],
         });
@@ -1909,6 +1928,7 @@ mod tests {
                 node: manifold_foundation::NodeId::new("material"),
             },
             shared_object_count: Some(1),
+            look: None,
             textures: Vec::new(),
             params: vec![
                 ("coat_mode".into(), mode_51.id.clone()),

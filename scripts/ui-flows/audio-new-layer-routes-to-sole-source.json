@@ -1,0 +1,27 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "KICK", "type": "Button" } },
+      "gesture": { "RightClick": null }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Insert Audio Layer", "type": "Button", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Audio 28" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Layer • Audio 28" } },
+      "check": "Exists"
+    }
+  }
+]

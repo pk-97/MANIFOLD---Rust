@@ -530,6 +530,9 @@ impl InspectorCompositePanel {
     }
 
     pub(super) fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers, tree: &UITree) -> Vec<PanelAction> {
+        if let Some(actions) = self.rack_click(node_id) {
+            return actions;
+        }
         if let Some(nodes) = self.group_nodes.iter().find(|nodes| nodes.collapse == node_id) {
             let group = self.rack_groups[Self::scope_idx(self.active_tab)].iter().find(|group| group.id == nodes.group_id);
             return group.map(|group| vec![PanelAction::Params(ParamsAction::EffectGroupCollapsed {
@@ -599,6 +602,7 @@ impl InspectorCompositePanel {
             self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_click(node_id),
+                PressedTarget::RackWetDry => Vec::new(),
                 PressedTarget::AudioTriggers => self.audio_trigger_section.handle_click(node_id),
                 PressedTarget::MasterChrome => self.master_chrome.handle_click(node_id),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
@@ -692,6 +696,9 @@ impl InspectorCompositePanel {
         modifiers: Modifiers,
         tree: &UITree,
     ) -> Vec<PanelAction> {
+        if let Some(actions) = self.rack_press(node_id, pos) {
+            return actions;
+        }
         if let Some(group_id) = self.group_nodes.iter().find(|nodes| nodes.header == node_id).map(|nodes| nodes.group_id.clone()) {
             self.select_rack_group(&group_id, modifiers.ctrl || modifiers.command);
             return vec![PanelAction::Params(ParamsAction::EffectSelectionChanged)];
@@ -734,6 +741,7 @@ impl InspectorCompositePanel {
 
             let mut actions = match target {
                 PressedTarget::Macros => self.macros_panel.handle_press(node_id, pos.x),
+                PressedTarget::RackWetDry => Vec::new(),
                 PressedTarget::AudioTriggers => {
                     self.audio_trigger_section.handle_press(node_id, pos.x, tree)
                 }
@@ -778,5 +786,35 @@ impl InspectorCompositePanel {
         } else {
             Vec::new()
         }
+    }
+}
+
+impl InspectorCompositePanel {
+    fn card_for_target_mut(&mut self, gpt: &crate::GraphParamTarget) -> Option<&mut ParamCardPanel> {
+        match gpt {
+            crate::GraphParamTarget::Effect(id) => self.effects.iter_mut().flatten()
+                .chain(self.modifier_cards.iter_mut())
+                .find(|card| card.effect_id() == id),
+            crate::GraphParamTarget::Generator | crate::GraphParamTarget::GeneratorOf(_) => self.gen_params.as_mut(),
+        }
+    }
+
+    /// Whether the card `gpt` names has drawer sections to fold (the card
+    /// menu offers collapse-all only then).
+    pub fn card_has_sections(&mut self, gpt: &crate::GraphParamTarget) -> bool {
+        self.card_for_target_mut(gpt).is_some_and(|card| card.has_sections())
+    }
+
+    /// Fold or unfold every drawer section on the card in one pass, through
+    /// the card's own fold state; one view bump, so one rebuild. Returns the
+    /// changed sections and whether the card saves its folds (a scene card).
+    pub fn set_card_sections_folded(&mut self, gpt: &crate::GraphParamTarget, folded: bool) -> (Vec<String>, bool) {
+        let Some(card) = self.card_for_target_mut(gpt) else { return (Vec::new(), false) };
+        let changed = card.set_all_sections_folded(folded);
+        let saved = card.is_scene_card();
+        if !changed.is_empty() {
+            self.view_version += 1;
+        }
+        (changed, saved)
     }
 }

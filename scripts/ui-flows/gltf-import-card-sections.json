@@ -33,7 +33,7 @@
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Sun", "type": "Label" } },
+      "selector": { "Query": { "text": "Sun intensity", "type": "Label" } },
       "check": "Exists"
     }
   },

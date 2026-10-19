@@ -1510,24 +1510,21 @@ impl UIRoot {
                     .layer_info(*layer)
                     .map(|info| manifold_core::LayerId::new(&info.layer_id))
                 {
-                    let is_trigger = self
-                        .layer_headers
-                        .layer_info(*layer)
-                        .is_some_and(|info| info.is_trigger);
-                    if !is_trigger {
-                        items.push(
-                            DropdownItem::new("Import MIDI File")
-                                .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
-                        );
-                    }
-                    if !is_trigger {
-                        items.push(
-                            DropdownItem::new("Add trigger lane")
-                                .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
-                                    owner: layer_id.clone(),
-                                    assignment: None,
-                                })),
-                        );
+                    let info = self.layer_headers.layer_info(*layer);
+                    let is_trigger = info.is_some_and(|info| info.is_trigger);
+                    // A trigger lane adds its sibling under the same parent.
+                    let lane_owner = if is_trigger {
+                        info.and_then(|i| i.parent_layer_id.as_deref()).map(manifold_core::LayerId::new)
+                    } else {
+                        items.push(DropdownItem::new("Import MIDI File").with_action(PanelAction::Editing(
+                            EditingAction::ContextImportMidi(layer_id.clone()),
+                        )));
+                        Some(layer_id.clone())
+                    };
+                    if let Some(owner) = lane_owner {
+                        items.push(DropdownItem::new("Add trigger lane").with_action(PanelAction::Params(
+                            ParamsAction::CreateTriggerLane { owner, assignment: None },
+                        )));
                     }
                     items.push(
                         DropdownItem::new("Insert Video Layer")
@@ -1629,13 +1626,19 @@ impl UIRoot {
                             .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
                     );
                 }
-                if !is_trigger {
+                // A trigger lane adds its sibling under the same parent.
+                let lane_owner = if is_trigger {
+                    layer_info
+                        .and_then(|i| i.parent_layer_id.as_deref())
+                        .map(manifold_core::LayerId::new)
+                } else {
+                    Some(layer_id.clone())
+                };
+                if let Some(owner) = lane_owner {
                     items.push(
-                        DropdownItem::new("Add trigger lane")
-                            .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
-                                owner: layer_id.clone(),
-                                assignment: None,
-                            })),
+                        DropdownItem::new("Add trigger lane").with_action(PanelAction::Params(
+                            ParamsAction::CreateTriggerLane { owner, assignment: None },
+                        )),
                     );
                 }
                 items.push(
@@ -1990,6 +1993,16 @@ impl UIRoot {
                         self.inspector.gen_has_graph_mod()
                     }
                 };
+                if self.inspector.card_has_sections(gpt) {
+                    if let Some(last) = items.last_mut() {
+                        last.separator_after = true;
+                    }
+                    for (label, folded) in [("Collapse all sections", true), ("Expand all sections", false)] {
+                        items.push(DropdownItem::new(label).with_action(PanelAction::Params(
+                            ParamsAction::SetCardSectionsFolded(gpt.clone(), folded),
+                        )));
+                    }
+                }
                 items.extend(preset_menu_items(has_graph_mod, |kind| {
                     use manifold_ui::panels::actions::PresetActionKind::*;
                     match kind {
@@ -2101,160 +2114,7 @@ impl UIRoot {
                 self.open_dropdown_typed(items, cell_trigger);
                 true
             }
-            // SCENE_PANEL_UX_DESIGN.md UX-P2, D6: the "+ Add Modifier"
-            // button opens the shared dropdown listing the SAME curated
-            // vocabulary the old 7-chip grid did — each item dispatches the
-            // SAME `SceneSetupAddModifier` action the chips fired directly.
-            // `button_node_id` resolves the anchor directly, same
-            // resolve-at-open convention as `SceneSetupEnumClicked` above.
-            PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
-                layer_id, render_scene_node_id, object_index, domains, button_node_id,
-            }) => {
-                let anchor = self.tree.get_bounds(*button_node_id);
-                let mut items = Vec::new();
-                if domains.is_empty() {
-                    items.push(DropdownItem::disabled("Add a Fluid to this scene first"));
-                } else {
-                    if domains.len() == 1 {
-                        items.push(DropdownItem::disabled(&domains[0].name));
-                    }
-                    for (role, label) in [(0, "Initial Fill"), (1, "Inflow"), (2, "Drain"), (3, "Collider")] {
-                        let action = if domains.len() == 1 {
-                            PanelAction::Project(ProjectAction::SceneSetupAssignFluidRole {
-                                layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                                object_index: *object_index, domain: domains[0].node.clone(), role,
-                            })
-                        } else {
-                            PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
-                                layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                                object_index: *object_index, role, domains: domains.clone(), anchor,
-                            })
-                        };
-                        items.push(DropdownItem::new(label).with_action(action));
-                    }
-                }
-                self.open_dropdown_typed(items, anchor);
-                true
-            }
-            PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
-                layer_id, source_node_id, domains, button_node_id,
-            }) => {
-                let mut items = vec![DropdownItem::disabled("Replace fluid targets")];
-                items.extend(domains.iter().map(|domain| DropdownItem::new(&domain.name)
-                    .with_action(PanelAction::Project(ProjectAction::SceneSetupRetargetFluidRole {
-                        layer_id: layer_id.clone(), source_node_id: *source_node_id,
-                        domain: domain.node.clone(),
-                    }))));
-                if domains.is_empty() { items.push(DropdownItem::disabled("Add a Fluid to this scene first")); }
-                self.open_dropdown_typed(items, self.tree.get_bounds(*button_node_id));
-                true
-            }
-            PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
-                layer_id, render_scene_node_id, object_index, role, domains, anchor,
-            }) => {
-                let items = domains.iter().map(|domain| {
-                    DropdownItem::new(&domain.name).with_action(PanelAction::Project(
-                        ProjectAction::SceneSetupAssignFluidRole {
-                            layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                            object_index: *object_index, domain: domain.node.clone(), role: *role,
-                        },
-                    ))
-                }).collect();
-                self.open_dropdown_typed(items, *anchor);
-                true
-            }
-            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(layer_id, group_node_id, button_node_id)) => {
-                let trigger = self.tree.get_bounds(*button_node_id);
-                let items: Vec<DropdownItem> = manifold_ui::panels::scene_setup_panel::MESH_MODIFIER_CHOICES
-                    .iter()
-                    .map(|(label, type_id)| {
-                        // These nodes require a second authored source. A card
-                        // picker cannot create a meaningful connection for it.
-                        match *type_id {
-                            "node.push_mesh" => return DropdownItem::disabled("Displace by Texture — connect a texture in Graph"),
-                            "node.morph_mesh" => return DropdownItem::disabled("Morph — connect a target mesh in Graph"),
-                            _ => {}
-                        }
-                        DropdownItem::new(label).with_action(PanelAction::Project(ProjectAction::SceneSetupAddModifier(
-                            layer_id.clone(),
-                            *group_node_id,
-                            (*type_id).to_string(),
-                        )))
-                    })
-                    .collect();
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            // SCENE_FX P4b: the Skin row's source dropdown — "None" + every
-            // project layer, options carried on the action (captured from the
-            // row's freshly synced `SkinRowVm`, so no project cache here).
-            // Each item dispatches `SceneSetupSkinSourceSet` — the only
-            // mutation path for the source binding. Handled at THIS
-            // pre-dispatch intercept (not app_render) so the headless script
-            // harness drives the identical dropdown.
-            PanelAction::Root(RootAction::SceneSetupSkinSourceClicked {
-                layer_id,
-                scope_path,
-                scene_object_id,
-                source_node_id,
-                target_map,
-                source_options,
-                button_node_id,
-            }) => {
-                let trigger = self.tree.get_bounds(*button_node_id);
-                let items: Vec<DropdownItem> = std::iter::once((None, "None".to_string()))
-                    .chain(source_options.iter().cloned().map(|(id, name)| (Some(id), name)))
-                    .map(|(source, label)| {
-                        DropdownItem::new(&label).with_action(PanelAction::Project(
-                            ProjectAction::SceneSetupSkinSourceSet {
-                                layer_id: layer_id.clone(),
-                                scope_path: scope_path.clone(),
-                                scene_object_id: *scene_object_id,
-                                source_node_id: *source_node_id,
-                                target_map: *target_map,
-                                source,
-                            },
-                        ))
-                    })
-                    .collect();
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            // SCENE_FX P4b: the Skin row's target-map dropdown — Emissive /
-            // Base Color, checked at the current map. Items carry the UI enum;
-            // `dispatch_project` translates to the editing command's own
-            // `SkinTargetMap`.
-            PanelAction::Root(RootAction::SceneSetupSkinTargetMapClicked {
-                layer_id,
-                scope_path,
-                scene_object_id,
-                source_node_id,
-                current_target_map,
-                button_node_id,
-            }) => {
-                let trigger = self.tree.get_bounds(*button_node_id);
-                let choices = [
-                    manifold_ui::panels::scene_setup_panel::SkinTargetMap::Emissive,
-                    manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
-                ];
-                let items: Vec<DropdownItem> = choices
-                    .iter()
-                    .map(|&map| {
-                        DropdownItem::new(map.label())
-                            .with_check(map == *current_target_map)
-                            .with_action(PanelAction::Project(ProjectAction::SceneSetupSkinTargetMapSet {
-                                layer_id: layer_id.clone(),
-                                scope_path: scope_path.clone(),
-                                scene_object_id: *scene_object_id,
-                                source_node_id: *source_node_id,
-                                target_map: map,
-                            }))
-                    })
-                    .collect();
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            _ => false,
+            _ => self.try_open_scene_setup_menu(action),
         }
     }
 

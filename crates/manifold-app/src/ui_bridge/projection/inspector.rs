@@ -56,6 +56,8 @@ fn rack_groups(
                 },
                 member_ids,
                 mask_effect_id: group.mask_effect_id.clone(),
+                enabled: group.enabled,
+                wet_dry: group.wet_dry,
             })
         })
         .collect()
@@ -164,7 +166,19 @@ pub fn sync_inspector_data(
                         .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(&gen_type).map(|def| (*def).clone()));
                     let layer_ids: Vec<manifold_core::LayerId> =
                         project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
-                    match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
+                    // The readout reads the same authored graph the viewport
+                    // does: a card binding (the Resolution card) overrides
+                    // the node's own saved literal (BUG-l2itk).
+                    let authored = def.as_ref().map(|d| {
+                        let mut authored = d.clone();
+                        let projected = crate::fluid_domain_edit::project_authored_params(
+                            &mut authored,
+                            project,
+                            &manifold_core::GraphTarget::Generator(layer_id.clone()),
+                        );
+                        if projected.is_some() { authored } else { d.clone() }
+                    });
+                    match authored.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
                             let items = def.as_ref().map(|def| {
@@ -553,7 +567,7 @@ pub fn sync_inspector_data(
                                                 ),
                                                 transform: transform.as_ref().map(&transform_row),
                                                 material: material_row(material),
-                                                material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known)),
+                                                material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known, l.gen_params())),
                                                 modifiers: object_modifier_rows(def.as_ref(), modifier_chain, &owned),
                                                 modifiers_addable: known.look_mesh.is_none() && *modifier_chain_parseable,
                                                 skin: if known.look_mesh.is_some() { None } else { skin },

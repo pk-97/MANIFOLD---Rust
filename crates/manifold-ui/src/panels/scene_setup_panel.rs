@@ -1,9 +1,10 @@
 //! The Scene tab of the inspector (SCENE_SURFACES_DESIGN.md D8 (Scene tab
 //! tree), D16 (the scene is a tab in the inspector)).
 //!
-//! The tree of scene items sits on top (`outliner.rs`), the selected item's
-//! header below it (`item_header.rs`), then the item's controls grouped by
-//! control group. The panel builds `UITree` nodes from data handed in via
+//! The tree of scene items sits in its own pane on top (`outliner.rs`), and
+//! the selected item's header (`item_header.rs`) and controls, grouped by
+//! control group, scroll in a second pane below a draggable split
+//! (`panes.rs`). The panel builds `UITree` nodes from data handed in via
 //! [`ScenePanel::configure`] and maps clicks and drags to
 //! [`super::PanelAction`]; it never writes the project itself. Param rows
 //! are the shared card rows, dispatched through the same `RowHost` every
@@ -26,6 +27,7 @@ mod host_parity_tests;
 mod row_gesture_tests;
 #[path = "scene_setup_panel/material_inspector.rs"]
 mod material_inspector;
+mod material_menus;
 #[path = "scene_setup_panel/object_modifiers.rs"]
 mod object_modifiers;
 #[path = "scene_setup_panel/forces.rs"]
@@ -36,6 +38,7 @@ mod parameter_navigation;
 mod value_sync;
 #[path = "scene_setup_panel/fluid_roles.rs"]
 mod fluid_roles;
+mod panes;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, View};
@@ -54,7 +57,7 @@ use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{ParamCardPanel, RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
-    ROW_ROLE_TOGGLE, param_row_key_base,
+    ROW_ROLE_TOGGLE, build_colour_row, param_row_key_base,
     build_button_row, toggle_btn_style,
 };
 use crate::param_surface::{
@@ -331,6 +334,8 @@ pub struct MaterialInspectorInfo {
     pub object_gain: Option<manifold_foundation::ParamId>,
     pub material: ModifierObjectRef,
     pub shared_object_count: Option<usize>,
+    /// The starter look the material currently matches; `None` is Custom.
+    pub look: Option<MaterialLook>,
     pub textures: Vec<MaterialTextureInfo>,
     /// Exact inner material parameter bindings for the selected material.
     /// Names are descriptor keys; ids are the exposed graph parameters.
@@ -747,6 +752,7 @@ impl SceneCardState {
         let prev_pushed = std::mem::take(&mut self.last_pushed_values);
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
+        self.row_host.index_swatches(&self.rows);
         self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
         self.last_pushed_values = self
             .rows
@@ -875,7 +881,9 @@ pub struct ScenePanel {
     state: SceneSetupState,
     panel_w: f32,
     host: ChromeHost,
+    /// The settings pane's scroll column; the tree pane's lives in `panes`.
     scroll: ScrollContainer,
+    panes: panes::ScenePanes,
     reveal_properties: bool,
     pub(crate) content_parent: NodeId,
     bg_id: NodeId,
@@ -1036,17 +1044,8 @@ pub struct ScenePanel {
     material_visible_features: ahash::AHashSet<crate::param_surface::MaterialFeature>,
     material_feature_order: Vec<crate::param_surface::MaterialFeature>,
     material_remove_ids: Vec<(NodeId, crate::param_surface::MaterialFeature, manifold_foundation::ParamId)>,
-    /// Named material recipe buttons for the selected object's material.
-    material_look_ids: Vec<(NodeId, MaterialLook, ModifierObjectRef, ModifierObjectRef)>,
-    /// Add Feature controls and explicit feature mode headers for the selected
-    /// material. The refs are captured from the current structural projection.
-    material_feature_ids: Vec<(
-        NodeId,
-        crate::param_surface::MaterialFeature,
-        Vec<MaterialParamWrite>,
-        ModifierObjectRef,
-        ModifierObjectRef,
-    )>,
+    /// The Material section's preset and add-feature menu buttons.
+    material_menus: Vec<(NodeId, material_menus::MaterialMenu)>,
     active_material_info: Option<MaterialInspectorInfo>,
     /// The current properties pass's group for undescribed controls.
     property_fallback_group: ControlGroup,
@@ -1073,6 +1072,7 @@ impl Default for ScenePanel {
             panel_w: PANEL_W_MIN,
             host: ChromeHost::new(),
             scroll: ScrollContainer::new(),
+            panes: Default::default(),
             reveal_properties: false,
             content_parent: NodeId::PLACEHOLDER,
             bg_id: NodeId::PLACEHOLDER,
@@ -1134,8 +1134,7 @@ impl Default for ScenePanel {
             material_visible_features: ahash::AHashSet::new(),
             material_feature_order: Vec::new(),
             material_remove_ids: Vec::new(),
-            material_look_ids: Vec::new(),
-            material_feature_ids: Vec::new(),
+            material_menus: Vec::new(),
             active_material_info: None,
             property_fallback_group: ControlGroup::Transform,
             material_block_stage: 0,
@@ -1156,10 +1155,6 @@ impl ScenePanel {
 
     pub fn is_open(&self) -> bool {
         self.open
-    }
-
-    pub fn content_viewport(&self) -> Rect {
-        self.scroll.viewport()
     }
 
     /// Node-intent dispatch for this panel's right-click gestures: the
@@ -1311,8 +1306,7 @@ impl ScenePanel {
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
         self.material_mode_ids.clear();
-        self.material_look_ids.clear();
-        self.material_feature_ids.clear();
+        self.material_menus.clear();
         self.material_remove_ids.clear();
         // Object modifier cards are retained for collapse/gesture state, but
         // their widget ids are frame-local. Clear them before rebuilding so
@@ -1329,44 +1323,8 @@ impl ScenePanel {
         // otherwise register intents on whatever now sits in those slots.
         self.properties_card.clear_nodes();
         self.active_material_info = None;
-        let inner_x = x + PAD;
-        let inner_w = self.panel_w - PAD * 2.0;
-        let content_top = y + PAD;
-        let body_viewport = Rect::new(x, content_top, self.panel_w, (y + panel_h - PAD - content_top).max(0.0));
-        self.object_modifier_bounds = body_viewport;
-        let clip_id = self.scroll.begin(tree, body_viewport);
-        // The panel builds inside the inspector region (SCENE_SURFACES D16);
-        // this name keeps `under_name: "scene_setup"` selectors addressing it.
-        tree.set_name(clip_id, "scene_setup");
-        self.content_parent = clip_id;
-        let content_start = tree.count();
-        let mut cy = content_top;
-
-        cy = match self.state.clone() {
-            SceneSetupState::NoSelection(sentence) => {
-                self.build_sentence(tree, inner_x, inner_w, cy, &sentence)
-            }
-            SceneSetupState::NoGenerator { .. } => self.build_no_generator(tree, inner_x, inner_w, cy),
-            SceneSetupState::NoScene { .. } => self.build_no_scene(tree, inner_x, inner_w, cy),
-            SceneSetupState::Live(vm) => self.build_live(tree, inner_x, inner_w, cy, &vm),
-        };
-
-        let content_height = (cy - content_top + PAD).max(0.0);
-        self.scroll.set_content_height(content_height);
-        self.scroll.reparent_content(tree, content_start);
-        let offset = self.scroll.scroll_offset();
-        if offset != 0.0 {
-            self.scroll.offset_content(tree, -offset);
-        }
-        let sb_x = x + self.panel_w - SCROLLBAR_W - 2.0;
-        self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
-        if self.reveal_properties {
-            if let Some((_, node, _)) = self.object_name_ids.first() {
-                let bounds = tree.get_bounds(*node);
-                self.scroll.reveal_rect(tree, bounds);
-            }
-            self.reveal_properties = false;
-        }
+        let body = Rect::new(x, y + PAD, self.panel_w, (panel_h - PAD * 2.0).max(0.0));
+        self.build_body(tree, body);
         self.reveal_pending_parameter_response(tree);
         self.rebuild_object_modifier_drag_overlay(tree);
     }
@@ -1422,39 +1380,6 @@ impl ScenePanel {
             KEY_OPEN_GRAPH_EDITOR,
         ));
         cy + ROW_H + ROW_GAP
-    }
-
-    /// The tree over the selected item's header and controls (D8).
-    fn build_live(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
-        if vm.multiple_scenes {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                "This layer has more than one scene; showing the first",
-                label_style(),
-            );
-            cy += ROW_H + ROW_GAP;
-        }
-        self.show_gizmos_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            toggle_btn_style(self.show_gizmos),
-            "Show gizmos",
-            KEY_SHOW_GIZMOS,
-        ));
-        cy += ROW_H + ROW_GAP;
-        let selected = self.resolve_selection(vm);
-        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, &selected);
-        cy += ROW_GAP * 2.0;
-
-        // ── Properties ──
-        self.build_properties(tree, inner_x, inner_w, cy, vm, selected)
     }
 
     /// External selection write (REALTIME_3D_DESIGN.md P6): a viewport
@@ -1729,7 +1654,7 @@ impl ScenePanel {
             if !folded {
                 cy = self.build_material_section_sources(tree, inner_x, inner_w, cy, &name);
                 for row in i..run_end {
-                    cy = self.build_properties_row(tree, inner_x, cy, row, label_width, slider_w, target.clone());
+                    cy = self.build_properties_block(tree, inner_x, cy, row, label_width, slider_w, target.clone());
                 }
             }
             i = run_end;
@@ -1768,7 +1693,7 @@ impl ScenePanel {
             self.material_block_stage = 1;
         }
         if self.material_block_stage == 1 && group > material {
-            cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &info);
+            cy = self.build_material_add_menu(tree, inner_x, inner_w, cy);
             cy = self.build_material_inspector(tree, inner_x, inner_w, cy, object, object.skin.as_ref());
             self.material_block_stage = 2;
         }
@@ -1847,15 +1772,6 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// Mouse-wheel scroll for the docked body.
-    pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        let moved = self.scroll.apply_scroll_delta(delta);
-        if moved {
-            self.view_version += 1;
-        }
-        moved
-    }
-
     /// The docked body's view version: scroll and card tween frames.
     pub fn view_version(&self) -> u64 {
         self.view_version
@@ -1879,6 +1795,9 @@ impl ScenePanel {
     pub fn handle_event(&mut self, event: &UIEvent, tree: &mut UITree) -> (bool, Vec<PanelAction>) {
         if !self.open {
             return (false, Vec::new());
+        }
+        if let Some(handled) = self.handle_pane_event(event) {
+            return handled;
         }
         match event {
             UIEvent::RightClick { node_id: Some(node_id), .. } if self.select_outliner_node(*node_id) => {
@@ -1943,37 +1862,11 @@ impl ScenePanel {
                         return (true, self.material_remove_action(
                             *feature, mode_id, GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
                         ));
-                    } else if let Some((_, feature, writes, object, material)) = self
-                        .material_feature_ids
-                        .iter()
-                        .find(|(id, _, _, _, _)| *id == *node_id)
-                    {
-                        if !self.material_action_context(object, material, false) {
-                            return (true, Vec::new());
-                        }
-                        self.material_feature_order.retain(|existing| existing != feature);
-                        self.material_feature_order.push(*feature);
-                        self.section_folded.insert(Self::material_feature_label(*feature).into(), false);
-                        actions.push(PanelAction::Project(ProjectAction::MaterialParamsSet {
-                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
-                            object: object.clone(),
-                            material: material.clone(),
-                            kind: MaterialEditKind::Feature,
-                            writes: writes.clone(),
-                            description: format!("Add {} feature", Self::material_feature_label(*feature)),
-                        }));
-                    } else if let Some((_, look, object, material)) =
-                        self.material_look_ids.iter().find(|(id, _, _, _)| *id == *node_id)
-                    {
-                        if !self.material_action_context(object, material, true) {
-                            return (true, Vec::new());
-                        }
-                        actions.push(PanelAction::Project(ProjectAction::MaterialLookApply {
-                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
-                            object: object.clone(),
-                            material: material.clone(),
-                            look: *look,
-                        }));
+                    } else if let Some(menu) = self.material_menu_click(
+                        *node_id,
+                        GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
+                    ) {
+                        return (true, menu);
                     } else if let Some((_, row_value)) =
                         self.outliner_eye_ids.iter().find(|(id, _)| *id == *node_id)
                     {
@@ -2155,7 +2048,7 @@ impl ScenePanel {
                         // its panel is docked to, which can differ from the
                         // app's active layer.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        for mut action in self.properties_row_action(row, role, *node_id, target) {
+                        for mut action in self.properties_row_action(tree, row, role, *node_id, target) {
                             if let PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. }) = &mut action {
                                 *anchor = tree.get_bounds(*node_id);
                                 *value = self.properties_card.mod_state.driver_effective_period(row);
@@ -2282,17 +2175,6 @@ impl ScenePanel {
                 let actions = self.properties_card.row_host.handle_drag_end();
                 let actions = self.rewrite_material_rgb_actions(actions);
                 (was_dragging || !actions.is_empty(), actions)
-            }
-            // BUG-199: mouse-wheel scroll over the docked body, routed here by
-            // `window_input.rs`'s `primary_mouse_wheel` through the generic
-            // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
-            // `window_input` already gated on `layout.scene_setup().contains(pos)`
-            // before emitting this, so no further position check is needed here.
-            // The scroll moves the panel's view version, so the planner
-            // rebuilds the inspector region that hosts the body.
-            UIEvent::Scroll { delta, .. } => {
-                self.handle_scroll(delta.y);
-                (true, Vec::new())
             }
             _ => (false, Vec::new()),
         }

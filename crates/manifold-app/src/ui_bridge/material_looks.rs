@@ -128,6 +128,46 @@ pub(super) fn writes(
     }).collect()
 }
 
+/// An add-feature menu item went out: the Scene panel moves that feature to
+/// the end of its UI-local section order.
+pub(super) fn note_feature_add(
+    ui: &mut crate::ui_root::UIRoot,
+    kind: manifold_ui::panels::actions::MaterialEditKind,
+    writes: &[MaterialParamWrite],
+) {
+    if kind == manifold_ui::panels::actions::MaterialEditKind::Feature {
+        ui.scene_setup_panel.note_material_feature_added(writes);
+    }
+}
+
+/// The starter look whose values the material holds right now, or `None` for
+/// a custom mix. Decided from the stored base values each time the Scene tab
+/// is projected, so applying a look and then nudging a slider reads as Custom
+/// with nothing extra to keep in step.
+pub(super) fn matching_look(
+    inst: &PresetInstance,
+    def: &EffectGraphDef,
+    material: &SceneNodeRef,
+) -> Option<MaterialLook> {
+    [
+        MaterialLook::Default,
+        MaterialLook::Matte,
+        MaterialLook::Coated,
+        MaterialLook::BrushedMetal,
+        MaterialLook::Glass,
+    ]
+    .into_iter()
+    .find(|&look| {
+        writes(inst, def, material, look).is_ok_and(|writes| {
+            writes.iter().all(|write| {
+                inst.params
+                    .get(write.param_id.as_ref())
+                    .is_some_and(|param| (param.base - write.value).abs() < 1e-4)
+            })
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,6 +477,35 @@ mod tests {
             serde_json::to_string(&loaded_instance.graph).unwrap(),
             before_graph
         );
+    }
+
+    #[test]
+    fn matching_look_follows_the_material_values() {
+        let mut fixture = physics_solids_fixture();
+        let current = |fixture: &MaterialFixture| {
+            let instance = fixture.project.preset_instance(&fixture.target).unwrap();
+            matching_look(instance, instance.graph.as_ref().unwrap(), &fixture.material)
+        };
+        let mut service = EditingService::new();
+        for look in [
+            MaterialLook::Matte,
+            MaterialLook::Coated,
+            MaterialLook::BrushedMetal,
+            MaterialLook::Glass,
+            MaterialLook::Default,
+        ] {
+            let (command, _) = build_command(&fixture, look);
+            service.execute(Box::new(command), &mut fixture.project);
+            assert_eq!(current(&fixture), Some(look), "{look:?} is recognised once applied");
+        }
+        let (command, _) = build_command(&fixture, MaterialLook::Coated);
+        service.execute(Box::new(command), &mut fixture.project);
+        let roughness = fixture.project.preset_instance(&fixture.target).unwrap().params.iter()
+            .find(|param| param.spec.name.eq_ignore_ascii_case("roughness"))
+            .map(|param| param.id().to_owned());
+        let roughness = roughness.expect("roughness is exposed");
+        fixture.project.preset_instance_mut(&fixture.target).unwrap().params.get_mut(&roughness).unwrap().base = 0.9;
+        assert_eq!(current(&fixture), None, "a nudged value reads as Custom");
     }
 
     #[test]

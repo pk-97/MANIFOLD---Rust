@@ -238,18 +238,16 @@ impl Application {
             let moved = self.ui_edits.stamps.fold_snapshot(&state.stamps);
             let version_changed = state.data_version != self.content_state.data_version
                 || !moved.minus(manifold_core::change::ChangeSet::LIVE).is_empty();
-            // Only deep-clone from Arc when it's a different allocation
-            // (new data_version). Modulation-only frames send the same
-            // Arc pointer — skip the clone (values are 1 frame stale,
-            // imperceptible).
-            let is_new_arc = self
-                .last_snapshot_arc
-                .as_ref()
-                .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+            // Only a different allocation is cloned (see `take_project_snapshot`);
+            // modulation-only frames send the same Arc.
+            let is_new_arc = crate::frame_plan::take_project_snapshot(
+                self.local_project.intake(),
+                &mut self.ui_edits.stamps,
+                &mut self.last_snapshot_arc,
+                snapshot,
+                version_changed,
+            );
             if is_new_arc {
-                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
-                *self.local_project.intake() = (*snapshot).clone();
-                self.last_snapshot_arc = Some(snapshot);
                 // Re-cover the clone with the gesture in flight.
                 // With no drag live, a leftover preview is stale
                 // and drops with the content's truth.
@@ -259,9 +257,6 @@ impl Application {
                     drop(self.ui_edits.preview.take_clip_gesture());
                     self.ui_edits.preview.clear_lanes();
                 }
-            } else {
-                // Same Arc — skip deep clone. Drop the Arc ref.
-                drop(snapshot);
             }
             // Restore the one actively-dragged gesture so a snapshot
             // doesn't overwrite the value the user is manipulating —

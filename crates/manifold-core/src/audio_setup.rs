@@ -355,6 +355,13 @@ impl Default for AudioSetup {
 }
 
 impl AudioSetup {
+    /// What a brand-new project starts with: no capture device (layers only).
+    /// Stored explicitly, because an absent `device` in an old file means System
+    /// Default and must keep meaning that.
+    pub fn for_new_project() -> Self {
+        Self { device: Some(AudioDeviceRef::none()), ..Self::default() }
+    }
+
     /// True when nothing is configured — lets the project skip serializing the
     /// field so existing fixtures round-trip byte-identically. Default
     /// crossovers count as "nothing configured" (they serialize to nothing).
@@ -471,6 +478,13 @@ impl AudioSetup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_project_stores_none_but_an_absent_device_stays_system_default() {
+        assert_eq!(AudioSetup::for_new_project().device, Some(AudioDeviceRef::none()));
+        let old: AudioSetup = serde_json::from_str(r#"{"sends":[]}"#).unwrap();
+        assert_eq!(old.device, None, "old files without a device keep meaning System Default");
+    }
 
     #[test]
     fn new_send_has_unique_stable_id() {

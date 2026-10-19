@@ -2,6 +2,22 @@
   "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py. water-family-controls: rename gesture coverage is deferred to BUG-ajyri (share performer text input with ui-snap); CPU water_family_visibility_rename_round_trip covers parent/child rename and save/reload.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flows. Row entries are EXACT flow names, never families or substrings (a family is expanded to its flows when the row is written); only the positional CLI filter keeps substring matching. Test-only paths (/tests/, tests.rs, test.rs, _tests.rs, _test.rs) select nothing. A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
+    "crates/manifold-ui/src/panels/inspector/": [
+      "inspector-modifier-group",
+      "rack-bypass",
+      "rack-wet-dry"
+    ],
+    "crates/manifold-app/src/ui_bridge/rack_controls.rs": [
+      "rack-bypass",
+      "rack-wet-dry"
+    ],
+    "crates/manifold-app/src/ui_bridge/scrub.rs": [
+      "rack-wet-dry"
+    ],
+    "crates/manifold-ui/src/chrome/diff.rs": [
+      "rack-bypass",
+      "rack-wet-dry"
+    ],
     "crates/manifold-app/src/ui_bridge/dispatch/params.rs": [
       "trigger-lane-assignment",
       "scene-slider-range"
@@ -89,8 +105,15 @@
       "scene-setup-empty-states",
       "scene-skin",
       "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
+      "scene-colour-row-hex",
+      "scene-light-swatch",
       "scene-fluid-role-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "scene-two-panes"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup-add-object",
@@ -101,8 +124,15 @@
       "scene-setup-empty-states",
       "scene-skin",
       "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
+      "scene-colour-row-hex",
+      "scene-light-swatch",
       "scene-fluid-role-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "scene-two-panes"
     ],
     "crates/manifold-editing/src/commands/graph/scene/fluid": [
       "scene-fluid-authoring",
@@ -172,7 +202,9 @@
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
       "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo",
+      "scene-colour-row-hex",
+      "scene-light-swatch"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
@@ -200,6 +232,25 @@
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
       "audio-setup-hygiene"
     ],
+    "crates/manifold-app/src/ui_bridge/dispatch/audio_setup.rs": [
+      "audio-new-source-starts-on-none",
+      "audio-add-source-keeps-system-default"
+    ],
+    "crates/manifold-editing/src/commands/audio_setup.rs": [
+      "audio-new-source-starts-on-none",
+      "audio-add-source-keeps-system-default"
+    ],
+    "crates/manifold-app/src/project_io.rs": [
+      "audio-new-source-starts-on-none"
+    ],
+    "crates/manifold-app/src/ui_bridge/editing.rs": [
+      "audio-new-layer-routes-to-sole-source",
+      "audio-new-layer-no-source-with-two-sources"
+    ],
+    "crates/manifold-editing/src/commands/layer.rs": [
+      "audio-new-layer-routes-to-sole-source",
+      "audio-new-layer-no-source-with-two-sources"
+    ],
     "crates/manifold-ui/src/panels/rt_quality_panel.rs": [
       "rt-quality-panel-demo"
     ],
@@ -208,20 +259,27 @@
     ],
     "crates/manifold-app/src/ui_bridge/projection/material.rs": [
       "material-inspector-colour",
+      "scene-colour-row-hex",
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_looks.rs": [
       "material-inspector-colour",
+      "scene-colour-row-hex",
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
+      "material-preset-menu",
+      "material-add-feature-menu",
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
       "material-inspector-colour",
+      "scene-colour-row-hex",
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
@@ -307,6 +365,10 @@
     "scene-photoscan-modifiers": "gltfscene",
     "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
+    "audio-new-source-starts-on-none": "audiosendsnone",
+    "audio-add-source-keeps-system-default": "audiosendsdefault",
+    "audio-new-layer-routes-to-sole-source": "audiosendsone",
+    "audio-new-layer-no-source-with-two-sources": "audiosends",
     "automation-placeholder-first-click": "automationplaceholder",
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
@@ -319,6 +381,8 @@
     "inspector-card-drag-reorder": "inspector",
     "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
+    "rack-bypass": "modifiergroup",
+    "rack-wet-dry": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
     "scene-setup-add-object": "gltfscene",
     "scene-setup-empty-states": "audiovisualizers",
@@ -350,6 +414,8 @@
     "material-inspector-features": "gltfscene",
     "material-inspector-looks": "gltfscene",
     "material-inspector-textures": "gltfscene",
+    "material-preset-menu": "gltfscene",
+    "material-add-feature-menu": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
@@ -362,6 +428,8 @@
     "scene-slider-range": "gltfscene",
     "scene-use-this-view": "gltfscene",
     "scene-light-swatch": "gltfscene",
+    "scene-colour-row-hex": "gltfscene",
+    "scene-two-panes": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
     "work-node-param-drag": "paramsteps",
@@ -380,7 +448,9 @@
     "audio-clip-trigger-add": "inspector",
     "rt-dynamic-modifier": "mushroomscene",
     "work-browser-search": "inspector",
-    "work-perform-exit": "timeline"
+    "work-perform-exit": "timeline",
+    "trigger-lane-sibling": "envmod",
+    "card-collapse-all": "gltfscene"
   },
   "expected_fail": {
     "scene-forces-controls": {

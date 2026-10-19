@@ -262,7 +262,7 @@ fn run_flow(
     // `paramsteps`/`gltfscene` pre-armed-state pattern above (BUG-073: a
     // script harness has no per-frame tick to drive a reveal tween, so state
     // that needs to already be settled is constructed, not clicked into).
-    if scene == "audiosends" {
+    if matches!(scene, "audiosends" | "audiosendsnone" | "audiosendsone" | "audiosendsdefault") {
         ui.audio_setup_panel.open();
         ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
         ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);
@@ -2488,13 +2488,10 @@ impl Runner {
                 format!("ScrollTo: target column x={cx:.0} is in no open scroll container (inspector {insp:?}, scene {scene:?})"),
             );
         };
-        let container_rect = |ui: &UIRoot| {
-            if container_is_inspector {
-                ui.layout.inspector()
-            } else {
-                ui.scene_setup_panel.content_viewport()
-            }
-        };
+        // The Scene tab has two scroll panes; the target's own one scrolls.
+        let node = self.resolve_all(ui, target).0.first().and_then(|m| m.node);
+        let scene_pane = ui.scene_setup_panel.scroll_viewport_of(&ui.tree, node);
+        let container_rect = |ui: &UIRoot| if container_is_inspector { ui.layout.inspector() } else { scene_pane };
 
         // +1: a negative delta reveals lower content (target's Y decreases toward
         // the band). Both containers share this convention today; detecting it on

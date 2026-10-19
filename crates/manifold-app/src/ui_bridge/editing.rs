@@ -275,7 +275,8 @@ pub(super) fn dispatch_editing(
                     let idx = idx + 1;
                     let name = format!("Audio {}", project.timeline.layers.len() + 1);
                     let cmd =
-                        AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None);
+                        AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None)
+                            .routing_to_sole_send();
                     {
                         let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);

@@ -3,7 +3,9 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene", "type": "Button", "under_name": "inspector"
+          "text": "Scene",
+          "type": "Button",
+          "under_name": "inspector"
         }
       },
       "gesture": {
@@ -31,7 +33,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "QS1694-W02-1-1"
+          "name": "scene_tree.item",
+          "text": "QS1694-W02-1-1"
         }
       },
       "gesture": {
@@ -45,7 +48,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "+ Add Coat"
+          "text": "+ Add feature"
         }
       }
     }
@@ -54,7 +57,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Add Coat"
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Coat"
         }
       },
       "gesture": {
@@ -195,7 +212,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "+ Add Iridescence"
+          "text": "+ Add feature"
         }
       }
     }
@@ -204,7 +221,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Add Iridescence"
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Iridescence"
         }
       },
       "gesture": {
@@ -237,7 +268,7 @@
       },
       "check": {
         "Above": {
-          "text": "+ Add Glass"
+          "text": "+ Add feature"
         }
       }
     }
@@ -278,15 +309,33 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
-          "text": "+ Add Coat"
+          "text": "Coat"
         }
       },
-      "check": {
-        "Count": 1
-      }
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
     }
   },
   {
@@ -348,7 +397,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "+ Add Coat"
+          "text": "+ Add feature"
         }
       }
     }
@@ -357,7 +406,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Add Coat"
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Coat"
         }
       },
       "gesture": {
@@ -414,7 +477,7 @@
       },
       "check": {
         "Above": {
-          "text": "+ Add Glass"
+          "text": "+ Add feature"
         }
       }
     }
@@ -514,7 +577,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "+ Add feature"
         }
       }
     }
@@ -523,7 +586,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Subsurface"
         }
       },
       "gesture": {
@@ -641,15 +718,33 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "Subsurface"
         }
       },
-      "check": {
-        "Count": 1
-      }
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
     }
   },
   {
@@ -685,7 +780,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "+ Add feature"
         }
       }
     }
@@ -694,7 +789,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Subsurface"
         }
       },
       "gesture": {

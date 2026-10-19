@@ -3,7 +3,9 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene", "type": "Button", "under_name": "inspector"
+          "text": "Scene",
+          "type": "Button",
+          "under_name": "inspector"
         }
       },
       "gesture": {
@@ -38,7 +40,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3"
+          "name": "scene_tree.item",
+          "text": "Object 3"
         }
       },
       "check": {
@@ -64,7 +67,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Object", "under_name": "dropdown"
+          "text": "Object",
+          "under_name": "dropdown"
         }
       },
       "gesture": {
@@ -79,33 +83,19 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3"
+          "name": "scene_tree.item",
+          "text": "Object 3"
         }
       },
       "check": "Exists"
     }
   },
   {
-    "Assert": {
-      "selector": {
+    "ScrollTo": {
+      "target": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "+ Add feature"
         }
-      },
-      "check": {
-        "Count": 1
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "+ Add Coat"
-        }
-      },
-      "check": {
-        "Count": 1
       }
     }
   },
@@ -113,7 +103,77 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3"
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Subsurface"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add feature"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add feature"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Coat"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_tree.item",
+          "text": "Object 3"
         }
       },
       "gesture": "RightClick"
@@ -137,7 +197,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3"
+          "name": "scene_tree.item",
+          "text": "Object 3"
         }
       },
       "gesture": "RightClick"
@@ -161,7 +222,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3_3"
+          "name": "scene_tree.item",
+          "text": "Object 3_3"
         }
       },
       "check": {
@@ -170,14 +232,25 @@
     }
   },
   {
-    "Assert": {
-      "selector": {
+    "ScrollTo": {
+      "target": {
         "Query": {
-          "text": "+ Add Subsurface"
+          "text": "+ Add feature"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add feature"
         }
       },
-      "check": {
-        "Count": 1
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
@@ -185,7 +258,23 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Object 3_3_2 \u2014 Transform"
+          "text": "Subsurface"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Object 3_3_2 — Transform"
         }
       },
       "check": {
@@ -197,7 +286,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3_3"
+          "name": "scene_tree.item",
+          "text": "Object 3_3"
         }
       },
       "gesture": "RightClick"
@@ -221,7 +311,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3_3"
+          "name": "scene_tree.item",
+          "text": "Object 3_3"
         }
       },
       "check": {
@@ -241,7 +332,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_tree.item", "text": "Object 3_3"
+          "name": "scene_tree.item",
+          "text": "Object 3_3"
         }
       },
       "check": {

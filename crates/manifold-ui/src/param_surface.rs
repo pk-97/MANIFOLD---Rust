@@ -83,14 +83,20 @@ pub enum ColourGroup {
     Light,
 }
 
-/// The three scalar params one swatch writes as a single RGB edit, and the
-/// colour they held at projection time (the swatch's first paint; live
-/// values arrive through the value sync).
+/// The three scalar params of one colour, and the colour they held at
+/// projection time (the swatch's first paint; live values arrive through the
+/// value sync). On the R channel's own row it makes that row the colour row
+/// ([`RowKind::Colour`]); on any other row it is a swatch beside that row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RgbMembers {
     pub group: ColourGroup,
     pub ids: [ParamId; 3],
     pub values: [f32; 3],
+    /// One RGB write owns all three: each binds straight to one node param
+    /// with no wire and no driver, envelope, audio mod, mapping or
+    /// automation. When false the swatch and hex only show the colour, and
+    /// the colour row opens on its channel sliders.
+    pub editable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -357,6 +363,10 @@ pub enum RowKind {
     Choice,
     /// A momentary fire button.
     Trigger,
+    /// A colour: swatch, hex field and a fold holding its three channel
+    /// sliders. Only the R channel's row is the colour row; the G and B rows
+    /// draw inside its fold.
+    Colour,
 }
 
 impl ParamRow {
@@ -372,6 +382,9 @@ impl ParamRow {
     /// with a modulator or mapping stored on it, armed or disarmed, stays a
     /// slider anywhere: its D, E and A lane is the only way back to a
     /// disarmed modulator.
+    ///
+    /// On a scene surface the R channel of a grouped colour is the colour
+    /// row, modulated or not: its fold keeps each channel's slider and lane.
     pub fn kind(&self, scene: bool) -> RowKind {
         let spec = &self.spec;
         if spec.is_trigger {
@@ -379,6 +392,9 @@ impl ParamRow {
         }
         if spec.is_toggle {
             return RowKind::Switch;
+        }
+        if scene && self.rgb_members.as_ref().is_some_and(|members| members.ids[0] == self.id) {
+            return RowKind::Colour;
         }
         let labels = spec.value_labels.as_deref().map_or(0, <[String]>::len);
         if !scene || labels < 2 || self.modulator_stored || self.is_attached() {
@@ -395,10 +411,11 @@ impl ParamRow {
 
     /// Whether the row can open a modulation drawer under itself: a slider
     /// and a fire button can, and so can a trigger-gate switch (its audio
-    /// drawer); a plain switch and a pick list cannot.
+    /// drawer) and a colour row (its R slider's drawer, in the fold); a plain
+    /// switch and a pick list cannot.
     pub fn grows_drawer(&self, scene: bool) -> bool {
         match self.kind(scene) {
-            RowKind::Number | RowKind::Trigger => true,
+            RowKind::Number | RowKind::Trigger | RowKind::Colour => true,
             RowKind::Switch => self.spec.is_trigger_gate,
             RowKind::Choice => false,
         }
@@ -493,11 +510,15 @@ pub enum RowRole {
     MappingChevron,
     /// D5 section fold header (row = first row of the section).
     SectionHeader,
-    /// A scene card section's title (row = first row of the section): opens
-    /// the Scene tab on the item that owns that row.
+    /// A scene card section's row-end "Open in Scene" button (row = first row
+    /// of the section): opens the Scene tab on the item that owns that row.
     SectionTitle,
     /// Colour swatch over the row's `rgb_members`: opens the colour menu.
     ColourSwatch(ColourGroup),
+    /// A colour row's hex field: opens the hex type-in.
+    ColourHex,
+    /// A colour row's name and triangle: folds its channel sliders.
+    ColourFold,
     /// Optional material feature header/toggle.
     MaterialFeatureToggle(MaterialFeature),
     /// Friendly material placement control backed by the six matrix rows.

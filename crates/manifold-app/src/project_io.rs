@@ -681,6 +681,7 @@ impl ProjectIOService {
     pub fn new_project(&self) -> ProjectIOAction {
         let mut new_project = Project {
             project_name: "New Project".to_string(),
+            audio_setup: manifold_core::audio_setup::AudioSetup::for_new_project(),
             ..Default::default()
         };
         new_project.timeline.add_layer(
@@ -1252,6 +1253,13 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
     use manifold_core::units::Bpm;
+
+    #[test]
+    fn new_project_starts_on_no_capture_device() {
+        let service = ProjectIOService::new(&UserPrefs::for_test());
+        let project = service.new_project().apply_project.expect("new project");
+        assert_eq!(project.audio_setup.device, Some(manifold_core::audio_setup::AudioDeviceRef::none()));
+    }
 
     /// An older project's modulated Setup rows get the pin an attach writes
     /// now; a Remove from Card stands over a switched-off modulator and gives

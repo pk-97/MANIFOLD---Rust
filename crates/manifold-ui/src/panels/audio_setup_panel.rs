@@ -838,9 +838,9 @@ impl AudioSetupPanel {
             // "−"/"+" glyphs collide with the timeline zoom control's
             // identical text, so an automation `Query{text:"+"}` picks the
             // wrong widget without a `name` to disambiguate by node type.
-            // `nth` still does the per-row pick among rows sharing this name
-            // (`&'static str` per `set_name`'s contract — see `tree.rs`).
+            // `nth` still does the per-row pick among rows sharing a name.
             tree.set_name(self.send_ids[i].gain_minus, "audio_setup.gain_minus");
+            tree.set_name(self.send_ids[i].delete, "audio_setup.delete");
             // Value label doubles as a D7 horizontal drag zone — pointer-down
             // arms `gain_drag_target`, matching the crossover-drag pattern.
             self.send_ids[i].gain_value = tree.add_label(

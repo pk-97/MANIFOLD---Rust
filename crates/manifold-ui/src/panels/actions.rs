@@ -530,6 +530,8 @@ pub enum ParamsAction {
     /// A scene card section title was clicked; carries the section's rows in
     /// card order. The Scene tab picks which one to reveal (D10).
     RevealSectionInSceneTab(GraphParamTarget, Vec<ParamId>),
+    /// Card menu: fold (`true`) or unfold every drawer section on the card.
+    SetCardSectionsFolded(GraphParamTarget, bool),
     /// section 6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.
@@ -572,6 +574,13 @@ pub enum ParamsAction {
         layer_id: Option<LayerId>,
         group_id: manifold_foundation::EffectGroupId,
         collapsed: bool,
+    },
+    /// The rack header bypass switch: `enabled` is the state to set.
+    EffectGroupBypass {
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+        group_id: manifold_foundation::EffectGroupId,
+        enabled: bool,
     },
     GenTypeClicked(Option<LayerId>), // layer_id
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the inspector "+ Add Modifier"
@@ -1155,6 +1164,14 @@ pub enum RootAction {
         source_node_id: Option<u32>,
         current_target_map: crate::panels::scene_setup_panel::SkinTargetMap,
         button_node_id: crate::node::NodeId,
+    },
+    /// The Material section's preset pick list and "+ Add feature" menu: the
+    /// app opens the shared dropdown anchored to `button_node_id`; every item
+    /// already carries the action it fires, so the opener holds no material
+    /// knowledge.
+    SceneSetupActionMenuClicked {
+        button_node_id: crate::node::NodeId,
+        items: Vec<super::dropdown::DropdownItem>,
     },
     // ── Graph-editor mapping-sidebar drags (`EffectMappingRange*` /
     // `EffectMappingAffine*`) are FRAME-RESIDENT (UI_FUNNEL_DECOMPOSITION P-I,

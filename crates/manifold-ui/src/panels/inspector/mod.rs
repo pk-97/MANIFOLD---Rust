@@ -20,8 +20,12 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 mod card_drag;
+mod rack_controls;
 mod render;
 mod routing;
+
+pub use rack_controls::RackGroupConfig;
+use rack_controls::{RackDrag, RackGroupNodes};
 
 /// A UI-only fold the inspector owns outside its effect cards. Toggled only
 /// through [`InspectorCompositePanel::toggle_fold`], which moves the view
@@ -56,27 +60,6 @@ const SCROLLBAR_STYLE: ScrollbarStyle = ScrollbarStyle {
 };
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
-
-/// Structural rack projection for one effect group. Membership is inferred by
-/// the app from each effect's stable group id; the inspector only needs the
-/// ordered member ids to add the header and indentation without touching the
-/// parameter surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RackGroupConfig {
-    pub id: EffectGroupId,
-    pub name: String,
-    pub collapsed: bool,
-    pub member_ids: Vec<EffectId>,
-    /// The composable mask modifier in this group, when present.
-    pub mask_effect_id: Option<EffectId>,
-}
-
-struct RackGroupNodes {
-    group_id: EffectGroupId,
-    frame: NodeId,
-    header: NodeId,
-    collapse: NodeId,
-}
 
 // ── Tab strip ───────────────────────────────────────────────────
 const TAB_STRIP_HEIGHT: f32 = 24.0;
@@ -170,6 +153,7 @@ enum PressedTarget {
     /// the modifier stack's stable NodeIds for structural actions.
     Modifier(usize),
     GenParam,
+    RackWetDry,
     Scrollbar,
 }
 
@@ -307,6 +291,7 @@ pub struct InspectorCompositePanel {
     /// cannot retain bindings to dead nodes after a structural rebuild.
     group_add_modifier_btns: Vec<(NodeId, EffectGroupId)>,
     group_nodes: Vec<RackGroupNodes>,
+    rack_drag: Option<RackDrag>,
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's
     /// node id (layer scope only), and whether the current layer scope is a
     /// scene layer at all (the picker needs a live scene to offer kinds).
@@ -500,6 +485,7 @@ impl InspectorCompositePanel {
             add_layer_effect_btn: None,
             group_add_modifier_btns: Vec::new(),
             group_nodes: Vec::new(),
+            rack_drag: None,
             add_modifier_btn: None,
             show_add_modifier: false,
             // Set by `configure_gen_params`, which the app calls with the
@@ -1173,7 +1159,7 @@ impl InspectorCompositePanel {
             PressedTarget::ClipChrome => {
                 self.last_effect_tab = InspectorTab::Clip;
             }
-            PressedTarget::Macros | PressedTarget::Scrollbar => {}
+            PressedTarget::Macros | PressedTarget::RackWetDry | PressedTarget::Scrollbar => {}
         }
     }
 
@@ -1536,6 +1522,7 @@ impl Panel for InspectorCompositePanel {
         // `register_intents` no-ops), and the chrome sections are gated on
         // `node_count() > 0` here — one signal, the same the rest of the panel uses.
         self.macros_panel.register_intents(intents);
+        self.rack_register_intents(intents);
         self.audio_trigger_section.register_intents(intents);
         for nodes in &self.group_nodes {
             intents.on(nodes.header, crate::intent::Gesture::RightClick,
@@ -1619,7 +1606,7 @@ mod tests {
         assert_eq!(panel.view_version(), v3);
     }
 
-    fn inspector_layout() -> ScreenLayout {
+    pub(super) fn inspector_layout() -> ScreenLayout {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
         layout.inspector_width = 280.0;
         layout
@@ -2731,13 +2718,14 @@ mod tests {
         (configs, layer)
     }
 
-    fn grouped_fixture(collapsed: bool) -> (InspectorCompositePanel, UITree) {
+    pub(super) fn grouped_fixture(collapsed: bool) -> (InspectorCompositePanel, UITree) {
         let configs: Vec<_> = (0..3).map(|i| mk_config(super::super::param_card::ParamCardKind::Effect, &format!("FX{i}"), 1)).collect();
         let mut panel = InspectorCompositePanel::new();
         panel.configure_master_effects(&configs);
         panel.configure_rack_groups(InspectorTab::Master, &[RackGroupConfig {
             id: EffectGroupId::new("group"), name: "Group".into(), collapsed,
             member_ids: vec![EffectId::new("FX0"), EffectId::new("FX1")], mask_effect_id: None,
+            enabled: true, wet_dry: 1.0,
         }]);
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         let mut tree = UITree::new();

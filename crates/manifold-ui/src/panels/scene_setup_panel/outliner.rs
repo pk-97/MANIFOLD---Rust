@@ -144,6 +144,25 @@ fn outliner_row_style(selected: bool) -> UIStyle {
     }
 }
 
+/// A group heading reads as a section heading, not an item: the fold header
+/// built from `first_slot` takes the darker chrome band and a bold title,
+/// while item rows stay transparent with regular grey text.
+fn restyle_as_heading(tree: &mut UITree, first_slot: usize, title: &str) {
+    for slot in first_slot..tree.count() {
+        let id = tree.id_at(slot);
+        let Some(node) = tree.get_node(id) else { continue };
+        let mut style = node.style;
+        if slot == first_slot {
+            style.bg_color = color::HEADER_BG;
+        } else if node.text.as_deref() == Some(title) {
+            style.font_weight = FontWeight::Bold;
+        } else {
+            continue;
+        }
+        tree.set_style(id, style);
+    }
+}
+
 fn icon_style(selected: bool) -> UIStyle {
     UIStyle {
         text_color: if selected { color::SELECTED_LAYER_RING } else { color::TEXT_DIMMED_C32 },
@@ -214,6 +233,7 @@ impl ScenePanel {
         count: usize,
     ) -> f32 {
         let add_w = if group.has_add() { STEP_W + GAP } else { 0.0 };
+        let first_slot = tree.count();
         let header = ParamCardPanel::build_section_header(
             tree,
             Some(self.content_parent),
@@ -224,6 +244,7 @@ impl ScenePanel {
             outliner_row_key(&SceneSelection::OutlinerFold(group)),
         );
         tree.set_name(header, format!("scene_tree.group.{}", group.title()));
+        restyle_as_heading(tree, first_slot, group.title());
         self.outliner_row_ids.push((header, SceneSelection::OutlinerFold(group)));
         if group.has_add() {
             let add = tree.add_button_keyed(

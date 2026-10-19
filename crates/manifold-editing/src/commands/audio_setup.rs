@@ -380,6 +380,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn adding_a_send_never_touches_the_device() {
+        for device in [None, Some(AudioDeviceRef::none()), Some(AudioDeviceRef::new("uid", "Mic"))] {
+            let mut project = Project::default();
+            project.audio_setup.device = device.clone();
+            let mut cmd = AddAudioSendCommand::new(AudioSend::new("A"));
+            cmd.execute(&mut project);
+            assert_eq!(project.audio_setup.device, device);
+            cmd.undo(&mut project);
+            assert_eq!(project.audio_setup.device, device);
+        }
+    }
+
+    #[test]
     fn add_then_undo_removes_the_send() {
         let mut project = Project::default();
         let send = AudioSend::new("Kick");

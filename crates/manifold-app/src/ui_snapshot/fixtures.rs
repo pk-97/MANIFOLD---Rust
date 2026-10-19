@@ -135,6 +135,27 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         "automationenum" => Some(automation_enum_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
+        // Audio-default flows: no source at all, and exactly one source (unrouted).
+        // A brand-new project: no source, device stored as None (layers only).
+        "audiosendsnone" => {
+            let mut scene = audio_sends_scene();
+            scene.project.audio_setup = manifold_core::audio_setup::AudioSetup::for_new_project();
+            Some(scene)
+        }
+        // An older project on System Default (device absent) with one plain source.
+        "audiosendsdefault" => {
+            let mut scene = audio_sends_scene();
+            scene.project.audio_setup.sends = vec![manifold_core::audio_setup::AudioSend::new("Master")];
+            Some(scene)
+        }
+        "audiosendsone" => {
+            let mut scene = audio_sends_scene();
+            scene.project.audio_setup.sends.truncate(1);
+            let send = &mut scene.project.audio_setup.sends[0];
+            send.label = "Master".into();
+            send.source.layers.clear();
+            Some(scene)
+        }
         // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
         // timeline content; the panel itself is pre-opened in script.rs.
         "rtquality" => Some(timeline_scene()),

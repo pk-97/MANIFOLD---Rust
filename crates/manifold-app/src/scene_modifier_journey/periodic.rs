@@ -172,7 +172,7 @@ fn scene_modifier_periodic_app_control_journey() {
             driver
         });
 
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut project);
+    let notices = super::notices::migrate_notices(&mut project);
     assert!(
         notices.is_empty(),
         "periodic migration notices: {notices:?}"

@@ -1230,24 +1230,41 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_ceiling_paths_select_app_godfile_binary_across_packages(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-core"
-            (crate / "src/effects").mkdir(parents=True)
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-core"\n')
-            workspace = synthetic_workspace(d, ["crates/manifold-core/src/effects/instance.rs"])
-            plan = cpu_scope.plan_for_paths(["crates/manifold-core/src/effects/instance.rs"], d,
+            crate = Path(d) / "crates/manifold-physics"
+            (crate / "src").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-physics"\n')
+            workspace = synthetic_workspace(d, ["crates/manifold-physics/src/lib.rs"])
+            plan = cpu_scope.plan_for_paths(["crates/manifold-physics/src/lib.rs"], d,
                                             workspace=workspace)
-            self.assertEqual(plan.packages, {"manifold-core", "manifold-app"})
-            self.assertIn("(package(=manifold-core) & test(/^effects::instance::/))", plan.filters)
-            self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
+            self.assertEqual(plan.packages, {"manifold-physics", "manifold-app"})
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-physics) & test(/^tests::/))",
+                "(package(=manifold-app) & binary(=godfile_regrowth))"})
             for path in cpu_scope.godfile_paths():
                 with self.subTest(path=path):
                     owner_workspace = synthetic_workspace(d, [path])
                     plan = cpu_scope.plan_for_paths([path], d, workspace=owner_workspace)
                     self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
 
+    def test_unlisted_file_over_the_limit_selects_godfile_binary(self):
+        limit = cpu_scope.godfile_table()[0]
+        path = "crates/manifold-physics/src/extra.rs"
+        for newlines, selected in ((limit, False), (limit + 1, True)):
+            with self.subTest(newlines=newlines), tempfile.TemporaryDirectory() as d:
+                workspace = synthetic_workspace(d, [path])
+                (Path(d) / path).write_text("x\n" * newlines)
+                plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+                self.assertEqual(
+                    "(package(=manifold-app) & binary(=godfile_regrowth))" in plan.filters, selected)
+        with tempfile.TemporaryDirectory() as d:
+            workspace = synthetic_workspace(d, [path])
+            (Path(d) / path).write_text("x\n" * (limit - 1) + "no trailing newline")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertNotIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
+
     def test_ceiling_parser_rejects_missing_empty_or_unparsed_tables(self):
-        for text in ("", "const CEILINGS: &[(&str, usize)] = &[];",
-                     'const CEILINGS: &[(&str, usize)] = &[("a.rs", 100), unknown];'):
+        for text in ("", "{}", "[]", '{"limit": 2500, "ceilings": {}}', '{"ceilings": {"a.rs": 1}}',
+                     '{"limit": 2500, "ceilings": {"a.rs": 100, unknown}}'):
             with self.subTest(text=text), patch.object(Path, "read_text", return_value=text):
                 with self.assertRaisesRegex(ValueError, "cannot parse CEILINGS"):
                     cpu_scope.godfile_paths()

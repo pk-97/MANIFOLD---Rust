@@ -9,7 +9,7 @@ fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
     crate::param_surface::stable_key(&format!("inspector.effect_group.add_modifier:{group_id}"))
 }
 
-fn rack_group_key(group_id: &EffectGroupId, part: &str) -> u64 {
+pub(super) fn rack_group_key(group_id: &EffectGroupId, part: &str) -> u64 {
     crate::param_surface::stable_key(&format!("inspector.effect_group.{part}:{group_id}"))
 }
 
@@ -32,17 +32,11 @@ fn rack_group_scope_text(group: &RackGroupConfig) -> String {
     }
 }
 
-fn rack_group_header_view(group: &RackGroupConfig) -> View {
+fn rack_group_header_view(group: &RackGroupConfig, address: &crate::panels::ValueRef) -> View {
     let mut view = View::row(4.0)
         .fill_w()
-        .h(Sizing::Fixed(InspectorCompositePanel::RACK_HEADER_H))
+        .h(Sizing::Fixed(InspectorCompositePanel::RACK_TITLE_H))
         .cross_align(crate::chrome::Align::Center)
-        .style(UIStyle {
-            bg_color: color::mix(color::BG_2, color::DEFAULT_GROUP_ACCENT, 0.16),
-            border_color: color::DEFAULT_GROUP_ACCENT,
-            border_width: 1.0,
-            ..UIStyle::default()
-        })
         .child(
             View::button(if group.collapsed { "▸" } else { "▾" })
                 .w(Sizing::Fixed(24.0)).fill_h()
@@ -84,7 +78,17 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
             .name(super::GROUP_ADD_MODIFIER_NAME)
             .key(rack_group_add_modifier_key(&group.id)),
     );
-    view
+    View::column(0.0)
+        .fill_w()
+        .h(Sizing::Fixed(InspectorCompositePanel::RACK_HEADER_H))
+        .style(UIStyle {
+            bg_color: color::mix(color::BG_2, color::DEFAULT_GROUP_ACCENT, 0.16),
+            border_color: color::DEFAULT_GROUP_ACCENT,
+            border_width: 1.0,
+            ..UIStyle::default()
+        })
+        .child(view)
+        .child(super::rack_controls::rack_controls_row(group, address))
 }
 
 fn rack_group_container_view() -> View {
@@ -140,6 +144,7 @@ fn rack_group_span(
 fn build_rack_group_frame(
     tree: &mut UITree,
     group: &RackGroupConfig,
+    address: &crate::panels::ValueRef,
     x: f32,
     y: f32,
     width: f32,
@@ -152,14 +157,25 @@ fn build_rack_group_frame(
         &rack_group_container_view().key(rack_group_key(&group.id, "frame")),
         Rect::new(x, y, width, height),
     );
-    let header_ids = chrome::materialize(
+    let (header_ids, slider_ids) = chrome::materialize_sliders(
         tree,
-        &rack_group_header_view(group),
+        &rack_group_header_view(group, address),
         Rect::new(x, y, width, InspectorCompositePanel::RACK_HEADER_H),
     );
     let node = |part: &str| header_ids.iter().find(|(key, _)| *key == rack_group_key(&group.id, part)).map(|(_, id)| *id);
+    let wet_dry = slider_ids.iter().find(|(key, _)| *key == rack_group_key(&group.id, "wet_dry")).map(|(_, ids)| *ids);
+    if let Some(ids) = wet_dry.as_ref() {
+        super::rack_controls::name_wet_dry_slider(tree, ids);
+    }
     if let (Some(header), Some(collapse), Some((_, frame))) = (node("header"), node("collapse"), frame_ids.first()) {
-        group_nodes.push(RackGroupNodes { group_id: group.id.clone(), frame: *frame, header, collapse });
+        group_nodes.push(RackGroupNodes {
+            group_id: group.id.clone(),
+            frame: *frame,
+            header,
+            collapse,
+            bypass: node("bypass"),
+            wet_dry,
+        });
     }
     if let Some((_, button_id)) = header_ids
         .iter()
@@ -170,7 +186,8 @@ fn build_rack_group_frame(
 }
 
 impl InspectorCompositePanel {
-    pub(super) const RACK_HEADER_H: f32 = 28.0;
+    pub(super) const RACK_TITLE_H: f32 = 28.0;
+    pub(super) const RACK_HEADER_H: f32 = Self::RACK_TITLE_H + super::rack_controls::RACK_CONTROLS_H;
     pub(super) const RACK_INDENT: f32 = color::SPACE_XL;
     const RACK_GROUP_BOTTOM_PAD: f32 = color::SPACE_M;
 
@@ -892,6 +909,7 @@ impl InspectorCompositePanel {
                             build_rack_group_frame(
                                 tree,
                                 &groups[group_idx],
+                                &super::rack_controls::rack_address(self.active_tab, &self.inspecting_layer_id, &groups[group_idx].id),
                                 inner_x,
                                 cy,
                                 inner_w,
@@ -1029,6 +1047,7 @@ impl InspectorCompositePanel {
                             build_rack_group_frame(
                                 tree,
                                 &groups[group_idx],
+                                &super::rack_controls::rack_address(self.active_tab, &self.inspecting_layer_id, &groups[group_idx].id),
                                 inner_x,
                                 cy,
                                 inner_w,
@@ -1135,6 +1154,7 @@ impl InspectorCompositePanel {
         let macros_rect = Rect::new(left_x, macros_y, content_w, macros_h);
         self.macros_panel.build(tree, macros_rect);
 
+        self.rack_rewire_drag();
         self.update_scroll_bounds();
         self.update_scrollbar(tree);
 
@@ -1153,6 +1173,8 @@ mod tests {
             collapsed: false,
             member_ids: vec![EffectId::new("mask"), EffectId::new("effect")],
             mask_effect_id,
+            enabled: true,
+            wet_dry: 1.0,
         }
     }
 
@@ -1172,7 +1194,7 @@ mod tests {
         let mut host = crate::chrome::ChromeHost::new();
         host.build(
             &mut tree,
-            &rack_group_header_view(&group),
+            &rack_group_header_view(&group, &super::super::rack_controls::rack_address(InspectorTab::Master, &None, &group.id)),
             Rect::new(0.0, 0.0, 400.0, InspectorCompositePanel::RACK_HEADER_H),
         );
         let mask_selector_button = host
