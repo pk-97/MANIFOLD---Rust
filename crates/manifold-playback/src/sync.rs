@@ -1,5 +1,7 @@
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, PlaybackState};
+use manifold_core::tempo::{TempoMap, TempoMapConverter};
+use manifold_core::units::Bpm;
 use manifold_core::{Beats, Seconds};
 
 /// Read-only view of playback state for sync controllers.
@@ -34,17 +36,24 @@ pub trait SyncArbiterTarget {
 pub struct SyncTargetSnapshot {
     state: PlaybackState,
     time: Seconds,
-    bpm: f32,
+    /// The project's map, so beat→time matches `position_time`. Cloning a
+    /// `TempoMap` shares its points (an `Arc`), so the per-frame capture
+    /// allocates nothing.
+    tempo_map: TempoMap,
+    fallback_bpm: Bpm,
 }
 
 impl SyncTargetSnapshot {
     /// Capture a snapshot from any SyncTarget implementor.
     pub fn from_engine(target: &dyn SyncTarget) -> Self {
-        let bpm = target.current_project().map_or(120.0, |p| p.settings.bpm.0);
+        let (tempo_map, fallback_bpm) = target
+            .current_project()
+            .map_or_else(|| (TempoMap::default(), Bpm(120.0)), |p| (p.tempo_map.clone(), p.settings.bpm));
         Self {
             state: target.current_state(),
             time: target.position_time(),
-            bpm,
+            tempo_map,
+            fallback_bpm,
         }
     }
 }
@@ -60,13 +69,7 @@ impl SyncTarget for SyncTargetSnapshot {
         self.state == PlaybackState::Playing
     }
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
-        // Fallback: use BPM for beat→time conversion (no tempo map in snapshot).
-        let beat_f = beat.as_f32();
-        if self.bpm > 0.0 {
-            Seconds((beat_f * 60.0 / self.bpm) as f64)
-        } else {
-            Seconds((beat_f * 0.5) as f64)
-        }
+        TempoMapConverter::beat_to_seconds_immut(&self.tempo_map, beat, self.fallback_bpm)
     }
     fn current_project(&self) -> Option<&Project> {
         None
@@ -284,6 +287,30 @@ mod tests {
                 assert_eq!(target.sought, should_pass.then_some(Seconds(7.0)));
             }
         }
+    }
+
+    /// BUG-mmct0.3 (MIDI clock compare uses constant BPM): the snapshot sync
+    /// controllers read must convert beats with the tempo map, the same way
+    /// the engine's `position_time` does, or a clock that agrees with the
+    /// playhead reads as seconds off once the map has a tempo change.
+    #[test]
+    fn snapshot_beat_to_time_follows_tempo_map() {
+        use manifold_core::types::TempoPointSource;
+
+        let mut project = Project::default();
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(Beats(64.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        // The live tempo at beat 128, as the engine keeps settings.bpm.
+        project.settings.bpm = Bpm(60.0);
+        let mut engine = crate::engine::PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+
+        let snap = SyncTargetSnapshot::from_engine(&engine);
+        let beat = Beats(128.0);
+        // 64 beats at 120 BPM (32 s) plus 64 beats at 60 BPM (64 s).
+        assert!((engine.timeline_beat_to_time(beat) - Seconds(96.0)).abs() < Seconds(1e-3));
+        let error = (snap.timeline_beat_to_time(beat) - engine.timeline_beat_to_time(beat)).abs();
+        assert!(error < Seconds(1e-9), "snapshot is {error:?} off the tempo map at beat 128");
     }
 
     // ── section 11 thresholds ──────────────────────────────────────────────────
