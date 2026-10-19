@@ -14,13 +14,15 @@ Three things make "unused" hard in this codebase:
 
 - Many things are used by string, not by Rust name: node and preset ids in preset JSON, graph JSON and saved projects; serde field and variant spellings; registry entries; UI flow scripts; script names in hooks and docs.
 - `pub` hides dead code from the compiler. rustc flags unused private items, and everything unused in the binary crate (manifold-app), but never an unused `pub` item in a library crate. Most dead code in the library crates is `pub`.
-- Peter's projects are the real record of use, and some are not on this disk (section 2).
+- Saved projects hold names and old formats that must keep loading (section 2). They are never a measure of use: Peter may not have used a feature yet.
 
 The census nominates. It does not delete. A deleting lane later removes a reviewed batch and lets `cargo check` confirm it, including the cascade of items that were only used by what it removed.
 
 Out of scope: `plugins/vendor/` (third-party code), the archived Unity repo, UI design fixes that are not slop (they belong to the UX pass; the census records only the code roots of walkthrough items), and anything that needs a test run or the GPU.
 
-## 2. The usage oracle: where Peter's projects and presets live
+## 2. Saved projects: a loading check, never a usage check
+
+Whether Peter's projects use a node, preset or setting says nothing about whether it should exist. The corpus answers one question only: would deleting this break loading a saved project? A saved serde name, node id or old format a project carries must keep loading (or get a migration). Absence from projects is never evidence for a candidate. Online-only Dropbox projects are not downloaded.
 
 | Source | Where | Count | Read? |
 |---|---|---|---|
@@ -34,10 +36,7 @@ Out of scope: `plugins/vendor/` (third-party code), the archived Unity repo, UI 
 
 `build_corpus.sh` (section 5) dumps every readable project's raw `project.json` through `project_tool json` (prebuilt in `target/debug`, read-only, reads both the ZIP and the plain-JSON format) into `/tmp/simplification_census/corpus/projects/NNN_name.json`. `index.tsv` maps each number to its source path and date; `skipped.tsv` lists the online-only files. It checks the `dataless` flag with `stat` and never opens an online-only file. The 2026-10-19 build: 182 projects, 333 MB, 67 skipped.
 
-What "unused" can mean is therefore: unused in 182 reachable projects and the bundled presets. Two limits follow.
-
-- The older shows are mostly online-only. Corpus absence of an old data shape is weak evidence, which matters most for legacy paths and migrations (section 3.8).
-- A feature Peter is building toward has no project uses yet by definition. Corpus absence alone never earns a `delete` for anything a show can reach; it earns an `ask`.
+The older shows are mostly online-only, so the corpus under-counts old data shapes. That matters only for legacy paths and migrations (section 3.8), where the count informs Peter's call on old formats.
 
 Two traps when searching the corpus:
 
@@ -108,7 +107,7 @@ rg -n 'dep:DEP|"DEP/' crates/<crate>/Cargo.toml
 
 ### 3.5 Nodes, primitives and presets nothing uses
 
-**Claim:** a registered node type, or a bundled effect, generator or scene-modifier preset, that no preset, no project and no code uses.
+**Claim:** a registered node type, or a bundled effect, generator or scene-modifier preset, that is a leftover: a one-off a newer node replaced, a dev or probe artifact, or something no preset and no code uses and no family Peter is building needs. Project use is not a signal either way; a project hit only means deleting it needs a load path (section 2).
 
 **Oracle:** `raw/node_usage.tsv` (`node_usage.sh`): for every type id and preset id in `docs/node_catalog.json` and the scene-modifier folder, the number of files holding the quoted id in bundled presets, corpus projects, Rust product code and Rust tests. Per candidate:
 
@@ -120,7 +119,7 @@ rg -l -F '"ID"' /tmp/simplification_census/corpus/projects
 plus the primitive's `*_TYPE_ID` const by name when it has one, and Rust that builds graphs in code (importers, preset builders such as `crates/manifold-nodes-water/src/presets/gpu_flip.rs`).
 
 **Traps:**
-- A preset row always counts its own file. The projects column is the signal.
+- A preset row always counts its own file. The projects column is not a signal of use.
 - The Rust product-code count includes the defining file, and a node's inline tests sit in that file.
 - Palette atoms are authoring vocabulary. A node with zero uses is still something Peter can drop into a graph, so a node in a family he is building (the 3D geometry atoms) is `ask`; `delete` is for one-offs a newer node replaced.
 - The LED generators (17 of 18 in no project) serve the LED rig: `ask`.
@@ -139,18 +138,15 @@ The walkthrough's six water entries are bundled generator presets: WaterDamBreak
 
 **Action:** move a test-only scene into test fixtures; keep anything a project uses. No new hiding flag. **Tier:** Opus.
 
-### 3.7 Settings that never move
+### 3.7 Settings that should not reach the user
 
-**Claim:** a node param or project setting that holds one value in every project that stores it, or that no project stores at all.
+**Claim:** a node param or project setting that duplicates another (the World node's own sun beside the Sun light), applies only to another mode or type (cone angles on a sun), is an engine internal with no performer meaning (shadow bias, a "Legacy" falloff), or does nothing.
 
-**Oracle:** `raw/node_param_distinct.tsv` (type, param, projects storing it, distinct values) and `raw/node_param_moves.tsv` (type, param, catalog default, projects holding the node type, projects storing the param, projects where it differs from the default). Project settings: `jq -c '.settings.<key>'` over the corpus.
+**Oracle:** code reading, the walkthrough (`docs/evidence/ux_walkthrough_2026-10-19/README.md`) and the node catalog. How often projects change a value is not evidence; the param tables in `raw/` are not used for this.
 
 **Traps:**
-- Judge by distinct values, not by the catalog default: presets override defaults, so "differs from default" can be the preset's value rather than Peter's.
-- Material params set by glTF import (texture filters, UV transforms) come from the imported file. Peter never moves them and the importer still needs them.
-- One show using a value is enough to make it varied. That is correct.
-
-2026-10-19 screen: 569 of 842 node params stored in five or more projects hold a single value. node.bake_environment's own sun (`sun_x`, `sun_y`, `sun_z`, `sun_disc_intensity`, `sun_disc_size`) is stored in none of the 67 projects holding that node; node.light `falloff` and both cone angles in none of 68. Those are the walkthrough's "second sun" and "settings for other light types on a sun". The RT quality settings vary across 42 projects: keep.
+- Material params set by glTF import (texture filters, UV transforms) come from the imported file; the importer still needs them.
+- A cut param keeps its value as a constant, and a saved project that stores it must still load (section 2).
 
 **Action:** `cut-param` (remove it and keep its value as a constant) or `ask`. Never "hide behind a toggle". **Tier:** Opus.
 
@@ -246,7 +242,7 @@ Header: sweep name, model, main commit (from `raw/main_commit.txt`), raw files u
 Rules:
 
 - A candidate without its proof section is not a candidate.
-- Anything at `stage` risk is grade B at best unless the corpus and the bundled presets both prove non-use.
+- Anything at `stage` risk is grade B at best; Peter confirms it in the report.
 - Open beads already name some of this work (61 on 2026-10-19, listed in `raw/open_cleanup_beads.txt`; `census_refs.py` counts a `.beads/issues.jsonl` hit as a mention). When a bead names the item, cite it in the proof column and keep its fix shape; never file a second finding for it. Example: the playback DEAD rows `sync_clip_loop_state`, `track_clip_start` and `finalize_clip` are already in the playback audit hygiene bead (`bd show BUG-mmct0.12`).
 - Sweeps log nothing to beads; the lead does after review.
 
@@ -355,7 +351,6 @@ For the lead:
 - The tools live in `/tmp` with their source in the evidence folder. Promote them to `scripts/` with a dev.py verb only if the census becomes recurring.
 
 For Peter:
-- **Online-only Dropbox projects.** 67 files, 2.1 GB, in `~/Dropbox/Videos/LATENT SPACE - Marketing Content/MANIFOLD Projects/`. Downloading them makes "unused" mean "unused in every show", which matters most for legacy paths and nodes. Without them, those categories stay at grade B.
 - Already visible from the screens, each to be confirmed by its sweep: depth relight (delete or turn back on); dropping old project formats (convert the old shows once, then cut the migration steps); the LED generators; the six water test scenes in the generator browser; the World node's own sun.
 
 ## 11. Sweep briefs
@@ -428,9 +423,10 @@ Standing rules, restated in every brief: read-only on code; write only your two 
 >
 > Standing rules as in 11.1. Inputs: `raw/node_usage.tsv`, `raw/node_param_moves.tsv`, `raw/node_param_distinct.tsv`, the corpus (`/tmp/simplification_census/corpus/`; `index.tsv` maps files to projects and dates), `docs/node_catalog.json`, the preset folders.
 >
-> 1. Nodes in no preset and no project: for each, the 3.5 searches; say whether it belongs to a family Peter is building, or a newer node replaced it.
-> 2. Presets in no project: separate test scenes (3.6) from real content Peter has not used yet. For each test scene, list every Rust file that loads it.
-> 3. Params: from the two param tables, the params never stored or never varied on node types used in five or more projects. Group per node; for each group say in one line what it is on stage and whether it is one of the walkthrough's complaints (duplicate settings, settings for another mode, raw engine settings). Actions are `cut-param` or `ask`; never new UI machinery.
+> Project use is never evidence (section 2): a node, preset or setting Peter has not used yet may still belong. Use the corpus only to say whether a deletion needs a load path.
+> 1. Nodes that are leftovers (3.5): one-offs a newer node replaced, dev or probe artifacts, nodes no preset and no code uses outside a family Peter is building. For each, the 3.5 searches and what replaced it.
+> 2. Presets: separate test, probe and engine-comparison scenes (3.6) from real content. For each test scene, list every Rust file that loads it.
+> 3. Params (3.7): duplicates, settings for another mode or type, engine internals with no performer meaning, settings that do nothing. Find them by reading the node code and the catalog, starting from the walkthrough's complaints. Group per node; one line each on what it is on stage. Actions are `cut-param` or `ask`; never new UI machinery.
 > 4. For each walkthrough pattern, name the code root when it is slop (dead param, duplicate param, test scene, leftover) and leave pure design issues to the UX pass in a short list.
 > 5. Write `docs/evidence/simplification_census_2026-10/content.md` and `content.proof.md` in the record format of the census doc's section 4 (The candidate record).
 
