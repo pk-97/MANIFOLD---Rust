@@ -2539,14 +2539,14 @@ fn group_face_scrub_emits_set_outer_param_matching_card_value() {
 
     // The card-path equivalent: what `param_card.rs`'s own ParamChanged arm
     // would build for this exact (id, value) pair.
-    let target = GraphParamTarget::Effect(0);
+    let target = GraphParamTarget::Effect(manifold_foundation::EffectId::new("fx0"));
     let mirrored = PanelAction::Scrub(
         ValueRef::Param(target, manifold_foundation::ParamId::from(outer_param_id.clone())),
         ScrubPhase::Move(ScrubValue::Scalar(new_value)),
     );
     let card_would_emit = PanelAction::Scrub(
         ValueRef::Param(
-            GraphParamTarget::Effect(0),
+            GraphParamTarget::Effect(manifold_foundation::EffectId::new("fx0")),
             manifold_foundation::ParamId::from("card_amount".to_string()),
         ),
         ScrubPhase::Move(ScrubValue::Scalar(0.75)),

@@ -623,6 +623,27 @@ pub(crate) fn resolve_effect_id(
         .map(|fx| fx.id.clone())
 }
 
+/// Resolve a card's `EffectId` address for dispatch. The editor's watched
+/// effect wins outright (it IS the card); otherwise the id must exist in the
+/// inspector's current effect list, so a stale id (effect deleted or moved to
+/// another chain mid-gesture) resolves to nothing instead of another effect.
+pub(crate) fn resolve_effect_by_id(
+    editor_target: Option<&manifold_core::GraphTarget>,
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    project: &Project,
+    id: &manifold_core::EffectId,
+) -> Option<manifold_core::EffectId> {
+    if let Some(manifold_core::GraphTarget::Effect(eid)) = editor_target {
+        return Some(eid.clone());
+    }
+    resolve_effects_ref(tab, project, active_layer, selection)?
+        .iter()
+        .any(|fx| &fx.id == id)
+        .then(|| id.clone())
+}
+
 /// The `(inspector tab, active layer)` the dispatch arms that still resolve
 /// positionally — the **modulation** family (drivers, layer-stored envelopes,
 /// trims, envelope targets) — must use so a card edit dispatched from the graph

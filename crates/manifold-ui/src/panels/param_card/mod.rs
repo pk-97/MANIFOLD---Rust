@@ -545,7 +545,7 @@ impl ParamCardPanel {
             return GraphParamTarget::GeneratorOf(m.layer_id.clone());
         }
         match self.kind {
-            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
+            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_id.clone()),
             ParamCardKind::Generator => GraphParamTarget::Generator,
         }
     }
@@ -1562,7 +1562,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Params(ParamsAction::ParamToggle(target, param_id)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
                 assert_eq!(param_id.as_ref(), "invert");
             }
             other => panic!("expected ParamToggle, got {:?}", other),
@@ -1581,7 +1581,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Params(ParamsAction::ParamFire(target, param_id)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
                 assert_eq!(param_id.as_ref(), "reset");
             }
             other => panic!("expected ParamFire, got {:?}", other),
@@ -1863,7 +1863,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, param_id, mode_idx)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
                 assert_eq!(param_id.as_ref(), "clip_trigger");
                 assert_eq!(*mode_idx, 2);
             }
@@ -1940,7 +1940,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::AudioModToggle(target, param_id)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
                 assert_eq!(param_id.as_ref(), "clip_trigger");
             }
             other => panic!("expected AudioModToggle, got {:?}", other),
@@ -1957,7 +1957,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::AudioModSetSource(target, param_id, send_id, _feature)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
                 assert_eq!(param_id.as_ref(), "clip_trigger");
                 assert_eq!(send_id.as_ref(), "send-kick");
             }
@@ -1981,7 +1981,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, param_id, mode_idx)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
                 assert_eq!(param_id.as_ref(), "clip_trigger");
                 assert_eq!(*mode_idx, 2);
             }
@@ -2176,7 +2176,7 @@ pub(super) mod tests {
         let chevron = panel.row_host.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
-            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Effect(0), param_id: pid, anchor_node_id })] if pid == "strength" && *anchor_node_id == chevron),
+            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Effect(fx), param_id: pid, anchor_node_id })] if fx == "test-effect-0" && pid == "strength" && *anchor_node_id == chevron),
             "got {actions:?}"
         );
         // The chevron also has a resolvable anchor rect by binding id.
@@ -2313,7 +2313,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::DriverToggle(GraphParamTarget::Effect(ei), param_id)) => {
-                assert_eq!(*ei, 0);
+                assert_eq!(ei.as_str(), "test-effect-0");
                 assert_eq!(param_id.as_ref(), "radius");
             }
             other => panic!("expected EffectDriverToggle, got {:?}", other),
@@ -2762,15 +2762,15 @@ pub(super) mod tests {
         panel.build(&mut UITree::new(), Rect::new(0.0, 0.0, 280.0, 400.0));
         let pid = panel.rows[0].id.clone();
         let actions = panel.audio_drawer_intent(
-            GraphParamTarget::Effect(0),
+            GraphParamTarget::Effect(EffectId::new("test-effect-0")),
             &pid,
             AudioDrawerClick::Invert,
         );
         assert!(matches!(
             actions.as_slice(),
             [PanelAction::Modulation(ModulationAction::AudioModSetInvert(
-                GraphParamTarget::Effect(0), id
-            ))] if id == &pid
+                GraphParamTarget::Effect(fx), id
+            ))] if fx == "test-effect-0" && id == &pid
         ));
     }
 
@@ -3783,7 +3783,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::EnvelopeToggle(GraphParamTarget::Effect(ei), param_id)) => {
-                assert_eq!(*ei, 0);
+                assert_eq!(ei.as_str(), "test-effect-0");
                 assert_eq!(param_id.as_ref(), "radius");
             }
             other => panic!("expected EnvelopeToggle, got {other:?}"),
@@ -4083,7 +4083,7 @@ pub(super) mod tests {
                     let r = main_track(p, t);
                     Vec2::new(r.x + r.width * 0.25, r.y)
                 },
-                value: |v| matches!(v, ValueRef::Param(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                value: |v| matches!(v, ValueRef::Param(GraphParamTarget::Effect(fx), pid) if fx == "test-effect-0" && radius(pid)),
                 begin_moves: true,
                 dragged: Some((25.0, 1.0)),
             },
@@ -4096,7 +4096,7 @@ pub(super) mod tests {
                     let r = main_track(p, t);
                     Vec2::new(r.x + r.width * 0.4, r.y)
                 },
-                value: |v| matches!(v, ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid) if radius(pid)),
+                value: |v| matches!(v, ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(fx), pid) if fx == "test-effect-0" && radius(pid)),
                 begin_moves: false,
                 dragged: None,
             },
@@ -4109,7 +4109,7 @@ pub(super) mod tests {
                     let r = main_track(p, t);
                     Vec2::new(r.x + r.width * 0.3, r.y)
                 },
-                value: |v| matches!(v, ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                value: |v| matches!(v, ValueRef::EnvelopeTarget(GraphParamTarget::Effect(fx), pid) if fx == "test-effect-0" && radius(pid)),
                 begin_moves: false,
                 dragged: Some((0.3, 0.05)),
             },
@@ -4128,7 +4128,7 @@ pub(super) mod tests {
                     let r = t.get_bounds(cfg.decay_slider.unwrap().track);
                     Vec2::new(r.x + r.width * 0.6, r.y)
                 },
-                value: |v| matches!(v, ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                value: |v| matches!(v, ValueRef::EnvDecay(GraphParamTarget::Effect(fx), pid) if fx == "test-effect-0" && radius(pid)),
                 begin_moves: true,
                 dragged: None,
             },
@@ -4145,7 +4145,7 @@ pub(super) mod tests {
                     let r = t.get_bounds(p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[0].track);
                     Vec2::new(r.x + r.width * 0.7, r.y)
                 },
-                value: |v| matches!(v, ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity) if radius(pid)),
+                value: |v| matches!(v, ValueRef::AudioModShape(GraphParamTarget::Effect(fx), pid, AudioShapeParam::Sensitivity) if fx == "test-effect-0" && radius(pid)),
                 begin_moves: true,
                 dragged: None,
             },
@@ -4167,7 +4167,7 @@ pub(super) mod tests {
                     let r = t.get_bounds(p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[3].track);
                     Vec2::new(r.x + r.width * 0.8, r.y)
                 },
-                value: |v| matches!(v, ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                value: |v| matches!(v, ValueRef::AudioModStepAmount(GraphParamTarget::Effect(fx), pid) if fx == "test-effect-0" && radius(pid)),
                 begin_moves: true,
                 dragged: None,
             },

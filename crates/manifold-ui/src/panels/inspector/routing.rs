@@ -97,9 +97,9 @@ impl InspectorCompositePanel {
         self.inspecting_layer_id.as_ref()
     }
 
-    pub fn select_effect_for_context_menu(&mut self, index: usize) {
+    pub fn select_effect_for_context_menu(&mut self, effect_id: &EffectId) {
         let tab = self.active_tab;
-        let Some(card_index) = self.cards_for_tab(tab).iter().position(|card| card.effect_index() == index) else { return; };
+        let Some(card_index) = self.cards_for_tab(tab).iter().position(|card| card.effect_id() == effect_id) else { return; };
         let id = self.cards_for_tab(tab)[card_index].effect_id();
         if !self.selection_for_tab(tab).0.contains(id) {
             self.select_effect(tab, card_index);

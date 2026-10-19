@@ -894,18 +894,18 @@ impl InspectorCompositePanel {
         out
     }
 
-    /// Returns true if the effect param at `(fx_idx, param_id)` has an
-    /// Ableton mapping. Keyed by stable id (Phase 2): `fx_idx` is
-    /// structural (chain position), `param_id` is the unified id
-    /// namespace shared across static + user-exposed bindings.
+    /// Returns true if the effect param at `(effect_id, param_id)` has an
+    /// Ableton mapping. `param_id` is the unified id namespace shared across
+    /// static + user-exposed bindings.
     pub fn is_effect_ableton_mapped(
         &self,
         tab: InspectorTab,
-        fx_idx: usize,
+        effect_id: &EffectId,
         param_id: &str,
     ) -> bool {
         self.cards_for_tab(tab)
-            .get(fx_idx)
+            .iter()
+            .find(|card| card.effect_id() == effect_id)
             .is_some_and(|card| card.param_has_ableton_mapping(param_id))
     }
 
@@ -921,10 +921,20 @@ impl InspectorCompositePanel {
     /// entry (PRESET_LIBRARY_DESIGN D3/P4) — same tab-resolution as
     /// [`Self::is_effect_ableton_mapped`], read by the card context menu to
     /// gate Revert/Push to Library.
-    pub fn effect_has_graph_mod(&self, tab: InspectorTab, fx_idx: usize) -> bool {
+    pub fn effect_has_graph_mod(&self, tab: InspectorTab, effect_id: &EffectId) -> bool {
         self.cards_for_tab(tab)
-            .get(fx_idx)
+            .iter()
+            .find(|card| card.effect_id() == effect_id)
             .is_some_and(|card| card.has_graph_mod())
+    }
+
+    /// Chain position of the effect `effect_id` on `tab`, read from the
+    /// current cards; `None` when the effect is no longer in that chain.
+    pub fn effect_position(&self, tab: InspectorTab, effect_id: &EffectId) -> Option<usize> {
+        self.cards_for_tab(tab)
+            .iter()
+            .find(|card| card.effect_id() == effect_id)
+            .map(|card| card.effect_index())
     }
 
     /// Whether the layer's generator has diverged from its library entry
@@ -942,7 +952,7 @@ impl InspectorCompositePanel {
     }
     /// `master_effect_mut`/`layer_effect_mut`, picked by `tab` — mirrors
     /// `is_effect_ableton_mapped`'s Master vs Layer|Group|Clip split. The one
-    /// accessor a `GraphParamTarget::Effect(idx)` dispatch arm needs when it
+    /// accessor a card-state dispatch arm needs when it
     /// wants to reach into the specific card's own UI-only state rather than
     /// just mutate the model.
     pub fn effect_card_mut(&mut self, tab: InspectorTab, idx: usize) -> Option<&mut ParamCardPanel> {

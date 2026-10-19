@@ -119,8 +119,8 @@ pub(crate) fn resolve_graph_target(
     project: &Project,
 ) -> Option<manifold_core::GraphTarget> {
     match gpt {
-        GraphParamTarget::Effect(idx) => {
-            super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *idx)
+        GraphParamTarget::Effect(id) => {
+            super::resolve_effect_by_id(editor_target, tab, active_layer, selection, project, id)
                 .map(manifold_core::GraphTarget::Effect)
         }
         GraphParamTarget::Generator => {
@@ -457,5 +457,41 @@ mod tests {
             false,
         )
         .is_none());
+    }
+
+    /// A chain reorder between the scrub's Begin and its Moves must not send
+    /// the value to a different effect: the card's address is the effect's id,
+    /// and a stale id resolves to nothing.
+    #[test]
+    fn effect_target_follows_the_effect_across_a_reorder() {
+        use manifold_core::effects::PresetInstance;
+        let mut project = Project::default();
+        let mut a = PresetInstance::new(PresetTypeId::new("Bloom"));
+        a.init_defaults();
+        let mut b = PresetInstance::new(PresetTypeId::new("Bloom"));
+        b.init_defaults();
+        let (a_id, b_id) = (a.id.clone(), b.id.clone());
+        project.settings.master_effects = vec![a, b];
+        let selection = SelectionState::default();
+        let resolve = |project: &Project, id: &manifold_core::EffectId| {
+            resolve_graph_target(
+                &GraphParamTarget::Effect(id.clone()),
+                None,
+                InspectorTab::Master,
+                &None,
+                &selection,
+                project,
+            )
+        };
+
+        assert_eq!(resolve(&project, &b_id), Some(manifold_core::GraphTarget::Effect(b_id.clone())));
+
+        project.settings.master_effects.swap(0, 1);
+        assert_eq!(project.settings.master_effects[0].id, b_id, "the reorder happened");
+        assert_eq!(resolve(&project, &b_id), Some(manifold_core::GraphTarget::Effect(b_id.clone())));
+        assert_eq!(resolve(&project, &a_id), Some(manifold_core::GraphTarget::Effect(a_id.clone())));
+
+        project.settings.master_effects.retain(|fx| fx.id != b_id);
+        assert_eq!(resolve(&project, &b_id), None, "a removed effect must not fall through to another");
     }
 }

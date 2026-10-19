@@ -1952,15 +1952,13 @@ impl Application {
                     // param, so it re-dispatches through the IDENTICAL
                     // `PanelAction::ParamChanged` handler the card's own
                     // slider uses (`ui_bridge/inspector.rs`) — never a
-                    // second write path. `idx` in `GraphParamTarget::Effect`
-                    // is a don't-care here: passing the editor's own
-                    // `watched_graph_target` explicitly as `editor_target`
-                    // makes `resolve_effect_id` resolve by stable id before
-                    // it ever consults `idx` (its early-return branch).
+                    // second write path. The `Effect` address is the
+                    // watched effect's own id, the same effect the editor
+                    // dispatch override resolves to.
                     if let Some(target) = self.watched_graph_target.as_ref() {
                         let gpt = match target {
-                            manifold_core::GraphTarget::Effect(_) => {
-                                manifold_ui::panels::GraphParamTarget::Effect(0)
+                            manifold_core::GraphTarget::Effect(eid) => {
+                                manifold_ui::panels::GraphParamTarget::Effect(eid.clone())
                             }
                             manifold_core::GraphTarget::Generator(_) => {
                                 manifold_ui::panels::GraphParamTarget::Generator

@@ -55,7 +55,7 @@ struct ProofCard {
 
 impl ProofCard {
     fn target(&self) -> GraphParamTarget {
-        GraphParamTarget::Effect(self.effect_index)
+        GraphParamTarget::Effect(manifold_foundation::EffectId::new(format!("fx-{}", self.effect_index)))
     }
 
     /// The whole card, described once. This is the method a migrated panel
@@ -332,21 +332,21 @@ fn intents_resolve_and_fold_up() {
     let d_btn = card.host.node_id(11).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(d_btn), Gesture::Click),
-        Some(PanelAction::Modulation(ModulationAction::DriverToggle(GraphParamTarget::Effect(3), _)))
+        Some(PanelAction::Modulation(ModulationAction::DriverToggle(GraphParamTarget::Effect(e), _))) if e == "fx-3"
     ));
 
     // Right-click the inert slider folds up to the param row's menu, not the card.
     let slider0 = card.host.node_id(9).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(slider0), Gesture::RightClick),
-        Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(GraphParamTarget::Effect(3), _)))
+        Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(GraphParamTarget::Effect(e), _))) if e == "fx-3"
     ));
 
     // Right-click the header drag handle (no row claim above it) folds to the card.
     let handle = card.host.node_id(2).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(handle), Gesture::RightClick),
-        Some(PanelAction::Params(ParamsAction::CardRightClicked(GraphParamTarget::Effect(3))))
+        Some(PanelAction::Params(ParamsAction::CardRightClicked(GraphParamTarget::Effect(e)))) if e == "fx-3"
     ));
 
     // Left-click the slider is absorbed by the row's claim (no click intent there).

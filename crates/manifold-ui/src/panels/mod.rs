@@ -41,7 +41,7 @@ use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::Color32;
 use crate::tree::UITree;
-use manifold_foundation::{AudioSendId, LayerId};
+use manifold_foundation::{AudioSendId, EffectId, LayerId};
 pub use viewport::HitRegion;
 
 // Per-domain intent enums (the FLAT sum decomposition of `PanelAction`, P-D /
@@ -106,8 +106,8 @@ pub enum DriverConfigAction {
 /// Which graph host a per-param [`PanelAction`] targets — the
 /// discriminator that replaced the parallel `Effect*` / `Gen*` variant
 /// pairs, so a card action can't be emitted (or dispatched) for the wrong
-/// kind by construction. `Effect` carries the chain-positional effect
-/// index (the card's `effect_index`); `Generator` carries nothing (a layer
+/// kind by construction. `Effect` carries the stable `EffectId` (a chain
+/// reorder cannot retarget it); `Generator` carries nothing (a layer
 /// hosts one generator, resolved from the active layer at dispatch time,
 /// exactly as the old `Gen*` arms did). `GeneratorOf` carries an explicit
 /// `LayerId` for dispatch sites that must NOT resolve through the active
@@ -119,7 +119,7 @@ pub enum DriverConfigAction {
 /// call site keeps using `Generator`/`Effect` unchanged.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphParamTarget {
-    Effect(usize),
+    Effect(EffectId),
     Generator,
     GeneratorOf(LayerId),
 }

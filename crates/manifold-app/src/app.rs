@@ -1092,8 +1092,8 @@ impl Application {
                             if let Some(target) = self.watched_graph_target.as_ref() {
                                 use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
                                 let gpt = match target {
-                                    manifold_core::GraphTarget::Effect(_) => {
-                                        manifold_ui::panels::GraphParamTarget::Effect(0)
+                                    manifold_core::GraphTarget::Effect(eid) => {
+                                        manifold_ui::panels::GraphParamTarget::Effect(eid.clone())
                                     }
                                     manifold_core::GraphTarget::Generator(_) => {
                                         manifold_ui::panels::GraphParamTarget::Generator
