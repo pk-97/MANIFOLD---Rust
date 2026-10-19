@@ -13,7 +13,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from gate_policy import godfile_paths, integration_rows, PREFIX_ROWS, is_inert_plan_path
+from gate_policy import exceeds_godfile_limit, godfile_paths, godfile_table, integration_rows, PREFIX_ROWS, is_inert_plan_path
 from gate_policy import CATALOG_PATHS, CATALOG_PACKAGE
 from gate_workspace import Workspace, module_mounts
 
@@ -172,6 +172,9 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             package, binaries = rows[path]
             plan.packages.add(package)
             plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
+        if path not in rows and exceeds_godfile_limit(repo, path):
+            plan.packages.add('manifold-app')
+            plan.filters.add("(package(=manifold-app) & binary(=godfile_regrowth))")
         for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
             if path.startswith(prefix) and path.endswith(suffix):
                 apply_row(package, modules, binaries)

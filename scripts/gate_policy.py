@@ -498,16 +498,31 @@ for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_press
 GODFILE_CEILINGS = "crates/manifold-app/tests/godfile_ceilings.json"
 
 
-def godfile_paths():
-    """Read the source-of-truth ceilings JSON; reject missing or empty tables."""
+def godfile_table():
+    """Read the source-of-truth ceilings JSON; reject missing or malformed tables."""
     source = Path(__file__).resolve().parent.parent / GODFILE_CEILINGS
     try:
         table = json.loads(source.read_text())
-    except ValueError:
-        table = None
-    if not isinstance(table, dict) or not table:
+        limit, ceilings = table["limit"], table["ceilings"]
+    except (ValueError, KeyError, TypeError):
+        limit = ceilings = None
+    if not isinstance(limit, int) or not isinstance(ceilings, dict) or not ceilings:
         raise ValueError(f"cannot parse CEILINGS in {source}")
-    return [GODFILE_CEILINGS, *table]
+    return limit, ceilings
+
+
+def godfile_paths():
+    return [GODFILE_CEILINGS, *godfile_table()[1]]
+
+
+def exceeds_godfile_limit(repo, path):
+    """True when a changed crates/**/*.rs file is over the limit (wc -l: newline count)."""
+    if not (path.startswith("crates/") and path.endswith(".rs")):
+        return False
+    try:
+        return (Path(repo) / path).read_bytes().count(b"\n") > godfile_table()[0]
+    except OSError:
+        return False
 
 
 # Cross-file contracts: path -> (owning package, integration binaries).
