@@ -636,15 +636,17 @@ pub(crate) fn editor_atlas_dirty(ui_root: &UIRoot) -> bool {
 }
 
 /// What the composite paints outside the tree and the canvas lane, each by
-/// its owner's own key: the window size, the dock dividers, the
-/// mini-timeline strip (its cache key, the playhead, the play state), and
-/// the per-frame surfaces' presence (node previews, the 3D viewport image,
-/// the popover, an editor text field), so the frame after one leaves draws
-/// it gone.
+/// its owner's own key: the window size, the dock dividers, the canvas's
+/// view and interaction state, the mini-timeline strip (its cache key, the
+/// playhead, the play state), and the per-frame surfaces' presence (node
+/// previews, the 3D viewport image, the popover, an editor text field), so
+/// the frame after one leaves draws it gone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CompositeKey {
     pub size: [u32; 2],
     pub dock: manifold_ui::DockDrawKey,
+    /// `GraphCanvas::view_version`; 0 without a canvas.
+    pub canvas: u64,
     pub mini: Option<(u64, i64, i64)>,
     pub playhead: u32,
     pub playing: bool,
@@ -939,6 +941,7 @@ mod tests {
         let key = CompositeKey {
             size: [800, 600],
             dock: manifold_ui::Dock::editor().draw_key(),
+            canvas: 0,
             mini: Some((1, 1, 1)),
             playhead: 0,
             playing: false,
@@ -960,5 +963,44 @@ mod tests {
         let previews = CompositeKey { live: LiveSurfaces { node_previews: true, ..LiveSurfaces::default() }, ..key };
         assert_eq!(idle(&mut state, previews), (true, true));
         assert_eq!(idle(&mut state, key), (true, false));
+    }
+
+    /// A canvas gesture reaches the composite through the canvas's own view
+    /// version, with no repaint call from the input code; a gesture that
+    /// changes nothing composites nothing.
+    #[test]
+    fn canvas_gestures_composite_through_the_canvas_view() {
+        let ui = UIRoot::new();
+        let mut state = EditorFrameState::default();
+        let mut canvas = GraphCanvas::new();
+        let vp = CanvasRect::new(0.0, 0.0, 800.0, 600.0);
+        let key = |canvas: &GraphCanvas| CompositeKey {
+            size: [800, 600],
+            dock: manifold_ui::Dock::editor().draw_key(),
+            canvas: canvas.view_version(),
+            mini: None,
+            playhead: 0,
+            playing: false,
+            live: LiveSurfaces::default(),
+        };
+        let mut frame = |canvas: &GraphCanvas| needs_composite(&mut state, &ui, false, key(canvas));
+        assert!(frame(&canvas), "the first frame draws");
+        assert!(!frame(&canvas), "an idle canvas draws nothing");
+        canvas.on_pointer_move(vp, 100.0, 100.0);
+        assert!(frame(&canvas), "the cursor moved: the tooltip and hover follow it");
+        canvas.on_pointer_move(vp, 100.0, 100.0);
+        assert!(!frame(&canvas), "a move to the same point changes nothing");
+        canvas.on_scroll(vp, 120.0);
+        assert!(frame(&canvas), "a zoom draws");
+        canvas.on_pan_button_down(100.0, 100.0);
+        canvas.on_pointer_move(vp, 140.0, 120.0);
+        canvas.on_pan_button_up();
+        assert!(frame(&canvas), "a pan draws");
+        canvas.toggle_debug_overlay();
+        assert!(frame(&canvas), "the debug overlay draws");
+        canvas.close_mapping_popover();
+        canvas.on_pan_button_up();
+        canvas.request_delete_selected();
+        assert!(!frame(&canvas), "closing what is closed changes nothing");
     }
 }

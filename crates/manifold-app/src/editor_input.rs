@@ -145,7 +145,9 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
 
     let (preview_width, card_x, viewport) = cx.columns();
     // The canvas always tracks the cursor: graph-space coords need it even
-    // for clicks that land in a side column.
+    // for clicks that land in a side column. What the move changes reaches
+    // the composite by its owner: the canvas's view version, the card
+    // lane's drawer as a live surface while open, tree hover as dirty nodes.
     if let Some(canvas) = cx.canvas.as_deref_mut() {
         canvas.on_pointer_move(viewport, pos.x, pos.y);
         // The canvas popover's live range drag and handle hover.
@@ -159,7 +161,6 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
     if in_panel || ui_root.browser_popup.is_open() || ui_root.input.pressed_widget().is_some() {
         ui_root.input.process_pointer(&mut ui_root.tree, pos, PointerAction::Move, cx.time);
     }
-    cx.ws.offscreen_dirty = true;
     moved
 }
 
@@ -363,7 +364,6 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
         }
         _ => {}
     }
-    cx.ws.offscreen_dirty = true;
     out
 }
 
@@ -406,7 +406,6 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
     let Some(canvas) = cx.canvas.as_deref_mut() else { return false };
     let (_, dy) = crate::window_input::normalize_scroll_delta(delta);
     canvas.on_scroll(CanvasRect::new(0.0, 0.0, cx.area.width, cx.area.height), dy);
-    ws.offscreen_dirty = true;
     true
 }
 
@@ -420,7 +419,6 @@ pub(crate) fn pinch(cx: &mut EditorPointer<'_>, magnification: f32) {
         return;
     }
     canvas.on_pinch(CanvasRect::new(0.0, 0.0, cx.area.width, cx.area.height), magnification);
-    cx.ws.offscreen_dirty = true;
 }
 
 /// Ends every editor-owned pointer gesture when the OS withholds the release
@@ -461,22 +459,19 @@ pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> bool {
     // idempotent when nothing is active.
     button(cx, MouseButton::Left, ElementState::Released);
     button(cx, MouseButton::Middle, ElementState::Released);
-    let cancelled = canvas_capture || ui_pressed || had_mapping || had_canvas_popover || cancelled_domain;
-    if cancelled {
-        cx.ws.offscreen_dirty = true;
-    }
-    cancelled
+    canvas_capture || ui_pressed || had_mapping || had_canvas_popover || cancelled_domain
 }
 
 /// A key while a mapping popover field is being typed into: the card lane's
 /// drawer first, then the canvas popover. Digits, `.`, `-` and Backspace edit,
 /// Enter commits, Escape cancels, ahead of every canvas shortcut (Backspace
 /// would otherwise delete the selected node). Command and Ctrl chords pass
-/// through untyped. False when neither popover is typing.
+/// through untyped. False when neither popover is typing. The card lane's
+/// drawer is a live surface of the composite while open; the canvas popover
+/// moves the canvas's view version.
 pub(crate) fn popover_key(
     mapping: &mut MappingPopover,
     canvas: Option<&mut GraphCanvas>,
-    ws: Option<&mut Workspace>,
     key: TextKey<'_>,
     modifiers: Modifiers,
 ) -> bool {
@@ -503,9 +498,6 @@ pub(crate) fn popover_key(
         }
     } else {
         return false;
-    }
-    if let Some(ws) = ws {
-        ws.offscreen_dirty = true;
     }
     true
 }

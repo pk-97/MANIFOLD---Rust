@@ -1906,6 +1906,7 @@ impl Application {
         let key = crate::editor_frame::CompositeKey {
             size: [logical_w, logical_h],
             dock: ws.dock.draw_key(),
+            canvas: self.graph_canvas.as_ref().map_or(0, |canvas| canvas.view_version()),
             mini: mini_key,
             playhead: mini_current_beat.to_bits(),
             playing: mini_is_playing,

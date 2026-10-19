@@ -19,10 +19,8 @@
 //! the same `TextInput` methods (the real shared core); merging the policy
 //! matches would be a behaviour change, not a dedup.
 //!
-//! Behaviour-preserving: the moved bodies are verbatim. The editor's
-//! viewport-slice math (`palette_width`/`sidebar_x`) and the explicit
-//! `offscreen_dirty` marking (the editor has no idle repaint loop) are preserved
-//! exactly — losing either would mis-hit-test or freeze the editor.
+//! Editor input never asks for a repaint: what it changes reaches the editor's
+//! composite through an input the composite reads (`editor_frame::needs_composite`).
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
@@ -1133,7 +1131,6 @@ impl Application {
         if crate::editor_input::popover_key(
             &mut self.editor_mapping_popover,
             self.graph_canvas.as_mut(),
-            self.graph_editor.as_mut(),
             crate::text_session::TextKey::from_winit(&logical_key),
             self.modifiers,
         ) {
@@ -1343,9 +1340,6 @@ impl Application {
             if let Some(canvas) = self.graph_canvas.as_mut() {
                 canvas.request_delete_selected();
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
             return true;
         }
         // Editor window: graph-canvas navigation + debug + transport keys.
@@ -1436,10 +1430,10 @@ impl Application {
                 }
                 _ => {}
             }
+            // Each lands through an input the composite reads: the play
+            // state, the canvas's view version, the overlay open set, the
+            // viewport image.
             if handled {
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
                 return true;
             }
         }
@@ -1461,9 +1455,6 @@ impl Application {
                     canvas.request_group_selection();
                 }
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
             return true;
         }
         // Editor window: Cmd+L tidies the current level — re-runs the
@@ -1477,9 +1468,6 @@ impl Application {
             if let Some(canvas) = self.graph_canvas.as_mut() {
                 canvas.request_relayout();
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
             return true;
         }
         // Editor window: Cmd+T recolours the selected group, cycling its
@@ -1491,9 +1479,6 @@ impl Application {
         {
             if let Some(canvas) = self.graph_canvas.as_mut() {
                 canvas.request_cycle_group_tint();
-            }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
             }
             return true;
         }

@@ -236,6 +236,7 @@ impl GraphCanvas {
             return;
         }
         self.auto_layout();
+        self.bump_view();
         let positions: Vec<(u32, (f32, f32))> =
             self.nodes.iter().map(|n| (n.id, n.pos_graph)).collect();
         self.pending_actions.push(GraphEditCommand::RelayoutGraph {

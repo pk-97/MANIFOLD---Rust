@@ -441,6 +441,14 @@ pub struct GraphCanvas {
     pub(crate) pan: (f32, f32),
     pub(crate) zoom: f32,
     pub(crate) cursor: (f32, f32),
+    /// Moves whenever an input entry may have changed what the canvas draws
+    /// from its own view and interaction state: pan, zoom, the cursor (the
+    /// tooltip, row lifts and ghost wire follow it), hover, selection, drags,
+    /// the popovers, scope, search, the debug overlay. The editor window's
+    /// composite key reads it (UI_INVALIDATION_DESIGN.md D17, D19); the
+    /// snapshot, aspect and tweens reach the composite through the canvas
+    /// feed instead.
+    pub(crate) view_version: u64,
     /// The canvas's one drag lifecycle (P7.2, D8/D9). Replaces the old
     /// `drag_mode: DragMode` + `drag_anchor` + `drag_pan_start` fields — the
     /// grab position lives in the controller's session, not a parallel field.
@@ -638,6 +646,7 @@ impl GraphCanvas {
             pan: (0.0, 0.0),
             zoom: 1.0,
             cursor: (0.0, 0.0),
+            view_version: 0,
             drag: crate::drag::DragController::new(),
             hovered: None,
             selected: ahash::AHashSet::new(),
@@ -832,6 +841,17 @@ impl GraphCanvas {
         if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
             n.collapsed = collapsed;
         }
+        self.bump_view();
+    }
+
+    /// The canvas's view version (see the field). Equal versions mean no
+    /// input changed what the canvas draws.
+    pub fn view_version(&self) -> u64 {
+        self.view_version
+    }
+
+    pub(crate) fn bump_view(&mut self) {
+        self.view_version = self.view_version.wrapping_add(1);
     }
 
     /// Tell the canvas whether the watched effect is currently on its
@@ -846,7 +866,10 @@ impl GraphCanvas {
     /// Set the find-a-node query (stored lowercased). Empty clears the search,
     /// restoring every node to full brightness.
     pub fn set_node_search(&mut self, query: &str) {
-        self.node_search = query.to_ascii_lowercase();
+        if !self.node_search.eq_ignore_ascii_case(query) {
+            self.node_search = query.to_ascii_lowercase();
+            self.bump_view();
+        }
     }
 
     /// The active find-a-node query (lowercased), or empty when no search is

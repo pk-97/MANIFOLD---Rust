@@ -138,8 +138,10 @@ impl Application {
         // Must still present every callback to maintain consistent cadence.
         // ProMotion adapts refresh rate based on observed frame delivery;
         // skipping presents causes it to drop from 120Hz to 60Hz, producing
-        // an 8/16ms nextDrawable bounce when it oscillates back.
-        if !self.ws.offscreen_dirty {
+        // an 8/16ms nextDrawable bounce when it oscillates back. A target
+        // that is new, or a size this window has not drawn at, composites.
+        let composited_size = Some([surface_w, surface_h]);
+        if !self.ws.offscreen_dirty && self.ws.composited_size == composited_size {
             if self.ws.surface_resized_this_frame {
                 self.ws.surface_resized_this_frame = false;
                 return;
@@ -178,6 +180,7 @@ impl Application {
             return;
         }
         self.ws.offscreen_dirty = false;
+        self.ws.composited_size = composited_size;
 
         // Reset overlay TextRenderer pool index
         if let Some(ui) = &mut self.ui_renderer {
