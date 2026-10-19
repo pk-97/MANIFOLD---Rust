@@ -35,14 +35,14 @@ The pidfile-based warning on a main-checkout branch switch is gone with the
 daemon that wrote the pidfiles. The Incident-1 hazard (two sessions sharing
 one HEAD) stays mitigated by the worktree slot ring (`scripts/agent-worktree.py`
 — branch work lives in worktrees, not the shared checkout), the merge-trunk
-landing protocol (section 2) and `detect_unverified_compound_landing_merge`.
+landing protocol (section 2).
 
 ## 1b. Landing-protocol guard
 
 Obsolete when: landing moves to a server-side gate (CI-enforced merge checks) — a local hook guarding a shared checkout has nothing left to guard.
 
 `.claude/hooks/preToolUseBash.py` is the spec (`landing_protocol_guard`,
-`land_pass_guard`, `detect_unverified_compound_landing_merge`). In the main
+`land_pass_guard`). In the main
 checkout, `git branch -f main` and any force-push to main ask unconditionally;
 a merge or push that lands on main without a recorded `land_branch.py` gate
 pass is denied unless it touches only `.beads/`, `docs/` and `.claude/hooks/`;
@@ -72,61 +72,9 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   re-gates outside the lock; a named red carries over only when that re-gate
   ran every check and went red on exactly the same checks. Each attempt logs
   one row to `.claude/orchestration/landing-runs.jsonl`.
-- **Several ready branches.** Land each with `land_branch.py`.
-  `scripts/land_wave.py --batch` (merge them in queue order, gate once, drop a
-  red culprit by name, land one merge listing every branch and tip) is a
-  fallback for a pile-up, not the standard path; its module docstring is the
-  spec.
-- **The gate.** It collects cheap reds before flows and GPU proofs. Any
-  cheap red stops at that boundary; every red prints its `rerun:` command.
-  `--fail-fast` stops at the first red; `--keep-going` is an explicit
-  diagnostic run. A named red never waives an unrun leg. Fix the reds with
-  their printed commands.
-  Follow background runs with `scripts/watch_land.py --pid PID --log PATH`
-  (`--kind land` for `land_branch.py`). It reads the active leg's live transcript
-  and exits on a red, refusal, hang or completion; `--hang-seconds` sets silence
-  tolerance. SIGINT/SIGTERM stop children and preserve an incomplete log.
-  Campaigns defer nightly work with `scripts/gpu_queue.py reserve --owner NAME
-  --reason TEXT --seconds N`; `clear` releases it early. Scripts are the spec.
-  The gate script itself is the
-  whole landing gate and gates only what
-  the branch touched: design-status housekeeping
-  (`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines
-  land in the same merge as the code), docs-index freshness when docs were
-  added/renamed (`scripts/gen_docs_index.py`), the UI flow gate
-  (`scripts/run_ui_flows.py --touched` — path-scoped via the flow manifest's
-  `path_triggers`; added after BUG-313 (drag flow red and unrun) and
-  hook-enforced: the run writes `.claude/orchestration/flow-gate-marker.json`
-  in the main checkout and `preToolUseBash.py` (`flow_gate_guard`) denies a
-  merge into main whose branch touches flow-mapped paths without a green
-  marker at that exact tip), `cargo deny check bans`, changed-code clippy
-  `--tests` + module-scoped nextest filtersets (including sibling test modules
-  and mapped integration binaries), and `scripts/gpu_proofs_gate.py` when
-  the diff touches GPU paths (scoped: mapped tests + smoke set from
-  `scripts/gpu_scope.py`, unmapped GPU path fails, `glb_conformance` only for
-  glTF paths; the whole suite is `--all`, nightly).
-  Comment/blank-only and docs-only diffs skip the build, clippy, CPU-test, and
-  GPU-proof legs. The selected CPU tests retain the GPU lock because device use
-  cannot be known cheaply; builds run outside that hold. Full touched-crate and
-  workspace CPU suites run nightly through `trunk_health.py`.
-  Successful legs are stored in the Git common directory, shared by every
-  slot. Keys cover content, dependency crates, test selection, features,
-  toolchain, environment, fixtures and gate scripts. An unchanged leg prints
-  `[REUSED]` with its original commit and time. Failed or unidentifiable legs
-  run again. Standalone proof-gate runs and equivalent serial cargo proof
-  commands through `gpu_queue.py` share these records. Only exact selections
-  match; a different filter, target or skip list needs its own pass. Raw cargo
-  runs longer than the minimum hang allowance need the instrumented proof gate
-  before they can count as landing passes.
-  A fully reused test set needs no build or GPU lock. Build results alone
-  are not reusable after a slot cache is reclaimed. Nightly sweeps never reuse.
-  Lanes run `landing_gate.py --cheap` before their commit: it gates the
-  uncommitted working tree against the base, and the landing gate reuses its
-  passes for the same content. The full gate requires a clean committed tree
-  and refreshes the existing verdict
-  and flow marker after reuse. `land_branch.py` checks the proposed merge tree
-  before committing it. If main changed that tree, it merges main into the
-  slot and gates again; only changed inputs need new checks.
+- **The gate.** Its mechanics (legs, scoping, reuse, flags, watching) are the
+  module docstring of `scripts/landing_gate.py`; lanes run it once with
+  `--cheap` before their commit (CLAUDE.md section How every session works).
 - **The GPU-proofs time budget is a warning, never a red.** Scoped runs never
   drop tests by duration. When passing tests exceed the landing budget,
   `gpu_proofs_gate.py` prints `GPU-PROOFS BUDGET: OVER` and the exit code is
@@ -233,16 +181,12 @@ live worktrees once carried 5–41 GB of cold-built `target/` each.
    survive wiped targets; workspace crates stay incremental and pass through.
    If sccache misbehaves, comment out the `rustc-wrapper` line — plain rustc
    is the unchanged fallback.
-3. **Batch landings.** Commits stay per-phase on the branch (durability
-   unchanged); `land_branch.py` runs once per 2–3 phases per design, not per
-   phase. Each landing skipped saves a gate rerun here and a lock wait for
-   every other concurrent session.
-4. **Prewarm during briefing.** The moment a worktree is acquired for a code
+3. **Prewarm during briefing.** The moment a worktree is acquired for a code
    wave, kick the phase's primary build (`cargo build -p <crate> [--features
    …] --manifest-path "<wt>/Cargo.toml"`) in the background, then write the
    worker briefs — the build runs while the worker reads its docs. Free
    overlap on every cold or profile-invalidated start.
-5. **Test runner + cache size.** CPU-focused gates run
+4. **Test runner + cache size.** CPU-focused gates run
    `cargo nextest` with filtersets for changed modules and mapped integration
    binaries; GPU-proofs suites STAY on
    `cargo test` — the in-process `test_device` lock is the device serializer
@@ -284,8 +228,7 @@ Obsolete when: sessions stop sharing the main checkout's index (all work in per-
   HEAD can change between a chain's steps in a shared checkout (a
   fetch→merge→push chain once landed a merge on another session's branch).
   Re-verify `git branch --show-current` immediately before the merge step,
-  as its own command (hook-denied otherwise:
-  `detect_unverified_compound_landing_merge`).
+  as its own command.
 - **Worktree handoff files.** A session stopping mid-work in a worktree
   (compaction, budget, interruption) writes its handoff to
   `<worktree>/WORKTREE_HANDOFF.md` — branch state, uncommitted diagnostics,

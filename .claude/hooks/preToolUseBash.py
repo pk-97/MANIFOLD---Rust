@@ -975,7 +975,7 @@ def land_pass_guard(cmd, cwd):
 # Worktree-ring guard (scripts/agent-worktree.py)
 #
 # 2026-07-15: 19 hand-rolled per-task worktrees × 15-60 GB cargo targets
-# filled Peter's disk (455 GB). The pool is now a fixed ring of at most 6
+# filled Peter's disk (455 GB). The pool is now a fixed ring of at most 10
 # slots, and scripts/agent-worktree.py is the ONLY sanctioned way to get a
 # worktree — its acquire path is structurally incapable of exceeding the
 # cap. This guard closes the bypass: any `git worktree add` from an agent
@@ -992,7 +992,7 @@ def land_pass_guard(cmd, cwd):
 WORKTREE_ADD_REASON = (
     "`git worktree add` is denied — worktrees come ONLY from the slot ring: "
     "`scripts/agent-worktree.py acquire <task-label> <branch> "
-    "[--tip REF]`. The ring caps the pool at 6 slots because hand-rolled "
+    "[--tip REF]`. The ring caps the pool at 10 slots because hand-rolled "
     "worktrees filled the disk once (455 GB, 2026-07-15). If acquire says "
     "POOL FULL, surface that to Peter instead of working around it."
 )
