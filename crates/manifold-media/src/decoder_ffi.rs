@@ -51,9 +51,6 @@ unsafe extern "C" {
     /// Detected frame rate (fps).
     pub fn VideoDecoder_GetFrameRate(handle: *mut c_void) -> f32;
 
-    /// Returns 1 if first frame has been decoded, 0 otherwise.
-    pub fn VideoDecoder_IsPrepared(handle: *mut c_void) -> i32;
-
     /// Release all resources for this decoder handle.
     pub fn VideoDecoder_Close(handle: *mut c_void);
 

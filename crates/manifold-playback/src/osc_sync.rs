@@ -261,14 +261,6 @@ impl OscSyncController {
         self.report.filter(|_| self.is_receiving_timecode)
     }
 
-    pub fn toggle_osc(&mut self, receiver: &mut OscReceiver) {
-        if self.is_osc_enabled {
-            self.disable_osc(Some(receiver));
-        } else {
-            self.enable_osc(receiver);
-        }
-    }
-
     // =================================================================
     // OSC Callback — port of Unity OnTimecodeReceived()
     // =================================================================

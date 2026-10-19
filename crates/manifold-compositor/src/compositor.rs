@@ -109,14 +109,6 @@ impl<'a> CompositorFrame<'a> {
         // Slow path: layer order doesn't match index (reordered/gaps).
         self.layers.iter().find(|l| l.layer_index == layer_index)
     }
-
-    /// Whether this layer is occluded by a fully-opaque layer above it.
-    /// Occluded layers skip their final blend dispatch only (the opaque
-    /// blend overwrites their pixels anyway); they render normally upstream.
-    #[inline]
-    pub fn is_occluded(&self, layer_index: i32) -> bool {
-        self.occluded_layers.contains(&layer_index)
-    }
 }
 
 /// One dumped texture borrowed from a compositor: `(node_id, port, type_id,
@@ -300,29 +292,6 @@ pub trait Compositor: Send {
         _layer_id: &str,
     ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
         None
-    }
-
-    /// Snapshot of a specific effect type's internal graph, identified
-    /// by its `PresetTypeId`. Default `None` — non-graph compositors
-    /// have nothing to expose. The real `LayerCompositor` override
-    /// delegates into its `EffectRegistry`.
-    fn graph_snapshot_for(
-        &self,
-        _type_id: &manifold_core::PresetTypeId,
-    ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
-        None
-    }
-
-    /// Outer→inner routings for a specific effect type. Used by the
-    /// per-card snapshot path where the snapshot is built off a
-    /// serialized graph, so the editor still needs the static
-    /// routing info from the live effect to disable inner rows.
-    /// Default empty.
-    fn outer_routings_for(
-        &self,
-        _type_id: &manifold_core::PresetTypeId,
-    ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
-        Vec::new()
     }
 
     /// Enable/disable per-step GPU attribution profiling on every effect

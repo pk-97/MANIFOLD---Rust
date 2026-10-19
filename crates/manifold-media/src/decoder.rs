@@ -244,11 +244,6 @@ impl DecoderHandle {
         unsafe { decoder_ffi::VideoDecoder_GetFrameRate(self.handle) }
     }
 
-    /// True if the first frame has been decoded and is ready.
-    pub fn is_prepared(&self) -> bool {
-        unsafe { decoder_ffi::VideoDecoder_IsPrepared(self.handle) != 0 }
-    }
-
     /// Raw handle for FFI calls.
     pub(crate) fn raw_handle(&self) -> *mut c_void {
         self.handle

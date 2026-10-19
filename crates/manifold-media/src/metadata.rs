@@ -30,9 +30,3 @@ pub fn probe_video_metadata(path: &str) -> Option<ProbeResult> {
 pub fn probe_video_metadata(_path: &str) -> Option<ProbeResult> {
     None
 }
-
-/// Check if a file path has a supported video extension.
-pub fn is_supported_video_file(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    SUPPORTED_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
-}
