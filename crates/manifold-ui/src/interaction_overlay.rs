@@ -28,8 +28,8 @@ use crate::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 // ── Constants ───────────────────────────────────────────────────
 // Unity InteractionOverlay lines 78-79.
 
-// Note: SNAP_THRESHOLD_PX and MAX_SNAP_BEATS live on TimelineViewportPanel
-// (viewport.rs magnetic_snap). These overlay constants will be needed when
+// Note: SNAP_THRESHOLD_PX lives in `snap.rs`; the live snap is
+// `TimelineViewportPanel::magnetic_snap` (viewport/coordinate.rs). These overlay constants will be needed when
 // overlay-level snapping is ported (Unity InteractionOverlay lines 78-79).
 
 // ── Shift+Click region selection ─────────────────────────────────

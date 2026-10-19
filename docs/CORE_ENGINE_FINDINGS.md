@@ -30,7 +30,7 @@ the decision-log memory so it isn't re-proposed).
 | F14 | Adaptive/measured round-trip windows (seek cooldown, ownership grace) | P3 | OPEN |
 | F15 | Session P2 seams (launch-from-stopped flash; phantom vs session-override) | P3 | OPEN |
 | F16 | Stable MIDI device identity (ports are positional) | P3 | OPEN |
-| F17 | Delete or fix `subscribe_keyed` key scheme | P3 | OPEN |
+| F17 | Delete or fix the keyed OSC subscribe scheme | P3 | DONE (keyed API deleted) |
 
 ---
 
@@ -403,12 +403,10 @@ source can attach to the wrong hardware. Fix: key by port *name* (stable on
 macOS for the same device), fall back to index; rebind registered devices on
 the existing 2s device scan when names move.
 
-### F17 · `subscribe_keyed` is a trap (map section 13.13)
+### F17 · Keyed OSC subscribe was a trap (map section 13.13)
 
-`OscReceiver::unsubscribe_keyed` uses `swap_remove`, which invalidates other
-keys for the same address. Unused today (only `unsubscribe_all` is called).
-Delete the keyed API or make keys stable (slot map / tombstones). Lean delete
-until a real second subscriber exists.
+The keyed API is deleted. `OscReceiver::unsubscribe_all` is the only removal; a
+second subscriber on one address needs stable keys (slot map / tombstones) first.
 
 ---
 

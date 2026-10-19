@@ -412,7 +412,7 @@ Every magic number on the timing paths, in one place:
 1. **The OSC/SMPTE timecode receive path is dead.** Nothing ever calls
    `OscSyncController::on_timecode_received` and `enable_osc` never registers
    a subscription (the code's own TODO says "when native OSC is live,
-   subscribe via subscribe_keyed"). Consequences: `is_receiving_timecode`
+   subscribe"). Consequences: `is_receiving_timecode`
    can never become true, so timecode transport-follow, position sync, *and*
    the OSC arm of authority auto-detection are all inert. M4L LiveMTC sync —
    a first-class feature of the Unity rig — silently does nothing in the Rust
@@ -485,10 +485,9 @@ Every magic number on the timing paths, in one place:
     replaces it) and AbletonOSC mode clears it each frame when the M4L
     sender is disabled. The M4L sender still uses the flag with the original
     staleness hazard — retired path, deferred cleanup.
-13. **`OscReceiver::subscribe_keyed`'s key scheme is broken by design** —
-    `swap_remove` invalidates other keys for the same address. Harmless today
-    (only `unsubscribe_all` is used, single-subscriber addresses) but a trap
-    for the next subscriber.
+13. ~~`OscReceiver` keyed subscribe key scheme is broken by design~~ **FIXED**:
+    the keyed API is deleted; `unsubscribe_all` is the only removal and every
+    address has one subscriber.
 14. ~~Round-trip constants are wall-clock guesses~~ **FIXED for position/
     transport correctness**: the CLK plane now releases on
     value-matched acknowledgment, not on the 0.3s cooldown, and retry

@@ -134,9 +134,8 @@ Chrome/View declarative API.
 > [chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs), on the Phase-3
 > tokens. Each component has **two forms** because the runtime has two write paths: a
 > `*_style(state) -> UIStyle` (for the in-place `set_style` update path) and a `*(..) -> View`
-> constructor (for the declarative build path). Built: Toggle, Button (primary/secondary),
-> IconButton, SegmentedControl (`segment` cell), Dropdown trigger, plus the ParamRow trailing
-> atoms (`reset_button`, `mod_badge`). The **full ParamRow composite is deferred to Phase 5** —
+> constructor (for the declarative build path). Built: Toggle, Button (secondary),
+> IconButton, SegmentedControl (`segment` cell), Dropdown trigger (`dropdown_trigger_style`). The **full ParamRow composite is deferred to Phase 5** —
 > it has to thread the live slider materialisation + drag state that lives in `param_card`, so
 > it gets assembled in that generic card and tuned against Edge Detect as the reference instance.
 > These supersede the scattered

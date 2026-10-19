@@ -344,19 +344,9 @@ impl OscReceiver {
             .push(callback);
     }
 
-    /// Remove a subscription by address. Removes the last-added callback
-    /// (mirrors Unity's List<Action>.Remove() which removes the first occurrence —
-    /// but since we do not have reference equality for Box<dyn Fn>, we remove
-    /// by index supplied by the caller; callers that need precise removal
-    /// should use subscribe_keyed / unsubscribe_keyed instead).
-    ///
-    /// Port of Unity OscReceiver.Unsubscribe().
-    ///
-    /// NOTE: Unity uses delegate reference equality for Remove(). In Rust,
-    /// Box<dyn Fn> closures are not comparable. Callers store the subscription
-    /// key returned by subscribe_keyed() and use unsubscribe_keyed() for
-    /// clean removal. This method removes ALL callbacks for the address —
-    /// sufficient for single-subscriber use cases (OscSyncController).
+    /// Remove every callback subscribed to `address`. `Box<dyn Fn>` closures
+    /// are not comparable, so there is no per-callback removal; this suits the
+    /// single-subscriber use of each address (OscSyncController).
     pub fn unsubscribe_all(&mut self, address: &str) {
         self.subscribers.remove(address);
         self.stamped.remove(address);

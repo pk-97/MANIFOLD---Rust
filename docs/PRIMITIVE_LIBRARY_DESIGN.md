@@ -125,9 +125,9 @@ Generator-side; each is a generator's algorithm as a graph primitive.
 | `Rotation4D` | `(angles: vec3) → rot: mat4` | stereo XY/ZW/XW (Tesseract, Duocylinder) |
 | `Camera4D` | `(dist: f32) → proj: mat4` | 4D→3D perspective |
 | `Raymarch` | `(volume: Texture3D, ray_origin, ray_dir, steps) → hit: vec4` | `parametric_surface_raymarch.wgsl` |
-| `MeshRender` | `(verts: Buffer, indices: Buffer, view, proj) → out: T2D, depth: T2D` | `mesh_pipeline.wgsl`, `nested_cubes.wgsl` |
+| `MeshRender` | `(verts: Buffer, indices: Buffer, view, proj) → out: T2D, depth: T2D` | `nested_cubes.wgsl` |
 | `Shadow` | `(scene: Mesh, light: mat4) → shadow: T2D` | PCF; `digital_plants_shadow.wgsl`, `galactic_rock_shadow.wgsl` |
-| `LineRasterize` | `(verts: Buffer, width: f32) → out: T2D` | `line_pipeline.wgsl`, `generator_lines.wgsl` |
+| `LineRasterize` | `(verts: Buffer, width: f32) → out: T2D` | `render_lines.wgsl` |
 
 ### 2.14 Particle infrastructure (3)
 

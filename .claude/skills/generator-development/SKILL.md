@@ -170,74 +170,9 @@ let pipelines = std::array::from_fn(|i| {
 });
 ```
 
-## Pattern B: Line-Based Generator (Lissajous template)
+## Pattern B: Line-Based Generator
 
-```rust
-use crate::generators::line_pipeline::LinePipeline;
-use crate::generators::generator_math::LineGeneratorHelper;
-
-pub struct MyLineGen {
-    line_pipeline: LinePipeline,
-    helper: LineGeneratorHelper,
-}
-
-impl MyLineGen {
-    pub fn new(device: &GpuDevice) -> Self {
-        let line_pipeline = LinePipeline::new(device, "My Lines");
-        let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, EDGE_COUNT);
-
-        // Define edge topology (which vertices connect)
-        for i in 0..VERTEX_COUNT {
-            helper.edge_a.push(i);
-            helper.edge_b.push((i + 1) % VERTEX_COUNT);
-        }
-
-        Self { line_pipeline, helper }
-    }
-}
-
-impl Generator for MyLineGen {
-    fn render(&mut self, gpu: &mut GpuEncoder, target: &GpuTexture,
-              ctx: &GeneratorContext) -> f32 {
-        // Compute vertex positions (CPU-side)
-        for i in 0..VERTEX_COUNT {
-            let t = i as f32 / VERTEX_COUNT as f32;
-            self.helper.projected_x[i] = /* x position */;
-            self.helper.projected_y[i] = /* y position */;
-            self.helper.projected_z[i] = /* depth (0..1) for edge animation */;
-        }
-
-        // Prepare line instances from vertices + edges
-        let (positions, instances, num_edges, edge_thick, dot_thick) =
-            self.helper.prepare_instances(
-                ctx.output_height as f32,
-                ctx.aspect,
-                line_width,     // pixel width of lines
-                show_verts,     // f32 toggle for vertex dots
-                vert_size,      // dot radius
-                animate,        // edge animation amount
-                speed,          // animation speed
-                window,         // animation window width
-                scale,          // overall scale
-                dot_scale,      // dot size multiplier
-                ctx.dt,
-            );
-
-        // Rasterize lines + dots
-        self.line_pipeline.draw(
-            gpu, target, positions, instances, num_edges,
-            edge_thick, dot_thick,
-            ctx.beat as f32, "My Lines", ctx.width, ctx.height,
-        );
-
-        self.helper.anim_progress
-    }
-
-    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
-        self.line_pipeline.resize(device, width, height);
-    }
-}
-```
+Build it as a graph: compute the points in graph nodes and rasterize with `node.render_lines` (docs/NODE_CATALOG.md).
 
 ## CRITICAL: Naga Multi-Entry-Point Uniform Size Rule
 
@@ -260,15 +195,10 @@ This applies to ANY binding index, not just uniforms — but uniforms are the mo
 
 ## Pattern C: 3D Mesh Generator (Galactic Rock template)
 
-Uses `MeshPipeline` for instanced cube rendering with depth testing, and optionally shadow mapping.
-
-**Infrastructure files:**
-- `mesh_pipeline.rs` — `MeshPipeline`, `MeshInstance`, `MeshUniforms`, procedural cube (36 verts from vertex_index), depth stencil, two-point PBR lighting. Max 131,072 instances.
-- `mesh_pipeline.wgsl` — vertex shader reads instances from storage buffer, applies Euler XYZ rotation, fragment does two-point Phong lighting.
-- Camera utilities in `mesh_pipeline.rs`: `perspective_rh()`, `look_at_rh()`, `ortho_rh()`, `mat4_mul()`.
+Build it as a graph with `node.render_3d_mesh` / `node.render_instanced_3d_mesh` (docs/NODE_CATALOG.md). Camera math (`perspective_rh()`, `look_at_rh()`, `ortho_rh()`, `mat4_mul()`) lives in `manifold-node-engine/src/mesh/pipeline.rs`.
 
 **Galactic Rock pattern (compute + shadow + render):**
-1. Compute pass: particle simulation → writes `MeshInstance` array to shared buffer
+1. Compute pass: particle simulation → writes the instance array to a shared buffer
 2. Shadow pass(es): `draw_instanced_depth()` from light POV → Depth32Float shadow maps (2048×2048)
 3. Main render: instanced draw sampling shadow maps via comparison sampler
 4. Optional post-process: compute blur pass
@@ -291,7 +221,7 @@ const INSTANCE_STRIDE: u64 = 32; // 2 × vec4
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct MeshInstance {
+struct InstanceData {
     pos_scale: [f32; 4],  // xyz: position, w: scale
     rot_pad: [f32; 4],    // xyz: Euler rotation, w: pad
 }

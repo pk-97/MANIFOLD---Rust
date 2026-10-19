@@ -242,12 +242,12 @@ lifetime safety, and driver-internal traversal is not observable here.
 | Phase                  | What                                                                                             | Status          |
 | ---------------------- | ------------------------------------------------------------------------------------------------ | --------------- |
 | 1                      | Foundation types (GpuEncoder wrapper)                                                            | **Done**        |
-| 2                      | HAL pipeline + ComputeBlitHelper                                                                 | **Done**        |
+| 2                      | HAL pipeline                                                                                  | **Done**        |
 | 3                      | All effects + generators to HAL                                                                  | **Done**        |
 | 4                      | MTLSharedEvent sync                                                                              | **Done**        |
 | 4B                     | All-compute pipeline (TBDR elimination)                                                          | **Done**        |
 | 4.5                    | Generators → hal, single submission                                                              | **Done**        |
-| 4.6                    | LinePipeline hal render + native readbacks → zero wgpu on content hot path                       | **Done**        |
+| 4.6                    | Instanced line render + native readbacks → zero wgpu on content hot path                       | **Done**        |
 | **manifold-gpu crate** | Extract hal code into native Metal backend (metal crate wrapper, not wgpu::hal). Metal-only, no wgpu fallback on content thread | **Done**        |
 | **Resource migration** | All content-thread textures/buffers → manifold_gpu types. Zero wgpu::Device on content thread    | **Done**        |
 | **objc2-metal migration** | Replace gfx-rs `metal` crate with typed `objc2-metal` bindings. Drops `objc 0.2`, `block 0.1`, `core-graphics-types` from dep graph | **Done** (2026-04-19) |

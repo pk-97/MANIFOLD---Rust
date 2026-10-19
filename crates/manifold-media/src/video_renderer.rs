@@ -194,8 +194,7 @@ impl VideoRenderer {
             .contains_key(Self::poster_key(clip_id).as_str())
     }
 
-    /// section 24 5c-2: request a per-bar FILMSTRIP decode for a parked video clip. Like
-    /// [`Self::request_clip_poster`] but walks the isolated decoder across
+    /// section 24 5c-2: request a per-bar FILMSTRIP decode for a parked video clip. Walks the isolated decoder across
     /// `bar_times` (source seconds per filmstrip cell), so the timeline can show
     /// frames sampled across the clip's duration, not just its first frame.
     /// Idempotent — a clip that's active or already decoding is left alone. The

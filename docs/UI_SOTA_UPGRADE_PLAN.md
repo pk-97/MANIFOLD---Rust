@@ -97,7 +97,7 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 | | |
 |---|---|
-| **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/**state_button**/button/icon_button/segment/dropdown_trigger/reset/mod_badge) now owns every **chrome-bar** button. Popups (`dropdown`/`browser_popup`/`ableton_picker`) still hand-roll their shells. |
+| **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/**state_button_skinned**/button_secondary_style/icon_button_style/segment/dropdown_trigger_style) now owns every **chrome-bar** button. Popups (`dropdown`/`browser_popup`/`ableton_picker`) still hand-roll their shells. |
 | **Changes** | ✅ transport / header / footer / layer_header buttons+toggles onto the kit; bespoke `*_style` fns deleted or collapsed to thin font/radius shims. ⬜ Popups onto one shared `popup_shell` (section 22.2), colours from section 15, depth from section 17. |
 | **Files** | ✅ `transport.rs`, `header.rs`, `footer.rs`, `layer_header.rs`. ⬜ the three popups. |
 | **Verify** | Harness snapshot per panel (panel-by-panel, one atomic cutover each); ratchet catches stray literals; tree assertions for layout. |
