@@ -423,7 +423,6 @@ pub fn run(args: &[String]) -> ! {
     // project before LoadProject so the content pipeline's own resize lands
     // on the override (LoadProject re-resizes to settings — see
     // content_commands.rs); the project file on disk is untouched.
-    // rt_a2_term_cost pins every fixture to 3840x2160 this way.
     let override_w: Option<u32> = args.windows(2)
         .find(|w| w[0] == "--width")
         .and_then(|w| w[1].parse().ok());
