@@ -51,7 +51,7 @@ Extend, don't redesign: every firing point is an existing hook; the only new sys
 
 `kind: no-gate` is the explicit bypass (docs-only landings, hook-only changes): the bypass is a verdict too, with a mandatory `reason`. JSONL, not JSON — append-only by construction; nothing ever rewrites history.
 
-**D6 — Pre-land coverage rule.** `git merge --no-ff` to main requires, for every bead task named on the branch, a passing verdict (gate or no-gate) against the branch tip. The clause lives in `preToolUseBash.py`, shaped like workflow-gate's two-tier deny (violation denies with the missing verdicts spelled out). Consequences, stated honestly: this adds friction to small landings — a doc typo fix to main now needs a one-line no-gate verdict. That's seconds with `gate_runner no-gate --task BUG-xxx --reason "typo"`, and the alternative is the silent-bypass hole the rule exists to close.
+**D6 — Pre-land coverage rule.** Retired: the merge hook no longer checks verdicts and the landing gate no longer stamps them; `land_pass_guard` (a land-pass record for the exact tree) is the only gate on a merge to main.
 
 **D7 — Wave report is a query, not a store.** `gate_runner report --wave <label>` counts verdicts, beads closes, and decisions.md entries between two refs/dates. Anything it can't compute from the trail is a trail gap, not a report feature.
 

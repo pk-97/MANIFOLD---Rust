@@ -1721,45 +1721,102 @@ def commit_substitution_guard(cmd):
 # `fd -x/-X` and `rg --pre` run an arbitrary program, `git -c` can set a
 # pager, editor or hook-like config key, `git checkout -- .` throws away the
 # whole working tree, `git branch -D` drops an unmerged branch. Denied in
-# auto mode only; other modes still prompt on them.
+# auto mode only; every other mode is unchanged (these shapes are
+# pre-approved there).
 AUTO_EXEC_SHAPE_REASON = (
     "Denied in auto mode: `fd -x/--exec/-X/--exec-batch`, `rg --pre`, `git -c`, "
     "`git checkout -- .` and `git branch -D` run code or discard work the "
     "reviewer never sees. Use `fd` without exec (pipe paths to a tool you name), "
-    "`rg` without --pre, the git config key's own command, "
-    "`git checkout -- <path>`, or `git branch -d`."
+    "`rg` without --pre, `git checkout -- <path>`, or `git branch -d`. "
+    "No per-command git config overrides in auto mode: stop and report to the lead."
 )
 _FD_EXEC_FLAGS = {"-x", "-X", "--exec", "--exec-batch"}
+_FD_VALUE_SHORTS = "dteESocj"
+_WHOLE_TREE_PATHSPECS = {".", "./", ":/"}
+
+
+def _glued_split(toks):
+    """Split a segment again where a word carries a glued `;` ("a.rs;"), which
+    shlex leaves attached."""
+    out, current = [], []
+    for t in toks:
+        if len(t) > 1 and t.endswith(";"):
+            current.append(t[:-1])
+            out.append(current)
+            current = []
+        else:
+            current.append(t)
+    if current:
+        out.append(current)
+    return out
+
+
+def _before_double_dash(toks, value_flags=()):
+    """Option tokens up to a `--` separator, dropping the values of
+    `value_flags` (they are patterns, not options)."""
+    out, skip = [], False
+    for t in toks:
+        if skip:
+            skip = False
+            continue
+        if t == "--":
+            break
+        if t in value_flags:
+            skip = True
+            continue
+        out.append(t)
+    return out
+
+
+def _fd_runs_command(args):
+    for t in _before_double_dash(args):
+        if t in _FD_EXEC_FLAGS or t.startswith(("--exec=", "--exec-batch=")):
+            return True
+        if t.startswith("-") and not t.startswith("--"):
+            for ch in t[1:]:
+                if ch in "xX":
+                    return True
+                if ch in _FD_VALUE_SHORTS:
+                    break
+    return False
+
+
+def _git_exec_shape(toks):
+    _, sub, rest = _git_checkout_dir(toks, os.getcwd())
+    before_sub = toks[1:len(toks) - len(rest) - 1] if sub else toks[1:]
+    if "-c" in before_sub or any(t.startswith("--config-env") for t in before_sub):
+        return True
+    if sub == "checkout" and any(t in _WHOLE_TREE_PATHSPECS for t in rest):
+        return True
+    if sub == "branch":
+        shorts = {ch for t in rest if t.startswith("-") and not t.startswith("--") for ch in t[1:]}
+        longs = {t for t in rest if t.startswith("--")}
+        delete = "d" in shorts or "--delete" in longs
+        force = "f" in shorts or "--force" in longs
+        if "D" in shorts or (delete and force):
+            return True
+    return False
 
 
 def auto_mode_exec_shape_guard(cmd):
     """Return a deny reason when any segment is one of the exec/discard shapes
     above. Never raises."""
     try:
-        for toks in _shlex_segments(cmd):
-            toks = _strip_leading_keywords(toks)
-            if not toks:
-                continue
-            head = toks[0].rsplit("/", 1)[-1]
-            if head == "fd":
-                if any(t in _FD_EXEC_FLAGS or t.startswith(("--exec=", "--exec-batch="))
-                       for t in toks[1:]):
-                    return AUTO_EXEC_SHAPE_REASON
-            elif head == "rg":
-                if any(t == "--pre" or t.startswith("--pre=") for t in toks[1:]):
-                    return AUTO_EXEC_SHAPE_REASON
-            elif head == "git":
-                _, sub, rest = _git_checkout_dir(toks, os.getcwd())
-                before_sub = toks[1:len(toks) - len(rest) - 1] if sub else toks[1:]
-                if "-c" in before_sub or any(t.startswith("--config-env") for t in before_sub):
-                    return AUTO_EXEC_SHAPE_REASON
-                if sub == "checkout" and "--" in rest:
-                    after = rest[len(rest) - rest[::-1].index("--"):]
-                    if "." in after:
-                        return AUTO_EXEC_SHAPE_REASON
-                if sub == "branch" and any(
-                        t == "-D" or (t.startswith("-") and not t.startswith("--") and "D" in t[1:])
-                        for t in rest):
+        for whole in _shlex_segments(cmd):
+            for toks in _glued_split(_strip_leading_keywords(whole)):
+                if not toks:
+                    continue
+                head = toks[0].rsplit("/", 1)[-1]
+                if head == "fd":
+                    hit = _fd_runs_command(toks[1:])
+                elif head == "rg":
+                    hit = any(t == "--pre" or t.startswith("--pre=")
+                              for t in _before_double_dash(toks[1:], ("-e", "--regexp", "-f", "--file")))
+                elif head == "git":
+                    hit = _git_exec_shape(toks)
+                else:
+                    hit = False
+                if hit:
                     return AUTO_EXEC_SHAPE_REASON
         return None
     except Exception:

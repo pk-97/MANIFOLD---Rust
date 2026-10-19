@@ -272,7 +272,7 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(landing.finish(self.repo, 'origin/main',
                                             [('PASS', 'clippy/a', 0, [])]), 1)
             self.assertFalse(landing.RAN_EVERY_CHECK.get())
-            self.assertIn('inputs changed before verdict publication', self.output.getvalue())
+            self.assertIn('inputs changed before the gate finished', self.output.getvalue())
 
     def test_proof_input_change_is_a_nonwaivable_gate_refusal(self):
         landing.RAN_EVERY_CHECK.set(True)
@@ -1180,6 +1180,11 @@ class CacheTests(unittest.TestCase):
         expected_packages = {'a', *cache.Workspace(self.repo).reverse_dependencies(['a'])}
         package_args = {c[c.index('-p') + 1] for c in cargo if '-p' in c}
         self.assertEqual(package_args, expected_packages)
+
+    def test_finish_fails_when_head_moved_during_the_gate(self):
+        with patch.object(landing, 'GATED_HEAD') as expected:
+            expected.get.return_value = 'obsolete-commit'
+            self.assertEqual(landing.finish(self.repo, 'origin/main', [('PASS', 'reused', 0, [])]), 1)
 
 
 class ExternalReadCoverageTests(unittest.TestCase):
