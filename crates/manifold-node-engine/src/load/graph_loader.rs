@@ -315,6 +315,31 @@ pub(crate) fn has_retired_params(def: &EffectGraphDef) -> bool {
 }
 }
 
+/// Bring a saved graph to today's shape: every graph-shape migration first,
+/// then the retired-param strip. A migration reads the very params the strip
+/// erases (the World sun position, the Physics node's box spawner), so the
+/// strip must come last. Both retire sites, [`instantiate_def`] and
+/// `PresetRuntime::from_def_for_render`, call this, and a library or
+/// catalog preset that never passed project load migrates the same way
+/// project load does. Each step runs only on a graph that needs it, so the
+/// common current document stays borrowed.
+pub(crate) fn migrate_graph_shape(def: Cow<'_, EffectGraphDef>) -> Cow<'_, EffectGraphDef> {
+    let mut def = def;
+    if manifold_core::phong_migration::contains_phong_materials(&def) {
+        manifold_core::phong_migration::migrate_phong_to_pbr(def.to_mut());
+    }
+    if manifold_core::sky_sun::carries_world_sun(&def) {
+        manifold_core::sky_sun::migrate_world_sun(def.to_mut(), &|_| None);
+    }
+    if manifold_core::copies_body::carries_world_copies(&def) {
+        manifold_core::copies_body::migrate_world_copies(def.to_mut());
+    }
+    if has_retired_params(&def) {
+        retire_params(def.to_mut());
+    }
+    def
+}
+
 /// Strip every [`manifold_core::type_id_migration::RETIRED_PARAMS`] entry
 /// from a saved graph: the value, exposure, wires into the port, group
 /// interface params and inputs that only fed it, and cards that only drove
@@ -445,42 +470,9 @@ pub fn instantiate_def(
 
     // Standalone preset definitions can reach the renderer without passing
     // through the project loader (catalog imports, previews, and editor
-    // snapshots). Apply the one-shot Phong migration at this shared choke
-    // point, while the common current-document path stays borrowed.
-    let phong_migrated;
-    let def = if manifold_core::phong_migration::contains_phong_materials(def) {
-        let mut owned = def.clone();
-        manifold_core::phong_migration::migrate_phong_to_pbr(&mut owned);
-        phong_migrated = owned;
-        &phong_migrated
-    } else {
-        def
-    };
-
-    // A graph saved before the sky's sun followed the Sun light (a library
-    // or catalog preset that never passed project load) migrates here the
-    // same way project load does: World sun position out, Sun light wired
-    // into the bake. Must run before the retired-param strip below, which
-    // would otherwise erase the World sun that marks the old graph.
-    let sky_sun_migrated;
-    let def = if manifold_core::sky_sun::carries_world_sun(def) {
-        let mut owned = def.clone();
-        manifold_core::sky_sun::migrate_world_sun(&mut owned, &|_| None);
-        sky_sun_migrated = owned;
-        &sky_sun_migrated
-    } else {
-        def
-    };
-
-    let retired;
-    let def = if has_retired_params(def) {
-        let mut owned = def.clone();
-        retire_params(&mut owned);
-        retired = owned;
-        &retired
-    } else {
-        def
-    };
+    // snapshots), so they migrate here.
+    let migrated = migrate_graph_shape(Cow::Borrowed(def));
+    let def: &EffectGraphDef = &migrated;
 
     // All raw host loads use the same structural preparation before any
     // primitive is installed. A standalone recipe still requires attachment.

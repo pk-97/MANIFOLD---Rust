@@ -277,7 +277,7 @@ manifold_core::testkit_visible! {
     /// `mesh_rules` is the fused view's prepared mesh-revision sidecar
     /// (design §3.3); canonical/unfused defs pass an empty map.
     pub(crate) fn from_render_def(
-        mut doc: EffectGraphDef,
+        doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
         mesh_rules: &crate::scene::mesh_change::PreparedMeshRules,
@@ -292,10 +292,10 @@ manifold_core::testkit_visible! {
             ));
         }
 
-        // Retired params leave before cards and bindings are cloned.
-        if crate::load::graph_loader::has_retired_params(&doc) {
-            crate::load::graph_loader::retire_params(&mut doc);
-        }
+        // Old shapes migrate and retired params leave before cards and
+        // bindings are cloned.
+        let mut doc =
+            crate::load::graph_loader::migrate_graph_shape(std::borrow::Cow::Owned(doc)).into_owned();
 
         // Load-time heal: a Float/IntRound-convert binding into a Bool-typed
         // target is upgraded to BoolThreshold. The v1130 cinematic-tail

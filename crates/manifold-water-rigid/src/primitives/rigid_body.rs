@@ -2,7 +2,7 @@ use manifold_node_engine::mesh::PLATONIC_SHAPES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use crate::physics::{ColliderGeometry, RigidBody};
+use crate::physics::{ColliderGeometry, CopySpawn, MAX_COPIES, RigidBody};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use crate::physics_mesh::{transform_vertices, validate_transform};
 use crate::physics_mesh::{PART_PORTS, load_compound_materials, parse_compound_materials};
@@ -18,6 +18,28 @@ const IDENTITY_TRANSFORM: Transform = Transform {
     scale: [1.0; 3],
     billboard: false,
 };
+
+/// The box spawner a Physics World reads when this body is its `copies`
+/// prototype. Arrangement accepts a wired scalar or the enum param.
+fn read_spawn(ctx: &EffectNodeContext<'_, '_>) -> CopySpawn {
+    let defaults = CopySpawn::default();
+    let wired_layout = ctx.inputs.scalar("copy_layout").and_then(|value| match value {
+        ParamValue::Float(value) => Some(value),
+        ParamValue::Enum(value) => Some(value as f32),
+        _ => None,
+    });
+    let layout = wired_layout.unwrap_or_else(|| match ctx.params.get("copy_layout") {
+        Some(ParamValue::Enum(value)) => *value as f32,
+        Some(ParamValue::Float(value)) => *value,
+        _ => defaults.layout,
+    });
+    CopySpawn {
+        count: ctx.scalar_or_param("copy_count", defaults.count),
+        spacing: ctx.scalar_or_param("copy_spacing", defaults.spacing),
+        columns: ctx.scalar_or_param("copy_columns", defaults.columns),
+        layout,
+    }
+}
 
 fn same_mesh_source(left: Option<&MeshSource>, right: Option<&MeshSource>) -> bool {
     match (left, right) {
@@ -149,6 +171,10 @@ manifold_node_engine::primitive! {
   friction: ScalarF32 optional,
   bounce: ScalarF32 optional,
   release_count: ScalarF32 optional,
+  copy_count: ScalarF32 optional,
+  copy_spacing: ScalarF32 optional,
+  copy_columns: ScalarF32 optional,
+  copy_layout: ScalarF32 optional,
  },
  outputs: { body: RigidBody, shape: ScalarF32, },
 params: [
@@ -174,10 +200,14 @@ ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType:
 ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0,63.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("collider_parts"), label: "Collider Detail", ty: ParamType::Int, default: ParamValue::Float(32.0), range: Some((1.0,64.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials", ty: ParamType::Table, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(1.25), range: Some((0.01, 100.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_layout"), label: "Arrangement", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Grid", "Pile"] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider.",
- examples: ["PhysicsSolids"],
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider. Wired into a Physics World's copies input, the body is the prototype of its box spawner: copy_count, copy_spacing, copy_columns and copy_layout (Grid or Pile) set how many copies the world makes and how it lays them out, apply on first build, reset or backwards transport, and are port-shadowed; any other body ignores them.",
+ examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object density, friction and bounce, then connect it to a Physics World.",
  category: Geometry3D, role: Source,
@@ -271,6 +301,7 @@ impl Primitive for RigidBodyNode {
                 bounce: ctx.scalar_or_param("bounce", 0.15),
                 collider: self.collider.clone(),
                 wall: false,
+                spawn: read_spawn(ctx),
             };
             let shape = body.shape;
             ctx.outputs.set_cpu_value("body", body);
@@ -490,6 +521,7 @@ impl Primitive for RigidBodyNode {
             bounce: ctx.scalar_or_param("bounce", 0.15),
             collider: self.collider.clone(),
             wall: false,
+            spawn: read_spawn(ctx),
         };
         let shape = body.shape;
         ctx.outputs.set_cpu_value("body", body);

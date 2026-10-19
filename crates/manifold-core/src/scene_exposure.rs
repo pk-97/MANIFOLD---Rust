@@ -339,8 +339,8 @@ pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f3
     }
 }
 
-/// `(doc_id, node_id, type_id, section, params, wired_inputs)` for one
-/// vocab-matched node, collected by collect_vocab_nodes and consumed by
+/// `(doc_id, node_id, type_id, section, params, wired_inputs, copies_body)`
+/// for one vocab-matched node, collected by collect_vocab_nodes and consumed by
 /// migrate_scene_exposures.
 type VocabNodeEntry = (
     u32,
@@ -349,6 +349,7 @@ type VocabNodeEntry = (
     String,
     BTreeMap<String, SerializedParamValue>,
     std::collections::BTreeSet<String>,
+    bool,
 );
 
 /// Walk every node in `def` — INCLUDING every `node.group`'s inner body,
@@ -391,8 +392,8 @@ where
         .get_or_insert_with(empty_scene_preset_metadata);
 
     let mut changed = false;
-    for (node_doc_id, node_id, type_id, section, node_params, wired_inputs) in &found {
-        let metadata = crate::param_lookup::stamped_node_params(type_id);
+    for (node_doc_id, node_id, type_id, section, node_params, wired_inputs, copies_body) in &found {
+        let metadata = crate::param_lookup::stamped_params_for(type_id, *copies_body);
         let fresh_metadata: Vec<_> = metadata
             .into_iter()
             .filter(|entry| {
@@ -422,8 +423,8 @@ where
     // stamped value (BUG-303). The idempotence guard above skips them forever
     // because a binding already targets `(node_id, param)` — re-seed those in
     // place whenever the node still has a stamped value that disagrees.
-    for (_, node_id, type_id, _, node_params, _) in &found {
-        let metadata = crate::param_lookup::stamped_node_params(type_id);
+    for (_, node_id, type_id, _, node_params, _, copies_body) in &found {
+        let metadata = crate::param_lookup::stamped_params_for(type_id, *copies_body);
         for meta_entry in &metadata {
             let Some(stamped) = node_params.get(&meta_entry.name) else {
                 // No stamped value for this param — nothing to repair against.
@@ -474,8 +475,8 @@ where
     // not-user-added predicate is the guard that keeps a hand-authored
     // exposure on the same node authored. Idempotent: a second run
     // re-derives `true` and writes nothing.
-    for (_, node_id, type_id, _, _, _) in &found {
-        let metadata = crate::param_lookup::stamped_node_params(type_id);
+    for (_, node_id, type_id, _, _, _, copies_body) in &found {
+        let metadata = crate::param_lookup::stamped_params_for(type_id, *copies_body);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter_mut().find(|b| {
                 !b.user_added
@@ -528,6 +529,7 @@ fn collect_vocab_nodes<F>(
                     .filter(|wire| wire.to_node == node.id)
                     .map(|wire| wire.to_port.clone())
                     .collect(),
+                crate::copies_body::is_copies_body(node.id, nodes, wires),
             ));
         }
         if let Some(body) = node.group.as_deref() {

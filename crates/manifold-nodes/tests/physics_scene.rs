@@ -41,6 +41,23 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
         (0.0, 4000.0, 256.0)
     );
     assert!(count.whole_numbers && count.card_visible);
+    // The box spawner is the copies body's: all four stamp there, none on
+    // the world or on the bodies that are not copied.
+    let targets = binding_targets(&def);
+    for param in ["copy_count", "copy_spacing", "copy_columns", "copy_layout"] {
+        assert!(targets.contains(&(121, param.to_string())), "copies body 121.{param} must be exposed");
+    }
+    assert_eq!(
+        targets.iter().filter(|(_, param)| param.starts_with("copy_")).count(),
+        4,
+        "{targets:?}"
+    );
+    assert!(
+        metadata.params.iter().any(|p| p.id == "121_copy_spacing")
+            && metadata.param_aliases.iter().any(|a| a.old == "40_copy_spacing"
+                && a.new.as_deref() == Some("121_copy_spacing")),
+        "a saved Spacing card value follows the control to its new id"
+    );
     assert!(
         metadata
             .params
@@ -97,6 +114,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         fragment_parent: None,
         release_count: 0.0,
         wall: false,
+        spawn: Default::default(),
     };
     let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
@@ -108,10 +126,10 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         sim.advance_with_copy_layout(
             bodies.clone(),
             prototype.clone(),
-            scalar(40, "copy_count"),
-            scalar(40, "copy_spacing"),
-            scalar(40, "copy_columns"),
-            scalar(40, "copy_layout"),
+            scalar(121, "copy_count"),
+            scalar(121, "copy_spacing"),
+            scalar(121, "copy_columns"),
+            scalar(121, "copy_layout"),
             [0.0, -9.81, 0.0],
             Seconds(f64::from(frame) / 60.0),
             1.0,
@@ -255,6 +273,11 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
             "world 40.{param} must be exposed"
         );
     }
+    // No copies body, so no box sliders anywhere.
+    assert!(
+        !targets.iter().any(|(_, param)| param.starts_with("copy_")),
+        "a scene without boxes shows no box controls"
+    );
 
     let metadata = migrated.preset_metadata.as_ref().expect("metadata");
     let reset_specs: Vec<_> = metadata

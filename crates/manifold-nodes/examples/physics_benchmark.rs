@@ -49,6 +49,7 @@ fn scene_inputs() -> (
         fragment_parent: None,
         release_count: 0.0,
         wall: false,
+        spawn: Default::default(),
     };
     let mut bodies = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
@@ -57,9 +58,9 @@ fn scene_inputs() -> (
     (
         bodies,
         body(121),
-        scalar(&nodes, 40, "copy_spacing"),
-        scalar(&nodes, 40, "copy_columns"),
-        scalar(&nodes, 40, "copy_layout"),
+        scalar(&nodes, 121, "copy_spacing"),
+        scalar(&nodes, 121, "copy_columns"),
+        scalar(&nodes, 121, "copy_layout"),
         -9.81,
     )
 }

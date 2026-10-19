@@ -55,20 +55,11 @@ impl PresetRuntime {
         manifest: Option<&ParamManifest>,
         render_fused: bool,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        let doc = if manifold_core::phong_migration::contains_phong_materials(&doc) {
-            let mut migrated = doc;
-            manifold_core::phong_migration::migrate_phong_to_pbr(&mut migrated);
-            migrated
-        } else {
-            doc
-        };
-        let mut doc = doc;
-        // Retired params leave before anything reads the authored graph: the
-        // scene-modifier expansion, its value writes and the render def must
-        // all see the same nodes.
-        if crate::load::graph_loader::has_retired_params(&doc) {
-            crate::load::graph_loader::retire_params(&mut doc);
-        }
+        // Old shapes migrate and retired params leave before anything reads
+        // the authored graph: the scene-modifier expansion, its value writes
+        // and the render def must all see the same nodes.
+        let mut doc =
+            crate::load::graph_loader::migrate_graph_shape(std::borrow::Cow::Owned(doc)).into_owned();
         crate::load::migration::prepare_stage(
             &mut doc,
             crate::load::migration::MigrationStage::BeforeSceneModifiers,

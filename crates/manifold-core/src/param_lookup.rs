@@ -62,10 +62,21 @@ pub fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
 
 /// The params a scene node stamps as exposures (creation sites and the
 /// load-time migration), in card order: every param [`node_params`] returns
-/// except those [`hidden_from_stamp`] drops.
+/// except those [`hidden_from_stamp`] drops, and the box spawner, which only
+/// a copies body stamps ([`stamped_params_for`]).
 pub fn stamped_node_params(type_id: &str) -> Vec<NodeParamMetadata> {
+    stamped_params_for(type_id, false)
+}
+
+/// [`stamped_node_params`] for a node in its role: a rigid body wired into
+/// a Physics World's `copies` input also stamps the box spawner
+/// (`crate::copies_body`).
+pub fn stamped_params_for(type_id: &str, copies_body: bool) -> Vec<NodeParamMetadata> {
     let mut params = node_params(type_id);
-    params.retain(|meta| !hidden_from_stamp(meta));
+    params.retain(|meta| {
+        !hidden_from_stamp(meta)
+            && (copies_body || !crate::copies_body::is_copies_body_param(type_id, &meta.name))
+    });
     params
 }
 
