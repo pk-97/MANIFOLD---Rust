@@ -319,7 +319,6 @@
     "led-layer-create": "timeline",
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
-    "trigger-lane-assignment": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",
     "inspector-card-drag-reorder": "inspector",
@@ -359,7 +358,6 @@
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
-    "scene-forces-controls": "physicsscene",
     "scene-surfaces-clickthrough": "gltfscene",
     "scene-surfaces-clickthrough-physics": "physicsscene",
     "scene-panel-tree": "gltfscene",
@@ -390,6 +388,17 @@
     "work-text-commit": "inspector",
     "work-perform-exit": "timeline"
   },
-  "expected_fail": {},
+  "expected_fail": {
+    "scene-forces-controls": {
+      "scene": "physicsscene",
+      "bug": "BUG-gm08t",
+      "reason": "step 35: the Assign picker shows no tick after assigning. sync_project_data reads clip trigger assignments (Effects part) but PROJECT_SYNC_PARTS has no Effects, so an assign never refreshes the picker or the trigger lane header (INV-16). Fix shape is a UI_INVALIDATION section 4 design call."
+    },
+    "trigger-lane-assignment": {
+      "scene": "envmod",
+      "bug": "BUG-gm08t",
+      "reason": "step 16: same root as scene-forces-controls; after an unassign the picker and the trigger lane header stay stale, so the re-assign click lands on the stale header button."
+    }
+  },
   "unresolved": {}
 }
