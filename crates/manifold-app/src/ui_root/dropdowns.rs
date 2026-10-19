@@ -1947,19 +1947,18 @@ impl UIRoot {
                     self.inspector.apply_selection_visuals(&mut self.tree);
                     items.extend(card_edit_menu_items(self.effect_clipboard.has_content(), true, self.inspector.selection_has_group()));
                     let selected = self.inspector.get_selected_effect_indices();
-                    let clicked_idx = self.inspector.effect_position(self.inspector.active_tab(), clicked_id);
-                    let selected_indices = match clicked_idx {
-                        Some(idx) if !selected.contains(&idx) => vec![idx],
-                        _ => selected,
-                    };
-                    items.extend(mask_menu_items("Add Mask", &self.clip_detect_layers, |preset_id, source_layer| {
-                        ParamsAction::AddMask {
-                            target: gpt.clone(),
-                            selected_indices: selected_indices.clone(),
-                            preset_id,
-                            source_layer,
-                        }
-                    }));
+                    // A stale id (the effect left this chain) offers no mask action.
+                    if let Some(idx) = self.inspector.effect_position(self.inspector.active_tab(), clicked_id) {
+                        let selected_indices = if selected.contains(&idx) { selected } else { vec![idx] };
+                        items.extend(mask_menu_items("Add Mask", &self.clip_detect_layers, |preset_id, source_layer| {
+                            ParamsAction::AddMask {
+                                target: gpt.clone(),
+                                selected_indices: selected_indices.clone(),
+                                preset_id,
+                                source_layer,
+                            }
+                        }));
+                    }
                 }
                 if matches!(gpt, GraphParamTarget::Generator) {
                     if let Some(layer) = self.inspector.modifier_scope_id().cloned()

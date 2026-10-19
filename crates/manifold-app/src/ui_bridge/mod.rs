@@ -597,7 +597,8 @@ pub(crate) fn resolve_effects_ref<'a>(
 /// Resolve "which effect instance" a single-effect card edit targets, as a
 /// stable [`EffectId`].
 ///
-/// Two callers, one rule:
+/// Position-payload actions only (card actions address by `EffectId` through
+/// [`resolve_effect_by_id`]). Two callers, one rule:
 /// - **Graph editor** (`editor_target == Some(Effect(id))`): the edited card IS
 ///   one effect, named by identity. Its id wins outright — the positional `idx`
 ///   from the action payload is ignored, and the resolution reaches master /
@@ -644,28 +645,23 @@ pub(crate) fn resolve_effect_by_id(
         .then(|| id.clone())
 }
 
-/// The `(inspector tab, active layer)` the dispatch arms that still resolve
-/// positionally — the **modulation** family (drivers, layer-stored envelopes,
-/// trims, envelope targets) — must use so a card edit dispatched from the graph
-/// editor targets the editor's WATCHED effect, not the main window's current
-/// selection.
+/// The `(inspector tab, active layer)` a card edit dispatched from the graph
+/// editor must use so it reaches the editor's WATCHED effect, not the main
+/// window's current selection.
 ///
-/// The single-effect *value / expose / mapping* arms already address by stable
-/// `EffectId` (via [`resolve_effect_id`]) and ignore this. But the modulation
-/// arms key on `(tab, active_layer)` + the effect's position, and the editor is
+/// Card actions address effects by `EffectId`, and the modulation arms match on
+/// that id too. This context only places the editor's effect in the right
+/// container for the arms that still read `(tab, active_layer)`; the editor is
 /// a separate window whose watched effect routinely diverges from the main
-/// window's selection. This expresses the editor's identity in the positional
-/// terms those arms still speak (a Stage-C cleanup would have every action carry
-/// its own id and retire this):
+/// window's selection.
 ///
 /// - **Generator** target → the generator's layer.
 /// - **Effect** target → the effect's *container*: `Master` for a master
 ///   effect, its owning `Layer` for a layer-scoped effect, or `Clip` for a
 ///   clip-scoped effect. The `Clip` mapping is deliberate: layer envelopes are
 ///   keyed by `(effect_type, param_id)` and cannot represent a clip effect
-///   without colliding with a same-type layer effect, and positional resolution
-///   can't reach it — so the modulation arms (whose `Clip` branch is `None`)
-///   safely no-op, while the value/mapping arms still address it by id.
+///   without colliding with a same-type layer effect, so the layer-envelope
+///   arms (whose `Clip` branch is `None`) safely no-op.
 /// - **`None`** (inspector / perform path) → the inspector's own ambient
 ///   context, byte-identical to before.
 pub(crate) fn editor_dispatch_context(
