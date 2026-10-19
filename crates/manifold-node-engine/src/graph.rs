@@ -355,33 +355,6 @@ manifold_core::testkit_visible! {
         self.handles.iter().map(|(k, v)| (k.as_ref(), *v))
     }
 
-    /// Remove a node and any wires that touch it. Returns the removed
-    /// [`NodeInstance`], or `None` if the id wasn't in the graph.
-    pub fn remove_node(&mut self, id: NodeInstanceId) -> Option<NodeInstance> {
-        let removed = self.nodes.remove(&id)?;
-        self.external_outputs.remove(&id);
-        if let Some(guards) = self.prepared_params.remove(&id) {
-            self.prepared_param_rejections -= guards.iter().filter(|guard| guard.rejected).count();
-        }
-        self.wires.retain(|w| w.from.0 != id && w.to.0 != id);
-        // Drop any handle that pointed at this node — keeping it would
-        // strand a stale handle->dead-id mapping that future
-        // node_id_by_handle lookups would honor.
-        self.handles.retain(|_, v| *v != id);
-        let affected: Vec<_> = self.node_pairs
-            .extract_if(.., |pair| pair.first == id || pair.second == id)
-            .collect();
-        for pair in affected {
-            let surviving = if pair.first == id { pair.second } else { pair.first };
-            if !self.node_pairs.iter().any(|other| other.first == surviving || other.second == surviving)
-                && let Some(inst) = self.nodes.get_mut(&surviving)
-            {
-                pair.behavior.set_enabled(inst.node.as_mut(), false);
-            }
-        }
-        Some(removed)
-    }
-
     /// Connect an output port of one node to an input port of another.
     ///
     /// Validates that:
@@ -821,33 +794,6 @@ mod tests {
     }
 
     #[test]
-    fn removing_pairs_disables_a_survivor_only_after_its_last_pair() {
-        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-        struct DisableCounter(Arc<AtomicUsize>);
-        impl NodePairBehavior for DisableCounter {
-            fn set_enabled(&self, _: &mut dyn EffectNode, enabled: bool) {
-                if !enabled { self.0.fetch_add(1, Ordering::Relaxed); }
-            }
-            fn before_first(&self, _: &mut dyn EffectNode, _: &mut dyn EffectNode, _: Option<&mut EffectNodeContext<'_, '_>>, _: crate::exec::effect_node::SimStep) {}
-            fn after_first(&self, _: &dyn EffectNode, _: &mut dyn EffectNode) {}
-        }
-        let mut graph = Graph::new();
-        let mut add = || graph.add_node(Box::new(crate::scene::boundary_nodes::Source::new()));
-        let shared = add();
-        let first = add();
-        let second = add();
-        let disabled = Arc::new(AtomicUsize::new(0));
-        graph.add_node_pair(shared, first, Box::new(DisableCounter(disabled.clone()))).unwrap();
-        graph.add_node_pair(shared, second, Box::new(DisableCounter(disabled.clone()))).unwrap();
-        assert!(graph.add_node_pair(shared, first, Box::new(DisableCounter(disabled.clone()))).is_err());
-        graph.remove_node(first).unwrap();
-        assert_eq!(disabled.load(Ordering::Relaxed), 0);
-        graph.remove_node(second).unwrap();
-        assert_eq!(disabled.load(Ordering::Relaxed), 1);
-        assert!(graph.node_pairs().is_empty());
-    }
-
-    #[test]
     fn external_output_registration_validates_and_clears_with_node() {
         let mut g = Graph::new();
         let node = g.add_node(Box::new(TestNode::new(
@@ -878,36 +824,6 @@ mod tests {
             Err(GraphError::PortNotFound { node: invalid, port })
                 if invalid == node && port == "field"));
         assert!(g.is_liveness_root(node), "a vanished port must not silently remove its reader");
-        g.remove_node(node);
-        assert!(!g.is_liveness_root(node));
-        assert!(g.external_outputs().next().is_none());
-    }
-
-    #[test]
-    fn add_then_remove_node_clears_wires_touching_it() {
-        let mut g = Graph::new();
-        let a = g.add_node_named(
-            String::from("owned-source"),
-            Box::new(TestNode::new(
-                "a",
-                vec![],
-                vec![output("out", PortType::Texture2D)],
-            )),
-        );
-        assert_eq!(g.node_id_by_handle("owned-source"), Some(a));
-        let b = g.add_node(Box::new(TestNode::new(
-            "b",
-            vec![input("in", PortType::Texture2D, true)],
-            vec![],
-        )));
-        g.connect((a, "out"), (b, "in")).unwrap();
-        assert_eq!(g.wires().len(), 1);
-
-        g.remove_node(a);
-        assert!(g.get_node(a).is_none());
-        assert_eq!(g.node_id_by_handle("owned-source"), None);
-        assert!(!g.handles().any(|(handle, _)| handle == "owned-source"));
-        assert_eq!(g.wires().len(), 0); // wire was cleaned up
     }
 
     #[test]

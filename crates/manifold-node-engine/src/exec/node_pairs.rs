@@ -450,23 +450,4 @@ pub(crate) mod tests {
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].pair_index, 1);
     }
-
-    #[test]
-    fn removing_coupled_participant_clears_compile_metadata() {
-        let mut graph = Graph::new();
-        let first = node(&mut graph, "first", &[], &["out"]);
-        let second = node(&mut graph, "second", &[], &[]);
-        pair(&mut graph, first, second);
-        assert_eq!(
-            crate::exec::execution_plan::compile(&graph)
-                .unwrap()
-                .node_pairs()
-                .len(),
-            1
-        );
-        graph.remove_node(first).expect("first participant exists");
-        assert!(graph.node_pairs().is_empty());
-        let plan = crate::exec::execution_plan::compile(&graph).unwrap();
-        assert!(plan.node_pairs().is_empty());
-    }
 }

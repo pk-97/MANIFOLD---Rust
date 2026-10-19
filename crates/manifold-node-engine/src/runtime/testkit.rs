@@ -42,9 +42,3 @@ pub fn build_segment_cards(indices: &[usize], effects: &[(usize, &manifold_core:
 pub fn metal_backend(runtime: &mut PresetRuntime) -> &mut crate::exec::metal_backend::MetalBackend {
     runtime.executor.backend_mut().as_any_mut().and_then(|value| value.downcast_mut::<crate::exec::metal_backend::MetalBackend>()).expect("production path constructs a MetalBackend")
 }
-
-#[cfg(feature = "gpu-proofs")]
-pub fn set_reference_fusion(runtime: &mut PresetRuntime, prior: &PresetRuntime, retarget: ahash::AHashMap<(String, String), (NodeId, String)>) {
-    runtime.effect_nodes[0].def_content_key = prior.effect_nodes[0].def_content_key;
-    runtime.effect_nodes[0].bound.fused_retarget = retarget;
-}
