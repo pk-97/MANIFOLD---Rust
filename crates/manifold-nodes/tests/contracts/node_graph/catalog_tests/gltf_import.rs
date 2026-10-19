@@ -834,7 +834,7 @@ fn merges_a_real_asset_and_writes_merged_def_for_graph_tool() {
 }
 
 /// BUG-036 round-trip gate: the assembled import graph — including the
-/// new map-port wires and the D7 sun-coherence dual bindings — must
+/// new map-port wires, the sky-sun wire and the light-only sun cards — must
 /// survive a save/reload cycle. `EffectGraphDef` (this function's
 /// return type) IS the persisted artifact for a generator layer's
 /// override (`ImportModelLayerCommand` stores it verbatim), so a JSON
@@ -881,10 +881,26 @@ fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
         .find(|n| n.type_id == "node.light")
         .map(|n| n.id)
         .expect("sun present");
+    let envmap_id = reloaded
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.bake_environment")
+        .map(|n| n.id)
+        .expect("envmap present");
+    assert!(
+        reloaded.wires.iter().any(|w| w.from_node == sun_id
+            && w.from_port == "out"
+            && w.to_node == envmap_id
+            && w.to_port == "sun"),
+        "the sky-sun wire from the Sun light to the envmap must survive reload"
+    );
     for param in ["pos_x", "pos_y", "pos_z"] {
         let macro_id = format!("{sun_id}_{param}");
-        let count = meta.bindings.iter().filter(|b| b.id == macro_id).count();
-        assert_eq!(count, 2, "`{macro_id}`'s dual binding must survive reload");
+        let targets: Vec<_> = meta.bindings.iter().filter(|b| b.id == macro_id).map(|b| &b.target).collect();
+        assert!(
+            matches!(targets.as_slice(), [BindingTarget::Node { node_id, param: p }] if node_id.as_str() == "sun" && p == param),
+            "`{macro_id}` must still drive the sun light alone after reload, got {targets:?}"
+        );
     }
 
     // Modulation live after reload, not just structurally present: the

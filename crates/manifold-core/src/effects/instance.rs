@@ -1156,6 +1156,16 @@ impl PresetInstance {
         }
     }
 
+    /// Whether a driver, envelope, audio mod, Ableton mapping or automation lane
+    /// is stored on param `id`, enabled or not: the attachment a disarm keeps.
+    pub fn modulator_stored(&self, id: &str) -> bool {
+        self.drivers.iter().flatten().any(|x| x.param_id == id)
+            || self.envelopes.iter().flatten().any(|x| x.param_id == id)
+            || self.audio_mods.iter().flatten().any(|x| x.param_id == id)
+            || self.ableton_mappings.iter().flatten().any(|x| x.param_id == id)
+            || self.automation_lanes.iter().flatten().any(|x| x.param_id == id)
+    }
+
     /// Drop any driver / Ableton mapping / envelope whose `param_id` no longer
     /// resolves to a live param on this instance, returning the removed rows for
     /// undo. The integrity sweep for structural edits that wipe params without

@@ -79194,6 +79194,27 @@
           "name": "Reset"
         },
         {
+          "default": "1.85",
+          "id": "40_copy_spacing",
+          "max": "100",
+          "min": "0.01",
+          "name": "Spacing"
+        },
+        {
+          "default": "24",
+          "id": "40_copy_columns",
+          "max": "64",
+          "min": "1",
+          "name": "Columns"
+        },
+        {
+          "default": "1",
+          "id": "40_copy_layout",
+          "max": "1",
+          "min": "0",
+          "name": "Arrangement"
+        },
+        {
           "default": "0",
           "id": "40_gravity_x",
           "max": "20",
@@ -81810,27 +81831,6 @@
           "max": "64",
           "min": "1",
           "name": "Collider Detail"
-        },
-        {
-          "default": "1.85",
-          "id": "121_copy_spacing",
-          "max": "100",
-          "min": "0.01",
-          "name": "Spacing"
-        },
-        {
-          "default": "24",
-          "id": "121_copy_columns",
-          "max": "64",
-          "min": "1",
-          "name": "Columns"
-        },
-        {
-          "default": "1",
-          "id": "121_copy_layout",
-          "max": "1",
-          "min": "0",
-          "name": "Arrangement"
         },
         {
           "default": "0",

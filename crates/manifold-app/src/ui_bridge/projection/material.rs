@@ -445,7 +445,7 @@ fn rgb_ids_editable(
     let mut owner: Option<&NodeId> = None;
     let mut colour = None;
     for (index, id) in ids.iter().enumerate() {
-        if ids[..index].contains(id) || super::cards::modulator_stored(inst, id) {
+        if ids[..index].contains(id) || inst.modulator_stored(id) {
             return false;
         }
         let Some((c, channel)) = inst.params.get(id).and_then(|p| rgb_channel(&p.spec)) else {
