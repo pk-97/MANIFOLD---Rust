@@ -361,6 +361,13 @@ def describe(result):
             'tooling': result.get('tooling', []),
             'cpu': result['cpu'].selections() if result['cpu'] else {},
             'whole_default_suites': sorted(result['cpu'].whole) if result['cpu'] else [],
+            'cpu_widening': sorted(result['cpu'].widening_reasons) if result['cpu'] else [],
             'gpu': result['gpu'].runs() if result['gpu'] and not result['gpu'].unmapped else [],
+            # Unfiltered GPU expansion and why; the gpu runs above show it as filters [].
+            'gpu_whole_packages': {p: result['gpu'].whole_reasons.get(p, [])
+                                   for p in sorted(result['gpu'].whole_packages)}
+                                  if result['gpu'] else {},
+            'gpu_whole_binaries': sorted('/'.join(b) for b in result['gpu'].required_binaries)
+                                  if result['gpu'] else [],
             'errors': result['errors'],
             'notes': result.get('notes', [])}

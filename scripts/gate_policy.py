@@ -85,7 +85,9 @@ LANDING_BUDGET_S = 360
 # Fixed end-to-end smoke: always runs when any GPU path is touched. Four proofs
 # that cover the effect chain + alpha contract, command-buffer replay, the
 # camera/scene render, and the G-buffer. Must stay under ~2 minutes in total;
-# the 25-slowest timing report is how that is re-checked.
+# the 25-slowest timing report is how that is re-checked. A smoke proof must
+# read no files: gpu_scope skips smoke in harnesses that cannot link the diff,
+# and a file read would let an unlinked change reach it.
 SMOKE_FILTERS = [
     "alpha_contract::effects_preserve_transparency",
     "encode_replay::encode_replay_parity",

@@ -182,6 +182,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         if package and path == workspace.roots[package] + '/Cargo.toml':
             plan.packages.add(package)
             plan.whole.add(package)
+            plan.widening_reasons.add(f'{path} changed: running {package} whole')
         if not package or not path.endswith(".rs"):
             continue
         crate = repo / workspace.roots[package]
@@ -213,6 +214,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         owning_target = target_sources.get((repo / path).resolve())
         if owning_target and ('lib' in owning_target['kind'] or 'custom-build' in owning_target['kind']):
             plan.whole.add(package)
+            plan.widening_reasons.add(f'{path} is a crate root: running {package} whole')
         binaries = set()
         if parts[2] == "tests":
             source = (repo / path).resolve()
@@ -282,6 +284,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             # A metadata target outside Cargo's conventional src/tests layout
             # changes the package; do not invent a path-derived module filter.
             plan.whole.add(package)
+            plan.widening_reasons.add(f'{path} is outside src/ and tests/: running {package} whole')
         for binary in binaries:
             plan.filters.add(f"(package(={package}) & binary(={binary}))")
     for expression in list(plan.filters):
@@ -313,6 +316,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             touched = sources.intersection(paths)
             if root + '/Cargo.toml' not in old or (sources and len(touched) * 2 >= len(sources)):
                 plan.whole.add(package)
+                plan.widening_reasons.add(f'{package}: new crate or half its sources touched: running it whole')
     plan.path_filters = {expression: sources for expression, sources in plan.path_filters.items()
                          if expression in plan.filters and expression not in explicit_filters}
     return plan
