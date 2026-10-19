@@ -83,7 +83,7 @@ fn dragging_the_split_resizes_both_panes_and_a_double_click_resets_it() {
     let strip = panel.panes.strip_id.expect("a live scene builds the split");
     let at = panel.panes.strip;
     let start = Vec2::new(at.x + 50.0, at.y + 2.0);
-    assert!(panel.split_cursor(start));
+    assert!(panel.split_cursor(start, RECT));
     let modifiers = Modifiers::default();
 
     let (consumed, _) = panel.handle_event(&UIEvent::PointerDown { node_id: strip, pos: start, modifiers }, &mut tree);
@@ -124,8 +124,49 @@ fn an_empty_state_has_one_column_and_no_split() {
     let mut tree = UITree::new();
     panel.build_docked(&mut tree, RECT);
     assert!(panel.panes.strip_id.is_none());
-    assert!(!panel.split_cursor(Vec2::new(10.0, 10.0)));
+    assert!(!panel.split_cursor(Vec2::new(10.0, 10.0), RECT));
     let anywhere = Vec2::new(20.0, 40.0);
     assert_eq!(panel.scroll_viewport_of(&tree, None), panel.scroll.viewport());
     assert!(!panel.handle_scroll_at(anywhere, -10.0), "nothing to scroll in a one-line sentence");
+}
+
+#[test]
+fn a_drag_held_at_the_clamp_rebuilds_nothing() {
+    let (mut panel, mut tree) = built();
+    let strip = panel.panes.strip_id.expect("a live scene builds the split");
+    let at = panel.panes.strip;
+    let start = Vec2::new(at.x + 50.0, at.y + 2.0);
+    let modifiers = Modifiers::default();
+    panel.handle_event(&UIEvent::PointerDown { node_id: strip, pos: start, modifiers }, &mut tree);
+    let drag = |y: f32| UIEvent::Drag { node_id: None, pos: Vec2::new(start.x, y), delta: Vec2::ZERO, modifiers };
+
+    // Far above the tree: the pane is at its smallest.
+    let version = panel.view_version();
+    assert!(panel.handle_event(&drag(start.y - 300.0), &mut tree).0);
+    assert_ne!(panel.view_version(), version, "the first move shrinks the tree and holds the strip");
+    let tree_h = panel.panes.tree_h(panel.panes.split);
+    assert_eq!(tree_h, MIN_TREE_H);
+
+    let held = panel.view_version();
+    for y in [start.y - 320.0, start.y - 400.0, start.y - 250.0] {
+        assert!(panel.handle_event(&drag(y), &mut tree).0);
+    }
+    assert_eq!(panel.view_version(), held, "moves that leave the panes as drawn are not planner input");
+    assert_eq!(panel.panes.tree_h(panel.panes.split), tree_h);
+
+    panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: Vec2::new(start.x, start.y - 400.0) }, &mut tree);
+    assert_ne!(panel.view_version(), held, "the release drops the held colour");
+}
+
+#[test]
+fn a_hidden_scene_tab_never_shows_the_resize_cursor() {
+    let (panel, _tree) = built();
+    let at = panel.panes.strip;
+    let over = Vec2::new(at.x + 50.0, at.y + 2.0);
+    assert!(panel.split_cursor(over, RECT));
+    // The tab is hidden: the inspector reports no Scene rect, and the strip
+    // rect from the last build is stale.
+    assert!(!panel.split_cursor(over, Rect::ZERO));
+    // A Scene rect that no longer covers the old strip.
+    assert!(!panel.split_cursor(over, Rect::new(0.0, 0.0, 400.0, at.y - 1.0)));
 }

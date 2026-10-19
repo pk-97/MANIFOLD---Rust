@@ -22,5 +22,6 @@
   { "Pointer": { "target": { "Query": { "name": "scene_setup.split" } }, "gesture": "DoubleClick" } },
   { "Assert": {
       "selector": { "Query": { "name": "scene_setup.split" } },
-      "check": { "RectWithin": { "x": 940.0, "y": 424.0, "width": 592.0, "height": 6.0 } } } }
+      "check": { "RectWithin": { "x": 940.0, "y": 424.0, "width": 592.0, "height": 6.0 } } } },
+  "AssertFresh"
 ]

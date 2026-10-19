@@ -36,8 +36,23 @@ pub(super) struct ScenePanes {
     strip_id: Option<NodeId>,
     tree_top: f32,
     body_h: f32,
+    /// The most the tree pane may take before the settings run out of room.
+    room: f32,
+    /// The tree rows' height at the last build.
+    tree_content_h: f32,
     /// This build has two panes; the empty states have one column.
     two: bool,
+}
+
+impl ScenePanes {
+    fn tree_cap(&self, split: f32) -> f32 {
+        (self.body_h * split).min(self.room).max(MIN_TREE_H)
+    }
+
+    /// The tree pane's height for `split` with the rows last built.
+    fn tree_h(&self, split: f32) -> f32 {
+        self.tree_cap(split).min(self.tree_content_h)
+    }
 }
 
 impl Default for ScenePanes {
@@ -50,6 +65,8 @@ impl Default for ScenePanes {
             strip_id: None,
             tree_top: 0.0,
             body_h: 0.0,
+            room: 0.0,
+            tree_content_h: 0.0,
             two: false,
         }
     }
@@ -136,15 +153,15 @@ impl ScenePanel {
     }
 
     fn build_tree_pane(&mut self, tree: &mut UITree, body: Rect, top: f32, vm: &SceneSetupVm, selected: &SceneSelection) {
-        let body_bottom = body.y + body.height;
-        let room = body_bottom - top - SPLIT_H - MIN_SETTINGS_H;
-        let cap = (body.height * self.panes.split).min(room).max(MIN_TREE_H);
+        self.panes.room = body.y + body.height - top - SPLIT_H - MIN_SETTINGS_H;
         self.panes.tree_top = top;
         self.panes.body_h = body.height;
         self.panes.two = true;
+        let cap = self.panes.tree_cap(self.panes.split);
         let start = self.begin_pane(tree, Pane::Tree, Rect::new(body.x, top, body.width, cap));
         let end = self.build_outliner(tree, body.x + PAD, body.width - PAD * 2.0, top, vm, selected);
         let content_h = end - top + ROW_GAP;
+        self.panes.tree_content_h = content_h;
         self.panes.tree.set_viewport_height(tree, content_h.min(cap));
         self.end_pane(tree, Pane::Tree, start, content_h);
         // An outside pick (a viewport click) scrolls its row into view.
@@ -225,9 +242,10 @@ impl ScenePanel {
             UIEvent::Drag { pos, .. } if self.panes.drag.is_some() => self.drag_split_to(pos.y),
             UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. } if self.panes.drag.is_some() => {
                 // The split lands where the button came up, and the strip
-                // drops its held colour on the next build.
+                // drops its held colour.
                 if self.panes.drag.is_some_and(|(_, moved)| moved) {
                     self.drag_split_to(pos.y);
+                    self.view_version += 1;
                 }
                 self.panes.drag = None;
             }
@@ -240,19 +258,25 @@ impl ScenePanel {
     }
 
     fn drag_split_to(&mut self, y: f32) {
-        let Some((grab, _)) = self.panes.drag else { return };
+        let Some((grab, moved)) = self.panes.drag else { return };
         self.panes.drag = Some((grab, true));
+        if !moved {
+            // The first move repaints the strip in its held colour.
+            self.view_version += 1;
+        }
         if self.panes.body_h > 0.0 {
             self.set_split((y - grab - self.panes.tree_top) / self.panes.body_h);
         }
-        // The first move repaints the strip in its held colour.
-        self.view_version += 1;
     }
 
+    /// A rebuild only when the tree pane's height changes (UI_INVALIDATION
+    /// D19): a split held at its clamp, or past a short tree's last row,
+    /// draws the same panes.
     fn set_split(&mut self, split: f32) {
         let split = split.clamp(MIN_SPLIT, MAX_SPLIT);
-        if split != self.panes.split {
-            self.panes.split = split;
+        let before = self.panes.tree_h(self.panes.split);
+        self.panes.split = split;
+        if self.panes.tree_h(split) != before {
             self.view_version += 1;
         }
     }
@@ -293,9 +317,14 @@ impl ScenePanel {
     }
 
     /// Whether the pointer should show the vertical resize cursor: over the
-    /// split, or holding it.
-    pub fn split_cursor(&self, pos: Vec2) -> bool {
-        self.open && self.panes.two && (self.panes.drag.is_some() || self.panes.strip.contains(pos))
+    /// split, or holding it. `shown` is the Scene tab's on-screen rect
+    /// (`InspectorCompositePanel::scene_content_rect`, zero while the tab or
+    /// the inspector is hidden): the panel stays open on a zero-width
+    /// inspector and keeps its last strip rect, which must not reach the
+    /// cursor over whatever is drawn there now.
+    pub fn split_cursor(&self, pos: Vec2, shown: Rect) -> bool {
+        let visible = self.open && self.panes.two && shown.width > 0.0 && shown.height > 0.0;
+        visible && (self.panes.drag.is_some() || (self.panes.strip.contains(pos) && shown.contains(pos)))
     }
 }
 

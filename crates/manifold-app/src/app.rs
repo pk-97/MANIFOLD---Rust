@@ -908,7 +908,8 @@ impl Application {
         self.ws.ui_root.set_audio_setup_handle_idle();
 
         // The Scene tab's split between its tree and settings panes.
-        if self.ws.ui_root.scene_setup_panel.split_cursor(self.cursor_pos) {
+        let scene_rect = self.ws.ui_root.inspector.scene_content_rect();
+        if self.ws.ui_root.scene_setup_panel.split_cursor(self.cursor_pos, scene_rect) {
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
             return;
         }
