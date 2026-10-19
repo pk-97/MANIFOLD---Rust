@@ -170,3 +170,22 @@ fn a_hidden_scene_tab_never_shows_the_resize_cursor() {
     // A Scene rect that no longer covers the old strip.
     assert!(!panel.split_cursor(over, Rect::new(0.0, 0.0, 400.0, at.y - 1.0)));
 }
+
+/// Group headings read as section headings: a darker band and a bold title.
+/// Item rows keep the transparent row style.
+#[test]
+fn group_headings_are_styled_apart_from_items() {
+    let (panel, tree) = built();
+    let heading = (0..tree.count())
+        .map(|i| tree.id_at(i))
+        .find(|id| tree.name_of(*id).is_some_and(|n| n.starts_with("scene_tree.group.")))
+        .expect("a group heading");
+    assert_eq!(tree.get_node(heading).unwrap().style.bg_color, color::HEADER_BG);
+    let title_bold = (0..tree.count())
+        .map(|i| tree.id_at(i))
+        .filter_map(|id| tree.get_node(id))
+        .any(|n| n.style.font_weight == FontWeight::Bold && n.text.as_deref().is_some_and(|t| SceneGroup::ORDER.iter().any(|g| g.title() == t)));
+    assert!(title_bold, "the heading title is bold");
+    let item = panel.outliner_row_ids.iter().find(|(_, s)| !matches!(s, SceneSelection::OutlinerFold(_))).expect("an item row").0;
+    assert_ne!(tree.get_node(item).unwrap().style.bg_color, color::HEADER_BG);
+}
