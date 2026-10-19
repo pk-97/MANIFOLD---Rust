@@ -865,7 +865,7 @@ fn placeholder_param_info() -> ParamRow {
         },
         scene_addr: None,
         rgb_members: None,
-        material_attached: false,
+        modulator_stored: false,
     }
 }
 
@@ -1570,9 +1570,11 @@ impl ScenePanel {
 
     /// The selected item's controls (D8): the rows it owns, in manifest
     /// order, grouped by control group in declaration order, one fold
-    /// section per group, each group's switch first. Hidden rows, and rows
-    /// the item's current mode does not read, are left out unless attached
-    /// (D6); an attached unread row stays, dimmed with the reason.
+    /// section per group, each group's switch first. Hidden rows are left
+    /// out unless attached or holding a stored modulator, armed or not;
+    /// rows the item's current mode does not read are left out unless
+    /// attached (D6), and an attached unread row stays, dimmed with the
+    /// reason.
     /// Material rows keep the material inspector's own sections inside the
     /// Material group, framed by its header and feature actions. Every row
     /// goes through the shared `build_param_row`/`RowHost` core, and
@@ -1629,8 +1631,11 @@ impl ScenePanel {
                 });
             let owned = selected_material_id || rows.owned.iter().any(|id| id == p.id.as_ref());
             let excluded = !selected_material_id && rows.excluded.iter().any(|id| id == p.id.as_ref());
-            let hidden = (unread.is_some() || p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden))
-                && !p.is_attached()
+            // A Hidden control shows while a modulator is stored on it, armed
+            // or not: the row is the only way back to a disarmed one.
+            let hidden_role = p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden)
+                && !(p.modulator_stored || p.is_attached());
+            let hidden = (hidden_role || (unread.is_some() && !p.is_attached()))
                 && !self.property_explicitly_revealed(p);
             // Imported bodies keep their own collider shape; only they offer
             // the collider detail control.

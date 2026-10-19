@@ -961,7 +961,7 @@
                 },
                     scene_addr: None,
                     rgb_members: None,
-                    material_attached: false,
+                    modulator_stored: false,
             }],
             string_params: Vec::new(),
             modifier: None,
@@ -1111,6 +1111,35 @@
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
         assert_eq!(panel.properties_card.rows.iter().map(|row| row.id.as_ref()).collect::<Vec<_>>(), ["shown", "attached"]);
+    }
+
+    /// A Hidden control with a disarmed modulator stored on it (the
+    /// projection's `modulator_stored`, with nothing active) stays in the
+    /// Scene tab so the modulator can be re-armed or deleted; with the
+    /// modulator deleted the control hides again.
+    #[test]
+    fn hidden_row_with_a_disarmed_modulator_stays_until_deleted() {
+        use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
+        let shown_ids = |stored: bool| {
+            let (mut vm, mut surface) = world_transform_vm();
+            set_item_ids(&mut vm, SceneSelection::World, &["shown", "disarmed"]);
+            let template = surface.rows[0].clone();
+            let mut disarmed = scene_row(&template, "disarmed", ControlGroup::Environment);
+            disarmed.spec.scene.as_mut().unwrap().role = SurfaceRole::Hidden;
+            disarmed.modulator_stored = stored;
+            assert!(!disarmed.is_attached(), "a disarmed driver drives nothing");
+            surface.rows = vec![scene_row(&template, "shown", ControlGroup::Environment), disarmed];
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(live(vm));
+            panel.configure_params(Some(surface));
+            panel.selection.insert(LayerId::new("layer-1"), SceneSelection::World);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+            panel.properties_card.rows.iter().map(|row| row.id.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(shown_ids(true), ["shown", "disarmed"], "the stored driver keeps its row");
+        assert_eq!(shown_ids(false), ["shown"], "deleted, the Hidden control hides again");
     }
 
     /// D8: the item header names the item once, with its kind beside it

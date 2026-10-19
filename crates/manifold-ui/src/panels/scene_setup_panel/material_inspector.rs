@@ -420,7 +420,7 @@ impl ScenePanel {
                 // neutral default. Keep the feature visible so the attachment
                 // remains reachable from the inspector.
                 let attached = row.value.driven
-                    || row.material_attached
+                    || row.modulator_stored
                     || row.modulation.driver_active
                     || row.modulation.envelope_active
                     || row.modulation.automation_active
@@ -559,7 +559,7 @@ impl ScenePanel {
                 continue;
             };
             let attached = row.value.driven
-                || row.material_attached
+                || row.modulator_stored
                 || row.modulation.driver_active
                 || row.modulation.envelope_active
                 || row.modulation.automation_active
@@ -1702,7 +1702,7 @@ mod tests {
             0.0,
             0.0,
         );
-        row.material_attached = true;
+        row.modulator_stored = true;
         let panel = ScenePanel::new();
         assert!(panel.material_feature_visible(&[row], feature));
     }

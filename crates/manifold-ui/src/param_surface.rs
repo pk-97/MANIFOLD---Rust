@@ -337,10 +337,12 @@ pub struct ParamRow {
     /// A row with a colour swatch: the three scalar params it writes as one
     /// gesture. The channels keep their own rows and bindings.
     pub rgb_members: Option<RgbMembers>,
-    /// An authored external attachment (wire, automation, or host mapping)
-    /// that remains meaningful even when the current frame flags are dormant.
-    /// Material feature visibility and seed writes use this projection fact.
-    pub material_attached: bool,
+    /// A driver, envelope, audio mod, Ableton mapping or automation lane is
+    /// stored on this param, enabled or not. Unlike [`Self::is_attached`]
+    /// (what moves the param now), it survives a disarm. The draw kind and
+    /// material feature visibility and seed writes read it. Filled by the
+    /// app projection.
+    pub modulator_stored: bool,
 }
 
 /// How a row draws. Decided once, by [`ParamRow::kind`]; every row builder,
@@ -367,8 +369,9 @@ impl ParamRow {
     /// `scene` is the surface's fact. The scene card and the Scene tab draw
     /// labelled params as switches and pick lists; other cards keep them
     /// sliders, whose driver lane is a performance tool there. A labelled row
-    /// with a modulator or mapping attached stays a slider anywhere, so what
-    /// moves it stays in view.
+    /// with a modulator or mapping stored on it, armed or disarmed, stays a
+    /// slider anywhere: its D, E and A lane is the only way back to a
+    /// disarmed modulator.
     pub fn kind(&self, scene: bool) -> RowKind {
         let spec = &self.spec;
         if spec.is_trigger {
@@ -378,7 +381,7 @@ impl ParamRow {
             return RowKind::Switch;
         }
         let labels = spec.value_labels.as_deref().map_or(0, <[String]>::len);
-        if !scene || labels < 2 || self.is_attached() {
+        if !scene || labels < 2 || self.modulator_stored || self.is_attached() {
             return RowKind::Number;
         }
         if spec.whole_numbers {
