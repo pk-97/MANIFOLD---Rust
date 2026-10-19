@@ -436,32 +436,151 @@ fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) 
         .collect()
 }
 
-/// The commands an export still runs after it ends, besides Cancel and Quit.
-/// None edits the show: two are the per-frame surface signals (a stage
-/// present is timing for a frame already shown, a surface wake is re-read
-/// from the pipeline), and the rest report where the output window and its
-/// display are. The UI sends those once, so dropping one would leave the
-/// output surface stale or dangling with nothing to resend it.
+/// What an export does with a command that arrives while it renders
+/// (BUG-v2o9y: nothing may change during an export).
 #[cfg(target_os = "macos")]
-fn keeps_through_export(cmd: &ContentCommand) -> bool {
-    matches!(
-        cmd,
-        ContentCommand::SurfaceReady
-            | ContentCommand::FramePresented { .. }
-            | ContentCommand::SetOutputSurface(_)
-            | ContentCommand::ClearOutputSurface
-            | ContentCommand::ResizeOutputSurface(..)
-            | ContentCommand::SetOutputPresentSuspended(_)
-            | ContentCommand::UpdateDisplayCapabilities { .. }
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportDisposition {
+    /// Stop the export.
+    Cancel,
+    /// Stop the export, then quit.
+    Quit,
+    /// Run after the export ends: only what is viewed, or window and preview
+    /// plumbing the UI sends once and never resends.
+    Hold,
+    /// Throw away: it can change the show, what plays, records or exports.
+    Drop,
 }
 
+/// The one place every command is classified. No wildcard arm: a new
+/// `ContentCommand` does not compile until it is named here. When one is
+/// ambiguous it is Dropped if it can change what the show outputs, else Held.
+#[cfg(target_os = "macos")]
+fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
+    use ExportDisposition::{Cancel, Drop, Hold, Quit};
+    match cmd {
+        ContentCommand::CancelExport => Cancel,
+        ContentCommand::Shutdown => Quit,
+
+        // Window, surface and preview plumbing.
+        ContentCommand::ResizeWorkspacePreview(..)
+        | ContentCommand::UpdateDisplayCapabilities { .. }
+        | ContentCommand::SetOutputSurface(_)
+        | ContentCommand::ClearOutputSurface
+        | ContentCommand::ResizeOutputSurface(..)
+        | ContentCommand::SetOutputPresentSuspended(_)
+        | ContentCommand::SurfaceReady
+        | ContentCommand::FramePresented { .. }
+        | ContentCommand::MarkCompositorDirty => Hold,
+
+        // What the editors and previews look at. The runtime-only SDR
+        // preview is a view of the output, not the output.
+        ContentCommand::WatchEffectGraph(_)
+        | ContentCommand::WatchGeneratorGraph(_)
+        | ContentCommand::WatchGraphTarget(_)
+        | ContentCommand::SetGraphPreviewNode(_)
+        | ContentCommand::SetSceneViewport(_)
+        | ContentCommand::SetPhysicsOverlay(_)
+        | ContentCommand::SetModifierPreviewContext { .. }
+        | ContentCommand::SetNodePreviewNormalize(_)
+        | ContentCommand::SetNodeAtlasVisible(_)
+        | ContentCommand::SetClipAtlasVisible(_)
+        | ContentCommand::DumpGraphOutputs
+        | ContentCommand::SetSdrPreview(_) => Hold,
+
+        // No effect on the show: notices, clipboard copy, the clean flag (a
+        // save cannot run during an export), the autosave snapshot request,
+        // sync calibration prefs, profiling.
+        ContentCommand::GraphEditRejected(_)
+        | ContentCommand::CopyClips { .. }
+        | ContentCommand::MarkClean
+        | ContentCommand::MarkCleanAt(_)
+        | ContentCommand::PrepareProjectSave(_)
+        | ContentCommand::SetSyncCalibration { .. } => Hold,
+        #[cfg(feature = "profiling")]
+        ContentCommand::StartProfiling { .. } | ContentCommand::StopProfiling => Hold,
+
+        // Transport, playback, recording and sync.
+        ContentCommand::Play
+        | ContentCommand::Pause
+        | ContentCommand::Stop
+        | ContentCommand::SeekTo(_)
+        | ContentCommand::SeekToBeat(_)
+        | ContentCommand::SetRecording(_)
+        | ContentCommand::FinishAutomationRecording
+        | ContentCommand::StartLiveRecording(_)
+        | ContentCommand::StopLiveRecording
+        | ContentCommand::ToggleLink
+        | ContentCommand::ToggleMidiClock
+        | ContentCommand::SetMidiClockDevice(_)
+        | ContentCommand::ResetBpm
+        | ContentCommand::ToggleOscSyncMode
+        | ContentCommand::AbletonMapParam { .. }
+        | ContentCommand::AbletonUnmapParam { .. }
+        | ContentCommand::AbletonRediscover => Drop,
+
+        // Sessions and automation.
+        ContentCommand::SessionLaunchSlot { .. }
+        | ContentCommand::SessionStopSlot { .. }
+        | ContentCommand::SessionLaunchScene { .. }
+        | ContentCommand::SessionStopAll
+        | ContentCommand::SessionBackToArrangement { .. }
+        | ContentCommand::SessionSetQuantize { .. }
+        | ContentCommand::PreviewAutomationLane { .. }
+        | ContentCommand::ClearAutomationPreviews
+        | ContentCommand::AutomationBackToArrangement
+        | ContentCommand::AutomationResumeParameter(..)
+        | ContentCommand::AutomationSetArmed(_)
+        | ContentCommand::AutomationHold { .. } => Drop,
+
+        // Edits, undo and the project itself.
+        ContentCommand::Execute(_)
+        | ContentCommand::ExecuteOnContent(_)
+        | ContentCommand::FireParameter { .. }
+        | ContentCommand::ExecuteSelecting(..)
+        | ContentCommand::SceneModifier(_)
+        | ContentCommand::ObjectModifier(_)
+        | ContentCommand::FluidDomainEdit(_)
+        | ContentCommand::SceneItem(_)
+        | ContentCommand::SceneCameraSetup(_)
+        | ContentCommand::ChangeGeneratorType { .. }
+        | ContentCommand::GeneratorTypeChanged { .. }
+        | ContentCommand::ExecuteBatch(..)
+        | ContentCommand::MutateProject { .. }
+        | ContentCommand::PasteClips { .. }
+        | ContentCommand::DetectClip(_)
+        | ContentCommand::ReplanClip(_)
+        | ContentCommand::ClearClipTriggers(_)
+        | ContentCommand::Undo
+        | ContentCommand::Redo
+        | ContentCommand::SetProject
+        | ContentCommand::LoadProject(_) => Drop,
+
+        // Show and output settings: each can change what the show outputs.
+        ContentCommand::SetFrameRate(_)
+        | ContentCommand::SetResolution(_)
+        | ContentCommand::SetDisplayResolution(..)
+        | ContentCommand::SetRenderScale(_)
+        | ContentCommand::SetTonemapCurve(_)
+        | ContentCommand::SetTonemapEnabled(_)
+        | ContentCommand::ResizeContent(..)
+        | ContentCommand::SetSpectrogramSend(_)
+        | ContentCommand::InitLedOutput(_)
+        | ContentCommand::ShutdownLedOutput => Drop,
+
+        // A second export, or a capture, mid-export.
+        ContentCommand::StartExport(_)
+        | ContentCommand::ExportFrame { .. }
+        | ContentCommand::CaptureStill
+        | ContentCommand::DiscardStill => Drop,
+    }
+}
 impl ContentThread {
+
     /// True when the export must stop: a cancel, or a quit. The quit is held
-    /// so it proceeds after the cancelled export unwinds. A project cannot
-    /// change during an export (BUG-v2o9y): every other command that arrives
-    /// meanwhile is dropped here, in this one place, except the few that
-    /// [`keeps_through_export`] names.
+    /// so it proceeds after the cancelled export unwinds. Every other command
+    /// is classified by [`export_disposition`]: held to run after the export,
+    /// or dropped, so the show cannot change while it renders (BUG-v2o9y).
     #[cfg(target_os = "macos")]
     fn poll_export_cancel(&mut self, cmd_rx: &Receiver<ContentCommand>) -> bool {
         // A cancel or quit can already be held, sent during the warmup the
@@ -472,18 +591,18 @@ impl ContentThread {
         let mut dropped = 0u32;
         let mut stop = false;
         while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                ContentCommand::CancelExport => {
+            match export_disposition(&cmd) {
+                ExportDisposition::Cancel => {
                     stop = true;
                     break;
                 }
-                ContentCommand::Shutdown => {
+                ExportDisposition::Quit => {
                     self.held_commands.push_back(cmd);
                     stop = true;
                     break;
                 }
-                cmd if keeps_through_export(&cmd) => self.hold_command(cmd),
-                _ => dropped += 1,
+                ExportDisposition::Hold => self.hold_command(cmd),
+                ExportDisposition::Drop => dropped += 1,
             }
         }
         if dropped > 0 {
@@ -1876,8 +1995,9 @@ mod tests {
         thread.poll_export_cancel(cmd_rx)
     }
 
-    /// BUG-v2o9y: nothing changes during an export. Play, a seek and an edit
-    /// sent meanwhile are thrown away, not replayed when it ends; Cancel and
+    /// BUG-v2o9y: nothing changes during an export. Play, a seek, a show setting and an edit
+    /// sent meanwhile are thrown away; a preview resize, a graph watch and a view setting
+    /// are held and run once it ends; Cancel and
     /// Quit still stop it, and the quit proceeds right after.
     #[cfg(target_os = "macos")]
     #[test]
@@ -1893,7 +2013,11 @@ mod tests {
 
         cmd_tx.send(ContentCommand::Play).expect("send");
         cmd_tx.send(ContentCommand::SeekTo(Seconds::from_f32(5.0))).expect("send");
+        cmd_tx.send(ContentCommand::SetFrameRate(24.0)).expect("send");
         cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
+        cmd_tx.send(ContentCommand::ResizeWorkspacePreview(320, 180)).expect("send");
+        let watched = manifold_core::GraphTarget::Generator(manifold_core::LayerId::new("watched"));
+        cmd_tx.send(ContentCommand::WatchGraphTarget(Some(watched.clone()))).expect("send");
         cmd_tx.send(ContentCommand::mutate(
             crate::content_command::touch::VALUES,
             Box::new(move |_| edited_in_command.store(true, Ordering::SeqCst)),
@@ -1907,14 +2031,16 @@ mod tests {
             cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at: now }).expect("send");
             assert!(!poll(&mut thread, &cmd_rx));
         }
-        assert!(thread.held_commands.len() <= 1, "held queue grew to {}", thread.held_commands.len());
+        assert!(thread.held_commands.len() <= 4, "held queue grew to {}", thread.held_commands.len());
         cmd_tx.send(ContentCommand::Shutdown).expect("send");
         assert!(poll(&mut thread, &cmd_rx), "a quit cancels the export");
 
         assert!(thread.drain_commands(&cmd_rx, &state_tx), "the quit proceeds after the export");
         assert!(!thread.engine.is_playing(), "Play sent during the export was dropped");
         assert_eq!(thread.engine.current_time(), Seconds::ZERO, "the seek was dropped");
-        assert!(!thread.content_pipeline.sdr_preview(), "the setting change was dropped");
+        assert_ne!(thread.engine.project().map(|p| p.settings.frame_rate), Some(24.0), "the show setting was dropped");
+        assert!(thread.content_pipeline.sdr_preview(), "the view setting was held and ran after the export");
+        assert_eq!(thread.watched_graph_target, Some(watched), "the graph watch was held and ran after the export");
         assert!(!edited.load(Ordering::SeqCst), "the project edit was dropped");
 
         // Control: the same Play and edit do run outside an export.
