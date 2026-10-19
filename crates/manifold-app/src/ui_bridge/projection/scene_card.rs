@@ -383,7 +383,8 @@ mod tests {
     fn physics_card_bands() {
         let rows = card("PhysicsSolids");
         assert_eq!(sections(&rows), ["Camera", "Physics", "Lighting", "Look"]);
-        assert_eq!(names_in(&rows, "Physics"), ["Count", "Reset"]);
+        // No copies body, so no box Count: the spawner shows only when boxes exist.
+        assert_eq!(names_in(&rows, "Physics"), ["Reset"]);
         assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Sun intensity", "Fill Light intensity"]);
         assert_eq!(names_in(&rows, "Look"), ["Depth of Field", "Focus Distance", "Motion Blur"], "details fold while off, focus dims");
     }

@@ -222,10 +222,72 @@ fn any_world_copies(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> boo
     }) || wires.iter().any(|w| COPY_PARAMS.contains(&w.to_port.as_str()) && is_world(w.to_node))
 }
 
+impl crate::project::Project {
+    /// The physics box spawner (Count, Spacing, Columns, Arrangement) used
+    /// to sit on the Physics World and did nothing without a copies body; it
+    /// now lives on the body wired into the world's `copies` input
+    /// (`copies_body::migrate_world_copies`). Every saved graph moves the
+    /// controls there, cards keeping their ids so saved card values still
+    /// land, and a show that had boxes keeps the same boxes. A world with no
+    /// copies body loses controls that never did anything. Idempotent: a
+    /// migrated world carries none.
+    pub(crate) fn migrate_world_copies_to_body(&mut self) {
+        use std::collections::BTreeSet;
+
+        use crate::copies_body::{WorldCopiesMigration, migrate_world_copies};
+        use crate::effect_graph_def::EffectGraphDef;
+        use crate::effects::PresetInstance;
+
+        fn note(def: &EffectGraphDef, outcome: WorldCopiesMigration, notes: &mut BTreeSet<String>) {
+            let name = def
+                .preset_metadata
+                .as_ref()
+                .map(|m| m.display_name.as_str())
+                .filter(|n| !n.is_empty())
+                .or(def.name.as_deref())
+                .unwrap_or("a scene");
+            if outcome.moved {
+                notes.insert(format!(
+                    "Physics boxes: \"{name}\" box Count, Spacing, Columns and Arrangement moved \
+                     from the Physics node onto its copies body."
+                ));
+            }
+            if outcome.no_copies_body {
+                notes.insert(format!(
+                    "Physics boxes: \"{name}\" had box controls on its Physics node and no copies \
+                     body; they did nothing and are gone."
+                ));
+            }
+        }
+        fn migrate_instance(fx: &mut PresetInstance, notes: &mut BTreeSet<String>) {
+            let Some(mut def) = fx.graph.take() else { return };
+            let outcome = migrate_world_copies(&mut def);
+            note(&def, outcome, notes);
+            fx.graph = Some(def);
+            if outcome.changed {
+                fx.refresh_manifest_from_graph();
+            }
+        }
+
+        let mut notes = BTreeSet::new();
+        for preset in &mut self.embedded_presets {
+            let outcome = migrate_world_copies(&mut preset.def);
+            note(&preset.def, outcome, &mut notes);
+        }
+        self.for_each_preset_instance_mut(|fx| migrate_instance(fx, &mut notes));
+        for line in notes {
+            eprintln!("[Migration] {line}");
+            self.load_report.migration_notes.push(line);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::effect_graph_def::SerializedParamValue;
+    use crate::preset_def::PresetKind;
+    use crate::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
     /// A Physics Boxes graph from before the spawner moved: the four
     /// controls stored on the world, Count exposed on a card, Spacing wired.
@@ -322,5 +384,68 @@ mod tests {
         assert!(!is_copies_body(5, &def.nodes, &def.wires));
         assert!(is_copies_body_param("node.rigid_body", "copy_count"));
         assert!(!is_copies_body_param("node.physics_world", "copy_count"));
+    }
+
+    /// A Physics Boxes scene saved before the box spawner moved: Count,
+    /// Spacing, Columns and Arrangement stored on the Physics node, Count on
+    /// a card, and a body wired into `copies`.
+    fn world_copies_scene() -> EmbeddedPreset {
+        let float = |v: f32| serde_json::json!({"type": "Float", "value": v});
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "name": "Box Scene",
+            "presetMetadata": {"id": "BoxScene", "displayName": "Box Scene", "category": "Geometry",
+                "oscPrefix": "box",
+                "params": [{"id": "40_copy_count", "name": "Box Count", "min": 0.0, "max": 4000.0, "defaultValue": 256.0}],
+                "bindings": [{"id": "40_copy_count", "label": "Box Count", "defaultValue": 256.0,
+                    "target": {"kind": "node", "nodeId": "world", "param": "copy_count"}, "convert": {"type": "IntRound"}}]},
+            "nodes": [
+                {"id": 40, "nodeId": "world", "typeId": "node.physics_world", "handle": "world",
+                    "params": {"copy_count": float(256.0), "copy_spacing": float(1.85), "copy_columns": float(24.0),
+                        "copy_layout": {"type": "Enum", "value": 1}},
+                    "exposedParams": ["copy_count"]},
+                {"id": 121, "nodeId": "box_body", "typeId": "node.rigid_body", "handle": "box_body"}
+            ],
+            "wires": [{"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies"}]
+        }))
+        .expect("box scene def");
+        EmbeddedPreset { kind: PresetKind::Generator, def, origin: EmbeddedOrigin::Saved }
+    }
+
+    /// The four controls land on the copies body with their values, the
+    /// Physics node is left with none, the card keeps its id, the load
+    /// report has one line, and loading again changes nothing.
+    #[test]
+    fn world_box_controls_move_onto_the_copies_body_at_load() {
+        use crate::effect_graph_def::{BindingTarget, SerializedParamValue};
+
+        let mut p = Project::default();
+        p.embedded_presets.push(world_copies_scene());
+        p.on_after_deserialize();
+
+        let def = &p.embedded_presets[0].def;
+        let world = def.nodes.iter().find(|n| n.node_id == "world").unwrap();
+        assert!(world.params.keys().all(|k| !k.starts_with("copy_")), "{:?}", world.params);
+        assert!(world.exposed_params.iter().all(|k| !k.starts_with("copy_")));
+        let body = def.nodes.iter().find(|n| n.node_id == "box_body").unwrap();
+        for (param, value) in [
+            ("copy_count", SerializedParamValue::Float { value: 256.0 }),
+            ("copy_spacing", SerializedParamValue::Float { value: 1.85 }),
+            ("copy_columns", SerializedParamValue::Float { value: 24.0 }),
+            ("copy_layout", SerializedParamValue::Enum { value: 1 }),
+        ] {
+            assert_eq!(body.params.get(param), Some(&value), "{param}");
+        }
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert!(meta.bindings.iter().any(|b| b.id == "40_copy_count"
+            && matches!(&b.target, BindingTarget::Node { node_id, param } if node_id == "box_body" && param == "copy_count")));
+        assert_eq!(p.load_report.migration_notes.len(), 1, "{:?}", p.load_report.migration_notes);
+        assert!(p.load_report.migration_notes[0].contains("\"Box Scene\""));
+        assert!(p.load_report.migration_notes[0].contains("onto its copies body"));
+
+        let migrated = p.embedded_presets[0].def.clone();
+        p.on_after_deserialize();
+        assert_eq!(p.embedded_presets[0].def, migrated, "idempotent");
+        assert_eq!(p.load_report.migration_notes.len(), 1, "no second note");
     }
 }
