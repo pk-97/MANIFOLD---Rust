@@ -493,7 +493,7 @@ pub fn run(args: &[String]) -> ! {
         .expect("spawn drain");
 
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
-    let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &cmd_tx, &state_tx);
+    let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &state_tx);
     eprintln!("[rt-capture] warmup pass took {:.1}ms (completed={})",
         load.warmup.elapsed_ms, load.warmup.completed);
     if profile_cpu {

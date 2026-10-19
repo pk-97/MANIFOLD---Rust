@@ -144,6 +144,10 @@ pub struct ContentThread {
     pub(crate) frame_deadline: std::time::Instant,
     /// Stage presents waiting for their presented time.
     pub(crate) issued_presents: IssuedPresents,
+    /// Commands taken off the channel while the thread was busy (warmup),
+    /// in arrival order. Every receive point serves these before the
+    /// channel, so nothing jumps ahead of them; see `next_command`.
+    pub(crate) held_commands: std::collections::VecDeque<ContentCommand>,
     /// A tempo source for tests that stand in for Link or MIDI clock: it
     /// delivers this tempo every tick, where a real source would (D21).
     #[cfg(test)]
@@ -253,12 +257,11 @@ impl ContentThread {
         &mut self,
         cmd: ContentCommand,
         cmd_rx: &Receiver<ContentCommand>,
-        cmd_tx: &Sender<ContentCommand>,
         state_tx: &StateTx,
     ) -> bool {
         match cmd {
             ContentCommand::LoadProject(project) =>
-                self.load_project_and_warmup(project, cmd_rx, cmd_tx, state_tx).warmup.interrupted,
+                self.load_project_and_warmup(project, cmd_rx, state_tx).warmup.interrupted,
             cmd => self.handle_command(cmd),
         }
     }
@@ -279,7 +282,7 @@ impl ContentThread {
         loop {
             work_trace.frame("content");
             // 1. Drain every pending command, coalescing consecutive seeks.
-            if self.drain_commands(&cmd_tx, &cmd_rx, &state_tx) {
+            if self.drain_commands(&cmd_rx, &state_tx) {
                 return;
             }
             self.publish_snapshot_if_dirty(&state_tx);
@@ -290,6 +293,17 @@ impl ContentThread {
         }
     }
 
+    /// The oldest command waiting: held-back commands first, then the channel.
+    pub(crate) fn next_command(
+        &mut self,
+        cmd_rx: &Receiver<ContentCommand>,
+    ) -> Result<ContentCommand, crossbeam_channel::TryRecvError> {
+        match self.held_commands.pop_front() {
+            Some(cmd) => Ok(cmd),
+            None => cmd_rx.try_recv(),
+        }
+    }
+
     /// Drains every queued command, coalescing consecutive seeks. During
     /// scrubbing the UI sends a SeekTo/SeekToBeat per mouse move; only the
     /// last seek of a burst matters, so it waits and is overwritten. GPU
@@ -297,13 +311,12 @@ impl ContentThread {
     /// shutdown.
     pub(crate) fn drain_commands(
         &mut self,
-        cmd_tx: &Sender<ContentCommand>,
         cmd_rx: &Receiver<ContentCommand>,
         state_tx: &StateTx,
     ) -> bool {
         let mut pending_seek: Option<ContentCommand> = None;
         loop {
-            match cmd_rx.try_recv() {
+            match self.next_command(cmd_rx) {
                 Ok(ContentCommand::StartExport(config)) => {
                     self.engine.clear_automation_previews();
                     // Stop any active live recording before entering export.
@@ -326,7 +339,7 @@ impl ContentThread {
                         log::info!("[ContentThread] shutdown received");
                         return true;
                     }
-                    let report = self.load_project_and_warmup(project, cmd_rx, cmd_tx, state_tx);
+                    let report = self.load_project_and_warmup(project, cmd_rx, state_tx);
                     if report.warmup.interrupted {
                         return true;
                     }
@@ -467,7 +480,11 @@ impl ContentThread {
             // Block until either a command arrives (UI or SurfaceReady from
             // GPU notification) or the 5-second deadline expires.
             // Zero CPU — thread sleeps in the kernel until woken.
-            match cmd_rx.recv_timeout(remaining) {
+            let received = match self.held_commands.pop_front() {
+                Some(cmd) => Ok(cmd),
+                None => cmd_rx.recv_timeout(remaining),
+            };
+            match received {
                 Ok(ContentCommand::SurfaceReady) => {
                     // GPU wake signal — loop back to check is_surface_ready().
                 }
@@ -482,11 +499,11 @@ impl ContentThread {
                     {
                         return true;
                     }
-                    if self.handle_command_with_preparation(cmd, cmd_rx, cmd_tx, state_tx) {
+                    if self.handle_command_with_preparation(cmd, cmd_rx, state_tx) {
                         return true; // shutdown
                     }
                     // Drain any additional queued commands.
-                    while let Ok(cmd) = cmd_rx.try_recv() {
+                    while let Ok(cmd) = self.next_command(cmd_rx) {
                         match cmd {
                             ContentCommand::SurfaceReady => {}
                             ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
@@ -500,7 +517,7 @@ impl ContentThread {
                                 {
                                     return true;
                                 }
-                                if self.handle_command_with_preparation(cmd, cmd_rx, cmd_tx, state_tx) {
+                                if self.handle_command_with_preparation(cmd, cmd_rx, state_tx) {
                                     return true;
                                 }
                             }
@@ -2468,7 +2485,7 @@ mod tests {
             let at = now + std::time::Duration::from_millis(25);
             cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at }).expect("send");
         }
-        assert!(!thread.drain_commands(&cmd_tx, &cmd_rx, &state_tx), "no shutdown");
+        assert!(!thread.drain_commands(&cmd_rx, &state_tx), "no shutdown");
         assert_eq!(thread.engine.transport_epoch(), epoch.wrapping_add(1), "one seek for the burst");
         assert!((thread.engine.current_time().0 - 3.0).abs() < 1.0 / 60.0, "the burst's last seek wins");
         assert!(thread.issued_presents.take(1).is_none(), "the presents reached the calibration");

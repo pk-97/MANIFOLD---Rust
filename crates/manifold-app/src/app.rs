@@ -1924,6 +1924,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 sync_log: manifold_playback::sync_log::SyncLog::new(),
                 frame_deadline: std::time::Instant::now(),
                 issued_presents: crate::content_thread::IssuedPresents::default(),
+                held_commands: std::collections::VecDeque::new(),
                 #[cfg(test)]
                 test_tempo_source: None,
                 rig_probe: crate::sync_rig_log::TickProbe::default(),

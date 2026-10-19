@@ -439,7 +439,7 @@ pub(crate) fn prepare_project_edited(
     let setup_ms = setup_started.elapsed().as_secs_f64() * 1000.0;
 
     let load_started = Instant::now();
-    let load_report = ct.load_project_and_warmup(Box::new(project), &cmd_rx, &cmd_tx, &state_tx);
+    let load_report = ct.load_project_and_warmup(Box::new(project), &cmd_rx, &state_tx);
     let load_ms = load_started.elapsed().as_secs_f64() * 1000.0;
     let total_ms = startup_started.elapsed().as_secs_f64() * 1000.0;
 
