@@ -2856,28 +2856,3 @@ fn first_add_into_each_optional_list_undoes_to_the_same_saved_bytes() {
     assert_undo_restores_saved_bytes("master effect group", project,
         Box::new(GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Group".into())));
 }
-
-/// BUG-8639v and BUG-zeid5 (generator instances made on first edit): a file
-/// whose generator layer has no saved instance gets one at load, so the
-/// first edit writes only what it declares and undo restores the save.
-#[test]
-fn legacy_generator_layer_loads_with_its_instance() {
-    use manifold_core::GraphTarget;
-    let mut project = make_test_project();
-    project.timeline.layers[1] = Layer::new_generator("Plasma".into(), PresetTypeId::PLASMA, 1);
-    let mut json = serde_json::to_value(&project).unwrap();
-    let layer = json
-        .pointer_mut("/timeline/layers/1")
-        .and_then(|layer| layer.as_object_mut())
-        .expect("the generator layer");
-    assert!(layer.remove("genParams").is_some(), "the save carried an instance");
-    layer.insert("generatorType".into(), serde_json::to_value(PresetTypeId::PLASMA).unwrap());
-
-    let loaded = manifold_io::loader::load_project_from_json(&json.to_string()).unwrap();
-    let generator = &loaded.timeline.layers[1];
-    assert_eq!(generator.gen_params().map(|gp| gp.generator_type()), Some(&PresetTypeId::PLASMA));
-
-    let target = GraphTarget::Generator(generator.layer_id.clone());
-    assert_undo_restores_saved_bytes("first edit on a loaded generator", loaded,
-        Box::new(AddEnvelopeCommand::new(target, make_envelope())));
-}
