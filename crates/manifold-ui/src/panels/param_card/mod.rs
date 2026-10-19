@@ -425,20 +425,6 @@ pub struct ParamCardPanel {
     /// normal once `progress()` returns `None`.
     value_flash: Vec<Transient>,
 
-    /// P2 "value snap-back" (D15) — per-param `AnimF32` (`Curve::Snap`) that
-    /// eases the slider FILL from its pre-reset position to the default after
-    /// the RIGHT-CLICK reset gesture (`begin_value_snapback`, meant to be
-    /// called by the app-side dispatch once the model has already snapped
-    /// instantly — D15: data first, visual follows). BUG-061 folded the
-    /// param right-click reset into the generic `SliderReset` trio, which
-    /// reuses the plain `ParamChanged` handler and does not call this — no
-    /// production path drives it today; only its own unit tests below do.
-    /// Settled (not animating) for every row until a reset targets it. Ticked in
-    /// `tick_value_flash` alongside the flash, which also repaints the fill
-    /// every frame it's mid-flight (the value-dirty-check in `sync_values`
-    /// only fires once, the frame the model value actually changes).
-    value_snapback: Vec<AnimF32>,
-
     /// D17 "spawn pop" — a brand-new card (no existing panel matched in
     /// `InspectorCompositePanel::reconcile_cards`) enters at scale 0.94→1
     /// eased with `Curve::Snap`. A reused card stays settled at `1.0`
@@ -566,7 +552,6 @@ impl ParamCardPanel {
             label_cache: Vec::new(),
             range_cache: Vec::new(),
             value_flash: Vec::new(),
-            value_snapback: Vec::new(),
             spawn_scale: AnimF32::new(1.0, color::MOTION_MED_MS),
             delete_fade: None,
             row_id_index: ahash::AHashMap::new(),
@@ -2593,60 +2578,6 @@ pub(super) mod tests {
             color::SLIDER_TEXT_C32,
             "reverted to the normal slider text color once finished"
         );
-    }
-
-    #[test]
-    fn value_snapback_eases_fill_from_old_to_default_after_reset() {
-        // P2 "value snap-back" (D15), end to end: `begin_value_snapback` is
-        // called the instant the RIGHT-CLICK reset commits (data already
-        // snapped by that point, per the app-side dispatch handler) —
-        // `sync_values`'s next poll (simulating the model now reading the
-        // new default) must draw the fill at the EASED position, not jump
-        // straight to the final one, and it must reach the final width once
-        // the tween settles.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        use crate::view::UiParamSlot as ParamSlot;
-        // Row 0 is "radius", min 0 / max 100 / default 10.
-        panel.sync_values_positional(&mut tree, &[ParamSlot { value: 50.0, base: 50.0, exposed: true, min: 0.0, max: 100.0 }, ParamSlot::exposed(0.8)]);
-        let fill_id = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
-        let width_at_50 = tree.get_bounds(fill_id).width;
-
-        // The reset gesture: data goes 50 -> 10 instantly; this only starts
-        // the visual ease.
-        panel.begin_value_snapback(&std::borrow::Cow::Borrowed("radius"), 50.0, 10.0);
-        assert!(panel.value_snapback[0].is_animating(), "reset starts the row's own tween");
-
-        // The next poll sees the model already at the new default (10.0).
-        panel.sync_values_positional(&mut tree, &[ParamSlot { value: 10.0, base: 10.0, exposed: true, min: 0.0, max: 100.0 }, ParamSlot::exposed(0.8)]);
-        let width_just_after = tree.get_bounds(fill_id).width;
-        assert!(
-            (width_just_after - width_at_50).abs() < 0.5,
-            "the fill must NOT jump to the final width the instant the model value \
-             changes — it starts from wherever it was: {width_just_after} vs {width_at_50}"
-        );
-
-        // Tick forward: `tick_value_flash` (the only per-frame driver of
-        // `value_snapback`, since `sync_values` no longer sees a dirty value)
-        // must keep repainting the fill every frame until it settles at the
-        // final (smaller — 10 < 50) width.
-        for _ in 0..30 {
-            panel.tick_value_flash(&mut tree, color::MOTION_MED_MS / 20.0);
-        }
-        assert!(!panel.value_snapback[0].is_animating(), "tween settles");
-        let width_settled = tree.get_bounds(fill_id).width;
-        assert!(
-            width_settled < width_just_after,
-            "settled fill reflects the smaller default value: {width_settled} vs {width_just_after}"
-        );
-
-        // A reset that's a no-op (already-at-default) `begin_value_snapback`
-        // targeting the SAME value must not start an animation.
-        panel.begin_value_snapback(&std::borrow::Cow::Borrowed("radius"), 10.0, 10.0);
-        assert!(!panel.value_snapback[0].is_animating(), "same-value retarget is a no-op");
     }
 
     #[test]
