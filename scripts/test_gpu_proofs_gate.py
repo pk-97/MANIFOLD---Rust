@@ -425,6 +425,9 @@ class GpuProofsGateTests(unittest.TestCase):
         def fake_build(cmd, **kwargs):
             if cmd[0] == "git":
                 return subprocess.CompletedProcess(cmd, 0, stdout="testsha\n")
+            if cmd[0] == "rg":
+                # No sources in the fixture: observers stay unknown, smoke runs everywhere.
+                return subprocess.CompletedProcess(cmd, 2, stdout="")
             self.assertEqual(kwargs["env"]["CARGO_INCREMENTAL"], "0")
             events.append(("build", cmd))
             return subprocess.CompletedProcess(cmd, build_exit)

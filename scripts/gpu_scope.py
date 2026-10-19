@@ -4,7 +4,11 @@
 Single source for scripts/gpu_proofs_gate.py (default mode, dev and landing),
 scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 
-- Every touched GPU path maps to test filters, plus the fixed SMOKE set.
+- Every touched GPU path maps to test filters, plus the fixed SMOKE set in every
+  harness that can see the change. A harness links only its package's
+  dependency closure, so a diff of owned Rust sources skips smoke in harnesses
+  outside the closure of every package that owns or names a touched file
+  (observing_packages). Any other path keeps smoke everywhere.
 - A path maps to the proofs of the thing it changes: NARROW_ROWS (clock, fields,
   domain nodes) beat the broad solver rows, and long proofs (REPORTER_SKIPS)
   run only when a changed test body names them, or nightly.
@@ -192,13 +196,29 @@ class Plan:
     workspace: object = None
     required_binaries: set = field(default_factory=set)
     whole_packages: set = field(default_factory=set)
+    whole_reasons: dict = field(default_factory=dict)  # package -> [why]
+    # Packages whose tests can see the diff; None = unknown, smoke everywhere.
+    observers: object = None
 
     @property
     def active(self):
         return bool(self.paths)
 
+    def add_whole(self, package, why):
+        self.whole_packages.add(package)
+        self.whole_reasons.setdefault(package, []).append(why)
+
     def final_filters(self):
         return sorted(set(SMOKE_FILTERS) | self.filters)
+
+    def sees_change(self, package):
+        """Can a test binary of `package` observe the touched paths?"""
+        return (self.observers is None
+                or bool(self.observers.intersection(self.workspace.dependencies([package]))))
+
+    def package_filters(self, package):
+        smoke = set(SMOKE_FILTERS) if self.sees_change(package) else set()
+        return sorted(smoke | self.filters)
 
     def final_skips(self):
         # Timing never removes an owning proof. Exact selections also override
@@ -216,10 +236,10 @@ class Plan:
         route = glb_conformance_route(self.workspace)
         if self.glb and route is None:
             raise ValueError('no glb_conformance GPU target in Cargo inventory')
-        runs = []
+        runs, available = [], set()
         for package in self.workspace.feature_packages('gpu-proofs'):
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
-                       else self.final_filters())
+                       else self.package_filters(package))
             if package in GPU_CONTRACT_TARGETS:
                 filters = [re.sub(r'^(exec|freeze|load|runtime|water|palette|preview_encoding|primitive_registry|node_graph)::',
                                   r'contracts::\1::', value) for value in filters]
@@ -231,7 +251,10 @@ class Plan:
                        and t['name'] not in GLB_TESTS
                        and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
+            available.update((package, target) for target in targets)
             if has_lib:
+                available.add((package, 'lib'))
+            if has_lib and (filters or package in self.whole_packages):
                 runs.append({'package': package, 'targets': [], 'lib': True, 'target': 'lib',
                              'filters': [] if package in self.whole_packages else filters,
                              'skips': (sorted(s for s in REPORTER_SKIPS if not any(s in f for f in self.filters))
@@ -239,6 +262,8 @@ class Plan:
                              'budgeted': True})
             for target in targets:
                 whole = package in self.whole_packages or (package, target) in self.required_binaries
+                if not (whole or filters):
+                    continue
                 skips = self.final_skips() if not whole else sorted(
                     s for s in REPORTER_SKIPS if not any(s in f for f in self.filters))
                 if route and route[:2] == (package, target) and route[2]:
@@ -249,9 +274,9 @@ class Plan:
                              'skips': skips, 'budgeted': True})
         if self.glb:
             package, target, prefix = route
+            available.add((package, target))
             runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
                          'filters': [prefix] if prefix else [], 'skips': [], 'budgeted': False})
-        available = {(run['package'], run['target']) for run in runs}
         for name in self.final_filters():
             owner = GPU_FILTER_TARGETS.get(name)
             if owner is not None and owner not in available:
@@ -270,9 +295,21 @@ class Plan:
         if self.whole_packages:
             lines.append("  whole packages (filters do not limit these): " +
                          ", ".join(sorted(self.whole_packages)))
+            lines += [f"    {package} because: " + "; ".join(self.whole_reasons[package])
+                      for package in sorted(self.whole_reasons)]
         if self.required_binaries:
             lines.append("  whole test binaries: " + ", ".join(
                 f"{package}/{target}" for package, target in sorted(self.required_binaries)))
+        if self.observers is not None:
+            lines.append("  smoke runs only in harnesses that link: " + ", ".join(sorted(self.observers)))
+        try:
+            runs = self.runs()
+        except ValueError:
+            runs = None  # No Cargo inventory: the run list is not computable.
+        if runs is not None:
+            lines.append(f"  harness runs: {len(runs)}, {sum(not run['filters'] for run in runs)} unfiltered: " +
+                         ", ".join(f"{run['package']}/{run['target']}" + ("" if run['filters'] else " (whole)")
+                                   for run in runs))
         skips = [s for s in self.final_skips()
                  if any(f in s or s in f for f in self.final_filters())]
         if skips:
@@ -512,7 +549,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             continue
         if owner and (path == workspace.roots[owner] + '/Cargo.toml'
                       or path == WATER_SRC + 'lib.rs'):
-            plan.whole_packages.add(owner)
+            plan.add_whole(owner, f"{path} (package manifest or crate root)")
             continue
         if path.startswith(UI_PAINT_DIR):
             plan.ui_paint = True
@@ -541,7 +578,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             plan.broad.append((path, "affects every proof"))
             continue
         if path.startswith(GPU_BACKEND_ROOT):
-            plan.whole_packages.add(owner)
+            plan.add_whole(owner, f"{path} (GPU backend core)")
             plan.ui_paint = True
             if path.endswith("raytrace.rs") or "/vulkan/" in path:
                 continue  # rt row above / Vulkan not built here: smoke only
@@ -597,7 +634,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                     if not mounted:
                         plan.notes.append(f'{path}: no {owner} GPU proof compiles this file; smoke only')
                     continue
-                plan.whole_packages.add(owner)
+                plan.add_whole(owner, f"{path} (lib source with no proof mapping)")
                 continue
         plan.unmapped.append((path, "no GPU test mapping rule for this file type"))
     # Feature-gated integration targets selected by CPU ownership belong here.
@@ -610,7 +647,55 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     if cpu_plan is not None:
         plan.required_binaries.update(cpu_plan.gpu_binaries)
         plan.filters.update(cpu_plan.gpu_filters)
+    if plan.active:
+        plan.observers = observing_packages([p for p in paths if p not in retired], repo, workspace)
     return plan
+
+
+def observing_packages(paths, repo, workspace):
+    """Packages whose test binaries can see `paths`, or None when unknown.
+
+    Cargo links a package's tests against its local dependency closure only.
+    An owned Rust source reaches a binary through that closure, or through a
+    source that names the file or its crate directory (a #[path], include or
+    file read): those naming packages are observers too; comment lines do not
+    count. A directory walk that never names the crate is not seen, which is
+    why only the fixed smoke set, whose tests read no files, is pruned by this.
+    Any other path (manifest, lockfile, shader, asset, unowned file) returns
+    None, and smoke runs everywhere.
+    """
+    owners, needles = set(), set()
+    for path in paths:
+        if path.endswith(DOC_SUFFIXES):
+            continue  # The diff scope drops docs before planning.
+        owner = workspace.owner(path)
+        if owner is None or not path.endswith('.rs'):
+            return None
+        owners.add(owner)
+        # The crate directory as a path component, not a prefix of a sibling.
+        crate = Path(workspace.roots[owner]).name
+        needles.update({Path(path).name, crate + '/', crate + '"'})
+    if not needles:
+        return None
+    repo = Path(repo).resolve()
+    found = subprocess.run(
+        ['rg', '--null', '--with-filename', '--no-heading', '-n', '-F', '--glob', '*.rs',
+         *(arg for needle in sorted(needles) for arg in ('-e', needle)), '--',
+         *sorted({str(repo / root) for root in workspace.roots.values()})],
+        capture_output=True, text=True)
+    if found.returncode not in (0, 1):
+        return None  # A missing root or rg failure proves nothing.
+    for line in found.stdout.splitlines():
+        source, separator, content = line.partition('\0')
+        if separator and re.match(r'\d+:\s*(//|/\*|\*)', content):
+            continue
+        source = Path(source).resolve()
+        owner = (workspace.owner(source.relative_to(repo).as_posix())
+                 if separator and source.is_relative_to(repo) else None)
+        if owner is None:
+            return None
+        owners.add(owner)
+    return owners
 
 
 def binary_only_proof_mounts(path, repo, workspace, owner):
@@ -644,7 +729,7 @@ def _map_wgsl(plan, path, repo, shader_users):
     if not (Path(repo) / path).exists():
         owner = plan.workspace.owner(path)
         if owner in plan.workspace.feature_packages('gpu-proofs'):
-            plan.whole_packages.add(owner)
+            plan.add_whole(owner, f"{path} (deleted shader)")
             plan.notes.append(f'{path}: deleted shader; every owning package proof is required')
         else:
             plan.unmapped.append((path, 'deleted shader has no proof package owner'))
@@ -666,7 +751,7 @@ def _map_wgsl(plan, path, repo, shader_users):
         else:
             owner = plan.workspace.owner(user)
             if owner in plan.workspace.feature_packages('gpu-proofs'):
-                plan.whole_packages.add(owner)
+                plan.add_whole(owner, f"{path} (shader used by {user})")
             else:
                 plan.unmapped.append((path, f'shader user {user} has no proof package owner'))
 

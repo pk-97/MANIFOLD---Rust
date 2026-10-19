@@ -368,6 +368,26 @@ class PathTriggerTests(unittest.TestCase):
         ):
             self.assertEqual(self.select(path), four, path)
 
+    def test_subsystem_flows_sit_on_their_own_files_not_the_shared_rows(self):
+        # BUG-bkfv2 (split bulky gate scopes): a forces or outliner edit ran
+        # 17 flows, seven of them material, colour-row and pane flows.
+        panel = "crates/manifold-ui/src/panels/scene_setup_panel/"
+        scene_ten = set(self.select(panel + "x.rs"))
+        material = {"material-inspector-colour", "material-inspector-features",
+                    "material-inspector-groups", "material-inspector-looks",
+                    "material-inspector-textures", "material-preset-menu",
+                    "material-add-feature-menu", "scene-colour-row-hex"}
+        for name in ("forces.rs", "outliner.rs", "value_sync.rs"):
+            self.assertEqual(set(self.select(panel + name)), scene_ten, name)
+        for name in ("material_inspector.rs", "material_menus.rs"):
+            self.assertEqual(set(self.select(panel + name)), scene_ten | material, name)
+        self.assertEqual(set(self.select(panel + "panes.rs")), scene_ten | {"scene-two-panes"})
+        shared = "crates/manifold-ui/src/panels/param_slider_shared/"
+        four = set(self.select(shared + "row_host.rs"))
+        self.assertEqual(len(four), 4)
+        self.assertEqual(set(self.select(shared + "colour_row.rs")),
+                         four | {"scene-colour-row-hex", "scene-light-swatch"})
+
     def test_protected_drag_flows_stay_selected_by_their_old_rows(self):
         for path in (
             "crates/manifold-ui/src/interaction_overlay.rs",
