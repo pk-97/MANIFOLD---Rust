@@ -436,11 +436,32 @@ fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) 
         .collect()
 }
 
+/// The commands an export still runs after it ends, besides Cancel and Quit.
+/// None edits the show: two are the per-frame surface signals (a stage
+/// present is timing for a frame already shown, a surface wake is re-read
+/// from the pipeline), and the rest report where the output window and its
+/// display are. The UI sends those once, so dropping one would leave the
+/// output surface stale or dangling with nothing to resend it.
+#[cfg(target_os = "macos")]
+fn keeps_through_export(cmd: &ContentCommand) -> bool {
+    matches!(
+        cmd,
+        ContentCommand::SurfaceReady
+            | ContentCommand::FramePresented { .. }
+            | ContentCommand::SetOutputSurface(_)
+            | ContentCommand::ClearOutputSurface
+            | ContentCommand::ResizeOutputSurface(..)
+            | ContentCommand::SetOutputPresentSuspended(_)
+            | ContentCommand::UpdateDisplayCapabilities { .. }
+    )
+}
+
 impl ContentThread {
-    /// True when the export must stop: a cancel, or a quit. Every other
-    /// command that arrives meanwhile is held back in arrival order and runs
-    /// once the export ends; the quit is held too, so it proceeds after the
-    /// cancelled export unwinds.
+    /// True when the export must stop: a cancel, or a quit. The quit is held
+    /// so it proceeds after the cancelled export unwinds. A project cannot
+    /// change during an export (BUG-v2o9y): every other command that arrives
+    /// meanwhile is dropped here, in this one place, except the few that
+    /// [`keeps_through_export`] names.
     #[cfg(target_os = "macos")]
     fn poll_export_cancel(&mut self, cmd_rx: &Receiver<ContentCommand>) -> bool {
         // A cancel or quit can already be held, sent during the warmup the
@@ -448,17 +469,27 @@ impl ContentThread {
         if self.quit_is_held() || self.take_held_export_cancel() {
             return true;
         }
+        let mut dropped = 0u32;
+        let mut stop = false;
         while let Ok(cmd) = cmd_rx.try_recv() {
             match cmd {
-                ContentCommand::CancelExport => return true,
+                ContentCommand::CancelExport => {
+                    stop = true;
+                    break;
+                }
                 ContentCommand::Shutdown => {
                     self.held_commands.push_back(cmd);
-                    return true;
+                    stop = true;
+                    break;
                 }
-                cmd => self.hold_command(cmd),
+                cmd if keeps_through_export(&cmd) => self.hold_command(cmd),
+                _ => dropped += 1,
             }
         }
-        false
+        if dropped > 0 {
+            log::debug!("[ContentThread] export dropped {dropped} command(s)");
+        }
+        stop
     }
 
     /// Run the offline video export loop.
@@ -1845,20 +1876,28 @@ mod tests {
         thread.poll_export_cancel(cmd_rx)
     }
 
-    /// Census bug 2 (export eats Shutdown): commands that arrive during an
-    /// export are kept in arrival order and run once it ends, and a quit
-    /// cancels the export and then proceeds.
+    /// BUG-v2o9y: nothing changes during an export. Play, a seek and an edit
+    /// sent meanwhile are thrown away, not replayed when it ends; Cancel and
+    /// Quit still stop it, and the quit proceeds right after.
     #[cfg(target_os = "macos")]
     #[test]
-    fn commands_during_export_are_held_and_a_quit_cancels_it() {
+    fn commands_during_export_are_dropped_and_a_quit_cancels_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
         let mut thread = crate::headless_harness::headless_content_thread(
             manifold_core::project::Project::default(), 64, 64,
         );
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let (state_tx, _state_rx) = crate::content_state::state_channel();
+        let edited = Arc::new(AtomicBool::new(false));
+        let edited_in_command = Arc::clone(&edited);
 
-        cmd_tx.send(ContentCommand::SetSdrPreview(false)).expect("send");
+        cmd_tx.send(ContentCommand::Play).expect("send");
+        cmd_tx.send(ContentCommand::SeekTo(Seconds::from_f32(5.0))).expect("send");
         cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
+        cmd_tx.send(ContentCommand::mutate(
+            crate::content_command::touch::VALUES,
+            Box::new(move |_| edited_in_command.store(true, Ordering::SeqCst)),
+        )).expect("send");
         assert!(!poll(&mut thread, &cmd_rx), "edits do not cancel an export");
         // A long export: every frame the UI wakes the surface wait and
         // reports a stage present. Neither may pile up in the held queue.
@@ -1868,12 +1907,27 @@ mod tests {
             cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at: now }).expect("send");
             assert!(!poll(&mut thread, &cmd_rx));
         }
-        assert!(thread.held_commands.len() <= 3, "held queue grew to {}", thread.held_commands.len());
+        assert!(thread.held_commands.len() <= 1, "held queue grew to {}", thread.held_commands.len());
         cmd_tx.send(ContentCommand::Shutdown).expect("send");
         assert!(poll(&mut thread, &cmd_rx), "a quit cancels the export");
 
         assert!(thread.drain_commands(&cmd_rx, &state_tx), "the quit proceeds after the export");
-        assert!(thread.content_pipeline.sdr_preview(), "the held edits ran, in arrival order");
+        assert!(!thread.engine.is_playing(), "Play sent during the export was dropped");
+        assert_eq!(thread.engine.current_time(), Seconds::ZERO, "the seek was dropped");
+        assert!(!thread.content_pipeline.sdr_preview(), "the setting change was dropped");
+        assert!(!edited.load(Ordering::SeqCst), "the project edit was dropped");
+
+        // Control: the same Play and edit do run outside an export.
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let edited_after = Arc::clone(&edited);
+        cmd_tx.send(ContentCommand::Play).expect("send");
+        cmd_tx.send(ContentCommand::mutate(
+            crate::content_command::touch::VALUES,
+            Box::new(move |_| edited_after.store(true, Ordering::SeqCst)),
+        )).expect("send");
+        thread.drain_commands(&cmd_rx, &state_tx);
+        assert!(thread.engine.is_playing(), "control: Play runs in the normal loop");
+        assert!(edited.load(Ordering::SeqCst), "control: the edit runs in the normal loop");
     }
 
     /// Export then Cancel pressed while a show warms up are both held; the
