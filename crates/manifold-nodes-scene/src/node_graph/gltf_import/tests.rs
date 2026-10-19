@@ -380,15 +380,12 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
         "P1 exposes many more params than the old 14 curated sliders"
     );
     // Every param routes one-to-one except: the shared Ambient, which
-    // fans out to every material's ambient (2 for azalea); D7's sun
-    // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
-    // (the sun light AND the envmap's disc direction) — 3 extra
-    // bindings; and G-P6's Environment master, which fans out to the
-    // softbox bake's intensity AND the HDRI branch's exposure gain — 1
-    // extra. 14 + 1 (ambient) + 3 (sun coherence) + 1 (env fan-out) = 19.
+    // fans out to every material's ambient (2 for azalea); and G-P6's
+    // Environment master, which fans out to the softbox bake's intensity
+    // AND the HDRI branch's exposure gain.
     assert!(
         meta.bindings.len() > meta.params.len(),
-        "fan-outs (ambient, sun coherence, env intensity) give more bindings than params"
+        "fan-outs (ambient, env intensity) give more bindings than params"
     );
     // Every card param routes to at least one node param.
     for p in &meta.params {
@@ -1821,15 +1818,12 @@ fn over_featured_material_wires_clearcoat_texture_and_maps_transmission_to_blend
     );
 }
 
-/// D7 sun coherence: each of the Sun X/Y/Z card macros must carry TWO
-/// binding targets — the sun `node.light`'s position (unchanged,
-/// pre-existing) AND the envmap's new `sun_x`/`sun_y`/`sun_z` disc-
-/// direction params — so performing the sun macro moves illumination,
-/// shadow, AND the envmap's reflected sun disc together (Peter,
-/// 2026-07-15: "place these fake strips and lights in the same
-/// positions as the real scene lights").
+/// The sky's sun follows the Sun light: the synthesized sun feeds the
+/// envmap's `sun` input, so moving the light moves illumination, shadow and
+/// the reflected sun disc together, and the Sun position cards drive the
+/// light alone.
 #[test]
-fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
+fn sky_sun_disc_follows_the_imported_sun_light() {
     let summary = GltfImportSummary {
         materials: vec![full_material(0, "Object", 100)],
         bbox_min: [-1.0, -1.0, -1.0],
@@ -1855,36 +1849,27 @@ fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
         .map(|n| n.id)
         .expect("sun present");
 
-    for (param, axis) in [("pos_x", "sun_x"), ("pos_y", "sun_y"), ("pos_z", "sun_z")] {
+    let envmap_node = def.nodes.iter().find(|n| n.type_id == "node.bake_environment").expect("envmap present");
+    assert!(
+        def.wires.iter().any(|w| w.from_node == sun_id
+            && w.from_port == "out"
+            && w.to_node == envmap_node.id
+            && w.to_port == "sun"),
+        "the sun light must feed the envmap's `sun` input"
+    );
+    for param in ["pos_x", "pos_y", "pos_z"] {
         let macro_id = format!("{sun_id}_{param}");
-        let bindings: Vec<_> = meta.bindings.iter().filter(|b| b.id == macro_id).collect();
-        assert_eq!(
-            bindings.len(),
-            2,
-            "`{macro_id}` must carry exactly 2 binding targets (sun light + envmap disc), got {}",
-            bindings.len()
-        );
-        let targets_sun = bindings.iter().any(|b| match &b.target {
-            BindingTarget::Node { node_id, param: p } => {
-                node_id.as_str() == "sun" && p == param
-            }
-            _ => false,
-        });
-        let targets_envmap = bindings.iter().any(|b| match &b.target {
-            BindingTarget::Node { node_id, param: p } => {
-                node_id.as_str() == "envmap" && p == axis
-            }
-            _ => false,
-        });
-        assert!(targets_sun, "`{macro_id}` must bind the sun light's `{param}`");
+        let targets: Vec<_> = meta.bindings.iter().filter(|b| b.id == macro_id).map(|b| &b.target).collect();
         assert!(
-            targets_envmap,
-            "`{macro_id}` must ALSO bind the envmap's `{axis}` disc-direction param"
+            matches!(targets.as_slice(), [BindingTarget::Node { node_id, param: p }] if node_id.as_str() == "sun" && p == param),
+            "`{macro_id}` drives the sun light alone, got {targets:?}"
         );
-        let defaults: std::collections::HashSet<_> =
-            bindings.iter().map(|b| b.default_value.to_bits()).collect();
-        assert_eq!(defaults.len(), 1, "`{macro_id}`'s two bindings must share one default value");
     }
+    assert!(
+        !meta.bindings.iter().any(|b| matches!(&b.target, BindingTarget::Node { node_id, param }
+            if node_id.as_str() == "envmap" && param.starts_with("sun_") && !param.starts_with("sun_disc"))),
+        "the envmap keeps no sun position of its own"
+    );
 
     // D7 import defaults: softbox @ 1.0, not the legacy gradient @ 0.
     let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
@@ -2743,6 +2728,52 @@ fn authored_spot_light_preserves_raw_intensity_cone_and_physical_range() {
     assert!(report.report_lines.iter().any(|line| {
         line.contains("raw") && line.contains("candela") && line.contains("spot cone")
     }));
+}
+
+/// With authored lights, the sky's sun is the first directional one; a
+/// scene with only point and spot lights has no sun disc.
+#[test]
+fn sky_sun_is_the_first_authored_directional_light() {
+    use super::gltf_load::{GltfLightKind, GltfPunctualLight};
+    let light = |name: &str, kind| GltfPunctualLight {
+        name: Some(name.to_string()),
+        kind,
+        color: [1.0, 1.0, 1.0],
+        intensity: 10.0,
+        range: None,
+        world_pos: [0.0, 1.0, 0.0],
+        world_forward: [0.0, -1.0, 0.0],
+    };
+    let import = |lights| {
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "M", 3)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
+            lights,
+            cameras: Vec::new(),
+            camera_report_lines: Vec::new(),
+            texture_dims: Vec::new(),
+        };
+        build_import_graph(&summary, std::path::Path::new("/tmp/synthetic_sky_sun.glb")).expect("build").0
+    };
+    let sky_sun = |def: &manifold_core::effect_graph_def::EffectGraphDef| {
+        let envmap = def.nodes.iter().find(|n| n.type_id == "node.bake_environment").unwrap().id;
+        def.wires
+            .iter()
+            .find(|w| w.to_node == envmap && w.to_port == "sun")
+            .and_then(|w| def.nodes.iter().find(|n| n.id == w.from_node))
+            .map(|n| n.node_id.to_string())
+    };
+
+    let def = import(vec![light("Lamp", GltfLightKind::Point), light("Key", GltfLightKind::Directional)]);
+    assert_eq!(sky_sun(&def).as_deref(), Some("light_1"));
+    let def = import(vec![light("Lamp", GltfLightKind::Point)]);
+    assert_eq!(sky_sun(&def), None);
 }
 
 #[test]

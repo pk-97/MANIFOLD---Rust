@@ -457,6 +457,21 @@ pub fn instantiate_def(
         def
     };
 
+    // A graph saved before the sky's sun followed the Sun light (a library
+    // or catalog preset that never passed project load) migrates here the
+    // same way project load does: World sun position out, Sun light wired
+    // into the bake. Must run before the retired-param strip below, which
+    // would otherwise erase the World sun that marks the old graph.
+    let sky_sun_migrated;
+    let def = if manifold_core::sky_sun::carries_world_sun(def) {
+        let mut owned = def.clone();
+        manifold_core::sky_sun::migrate_world_sun(&mut owned, &|_| None);
+        sky_sun_migrated = owned;
+        &sky_sun_migrated
+    } else {
+        def
+    };
+
     let retired;
     let def = if has_retired_params(def) {
         let mut owned = def.clone();

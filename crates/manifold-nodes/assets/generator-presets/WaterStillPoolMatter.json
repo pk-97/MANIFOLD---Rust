@@ -3943,6 +3943,12 @@
       "toPort": "light_0"
     },
     {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "sun"
+    },
+    {
       "fromNode": 33,
       "fromPort": "out",
       "toNode": 30,

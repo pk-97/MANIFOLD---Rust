@@ -17,6 +17,7 @@ use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::light::{Light, LightMode};
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -37,33 +38,72 @@ pub struct EnvmapUniforms {
     emitter_intensity: f32,
     emitter_elevation: f32,
     emitter_width: f32,
+    // Direction toward the sun: the wired Sun light's `-dir`. Zero with the
+    // disc intensity when no Sun light feeds `sun`.
     sun_x: f32,
     sun_y: f32,
     sun_z: f32,
     sun_disc_intensity: f32,
     sun_disc_size: f32,
-    // Softbox dome fill (IMPORT_FIDELITY F-P7) — occupies the former pad
-    // slot, so the uniform stays 64 bytes (16 × 4-byte fields, naga
-    // uniform-size rule). 0.0 = pure-black void, byte-identical to D7.
+    // Softbox dome fill (IMPORT_FIDELITY F-P7). 0.0 = pure-black void,
+    // byte-identical to D7.
     fill_intensity: f32,
     // RT_FURNACE_ORACLE: white-furnace mode. 1 = ignore `mode`'s gradient/
     // softbox math entirely and bake a CONSTANT radiance of 1.0 (scaled by
     // `intensity` below) into every texel/direction — a closed-form
-    // environment for correctness testing. 0 = existing behaviour,
-    // byte-identical (this field grows the uniform buffer past the old
-    // 64-byte/16-field size, so the size pads back out to the next 16-byte
-    // multiple — 80 bytes/20 fields — below).
+    // environment for correctness testing. 0 = existing behaviour.
     uniform_mode: u32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    // The Sun light's colour with its intensity divided out (brightest
+    // channel 1), so the disc takes the light's hue while
+    // `sun_disc_intensity` alone sets its brightness. 80 bytes, 20 fields.
+    sun_r: f32,
+    sun_g: f32,
+    sun_b: f32,
+}
+
+/// What the disc reads from the wired light: the direction toward the sun
+/// and the light's hue. `None` (disc off) unless the light is a Sun with a
+/// non-black colour.
+fn sun_from_light(light: Option<Light>) -> Option<([f32; 3], [f32; 3])> {
+    let light = light.filter(|l| matches!(l.mode, LightMode::Sun))?;
+    let [r, g, b, _] = light.color;
+    let peak = r.max(g).max(b);
+    if peak <= 0.0 {
+        return None;
+    }
+    let [x, y, z] = light.dir;
+    Some(([-x, -y, -z], [r / peak, g / peak, b / peak].map(snap_hue)))
+}
+
+/// Hue step. `c * i / (max(c) * i)` can land one bit apart as the light's
+/// intensity moves; snapping keeps an audio-reactive sun from failing the
+/// exact uniform compare and re-baking every frame for no visible change.
+const HUE_STEP: f32 = 1.0 / 1024.0;
+
+fn snap_hue(channel: f32) -> f32 {
+    (channel / HUE_STEP).round() * HUE_STEP
+}
+
+/// The sun fields of the bake's uniforms: direction toward the sun, hue,
+/// disc intensity, disc size. Every field is zero unless the disc is drawn
+/// (Softbox mode, white furnace off, `sun_disc_intensity > 0`, a Sun light
+/// on `sun`), so a moving light only re-bakes while its disc is visible.
+/// Moving it then re-bakes every frame it moves, by design: the sky follows.
+fn sun_uniform(light: Option<Light>, mode: u32, uniform_mode: u32, disc_intensity: f32, disc_size: f32) -> ([f32; 3], [f32; 3], f32, f32) {
+    let drawn = mode == 1 && uniform_mode == 0 && disc_intensity > 0.0;
+    match sun_from_light(light).filter(|_| drawn) {
+        Some((dir, hue)) => (dir, hue, disc_intensity, disc_size),
+        None => ([0.0; 3], [0.0; 3], 0.0, 0.0),
+    }
 }
 
 manifold_node_engine::primitive! {
     name: BakeEquirectEnvmap,
     type_id: "node.bake_environment",
-    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional directional sun disc at `sun_x/sun_y/sun_z` sized by `sun_disc_size` and `sun_disc_intensity` (0 = no disc). Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
-    inputs: {},
+    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+    inputs: {
+        sun: Light optional,
+    },
     outputs: {
         envmap: Texture2D,
     },
@@ -159,30 +199,6 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: Cow::Borrowed("sun_x"),
-            label: "Sun X",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-1.0, 1.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("sun_y"),
-            label: "Sun Y",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-1.0, 1.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("sun_z"),
-            label: "Sun Z",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-1.0, 1.0)),
-            enum_values: &[],
-        },
-        ParamDef {
             name: Cow::Borrowed("sun_disc_intensity"),
             label: "Sun Disc Intensity",
             ty: ParamType::Float,
@@ -233,7 +249,7 @@ manifold_node_engine::primitive! {
     ],
     // depth_rule: procedural HDR envmap bake (no texture input, math-defined, not a file load) — used as a Material/PBR side-channel rather than the main color chain, but structurally a procedural producer like noise/gradient
     depth_rule: SourceHeight,
-    composition_notes: "One-shot per chain rebuild — the runtime allocates a persistent slot for this output; the shader writes once on the first frame and downstream samplers read across frames. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). For non-studio aesthetics author a sibling primitive (sky-gradient, file-loaded HDRI) — this one specifically reproduces the legacy MetallicGlass studio (mode=gradient) or D7's black-void softbox (mode=softbox). Softbox strips are compact-support (smoothstep-clamped falloff, EXACTLY 0.0 outside the band) so the base stays pure black — never a Gaussian tail. Sun disc direction (`sun_x/y/z`) is consumed as-is (no conversion math here); F-P4 is responsible for binding it to the scene sun.",
+    composition_notes: "Re-bakes only when a param or the `sun` light changes — the runtime allocates a persistent slot for this output and downstream samplers read it across frames, so a static scene bakes once. Wire the scene's Sun light (the same `node.light` that feeds `render_scene`) into `sun` and the sky's sun disc follows it live: direction and hue from the light, brightness and size from `sun_disc_intensity` / `sun_disc_size`. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). For non-studio aesthetics author a sibling primitive (sky-gradient, file-loaded HDRI) — this one specifically reproduces the legacy MetallicGlass studio (mode=gradient) or D7's black-void softbox (mode=softbox). Softbox strips are compact-support (smoothstep-clamped falloff, EXACTLY 0.0 outside the band) so the base stays pure black — never a Gaussian tail.",
     examples: [],
     picker: { label: "Bake Environment (equirect)", category: Atom },
     summary: "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
@@ -247,7 +263,7 @@ manifold_node_engine::primitive! {
         // texture's physical identity at that time. `run()`'s dispatch is
         // skipped (and `mark_outputs_unchanged()` declared) only when BOTH
         // match this frame's freshly computed values — any param change
-        // (including the D7 sun-coherence animated-envmap gesture) or a
+        // (including a moving Sun light on `sun`) or a
         // pool-recycled/resized output texture forces a real re-bake, so
         // `render_scene`'s consumption-side gate (which trusts this node's
         // declaration) can never observe a stale envmap.
@@ -308,13 +324,15 @@ impl Primitive for BakeEquirectEnvmap {
         let emitter_intensity = read_float("emitter_intensity", 6.0);
         let emitter_elevation = read_float("emitter_elevation", 0.15);
         let emitter_width = read_float("emitter_width", 0.05);
-        let sun_x = read_float("sun_x", 0.0);
-        let sun_y = read_float("sun_y", 0.0);
-        let sun_z = read_float("sun_z", 0.0);
-        let sun_disc_intensity = read_float("sun_disc_intensity", 0.0);
-        let sun_disc_size = read_float("sun_disc_size", 0.0);
         let fill_intensity = read_float("fill", 0.0);
         let uniform_mode = u32::from(matches!(ctx.params.get("uniform"), Some(ParamValue::Bool(true))));
+        let ([sun_x, sun_y, sun_z], [sun_r, sun_g, sun_b], sun_disc_intensity, sun_disc_size) = sun_uniform(
+            ctx.inputs.light("sun"),
+            mode,
+            uniform_mode,
+            read_float("sun_disc_intensity", 0.0),
+            read_float("sun_disc_size", 0.0),
+        );
 
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
@@ -343,9 +361,9 @@ impl Primitive for BakeEquirectEnvmap {
             sun_disc_size,
             fill_intensity,
             uniform_mode,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            sun_r,
+            sun_g,
+            sun_b,
         };
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7's `last_key`
@@ -436,6 +454,82 @@ mod tests {
         assert_eq!(uniform_def.default, ParamValue::Bool(false));
     }
 
+    fn light(mode: LightMode, aim_from_pos: [f32; 3], color: [f32; 4]) -> Light {
+        Light { mode, dir: aim_from_pos, color, ..Light::default_sun() }
+    }
+
+    /// The disc sits where the light shines from (opposite its travel
+    /// direction) and takes its hue with the intensity divided out.
+    #[test]
+    fn sun_disc_follows_a_sun_light() {
+        let sun = light(LightMode::Sun, [0.0, -0.6, -0.8], [7.0, 3.5, 0.0, 1.0]);
+        assert_eq!(sun_from_light(Some(sun)), Some(([0.0, 0.6, 0.8], [1.0, 0.5, 0.0])));
+    }
+
+    #[test]
+    fn sun_disc_is_off_without_a_sun_light() {
+        assert_eq!(sun_from_light(None), None);
+        for mode in [LightMode::Point, LightMode::Spot] {
+            assert_eq!(sun_from_light(Some(light(mode, [0.0, -1.0, 0.0], [1.0; 4]))), None, "{mode:?}");
+        }
+        let black = light(LightMode::Sun, [0.0, -1.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(sun_from_light(Some(black)), None);
+    }
+
+    /// A Sun light that moves while its disc is not drawn leaves the sun
+    /// uniforms untouched, so the bake (and render_scene's IBL convolution
+    /// behind it) never re-runs for nothing: disc intensity 0, Gradient mode,
+    /// or the white furnace.
+    #[test]
+    fn moving_sun_with_disc_off_keeps_uniforms_still() {
+        let at = |dir| Some(light(LightMode::Sun, dir, [3.5, 3.5, 3.5, 1.0]));
+        let (a, b) = (at([0.0, -0.6, -0.8]), at([-0.8, -0.6, 0.0]));
+        for (mode, furnace, disc) in [(1, 0, 0.0), (0, 0, 4.0), (1, 1, 4.0)] {
+            assert_eq!(sun_uniform(a, mode, furnace, disc, 0.1), sun_uniform(b, mode, furnace, disc, 0.1), "{mode} {furnace} {disc}");
+            assert_eq!(sun_uniform(a, mode, furnace, disc, 0.1), ([0.0; 3], [0.0; 3], 0.0, 0.0));
+        }
+        assert_ne!(sun_uniform(a, 1, 0, 4.0, 0.1), sun_uniform(b, 1, 0, 4.0, 0.1), "a drawn disc follows the light");
+    }
+
+    /// An audio-reactive sun (only its intensity moving) with the disc on
+    /// keeps the exact same hue, so it never re-bakes.
+    #[test]
+    fn sun_intensity_alone_never_changes_the_hue() {
+        let base = [1.0f32, 0.6, 0.3];
+        let hue_at = |i: f32| {
+            let color = [base[0] * i, base[1] * i, base[2] * i, 1.0];
+            sun_uniform(Some(light(LightMode::Sun, [0.0, -1.0, 0.0], color)), 1, 0, 4.0, 0.1).1
+        };
+        let first = hue_at(0.01);
+        for step in 1..2000 {
+            let i = 0.01 + step as f32 * 0.0137;
+            assert_eq!(hue_at(i), first, "intensity {i}");
+        }
+    }
+
+    #[test]
+    fn sun_arrives_as_a_light_input_not_a_position() {
+        let prim = BakeEquirectEnvmap::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.inputs().iter().any(|p| p.name == "sun"));
+        for gone in ["sun_x", "sun_y", "sun_z"] {
+            assert!(BakeEquirectEnvmap::PARAMS.iter().all(|p| p.name != gone), "{gone}");
+        }
+    }
+
+    /// The load migration compares a saved World sun against a light that
+    /// may carry no position, using core's copy of the light's defaults.
+    #[test]
+    fn sky_sun_light_defaults_match_the_light_node() {
+        use manifold_core::sky_sun::{LIGHT_DEFAULT_AIM, LIGHT_DEFAULT_POS};
+        let default = |name: &str| match super::super::light::LightNode::PARAMS.iter().find(|p| p.name == name) {
+            Some(ParamDef { default: ParamValue::Float(v), .. }) => *v,
+            other => panic!("{name}: {other:?}"),
+        };
+        assert_eq!(["pos_x", "pos_y", "pos_z"].map(default), LIGHT_DEFAULT_POS);
+        assert_eq!(["aim_x", "aim_y", "aim_z"].map(default), LIGHT_DEFAULT_AIM);
+    }
+
     #[test]
     fn mode_param_defaults_to_gradient() {
         let defaults = BakeEquirectEnvmap::PARAMS;
@@ -524,9 +618,10 @@ mod gpu_tests {
             sun_disc_size,
             fill_intensity,
             uniform_mode,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            // A white Sun light.
+            sun_r: 1.0,
+            sun_g: 1.0,
+            sun_b: 1.0,
         };
         let mut enc = device.create_encoder("bake-env-dispatch");
         enc.dispatch_compute(

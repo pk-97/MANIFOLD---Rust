@@ -75,6 +75,10 @@ impl Project {
         // section 9 U2/D3.
         self.migrate_step_random_audio_mods_to_envelopes();
 
+        // The sky's sun follows the Sun light: saved scenes lose the World's
+        // own sun position and get the Sun light wired into the bake.
+        self.migrate_world_sun_to_light();
+
         // Validate tempo map data
         self.tempo_map.ensure_valid();
         self.tempo_map
@@ -308,6 +312,66 @@ impl Project {
                 "[Migration] moved clip-edge Step/Random audio-mod firing to envelopes on \
                  {migrated} config(s) (PARAM_STEP_ACTIONS)"
             );
+        }
+    }
+
+    /// The environment bake's sun disc used to sit at the World's own
+    /// `sun_x`/`sun_y`/`sun_z`; it now follows the Sun light wired into the
+    /// bake's `sun` input (`sky_sun::migrate_world_sun`). Every saved graph
+    /// (embedded presets, and the graphs on generators and effects) drops
+    /// the World position and gets the wire. Where the World sun pointed
+    /// away from the Sun light, the light wins and the load report says so;
+    /// a World sun matching the light (an imported scene's fan-out) changes
+    /// nothing visible and logs nothing. Idempotent: a migrated graph has no
+    /// World position left to drop.
+    fn migrate_world_sun_to_light(&mut self) {
+        use std::collections::BTreeSet;
+
+        use crate::effect_graph_def::EffectGraphDef;
+        use crate::effects::PresetInstance;
+        use crate::sky_sun::{WorldSunMigration, migrate_world_sun};
+
+        fn note(def: &EffectGraphDef, outcome: WorldSunMigration, notes: &mut BTreeSet<String>) {
+            let name = def
+                .preset_metadata
+                .as_ref()
+                .map(|m| m.display_name.as_str())
+                .filter(|n| !n.is_empty())
+                .or(def.name.as_deref())
+                .unwrap_or("a scene");
+            if outcome.moved_off_light {
+                notes.insert(format!(
+                    "Sky sun: \"{name}\" had its own sun position, away from its Sun light; \
+                     the sky's sun now follows the Sun light."
+                ));
+            }
+            if outcome.no_sun_light {
+                notes.insert(format!(
+                    "Sky sun: \"{name}\" had its own sun position and no Sun light; \
+                     the sky's sun disc is now off."
+                ));
+            }
+        }
+        fn migrate_instance(fx: &mut PresetInstance, notes: &mut BTreeSet<String>) {
+            let Some(mut def) = fx.graph.take() else { return };
+            let params = &fx.params;
+            let outcome = migrate_world_sun(&mut def, &|id| params.get(id).map(|p| p.base));
+            note(&def, outcome, notes);
+            fx.graph = Some(def);
+            if outcome.changed {
+                fx.refresh_manifest_from_graph();
+            }
+        }
+
+        let mut notes = BTreeSet::new();
+        for preset in &mut self.embedded_presets {
+            let outcome = migrate_world_sun(&mut preset.def, &|_| None);
+            note(&preset.def, outcome, &mut notes);
+        }
+        self.for_each_preset_instance_mut(|fx| migrate_instance(fx, &mut notes));
+        for line in notes {
+            eprintln!("[Migration] {line}");
+            self.load_report.migration_notes.push(line);
         }
     }
 
@@ -841,6 +905,89 @@ mod tests {
     use crate::PresetTypeId;
     use crate::effects::{ParameterDriver, PresetInstance};
     use crate::types::{BeatDivision, DriverWaveform};
+
+    /// A saved scene from before the sky's sun followed the Sun light: the
+    /// envmap carries its own sun position (stored, and on a "Sun X" card),
+    /// and the Sun light's position card may also fan out to it.
+    fn world_sun_scene(world_sun_x: f32, light_card_fans_out: bool) -> EmbeddedPreset {
+        let float = |v: f32| serde_json::json!({"type": "Float", "value": v});
+        let binding = |id: &str, node: &str, param: &str, default: f32| {
+            serde_json::json!({"id": id, "label": "", "defaultValue": default,
+                "target": {"kind": "node", "nodeId": node, "param": param}, "convert": {"type": "Float"}})
+        };
+        let spec = |id: &str| serde_json::json!({"id": id, "name": id, "min": -100.0, "max": 100.0, "defaultValue": 0.0});
+        let mut bindings = vec![
+            binding("1_sun_x", "envmap", "sun_x", world_sun_x),
+            binding("7_pos_y", "sun", "pos_y", 5.0),
+        ];
+        if light_card_fans_out {
+            bindings.push(binding("7_pos_y", "envmap", "sun_y", 5.0));
+        }
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "name": "Sky Scene",
+            "presetMetadata": {"id": "SkyScene", "displayName": "Sky Scene", "category": "Geometry",
+                "oscPrefix": "sky", "params": [spec("1_sun_x"), spec("7_pos_y")], "bindings": bindings},
+            "nodes": [
+                {"id": 1, "nodeId": "envmap", "typeId": "node.bake_environment", "handle": "envmap",
+                    "params": {"sun_x": float(world_sun_x), "sun_disc_intensity": float(3.0)}},
+                {"id": 7, "nodeId": "sun", "typeId": "node.light", "handle": "sun",
+                    "params": {"mode": {"type": "Enum", "value": 0}, "pos_x": float(0.0), "pos_y": float(5.0), "pos_z": float(0.0)}},
+                {"id": 8, "nodeId": "render", "typeId": "node.render_scene", "handle": "render"}
+            ],
+            "wires": [
+                {"fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "light_0"},
+                {"fromNode": 1, "fromPort": "envmap", "toNode": 8, "toPort": "envmap"}
+            ]
+        }))
+        .expect("scene def");
+        EmbeddedPreset { kind: PresetKind::Generator, def, origin: EmbeddedOrigin::Saved }
+    }
+
+    fn assert_follows_light(def: &EffectGraphDef) {
+        let envmap = def.nodes.iter().find(|n| n.node_id == "envmap").unwrap();
+        assert!(["sun_x", "sun_y", "sun_z"].iter().all(|p| !envmap.params.contains_key(*p)), "World position dropped");
+        assert!(envmap.params.contains_key("sun_disc_intensity"), "the disc's own brightness stays");
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert!(!meta.bindings.iter().any(|b| matches!(&b.target,
+            crate::effect_graph_def::BindingTarget::Node { node_id, param } if node_id == "envmap" && param.starts_with("sun_") && param != "sun_disc_intensity")));
+        assert!(!meta.params.iter().any(|p| p.id == "1_sun_x"), "the Sun X card drove only the World position");
+        assert!(meta.params.iter().any(|p| p.id == "7_pos_y"), "the light's own card stays");
+        assert!(def.wires.iter().any(|w| w.from_node == 7 && w.to_node == 1 && w.to_port == "sun"), "the Sun light feeds the sky");
+        let light = def.nodes.iter().find(|n| n.node_id == "sun").unwrap();
+        assert_eq!(light.params.get("pos_y"), Some(&crate::effect_graph_def::SerializedParamValue::Float { value: 5.0 }), "the light is kept");
+    }
+
+    /// A World sun pointing away from the Sun light loads with the light
+    /// kept, the World position gone and one line in the load report;
+    /// loading again changes nothing.
+    #[test]
+    fn world_sun_that_differs_from_the_sun_light_yields_to_the_light() {
+        let mut p = Project::default();
+        p.embedded_presets.push(world_sun_scene(1.0, false));
+        p.on_after_deserialize();
+
+        assert_follows_light(&p.embedded_presets[0].def);
+        assert_eq!(p.load_report.migration_notes.len(), 1, "{:?}", p.load_report.migration_notes);
+        assert!(p.load_report.migration_notes[0].contains("\"Sky Scene\""));
+        assert!(p.load_report.migration_notes[0].contains("now follows the Sun light"));
+
+        let migrated = p.embedded_presets[0].def.clone();
+        p.on_after_deserialize();
+        assert_eq!(p.embedded_presets[0].def, migrated, "idempotent");
+        assert_eq!(p.load_report.migration_notes.len(), 1, "no second note");
+    }
+
+    /// An imported scene's World sun was the light's position fanned out,
+    /// so it already matched: same migration, nothing to report.
+    #[test]
+    fn world_sun_matching_the_sun_light_migrates_silently() {
+        let mut p = Project::default();
+        p.embedded_presets.push(world_sun_scene(0.0, true));
+        p.on_after_deserialize();
+        assert_follows_light(&p.embedded_presets[0].def);
+        assert!(p.load_report.migration_notes.is_empty(), "{:?}", p.load_report.migration_notes);
+    }
 
     #[test]
     fn backfill_legacy_fork_display_names_derives_variant_label_from_id() {

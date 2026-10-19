@@ -370,10 +370,9 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
         "mode" => setup(Environment).switch(Feature::EnvironmentMode),
         "width" | "height" => setup(Environment),
         "horizon_strength" | "azimuth_variation" => setup(Environment).gate(GRADIENT),
-        "emitter_count" | "emitter_intensity" | "emitter_elevation" | "emitter_width" | "sun_x"
-        | "sun_y" | "sun_z" | "sun_disc_intensity" | "sun_disc_size" | "fill" => {
-            setup(Environment).gate(SOFTBOX)
-        }
+        // The disc's direction and hue come from the Sun light itself.
+        "emitter_count" | "emitter_intensity" | "emitter_elevation" | "emitter_width"
+        | "sun_disc_intensity" | "sun_disc_size" | "fill" => setup(Environment).gate(SOFTBOX),
         // White Furnace is a lighting test, not a look.
         "uniform" => hidden(Environment),
         _ => return None,
@@ -530,8 +529,8 @@ mod tests {
             assert_eq!(env(gradient), [true, false], "{gradient}");
         }
         for softbox in [
-            "emitter_count", "emitter_intensity", "emitter_elevation", "emitter_width", "sun_x", "sun_y", "sun_z",
-            "sun_disc_intensity", "sun_disc_size", "fill",
+            "emitter_count", "emitter_intensity", "emitter_elevation", "emitter_width", "sun_disc_intensity",
+            "sun_disc_size", "fill",
         ] {
             assert_eq!(env(softbox), [false, true], "{softbox}");
         }

@@ -204,7 +204,7 @@ pub(super) fn build_import_graph(
     // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
     // card fader) restores symmetry: env_intensity fans out to BOTH
     // envmap.intensity and this gain, so one fader is the environment
-    // master in either mode — same fan-out pattern as the sun_x/y/z macros.
+    // master in either mode.
     // (`node.exposure` is the gain atom's type id; its param is `gain`.)
     let hdri_gain_id = fresh_id();
     nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
@@ -695,6 +695,9 @@ pub(super) fn build_import_graph(
     if let Some(sun_id) = sun_id {
         wires.push(wire(sun_id, "out", render_id, "light_0"));
     }
+    // The sky's sun disc follows the scene's Sun light: the synthesized sun,
+    // or the first directional light the asset authored.
+    manifold_core::sky_sun::wire_sky_sun(&nodes, &mut wires);
 
     // render_scene → ao (contact AO) → dof → motion_blur → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
@@ -714,39 +717,11 @@ pub(super) fn build_import_graph(
     // curated cross-node fan-outs and shared controls that are not covered by
     // a single node's manifest.
     //
-    // D7 sun coherence: the sun pos sliders also drive envmap.sun_x/y/z so one
-    // control moves both the light and the reflection direction. Use the same
-    // default as the auto-generated sun binding so the slider rests
-    // consistently on both targets.
-    // These two fan-outs copy a STAMPED binding's default, but they stay
-    // authored (`default_mirrors_node_param: false`) because provenance is
-    // about the binding's own target: nothing writes `envmap.sun_*` or
-    // `hdri_gain.gain` into the def's node params, so the plant is the only
-    // thing that puts the sun direction and the HDRI gain there.
-    for (param, axis) in [("pos_x", "sun_x"), ("pos_y", "sun_y"), ("pos_z", "sun_z")] {
-        let Some(sun_id) = sun_id else { break };
-        let id = format!("{sun_id}_{param}");
-        let default = card_bindings
-            .iter()
-            .find(|b| b.id == id)
-            .map(|b| b.default_value)
-            .unwrap_or(0.0);
-        card_bindings.push(BindingDef {
-            id,
-            label: String::new(),
-            default_value: default,
-            target: BindingTarget::Node {
-                node_id: NodeId::new("envmap"),
-                param: axis.to_string(),
-            },
-            convert: manifold_core::effects::ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: false,
-        });
-    }
-    // Environment intensity also drives the HDRI exposure gain (G-P6).
+    // Environment intensity also drives the HDRI exposure gain (G-P6). This
+    // fan-out copies a STAMPED binding's default but stays authored
+    // (`default_mirrors_node_param: false`) because provenance is about the
+    // binding's own target: nothing writes `hdri_gain.gain` into the def's
+    // node params, so the plant is the only thing that puts the gain there.
     let env_intensity_id = format!("{envmap_id}_intensity");
     let env_intensity_default = card_bindings
         .iter()

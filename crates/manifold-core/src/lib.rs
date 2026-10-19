@@ -78,6 +78,7 @@ pub mod scene_object_migration;
 pub mod selection;
 pub mod session;
 pub mod settings;
+pub mod sky_sun;
 pub mod stage;
 pub mod tempo;
 pub mod timeline;

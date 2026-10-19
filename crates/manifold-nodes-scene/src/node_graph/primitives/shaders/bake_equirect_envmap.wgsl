@@ -10,7 +10,7 @@
 // mode = 1 (softbox, D7): pure-black base (every texel outside a strip's
 // falloff band is EXACTLY 0.0 — Peter, 2026-07-15: "I want it PURE black
 // void") lit only by `emitter_count` horizontal emitter strips, plus one
-// optional directional sun disc (D7 sun-coherence addendum). Both the
+// optional sun disc that follows the scene's Sun light. Both the
 // strips and the disc use compact-support falloff (smoothstep clamps to
 // exactly 0.0/1.0 outside/inside their band) — never a Gaussian tail — so
 // the "exact zero outside the lit regions" contract holds exactly, not
@@ -44,9 +44,10 @@ struct Uniforms {
     // (`intensity`) into every texel/direction, ignoring `mode` entirely.
     // 0 = existing gradient/softbox behaviour, byte-identical.
     uniform_mode: u32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    // The Sun light's hue, brightest channel 1.
+    sun_r: f32,
+    sun_g: f32,
+    sun_b: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -126,14 +127,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color += strips * uniforms.emitter_intensity;
 
-        // Sun disc (D7 sun-coherence addendum) — directional only; a sun is
-        // infinitely far, which an equirect envmap represents exactly.
-        // Point lights are near-field and must NOT be painted here.
+        // Sun disc, painted where the wired Sun light shines from. A sun is
+        // infinitely far, which an equirect envmap represents exactly; the
+        // CPU side zeroes the intensity for Point and Spot lights, which are
+        // near-field and must NOT be painted here.
         //
         // Skipped entirely when intensity is 0 (byte-identical to no disc —
         // the F-P3 gate) and when the direction is degenerate (avoids a NaN
-        // from normalizing a zero vector when the importer hasn't bound a
-        // direction yet).
+        // from normalizing a zero vector).
         if uniforms.sun_disc_intensity > 0.0 {
             let sun_dir_raw = vec3<f32>(uniforms.sun_x, uniforms.sun_y, uniforms.sun_z);
             if dot(sun_dir_raw, sun_dir_raw) > 1e-10 {
@@ -149,7 +150,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // maximum at d = 1.0 (frag_dir == sun_dir) so the brightest
                 // texel sits precisely at the sun direction.
                 let disc = smoothstep(outer, 1.0, d);
-                color += vec3<f32>(4.0, 4.0, 3.8) * uniforms.sun_disc_intensity * disc;
+                let hue = vec3<f32>(uniforms.sun_r, uniforms.sun_g, uniforms.sun_b);
+                color += 4.0 * hue * uniforms.sun_disc_intensity * disc;
             }
         }
     }

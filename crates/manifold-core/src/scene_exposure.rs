@@ -427,7 +427,7 @@ where
         for meta_entry in &metadata {
             let Some(stamped) = node_params.get(&meta_entry.name) else {
                 // No stamped value for this param — nothing to repair against.
-                // Protects curated fan-outs (e.g. sun -> envmap.sun_x) whose
+                // Protects curated fan-outs (e.g. env intensity -> hdri_gain.gain) whose
                 // target node never carries this param in its own overrides.
                 continue;
             };
