@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::manifest::{ProjectInfo, ProjectManifest, SnapshotEntry};
+use crate::manifest::{ProjectManifest, SnapshotEntry};
 
 /// V2 project archive constants.
 /// Port of C# ProjectArchive.cs lines 19-22.
@@ -255,32 +255,6 @@ pub fn read_history_snapshot(path: &str, hash: &str) -> Result<String, String> {
         .read_to_string(&mut json)
         .map_err(|e| format!("Failed to gunzip snapshot {hash}: {e}"))?;
     Ok(json)
-}
-
-/// Check if a file is a valid V2 project file. Fast — reads manifest only.
-/// Port of C# ProjectArchive.IsValidProjectFile (lines 284-288).
-pub fn is_valid_project_file(path: &str) -> bool {
-    match read_manifest(path) {
-        Some(manifest) => manifest.format_version >= 2,
-        None => false,
-    }
-}
-
-/// Get project info without fully loading. Fast — reads manifest only.
-/// Port of C# ProjectArchive.GetProjectInfo (lines 293-307).
-pub fn get_project_info(path: &str) -> Option<ProjectInfo> {
-    let manifest = read_manifest(path)?;
-
-    let metadata = std::fs::metadata(path).ok()?;
-    let last_modified = metadata.modified().ok()?;
-
-    Some(ProjectInfo {
-        project_name: manifest.name,
-        project_version: format!("V{}", manifest.format_version),
-        file_path: path.to_string(),
-        file_size: metadata.len(),
-        last_modified,
-    })
 }
 
 // ──────────────────────────────────────

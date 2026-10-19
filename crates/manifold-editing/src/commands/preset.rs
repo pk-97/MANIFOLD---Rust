@@ -4,7 +4,7 @@
 //! preset's `EffectGraphDef`, minted under a fresh id) and retargets an instance
 //! to it, so a per-instance recalibration becomes a named, shareable variant
 //! rather than a hidden override. These wrap the `Project` primitives
-//! (`fork_preset`, `embedded_preset`) in undoable [`Command`]s so the fork and
+//! (`mint_forked_preset_id`, `embedded_preset`) in undoable [`Command`]s so the fork and
 //! any subsequent preset-param edit ride the normal undo stack.
 
 use manifold_core::GraphTarget;

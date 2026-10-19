@@ -242,37 +242,6 @@ impl Project {
             }
         }
     }
-
-    /// Fork: register `source_def` as a new project-embedded preset (id minted
-    /// uniquely from its current id) and retarget the instance at `target` to
-    /// it. Returns the new preset id, or `None` if the target wasn't found.
-    /// The instance keeps its param values — a fork is a copy of the same
-    /// preset under a new id, so the values stay valid.
-    pub fn fork_preset(
-        &mut self,
-        target: &crate::GraphTarget,
-        kind: PresetKind,
-        mut source_def: EffectGraphDef,
-    ) -> Option<PresetTypeId> {
-        let base = source_def
-            .preset_metadata
-            .as_ref()
-            .map(|m| m.id.as_str().to_string())
-            .unwrap_or_else(|| "preset".to_string());
-        let new_id = self.mint_embedded_preset_id(&base);
-        if let Some(m) = source_def.preset_metadata.as_mut() {
-            m.id = new_id.clone();
-        }
-        if !self.set_instance_preset_id(target, new_id.clone()) {
-            return None;
-        }
-        self.embedded_presets.push(EmbeddedPreset {
-            kind,
-            def: source_def,
-            origin: EmbeddedOrigin::Saved,
-        });
-        Some(new_id)
-    }
 }
 
 #[cfg(test)]
@@ -280,41 +249,6 @@ mod tests {
     use super::*;
     use super::super::test_support::*;
     use crate::PresetTypeId;
-    use crate::effects::PresetInstance;
-
-    #[test]
-    fn fork_preset_mints_id_and_retargets_instance() {
-        let mut p = Project::default();
-        let fx = PresetInstance::new(PresetTypeId::BLOOM);
-        let fx_id = fx.id.clone();
-        p.settings.master_effects.push(fx);
-
-        let target = crate::GraphTarget::Effect(fx_id.clone());
-        let new_id = p
-            .fork_preset(&target, PresetKind::Effect, graph_def_with_id("Bloom", "Bloom"))
-            .expect("fork retargets an existing instance");
-
-        // Minted a distinct project-scoped id.
-        assert_eq!(new_id.as_str(), "Bloom#1");
-        // The instance now points at the fork; the embedded preset exists.
-        assert_eq!(p.find_effect_by_id(&fx_id).unwrap().effect_type(), &new_id);
-        assert!(p.embedded_preset(&new_id).is_some());
-        assert_eq!(p.embedded_preset(&new_id).unwrap().def.preset_metadata.as_ref().unwrap().id, new_id);
-
-        // A second fork of the same base mints a fresh id.
-        let fx2 = PresetInstance::new(PresetTypeId::BLOOM);
-        let fx2_id = fx2.id.clone();
-        p.settings.master_effects.push(fx2);
-        let new_id2 = p
-            .fork_preset(
-                &crate::GraphTarget::Effect(fx2_id),
-                PresetKind::Effect,
-                graph_def_with_id("Bloom", "Bloom"),
-            )
-            .unwrap();
-        assert_eq!(new_id2.as_str(), "Bloom#2");
-        assert_eq!(p.embedded_presets.len(), 2);
-    }
 
     #[test]
     fn mint_forked_preset_id_starts_at_2_and_probes_past_collisions() {

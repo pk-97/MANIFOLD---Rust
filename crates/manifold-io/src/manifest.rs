@@ -63,27 +63,3 @@ pub struct SnapshotEntry {
     #[serde(default, rename = "auto")]
     pub is_auto: bool,
 }
-
-/// Lightweight project information without loading full data.
-/// Port of C# ProjectInfo (ProjectSerializer.cs lines 108-120).
-#[derive(Debug, Clone)]
-pub struct ProjectInfo {
-    pub project_name: String,
-    pub project_version: String,
-    pub file_path: String,
-    pub file_size: u64,
-    pub last_modified: std::time::SystemTime,
-}
-
-impl std::fmt::Display for ProjectInfo {
-    /// Matches Unity's ToString() override:
-    /// "{name} (v{version}) - {size}KB - Modified: {date}"
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kb = self.file_size / 1024;
-        write!(
-            f,
-            "{} (v{}) - {}KB - Modified: {:?}",
-            self.project_name, self.project_version, kb, self.last_modified
-        )
-    }
-}

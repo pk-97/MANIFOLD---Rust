@@ -638,18 +638,6 @@ impl SetRelightParamCommand {
             new_value,
         }
     }
-
-    /// Build from the live instance's current value (so callers don't have
-    /// to read + clone `RelightParams` themselves before constructing).
-    pub fn from_current(
-        project: &Project,
-        target: GraphTarget,
-        field: RelightField,
-        new_value: f32,
-    ) -> Option<Self> {
-        let old_value = field.get(&project.preset_instance(&target)?.relight_params);
-        Some(Self::new(target, field, old_value, new_value))
-    }
 }
 
 impl Command for SetRelightParamCommand {

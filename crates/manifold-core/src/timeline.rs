@@ -37,12 +37,6 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    /// Read-only access to the layer_id → index cache (for batch lookups in sort).
-    #[inline]
-    pub fn layer_id_index_map(&self) -> &AHashMap<LayerId, usize> {
-        &self.layer_id_to_index
-    }
-
     /// Resolve a LayerId to its current positional index.
     pub fn layer_index_for_id(&self, id: &LayerId) -> Option<usize> {
         // Fast path: use cached map if populated
@@ -116,17 +110,6 @@ impl Timeline {
             }
         }
         None
-    }
-
-    /// Register a single clip in the lookup (incremental add).
-    pub fn register_clip_in_lookup(
-        &mut self,
-        clip_id: &str,
-        layer_index: usize,
-        clip_index: usize,
-    ) {
-        self.clip_lookup
-            .insert(ClipId::new(clip_id), (layer_index, clip_index));
     }
 
     /// Get total duration in beats (max clip EndBeat across all layers).
@@ -407,20 +390,6 @@ impl Timeline {
         self.get_clips_in_beat_window_ref(beat, beat, results, active_indices);
     }
 
-    /// Get active clips at a given beat into caller-provided buffer.
-    /// Exact half-open rule: a clip is active where `start <= beat < end`.
-    /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
-    /// before calling this. Use `get_active_clips_at_beat()` if unsure.
-    /// Zero per-frame allocation — uses caller's pre-allocated buffers.
-    pub fn get_active_clips_at_beat_ref(
-        &self,
-        beat: Beats,
-        results: &mut Vec<(usize, usize)>,
-        active_indices: &mut Vec<usize>,
-    ) {
-        self.get_clips_in_beat_window_ref(beat, beat, results, active_indices);
-    }
-
     /// Get clips covering any beat from `from` through `through`, inclusive.
     /// Caller must ensure sort caches are current first. Group layers are skipped.
     pub fn get_clips_in_beat_window_ref(
@@ -476,31 +445,6 @@ impl Timeline {
             .iter_mut()
             .enumerate()
             .find(|(_, l)| l.layer_id == layer_id)
-    }
-
-    /// Insert an existing pre-built layer at index. Unity Timeline.cs lines 190-196.
-    pub fn insert_existing_layer(&mut self, index: usize, layer: Layer) {
-        let idx = index.min(self.layers.len());
-        self.layers.insert(idx, layer);
-        self.reindex_layers();
-    }
-
-    /// Get the earliest clip start beat across all layers.
-    /// From Unity Timeline.cs GetStartBeat.
-    pub fn get_start_beat(&self) -> Beats {
-        let mut min_beat = Beats(f64::MAX);
-        for layer in &self.layers {
-            for clip in &layer.clips {
-                if clip.start_beat < min_beat {
-                    min_beat = clip.start_beat;
-                }
-            }
-        }
-        if min_beat.0 >= f64::MAX / 2.0 {
-            Beats::ZERO
-        } else {
-            min_beat
-        }
     }
 
     // ── Markers ─────────────────────────────────────────────────────

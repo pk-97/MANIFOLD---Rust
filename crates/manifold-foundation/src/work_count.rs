@@ -164,10 +164,6 @@ impl WorkKind {
             WorkKind::FrameAlloc => "FrameAlloc",
         }
     }
-
-    pub fn from_name(name: &str) -> Option<WorkKind> {
-        WorkKind::ALL.into_iter().find(|k| k.name() == name)
-    }
 }
 
 thread_local! {
@@ -339,7 +335,6 @@ mod tests {
     fn names_round_trip_and_cover_every_kind() {
         for (i, kind) in WorkKind::ALL.into_iter().enumerate() {
             assert_eq!(kind.index(), i, "ALL must follow declaration order");
-            assert_eq!(WorkKind::from_name(kind.name()), Some(kind));
         }
     }
 }

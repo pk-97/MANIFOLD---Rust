@@ -196,10 +196,6 @@ impl TimelineClip {
         !self.is_muted
     }
 
-    pub fn overlaps_with(&self, other: &TimelineClip) -> bool {
-        self.start_beat < other.end_beat() && self.end_beat() > other.start_beat
-    }
-
     /// Deep clone with new ID.
     ///
     /// The clip's nested effects are also given fresh identities (via
@@ -218,11 +214,6 @@ impl TimelineClip {
     /// Set duration with non-negative clamp. Unity TimelineClip.cs line 82.
     pub fn set_duration_beats(&mut self, v: Beats) {
         self.duration_beats = v.max(Beats::ZERO);
-    }
-
-    /// Set in-point with non-negative clamp. Unity TimelineClip.cs line 114.
-    pub fn set_in_point(&mut self, v: Seconds) {
-        self.in_point = v.max(Seconds::ZERO);
     }
 
     /// The finite, clamped source BPM, independent of whether audio warp is
@@ -264,21 +255,6 @@ impl TimelineClip {
         match project_recorded_bpm {
             Some(bpm) if own <= 0.0 && !self.is_audio() => bpm.0.clamp(20.0, 300.0),
             _ => own,
-        }
-    }
-
-    /// Warp ratio for this clip at `project_bpm` (Audio Layer section 4.1): how much
-    /// faster than 1× the source must play to lock the clip's recorded tempo to
-    /// the project. `project_bpm / recorded_bpm`, or **1.0 when the clip has no
-    /// recorded BPM** (0 = warp off → source plays at its native speed). The
-    /// single source for both the audio voice (`playback_rate`) and the offline
-    /// modulation-curve index, so what modulates stays aligned to what is heard.
-    pub fn warp_ratio(&self, project_bpm: f32) -> f32 {
-        let clip_bpm = self.recorded_bpm_resolved();
-        if clip_bpm <= 0.0 || project_bpm <= 0.0 {
-            1.0
-        } else {
-            project_bpm / clip_bpm
         }
     }
 
@@ -383,16 +359,6 @@ impl TimelineClip {
     pub fn is_image(&self) -> bool {
         !self.image_path.is_empty()
     }
-
-    /// Set scale with clamp. Unity TimelineClip.cs line 179.
-    pub fn set_scale(&mut self, v: f32) {
-        self.scale = v.max(0.01);
-    }
-
-    /// Set loop duration with clamp. Unity TimelineClip.cs line 201.
-    pub fn set_loop_duration_beats(&mut self, v: Beats) {
-        self.loop_duration_beats = v.max(Beats::ZERO);
-    }
 }
 
 impl Default for TimelineClip {
@@ -488,13 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_in_point_clamps_negative() {
-        let mut clip = TimelineClip::default();
-        clip.set_in_point(Seconds(-2.0));
-        assert_eq!(clip.in_point, Seconds(0.0));
-    }
-
-    #[test]
     fn color_override_defaults_none_and_is_skipped_when_unset() {
         // Default = layer colour (None), and an unset override never appears in
         // the JSON — old projects round-trip byte-for-byte on this field.
@@ -526,24 +485,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(clip.recorded_bpm_resolved(), 0.0);
-    }
-
-    #[test]
-    fn test_warp_ratio_passthrough_when_no_clip_bpm() {
-        // recorded_bpm 0 ⇒ warp off ⇒ ratio 1.0 regardless of project tempo.
-        let clip = TimelineClip { recorded_bpm: 0.0, ..Default::default() };
-        assert_eq!(clip.warp_ratio(128.0), 1.0);
-        assert_eq!(clip.warp_ratio(0.0), 1.0);
-    }
-
-    #[test]
-    fn test_warp_ratio_project_over_clip() {
-        // 120-BPM clip on a 128-BPM project must play 128/120× faster.
-        let clip = TimelineClip { recorded_bpm: 120.0, ..Default::default() };
-        assert!((clip.warp_ratio(128.0) - 128.0 / 120.0).abs() < 1e-6);
-        // Clamp applies through recorded_bpm_resolved (10 ⇒ 20).
-        let slow = TimelineClip { recorded_bpm: 10.0, ..Default::default() };
-        assert!((slow.warp_ratio(120.0) - 120.0 / 20.0).abs() < 1e-6);
     }
 
     #[test]

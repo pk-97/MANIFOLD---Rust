@@ -89,11 +89,6 @@ impl PresetTypeId {
     pub const DEPTH_OF_FIELD: Self = Self(Cow::Borrowed("DepthOfField"));
     pub const HDR_BOOST: Self = Self(Cow::Borrowed("HighlightBoost"));
     pub const AUTO_GAIN: Self = Self(Cow::Borrowed("AutoGain"));
-    pub const WATERCOLOR: Self = Self(Cow::Borrowed("Watercolor"));
-
-    /// Test effect proving the node-graph runtime renders to a real layer
-    /// target. `Source × 2 → Mix → FinalOutput`.
-    pub const NODE_GRAPH_TEST: Self = Self(Cow::Borrowed("NodeGraphTest"));
 
     /// Soft Focus, graph-backed — first graph-backed effect with branching
     /// topology.
@@ -131,7 +126,6 @@ impl PresetTypeId {
     pub const STAR_FIELD: Self = Self(Cow::Borrowed("StarField"));
     pub const TEXT: Self = Self(Cow::Borrowed("Text"));
     pub const PARTICLE_TEXT: Self = Self(Cow::Borrowed("ParticleText"));
-    pub const DIGITAL_PLANTS: Self = Self(Cow::Borrowed("DigitalPlants"));
 }
 
 // ── Legacy discriminant mapping (kind-specific) ─────────────────────────

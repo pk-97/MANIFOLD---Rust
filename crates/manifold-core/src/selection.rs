@@ -16,40 +16,6 @@ pub struct SelectionRegion {
 }
 
 impl SelectionRegion {
-    /// Create a region with stable LayerIds. Computes `selected_layer_ids` from the layer array.
-    pub fn new_with_ids(
-        start_beat: Beats,
-        end_beat: Beats,
-        start_layer_id: LayerId,
-        end_layer_id: LayerId,
-        layers: &[crate::layer::Layer],
-    ) -> Self {
-        let start_idx = layers
-            .iter()
-            .position(|l| l.layer_id == start_layer_id)
-            .unwrap_or(0);
-        let end_idx = layers
-            .iter()
-            .position(|l| l.layer_id == end_layer_id)
-            .unwrap_or(0);
-
-        let lo = start_idx.min(end_idx);
-        let hi = start_idx.max(end_idx);
-        let mut selected = HashSet::new();
-        for layer in layers.iter().skip(lo).take(hi - lo + 1) {
-            selected.insert(layer.layer_id.clone());
-        }
-
-        Self {
-            start_beat,
-            end_beat,
-            is_active: true,
-            start_layer_id: Some(start_layer_id),
-            end_layer_id: Some(end_layer_id),
-            selected_layer_ids: selected,
-        }
-    }
-
     pub fn contains_beat(&self, beat: Beats) -> bool {
         beat >= self.start_beat && beat < self.end_beat
     }
@@ -60,38 +26,6 @@ impl SelectionRegion {
 
     pub fn duration_beats(&self) -> Beats {
         self.end_beat - self.start_beat
-    }
-
-    /// Set the selection region with stable LayerIds.
-    pub fn set_with_ids(
-        &mut self,
-        start_beat: Beats,
-        end_beat: Beats,
-        start_layer_id: LayerId,
-        end_layer_id: LayerId,
-        layers: &[crate::layer::Layer],
-    ) {
-        let start_idx = layers
-            .iter()
-            .position(|l| l.layer_id == start_layer_id)
-            .unwrap_or(0);
-        let end_idx = layers
-            .iter()
-            .position(|l| l.layer_id == end_layer_id)
-            .unwrap_or(0);
-
-        self.start_beat = start_beat;
-        self.end_beat = end_beat;
-        self.is_active = true;
-
-        let lo = start_idx.min(end_idx);
-        let hi = start_idx.max(end_idx);
-        self.selected_layer_ids.clear();
-        for layer in layers.iter().skip(lo).take(hi - lo + 1) {
-            self.selected_layer_ids.insert(layer.layer_id.clone());
-        }
-        self.start_layer_id = Some(start_layer_id);
-        self.end_layer_id = Some(end_layer_id);
     }
 
     pub fn clear(&mut self) {

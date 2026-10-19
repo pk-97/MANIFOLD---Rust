@@ -16,9 +16,6 @@ use manifold_core::scene_modifier_preset::{
     SceneModifierSchemaError, validate_scene_modifier_schema,
 };
 
-/// Canonical extension for a standalone preset file.
-pub const PRESET_FILE_EXTENSION: &str = "manifoldpreset";
-
 /// Failure modes for reading/writing a standalone preset file.
 #[derive(Debug)]
 pub enum PresetFileError {
@@ -169,7 +166,7 @@ mod tests {
     fn export_to_disk_then_import_reinstalls_into_a_project() {
         let def = sample_def();
         let path = std::env::temp_dir()
-            .join(format!("manifold-preset-{}.{PRESET_FILE_EXTENSION}", std::process::id()));
+            .join(format!("manifold-preset-{}.manifoldpreset", std::process::id()));
         export_preset(&def, &path).expect("export to disk");
         let imported = import_preset(&path).expect("import from disk");
 

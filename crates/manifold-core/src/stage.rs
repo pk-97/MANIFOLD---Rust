@@ -217,18 +217,6 @@ impl StageLayout {
         self.placements.is_empty()
     }
 
-    /// Mint the next unused id in this layout (one past the current max, or 0
-    /// for the first placement).
-    pub fn next_output_id(&self) -> OutputId {
-        OutputId(
-            self.placements
-                .iter()
-                .map(|p| p.id.0)
-                .max()
-                .map_or(0, |m| m + 1),
-        )
-    }
-
     pub fn find(&self, id: OutputId) -> Option<&DisplayPlacement> {
         self.placements.iter().find(|p| p.id == id)
     }
@@ -633,18 +621,6 @@ mod tests {
     }
 
     // ── OutputId / StageLayout helpers ──
-
-    #[test]
-    fn next_output_id_is_one_past_the_max() {
-        let layout = StageLayout {
-            placements: vec![
-                placement(0, [0.0, 0.0], [1.0, 1.0], [1, 1]),
-                placement(5, [0.0, 0.0], [1.0, 1.0], [1, 1]),
-            ],
-        };
-        assert_eq!(layout.next_output_id(), OutputId(6));
-        assert_eq!(StageLayout::default().next_output_id(), OutputId(0));
-    }
 
     #[test]
     fn find_and_find_mut_locate_by_id() {

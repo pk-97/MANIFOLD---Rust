@@ -183,12 +183,6 @@ impl AbletonParamMapping {
         }
         self.range_min + (self.range_max - self.range_min) * v
     }
-
-    /// Map an incoming Ableton value to the parameter's native range.
-    pub fn map_to_param_range(&self, ableton_value: f32, param_min: f32, param_max: f32) -> f32 {
-        let normalized = self.map_value(ableton_value);
-        param_min + (param_max - param_min) * normalized
-    }
 }
 
 // ── Default-name detection ────────────────────────────────────────
@@ -304,23 +298,6 @@ mod tests {
         assert!((mapping.map_value(0.0) - 0.25).abs() < f32::EPSILON);
         assert!((mapping.map_value(0.5) - 0.50).abs() < f32::EPSILON);
         assert!((mapping.map_value(1.0) - 0.75).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn map_to_param_range_scales() {
-        let mapping = AbletonParamMapping {
-            param_id: Cow::Borrowed("amount"),
-            address: test_address(),
-            range_min: 0.0,
-            range_max: 1.0,
-            inverted: false,
-            legacy_param_index: None,
-            last_value: 0.0,
-            status: AbletonMappingStatus::Active,
-        };
-        // Param range 20–20000 (e.g. filter cutoff)
-        let val = mapping.map_to_param_range(0.5, 20.0, 20000.0);
-        assert!((val - 10010.0).abs() < 0.01);
     }
 
     #[test]
