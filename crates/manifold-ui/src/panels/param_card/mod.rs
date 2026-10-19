@@ -1281,7 +1281,7 @@ pub(super) mod tests {
                     },
                     scene_addr: None,
                     rgb_members: None,
-                    material_attached: false,
+                    modulator_stored: false,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("strength"),
@@ -1317,7 +1317,7 @@ pub(super) mod tests {
                     },
                     scene_addr: None,
                     rgb_members: None,
-                    material_attached: false,
+                    modulator_stored: false,
                 },
             ],
             has_graph_mod: false,
@@ -1365,7 +1365,7 @@ pub(super) mod tests {
             },
             scene_addr: None,
             rgb_members: None,
-            material_attached: false,
+            modulator_stored: false,
         });
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("reset"),
@@ -1401,7 +1401,7 @@ pub(super) mod tests {
             },
             scene_addr: None,
             rgb_members: None,
-            material_attached: false,
+            modulator_stored: false,
         });
         c
     }
@@ -1638,7 +1638,7 @@ pub(super) mod tests {
             },
             scene_addr: None,
             rgb_members: None,
-            material_attached: false,
+            modulator_stored: false,
         });
         let n = c.rows.len();
 
@@ -3472,7 +3472,7 @@ pub(super) mod tests {
                     },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: false,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("invert"),
@@ -3508,7 +3508,7 @@ pub(super) mod tests {
                     },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: false,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("scale"),
@@ -3544,7 +3544,7 @@ pub(super) mod tests {
                     },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: false,
                 },
             ],
             string_params: vec![],
