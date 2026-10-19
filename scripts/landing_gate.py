@@ -15,7 +15,6 @@ import argparse
 import codecs
 import contextlib
 import contextvars
-import importlib.util
 import io
 import json
 import math
@@ -349,15 +348,6 @@ def run_check(label, cmd, cwd, timeout, passed=None):
             ['scripts/landing_gate.py', '--repo', str(cwd)], cwd), 0.0
     passed = passed or (gate_passes.command_pass(cwd, label, cmd) if cacheable else None)
     if passed and passed.reused():
-        if label == 'flow-gate':
-            import run_ui_flows
-            filters = touched_flow_filters(cwd, cmd[-1])
-            previous = run_ui_flows.ROOT
-            try:
-                run_ui_flows.ROOT = str(cwd)
-                run_ui_flows.write_gate_marker(cmd[-1], filters, True)
-            finally:
-                run_ui_flows.ROOT = previous
         return 0, '[REUSED] ' + label, '', 0.0
     live = landing_log_path(cwd, label.replace("/", "-"))
     print(f"[RUN] {label}  (live transcript: {live})", flush=True)
@@ -576,7 +566,7 @@ def _main(stack):
                       help="stop at the first red")
     mode.add_argument("--cheap", action="store_true",
                       help="run only the legs before the expensive boundary, record their "
-                           "passes for reuse, publish no gate verdict; lanes run it before "
+                           "passes for reuse, never a landing pass; lanes run it before "
                            "their commit, on the uncommitted working tree")
     parser.add_argument('--plan-only', action='store_true', help='read-only plan including working-tree changes; no build, test or receipt writes')
     parser.add_argument('--paths-json', type=Path, help='plan-only path fixture with paths/base/head')
@@ -1075,7 +1065,7 @@ def finish(repo, base_sha, results):
     changed = gate_passes.changed_passes(gate_passes.accepted_passes())
     if changed:
         RAN_EVERY_CHECK.set(False)
-        tail = ['inputs changed before verdict publication: ' + ', '.join(changed),
+        tail = ['inputs changed before the gate finished: ' + ', '.join(changed),
                 'rerun: ' + rerun_command(['scripts/landing_gate.py', '--repo', str(repo),
                                            '--base', base_sha], repo)]
         results.append(('FAIL', 'stable-inputs', None, tail))
@@ -1142,62 +1132,6 @@ def finish(repo, base_sha, results):
             f.write(json.dumps(entry) + "\n")
     except Exception as e:
         print(f"[WARN] timing log failed: {e}")
-
-    # Self-verdict (only when gate passes)
-    if failed == 0:
-        try:
-            # Extract bead IDs from commit messages
-            log_out = run_cmd(["git", "log", f"{base_sha}..HEAD", "--format=%B"],
-                             cwd=repo, timeout=300)[1]
-            bead_ids = sorted(set(re.findall(r"BUG-\w+", log_out)))
-            # Load the MAIN checkout's gate_runner: its append_verdict writes to
-            # the main checkout's verdict trail, which is what the merge guard reads.
-            gate_runner_path = MAIN_CHECKOUT / "scripts" / "gate_runner.py"
-            if bead_ids and not gate_runner_path.exists():
-                print(f"[WARN] gate_runner.py not found at {gate_runner_path}")
-            elif bead_ids:
-                gate_runner_spec = importlib.util.spec_from_file_location(
-                    "gate_runner",
-                    str(gate_runner_path)
-                )
-                if gate_runner_spec and gate_runner_spec.loader:
-                    gate_runner = importlib.util.module_from_spec(gate_runner_spec)
-                    gate_runner_spec.loader.exec_module(gate_runner)
-                    commit = run_cmd(["git", "rev-parse", "HEAD"],
-                                    cwd=repo, timeout=30)[1].strip()
-                    for bead_id in bead_ids:
-                        verdict = {
-                            "schema": 1,
-                            "task": bead_id,
-                            "phase": "per-lane",
-                            "brief": "scripts/landing_gate.py",
-                            "branch": branch,
-                            "commit": commit,
-                            "gates": [
-                                {
-                                    "cmd": label,
-                                    "exit": 0 if status != "FAIL" else 1,
-                                    "duration_s": round(duration, 1) if duration is not None else 0.0,
-                                    "tail": status
-                                }
-                                for status, label, duration, _ in results
-                            ],
-                            "scope": {"files_changed": [], "in_scope": True},
-                            "pass": True,
-                            "kind": "gate",
-                            "reason": None,
-                            "runner": "gate_runner.py@lead",
-                            "ts": datetime.now(timezone.utc).isoformat()
-                        }
-                        if gate_passes.changed_passes(gate_passes.accepted_passes()):
-                            print('[FAIL] inputs changed before verdict publication')
-                            print('rerun: ' + rerun_command(
-                                ['scripts/landing_gate.py', '--repo', str(repo), '--base', base_sha], repo))
-                            return 1
-                        gate_runner.append_verdict(bead_id, verdict)
-                        print(f"verdict stamped: {bead_id}")
-        except Exception as e:
-            print(f"[WARN] self-verdict failed: {e}")
 
     if failed == 0:
         print('[COMPLETE] landing gate: passed', flush=True)

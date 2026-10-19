@@ -218,15 +218,7 @@ class FlowTests(unittest.TestCase):
                                              (regate_code, regate_text)], named_red=True)
                 self.assertEqual(row['outcome'], 'landed' if lands else 'red')
                 self.assertEqual('push main' in fake.calls, lands)
-                self.assertEqual('no-gate verdict' in fake.calls, lands)
                 self.assert_unlocked()
-
-    def test_moved_main_green_drops_the_verdict(self):
-        fake = FakeGit(self.root, ['base', 'moved', 'moved'])
-        code, row = self.land(fake, [(CHECKS_RED, gate_text('clippy/a')), (0, gate_text())],
-                              named_red=True)
-        self.assertEqual(row['outcome'], 'landed')
-        self.assertNotIn('no-gate verdict', fake.calls)
 
     def test_outcome_rows(self):
         cases = [

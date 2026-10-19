@@ -22,6 +22,14 @@ class PlannerTests(unittest.TestCase):
             self.assertEqual([c["name"] for c in checks],
                              ["scripts/test_agent_worktree.py", "scripts/test_dev.py"])
 
+    def test_hook_diff_selects_every_hook_test(self):
+        repo = Path(__file__).resolve().parents[1]
+        names = [c["name"] for c in codex_checks.tooling_checks(repo, [".claude/hooks/preToolUseBash.py"])]
+        expected = sorted(f".claude/hooks/{t.name}" for t in (repo / ".claude/hooks").glob("test_*.py"))
+        self.assertTrue(expected)
+        self.assertEqual(names, expected)
+        self.assertEqual(codex_checks.tooling_checks(repo, ["docs/README.md"]), [])
+
     def test_feature_coverage_is_checked_without_builds(self):
         repo = Path(__file__).resolve().parents[1]
         for path in ("Cargo.toml", "crates/manifold-nodes/Cargo.toml", "scripts/feature_matrix.py"):

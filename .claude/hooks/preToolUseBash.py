@@ -565,9 +565,6 @@ def _main_checkout_path():
     return p
 
 
-_ORCH_VERDICTS_DIR = _main_checkout_path() / ".claude" / "orchestration" / "verdicts"
-
-
 def _git_checkout_dir(toks, cwd):
     """Resolve the effective working dir for a `git [-C dir]... <sub>` segment,
     applying `-C` cumulatively (git semantics: each is relative to the last).
@@ -587,17 +584,6 @@ def _git_checkout_dir(toks, cwd):
             i += 1
     sub = toks[i] if i < len(toks) else ""
     return target, sub, toks[i + 1 :]
-
-
-def _is_branch_switch_sub(sub, rest_toks):
-    """switch/merge always count; `checkout` counts unless it's the
-    `checkout -- <paths>` file-restore form (destructive-to-worktree, not a
-    branch switch — left alone per spec)."""
-    if sub in ("switch", "merge"):
-        return True
-    if sub == "checkout":
-        return "--" not in rest_toks
-    return False
 
 
 def _strip_leading_keywords(toks):
@@ -983,69 +969,6 @@ def land_pass_guard(cmd, cwd):
         except Exception as error:
             return f"Landing guard could not verify this git command ({error}). " + _LAND_HOW
     return None
-
-
-# ---------------------------------------------------------------------------
-# Unverified compound landing-merge guard (.claude/GIT_TREE_DISCIPLINE.md §3b)
-#
-# Session 4340cb05: a `fetch && merge origin/main && merge --no-ff && push`
-# compound landed a merge on another session's branch because HEAD changed
-# between steps and was never re-verified. GIT_TREE_DISCIPLINE.md §3b: "Never
-# run the landing `git merge --no-ff` inside a compound chain... Re-verify
-# `git branch --show-current` immediately before the merge step, as its own
-# command." Unlike the warn-only guards above, this one DENIES: a compound
-# (2+ segments) in the main checkout where a landing merge (merge while on
-# main) follows an earlier branch-mutating segment (checkout/switch/merge)
-# with no branch-state re-verification segment in between. A single
-# (non-compound) landing merge, or a compound where a verify segment
-# intervenes, is unaffected (stays the existing allow+reminder path in
-# `landing_protocol_guard`).
-# ---------------------------------------------------------------------------
-
-def _is_branch_verify_sub(sub, rest_toks):
-    """True for `git branch --show-current` or `git rev-parse --abbrev-ref
-    HEAD` — the two forms that actually re-read current branch state."""
-    if sub == "branch":
-        return "--show-current" in rest_toks
-    if sub == "rev-parse":
-        return "--abbrev-ref" in rest_toks and "HEAD" in rest_toks
-    return False
-
-
-def detect_unverified_compound_landing_merge(cmd, cwd):
-    """TICKETS.md T6: deny (not just warn) a compound where a landing merge
-    (merge while on main) follows an earlier branch-mutating segment
-    (checkout/switch/merge) with no branch-state re-verification in between
-    — HEAD can change between a shared checkout's compound steps
-    (GIT_TREE_DISCIPLINE.md §3b, session 4340cb05). Never raises."""
-    try:
-        segments = _shlex_segments(cmd)
-        if len(segments) < 2:
-            return None  # not a compound; single landing merges are unaffected
-        unverified_mutation = False
-        for toks in segments:
-            toks = _strip_leading_keywords(toks)
-            if not toks or toks[0] != "git":
-                continue
-            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
-            if target_dir is None or not _in_main_checkout(target_dir):
-                continue
-            is_landing_merge_here = sub == "merge" and _current_branch(target_dir) == "main"
-            if is_landing_merge_here and unverified_mutation:
-                return ("This compound runs a landing merge after an earlier "
-                        "branch-mutating step (checkout/switch/merge) with no "
-                        "`git branch --show-current` in between — HEAD can change "
-                        "between a shared checkout's compound steps "
-                        "(GIT_TREE_DISCIPLINE.md section 3b). Land with "
-                        "scripts/land_branch.py; a manual landing merge runs as "
-                        "its OWN command, right after `git branch --show-current`.")
-            if _is_branch_verify_sub(sub, rest):
-                unverified_mutation = False
-            elif _is_branch_switch_sub(sub, rest):
-                unverified_mutation = True
-        return None
-    except Exception:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1793,6 +1716,113 @@ def commit_substitution_guard(cmd):
         return None
 
 
+# Auto-mode exec-shape guard. In auto mode nothing prompts, and these shapes
+# run code or discard work the reviewer never sees in the command text:
+# `fd -x/-X` and `rg --pre` run an arbitrary program, `git -c` can set a
+# pager, editor or hook-like config key, `git checkout -- .` throws away the
+# whole working tree, `git branch -D` drops an unmerged branch. Denied in
+# auto mode only; every other mode is unchanged (these shapes are
+# pre-approved there).
+AUTO_EXEC_SHAPE_REASON = (
+    "Denied in auto mode: `fd -x/--exec/-X/--exec-batch`, `rg --pre`, `git -c`, "
+    "`git checkout -- .` and `git branch -D` run code or discard work the "
+    "reviewer never sees. Use `fd` without exec (pipe paths to a tool you name), "
+    "`rg` without --pre, `git checkout -- <path>`, or `git branch -d`. "
+    "No per-command git config overrides in auto mode: stop and report to the lead."
+)
+_FD_EXEC_FLAGS = {"-x", "-X", "--exec", "--exec-batch"}
+_FD_VALUE_SHORTS = "dteESocj"
+_WHOLE_TREE_PATHSPECS = {".", "./", ":/"}
+
+
+def _glued_split(toks):
+    """Split a segment again where a word carries a glued `;` ("a.rs;"), which
+    shlex leaves attached."""
+    out, current = [], []
+    for t in toks:
+        if len(t) > 1 and t.endswith(";"):
+            current.append(t[:-1])
+            out.append(current)
+            current = []
+        else:
+            current.append(t)
+    if current:
+        out.append(current)
+    return out
+
+
+def _before_double_dash(toks, value_flags=()):
+    """Option tokens up to a `--` separator, dropping the values of
+    `value_flags` (they are patterns, not options)."""
+    out, skip = [], False
+    for t in toks:
+        if skip:
+            skip = False
+            continue
+        if t == "--":
+            break
+        if t in value_flags:
+            skip = True
+            continue
+        out.append(t)
+    return out
+
+
+def _fd_runs_command(args):
+    for t in _before_double_dash(args):
+        if t in _FD_EXEC_FLAGS or t.startswith(("--exec=", "--exec-batch=")):
+            return True
+        if t.startswith("-") and not t.startswith("--"):
+            for ch in t[1:]:
+                if ch in "xX":
+                    return True
+                if ch in _FD_VALUE_SHORTS:
+                    break
+    return False
+
+
+def _git_exec_shape(toks):
+    _, sub, rest = _git_checkout_dir(toks, os.getcwd())
+    before_sub = toks[1:len(toks) - len(rest) - 1] if sub else toks[1:]
+    if "-c" in before_sub or any(t.startswith("--config-env") for t in before_sub):
+        return True
+    if sub == "checkout" and any(t in _WHOLE_TREE_PATHSPECS for t in rest):
+        return True
+    if sub == "branch":
+        shorts = {ch for t in rest if t.startswith("-") and not t.startswith("--") for ch in t[1:]}
+        longs = {t for t in rest if t.startswith("--")}
+        delete = "d" in shorts or "--delete" in longs
+        force = "f" in shorts or "--force" in longs
+        if "D" in shorts or (delete and force):
+            return True
+    return False
+
+
+def auto_mode_exec_shape_guard(cmd):
+    """Return a deny reason when any segment is one of the exec/discard shapes
+    above. Never raises."""
+    try:
+        for whole in _shlex_segments(cmd):
+            for toks in _glued_split(_strip_leading_keywords(whole)):
+                if not toks:
+                    continue
+                head = toks[0].rsplit("/", 1)[-1]
+                if head == "fd":
+                    hit = _fd_runs_command(toks[1:])
+                elif head == "rg":
+                    hit = any(t == "--pre" or t.startswith("--pre=")
+                              for t in _before_double_dash(toks[1:], ("-e", "--regexp", "-f", "--file")))
+                elif head == "git":
+                    hit = _git_exec_shape(toks)
+                else:
+                    hit = False
+                if hit:
+                    return AUTO_EXEC_SHAPE_REASON
+        return None
+    except Exception:
+        return None
+
+
 def manifold_gui_guard(cmd):
     """Return a deny reason if any segment runs the manifold app binary
     (directly or via `cargo run --bin manifold`) without one of the
@@ -2248,273 +2278,6 @@ def destructive_outward_guard(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
-# Pre-land verdict-coverage guard (I1)
-#
-# When a `git merge` lands on main (current branch = main in the main
-# checkout), every BUG- task id named on the merged branch's commits since
-# origin/main must have a passing verdict (gate or no-gate) in the main
-# checkout's verdict trail at .claude/orchestration/verdicts/<task>.jsonl.
-#
-# - Docs-only branches (all changed files under docs/) pass with a note.
-# - Branches with no BUG- ids in the log pass (D6: pre-trail landings).
-# - Violations deny with the missing tasks and the exact fix command.
-# - Fails open: any error prints loudly and yields None (no guard).
-# ---------------------------------------------------------------------------
-
-_MERGE_OPT_VALUE = frozenset({
-    "-m", "--message", "-F", "--file", "-e", "--edit", "--log", "--signoff",
-    "-s", "--strategy", "-X", "--strategy-option",
-})
-
-
-def _get_merge_source_branch(rest_toks):
-    """Extract the branch being merged from post-subcommand git merge tokens.
-
-    Skips option-argument pairs so `-m "msg" branch` yields `branch`.
-    Returns None if no positional remains."""
-    skip_next = False
-    positional = []
-    for t in rest_toks:
-        if skip_next:
-            skip_next = False
-            continue
-        if t in _MERGE_OPT_VALUE:
-            skip_next = True
-            continue
-        if t.startswith("-"):
-            continue
-        positional.append(t)
-    return positional[0] if positional else None
-
-
-def merge_verdict_guard(cmd, cwd):
-    """Return (deny_reason, allow_context) for a git merge targeting main.
-
-    I1: every BUG- task on the merged branch must have a passing verdict.
-    Fails open on error — prints loudly, returns None."""
-    try:
-        for toks in _shlex_segments(cmd):
-            toks = _strip_leading_keywords(toks)
-            if not toks or toks[0] != "git":
-                continue
-            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
-            if target_dir is None or not _in_main_checkout(target_dir):
-                continue
-            if sub != "merge":
-                continue
-            if _current_branch(target_dir) != "main":
-                continue
-
-            # Git merge while on main — extract source branch
-            source_branch = _get_merge_source_branch(rest)
-            if source_branch is None:
-                continue  # can't determine branch; skip guard
-
-            # --- Docs-only check ---
-            diff_r = subprocess.run(
-                ["git", "-C", str(target_dir), "diff", "--name-only",
-                 "origin/main", source_branch],
-                capture_output=True, text=True, timeout=15,
-            )
-            if diff_r.returncode == 0:
-                changed = [l.strip()
-                           for l in diff_r.stdout.strip().split("\n") if l.strip()]
-                if changed and all(f.startswith("docs/") for f in changed):
-                    return (None,
-                            "Docs-only merge: no verdict coverage required (D6).")
-
-            # --- Extract BUG- ids from branch commits ---
-            log_r = subprocess.run(
-                ["git", "-C", str(target_dir), "log", "--format=%B",
-                 f"origin/main..{source_branch}"],
-                capture_output=True, text=True, timeout=15,
-            )
-            if log_r.returncode != 0:
-                print(
-                    f"merge_verdict_guard: git log failed "
-                    f"(exit {log_r.returncode}): {log_r.stderr.strip()}",
-                    file=sys.stderr,
-                )
-                return (None, None)
-
-            bug_ids = re.findall(r"BUG-\w+", log_r.stdout)
-            if not bug_ids:
-                return (None,
-                        "No BUG- task ids in merged branch commits. "
-                        "Verdict coverage not required (D6: pre-trail landings).")
-
-            # --- Check verdicts in MAIN checkout trail ---
-            missing = []
-            for bid in sorted(set(bug_ids)):
-                vpath = _ORCH_VERDICTS_DIR / f"{bid}.jsonl"
-                has_passing = False
-                if vpath.exists():
-                    with open(vpath) as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                v = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-                            if (v.get("schema") == 1
-                                    and v.get("pass") is True
-                                    and v.get("kind") in ("gate", "no-gate")):
-                                has_passing = True
-                                break
-                if not has_passing:
-                    missing.append(bid)
-
-            if missing:
-                fixes = "\n".join(
-                    f'  gate_runner no-gate --task {m} '
-                    f'--reason "<why-safe-without-gates>"'
-                    for m in missing
-                )
-                return (
-                    f"Merge blocked by I1: {len(missing)} task(s) lack passing "
-                    f"verdicts:\n  {', '.join(missing)}\n\n"
-                    f"Add no-gate verdicts:\n{fixes}\n\n"
-                    f"Or run the design's declared gates (gate_runner per-lane) "
-                    f"and retry the merge. (I1: every BUG- task on the merged "
-                    f"branch needs verdict coverage.)",
-                    None,
-                )
-
-            return (None,
-                    "All BUG- tasks have passing verdicts. Merge permitted.")
-
-    except Exception as e:
-        print(f"merge_verdict_guard FAILED OPEN: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return (None, None)
-
-    return (None, None)  # no merge-to-main segment found
-
-
-# ---------------------------------------------------------------------------
-# Pre-land flow-gate guard
-#
-# The flow gate (`scripts/run_ui_flows.py --touched ...`) was a prose line in
-# the landing protocol: nine flows drifted red across multiple landings before
-# a sweep caught them, because nothing made "the gate ran, green, at the tip
-# that lands" a machine fact. run_ui_flows.py now writes a marker
-# (.claude/orchestration/flow-gate-marker.json in the main checkout: HEAD sha,
-# pass, ts) on every --touched run; this guard denies a merge into main when
-# the merged branch touches flow-mapped paths (manifest path_triggers or flow
-# JSON files) and no green marker exists for exactly that branch tip.
-#
-# Fails open loudly, like merge_verdict_guard. Docs-only and unmapped
-# branches never see it.
-#
-# Obsolete when: landing moves to a server-side CI gate that runs the flow
-# suite itself, or the flow suite is folded into gate_runner pre-land
-# execution.
-# ---------------------------------------------------------------------------
-
-_FLOW_MARKER_PATH = (
-    _main_checkout_path() / ".claude" / "orchestration" / "flow-gate-marker.json"
-)
-_FLOW_MANIFEST_PATH = (
-    _main_checkout_path() / "scripts" / "ui-flows" / "manifest.json"
-)
-
-
-def _flow_mapped(path, triggers):
-    """True when a changed path is covered by the flow gate: either a flow
-    script itself or a path_triggers prefix match."""
-    if (path.startswith("scripts/ui-flows/") and path.endswith(".json")
-            and not path.endswith("manifest.json")):
-        return True
-    return any(path.startswith(prefix) for prefix in triggers)
-
-
-def flow_gate_guard(cmd, cwd):
-    """Return (deny_reason, allow_context) for a git merge targeting main.
-
-    Deny when the merged branch touches flow-mapped paths and the flow-gate
-    marker is missing, red, or written at a different HEAD than the branch
-    tip. Fails open on error — prints loudly, returns (None, None)."""
-    try:
-        for toks in _shlex_segments(cmd):
-            toks = _strip_leading_keywords(toks)
-            if not toks or toks[0] != "git":
-                continue
-            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
-            if target_dir is None or not _in_main_checkout(target_dir):
-                continue
-            if sub != "merge":
-                continue
-            if _current_branch(target_dir) != "main":
-                continue
-            source_branch = _get_merge_source_branch(rest)
-            if source_branch is None:
-                continue
-
-            diff_r = subprocess.run(
-                ["git", "-C", str(target_dir), "diff", "--name-only",
-                 "origin/main", source_branch],
-                capture_output=True, text=True, timeout=15,
-            )
-            if diff_r.returncode != 0:
-                return (None, None)
-            changed = [l.strip()
-                       for l in diff_r.stdout.strip().split("\n") if l.strip()]
-
-            triggers = json.loads(
-                _FLOW_MANIFEST_PATH.read_text()).get("path_triggers", {})
-            mapped = [p for p in changed if _flow_mapped(p, triggers)]
-            if not mapped:
-                return (None, None)
-
-            tip_r = subprocess.run(
-                ["git", "-C", str(target_dir), "rev-parse", source_branch],
-                capture_output=True, text=True, timeout=15,
-            )
-            if tip_r.returncode != 0:
-                return (None, None)
-            tip = tip_r.stdout.strip()
-
-            problem = None
-            if not _FLOW_MARKER_PATH.exists():
-                problem = "no flow-gate marker exists"
-            else:
-                marker = json.loads(_FLOW_MARKER_PATH.read_text())
-                if marker.get("head") != tip:
-                    problem = (f"marker is stale: written at "
-                               f"{str(marker.get('head'))[:12]}, branch tip is "
-                               f"{tip[:12]}")
-                elif marker.get("pass") is not True:
-                    problem = "marker records a RED run"
-
-            if problem is None:
-                return (None,
-                        f"Flow gate: green marker matches {source_branch} tip.")
-
-            return (
-                f"Merge blocked by the flow gate: {source_branch} touches "
-                f"{len(mapped)} flow-mapped path(s) (e.g. {mapped[0]}) but "
-                f"{problem}.\n\n"
-                f"In the branch's worktree run:\n"
-                f"  scripts/run_ui_flows.py --touched origin/main...HEAD\n"
-                f"(writes the marker on completion), then retry the merge. "
-                f"BUG-313 shipped exactly this way — its catching flow was "
-                f"red and unrun.",
-                None,
-            )
-
-    except Exception as e:
-        print(f"flow_gate_guard FAILED OPEN: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return (None, None)
-
-    return (None, None)  # no merge-to-main segment found
-
-
-# ---------------------------------------------------------------------------
 # Warning-only lints (never deny, never ask) — additionalContext on allow
 #
 # TICKETS.md T4/T5/T8: three independent shell-shape mistakes that have each
@@ -2813,31 +2576,13 @@ def main() -> int:
         json.dump(build_deny([commit_deny]), sys.stdout)
         return 0
 
-    # 0c. Unverified compound landing-merge guard (T6): denies a compound
-    # landing merge with no branch-state re-verification in between. Must
-    # run before the pre-approved-allow branch below, or this compound would
-    # sail through as a normal pre-approved git workflow.
-    compound_deny_reason = first(detect_unverified_compound_landing_merge, cwd)
-    if compound_deny_reason:
-        json.dump(build_deny([compound_deny_reason]), sys.stdout)
-        return 0
-
-    # 0e. Pre-land verdict-coverage guard (I1): a merge into main requires
-    # verdict coverage for every BUG- task on the merged branch. Denies with
-    # the missing tasks and fix commands; passes with a note otherwise.
-    merge_deny, merge_context = merge_verdict_guard(cmd, cwd)
-    merge_deny = merge_deny or first(lambda t: merge_verdict_guard(t, cwd)[0])
-    if merge_deny:
-        json.dump(build_deny([merge_deny]), sys.stdout)
-        return 0
-
-    # 0e2. Pre-land flow-gate guard: a merge into main whose branch touches
-    # flow-mapped paths requires a green flow-gate marker at the branch tip.
-    flow_deny, flow_context = flow_gate_guard(cmd, cwd)
-    flow_deny = flow_deny or first(lambda t: flow_gate_guard(t, cwd)[0])
-    if flow_deny:
-        json.dump(build_deny([flow_deny]), sys.stdout)
-        return 0
+    # 0k2. Exec and discard shapes (fd -x, rg --pre, git -c, git checkout --
+    # ., git branch -D): denied in auto mode, where nothing would prompt.
+    if data.get("permission_mode") == "auto":
+        exec_deny = first(auto_mode_exec_shape_guard)
+        if exec_deny:
+            json.dump(build_deny([exec_deny]), sys.stdout)
+            return 0
 
     # 0m. Wait-loop guard (BUG-zezjf.15 (one status screen)): a foreground
     # poll (while/until + sleep or kill -0, or a sleep past settle time) is
@@ -2884,7 +2629,7 @@ def main() -> int:
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
         combined = "\n\n".join(c for c in (
-            landing_context, merge_context, flow_context,
+            landing_context,
             rg_warning, masked_exit_warning, comment_swallow_warning,
             workspace_sweep_warning,
         ) if c) or None
