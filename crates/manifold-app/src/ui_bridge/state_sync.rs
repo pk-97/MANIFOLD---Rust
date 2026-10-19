@@ -617,9 +617,12 @@ pub fn push_selection(
     // Region → viewport (sync from UIState so clearing via set_insert_cursor
     // propagates). Only a `TimeRange` selection has a region; a `Clips`
     // selection pushes `None`, so no band draws behind a clip selection (D1).
-    if let Some(r) = selection.current_region() {
+    // A region whose edge layers are gone covers no layer, so it draws no band.
+    let band = selection.current_region().and_then(|r| {
         let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
-        let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
+        r.layer_index_range(&ui_layers).map(|(start, end)| (r, start, end))
+    });
+    if let Some((r, start_layer, end_layer)) = band {
         ui.viewport
             .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
                 start_beat: r.start_beat,

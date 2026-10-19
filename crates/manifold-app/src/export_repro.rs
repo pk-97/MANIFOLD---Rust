@@ -122,7 +122,7 @@ fn run_export(args: &ExportReproArgs) -> Result<(), String> {
         .map_err(|e| format!("failed to start export status drain: {e}"))?;
     ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
     let (warm_tx, warm_rx) = unbounded::<ContentCommand>();
-    ct.run_warmup(&warm_rx, &warm_tx, &state_tx);
+    ct.run_warmup(&warm_rx, &state_tx);
     drop(warm_tx);
     let (cmd_tx, cmd_rx) = unbounded::<ContentCommand>();
     ct.run_export(

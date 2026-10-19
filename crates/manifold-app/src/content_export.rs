@@ -436,18 +436,31 @@ fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) 
         .collect()
 }
 
-/// The modal prevents authoring commands while export owns the content loop.
-#[cfg(target_os = "macos")]
-fn poll_export_cancel(cmd_rx: &Receiver<ContentCommand>) -> bool {
-    while let Ok(cmd) = cmd_rx.try_recv() {
-        if matches!(cmd, ContentCommand::CancelExport) {
+impl ContentThread {
+    /// True when the export must stop: a cancel, or a quit. Every other
+    /// command that arrives meanwhile is held back in arrival order and runs
+    /// once the export ends; the quit is held too, so it proceeds after the
+    /// cancelled export unwinds.
+    #[cfg(target_os = "macos")]
+    fn poll_export_cancel(&mut self, cmd_rx: &Receiver<ContentCommand>) -> bool {
+        // A cancel or quit can already be held, sent during the warmup the
+        // export was queued behind.
+        if self.quit_is_held() || self.take_held_export_cancel() {
             return true;
         }
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            match cmd {
+                ContentCommand::CancelExport => return true,
+                ContentCommand::Shutdown => {
+                    self.held_commands.push_back(cmd);
+                    return true;
+                }
+                cmd => self.hold_command(cmd),
+            }
+        }
+        false
     }
-    false
-}
 
-impl ContentThread {
     /// Run the offline video export loop.
     ///
     /// Temporarily replaces the normal content loop: ticks the engine with fixed
@@ -908,7 +921,7 @@ impl ContentThread {
         let mut gpu_fatal = false;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
-            cancelled = poll_export_cancel(cmd_rx);
+            cancelled = self.poll_export_cancel(cmd_rx);
             if cancelled {
                 session.cancel();
                 break;
@@ -962,12 +975,12 @@ impl ContentThread {
                 None => "Finalizing video...".into(),
             };
             self.send_export_phase(state_tx, true, 1.0, &status, false);
-            cancelled = poll_export_cancel(cmd_rx);
+            cancelled = self.poll_export_cancel(cmd_rx);
             if cancelled {
                 session.cancel();
             } else {
                 let result = session.finalize(ffmpeg_path.as_deref());
-                cancelled = poll_export_cancel(cmd_rx);
+                cancelled = self.poll_export_cancel(cmd_rx);
                 if !cancelled {
                     match result {
                         Ok(result) => {
@@ -1824,5 +1837,60 @@ mod tests {
                 "/tmp/export/my show--section-1-2.mp4",
             ]
         );
+    }
+
+    /// The export's command poll, as the frame loop calls it.
+    #[cfg(target_os = "macos")]
+    fn poll(thread: &mut ContentThread, cmd_rx: &Receiver<ContentCommand>) -> bool {
+        thread.poll_export_cancel(cmd_rx)
+    }
+
+    /// Census bug 2 (export eats Shutdown): commands that arrive during an
+    /// export are kept in arrival order and run once it ends, and a quit
+    /// cancels the export and then proceeds.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn commands_during_export_are_held_and_a_quit_cancels_it() {
+        let mut thread = crate::headless_harness::headless_content_thread(
+            manifold_core::project::Project::default(), 64, 64,
+        );
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
+
+        cmd_tx.send(ContentCommand::SetSdrPreview(false)).expect("send");
+        cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
+        assert!(!poll(&mut thread, &cmd_rx), "edits do not cancel an export");
+        // A long export: every frame the UI wakes the surface wait and
+        // reports a stage present. Neither may pile up in the held queue.
+        let now = std::time::Instant::now();
+        for id in 0..1000u64 {
+            cmd_tx.send(ContentCommand::SurfaceReady).expect("send");
+            cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at: now }).expect("send");
+            assert!(!poll(&mut thread, &cmd_rx));
+        }
+        assert!(thread.held_commands.len() <= 3, "held queue grew to {}", thread.held_commands.len());
+        cmd_tx.send(ContentCommand::Shutdown).expect("send");
+        assert!(poll(&mut thread, &cmd_rx), "a quit cancels the export");
+
+        assert!(thread.drain_commands(&cmd_rx, &state_tx), "the quit proceeds after the export");
+        assert!(thread.content_pipeline.sdr_preview(), "the held edits ran, in arrival order");
+    }
+
+    /// Export then Cancel pressed while a show warms up are both held; the
+    /// export that starts from the held queue must see its held cancel.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_cancel_held_behind_its_export_cancels_it() {
+        let mut thread = crate::headless_harness::headless_content_thread(
+            manifold_core::project::Project::default(), 64, 64,
+        );
+        let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+        thread.held_commands.push_back(ContentCommand::StartExport(Box::new(meta_config(false))));
+        thread.held_commands.push_back(ContentCommand::CancelExport);
+
+        let started = thread.next_command(&cmd_rx);
+        assert!(matches!(started, Ok(ContentCommand::StartExport(_))));
+        assert!(poll(&mut thread, &cmd_rx), "the held cancel stops the export");
+        assert!(thread.held_commands.is_empty(), "the cancel is spent on its export");
     }
 }

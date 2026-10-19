@@ -105,6 +105,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         sync_log: manifold_playback::sync_log::SyncLog::new(),
         frame_deadline: std::time::Instant::now(),
         issued_presents: crate::content_thread::IssuedPresents::default(),
+        held_commands: std::collections::VecDeque::new(),
         #[cfg(test)]
         test_tempo_source: None,
         rig_probe: crate::sync_rig_log::TickProbe::default(),

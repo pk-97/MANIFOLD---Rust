@@ -402,11 +402,6 @@ impl AudioSetup {
         self.legacy_device_name = None;
     }
 
-    /// Display name of the chosen device, if any.
-    pub fn device_display_name(&self) -> Option<&str> {
-        self.device.as_ref().map(|d| d.name.as_str())
-    }
-
     /// Upgrade legacy single-channel sends to the stereo default. The per-send
     /// channel picker is gone — a capture-fed send is always stereo — so a send
     /// saved with exactly one channel (`[0]`, `[3]`, …) becomes `[0, 1]`.

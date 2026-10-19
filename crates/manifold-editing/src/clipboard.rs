@@ -24,18 +24,6 @@ impl EffectClipboard {
         self.clips.len()
     }
 
-    pub fn copy_single(&mut self, effect: &PresetInstance) {
-        self.clips.clear();
-        self.groups.clear();
-        self.clips.push(effect.clone());
-    }
-
-    pub fn copy_all(&mut self, effects: &[PresetInstance]) {
-        self.clips.clear();
-        self.groups.clear();
-        self.clips.extend(effects.iter().cloned());
-    }
-
     /// Copy an effect selection together with every group whose members are
     /// fully selected. Partial groups become ordinary, ungrouped effects.
     pub fn copy_selection(
@@ -91,11 +79,6 @@ impl EffectClipboard {
                 group
             })
             .collect();
-    }
-
-    /// Get fresh clones for paste.
-    pub fn get_paste_clones(&self) -> Vec<PresetInstance> {
-        self.clips.clone()
     }
 
     /// Return fresh effect and group IDs for one paste operation.

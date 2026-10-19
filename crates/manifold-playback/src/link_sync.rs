@@ -58,11 +58,6 @@ impl SimulatedLink {
         };
         self.beat + secs * self.tempo / 60.0
     }
-
-    /// The same session with a new tempo from `at`, keeping the beat continuous.
-    pub fn with_tempo(&self, at: Instant, tempo: f64) -> Self {
-        Self { at, beat: self.beat_at(at), tempo, ..*self }
-    }
 }
 
 impl LinkSyncController {

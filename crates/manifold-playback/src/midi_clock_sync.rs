@@ -265,9 +265,6 @@ impl MidiClockSyncController {
     pub fn is_receiving_clock(&self) -> bool {
         self.is_receiving_clock
     }
-    pub fn is_clock_transport_playing(&self) -> bool {
-        self.is_receiving_clock && self.last_is_playing
-    }
     pub fn current_position_display(&self) -> &str {
         &self.current_position_display
     }
@@ -313,24 +310,6 @@ impl MidiClockSyncController {
     }
     pub fn selected_source_index(&self) -> i32 {
         self.selected_source_index
-    }
-
-    /// Number of available MIDI input ports.
-    pub fn available_source_count() -> usize {
-        MidiClockReceiver::source_count()
-    }
-
-    /// Display name of the MIDI port at `index`.
-    pub fn available_source_name(index: i32) -> String {
-        MidiClockReceiver::source_name(index)
-    }
-
-    /// List all available MIDI input port names.
-    pub fn available_source_names() -> Vec<String> {
-        let count = MidiClockReceiver::source_count();
-        (0..count)
-            .map(|i| MidiClockReceiver::source_name(i as i32))
-            .collect()
     }
 
     /// Display name of the currently selected MIDI source.

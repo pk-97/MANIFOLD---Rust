@@ -593,6 +593,17 @@ impl InspectorCompositePanel {
         any
     }
 
+    /// Whether a card tween that reflows the region on a rebuild (collapse,
+    /// spawn pop, delete fade) is in flight on a card `skip_to_settled` settles.
+    pub fn structural_motion(&self) -> bool {
+        self.effects
+            .iter()
+            .flatten()
+            .chain(self.gen_params.as_ref())
+            .chain(self.modifier_cards.iter())
+            .any(ParamCardPanel::structural_motion)
+    }
+
     /// Whether card motion moved built nodes since the last call.
     pub fn take_moved_in_place(&mut self) -> bool {
         std::mem::take(&mut self.moved_in_place)

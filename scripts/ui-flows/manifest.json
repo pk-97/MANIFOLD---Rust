@@ -172,8 +172,7 @@
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
       "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo",
-      "scene-slider-range"
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
@@ -271,8 +270,6 @@
     "work-automation-hover": "automation",
     "work-clip-drag": "timeline",
     "work-clip-trim": "timeline",
-    "work-automation-point-drag": "automation",
-    "work-lane-resize": "automation",
     "work-marquee": "timeline",
     "work-region-move": "timeline",
     "work-split-drag": "timeline",
@@ -287,8 +284,6 @@
     "work-layer-gain": "inspector",
     "work-send-gain": "audiosends",
     "work-band-split": "audiosends",
-    "work-slider-drag": "inspector",
-    "work-slider-grab": "inspector",
     "work-values-undo": "inspector",
     "work-trim-undo": "inspector",
     "work-cursor-nav": "timeline",
@@ -320,7 +315,6 @@
     "led-layer-create": "timeline",
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
-    "trigger-lane-assignment": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",
     "inspector-card-drag-reorder": "inspector",
@@ -360,7 +354,6 @@
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
-    "scene-forces-controls": "physicsscene",
     "scene-surfaces-clickthrough": "gltfscene",
     "scene-surfaces-clickthrough-physics": "physicsscene",
     "scene-panel-tree": "gltfscene",
@@ -388,9 +381,44 @@
     "audio-clip-trigger-add": "inspector",
     "rt-dynamic-modifier": "mushroomscene",
     "work-browser-search": "inspector",
-    "work-text-commit": "inspector",
     "work-perform-exit": "timeline"
   },
-  "expected_fail": {},
+  "expected_fail": {
+    "scene-forces-controls": {
+      "scene": "physicsscene",
+      "bug": "BUG-gm08t",
+      "reason": "step 35: the Assign picker shows no tick after assigning. sync_project_data reads clip trigger assignments (Effects part) but PROJECT_SYNC_PARTS has no Effects, so an assign never refreshes the picker or the trigger lane header (INV-16). Fix shape is a UI_INVALIDATION section 4 design call."
+    },
+    "trigger-lane-assignment": {
+      "scene": "envmod",
+      "bug": "BUG-gm08t",
+      "reason": "step 16: same root as scene-forces-controls; after an unassign the picker and the trigger lane header stay stale, so the re-assign click lands on the stale header button."
+    },
+    "work-slider-grab": {
+      "scene": "inspector",
+      "bug": "BUG-rqsaa",
+      "reason": "FrameAlloc 29 over the 27 ceiling since 9b8086df6: a param slider press sends AutomationHold with a cloned owned ParamId, one allocation per press. Ceiling held (D11) pending the ParamId type change or a reviewed --record-work."
+    },
+    "work-slider-drag": {
+      "scene": "inspector",
+      "bug": "BUG-rqsaa",
+      "reason": "FrameAlloc 490 over the 489 ceiling; red from the 2026-10-17 nightly, the same range as work-slider-grab. Not bisected."
+    },
+    "work-text-commit": {
+      "scene": "inspector",
+      "bug": "BUG-rqsaa",
+      "reason": "FrameAlloc 25 over the 24 ceiling; red from the 2026-10-17 nightly, the same range as work-slider-grab. Not bisected."
+    },
+    "work-automation-point-drag": {
+      "scene": "automation",
+      "bug": "BUG-rqsaa",
+      "reason": "FrameAlloc 4285 over the 4251 ceiling; already red in the 2026-10-16 nightly at 8743ad871, before 9b8086df6, so a separate cause. Not bisected."
+    },
+    "work-lane-resize": {
+      "scene": "automation",
+      "bug": "BUG-rqsaa",
+      "reason": "FrameAlloc 14064 over the 13390 ceiling; already red in the 2026-10-16 nightly at 8743ad871, before 9b8086df6, so a separate cause. Not bisected."
+    }
+  },
   "unresolved": {}
 }

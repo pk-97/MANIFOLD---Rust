@@ -14,7 +14,6 @@ use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::Project;
-use manifold_core::video::VideoClip;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
 use manifold_editing::commands::layer::AddLayerCommand;
@@ -128,8 +127,6 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
 
 // ── Constants — Unity ProjectIOService lines 25-28 ──────────────────
 
-const FILE_DROP_DEFAULT_DURATION_BEATS: f32 = 4.0;
-const FILE_DROP_MIN_DURATION_BEATS: f32 = 0.125;
 pub(crate) const LAST_OPENED_PROJECT_PREF_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
 /// Pref key for the recent-projects list (JSON array of absolute paths,
 /// most-recent first). Drives the File → Open Recent submenu.
@@ -622,10 +619,6 @@ pub struct ProjectIOService {
     /// [`MAX_RECENT_PROJECTS`]. Persisted as a JSON array under
     /// [`RECENT_PROJECTS_PREF_KEY`]; drives the File → Open Recent submenu.
     recent_projects: Vec<String>,
-
-    /// Preview metadata cache for file drop duration estimation.
-    /// Unity: fileDropPreviewDurationSecondsByPath (line 42).
-    file_drop_preview_duration_seconds: std::collections::HashMap<String, f32>,
 }
 
 impl ProjectIOService {
@@ -650,7 +643,6 @@ impl ProjectIOService {
         Self {
             last_opened_project_path,
             recent_projects,
-            file_drop_preview_duration_seconds: std::collections::HashMap::new(),
         }
     }
 
@@ -995,8 +987,9 @@ impl ProjectIOService {
 
     // ── File Drag-and-Drop ──────────────────────────────────────────
 
-    /// Unity ProjectIOService.ProcessDroppedFiles (lines 246-326).
-    /// Processes dropped video/MIDI files at a given beat and layer.
+    /// Processes dropped MIDI and audio files at a given beat and layer.
+    /// Video files take `app_lifecycle::start_video_import` instead, the one
+    /// path that delivers their library entries to the content thread.
     pub fn process_dropped_files(
         &mut self,
         file_paths: &[PathBuf],
@@ -1004,7 +997,6 @@ impl ProjectIOService {
         drop_layer_index: i32,
         join_audio_layer: Option<manifold_core::LayerId>,
         project: &mut Project,
-        seconds_per_beat: f32,
     ) -> ProjectIOAction {
         if file_paths.is_empty() {
             return ProjectIOAction::default();
@@ -1023,117 +1015,6 @@ impl ProjectIOService {
                     self.process_dropped_midi_file(fp, drop_beat, drop_layer_index, project);
                 action.record_commands.extend(midi_action.record_commands);
             }
-        }
-
-        // Process video files (Unity lines 261-326)
-        let mut placement_beat = drop_beat;
-        let mut imported_count = 0;
-        let mut drop_commands: Vec<Box<dyn Command>> = Vec::new();
-
-        for raw_path in file_paths {
-            let file_path = match resolve_dropped_file_path(raw_path) {
-                Some(fp) => fp,
-                None => continue,
-            };
-            if !file_path.exists() {
-                continue;
-            }
-            if is_supported_midi_extension(&file_path) {
-                continue;
-            }
-            if !is_supported_video_extension(&file_path) {
-                continue;
-            }
-
-            let file_name = file_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Untitled".to_string());
-
-            let file_path_str = file_path.to_string_lossy().into_owned();
-
-            // Check if video clip already exists in library (Unity lines 278-293)
-            let existing_id = project
-                .video_library
-                .clips
-                .iter()
-                .find(|vc| vc.file_path == file_path_str)
-                .map(|vc| vc.id.clone());
-
-            let video_clip_id = if let Some(id) = existing_id {
-                id
-            } else {
-                let file_size = std::fs::metadata(&file_path)
-                    .map(|m| m.len() as i64)
-                    .unwrap_or(0);
-                let last_modified = std::fs::metadata(&file_path)
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-
-                let video_clip = VideoClip {
-                    id: manifold_core::short_id(),
-                    file_path: file_path_str.clone(),
-                    relative_file_path: None,
-                    file_name: file_name.clone(),
-                    duration: 0.0,
-                    resolution_width: 0,
-                    resolution_height: 0,
-                    file_size,
-                    last_modified_ticks: last_modified,
-                };
-                let id = video_clip.id.clone();
-                project.video_library.add_clip(video_clip);
-                id
-            };
-
-            // Ensure enough layers exist (Unity lines 295-296)
-            while (project.timeline.layers.len() as i32) <= drop_layer_index {
-                let name = format!("Layer {}", project.timeline.layers.len());
-                project.timeline.add_layer(
-                    &name,
-                    manifold_core::types::LayerType::Video,
-                    PresetTypeId::NONE,
-                );
-            }
-
-            let duration_beats = self.get_clip_duration_beats(
-                &video_clip_id,
-                &file_path_str,
-                project,
-                seconds_per_beat,
-            );
-
-            // Create timeline clip (Unity lines 301-307)
-            let drop_layer_id = project
-                .timeline
-                .layers
-                .get(drop_layer_index as usize)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
-            let timeline_clip = TimelineClip {
-                video_clip_id: video_clip_id.clone(),
-                layer_id: drop_layer_id.clone(),
-                start_beat: manifold_core::Beats::from_f32(placement_beat),
-                duration_beats: manifold_core::Beats::from_f32(duration_beats),
-                in_point: manifold_core::Seconds::ZERO,
-                generator_type: PresetTypeId::NONE,
-                ..TimelineClip::default()
-            };
-
-            // AddClipCommand enforces non-overlap internally.
-            let layer_idx = drop_layer_index as usize;
-            if layer_idx < project.timeline.layers.len() {
-                let mut add_cmd =
-                    AddClipCommand::new(timeline_clip, drop_layer_id);
-                add_cmd.execute(project);
-                drop_commands.push(Box::new(add_cmd));
-            }
-
-            placement_beat += duration_beats;
-            imported_count += 1;
         }
 
         // Process audio files (Audio Layer feature, docs/AUDIO_LAYER_DESIGN.md section 6).
@@ -1224,28 +1105,6 @@ impl ProjectIOService {
             );
         }
 
-        if imported_count > 0 {
-            let description = if imported_count == 1 {
-                "Drop clip".to_string()
-            } else {
-                "Drop clips".to_string()
-            };
-
-            if drop_commands.len() == 1 {
-                action.record_commands.push(drop_commands.remove(0));
-            } else {
-                action
-                    .record_commands
-                    .push(Box::new(CompositeCommand::new(drop_commands, description)));
-            }
-            log::info!(
-                "[ProjectIO] Dropped {} file(s) at beat {:.2}, layer {}",
-                imported_count,
-                drop_beat,
-                drop_layer_index
-            );
-        }
-
         action
     }
 
@@ -1291,40 +1150,6 @@ impl ProjectIOService {
         } else {
             ProjectIOAction::default()
         }
-    }
-
-    /// Unity ProjectIOService.GetClipDurationBeats (lines 328-349).
-    fn get_clip_duration_beats(
-        &self,
-        video_clip_id: &str,
-        file_path: &str,
-        project: &Project,
-        seconds_per_beat: f32,
-    ) -> f32 {
-        let duration = project
-            .video_library
-            .clips
-            .iter()
-            .find(|vc| vc.id == video_clip_id)
-            .map(|vc| vc.duration)
-            .unwrap_or(0.0);
-
-        if duration <= 0.0 {
-            // Try preview metadata cache (Unity lines 332-339)
-            if let Some(&preview_seconds) = self.file_drop_preview_duration_seconds.get(file_path)
-                && preview_seconds > 0.0
-                && seconds_per_beat > 0.0
-            {
-                return (preview_seconds / seconds_per_beat).max(FILE_DROP_MIN_DURATION_BEATS);
-            }
-            return FILE_DROP_DEFAULT_DURATION_BEATS;
-        }
-
-        if seconds_per_beat <= 0.0 {
-            return FILE_DROP_DEFAULT_DURATION_BEATS;
-        }
-
-        (duration / seconds_per_beat).max(FILE_DROP_MIN_DURATION_BEATS)
     }
 
     /// Process a project file drop (routes through shared open_project_from_path).
@@ -1535,42 +1360,6 @@ mod tests {
             audio_source_duration("/no/such/file.wav"),
             manifold_core::Seconds::ZERO
         );
-    }
-
-    #[test]
-    fn dropped_video_enforces_non_overlap_immediately() {
-        let temp_path =
-            std::env::temp_dir().join(format!("manifold-drop-{}.mp4", std::process::id()));
-        std::fs::write(&temp_path, b"test").unwrap();
-
-        let prefs = UserPrefs::for_test();
-        let mut service = ProjectIOService::new(&prefs);
-        let mut project = Project::default();
-        project.settings.bpm = Bpm(120.0);
-        project
-            .timeline
-            .insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
-        project.timeline.layers[0].restore_clip(TimelineClip {
-            video_clip_id: "existing".into(),
-            start_beat: manifold_core::Beats::from_f32(0.0),
-            duration_beats: manifold_core::Beats::from_f32(4.0),
-            ..TimelineClip::default()
-        });
-
-        let action = service.process_dropped_files(
-            std::slice::from_ref(&temp_path),
-            0.0,
-            0,
-            None,
-            &mut project,
-            0.5,
-        );
-
-        assert!(!action.record_commands.is_empty());
-        assert_eq!(project.timeline.layers[0].clips.len(), 1);
-        assert!(!project.timeline.layers[0].has_overlapping_clips());
-
-        let _ = std::fs::remove_file(temp_path);
     }
 
     // ── BUG-063 — surface silent load-repairs (PROJECT_FILE_INTEGRITY_DESIGN section 3.6 P3) ──

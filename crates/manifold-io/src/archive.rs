@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::manifest::{ProjectInfo, ProjectManifest, SnapshotEntry};
+use crate::manifest::{ProjectManifest, SnapshotEntry};
 
 /// V2 project archive constants.
 /// Port of C# ProjectArchive.cs lines 19-22.
@@ -76,23 +76,38 @@ pub fn save_v2_archive(
     // Compute hash (Unity line 149)
     let hash = compute_hash(project_bytes);
 
-    // Read existing manifest if file exists and is V2
+    // Read the existing archive's manifest and current project.json.
     let mut manifest: Option<ProjectManifest> = None;
     let mut previous_hash: Option<String> = None;
     let mut previous_project_bytes: Option<Vec<u8>> = None;
+    let existing_archive = Path::new(path).exists() && is_zip_archive(path);
 
-    if Path::new(path).exists() && is_v2_archive(path) {
-        manifest = read_manifest(path);
-        previous_hash = manifest.as_ref().map(|m| m.current_hash.clone());
+    if existing_archive {
+        match read_manifest(path) {
+            Some(existing) => {
+                previous_hash = Some(existing.current_hash.clone());
 
-        // Dedup: if nothing changed, skip the write (Unity lines 153-160)
-        if previous_hash.as_deref() == Some(&hash) {
-            log::info!("[ProjectArchive] No changes detected, skipping save");
-            return Ok(true);
+                // Dedup: if nothing changed, skip the write (Unity lines 153-160)
+                if previous_hash.as_deref() == Some(&hash) {
+                    log::info!("[ProjectArchive] No changes detected, skipping save");
+                    return Ok(true);
+                }
+                manifest = Some(existing);
+                previous_project_bytes = read_entry_bytes(path, PROJECT_ENTRY);
+            }
+            None => {
+                // An unreadable manifest must never empty the history: the
+                // snapshots are still in the zip, so rebuild the index from
+                // them. The hash of project.json is the manifest's own
+                // current_hash by construction.
+                previous_project_bytes = read_entry_bytes(path, PROJECT_ENTRY);
+                previous_hash = previous_project_bytes.as_deref().map(compute_hash);
+                log::warn!(
+                    "[ProjectArchive] Unreadable manifest in {path}; rebuilding snapshot history from the archive"
+                );
+                manifest = Some(recover_manifest(path, previous_hash.as_deref(), &hash));
+            }
         }
-
-        // Read previous project.json for history
-        previous_project_bytes = read_entry_bytes(path, PROJECT_ENTRY);
     }
 
     let mut manifest = manifest.unwrap_or_default();
@@ -150,7 +165,7 @@ pub fn save_v2_archive(
         // Copy existing history entries from old archive (Unity lines 186-190).
         // Entries pruned out of the manifest above are dropped here, keeping
         // the archive's byte size bounded by the auto-save cap.
-        let copied_entries = if Path::new(path).exists() && is_v2_archive(path) {
+        let copied_entries = if existing_archive {
             copy_history_entries(path, &mut zip, &live_hashes)?
         } else {
             HashSet::new()
@@ -161,6 +176,7 @@ pub fn save_v2_archive(
         // or if the previous save was itself just pruned out of the manifest.
         if let (Some(prev_bytes), Some(prev_hash)) = (&previous_project_bytes, &previous_hash)
             && !prev_hash.is_empty()
+            && *prev_hash != hash
             && live_hashes.contains(prev_hash.as_str())
         {
             let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, prev_hash);
@@ -257,32 +273,6 @@ pub fn read_history_snapshot(path: &str, hash: &str) -> Result<String, String> {
     Ok(json)
 }
 
-/// Check if a file is a valid V2 project file. Fast — reads manifest only.
-/// Port of C# ProjectArchive.IsValidProjectFile (lines 284-288).
-pub fn is_valid_project_file(path: &str) -> bool {
-    match read_manifest(path) {
-        Some(manifest) => manifest.format_version >= 2,
-        None => false,
-    }
-}
-
-/// Get project info without fully loading. Fast — reads manifest only.
-/// Port of C# ProjectArchive.GetProjectInfo (lines 293-307).
-pub fn get_project_info(path: &str) -> Option<ProjectInfo> {
-    let manifest = read_manifest(path)?;
-
-    let metadata = std::fs::metadata(path).ok()?;
-    let last_modified = metadata.modified().ok()?;
-
-    Some(ProjectInfo {
-        project_name: manifest.name,
-        project_version: format!("V{}", manifest.format_version),
-        file_path: path.to_string(),
-        file_size: metadata.len(),
-        last_modified,
-    })
-}
-
 // ──────────────────────────────────────
 // INTERNAL HELPERS
 // ──────────────────────────────────────
@@ -334,6 +324,60 @@ fn read_entry_bytes(archive_path: &str, entry_name: &str) -> Option<Vec<u8>> {
     let mut data = Vec::new();
     entry.read_to_end(&mut data).ok()?;
     Some(data)
+}
+
+/// True when the file at `path` opens as a zip, with or without a readable
+/// manifest.
+fn is_zip_archive(path: &str) -> bool {
+    std::fs::read(path)
+        .ok()
+        .is_some_and(|bytes| ZipArchive::new(Cursor::new(bytes)).is_ok())
+}
+
+/// Rebuild a manifest for an archive whose manifest.json is unreadable, from
+/// the snapshots the zip still holds. Newest first: the replaced
+/// project.json, then the history blobs in reverse write order (each save
+/// appends its blob after the copied older ones). Labels, timestamps and the
+/// auto flag lived only in the lost manifest, so recovered entries count as
+/// manual saves and are never pruned.
+fn recover_manifest(
+    path: &str,
+    previous_hash: Option<&str>,
+    current_hash: &str,
+) -> ProjectManifest {
+    let mut hashes: Vec<String> = Vec::new();
+    if let Some(bytes) = std::fs::read(path).ok()
+        && let Ok(archive) = ZipArchive::new(Cursor::new(bytes))
+    {
+        for name in archive.file_names() {
+            if let Some(entry_hash) = name
+                .strip_prefix(HISTORY_FOLDER)
+                .and_then(|s| s.strip_suffix(".json.gz"))
+            {
+                hashes.push(entry_hash.to_string());
+            }
+        }
+    }
+    hashes.reverse();
+    if let Some(prev) = previous_hash {
+        hashes.insert(0, prev.to_string());
+    }
+
+    let mut seen = HashSet::new();
+    let history = hashes
+        .into_iter()
+        .filter(|h| !h.is_empty() && h != current_hash && seen.insert(h.clone()))
+        .map(|hash| SnapshotEntry {
+            hash,
+            timestamp: String::new(),
+            label: None,
+            is_auto: false,
+        })
+        .collect();
+    ProjectManifest {
+        history,
+        ..Default::default()
+    }
 }
 
 /// Copy history/ entries from source archive to destination zip writer,

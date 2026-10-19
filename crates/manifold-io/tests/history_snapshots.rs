@@ -196,3 +196,69 @@ fn read_history_snapshot_rejects_unknown_hash() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// Rewrites the archive at `path` with its manifest entry replaced by
+/// `manifest_bytes`, every other entry copied byte for byte.
+fn replace_manifest(path: &Path, manifest_bytes: &[u8]) {
+    use std::io::{Read, Write};
+    let bytes = std::fs::read(path).expect("read archive");
+    let mut src = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open archive");
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored);
+    for i in 0..src.len() {
+        let mut entry = src.by_index(i).expect("entry");
+        let name = entry.name().to_string();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).expect("entry bytes");
+        out.start_file(&name, opts).expect("start entry");
+        if name == "manifest.json" {
+            out.write_all(manifest_bytes).expect("write manifest");
+        } else {
+            out.write_all(&data).expect("write entry");
+        }
+    }
+    let written = out.finish().expect("finish archive").into_inner();
+    std::fs::write(path, written).expect("write archive");
+}
+
+/// Census bug 3 (a save can wipe the history): saving over a show whose
+/// manifest is unreadable must keep every snapshot the old archive holds,
+/// including the state the save replaces.
+#[test]
+fn save_over_damaged_manifest_keeps_snapshot_history() {
+    let path = temp_archive_path("damaged-manifest");
+    let _ = std::fs::remove_file(&path);
+
+    let mut project = Project::default();
+    let mut hashes = Vec::new();
+    for marker in [1.0, 2.0, 3.0] {
+        project.saved_playhead_time = marker;
+        save(&mut project, &path, false);
+        let manifest = archive::read_manifest(&path.to_string_lossy()).expect("manifest");
+        hashes.push(manifest.current_hash.clone());
+    }
+
+    replace_manifest(&path, b"{ this is not json");
+    assert!(archive::read_manifest(&path.to_string_lossy()).is_none());
+
+    project.saved_playhead_time = 4.0;
+    save(&mut project, &path, false);
+
+    let manifest =
+        archive::read_manifest(&path.to_string_lossy()).expect("save repairs the manifest");
+    let listed: Vec<&str> = manifest.history.iter().map(|e| e.hash.as_str()).collect();
+    for (marker, hash) in [1.0, 2.0, 3.0].into_iter().zip(&hashes) {
+        assert!(
+            listed.contains(&hash.as_str()),
+            "snapshot {marker} must stay listed, history is {listed:?}"
+        );
+        let snap = loader::load_project_snapshot(&path, hash)
+            .unwrap_or_else(|e| panic!("snapshot {marker} must stay loadable: {e:?}"));
+        assert_eq!(snap.saved_playhead_time, marker);
+    }
+    let current = loader::load_project(&path).expect("current project loads");
+    assert_eq!(current.saved_playhead_time, 4.0);
+
+    let _ = std::fs::remove_file(&path);
+}

@@ -94,25 +94,6 @@ impl VideoLibrary {
         self.clip_lookup.clear();
     }
 
-    /// Find a clip by file path.
-    /// Unity VideoLibrary.cs FindClipByPath lines 259-269.
-    pub fn find_clip_by_path(&self, path: &str) -> Option<&VideoClip> {
-        self.clips.iter().find(|c| c.file_path == path)
-    }
-
-    /// Remove clips whose files no longer exist.
-    /// Unity VideoLibrary.cs RemoveMissingClips lines 292-308.
-    pub fn remove_missing_clips(&mut self) -> usize {
-        let before = self.clips.len();
-        self.clips
-            .retain(|clip| clip.file_path.is_empty() || Path::new(&clip.file_path).exists());
-        let removed = before - self.clips.len();
-        if removed > 0 {
-            self.rebuild_lookup();
-        }
-        removed
-    }
-
     /// Validate all clips in the library. Returns paths of missing files.
     /// Port of C# VideoLibrary.ValidateClips() (lines 274-287).
     pub fn validate_clips(&self) -> ValidationResult {

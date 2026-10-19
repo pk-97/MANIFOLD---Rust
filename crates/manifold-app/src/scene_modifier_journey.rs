@@ -286,7 +286,7 @@ pub(super) fn warm_project(
     state_tx: &StateTx,
 ) {
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
-    ct.run_warmup(&command_rx, &command_tx, state_tx);
+    ct.run_warmup(&command_rx, state_tx);
 }
 
 fn capture_output_impl(

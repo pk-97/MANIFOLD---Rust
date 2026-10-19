@@ -2813,11 +2813,6 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
             applied: |p| p.settings.macro_bank.slots[0].label == "Wobble",
         },
         SetterCase {
-            name: "rescale beats for bpm",
-            build: |p| Box::new(RescaleBeatsForBpmChangeCommand::build(p, Bpm(120.0), Bpm(60.0)).expect("clips to rescale")),
-            applied: |p| p.timeline.layers[0].clips.iter().any(|c| c.start_beat == Beats(2.0)),
-        },
-        SetterCase {
             name: "toggle param expose",
             build: |p| Box::new(ToggleParamExposeCommand::new(push_master_bloom(p), "amount".into(), false)),
             applied: |_| true,

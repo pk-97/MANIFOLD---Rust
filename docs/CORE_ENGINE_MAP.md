@@ -76,7 +76,7 @@ one of those happened.
 |---|---|
 | `units.rs` | `Beats`(f64) / `Seconds`(f64) / `Bpm`(f32) newtypes. The engine's beat accumulator is f64; several boundaries still round-trip f32 (section 13.6). |
 | `tempo.rs` | `TempoMap` (sorted points, step-change BPM) + `TempoMapConverter` (piecewise beat↔seconds integration, f64 variant for the per-frame path, BPM clamped 20–300). Linear walks (section 13.9). |
-| `timeline.rs` | `Timeline`: layers, self-healing clip-id lookup cache, `enforce_tree_order` (pre-order DFS group invariant), group-aware `get_active_clips_at_beat_ref` (mute/solo are presentational, not membership — D2), markers. |
+| `timeline.rs` | `Timeline`: layers, self-healing clip-id lookup cache, `enforce_tree_order` (pre-order DFS group invariant), group-aware `get_clips_in_beat_window_ref` (mute/solo are presentational, not membership — D2), markers. |
 | `layer.rs` | `Layer`: sorted clip caches, **`enforce_non_overlap_for`** — DaVinci-style write-time overlap resolution (delete / trim-start with in-point advance / trim-end / split), returning `OverlapAction`s for undo. |
 | `clip.rs` | `TimelineClip`: beat-domain position/duration, `in_point` (Seconds), loop fields, `recorded_bpm`, absolute-tick provenance. |
 | `math.rs` | `BeatQuantizer`: BPM step 0.01, beat step 0.0001, time step 0.0001 — save-file jitter suppression. |
@@ -172,8 +172,7 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
   re-derived from time.
 
 **For the instrument:** beats are the contract. A clip drawn at bar 33 plays at
-bar 33 under any tempo automation; a BPM change rescales the timeline through
-an undoable command (`RescaleBeatsForBpmChangeCommand`), never silently.
+bar 33 under any tempo automation; a BPM change keeps every clip on its bar.
 
 ## 5. `sync_clips_to_time` — the sole authority
 

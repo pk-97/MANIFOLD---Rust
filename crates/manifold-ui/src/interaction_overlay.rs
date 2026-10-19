@@ -49,25 +49,18 @@ fn select_region_to(
         return;
     }
 
-    // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback
+    // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback.
+    // A cursor or region whose layers were deleted anchors nothing, never layer 0.
     let anchor: Option<(Beats, usize)> = if ui_state.has_insert_cursor() {
         // Resolve insert cursor layer_id back to an index for region computation
-        let anchor_idx = ui_state
+        ui_state
             .insert_cursor_layer_id()
             .and_then(|id| {
                 (0..layer_count).find(|&i| host.layer_id_at_index(i).as_ref() == Some(id))
             })
-            .unwrap_or(0);
-        Some((
-            ui_state.insert_cursor_beat().unwrap_or(Beats::ZERO),
-            anchor_idx,
-        ))
+            .map(|anchor_idx| (ui_state.insert_cursor_beat().unwrap_or(Beats::ZERO), anchor_idx))
     } else if let Some(r) = ui_state.current_region() {
-        let start_idx = r
-            .layer_index_range(host.layers())
-            .map(|(lo, _)| lo)
-            .unwrap_or(0);
-        Some((r.start_beat, start_idx))
+        r.layer_index_range(host.layers()).map(|(lo, _)| (r.start_beat, lo))
     } else if let Some(clip_id) = ui_state.primary_selected_clip_id().cloned() {
         host.find_clip_by_id(&clip_id)
             .map(|c| (c.start_beat, c.layer_index))
@@ -4214,6 +4207,22 @@ mod b4_group_move_tests {
             panel.beat_to_pixel(Beats::from_f32(beat_center)),
             panel.tracks_rect().y + 70.0,
         )
+    }
+
+    /// Census bug 19's class (a dead region becomes layer 0): once both edge
+    /// layers of the region are deleted it anchors nothing, so Shift+click
+    /// places an insert cursor instead of a region reaching layer 0.
+    #[test]
+    fn shift_click_after_region_edge_layers_are_deleted_does_not_anchor_on_layer_0() {
+        let before = TestHost::new(&["a", "b", "c", "d"]);
+        let mut ui_state = UIState::new();
+        ui_state.set_region(Beats(2.0), Beats(6.0), 1, 2, before.layers());
+        let after = TestHost::new(&["a", "d"]);
+
+        select_region_to(Beats(8.0), 1, &mut ui_state, &after);
+
+        assert!(ui_state.current_region().is_none(), "region {:?}", ui_state.current_region());
+        assert_eq!(ui_state.insert_cursor_layer_id(), Some(&LayerId::new("d")));
     }
 
     #[test]

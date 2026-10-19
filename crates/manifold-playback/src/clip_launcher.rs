@@ -64,10 +64,6 @@ impl ClipLauncher {
         }
     }
 
-    pub fn set_randomize_in_point(&mut self, value: bool) {
-        self.randomize_in_point = value;
-    }
-
     pub fn set_show_debug_logs(&mut self, value: bool) {
         self.show_debug_logs = value;
     }

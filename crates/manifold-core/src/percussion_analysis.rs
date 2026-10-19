@@ -157,11 +157,6 @@ impl PercussionBeatGrid {
         self.confidence.clamp(0.0, 1.0)
     }
 
-    /// Port of Unity PercussionBeatGrid.OnsetToPeakSeconds property getter.
-    pub fn onset_to_peak_seconds_clamped(&self) -> f32 {
-        self.onset_to_peak_seconds.clamp(0.0, 0.050)
-    }
-
     pub fn has_usable_beats(&self) -> bool {
         self.beat_times_seconds.len() >= 2
     }
@@ -525,19 +520,6 @@ impl PercussionClipBinding {
             layer_index: self.layer_index,
             video_clip_id: Some(resolved_video_clip_id.to_string()),
             generator_type: self.generator_type.clone(),
-            duration_beats: self.duration_beats,
-            minimum_confidence: self.minimum_confidence,
-            target_layer: self.target_layer.clone(),
-        }
-    }
-
-    /// Port of Unity PercussionClipBinding.AsGeneratorBinding().
-    pub fn as_generator_binding(&self, resolved_generator_type: PresetTypeId) -> Self {
-        Self {
-            trigger_type: self.trigger_type,
-            layer_index: self.layer_index,
-            video_clip_id: self.video_clip_id.clone(),
-            generator_type: resolved_generator_type,
             duration_beats: self.duration_beats,
             minimum_confidence: self.minimum_confidence,
             target_layer: self.target_layer.clone(),

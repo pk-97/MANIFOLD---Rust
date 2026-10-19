@@ -512,8 +512,8 @@ impl Layer {
     /// end edge shows whatever follows (the next clip, lower layers, or black).
     /// No boundary tolerance — the picture must agree with the timeline.
     ///
-    /// IMPORTANT: Caches must be up-to-date before calling. Either call
-    /// `ensure_sorted()` first, or use `collect_active_clips_at_beat_mut()`.
+    /// IMPORTANT: Caches must be up-to-date before calling; call
+    /// `ensure_sorted()` first.
     pub fn collect_active_clips_at_beat(&self, beat: Beats, results: &mut Vec<usize>) {
         self.collect_clips_in_beat_window(beat, beat, results);
     }
@@ -630,17 +630,6 @@ impl Layer {
                     .partial_cmp(&b.start_beat)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-    }
-
-    /// Convenience: ensure caches + collect active clips in one &mut self call.
-    /// Use when you don't need to split the borrow.
-    pub fn collect_active_clips_at_beat_mut(
-        &mut self,
-        beat: Beats,
-        results: &mut Vec<usize>,
-    ) {
-        self.ensure_clip_ordering_caches();
-        self.collect_active_clips_at_beat(beat, results);
     }
 
     /// Add a clip with DaVinci-style overlap enforcement.
@@ -799,10 +788,6 @@ impl Layer {
         self.clips.iter_mut().find(|c| c.id == clip_id)
     }
 
-    pub fn find_clip_index(&self, clip_id: &str) -> Option<usize> {
-        self.clips.iter().position(|c| c.id == clip_id)
-    }
-
     /// Check whether any clips on this layer overlap in beat range.
     /// O(n log n) — sorts a temporary copy by start_beat, then sweeps.
     pub fn has_overlapping_clips(&self) -> bool {
@@ -838,16 +823,6 @@ impl Layer {
             self.effect_groups = Some(Vec::new());
         }
         self.effect_groups.as_mut().unwrap()
-    }
-
-    /// Read a generator param value at card position `index` (returns 0.0 if
-    /// out of range or no gen_params). Positional read over the manifest's
-    /// card order — a transient boundary view, not a stored index.
-    pub fn get_gen_param(&self, index: usize) -> f32 {
-        self.gen_params
-            .as_ref()
-            .and_then(|gp| gp.params.iter().nth(index).map(|p| p.value))
-            .unwrap_or(0.0)
     }
 
     /// Snapshot current generator param values (effective floats, card order).
@@ -951,11 +926,6 @@ impl Layer {
         gp.restore(old_type.clone(), params, drivers, envelopes);
     }
 
-    /// Set MIDI note. Unity Layer.cs lines 264-265.
-    pub fn set_midi_note(&mut self, v: i32) {
-        self.midi_note = if v < 0 { -1 } else { v.clamp(0, 127) };
-    }
-
     /// Set MIDI channel. Unity Layer.cs line 271.
     pub fn set_midi_channel(&mut self, v: i32) {
         self.midi_channel = if v < 0 { -1 } else { v.clamp(0, 15) };
@@ -972,12 +942,6 @@ impl Layer {
     /// Set the MIDI trigger mode (single-note vs all-notes).
     pub fn set_midi_trigger_mode(&mut self, mode: MidiTriggerMode) {
         self.midi_trigger_mode = mode;
-    }
-
-    /// Clear all clips. Unity Layer.cs line 445.
-    pub fn clear_clips(&mut self) {
-        self.clips.clear();
-        self.mark_clips_unsorted();
     }
 
     /// Deep-clone this layer with all nested IDs regenerated.
@@ -1049,19 +1013,6 @@ impl Layer {
         }
 
         cloned
-    }
-
-    /// Set a generator param base value at card position `index`. Resolves the
-    /// position to its id off the manifest (a transient boundary view) and
-    /// routes through the unified id-keyed
-    /// [`crate::effects::PresetInstance::set_base_param`].
-    pub fn set_gen_param_base(&mut self, index: usize, value: f32) {
-        if let Some(gp) = &mut self.gen_params {
-            let id = gp.params.iter().nth(index).map(|p| p.id().to_string());
-            if let Some(id) = id {
-                gp.set_base_param(&id, value);
-            }
-        }
     }
 }
 

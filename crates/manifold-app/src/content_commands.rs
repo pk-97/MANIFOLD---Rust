@@ -12,7 +12,7 @@ use manifold_playback::renderer::ClipRenderer;
 use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, StateTx};
 use crate::content_thread::ContentThread;
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 
 /// Measurements from the shared production project installation and preparation path.
 #[derive(Debug, serde::Serialize)]
@@ -221,7 +221,6 @@ impl ContentThread {
         &mut self,
         project: Box<manifold_core::project::Project>,
         cmd_rx: &Receiver<ContentCommand>,
-        cmd_tx: &Sender<ContentCommand>,
         state_tx: &StateTx,
     ) -> ProjectLoadReport {
         let start = std::time::Instant::now();
@@ -231,7 +230,7 @@ impl ContentThread {
             .filter(|event| Some(event.sequence) != previous_diagnostic)
             .map(|event| event.message.clone());
         let install_ms = start.elapsed().as_secs_f64() * 1000.0;
-        let warmup = self.run_warmup(cmd_rx, cmd_tx, state_tx);
+        let warmup = self.run_warmup(cmd_rx, state_tx);
         // Loading is stopped transport time, not a giant first playback tick.
         // Preserve the application clock used by sync; reset only frame pacing.
         self.timer.resume_after_load();
@@ -245,7 +244,6 @@ impl ContentThread {
     pub(crate) fn run_warmup(
         &mut self,
         cmd_rx: &Receiver<ContentCommand>,
-        cmd_tx: &Sender<ContentCommand>,
         state_tx: &StateTx,
     ) -> WarmupReport {
         let start = std::time::Instant::now();
@@ -333,23 +331,25 @@ impl ContentThread {
             if manifold_gpu::gpu_fault::fault_count() != initial_gpu_faults {
                 crate::abort_gpu_work("GPU failure observed during warmup; stopping remaining layers");
             }
-            // Abort early on shutdown so a quit during a long warm doesn't hang.
-            match cmd_rx.try_recv() {
-                Ok(ContentCommand::Shutdown) => {
-                    log::info!("[ContentThread] Shutdown during warmup, aborting");
-                    // Re-queue — consuming it here would swallow the quit:
-                    // the main loop must still see it after load unwinds.
-                    let _ = cmd_tx.send(ContentCommand::Shutdown);
-                    report.interrupted = true;
-                    report.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    return report;
+            // Abort early on shutdown so a quit during a long warm doesn't
+            // hang. Everything taken off the channel is held back in arrival
+            // order: other commands address the new project and run after
+            // load completes, and the main loop still sees the quit.
+            // A quit already held (sent before this load began) counts too.
+            let mut shutdown = self.quit_is_held();
+            while !shutdown && let Ok(cmd) = cmd_rx.try_recv() {
+                shutdown = matches!(cmd, ContentCommand::Shutdown);
+                if shutdown {
+                    self.held_commands.push_back(cmd);
+                } else {
+                    self.hold_command(cmd);
                 }
-                Ok(cmd) => {
-                    // Other commands address the new project and should run
-                    // after load completes — put them back on the queue.
-                    let _ = cmd_tx.send(cmd);
-                }
-                Err(_) => {}
+            }
+            if shutdown {
+                log::info!("[ContentThread] Shutdown during warmup, aborting");
+                report.interrupted = true;
+                report.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                return report;
             }
 
             if run.exhausted(std::time::Instant::now(), 0).is_some() {
@@ -2223,5 +2223,51 @@ mod warmup_tests {
         assert!(report.preparation_failed);
         assert!(report.install_failed);
         assert!(report.budget_exhausted);
+    }
+
+    /// Census bug 11 (opening a project shuffles queued commands): commands
+    /// that arrive while a show opens run after it, in arrival order.
+    #[test]
+    fn commands_queued_during_warmup_keep_arrival_order() {
+        use crate::content_command::ContentCommand;
+        use manifold_core::layer::Layer;
+        use manifold_core::project::Project;
+        use manifold_core::PresetTypeId;
+
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator("Gen".into(), PresetTypeId::PLASMA, 0));
+        let mut thread = crate::headless_harness::headless_content_thread(project, 64, 64);
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
+
+        cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
+        cmd_tx.send(ContentCommand::SetSdrPreview(false)).expect("send");
+        let report = thread.run_warmup(&cmd_rx, &state_tx);
+        assert_eq!(report.total_layers, 1, "the generator layer warms");
+        assert!(!report.interrupted);
+
+        assert!(!thread.drain_commands(&cmd_rx, &state_tx), "no shutdown");
+        assert!(!thread.content_pipeline.sdr_preview(), "the later command must win");
+    }
+
+    /// A quit already held (behind the show being opened) stops the warmup
+    /// at once instead of waiting for every layer.
+    #[test]
+    fn a_held_quit_interrupts_warmup() {
+        use crate::content_command::ContentCommand;
+        use manifold_core::layer::Layer;
+        use manifold_core::project::Project;
+        use manifold_core::PresetTypeId;
+
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator("Gen".into(), PresetTypeId::PLASMA, 0));
+        let mut thread = crate::headless_harness::headless_content_thread(project, 64, 64);
+        let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
+        thread.held_commands.push_back(ContentCommand::Shutdown);
+
+        let report = thread.run_warmup(&cmd_rx, &state_tx);
+        assert!(report.interrupted, "the held quit interrupts the warmup");
+        assert!(matches!(thread.held_commands.front(), Some(ContentCommand::Shutdown)), "the quit stays queued");
     }
 }

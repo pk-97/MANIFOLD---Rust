@@ -117,18 +117,6 @@ impl SyncArbiter {
         }
     }
 
-    pub fn current_authority(project: Option<&Project>) -> ClockAuthority {
-        project
-            .map(|p| p.settings.clock_authority)
-            .unwrap_or(ClockAuthority::Internal)
-    }
-
-    pub fn set_manifold_owns(&mut self) {
-        self.manifold_owns_playback = true;
-        // Record wall-clock time so clear_ownership can enforce the grace period.
-        // Uses owns_set_time field; caller must have called update_time() this frame.
-    }
-
     /// Set manifold_owns with a wall-clock timestamp for grace period tracking.
     pub fn set_manifold_owns_at(&mut self, now: Seconds) {
         self.manifold_owns_playback = true;

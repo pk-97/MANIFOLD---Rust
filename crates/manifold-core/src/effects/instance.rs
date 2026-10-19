@@ -502,10 +502,6 @@ impl PresetInstance {
         self.drivers.as_ref().is_some_and(|d| !d.is_empty())
     }
 
-    pub fn clone_deep(&self) -> Self {
-        self.clone()
-    }
-
     /// Assign a fresh EffectId (used when deep-cloning a layer or effect chain).
     pub fn regenerate_id(&mut self) {
         self.id = EffectId::new(crate::math::short_id());
@@ -1445,11 +1441,6 @@ impl PresetInstance {
         self.envelopes.as_ref()?.iter().find(|e| e.param_id == param_id)
     }
 
-    /// No-alloc check.
-    pub fn has_envelopes(&self) -> bool {
-        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
-    }
-
     /// The instance's envelope list, auto-created on first access.
     /// Envelope-home unification: effect and generator envelopes both live
     /// here, keyed by `param_id` (no `target_effect_type` — the instance the
@@ -1470,11 +1461,6 @@ impl PresetInstance {
             self.automation_lanes = Some(Vec::new());
         }
         self.automation_lanes.as_mut().unwrap()
-    }
-
-    /// No-alloc check, mirroring [`Self::has_envelopes`] / [`Self::has_audio_mods`].
-    pub fn has_automation_lanes(&self) -> bool {
-        self.automation_lanes.as_ref().is_some_and(|v| !v.is_empty())
     }
 
     /// Reset effective values to base — ONLY for params with active drivers or

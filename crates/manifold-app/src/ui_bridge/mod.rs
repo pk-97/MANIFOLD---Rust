@@ -359,24 +359,18 @@ pub(crate) fn select_region_to_with_project(
         return;
     }
 
+    // A cursor or region whose layers were deleted anchors nothing, never layer 0.
     let anchor: Option<(manifold_core::Beats, usize)> = if selection.has_insert_cursor() {
-        let anchor_idx = selection
+        selection
             .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
-            .unwrap_or(0);
-        Some((
-            selection
-                .insert_cursor_beat()
-                .unwrap_or(manifold_core::Beats::ZERO),
-            anchor_idx,
-        ))
+            .map(|anchor_idx| {
+                (selection.insert_cursor_beat().unwrap_or(manifold_core::Beats::ZERO), anchor_idx)
+            })
     } else if let Some(r) = selection.current_region() {
-        let start_idx = r
-            .layer_index_range(&crate::ui_translate::layers_to_ui(&project.timeline.layers))
-            .map(|(lo, _)| lo)
-            .unwrap_or(0);
-        Some((r.start_beat, start_idx))
+        r.layer_index_range(&crate::ui_translate::layers_to_ui(&project.timeline.layers))
+            .map(|(lo, _)| (r.start_beat, lo))
     } else if let Some(ref clip_id) = selection.primary_selected_clip_id().cloned() {
         project
             .timeline
@@ -732,6 +726,27 @@ mod d2_d3_tests {
     use manifold_core::{Beats, ClipId, Seconds};
     use manifold_editing::service::EditingService;
     use manifold_ui::UIState;
+
+    /// Census bug 19's class (a dead region becomes layer 0), app twin: a
+    /// region whose edge layers were deleted anchors nothing on Shift+click.
+    #[test]
+    fn shift_click_after_region_edge_layers_are_deleted_does_not_anchor_on_layer_0() {
+        let mut project = Project::default();
+        for (i, name) in ["a", "b", "c", "d"].iter().enumerate() {
+            project.timeline.insert_layer(i, Layer::new((*name).into(), LayerType::Video, i as i32));
+        }
+        let mut selection = UIState::new();
+        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
+        selection.set_region(Beats(2.0), Beats(6.0), 1, 2, &ui_layers);
+        project.timeline.remove_layer(2);
+        project.timeline.remove_layer(1);
+        let survivor = project.timeline.layers[1].layer_id.clone();
+
+        select_region_to_with_project(Beats(8.0), 1, &mut selection, &project);
+
+        assert!(selection.current_region().is_none(), "region {:?}", selection.current_region());
+        assert_eq!(selection.insert_cursor_layer_id(), Some(&survivor));
+    }
 
     fn clip(id: &str, start: f64, dur: f64) -> manifold_core::clip::TimelineClip {
         let mut c = TimelineClip::new_video(id.into(), Beats(start), Beats(dur), Seconds::ZERO);

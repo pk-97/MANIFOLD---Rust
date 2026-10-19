@@ -16,12 +16,6 @@ pub const CHANNELS_PER_LED: usize = 3;
 pub const DMX_UNIVERSE_SIZE: usize = 512;
 /// ArtNet packet header size in bytes.
 pub const ARTNET_HEADER_SIZE: usize = 18;
-/// Physical installation: strips per side.
-pub const STRIPS_PER_SIDE: u32 = 4;
-/// ArtNet OpPoll opcode.
-pub const ARTNET_OP_POLL: u16 = 0x2000;
-/// ArtNet protocol version.
-pub const ARTNET_PROTOCOL_VERSION: u16 = 14;
 
 // ─── Enums (exact match: ExternalOutputType.cs) ───
 

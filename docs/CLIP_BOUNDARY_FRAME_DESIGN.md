@@ -15,7 +15,7 @@ Superseded 2026-09-09: the half-frame boundary epsilon (D1/D3, shipped 2026-09-0
 |---|---|---|
 | Clip activity test | `crates/manifold-core/src/clip.rs` `is_active_at_beat` | `beat >= start_beat && beat < end_beat()` — half-open, the one rule. |
 | Timeline active-clip query | `crates/manifold-core/src/layer.rs` | `collect_active_clips_at_beat` — exact half-open, no epsilon. |
-| Timeline query caller | `crates/manifold-playback/src/engine.rs` | `query_active_timeline_clips` calls `get_active_clips_at_beat_ref(beat)`. |
+| Timeline query caller | `crates/manifold-playback/src/engine.rs` | `query_active_timeline_clips` calls `get_clips_in_beat_window_ref`. |
 | Video/media time | `crates/manifold-playback/src/engine.rs` | `compute_video_time` samples `in_point + source_elapsed` at `current_beat`. |
 | Audio clip lookup | `crates/manifold-core/src/layer.rs` | `is_active_at_beat` — exact. |
 | Selection range | `crates/manifold-core/src/selection.rs` | Same half-open test. |

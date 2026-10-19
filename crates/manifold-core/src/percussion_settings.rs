@@ -394,11 +394,6 @@ pub struct PercussionPipelineSettings {
 }
 
 impl PercussionPipelineSettings {
-    /// Port of Unity PercussionPipelineSettings.ResetToDefaults().
-    pub fn reset_to_defaults(&mut self) {
-        *self = Self::default();
-    }
-
     /// Port of Unity PercussionPipelineSettings.BuildImportOptions().
     pub fn build_import_options(
         &self,

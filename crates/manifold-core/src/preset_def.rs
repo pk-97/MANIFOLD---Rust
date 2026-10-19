@@ -32,9 +32,6 @@ pub enum PresetKind {
 }
 
 impl PresetKind {
-    pub fn is_effect(self) -> bool {
-        matches!(self, PresetKind::Effect)
-    }
     pub fn is_generator(self) -> bool {
         matches!(self, PresetKind::Generator)
     }

@@ -117,16 +117,6 @@ impl RecordingProvenance {
         self.tempo_changes.push(change);
     }
 
-    /// Try to get the recorded tempo lane.
-    /// Unity RecordingProvenance.cs TryGetRecordedTempoLane lines 190-201.
-    pub fn try_get_recorded_tempo_lane(&self) -> Option<&[TempoPoint]> {
-        if self.recorded_tempo_lane.is_empty() {
-            None
-        } else {
-            Some(&self.recorded_tempo_lane)
-        }
-    }
-
     /// Whether a recorded tempo lane exists.
     pub fn has_recorded_tempo_lane(&self) -> bool {
         !self.recorded_tempo_lane.is_empty()
@@ -167,107 +157,6 @@ impl RecordingProvenance {
         self.set_recorded_tempo_lane(&points, overwrite);
     }
 
-    /// Try to restore the recorded tempo lane to a target tempo map.
-    /// Unity RecordingProvenance.cs TryRestoreRecordedTempoLane lines 242-265.
-    pub fn try_restore_recorded_tempo_lane(
-        &self,
-        target: &mut TempoMap,
-        fallback_bpm: Bpm,
-    ) -> bool {
-        if !self.has_recorded_tempo_lane() {
-            return false;
-        }
-
-        target.clear();
-        for point in &self.recorded_tempo_lane {
-            target.add_or_replace_point_with_time(
-                point.beat,
-                point.bpm,
-                point.source,
-                0.001,
-                point.recorded_at_seconds,
-            );
-        }
-
-        let beat_zero_source = self.get_source_at_beat(
-            &self.recorded_tempo_lane,
-            Beats::ZERO,
-            TempoPointSource::Recorded,
-        );
-        let source = if beat_zero_source == TempoPointSource::Unknown {
-            TempoPointSource::Recorded
-        } else {
-            beat_zero_source
-        };
-        target.ensure_default_at_beat_zero(fallback_bpm, source);
-
-        true
-    }
-
-    /// Get tempo source at a given beat from a lane.
-    /// Unity RecordingProvenance.cs GetSourceAtBeat lines 267-286.
-    fn get_source_at_beat(
-        &self,
-        lane: &[TempoPoint],
-        beat: Beats,
-        fallback: TempoPointSource,
-    ) -> TempoPointSource {
-        if lane.is_empty() {
-            return fallback;
-        }
-        let mut source = fallback;
-        for point in lane {
-            if point.beat > beat {
-                break;
-            }
-            source = point.source;
-        }
-        source
-    }
-
-    /// Check if the recorded tempo lane is equivalent to a tempo map.
-    /// Unity RecordingProvenance.cs IsRecordedTempoLaneEquivalent lines 288-316.
-    pub fn is_recorded_tempo_lane_equivalent(
-        &self,
-        tempo_map: &mut TempoMap,
-        beat_epsilon: f32,
-        bpm_epsilon: f32,
-    ) -> bool {
-        if !self.has_recorded_tempo_lane() {
-            return tempo_map.points().is_empty();
-        }
-
-        let current_lane = tempo_map.get_sorted_points();
-        if current_lane.len() != self.recorded_tempo_lane.len() {
-            return false;
-        }
-
-        for (i, a) in current_lane.iter().enumerate() {
-            let b = &self.recorded_tempo_lane[i];
-            if (a.beat - b.beat).abs() > Beats::from_f32(beat_epsilon) {
-                return false;
-            }
-            if (a.bpm.0 - b.bpm.0).abs() > bpm_epsilon {
-                return false;
-            }
-            if a.source != b.source {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    /// Try to get the recorded project BPM.
-    /// Unity RecordingProvenance.cs TryGetRecordedProjectBpm lines 318-329.
-    pub fn try_get_recorded_project_bpm(&self) -> Option<Bpm> {
-        if self.has_recorded_project_bpm {
-            Some(Bpm(self.recorded_project_bpm.0.clamp(20.0, 300.0)))
-        } else {
-            None
-        }
-    }
-
     /// Set the recorded project BPM.
     /// Unity RecordingProvenance.cs SetRecordedProjectBpm lines 331-342.
     pub fn set_recorded_project_bpm(
@@ -291,9 +180,5 @@ impl RecordingProvenance {
         self.has_recorded_project_bpm = false;
         self.recorded_project_bpm = Bpm::DEFAULT;
         self.recorded_project_bpm_source = TempoPointSource::Unknown;
-    }
-
-    pub fn tempo_change_count(&self) -> usize {
-        self.tempo_changes.len()
     }
 }
