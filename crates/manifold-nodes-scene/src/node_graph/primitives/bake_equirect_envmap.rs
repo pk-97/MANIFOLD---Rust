@@ -72,7 +72,29 @@ fn sun_from_light(light: Option<Light>) -> Option<([f32; 3], [f32; 3])> {
         return None;
     }
     let [x, y, z] = light.dir;
-    Some(([-x, -y, -z], [r / peak, g / peak, b / peak]))
+    Some(([-x, -y, -z], [r / peak, g / peak, b / peak].map(snap_hue)))
+}
+
+/// Hue step. `c * i / (max(c) * i)` can land one bit apart as the light's
+/// intensity moves; snapping keeps an audio-reactive sun from failing the
+/// exact uniform compare and re-baking every frame for no visible change.
+const HUE_STEP: f32 = 1.0 / 1024.0;
+
+fn snap_hue(channel: f32) -> f32 {
+    (channel / HUE_STEP).round() * HUE_STEP
+}
+
+/// The sun fields of the bake's uniforms: direction toward the sun, hue,
+/// disc intensity, disc size. Every field is zero unless the disc is drawn
+/// (Softbox mode, white furnace off, `sun_disc_intensity > 0`, a Sun light
+/// on `sun`), so a moving light only re-bakes while its disc is visible.
+/// Moving it then re-bakes every frame it moves, by design: the sky follows.
+fn sun_uniform(light: Option<Light>, mode: u32, uniform_mode: u32, disc_intensity: f32, disc_size: f32) -> ([f32; 3], [f32; 3], f32, f32) {
+    let drawn = mode == 1 && uniform_mode == 0 && disc_intensity > 0.0;
+    match sun_from_light(light).filter(|_| drawn) {
+        Some((dir, hue)) => (dir, hue, disc_intensity, disc_size),
+        None => ([0.0; 3], [0.0; 3], 0.0, 0.0),
+    }
 }
 
 manifold_node_engine::primitive! {
@@ -302,16 +324,15 @@ impl Primitive for BakeEquirectEnvmap {
         let emitter_intensity = read_float("emitter_intensity", 6.0);
         let emitter_elevation = read_float("emitter_elevation", 0.15);
         let emitter_width = read_float("emitter_width", 0.05);
-        // No Sun light, no disc: direction, hue and intensity all zero so a
-        // light that moves while it is not a Sun never forces a re-bake.
-        let ([sun_x, sun_y, sun_z], [sun_r, sun_g, sun_b], sun_disc_intensity) =
-            match sun_from_light(ctx.inputs.light("sun")) {
-                Some((dir, hue)) => (dir, hue, read_float("sun_disc_intensity", 0.0)),
-                None => ([0.0; 3], [0.0; 3], 0.0),
-            };
-        let sun_disc_size = read_float("sun_disc_size", 0.0);
         let fill_intensity = read_float("fill", 0.0);
         let uniform_mode = u32::from(matches!(ctx.params.get("uniform"), Some(ParamValue::Bool(true))));
+        let ([sun_x, sun_y, sun_z], [sun_r, sun_g, sun_b], sun_disc_intensity, sun_disc_size) = sun_uniform(
+            ctx.inputs.light("sun"),
+            mode,
+            uniform_mode,
+            read_float("sun_disc_intensity", 0.0),
+            read_float("sun_disc_size", 0.0),
+        );
 
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
@@ -453,6 +474,37 @@ mod tests {
         }
         let black = light(LightMode::Sun, [0.0, -1.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(sun_from_light(Some(black)), None);
+    }
+
+    /// A Sun light that moves while its disc is not drawn leaves the sun
+    /// uniforms untouched, so the bake (and render_scene's IBL convolution
+    /// behind it) never re-runs for nothing: disc intensity 0, Gradient mode,
+    /// or the white furnace.
+    #[test]
+    fn moving_sun_with_disc_off_keeps_uniforms_still() {
+        let at = |dir| Some(light(LightMode::Sun, dir, [3.5, 3.5, 3.5, 1.0]));
+        let (a, b) = (at([0.0, -0.6, -0.8]), at([-0.8, -0.6, 0.0]));
+        for (mode, furnace, disc) in [(1, 0, 0.0), (0, 0, 4.0), (1, 1, 4.0)] {
+            assert_eq!(sun_uniform(a, mode, furnace, disc, 0.1), sun_uniform(b, mode, furnace, disc, 0.1), "{mode} {furnace} {disc}");
+            assert_eq!(sun_uniform(a, mode, furnace, disc, 0.1), ([0.0; 3], [0.0; 3], 0.0, 0.0));
+        }
+        assert_ne!(sun_uniform(a, 1, 0, 4.0, 0.1), sun_uniform(b, 1, 0, 4.0, 0.1), "a drawn disc follows the light");
+    }
+
+    /// An audio-reactive sun (only its intensity moving) with the disc on
+    /// keeps the exact same hue, so it never re-bakes.
+    #[test]
+    fn sun_intensity_alone_never_changes_the_hue() {
+        let base = [1.0f32, 0.6, 0.3];
+        let hue_at = |i: f32| {
+            let color = [base[0] * i, base[1] * i, base[2] * i, 1.0];
+            sun_uniform(Some(light(LightMode::Sun, [0.0, -1.0, 0.0], color)), 1, 0, 4.0, 0.1).1
+        };
+        let first = hue_at(0.01);
+        for step in 1..2000 {
+            let i = 0.01 + step as f32 * 0.0137;
+            assert_eq!(hue_at(i), first, "intensity {i}");
+        }
     }
 
     #[test]

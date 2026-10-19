@@ -460,6 +460,62 @@ mod tests {
         );
     }
 
+    /// A library-style preset (never passed project load) saved while the
+    /// sky's sun had its own position: it loads with the World position gone
+    /// and the Sun light wired into the bake, exactly as project load does.
+    /// A `sun` input the document already wires stays as it is.
+    #[test]
+    fn library_preset_world_sun_migrates_at_instantiate() {
+        let scene = |extra_wire: Option<serde_json::Value>| {
+            let float = |v: f32| serde_json::json!({"type": "Float", "value": v});
+            let mut wires = vec![
+                serde_json::json!({"fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "light_0"}),
+                serde_json::json!({"fromNode": 1, "fromPort": "envmap", "toNode": 8, "toPort": "envmap"}),
+            ];
+            wires.extend(extra_wire);
+            let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+                "version": 1,
+                "presetMetadata": {"id": "LibrarySky", "displayName": "Library Sky", "category": "Geometry",
+                    "oscPrefix": "sky", "params": [{"id": "1_sun_x", "name": "Sun X", "min": -1.0, "max": 1.0, "defaultValue": 0.6}],
+                    "bindings": [{"id": "1_sun_x", "label": "Sun X", "defaultValue": 0.6,
+                        "target": {"kind": "node", "nodeId": "envmap", "param": "sun_x"}, "convert": {"type": "Float"}}]},
+                "nodes": [
+                    {"id": 1, "nodeId": "envmap", "typeId": "node.bake_environment", "handle": "envmap",
+                     "params": {"mode": {"type": "Enum", "value": 1}, "sun_x": float(0.6), "sun_y": float(0.7),
+                        "sun_z": float(0.4), "sun_disc_intensity": float(5.0)}},
+                    {"id": 7, "nodeId": "sun", "typeId": "node.light", "handle": "sun",
+                     "params": {"mode": {"type": "Enum", "value": 0}, "pos_y": float(5.0)}},
+                    {"id": 9, "nodeId": "lamp", "typeId": "node.light", "handle": "lamp",
+                     "params": {"mode": {"type": "Enum", "value": 0}}},
+                    {"id": 8, "nodeId": "render", "typeId": "node.render_scene", "handle": "render",
+                     "params": {"objects": {"type": "Int", "value": 0}, "lights": {"type": "Int", "value": 1}}}
+                ],
+                "wires": wires
+            }))
+            .unwrap();
+            assert!(manifold_core::sky_sun::carries_world_sun(&def));
+            let mut graph = Graph::new();
+            instantiate_def(&mut graph, &def, &registry(), HandleScope::Global, BoundaryHandling::Standalone,
+                &PreparedMeshRules::default())
+                .unwrap_or_else(|e| panic!("library preset with a World sun must load: {e:?}"));
+            let id = |handle: &str| graph.node_id_by_handle(handle).unwrap();
+            let envmap = graph.get_node(id("envmap")).unwrap();
+            for gone in ["sun_x", "sun_y", "sun_z"] {
+                assert!(envmap.params.get(gone).is_none(), "{gone}");
+            }
+            assert_eq!(envmap.params.get("sun_disc_intensity"), Some(&ParamValue::Float(5.0)));
+            let feeds: Vec<_> = graph.wires().iter().filter(|w| w.to == (id("envmap"), "sun")).map(|w| w.from.0).collect();
+            (feeds, id("sun"), id("lamp"))
+        };
+
+        let (feeds, sun, _) = scene(None);
+        assert_eq!(feeds, vec![sun], "the scene's Sun light feeds the sky");
+
+        let user_wire = serde_json::json!({"fromNode": 9, "fromPort": "out", "toNode": 1, "toPort": "sun"});
+        let (feeds, _, lamp) = scene(Some(user_wire));
+        assert_eq!(feeds, vec![lamp], "an already-wired sun input is never overwritten");
+    }
+
     #[test]
     fn retired_params_saved_nondefault_values_load() {
         let registry = registry();

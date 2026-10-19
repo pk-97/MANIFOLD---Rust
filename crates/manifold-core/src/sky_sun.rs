@@ -95,17 +95,13 @@ pub struct WorldSunMigration {
 /// removes stays removed. `card_value` answers a card's saved value by id;
 /// a card it does not know reads its binding default.
 pub fn migrate_world_sun(def: &mut EffectGraphDef, card_value: &dyn Fn(&str) -> Option<f32>) -> WorldSunMigration {
+    if !carries_world_sun(def) {
+        return WorldSunMigration::default();
+    }
     let mut bakes = BTreeSet::new();
     collect_bakes(&def.nodes, &mut bakes);
     let bindings = def.preset_metadata.as_ref().map(|m| m.bindings.as_slice()).unwrap_or_default();
-    let targets_world_sun = |target: &BindingTarget| {
-        matches!(target, BindingTarget::Node { node_id, param }
-            if bakes.contains(node_id.as_str()) && WORLD_SUN_PARAMS.contains(&param.as_str()))
-    };
-    let stored = any_world_sun_param(&def.nodes);
-    if !stored && !bindings.iter().any(|b| targets_world_sun(&b.target)) {
-        return WorldSunMigration::default();
-    }
+    let targets_world_sun = |target: &BindingTarget| targets_world_sun(&bakes, target);
 
     // The value a param had when saved: its card's value if a card drives
     // it, else the node's own value, else the primitive default.
@@ -158,6 +154,27 @@ pub fn migrate_world_sun(def: &mut EffectGraphDef, card_value: &dyn Fn(&str) -> 
     }
     wire_levels(&mut def.nodes, &mut def.wires);
     report
+}
+
+/// Whether `def` still carries a World sun position: a bake with a stored
+/// `sun_x`/`sun_y`/`sun_z`, or a card binding that drives one. Lets the
+/// common load borrow the document instead of cloning it.
+pub fn carries_world_sun(def: &EffectGraphDef) -> bool {
+    if any_world_sun_param(&def.nodes) {
+        return true;
+    }
+    let mut bakes = BTreeSet::new();
+    collect_bakes(&def.nodes, &mut bakes);
+    !bakes.is_empty()
+        && def
+            .preset_metadata
+            .as_ref()
+            .is_some_and(|m| m.bindings.iter().any(|b| targets_world_sun(&bakes, &b.target)))
+}
+
+fn targets_world_sun(bakes: &BTreeSet<String>, target: &BindingTarget) -> bool {
+    matches!(target, BindingTarget::Node { node_id, param }
+        if bakes.contains(node_id.as_str()) && WORLD_SUN_PARAMS.contains(&param.as_str()))
 }
 
 fn collect_bakes(nodes: &[EffectGraphNode], bakes: &mut BTreeSet<String>) {
