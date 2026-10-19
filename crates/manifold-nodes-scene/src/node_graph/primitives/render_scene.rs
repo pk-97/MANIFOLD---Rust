@@ -2036,7 +2036,6 @@ fn color_pass_points(
 // run. One struct literal at the end of `frame_preliminaries` — no
 // re-derivation, no changed semantics.
 struct FramePrelude<'ctx> {
-    probe_t0: Option<std::time::Instant>,
     objects: usize,
     cam: manifold_node_engine::scene::camera::Camera,
     envmap_wired: Option<&'ctx manifold_gpu::GpuTexture>,
@@ -3597,12 +3596,6 @@ impl RenderScene {
                     }
                     self.rt_source_trace_last_admission = Some((topo_key, content_key));
                 }
-                // RS-C test-only gate: force the sampler kernel block off by
-                // binding zeroed emissive stats at the dispatch below (P4a:
-                // the count lives GPU-side now — the gate swaps the bound
-                // stats buffer instead of zeroing a CPU field).
-                let emissive_sampler_disabled =
-                    std::env::var("MANIFOLD_DISABLE_EMISSIVE_SAMPLER").as_deref() == Ok("1");
 
                 // Multi-caster shadow fix: previously only `casters[0]`
                 // (the first shadow-casting light) was traced — every
@@ -3815,15 +3808,10 @@ impl RenderScene {
                 // P4a: the emissive count/mean/area/local flag live in the
                 // GPU-written stats buffer, not CPU params. Bind the table's
                 // stats; the tracer's shared zero buffer when there is no
-                // table (kernel guards on entry_count == 0), and the same
-                // zero buffer under the RS-C disable gate above.
-                let emissive_stats = if emissive_sampler_disabled {
-                    tracer.zero_emissive_stats()
-                } else {
-                    accel.emissive_table.as_ref()
-                        .map(|t| &t.stats)
-                        .unwrap_or_else(|| tracer.zero_emissive_stats())
-                };
+                // table (kernel guards on entry_count == 0).
+                let emissive_stats = accel.emissive_table.as_ref()
+                    .map(|t| &t.stats)
+                    .unwrap_or_else(|| tracer.zero_emissive_stats());
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
                 let mask_params_buffer = self.rt_mask_params_buffer.as_ref().expect("ensured above");
                 let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
@@ -5542,7 +5530,6 @@ impl RenderScene {
                 "node.render_scene upscale alpha combine",
             );
         }
-        // PROBE: capture time just before denoiser encode.
         true
     }
 
@@ -5551,9 +5538,8 @@ impl RenderScene {
     /// directly to native_color. Reset expression B stays verbatim
     /// (reset_decision || rt_just_resumed || denoiser_lighting_changed
     /// || denoiser_gesture_active — the three sources, strobes do NOT
-    /// reset). The MTL4-saturated and MANIFOLD_DENOISE_SKIP ablation
-    /// paths are unchanged. Returns false only for the BUG-317-class
-    /// plan-missing abort.
+    /// reset). The MTL4-saturated fallback copy is unchanged. Returns
+    /// false only for the BUG-317-class plan-missing abort.
     #[allow(clippy::too_many_arguments, reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape")]
     fn denoise_tail<'ctx, 'gpu>(
         &mut self,
@@ -5634,12 +5620,6 @@ impl RenderScene {
             // Set the denoiser's own jitter offset to match this frame's
             // camera jitter (0,0 when `temporal_upscale` is off).
             denoiser.set_jitter(jitter_px.0, jitter_px.1);
-            // PROBE: ablation gate — skip MetalFX encode, blit instead
-            // (MANIFOLD_DENOISE_SKIP=1). Aux MRT renders + resolves still run;
-            // only the final denoiser encode is replaced by a texture copy.
-            // The delta between full path and skipped path isolates the
-            // MetalFX denoiser's GPU cost.
-            let skip_denoise = std::env::var_os("MANIFOLD_DENOISE_SKIP").is_some();
             // Color source: `target` holds the forward-pass output at the
             // correct resolution (render res when temporal_upscale is on,
             // native res for 1:1 denoise). The denoiser writes its output
@@ -5653,77 +5633,45 @@ impl RenderScene {
                 target
             };
             let gpu = ctx.gpu_encoder();
-            if skip_denoise {
-                // PROBE ablation: blit instead of MetalFX denoiser.
-                // For 1:1: copy target→native (same res).
-                // For upscaled: use T2-B temporal upscaler.
-                if temporal_upscale && let Some(ref upscaler) = self.rt_temporal_upscaler {
-                    // Rerun T2-B path: the forward pass rendered into the
-                    // render-res scratch; temporal scaler upscales it.
-                    let depth_src = depth_resolve_target.expect("ensured");
-                    let velocity_src = velocity_resolve_target.expect("ensured");
-                    // Same MTL4 skip semantics as the main T2-B path:
-                    // false leaves `output` stale and the copy below
-                    // presents last frame's upscale.
-                    upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, false);
-                    gpu.native_enc.copy_texture_to_texture(
-                        &upscaler.output.texture,
-                        native_color,
-                        native_width,
-                        native_height,
-                        1,
-                    );
-                } else {
-                    gpu.native_enc.copy_texture_to_texture(
-                        target,
-                        native_color,
-                        native_width,
-                        native_height,
-                        1,
-                    );
-                }
-            } else {
-                let denoised = denoiser.encode(
-                    gpu,
-                    color_src,
-                    depth_src,
-                    velocity_src,
-                    normal_src,
-                    roughness_src,
-                    diffuse_src,
-                    specular_src,
-                    hit_dist_src,
-                    native_color, // output directly to native res
-                    reset,
-                    // DN-L (section 17.7): reactive mask — emissive
-                    // surfaces and object-moved draws marked by the
-                    // forward pass, so the denoiser trusts the current
-                    // frame over its history there (emissive strobes
-                    // and movers no longer trail).
-                    Some(reactive_src),
-                );
+            let denoised = denoiser.encode(
+                gpu,
+                color_src,
+                depth_src,
+                velocity_src,
+                normal_src,
+                roughness_src,
+                diffuse_src,
+                specular_src,
+                hit_dist_src,
+                native_color, // output directly to native res
+                reset,
+                // DN-L (section 17.7): reactive mask — emissive
+                // surfaces and object-moved draws marked by the
+                // forward pass, so the denoiser trusts the current
+                // frame over its history there (emissive strobes
+                // and movers no longer trail).
+                Some(reactive_src),
+            );
 
-                if !denoised && !temporal_upscale {
-                    // MTL4 allocator ring saturated: the denoiser left
-                    // native_color untouched. For 1:1 denoise the forward
-                    // pass rendered into color_src (the native-res scratch),
-                    // so copy it to native_color as a safe un-denoised
-                    // fallback. With temporal_upscale on the denoiser
-                    // REPLACES the temporal scaler, so nothing else writes
-                    // native_color this frame — the skip leaves last frame's
-                    // output in place (one-frame freeze under extreme
-                    // backpressure, recovers when the ring drains).
-                    gpu.native_enc.copy_texture_to_texture(
-                        color_src,
-                        native_color,
-                        native_width,
-                        native_height,
-                        1,
-                    );
-                }
+            if !denoised && !temporal_upscale {
+                // MTL4 allocator ring saturated: the denoiser left
+                // native_color untouched. For 1:1 denoise the forward
+                // pass rendered into color_src (the native-res scratch),
+                // so copy it to native_color as a safe un-denoised
+                // fallback. With temporal_upscale on the denoiser
+                // REPLACES the temporal scaler, so nothing else writes
+                // native_color this frame — the skip leaves last frame's
+                // output in place (one-frame freeze under extreme
+                // backpressure, recovers when the ring drains).
+                gpu.native_enc.copy_texture_to_texture(
+                    color_src,
+                    native_color,
+                    native_width,
+                    native_height,
+                    1,
+                );
             }
         }
-        // PROBE: capture time after denoiser encode and emit timing report.
         true
     }
 
@@ -5983,11 +5931,6 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         port_index: &ahash::AHashMap<&'static str, manifold_node_engine::bindings::Slot>,
     ) -> Option<FrameInit<'ctx>> {
-        // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
-        // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
-        let _probe_t0 = std::env::var_os("MANIFOLD_DENOISE_PROBE")
-            .is_some()
-            .then(std::time::Instant::now);
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
 
@@ -6409,12 +6352,6 @@ impl RenderScene {
         };
         self.prev_cam_state = Some(cam);
         self.rendered_camera = Some(cam);
-        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
-            eprintln!(
-                "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
-                cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
-            );
-        }
         // MetalFX velocity jitter exclusion (`velocity_jitter` uniform):
         // this frame's and last frame's jitter as NDC offsets. MetalFX
         // expects motion vectors jitter-free (its jitterOffset compensates
@@ -6428,7 +6365,6 @@ impl RenderScene {
 
         Some((
             FramePrelude {
-                probe_t0: _probe_t0,
                 objects,
                 cam,
                 envmap_wired,
@@ -9402,10 +9338,10 @@ impl RenderScene {
             return;
         };
         let FramePrelude {
-            probe_t0: _probe_t0, objects: _, cam: _, envmap_wired: _, envmap_pending: _, atmosphere: _,
+            objects: _, cam: _, envmap_wired: _, envmap_pending: _, atmosphere: _,
             render_mode: _, light_data: _, light_count: _, casters: _,
             caster_table: _,
-            native_width, native_height, width, height, aspect: _, temporal_upscale,
+            native_width: _, native_height: _, width: _, height: _, aspect: _, temporal_upscale: _,
             view_proj: _, prev_view_proj: _, jitter_px: _, jitter_ndc: _, prev_jitter_ndc: _,
             cam_motion: _, rt_enabled, rt_reflections: _, rt_shadows_enabled: _,
             rt_ao_enabled: _, rt_gi_enabled: _, rt_firefly_clamp_enabled: _, rtq: _,
@@ -9653,8 +9589,6 @@ impl RenderScene {
         ) {
             return;
         }
-        // PROBE: capture time just before denoiser encode.
-        let _probe_pre_denoise = _probe_t0.map(|t0| (std::time::Instant::now(), t0));
         // ---- ML denoiser tail (BUG-trh7 stage 2, `denoise_tail`) — reset
         // expression B verbatim inside; false = the plan-missing abort.
         if !self.denoise_tail(
@@ -9667,19 +9601,6 @@ impl RenderScene {
             velocity_resolve_target,
         ) {
             return;
-        }
-        // PROBE: capture time after denoiser encode and emit timing report.
-        if let Some((pre_instant, t0)) = _probe_pre_denoise {
-            let now = std::time::Instant::now();
-            let before_denoise_ms = pre_instant.duration_since(t0).as_secs_f64() * 1000.0;
-            let denoise_encode_ms = now.duration_since(pre_instant).as_secs_f64() * 1000.0;
-            let total_ms = now.duration_since(t0).as_secs_f64() * 1000.0;
-            let (input_w, input_h) = if temporal_upscale { (width, height) } else { (native_width, native_height) };
-            eprintln!(
-                "[DENOISE_PROBE] f={} input={}x{} output={}x{} total_ms={:.2} before_denoise_ms={:.2} denoise_encode_ms={:.2}",
-                self.jitter_frame_index, input_w, input_h, native_width, native_height,
-                total_ms, before_denoise_ms, denoise_encode_ms
-            );
         }
         // ── RT capture: composited output snapshot ──
         if RT_CAPTURE_ARM_COMPOSITE.replace(false)

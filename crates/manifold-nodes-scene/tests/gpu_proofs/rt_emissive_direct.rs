@@ -4,9 +4,8 @@
 //! Leg 1 (sampler ON): probe at ground center within +/-30% of CPU analytic
 //!   (derived from the kernel's RIS estimator formula: emissive * integral
 //!   cos_theta * cos_emit / |l|^2 dA, then through PBR kd_ibl * albedo * luma).
-//! Leg 2 (sampler OFF, MANIFOLD_DISABLE_EMISSIVE_SAMPLER=1): pure GI gather
-//!   at 2 spp statistically misses the small emitter (<15% analytic floor).
-//! I-RS3 substitution proof: the gap proves RS7 (sampler replaces, not adds).
+//! Leg 2 (emission 0, fresh runtime): the baseline leg 1's delta is measured
+//!   against.
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
