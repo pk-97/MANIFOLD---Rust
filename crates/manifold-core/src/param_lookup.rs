@@ -54,6 +54,28 @@ fn node_source() -> Option<&'static NodeParamSource> {
     Some(source)
 }
 
+/// Every param `type_id` declares, in declaration order, Hidden ones
+/// included. Empty when the type is unknown or no source is linked.
+pub fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
+    node_source().map(|source| (source.params_for_type)(type_id)).unwrap_or_default()
+}
+
+/// The params a scene node stamps as exposures (creation sites and the
+/// load-time migration), in card order: every param [`node_params`] returns
+/// except those [`hidden_from_stamp`] drops.
+pub fn stamped_node_params(type_id: &str) -> Vec<NodeParamMetadata> {
+    let mut params = node_params(type_id);
+    params.retain(|meta| !hidden_from_stamp(meta));
+    params
+}
+
+/// The one Hidden filter: the scene table marks the param Hidden. A type
+/// outside the scene vocabulary has no scene facts and keeps every param.
+fn hidden_from_stamp(meta: &NodeParamMetadata) -> bool {
+    meta.scene
+        .is_some_and(|s| s.role == manifold_foundation::scene_surface::SurfaceRole::Hidden)
+}
+
 /// What the code declares about one control. Never a user choice.
 pub fn describe(key: ParamKey<'_>) -> Option<ParamSpecDef> {
     Resolver::default().describe(key)
@@ -72,11 +94,10 @@ impl Resolver {
             ParamKey::Template { preset, id } => template_spec(preset, id),
             ParamKey::Modifier { recipe, param } => template_spec(recipe, param),
             ParamKey::Node { type_id, param, scene_radius } => {
-                let source = node_source()?;
                 let params = self
                     .node_params
                     .entry(type_id.to_string())
-                    .or_insert_with(|| (source.params_for_type)(type_id));
+                    .or_insert_with(|| node_params(type_id));
                 let meta = params.iter().find(|m| m.name == param)?;
                 let (min, max) = scene_radius
                     .and_then(|r| scene_scaled_range(type_id, param, r))
@@ -547,9 +568,23 @@ mod tests {
         }
     }
 
+    /// The one node source in core's test binary; the `scene_exposure`
+    /// migration tests read their light and transform params from it too.
     fn test_params(type_id: &str) -> Vec<NodeParamMetadata> {
-        if type_id != "node.test_lamp" {
-            return Vec::new();
+        use crate::scene_exposure::tests::float_meta;
+        match type_id {
+            "node.test_lamp" => {}
+            "node.light" => return vec![float_meta("intensity", "Intensity")],
+            "node.transform_3d" => return vec![float_meta("pos_x", "X")],
+            "node.test_hidden" => {
+                let mut hidden = float_meta("hidden", "Hidden");
+                hidden.scene = Some(manifold_foundation::scene_surface::SceneParamDesc {
+                    role: manifold_foundation::scene_surface::SurfaceRole::Hidden,
+                    ..lamp_scene()
+                });
+                return vec![float_meta("first", "First"), hidden, float_meta("last", "Last")];
+            }
+            _ => return Vec::new(),
         }
         vec![NodeParamMetadata {
             name: "intensity".into(),
@@ -572,6 +607,14 @@ mod tests {
     }
 
     inventory::submit! { NodeParamSource { params_for_type: test_params } }
+
+    #[test]
+    fn stamped_node_params_drops_only_hidden_and_keeps_order() {
+        let names = |params: Vec<NodeParamMetadata>| params.into_iter().map(|m| m.name).collect::<Vec<_>>();
+        assert_eq!(names(node_params("node.test_hidden")), ["first", "hidden", "last"]);
+        assert_eq!(names(stamped_node_params("node.test_hidden")), ["first", "last"]);
+        assert!(stamped_node_params("node.not_registered").is_empty());
+    }
 
     fn node(id: &str, type_id: &str) -> EffectGraphNode {
         EffectGraphNode {

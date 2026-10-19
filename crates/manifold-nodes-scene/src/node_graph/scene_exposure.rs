@@ -1,23 +1,21 @@
 //! Renderer-side implementation of `docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` P1.
 //!
-//! - `metadata_for_node_type` reads a primitive's `ParamDef` table through the
-//!   registry.
+//! - `all_params_for_node_type` reads a primitive's `ParamDef` table through
+//!   the registry and is registered as core's `NodeParamSource`, the one
+//!   node param lookup every crate reads.
 //! - `migrate_scene_exposures` is the load-time idempotent migration that stamps
 //!   exposures onto every scene-vocabulary node in an existing graph.
-//! - `PrimitiveRegistrySceneExposureProvider` implements the core trait for
-//!   creation-site commands that cannot depend on `manifold_nodes` directly.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;
 mod fluid_objects;
 use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
-use manifold_core::scene_exposure::{NodeParamProvider, NodeParamMetadata};
+use manifold_core::scene_exposure::NodeParamMetadata;
 
 use manifold_node_engine::parameters::ParamType;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use crate::node_graph::material_inspector::material_param_role;
 use crate::node_graph::scene_surface::scene_param_facts;
-use manifold_foundation::scene_surface::SurfaceRole;
 
 static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
@@ -74,39 +72,25 @@ pub fn is_scene_setup_node(type_id: &str) -> bool {
     SCENE_VOCABULARY.contains(&type_id)
 }
 
-/// The params `type_id` stamps, from the primitive registry: every param
-/// except those the scene table marks Hidden, each carrying its scene facts.
-/// Empty when the type is unknown.
+/// The params `type_id` stamps: `manifold_core::param_lookup::stamped_node_params`,
+/// the registered source below minus the scene table's Hidden params.
 pub fn metadata_for_node_type(type_id: &str) -> Vec<NodeParamMetadata> {
-    node_params(type_id, false)
+    manifold_core::param_lookup::stamped_node_params(type_id)
 }
 
-/// Every param `type_id` declares, Hidden ones included: the node half of
-/// the live param lookup (`manifold_core::param_lookup`). A control may
-/// target a param the stamp skips (an authored exposure), and it still needs
-/// its description.
+/// Every param `type_id` declares, Hidden ones included, each carrying its
+/// scene facts: the node half of the live param lookup, registered as
+/// `manifold_core::param_lookup::NodeParamSource`. A control may target a
+/// param the stamp skips (an authored exposure), and it still needs its
+/// description. Empty when the type is unknown.
 pub fn all_params_for_node_type(type_id: &str) -> Vec<NodeParamMetadata> {
-    node_params(type_id, true)
-}
-
-inventory::submit! {
-    manifold_core::param_lookup::NodeParamSource {
-        params_for_type: all_params_for_node_type,
-    }
-}
-
-fn node_params(type_id: &str, with_hidden: bool) -> Vec<NodeParamMetadata> {
     let Some(node) = SCENE_EXPOSURE_REGISTRY.construct(type_id) else {
         return Vec::new();
     };
     node.parameters()
         .iter()
-        .filter_map(|pd| {
+        .map(|pd| {
             let facts = scene_param_facts(type_id, pd.name.as_ref());
-            let hidden = facts.is_some_and(|f| f.desc.role == SurfaceRole::Hidden);
-            (with_hidden || !hidden).then_some((pd, facts))
-        })
-        .map(|(pd, facts)| {
             let (min, max) = pd.range.unwrap_or({
                 if matches!(pd.ty, ParamType::Angle) {
                     UNBOUNDED_ANGLE_EXPOSURE_RANGE
@@ -155,6 +139,12 @@ fn node_params(type_id: &str, with_hidden: bool) -> Vec<NodeParamMetadata> {
         .collect()
 }
 
+inventory::submit! {
+    manifold_core::param_lookup::NodeParamSource {
+        params_for_type: all_params_for_node_type,
+    }
+}
+
 /// Idempotent load-time migration: stamp exposures for every scene-vocabulary
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
@@ -166,12 +156,10 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
     let compound = compound::migrate(def);
     let fluid_objects = fluid_objects::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
-    let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
         def,
         &SCENE_VOCABULARY,
         section_name_for_node,
-        &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
     let light_titles = migrate_light_titles(def);
@@ -464,31 +452,19 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
     format!("{} — {}", display, category)
 }
 
-/// Zero-sized provider backed by the lazy static registry. Commands in
-/// `manifold_editing` store a `Box<dyn NodeParamProvider>` and call
-/// this at execute time.
-pub struct PrimitiveRegistrySceneExposureProvider;
-
-impl NodeParamProvider for PrimitiveRegistrySceneExposureProvider {
-    fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
-        metadata_for_node_type(type_id)
-    }
-}
-
-
-inventory::submit! {
-    manifold_node_engine::scene::exposure_source::SceneExposureSource {
-        metadata: metadata_for_node_type,
-    }
-}
-
+/// Registration parity for the scene exposure seam
+/// (RENDERER_CRATE_SPLIT_DESIGN.md section 6 (Decided, do not reopen) item 14):
+/// core's `NodeParamSource` answers exactly what this crate builds.
 #[cfg(test)]
-mod exposure_source_tests {
+mod node_param_source_parity {
     #[test]
-    fn scene_exposure_registration_preserves_metadata() {
-        for type_id in ["node.scene_object", "node.pbr_material", "node.camera", "missing"] {
-            assert_eq!(super::metadata_for_node_type(type_id),
-                manifold_node_engine::scene::exposure_source::metadata_for_node_type(type_id));
+    fn core_node_param_source_matches_the_registry_for_every_type() {
+        for type_id in super::SCENE_EXPOSURE_REGISTRY.known_type_ids().chain(["missing"]) {
+            assert_eq!(
+                manifold_core::param_lookup::node_params(type_id),
+                super::all_params_for_node_type(type_id),
+                "{type_id}"
+            );
         }
     }
 }
