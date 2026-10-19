@@ -61,6 +61,13 @@ pub struct Workspace {
     /// existing offscreen.
     pub offscreen_dirty: bool,
 
+    /// The offscreen's physical size at the main window's last composite;
+    /// `None` while the target holds nothing (just created). The main
+    /// window composites whenever it differs from the target's size, so a
+    /// resize or scale change needs no repaint call. The editor keys its
+    /// target through `editor_frame.last_composite` instead.
+    pub composited_size: Option<[u32; 2]>,
+
     /// Skip drawable acquisition this frame (surface just resized —
     /// drawable pool may be reconfiguring). Offscreen render still
     /// runs; blit skipped.
@@ -170,6 +177,7 @@ impl Workspace {
             #[cfg(target_os = "macos")]
             ui_display_link: None,
             offscreen_dirty: true,
+            composited_size: None,
             surface_resized_this_frame: false,
             dock: manifold_ui::Dock::editor(),
             timeline_scrubbing: false,

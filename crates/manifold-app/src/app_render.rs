@@ -1348,7 +1348,6 @@ impl Application {
                             paste_count: 0,
                             screen_anchor: manifold_ui::Vec2::new(screen_pos.0, screen_pos.1),
                         });
-                        ed.offscreen_dirty = true;
                     }
                     // Auto-focus the search field so the user types
                     // immediately. The popup tree isn't built yet (it builds
@@ -2069,9 +2068,6 @@ impl Application {
                         12.0,
                     );
                     self.text_input.graph_param_name = Some(param_name.clone());
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
                     continue;
                 }
                 manifold_ui::GraphEditCommand::EditGraphNodeWgsl {
@@ -2100,9 +2096,6 @@ impl Application {
                         anchor,
                         12.0,
                     );
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
                     continue;
                 }
                 manifold_ui::GraphEditCommand::EditGraphNodeNumericParam {
@@ -2139,9 +2132,6 @@ impl Application {
                         whole_numbers: *whole_numbers,
                         outer_param_id: outer_param_id.clone(),
                     });
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
                     continue;
                 }
                 manifold_ui::GraphEditCommand::EditGraphNodeTableCell {
@@ -2173,9 +2163,6 @@ impl Application {
                         col: *col,
                         rows: rows.clone(),
                     });
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
                     continue;
                 }
                 manifold_ui::GraphEditCommand::GroupSelection {

@@ -32,6 +32,7 @@ impl GraphCanvas {
         }
         self.select_single(rid);
         self.pending_focus = Some(rid);
+        self.bump_view();
         true
     }
 
@@ -167,9 +168,13 @@ impl GraphCanvas {
     fn zoom_at_cursor(&mut self, viewport: Rect, factor: f32) {
         let (gx_before, gy_before) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
         let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        if new_zoom == self.zoom {
+            return;
+        }
         self.zoom = new_zoom;
         let (gx_after, gy_after) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
         self.pan.0 += gx_after - gx_before;
         self.pan.1 += gy_after - gy_before;
+        self.bump_view();
     }
 }

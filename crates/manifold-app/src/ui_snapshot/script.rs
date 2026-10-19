@@ -1501,11 +1501,8 @@ impl Runner {
                 }
                 for (chars, key, modifiers) in step_keys(action) {
                     self.modifiers = modifiers;
-                    let (canvas, ws) = match self.editor.as_mut() {
-                        Some(ed) => (Some(&mut ed.canvas), Some(&mut ed.ws)),
-                        None => (None, None),
-                    };
-                    if !crate::editor_input::popover_key(&mut self.editor_mapping, canvas, ws, text_key(&chars, key), modifiers) {
+                    let canvas = self.editor.as_mut().map(|ed| &mut ed.canvas);
+                    if !crate::editor_input::popover_key(&mut self.editor_mapping, canvas, text_key(&chars, key), modifiers) {
                         return Some(self.fail(index, desc, ui, out_dir, "the mapping field closed before every key was typed".into()));
                     }
                 }

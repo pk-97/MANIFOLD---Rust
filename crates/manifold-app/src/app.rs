@@ -1851,9 +1851,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             self.resize_ui_offscreen(size.width, size.height);
                             // Skip drawable acquisition this frame — the
                             // drawable pool may be reconfiguring after
-                            // set_drawable_size.
+                            // set_drawable_size. The new offscreen composites
+                            // on its own (`Workspace::composited_size`).
                             self.ws.surface_resized_this_frame = true;
-                            self.ws.offscreen_dirty = true;
                         }
                         let logical_w = size.width as f32 / scale as f32;
                         let logical_h = size.height as f32 / scale as f32;
@@ -1880,7 +1880,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             surface.resize(size.width, size.height);
                             self.resize_ui_offscreen(size.width, size.height);
                             self.ws.surface_resized_this_frame = true;
-                            self.ws.offscreen_dirty = true;
                         }
                         let logical_w = size.width as f32 / scale_factor as f32;
                         let logical_h = size.height as f32 / scale_factor as f32;
@@ -2390,8 +2389,10 @@ impl Application {
             label: "UI Offscreen",
             mip_levels: 1,
         }));
-        // A new target holds nothing: the perform HUD, which keeps the frame
-        // it last drew while its inputs hold still, must draw again.
+        // A new target holds nothing: the main window composites it whole,
+        // and the perform HUD, which keeps the frame it last drew while its
+        // inputs hold still, must draw again.
+        self.ws.composited_size = None;
         self.perform.shown = None;
     }
 
@@ -2416,8 +2417,8 @@ impl Application {
             label: "Graph Editor Offscreen",
             mip_levels: 1,
         }));
-        // A new target holds nothing; the next pulse composites it whole.
+        // A new target holds nothing; with no composite key on record the
+        // next pulse composites it whole.
         ws.editor_frame.last_composite = None;
-        ws.offscreen_dirty = true;
     }
 }
