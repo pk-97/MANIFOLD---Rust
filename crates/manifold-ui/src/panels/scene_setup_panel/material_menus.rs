@@ -44,7 +44,7 @@ impl ScenePanel {
             cy,
             (inner_w - label_w).max(0.0),
             ROW_H,
-            btn_style(),
+            crate::chrome::components::dropdown_trigger_style(btn_style().font_size),
             current,
             PRESET_BUTTON_KEY,
         );

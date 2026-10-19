@@ -362,12 +362,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name": "param_row.10_iridescence_mode.value"
         }
       },
       "check": {
         "Above": {
-          "name": "param_row.10_iridescence_mode.value"
+          "name": "param_row.10_coat_mode.value"
         }
       }
     }
@@ -434,12 +434,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name": "param_row.10_iridescence_mode.value"
         }
       },
       "check": {
         "Above": {
-          "name": "param_row.10_iridescence_mode.value"
+          "name": "param_row.10_coat_mode.value"
         }
       }
     }

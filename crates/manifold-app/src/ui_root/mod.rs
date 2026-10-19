@@ -19,6 +19,7 @@ mod export;
 
 mod card_pin;
 mod dropdowns;
+mod scene_menus;
 // `build_picker_session` is called by `ui_bridge/state_sync.rs` at the historical
 // `crate::ui_root::build_picker_session` path; the re-export preserves it after
 // the fn moved into the `dropdowns` submodule (P-F2a).
