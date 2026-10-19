@@ -1184,7 +1184,29 @@ impl Runner {
     /// a tween settles in the frame after it starts, as under reduced motion,
     /// so counts and asserts do not depend on machine speed; a `Step` frame
     /// outside a work window lets tweens run on the wall clock instead.
+    ///
+    /// A structural tween armed by this frame's own rebuild (a new card's spawn
+    /// pop) gets the one settling frame here: the next step may run no frame
+    /// (Snapshot, Assert, an in-band ScrollTo), and its resolves and hit tests
+    /// would read the half-scaled card.
     fn live_frame(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        render: &mut RenderState,
+        scrolled_in_place: bool,
+        settle_tweens: bool,
+    ) {
+        self.live_frame_once(ui, data, render, scrolled_in_place, settle_tweens);
+        if settle_tweens && !self.perform.active {
+            let editor_structural = self.editor.as_ref().is_some_and(|ed| ed.ws.ui_root.inspector.structural_motion());
+            if ui.inspector.structural_motion() || ui.scene_setup_panel.cards_structural_motion() || editor_structural {
+                self.live_frame_once(ui, data, render, false, true);
+            }
+        }
+    }
+
+    fn live_frame_once(
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,

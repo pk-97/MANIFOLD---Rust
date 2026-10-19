@@ -514,6 +514,12 @@ impl ScenePanel {
         std::mem::take(&mut self.moved_in_place)
     }
 
+    /// Whether an object or force card tween that reflows the panel on a
+    /// rebuild (collapse, spawn pop, delete fade) is in flight.
+    pub fn cards_structural_motion(&self) -> bool {
+        self.object_modifier_cards.iter().chain(self.force_cards.iter()).any(|card| card.structural_motion())
+    }
+
     /// Settle shared card motion for scripted frames without a running UI clock.
     pub fn skip_cards_to_settled(&mut self, tree: &mut UITree) -> bool {
         let mut structural = false;
