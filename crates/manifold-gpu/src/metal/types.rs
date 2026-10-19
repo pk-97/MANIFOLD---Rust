@@ -3,7 +3,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLComputePipelineState, MTLDepthStencilState, MTLHeap, MTLRenderPipelineState,
+    MTLBuffer, MTLComputePipelineState, MTLDepthStencilState, MTLRenderPipelineState,
     MTLSamplerState, MTLSharedEvent, MTLSharedEventListener, MTLTexture,
 };
 
@@ -515,67 +515,6 @@ impl GpuEvent {
     /// Raw Metal shared event reference.
     pub fn raw(&self) -> &ProtocolObject<dyn MTLSharedEvent> {
         &self.raw
-    }
-}
-
-// ─── GpuHeap ──────────────────────────────────────────────────────────
-
-/// GPU heap backed by a native MTLHeap.
-/// Sub-allocates textures without per-allocation kernel calls.
-pub struct GpuHeap {
-    heap: Retained<ProtocolObject<dyn MTLHeap>>,
-    /// Retirement mark sub-allocated textures carry (same fence-stamped
-    /// drop retirement as pool/device allocations; `None` when the heap was
-    /// created before retirement wiring).
-    retire: Option<std::sync::Arc<super::retire::RetireMark>>,
-    residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
-}
-
-unsafe impl Send for GpuHeap {}
-unsafe impl Sync for GpuHeap {}
-
-impl GpuHeap {
-    /// Create a new GpuHeap wrapping a Metal heap.
-    pub(crate) fn new(
-        heap: Retained<ProtocolObject<dyn MTLHeap>>,
-        retire: Option<std::sync::Arc<super::retire::RetireMark>>,
-        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
-    ) -> Self {
-        Self { heap, retire, residency }
-    }
-
-    /// Sub-allocate a texture from this heap.
-    /// Returns `None` if the heap doesn't have enough space.
-    pub fn new_texture(&self, desc: &GpuTextureDesc) -> Option<GpuTexture> {
-        let mtl_desc = GpuDevice::build_mtl_texture_desc(desc);
-        // Override storage mode to match heap's storage mode.
-        let storage_mode = unsafe { self.heap.storageMode() };
-        unsafe { mtl_desc.setStorageMode(storage_mode) };
-        let raw = unsafe { self.heap.newTextureWithDescriptor(&mtl_desc) }?;
-        Some(GpuTexture {
-            raw,
-            width: desc.width,
-            height: desc.height,
-            depth: desc.depth,
-            format: desc.format,
-            retire: self.retire.clone(),
-            residency: self.residency.clone(),
-        })
-    }
-
-    /// Total heap size in bytes.
-    pub fn size(&self) -> u64 {
-        unsafe { self.heap.size() as u64 }
-    }
-
-    /// Currently used heap memory in bytes.
-    pub fn used_size(&self) -> u64 {
-        unsafe { self.heap.usedSize() as u64 }
-    }
-
-    /// Maximum available contiguous allocation size with given alignment.
-    pub fn max_available_size(&self, alignment: u64) -> u64 {
-        unsafe { self.heap.maxAvailableSizeWithAlignment(alignment as usize) as u64 }
     }
 }
 

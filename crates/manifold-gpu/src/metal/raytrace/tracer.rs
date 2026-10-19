@@ -1335,13 +1335,6 @@ impl MetalShadowRayTracer {
         self.secondary_prefiltered_sheen = Some(prefiltered_sheen.clone());
     }
 
-    pub fn clear_secondary_lighting(&mut self) {
-        self.secondary_lights = None;
-        self.secondary_irradiance = None;
-        self.secondary_brdf_lut = None;
-        self.secondary_prefiltered_sheen = None;
-    }
-
     /// Encode the cached geometry-aware subsurface transport pass. The
     /// material and light tables are caller-owned GPU buffers; this method
     /// snapshots only the small parameter and bounded tile payloads as Metal

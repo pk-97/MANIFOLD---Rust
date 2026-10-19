@@ -28,16 +28,6 @@ pub enum TrackHeight {
 }
 
 impl TrackHeight {
-    /// The preset for a content track given its collapse state.
-    #[inline]
-    pub fn for_collapsed(is_collapsed: bool) -> Self {
-        if is_collapsed {
-            TrackHeight::Collapsed
-        } else {
-            TrackHeight::Normal
-        }
-    }
-
     /// The pixel height for this preset.
     #[inline]
     pub fn px(self) -> f32 {
@@ -51,7 +41,6 @@ impl TrackHeight {
 
 pub struct CoordinateMapper {
     pixels_per_beat: f32,
-    scroll_offset_x: f32, // in pixels (matches Unity's ScrollOffsetX)
     layer_y_offsets: Vec<f32>,
     layer_heights: Vec<f32>,
     total_content_height: f32,
@@ -70,7 +59,6 @@ impl CoordinateMapper {
     pub fn new() -> Self {
         Self {
             pixels_per_beat: color::ZOOM_LEVELS[color::DEFAULT_ZOOM_INDEX],
-            scroll_offset_x: 0.0,
             layer_y_offsets: Vec::new(),
             layer_heights: Vec::new(),
             total_content_height: 0.0,
@@ -84,14 +72,6 @@ impl CoordinateMapper {
         self.pixels_per_beat
     }
 
-    pub fn scroll_offset_x(&self) -> f32 {
-        self.scroll_offset_x
-    }
-
-    pub fn set_scroll_offset_x(&mut self, x: f32) {
-        self.scroll_offset_x = x;
-    }
-
     pub fn total_content_height(&self) -> f32 {
         self.total_content_height
     }
@@ -99,11 +79,11 @@ impl CoordinateMapper {
     // ── Beat-based conversions (primary) ────────────────────────────
 
     /// The beat↔pixel mapping as a shared affine [`Axis`]: scale is
-    /// pixels-per-beat, the offset is the negated scroll (`screen = beat·ppb −
-    /// scroll`). Every X conversion below expresses this one axis.
+    /// pixels-per-beat, the offset is 0 (`screen = beat·ppb`).
+    /// Every X conversion below expresses this one axis.
     #[inline]
     fn x_axis(&self) -> Axis {
-        Axis::new(self.pixels_per_beat, -self.scroll_offset_x)
+        Axis::new(self.pixels_per_beat, 0.0)
     }
 
     /// Convert beat position to scroll-adjusted pixel X.
@@ -118,24 +98,10 @@ impl CoordinateMapper {
         Beats::from_f32(self.x_axis().to_logical(pixel_x))
     }
 
-    /// Convert beat to pixel X in content space (not scroll-adjusted).
-    /// Use for positioning elements that are children of scrollable content.
-    /// Unity line 65-67.
-    pub fn beat_to_pixel_absolute(&self, beat: Beats) -> f32 {
-        // Same axis with no scroll offset.
-        Axis::new(self.pixels_per_beat, 0.0).to_screen(beat.as_f32())
-    }
-
     /// Convert beat duration to pixel width.
     /// Unity line 73-75.
     pub fn beat_duration_to_width(&self, beats: Beats) -> f32 {
         self.x_axis().span_to_screen(beats.as_f32())
-    }
-
-    /// Convert pixel width to beat duration.
-    /// Unity line 81-83.
-    pub fn width_to_beat_duration(&self, width: f32) -> Beats {
-        Beats::from_f32(self.x_axis().span_to_logical(width))
     }
 
     // ── Zoom management ─────────────────────────────────────────────
@@ -186,21 +152,6 @@ impl CoordinateMapper {
     /// zoom is smooth, not a jump between fixed steps (section 24 5e).
     pub fn zoom_continuous(&self, factor: f32) -> f32 {
         (self.pixels_per_beat * factor).clamp(color::MIN_PIXELS_PER_BEAT, color::MAX_PIXELS_PER_BEAT)
-    }
-
-    /// Calculate zoom level to fit timeline duration in viewport width.
-    /// Unity line 109-115.
-    pub fn calculate_fit_zoom(&self, timeline_beats: Beats, viewport_width: f32) -> f32 {
-        if timeline_beats.as_f32() <= 0.0 || viewport_width <= 0.0 {
-            return self.pixels_per_beat;
-        }
-        viewport_width / timeline_beats.as_f32()
-    }
-
-    /// Get content width needed for timeline duration at current zoom.
-    /// Unity line 120-123.
-    pub fn get_content_width(&self, timeline_beats: Beats) -> f32 {
-        self.beat_duration_to_width(timeline_beats)
     }
 
     // ── Y-axis layout (variable track heights) ──────────────────────
@@ -433,40 +384,11 @@ mod tests {
     }
 
     #[test]
-    fn beat_to_pixel_with_scroll() {
-        let mut mapper = CoordinateMapper::new();
-        mapper.set_scroll_offset_x(100.0);
-        let pixel = mapper.beat_to_pixel(Beats::from_f32(4.0));
-        assert!((pixel - (4.0 * 120.0 - 100.0)).abs() < 0.001);
-    }
-
-    #[test]
     fn pixel_to_beat_roundtrip() {
-        let mut mapper = CoordinateMapper::new();
-        mapper.set_scroll_offset_x(50.0);
+        let mapper = CoordinateMapper::new();
         let pixel = mapper.beat_to_pixel(Beats::from_f32(7.5));
         let beat = mapper.pixel_to_beat(pixel);
         assert!((beat.as_f32() - 7.5).abs() < 0.001);
-    }
-
-    #[test]
-    fn beat_to_pixel_absolute_ignores_scroll() {
-        let mut mapper = CoordinateMapper::new();
-        mapper.set_scroll_offset_x(200.0);
-        let absolute = mapper.beat_to_pixel_absolute(Beats::from_f32(4.0));
-        let scrolled = mapper.beat_to_pixel(Beats::from_f32(4.0));
-
-        assert!((absolute - 4.0 * 120.0).abs() < 0.001);
-        assert!((scrolled - (absolute - 200.0)).abs() < 0.001);
-    }
-
-    #[test]
-    fn duration_width_roundtrip() {
-        let mapper = CoordinateMapper::new();
-        let beats = Beats::from_f32(3.5);
-        let width = mapper.beat_duration_to_width(beats);
-        let result = mapper.width_to_beat_duration(width);
-        assert!((result.as_f32() - beats.as_f32()).abs() < 0.001);
     }
 
     // ── Zoom management ──────────────────────────────────────────────
@@ -495,23 +417,6 @@ mod tests {
 
         mapper.set_zoom_by_index(2);
         assert_eq!(mapper.pixels_per_beat(), color::ZOOM_LEVELS[2]);
-    }
-
-    // ── Fit zoom ─────────────────────────────────────────────────────
-
-    #[test]
-    fn calculate_fit_zoom() {
-        let mapper = CoordinateMapper::new();
-        let fit = mapper.calculate_fit_zoom(Beats::from_f32(16.0), 800.0);
-        assert!((fit - 800.0 / 16.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn calculate_fit_zoom_zero_input() {
-        let mapper = CoordinateMapper::new();
-        let current = mapper.pixels_per_beat();
-        assert!((mapper.calculate_fit_zoom(Beats::from_f32(0.0), 800.0) - current).abs() < 0.001);
-        assert!((mapper.calculate_fit_zoom(Beats::from_f32(16.0), 0.0) - current).abs() < 0.001);
     }
 
     // ── Y-axis layout ────────────────────────────────────────────────
@@ -628,8 +533,6 @@ mod tests {
 
     #[test]
     fn track_height_presets_ordered() {
-        assert_eq!(TrackHeight::for_collapsed(true), TrackHeight::Collapsed);
-        assert_eq!(TrackHeight::for_collapsed(false), TrackHeight::Normal);
         assert!(TrackHeight::Collapsed.px() < TrackHeight::Normal.px());
         // Two-tier system: Normal IS the expanded tier (200). Tall is reserved
         // and currently equal to Normal — no longer strictly greater.

@@ -287,14 +287,6 @@ impl LayerChromePanel {
 
     // ── Sync methods ─────────────────────────────────────────────
 
-    pub fn sync_header_text(&mut self, tree: &mut UITree, text: &str) {
-        if self.cached_header_text == text {
-            return;
-        }
-        self.cached_header_text = text.into();
-        self.reconcile_chrome(tree);
-    }
-
     pub fn sync_name(&mut self, tree: &mut UITree, name: &str) {
         if self.cached_name == name {
             return;

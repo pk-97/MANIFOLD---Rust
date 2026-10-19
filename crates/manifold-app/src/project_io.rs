@@ -646,13 +646,6 @@ impl ProjectIOService {
         }
     }
 
-    /// Unity ProjectIOService.LastOpenedProjectPath (line 49).
-    // Ported service method; its Application wrapper isn't wired yet.
-    #[allow(dead_code)]
-    pub fn last_opened_project_path(&self) -> Option<&str> {
-        self.last_opened_project_path.as_deref()
-    }
-
     /// Recent project paths, most-recent first, filtered to those that still
     /// exist on disk. Drives the File → Open Recent submenu.
     pub fn recent_projects(&self) -> Vec<PathBuf> {
@@ -1150,17 +1143,6 @@ impl ProjectIOService {
         } else {
             ProjectIOAction::default()
         }
-    }
-
-    /// Process a project file drop (routes through shared open_project_from_path).
-    // Ported drop handler; its Application wrapper isn't wired yet.
-    #[allow(dead_code)]
-    pub fn process_dropped_project_file(
-        &mut self,
-        path: &Path,
-        user_prefs: &mut UserPrefs,
-    ) -> ProjectIOAction {
-        self.open_project_from_path(path, user_prefs)
     }
 }
 

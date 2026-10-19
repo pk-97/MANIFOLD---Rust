@@ -13,7 +13,7 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
     MTLCommandBufferDescriptor, MTLCommandBufferErrorOption,
-    MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLHeap, MTLHeapDescriptor,
+    MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice,
     MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource,
     MTLResourceOptions, MTLSamplerDescriptor, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
     MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexStepFunction,
@@ -387,14 +387,6 @@ impl GpuDevice {
     ) -> Option<std::sync::Arc<super::residency::GpuResidencyLease>> {
         self.residency_sender()
             .map(|sender| super::residency::lease_for_buffer(&sender, raw))
-    }
-
-    pub(crate) fn residency_heap_lease(
-        &self,
-        raw: &ProtocolObject<dyn MTLHeap>,
-    ) -> Option<std::sync::Arc<super::residency::GpuResidencyLease>> {
-        self.residency_sender()
-            .map(|sender| super::residency::lease_for_heap(&sender, raw))
     }
 
     /// Human-readable Metal device name (e.g. `"Apple M4 Max"`). Used as the
@@ -856,39 +848,6 @@ impl GpuDevice {
             source = source.replace(pattern, replacement);
         }
         self.create_compute_pipeline(&source, entry_point, label)
-    }
-
-    /// Half-precision variant of `create_specialized_compute_pipeline`.
-    pub fn create_specialized_compute_pipeline_half(
-        &self,
-        wgsl_source: &str,
-        entry_point: &str,
-        specializations: &[(&str, &str)],
-        label: &str,
-    ) -> GpuComputePipeline {
-        let mut source = wgsl_source.to_string();
-        for &(pattern, replacement) in specializations {
-            source = source.replace(pattern, replacement);
-        }
-        self.create_compute_pipeline_half(&source, entry_point, label)
-    }
-
-    /// Create a specialized render pipeline by text-replacing patterns in WGSL
-    /// source before compilation.
-    pub fn create_specialized_render_pipeline(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        specializations: &[(&str, &str)],
-        color_format: GpuTextureFormat,
-        label: &str,
-    ) -> GpuRenderPipeline {
-        let mut source = wgsl_source.to_string();
-        for &(pattern, replacement) in specializations {
-            source = source.replace(pattern, replacement);
-        }
-        self.create_render_pipeline(&source, vs_entry, fs_entry, color_format, None, label)
     }
 
     /// Load or create a pipeline binary archive at the given path.
@@ -1577,7 +1536,7 @@ impl GpuDevice {
     /// [`Self::create_render_pipeline_depth_msaa`]'s specialized-plus-MRT
     /// superset (`docs/GBUFFER_DESIGN.md` section 2 D5, P2): text-substitutes
     /// `specializations` into `wgsl_source` before compiling (the same
-    /// "function constant" mechanism as [`Self::create_specialized_render_pipeline`]
+    /// "function constant" mechanism as [`Self::create_specialized_compute_pipeline`]
     /// — a single WGSL template compiled into distinct pipeline variants,
     /// never a second shader file), and declares one extra color attachment
     /// (indices 1..) per entry in `aux_color_formats` so the fragment can
@@ -2019,37 +1978,6 @@ impl GpuDevice {
     /// with a clone of this `Arc`.
     fn retirement_mark(&self) -> Option<Arc<super::retire::RetireMark>> {
         self.retirement.get().map(Arc::clone)
-    }
-
-    /// Create a GPU heap for sub-allocation.
-    pub fn create_heap(&self, size: u64, storage_mode: GpuStorageMode) -> GpuHeap {
-        if alloc_log_enabled() {
-            eprintln!("[gpu-alloc] heap {size} {storage_mode:?}");
-            alloc_log_backtrace();
-        }
-        let desc = unsafe {
-            use objc2::AnyThread;
-            MTLHeapDescriptor::init(MTLHeapDescriptor::alloc())
-        };
-        unsafe {
-            desc.setSize(size as usize);
-            desc.setStorageMode(to_mtl_storage_mode(storage_mode));
-        }
-        let heap = self
-            .device
-            .newHeapWithDescriptor(&desc)
-            .expect("newHeapWithDescriptor failed");
-        unsafe { heap.setLabel(Some(&NSString::from_str("MANIFOLD TexturePool Heap"))) };
-        let residency = self.residency_heap_lease(&heap);
-        GpuHeap::new(heap, self.retirement_mark(), residency)
-    }
-
-    /// Query the heap size and alignment needed for a texture with the given
-    /// descriptor. Used to pre-compute heap capacity.
-    pub fn heap_texture_size_and_align(&self, desc: &GpuTextureDesc) -> (u64, u64) {
-        let mtl_desc = Self::build_mtl_texture_desc(desc);
-        let sa = unsafe { self.device.heapTextureSizeAndAlignWithDescriptor(&mtl_desc) };
-        (sa.size as u64, sa.align as u64)
     }
 
     /// Build a Metal TextureDescriptor from GpuTextureDesc (shared helper).

@@ -366,11 +366,6 @@ impl View {
         self
     }
 
-    pub fn pressed_bg(mut self, c: Color32) -> Self {
-        self.style.pressed_bg_color = c;
-        self
-    }
-
     pub fn border(mut self, color: Color32, width: f32) -> Self {
         self.style.border_color = color;
         self.style.border_width = width;
@@ -470,11 +465,6 @@ impl View {
 
     pub fn on_click(mut self, action: PanelAction) -> Self {
         self.intent.click = Some(action);
-        self
-    }
-
-    pub fn on_double_click(mut self, action: PanelAction) -> Self {
-        self.intent.double_click = Some(action);
         self
     }
 

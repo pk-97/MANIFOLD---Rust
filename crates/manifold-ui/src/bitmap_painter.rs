@@ -11,8 +11,6 @@ use crate::node::Color32;
 // `manifold_nodes::clip_draw`); their constants left with them. Region
 // highlight + insert cursor are still bitmap-painted (front buffer).
 
-pub const REGION_HIGHLIGHT_COLOR: Color32 = color::ACCENT_BLUE_SELECTION;
-pub const INSERT_CURSOR_COLOR: Color32 = color::INSERT_CURSOR_BLUE;
 
 /// Scale a logical pixel value to texture pixels, minimum 1.
 /// Unity: `private static int S(int logicalPx, float renderScale)

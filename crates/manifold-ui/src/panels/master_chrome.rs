@@ -414,13 +414,6 @@ impl MasterChromePanel {
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         self.host.register_slider_resets(intents);
     }
-
-    pub fn exit_path_button_rect(&self, tree: &UITree) -> Rect {
-        self.host
-            .node_id_for_key(KEY_EXIT_PATH)
-            .map(|id| tree.get_bounds(id))
-            .unwrap_or(Rect::ZERO)
-    }
 }
 
 impl Default for MasterChromePanel {

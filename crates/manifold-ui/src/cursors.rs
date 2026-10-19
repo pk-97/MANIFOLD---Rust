@@ -93,22 +93,6 @@ impl CursorManager {
     }
 }
 
-impl TimelineCursor {
-    /// Convert to winit CursorIcon string name.
-    /// Used by app.rs to call `window.set_cursor(winit::window::CursorIcon::*)`.
-    pub fn to_winit_cursor_icon(self) -> &'static str {
-        match self {
-            TimelineCursor::Crosshair => "Crosshair",
-            TimelineCursor::Default => "Default",
-            TimelineCursor::ResizeHorizontal => "ColResize",
-            TimelineCursor::ResizeVertical => "RowResize",
-            TimelineCursor::Move => "Move",
-            TimelineCursor::Blocked => "NotAllowed",
-            TimelineCursor::Bend => "Grab",
-        }
-    }
-}
-
 impl From<crate::automation_hit_tester::AutomationOperation> for TimelineCursor {
     fn from(operation: crate::automation_hit_tester::AutomationOperation) -> Self {
         use crate::automation_hit_tester::AutomationOperation as Op;

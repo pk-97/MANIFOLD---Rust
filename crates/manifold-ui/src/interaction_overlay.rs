@@ -717,16 +717,6 @@ struct TrimDrag {
     clip_id: ClipId,
     original_start_beat: Beats,
     original_duration_beats: Beats,
-    // Doc-committed shape (UI_WIDGET_UNIFICATION_DESIGN.md P7.4) — mirrors
-    // `original_start_beat`/`original_duration_beats`'s role for the grabbed
-    // clip, but no current handler consults it (the per-clip fan-over reads
-    // `TrimOriginal::in_point` on `originals` instead). Was equally unread
-    // as the pre-fold loose field it replaces — carried forward for shape
-    // parity, not new dead weight. Un-suppression trigger: wire it into a
-    // grabbed-clip-specific in_point read, or delete in a follow-up hygiene
-    // pass if P7.5+ never needs it.
-    #[allow(dead_code)]
-    original_in_point: Seconds,
     originals: Vec<TrimOriginal>,
 }
 
@@ -1323,7 +1313,6 @@ impl InteractionOverlay {
             clip_id,
             original_start_beat: clip.start_beat,
             original_duration_beats: clip.duration_beats,
-            original_in_point: clip.in_point,
             originals,
         }
     }
@@ -2793,13 +2782,6 @@ impl InteractionOverlay {
                 host.set_cursor(TimelineCursor::Default);
             }
         }
-    }
-
-    /// Port of Unity InteractionOverlay.OnPointerExit (lines 259-272).
-    pub fn on_pointer_exit(&mut self, host: &mut dyn TimelineEditingHost, ui_state: &mut UIState) {
-        let had_hover = ui_state.hovered_clip_id.take().is_some();
-        if ui_state.automation_feedback.take().is_some() || had_hover { host.redraw(); }
-        host.set_cursor(TimelineCursor::Default);
     }
 
     // ────────────────────────────────────────────────────────────

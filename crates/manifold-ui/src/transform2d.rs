@@ -60,14 +60,6 @@ impl Affine2 {
             .mul(&Affine2::translate(-pivot.0, -pivot.1))
     }
 
-    /// Scale by `(sx, sy)` about `pivot` — the pivot point is left fixed.
-    /// `= translate(pivot) ∘ scale(sx, sy) ∘ translate(-pivot)`.
-    pub fn scale_about(pivot: (f32, f32), sx: f32, sy: f32) -> Self {
-        Affine2::translate(pivot.0, pivot.1)
-            .mul(&Affine2::scale(sx, sy))
-            .mul(&Affine2::translate(-pivot.0, -pivot.1))
-    }
-
     /// Compose `self ∘ other`: apply `other` first, then `self`. Matches the
     /// module doc's convention — `self.mul(&other).apply(p) == self.apply(other.apply(p))`.
     pub fn mul(&self, other: &Affine2) -> Self {
@@ -149,23 +141,6 @@ mod tests {
             .mul(&Affine2::translate(-pivot.0, -pivot.1));
         let p = (12.0, -3.0);
         approx_eq(via_helper.apply(p), manual.apply(p));
-    }
-
-    #[test]
-    fn scale_about_pivot_fixes_the_pivot() {
-        let pivot = (100.0, 40.0);
-        let s = Affine2::scale_about(pivot, 2.0, 0.5);
-        approx_eq(s.apply(pivot), pivot);
-    }
-
-    #[test]
-    fn scale_about_center_scales_corner_correctly() {
-        // A 100x100 rect at origin, center (50,50), scaled 2x about its center:
-        // the far corner (100,100) should land at (150,150).
-        let pivot = (50.0, 50.0);
-        let s = Affine2::scale_about(pivot, 2.0, 2.0);
-        approx_eq(s.apply((100.0, 100.0)), (150.0, 150.0));
-        approx_eq(s.apply((0.0, 0.0)), (-50.0, -50.0));
     }
 
     #[test]

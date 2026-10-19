@@ -191,37 +191,6 @@ impl ScreenLayout {
         Rect::new(x, top, self.audio_setup_width, h)
     }
 
-    /// Effect browser: leftmost sidebar.
-    pub fn effect_browser(&self) -> Rect {
-        if self.effect_browser_width <= 0.0 {
-            return Rect::ZERO;
-        }
-        let top = self.transport_bar_height;
-        Rect::new(
-            0.0,
-            top,
-            self.effect_browser_width,
-            self.screen_height - top,
-        )
-    }
-
-    // ── Convenience accessors for dropdown anchoring ──────────────
-
-    /// Y position of the footer bar.
-    pub fn footer_y(&self) -> f32 {
-        self.footer().y
-    }
-
-    /// X position of the inspector sidebar.
-    pub fn inspector_x(&self) -> f32 {
-        self.inspector().x
-    }
-
-    /// Y position of the inspector sidebar.
-    pub fn inspector_y(&self) -> f32 {
-        self.inspector().y
-    }
-
     /// Height of the non-scrollable header area above the track scroll container.
     /// Overview strip (16) + ruler (40) = 56px base.
     /// When audio waveform lane is visible: + 56px.

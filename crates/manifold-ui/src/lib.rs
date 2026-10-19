@@ -14,7 +14,6 @@ pub mod cursors;
 pub mod drag;
 pub mod dock;
 pub mod draw;
-pub mod driver_waveform_icons;
 pub mod fmt;
 pub mod mini_timeline;
 pub mod graph_canvas;
@@ -47,7 +46,6 @@ pub mod value_cell;
 pub mod view;
 pub mod waveform_painter;
 pub mod waveform_renderer;
-pub mod widget_layout;
 
 pub use automation::{
     AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo, ResolveError,

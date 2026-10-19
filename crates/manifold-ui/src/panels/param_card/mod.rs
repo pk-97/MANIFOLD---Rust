@@ -1218,39 +1218,6 @@ impl ParamCardPanel {
         Some(tree.get_bounds(cid))
     }
 
-    /// Hit-test the param NAME labels (slider + toggle/trigger rows) and return
-    /// the [`ParamId`](manifold_foundation::ParamId) of the row whose label
-    /// contains `(sx, sy)`, or `None`. Read-only — no behaviour change and no
-    /// effect on the performance card; the graph-editor host calls it in Author
-    /// context to jump from a card param straight to the node that defines it.
-    pub fn label_hit(
-        &self,
-        tree: &UITree,
-        sx: f32,
-        sy: f32,
-    ) -> Option<manifold_foundation::ParamId> {
-        let pos = Vec2::new(sx, sy);
-        for (i, info) in self.rows.iter().enumerate() {
-            let label_id = self.row_host
-                .slider_ids
-                .get(i)
-                .and_then(|s| s.as_ref())
-                .and_then(|ids| ids.label)
-                .or_else(|| {
-                    self.row_host.toggle_ids
-                        .get(i)
-                        .and_then(|t| t.as_ref())
-                        .and_then(|ids| ids.label_id)
-                });
-            if let Some(lid) = label_id
-                && tree.get_bounds(lid).contains(pos)
-            {
-                return Some(info.id.clone());
-            }
-        }
-        None
-    }
-
     /// Get string param info for text input anchoring (generator kind).
     pub fn string_param(&self, index: usize) -> Option<&ParamCardStringInfo> {
         self.string_param_info.get(index)

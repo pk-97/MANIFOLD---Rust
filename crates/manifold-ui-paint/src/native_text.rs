@@ -1229,13 +1229,6 @@ impl NativeTextRenderer {
         }
     }
 
-    /// Clear the draw queues (call after render()).
-    pub fn clear_commands(&mut self) {
-        self.commands.clear();
-        self.icon_commands.clear();
-        self.text_arena.clear(); // reuses capacity
-    }
-
     /// Shape all queued text, ensure glyphs are in atlas, build vertex/index buffers.
     /// Returns true if there is anything to render.
     pub fn prepare(

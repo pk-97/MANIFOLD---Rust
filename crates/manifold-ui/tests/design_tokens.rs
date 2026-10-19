@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 // spectral palette and its two interpolation fixture colours.
 // 205→201, 2026-09-29 (test prune): the deleted chrome style-pin tests held
 // four raw fixture colours.
-const COLOR_BASELINE: usize = 200;
+const COLOR_BASELINE: usize = 199;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

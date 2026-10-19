@@ -2358,22 +2358,6 @@ impl ParamCardPanel {
             tree.set_text(name_label_id, name);
         }
     }
-
-    /// Update a string param value and its display text (generator kind).
-    pub fn sync_string_param(&mut self, tree: &mut UITree, index: usize, value: &str) {
-        if let Some(sp) = self.string_param_info.get_mut(index) {
-            sp.value = value.to_string();
-            if let Some(Some(btn_id)) = self.string_param_btn_ids.get(index).copied() {
-                let display_value = sp.display_value.as_deref().unwrap_or(value);
-                let display = if display_value.is_empty() {
-                    format!("{}: (empty)", sp.name)
-                } else {
-                    format!("{}: {}", sp.name, display_value)
-                };
-                tree.set_text(btn_id, &display);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -4,7 +4,6 @@
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
-use manifold_core::effects::SegmentShape;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::commands::effect_target::EffectTarget;
@@ -14,7 +13,6 @@ use manifold_ui::InspectorTab;
 use manifold_ui::cursor_nav;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 use manifold_ui::ui_state::UIState;
-use manifold_ui::view::UiSegmentShape;
 
 use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
@@ -1616,32 +1614,6 @@ fn clear_export_range(p: &mut manifold_core::project::Project) {
     p.timeline.export_in_beat = manifold_core::Beats::ZERO;
     p.timeline.export_out_beat = manifold_core::Beats::ZERO;
     p.timeline.export_range_enabled = false;
-}
-
-#[allow(dead_code, unreachable_patterns)]
-fn from_core_segment_shape(shape: SegmentShape) -> UiSegmentShape {
-    match shape {
-        SegmentShape::Linear => UiSegmentShape::Linear,
-        SegmentShape::Hold => UiSegmentShape::Hold,
-        SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
-        SegmentShape::CurvedRange { bend, start, end } => {
-            UiSegmentShape::CurvedRange { bend, start, end }
-        }
-        _ => UiSegmentShape::Linear,
-    }
-}
-
-#[allow(dead_code, unreachable_patterns)]
-fn to_core_segment_shape(shape: UiSegmentShape) -> SegmentShape {
-    match shape {
-        UiSegmentShape::Linear => SegmentShape::Linear,
-        UiSegmentShape::Hold => SegmentShape::Hold,
-        UiSegmentShape::Curved(bend) => SegmentShape::Curved(bend),
-        UiSegmentShape::CurvedRange { bend, start, end } => {
-            SegmentShape::CurvedRange { bend, start, end }
-        }
-        _ => SegmentShape::Linear,
-    }
 }
 
 // ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──

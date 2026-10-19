@@ -680,11 +680,6 @@ impl UIState {
         }
     }
 
-    /// The pointer's timeline position (paste target). Displayed nowhere.
-    pub fn pointer_position(&self) -> (f32, Option<&LayerId>) {
-        (self.cursor_beat, self.cursor_layer_id.as_ref())
-    }
-
     pub fn set_pointer_position(&mut self, beat: f32, layer_id: Option<LayerId>) {
         self.cursor_beat = beat;
         self.cursor_layer_id = layer_id;
@@ -985,17 +980,6 @@ impl UIState {
         self.note_cursor_change();
     }
 
-    /// Clear insert cursor if active.
-    /// Unity UIState.cs ClearInsertCursor (lines 132-138).
-    pub fn clear_insert_cursor(&mut self) {
-        if self.insert_cursor_layer_id.is_none() {
-            return;
-        }
-        self.insert_cursor_beat = None;
-        self.insert_cursor_layer_id = None;
-        self.note_selection_change();
-    }
-
     /// Whether an insert cursor is placed.
     pub fn has_insert_cursor(&self) -> bool {
         self.insert_cursor_layer_id.is_some()
@@ -1245,11 +1229,6 @@ impl UIState {
             self.selected_marker_ids.insert(marker_id);
         }
         self.note_selection_change();
-    }
-
-    /// Whether a specific marker is selected.
-    pub fn is_marker_selected(&self, marker_id: &MarkerId) -> bool {
-        self.selected_marker_ids.contains(marker_id)
     }
 }
 

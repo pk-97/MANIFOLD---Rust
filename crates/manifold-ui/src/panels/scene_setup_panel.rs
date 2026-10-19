@@ -441,42 +441,7 @@ pub enum ObjectRowVm {
     Custom { index: usize },
 }
 
-/// A stepper row whose value is an enum index rather than a raw float —
-/// historically the same `[label] [−] value [+]` shape as [`RowValue`]'s
-/// numeric steppers; C-P1c/C-P1d converted every consumer (Light, then
-/// Modifier's Axis rows) onto [`ModulatedEnumRow`]'s `value_labels` path, so
-/// this type has no producer left in this crate — kept only as the DTO shape
-/// documentation for `ModulatedEnumRow`'s own doc comment to point at
-/// (`labels` is transcribed by `state_sync`, the same DTO-boundary
-/// convention as `EnvironmentRowVm::mode_is_hdri`, since this crate can't
-/// depend on `manifold-nodes`'s `LIGHT_MODES`/`SHADOW_SOFTNESS_LABELS`).
-#[derive(Clone, Debug, PartialEq)]
-pub struct EnumRowValue {
-    pub row: RowValue,
-    pub labels: Vec<&'static str>,
-}
-
-/// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the modulation-carrying
-/// twin of [`EnumRowValue`] — same shape, but `row` is a [`ModulatedRow`] so
-/// enum/axis rows can carry driver/envelope/audio-mod facts through
-/// `build_param_row`'s `ParamRow.value_labels` path (the card row core
-/// already supports labeled/enum rows — no bespoke stepper needed, D1's
-/// "check for a card enum row first"). Light's Mode/Cast Shadows/Shadow
-/// Softness rows were the first consumer (C-P1c); C-P1d moved Modifier's
-/// `ModifierParamRowVm::Axis` rows onto this same type, so every enum row in
-/// the panel now rides one shape.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ModulatedEnumRow {
-    pub row: ModulatedRow,
-    pub labels: Vec<&'static str>,
-}
-
-/// One light row's full editable surface (D3/D4): mode, color, intensity,
-/// pos/aim, cast_shadows, shadow_softness, and light_size — the last shown
-/// as a sub-row beneath shadow_softness but ALWAYS present and editable
-/// (parameter dependency, not conditional UI — `feedback_no_conditionally_visible_ui`).
-/// C-P1c: every field promoted to `ModulatedRow`/`ModulatedEnumRow` — same
-/// promotion C-P1b already did for `TransformRowVm`/`ObjectMaterialVm`.
+/// One light row: the fields the panel reads.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightKnownRow {
     pub index: usize,
@@ -485,16 +450,6 @@ pub struct LightKnownRow {
     /// before this design). Double-click opens the same rename UX as an
     /// object's name.
     pub name: String,
-    pub mode: ModulatedEnumRow,
-    pub color: (ModulatedRow, ModulatedRow, ModulatedRow),
-    pub intensity: ModulatedRow,
-    pub pos: (ModulatedRow, ModulatedRow, ModulatedRow),
-    pub aim: (ModulatedRow, ModulatedRow, ModulatedRow),
-    /// A 2-label (`Off`/`On`) enum stepper over the raw [0,1] threshold —
-    /// same shape as `mode`/`shadow_softness`, not a bespoke toggle widget.
-    pub cast_shadows: ModulatedEnumRow,
-    pub shadow_softness: ModulatedEnumRow,
-    pub light_size: ModulatedRow,
 }
 
 /// One Lights-section row.
@@ -505,43 +460,6 @@ pub enum LightRowVm {
     Custom { index: usize },
 }
 
-/// `node.camera_lens`'s four params (D3: "the lens node's own row beneath").
-/// C-P1c: `ModulatedRow`, same promotion as `LightKnownRow`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LensRowVm {
-    pub focus_distance: ModulatedRow,
-    pub f_stop: ModulatedRow,
-    pub shutter_angle: ModulatedRow,
-    pub exposure_ev: ModulatedRow,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct OrbitCameraRowVm {
-    pub orbit: ModulatedRow,
-    pub tilt: ModulatedRow,
-    pub distance: ModulatedRow,
-    pub fov_y: ModulatedRow,
-    pub lens: Option<LensRowVm>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct FreeCameraRowVm {
-    pub pos: (ModulatedRow, ModulatedRow, ModulatedRow),
-    pub yaw: ModulatedRow,
-    pub pitch: ModulatedRow,
-    pub roll: ModulatedRow,
-    pub fov_y: ModulatedRow,
-    pub lens: Option<LensRowVm>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct LookAtCameraRowVm {
-    pub pos: (ModulatedRow, ModulatedRow, ModulatedRow),
-    pub target: (ModulatedRow, ModulatedRow, ModulatedRow),
-    pub fov_y: ModulatedRow,
-    pub lens: Option<LensRowVm>,
-}
-
 /// The Camera section (D3/D4): exactly one of these per live scene (`None`
 /// when `camera` is unwired — D3 has no "add camera" action in v1, unlike
 /// Environment/Fog, since `render_scene`'s `camera` port is REQUIRED —
@@ -549,9 +467,9 @@ pub struct LookAtCameraRowVm {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CameraRowVm {
     None,
-    Orbit(Box<OrbitCameraRowVm>),
-    Free(Box<FreeCameraRowVm>),
-    LookAt(Box<LookAtCameraRowVm>),
+    Orbit,
+    Free,
+    LookAt,
     /// Producer resolved but isn't one of the three curated atoms — honest
     /// custom row (D3).
     Custom,

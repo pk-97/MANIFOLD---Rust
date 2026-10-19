@@ -204,12 +204,6 @@ pub fn state_button_style(active_color: Color32, active: bool) -> UIStyle {
     )
 }
 
-/// A state button showing `label`, filled with `active_color` when `active` and
-/// a neutral chip otherwise. Size + wire it like any component.
-pub fn state_button(label: impl Into<String>, active_color: Color32, active: bool) -> View {
-    View::button(label).style(state_button_style(active_color, active))
-}
-
 // ── ChipMotion ──────────────────────────────────────────────────────
 // The one hover/press tween a kit control uses instead of the renderer's
 // instant flag-driven color jump (`UI_CRAFT_AND_MOTION_PLAN.md` P1: "kit chip
@@ -435,21 +429,6 @@ pub fn dropdown_chip_style(surface: ChipSurface, font_size: u16, radius: f32) ->
 // Secondary = neutral control grey (everything else). One accent, used
 // sparingly — that is what keeps it meaning "this is the action".
 
-pub fn button_primary_style() -> UIStyle {
-    UIStyle {
-        bg_color: color::ACCENT_BLUE_C32,
-        hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
-        pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
-        text_color: color::TEXT_WHITE_C32,
-        border_color: CONTROL_OUTLINE,
-        border_width: CONTROL_OUTLINE_WIDTH,
-        font_size: color::FONT_BODY,
-        corner_radius: color::CHIP_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
-}
-
 pub fn button_secondary_style() -> UIStyle {
     UIStyle {
         bg_color: color::BG_3,
@@ -463,14 +442,6 @@ pub fn button_secondary_style() -> UIStyle {
         text_align: TextAlign::Center,
         ..UIStyle::default()
     }
-}
-
-pub fn button_primary(text: impl Into<String>) -> View {
-    View::button(text).style(button_primary_style())
-}
-
-pub fn button_secondary(text: impl Into<String>) -> View {
-    View::button(text).style(button_secondary_style())
 }
 
 // ── IconButton ──────────────────────────────────────────────────────
@@ -488,11 +459,6 @@ pub fn icon_button_style() -> UIStyle {
         text_align: TextAlign::Center,
         ..UIStyle::default()
     }
-}
-
-/// A transparent glyph button (`\u{2261}` menu, `\u{25B6}`/`\u{25BC}` chevron, …).
-pub fn icon_button(glyph: impl Into<String>) -> View {
-    View::button(glyph).style(icon_button_style())
 }
 
 // ── SegmentedControl ────────────────────────────────────────────────
@@ -555,82 +521,6 @@ pub fn dropdown_trigger_style(font_size: u16) -> UIStyle {
     dropdown_chip_style(ChipSurface::Neutral, font_size, color::CHIP_RADIUS)
 }
 
-/// A dropdown trigger showing `text`; the caret affordance is painted by the
-/// style's `dropdown_caret` flag, so `text` is the bare value.
-pub fn dropdown_trigger(text: impl AsRef<str>, font_size: u16) -> View {
-    View::button(text.as_ref().to_string()).style(dropdown_trigger_style(font_size))
-}
-
-// ── ParamRow pieces ─────────────────────────────────────────────────
-// The full param row (label · slider · value · badge · reset) is assembled in
-// Phase 5 on the Edge Detect prototype, because it has to thread the live
-// slider materialisation + drag state that lives in `param_card`. These are the
-// row's reusable trailing-column atoms, defined here so that assembly is just
-// composition.
-
-/// Reset (`\u{21BA}`) — a fixed right-column control, same spot every row
-/// (Resolve pattern). An icon button by another name.
-pub fn reset_button() -> View {
-    View::button("\u{21BA}").style(icon_button_style())
-}
-
-/// Modulation glance badge — a small dot on a collapsed row: filled accent when
-/// the param is modulated (armed), a faint dot when idle. Non-interactive.
-/// Per-source colouring (driver teal / envelope orange / audio green) is a
-/// Phase 5 detail; this is the binary armed/idle glance.
-pub fn mod_badge(armed: bool) -> View {
-    View::panel().fixed(6.0, 6.0).radius(color::BUTTON_RADIUS).bg(if armed {
-        color::ACCENT_BLUE_C32
-    } else {
-        color::STATUS_DOT_INACTIVE
-    })
-}
-
-// ── Panel state (empty / error / loading) ───────────────────────────
-// One look for "there's nothing to show here": a centered line, dimmed for an
-// empty or loading panel and tinted to the status red for an error. Replaces the
-// per-panel hand-rolled "Select a …" labels so every empty / error / loading
-// state reads as deliberate rather than missing. Text-only by intent — the
-// reference DAWs (Ableton, Resolve) place a quiet line here, not an illustration.
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PanelStateKind {
-    /// Nothing selected / nothing here yet — a neutral dimmed hint.
-    Empty,
-    /// Something went wrong — the line tints to the status red.
-    Error,
-    /// Work in flight — a neutral dimmed line. No spinner: the app redraws on
-    /// completion, so restraint wins over decorative idle motion (section 19).
-    Loading,
-}
-
-impl PanelStateKind {
-    fn text_color(self) -> Color32 {
-        match self {
-            PanelStateKind::Empty | PanelStateKind::Loading => color::TEXT_DIMMED_C32,
-            PanelStateKind::Error => color::STATUS_BAD,
-        }
-    }
-}
-
-/// Label style for an empty / error / loading message: one centered line, dimmed
-/// or error-tinted. Imperative callers pass this to `UITree::add_label`;
-/// declarative callers use [`panel_state`].
-pub fn panel_state_style(kind: PanelStateKind) -> UIStyle {
-    UIStyle {
-        text_color: kind.text_color(),
-        font_size: color::FONT_BODY,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
-}
-
-/// A centered empty / error / loading message line. Size + wire it (usually
-/// `.inert()`): `components::panel_state("Select a node", Empty).fill().inert()`.
-pub fn panel_state(message: impl Into<String>, kind: PanelStateKind) -> View {
-    View::label(message).style(panel_state_style(kind))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,46 +572,5 @@ mod tests {
         assert_eq!(validate(&v).len(), 1, "unwired component must warn");
         // …and is silent once wired (here: key-routed, so inert).
         assert!(validate(&toggle("ON", true).inert()).is_empty());
-    }
-
-    #[test]
-    fn dropdown_trigger_carries_chevron_affordance() {
-        let v = dropdown_trigger("Mode", color::FONT_BODY);
-        // The caret is the style's `dropdown_caret` flag (renderer-painted), not a
-        // glyph baked into the text.
-        assert!(dropdown_trigger_style(color::FONT_BODY).dropdown_caret);
-        assert_eq!(v.text.as_deref(), Some("Mode"));
-        assert!(validate(&v.inert()).is_empty());
-    }
-
-    #[test]
-    fn mod_badge_is_a_non_interactive_dot() {
-        assert!(validate(&mod_badge(true)).is_empty());
-        assert_eq!(mod_badge(true).kind, UINodeType::Panel);
-    }
-
-    #[test]
-    fn panel_state_dims_empty_and_loading_tints_error_and_centers() {
-        assert_eq!(
-            panel_state_style(PanelStateKind::Empty).text_color,
-            color::TEXT_DIMMED_C32
-        );
-        assert_eq!(
-            panel_state_style(PanelStateKind::Loading).text_color,
-            color::TEXT_DIMMED_C32
-        );
-        assert_eq!(
-            panel_state_style(PanelStateKind::Error).text_color,
-            color::STATUS_BAD
-        );
-        // Centered, so it reads as a deliberate placeholder, not a stray label.
-        assert_eq!(
-            panel_state_style(PanelStateKind::Empty).text_align,
-            TextAlign::Center
-        );
-        // The View carries the message and is a label.
-        let v = panel_state("Select a node", PanelStateKind::Empty);
-        assert_eq!(v.kind, UINodeType::Label);
-        assert_eq!(v.text.as_deref(), Some("Select a node"));
     }
 }

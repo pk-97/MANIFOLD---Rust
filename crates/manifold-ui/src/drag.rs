@@ -132,14 +132,6 @@ impl<T> DragController<T> {
     pub fn cancel(&mut self) {
         self.session = None;
     }
-
-    /// Take the whole in-flight session — payload plus grab/current geometry
-    /// — with NO commit signal (unlike `release`, whose return is the
-    /// caller's cue to emit a commit). For a cancel-with-rollback that needs
-    /// to read the payload (e.g. to clear a live preview) before dropping it.
-    pub fn take_session(&mut self) -> Option<DragSession<T>> {
-        self.session.take()
-    }
 }
 
 #[cfg(test)]
@@ -236,22 +228,5 @@ mod tests {
         // idle controller: no payload to mutate
         let mut idle: DragController<Counter> = DragController::new();
         assert!(idle.payload_mut().is_none());
-    }
-
-    #[test]
-    fn take_session_returns_full_session_with_no_commit_signal() {
-        let mut d: DragController<u32> = DragController::new();
-        d.start(5, Vec2::new(1.0, 2.0));
-        d.track(Vec2::new(4.0, 6.0));
-
-        let session = d.take_session().expect("session was active");
-        assert_eq!(session.payload, 5);
-        assert_eq!(session.start, Vec2::new(1.0, 2.0));
-        assert_eq!(session.current, Vec2::new(4.0, 6.0));
-        assert!(!d.is_active(), "take_session must end the drag");
-
-        // idle controller: nothing to take
-        let mut idle: DragController<u32> = DragController::new();
-        assert!(idle.take_session().is_none());
     }
 }

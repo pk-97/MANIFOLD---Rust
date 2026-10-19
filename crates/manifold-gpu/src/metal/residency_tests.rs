@@ -72,27 +72,6 @@ fn fence_retirement_holds_lease_until_completion() {
 }
 
 #[test]
-fn heap_children_share_one_registration() {
-    let device = GpuDevice::new();
-    let mut manager = residency_manager(&device);
-
-    let heap = device.create_heap(128 * 1024, crate::GpuStorageMode::Private);
-    manager.drain();
-    assert_eq!(manager.stats().allocation_count, 1);
-    let child = heap
-        .new_texture(&texture_desc(1))
-        .expect("heap should fit proof texture");
-    manager.drain();
-    assert_eq!(manager.stats().allocation_count, 1);
-    drop(heap);
-    manager.drain();
-    assert_eq!(manager.stats().allocation_count, 1);
-    drop(child);
-    manager.drain();
-    assert_eq!(manager.stats().allocation_count, 0);
-}
-
-#[test]
 fn pool_recycle_keeps_registration_alive() {
     let device = GpuDevice::new();
     let mut manager = residency_manager(&device);

@@ -275,7 +275,7 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         item: &SceneItemVm,
     ) -> f32 {
-        let supported = matches!(vm.camera, CameraRowVm::Orbit(_) | CameraRowVm::Free(_));
+        let supported = matches!(vm.camera, CameraRowVm::Orbit | CameraRowVm::Free);
         let button_w = tree.text_width(USE_VIEW, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0;
         let name_w = (inner_w - button_w - 4.0).max(0.0);
         self.build_name_and_kind(tree, Rect::new(inner_x, cy, name_w, ROW_H), &item.name, item.kind, None);

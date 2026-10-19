@@ -50,12 +50,6 @@ impl TimelineViewportPanel {
         )
     }
 
-    /// Convert panel-local pixel X (0 = left edge of tracks area) to beat position.
-    /// Used by waveform/stem scrub where events are already offset to local coords.
-    pub fn local_pixel_to_beat(&self, local_px: f32) -> Beats {
-        Beats((local_px / self.mapper.pixels_per_beat()) as f64 + self.scroll_x_beats.0)
-    }
-
     /// Snap a beat to the grid for ruler scrubbing, unless free-scrub is active.
     ///
     /// Unity `RulerScrubHandler.ScrubToPosition()`:
