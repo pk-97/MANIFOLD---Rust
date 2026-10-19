@@ -89,6 +89,8 @@
       "scene-setup-empty-states",
       "scene-skin",
       "material-inspector-colour",
+      "scene-colour-row-hex",
+      "scene-light-swatch",
       "scene-fluid-role-lifecycle",
       "scene-forces-controls"
     ],
@@ -101,6 +103,8 @@
       "scene-setup-empty-states",
       "scene-skin",
       "material-inspector-colour",
+      "scene-colour-row-hex",
+      "scene-light-swatch",
       "scene-fluid-role-lifecycle",
       "scene-forces-controls"
     ],
@@ -172,7 +176,9 @@
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
       "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo",
+      "scene-colour-row-hex",
+      "scene-light-swatch"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
@@ -227,6 +233,7 @@
     ],
     "crates/manifold-app/src/ui_bridge/projection/material.rs": [
       "material-inspector-colour",
+      "scene-colour-row-hex",
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
@@ -234,6 +241,7 @@
     ],
     "crates/manifold-app/src/ui_bridge/material_looks.rs": [
       "material-inspector-colour",
+      "scene-colour-row-hex",
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
@@ -241,6 +249,7 @@
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
       "material-inspector-colour",
+      "scene-colour-row-hex",
       "material-inspector-features",
       "material-inspector-groups",
       "material-inspector-looks",
@@ -385,6 +394,7 @@
     "scene-slider-range": "gltfscene",
     "scene-use-this-view": "gltfscene",
     "scene-light-swatch": "gltfscene",
+    "scene-colour-row-hex": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
     "work-node-param-drag": "paramsteps",

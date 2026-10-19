@@ -373,36 +373,64 @@ pub(super) fn enrich_surface(
             row.spec.inactive_reason = Some("Custom binding — edit individual parameters".into());
         }
     }
-    for index in 0..surface.rows.len() {
-        let Some(Role::Colour(_, colour, RgbChannel::R)) = surface.rows[index].spec.material_role
-        else {
+    colour_rows(&mut surface.rows, inst, def);
+    for row in &mut surface.rows {
+        let red = matches!(row.spec.material_role, Some(Role::Colour(_, _, RgbChannel::R)));
+        if red && !row.rgb_members.as_ref().is_some_and(|members| members.editable) && row.spec.inactive_reason.is_none() {
+            row.spec.inactive_reason = Some("Colour channels have separate control — edit them individually".into());
+        }
+    }
+}
+
+/// Group each colour's three channel rows: the R row of a colour whose G
+/// and B rows bind to the same node carries all three as `rgb_members`, so
+/// a scene surface draws it as the one colour row. Its `editable` says
+/// whether one RGB write owns them ([`rgb_ids_editable`], no wire-fed row).
+/// A colour with a missing, doubled or split channel stays three rows.
+pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance, def: &EffectGraphDef) {
+    for index in 0..rows.len() {
+        let Some((colour, ui::RgbChannel::R)) = row_rgb_channel(&rows[index].spec) else {
             continue;
         };
-        let Some((node, _)) = direct_binding(inst, def, &surface.rows[index].id) else {
+        let Some((node, _)) = direct_binding(inst, def, &rows[index].id) else {
             continue;
         };
         let mut members: [Option<&ui::ParamRow>; 3] = [None, None, None];
-        let mut valid = true;
-        for row in &surface.rows {
-            let Some(Role::Colour(_, c, channel)) = row.spec.material_role else {
+        let mut single = true;
+        for row in rows.iter() {
+            let Some((c, channel)) = row_rgb_channel(&row.spec) else {
                 continue;
             };
             if c != colour || !direct_binding(inst, def, &row.id).is_some_and(|(n, _)| n == node) {
                 continue;
             }
-            valid &= members[channel.index()].is_none() && !row.value.driven;
+            single &= members[channel.index()].is_none();
             members[channel.index()] = Some(row);
         }
-        let group = match members {
-            [Some(r), Some(g), Some(b)] if valid => rgb_members(inst, def, ui::ColourGroup::Material(colour), [r, g, b]),
+        let group = colour.map_or(ui::ColourGroup::Light, ui::ColourGroup::Material);
+        let grouped = match members {
+            [Some(r), Some(g), Some(b)] if single => {
+                let ids = [r, g, b].map(|row| row.id.clone());
+                Some(ui::RgbMembers {
+                    group,
+                    editable: [r, g, b].iter().all(|row| !row.value.driven) && rgb_ids_editable(inst, def, &ids),
+                    ids,
+                    values: [r, g, b].map(|row| row.value.base),
+                })
+            }
             _ => None,
         };
-        if group.is_some() {
-            surface.rows[index].rgb_members = group;
-        } else if surface.rows[index].spec.inactive_reason.is_none() {
-            surface.rows[index].spec.inactive_reason =
-                Some("Colour channels have separate control — edit them individually".into());
-        }
+        rows[index].rgb_members = grouped;
+    }
+}
+
+/// A row's colour and channel, from its UI descriptor: a material colour
+/// channel, or a scene item's colour channel (`None` colour).
+fn row_rgb_channel(spec: &ui::RowSpec) -> Option<(Option<ui::MaterialColour>, ui::RgbChannel)> {
+    match (spec.material_role, spec.scene.and_then(|scene| scene.colour)) {
+        (Some(ui::MaterialParamRole::Colour(_, colour, channel)), _) => Some((Some(colour), channel)),
+        (None, Some(channel)) => Some((None, channel)),
+        _ => None,
     }
 }
 
@@ -419,6 +447,7 @@ pub(super) fn rgb_members(
         group,
         ids,
         values: rows.map(|row| row.value.base),
+        editable: true,
     })
 }
 

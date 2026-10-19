@@ -985,8 +985,7 @@ pub(crate) fn scrub_for(
 /// cell. Alpha is dropped from the compact face string (it's still editable on
 /// the inspector's A channel). Shared with the inspector's swatch path.
 pub(crate) fn format_color_hex(c: [f32; 4]) -> String {
-    let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02X}{:02X}{:02X}", to_u8(c[0]), to_u8(c[1]), to_u8(c[2]))
+    crate::panels::param_slider_shared::colour_hex([c[0], c[1], c[2]])
 }
 
 /// Whether a sparkline history actually moves — `true` only if its range spans

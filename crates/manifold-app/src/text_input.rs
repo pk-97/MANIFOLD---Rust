@@ -867,8 +867,7 @@ pub fn parse_material_colour_hex(text: &str) -> Option<[f32; 3]> {
 
 /// Format normalized RGB values for the swatch's initial text.
 pub fn format_material_colour_hex(value: [f32; 3]) -> String {
-    let channels = value.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
-    format!("#{:02X}{:02X}{:02X}", channels[0], channels[1], channels[2])
+    manifold_ui::panels::param_slider_shared::colour_hex(value)
 }
 
 /// Build the existing atomic RGB scrub transaction for a committed hex value.

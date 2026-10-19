@@ -209,6 +209,7 @@ impl ParamCardPanel {
                 return vec![PanelAction::Params(ParamsAction::CardSectionFolded { target, section, folded })];
             }
             return self.row_host.row_action(
+                tree,
                 target,
                 row,
                 role,
