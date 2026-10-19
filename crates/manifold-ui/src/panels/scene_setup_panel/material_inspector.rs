@@ -15,16 +15,11 @@ impl ScenePanel {
 
     fn sync_material_feature_order(&mut self) {
         let features = crate::param_surface::MATERIAL_FEATURES;
-        let Some(surface) = self.full_params.as_ref() else { return };
-        let gone: Vec<_> = features
-            .iter()
-            .copied()
-            .filter(|&feature| !self.material_feature_visible(&surface.rows, feature))
-            .collect();
-        // A feature that leaves and comes back lands last, as a fresh add does.
-        self.material_feature_order.retain(|feature| !gone.contains(feature));
         for &feature in features {
-            let visible = !gone.contains(&feature);
+            let visible = self
+                .full_params
+                .as_ref()
+                .is_some_and(|surface| self.material_feature_visible(&surface.rows, feature));
             if visible {
                 self.material_visible_features.insert(feature);
                 if !self.material_feature_order.contains(&feature) {
@@ -1471,33 +1466,52 @@ mod tests {
         );
     }
 
-    #[test]
-    fn material_inspector_removed_then_readded_feature_goes_last() {
+    fn order_panel(coat: f32, iridescence: f32) -> ScenePanel {
         use crate::param_surface::MaterialFeature;
         let (_, mut surface) = super::super::tests::world_transform_vm();
         let mode = |feature, name: &str, base| {
             material_test_row(name, MaterialParamRole::FeatureMode(feature), base, 0.0)
         };
-        let set = |surface: &mut crate::param_surface::ParamSurface, coat, iridescence| {
-            surface.rows = vec![
-                mode(MaterialFeature::Coat, "51_coat_mode", coat),
-                mode(MaterialFeature::Iridescence, "51_iridescence_mode", iridescence),
-            ];
-        };
+        surface.rows = vec![
+            mode(MaterialFeature::Coat, "51_coat_mode", coat),
+            mode(MaterialFeature::Iridescence, "51_iridescence_mode", iridescence),
+        ];
         let mut panel = ScenePanel::new();
-        set(&mut surface, 2.0, 2.0);
-        panel.full_params = Some(surface.clone());
-        panel.sync_material_feature_order();
-        assert_eq!(panel.material_feature_order, [MaterialFeature::Coat, MaterialFeature::Iridescence]);
-        set(&mut surface, 3.0, 2.0);
-        panel.full_params = Some(surface.clone());
-        panel.sync_material_feature_order();
-        assert_eq!(panel.material_feature_order, [MaterialFeature::Iridescence]);
-        set(&mut surface, 2.0, 2.0);
         panel.full_params = Some(surface);
-        panel.sync_material_feature_order();
-        assert_eq!(panel.material_feature_order, [MaterialFeature::Iridescence, MaterialFeature::Coat]);
+        panel
     }
+
+    #[test]
+    fn material_inspector_readded_feature_goes_last_but_undone_remove_keeps_its_slot() {
+        use crate::param_surface::MaterialFeature::{Coat, Iridescence};
+        let mut panel = order_panel(2.0, 2.0);
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Coat, Iridescence]);
+        // Coat removed, then undone: back in its slot.
+        let mut gone = order_panel(3.0, 2.0);
+        panel.full_params = gone.full_params.take();
+        panel.sync_material_feature_order();
+        panel.full_params = order_panel(2.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Coat, Iridescence]);
+        // Coat removed, then re-added from the menu: last.
+        panel.full_params = order_panel(3.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        let writes = vec![MaterialParamWrite { param_id: "51_coat_mode".into(), value: 2.0 }];
+        panel.material_menus.push((
+            panel_node(),
+            material_menus::MaterialMenu::AddFeature(vec![(Coat, writes.clone())]),
+        ));
+        panel.note_material_feature_added(&writes);
+        panel.full_params = order_panel(2.0, 2.0).full_params.take();
+        panel.sync_material_feature_order();
+        assert_eq!(panel.material_feature_order, [Iridescence, Coat]);
+    }
+
+    fn panel_node() -> NodeId {
+        UITree::new().add_label(None, 0.0, 0.0, 1.0, 1.0, "x", label_style())
+    }
+
 
     #[test]
     fn material_inspector_new_features_follow_existing_sections() {

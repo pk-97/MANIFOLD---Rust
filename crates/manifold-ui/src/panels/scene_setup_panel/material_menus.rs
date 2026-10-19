@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::panels::dropdown::DropdownItem;
+use crate::panels::param_slider_shared::TOGGLE_BTN_H;
 
 const PRESET_BUTTON_KEY: u64 = MATERIAL_LOOK_KEY_BASE;
 const ADD_BUTTON_KEY: u64 = MATERIAL_LOOK_KEY_BASE + 32;
@@ -35,15 +36,17 @@ impl ScenePanel {
         cy: f32,
         info: &MaterialInspectorInfo,
     ) {
-        let label_w = crate::slider::label_width_for_row(inner_w);
-        tree.add_label(Some(self.content_parent), inner_x, cy, label_w, ROW_H, "Preset", label_style());
+        // The same field the param-row pick lists use, so the two line up.
+        let RowGeometry { label_width, slider_w } = crate::panels::param_card::row_geometry(inner_w, false);
+        tree.add_label(Some(self.content_parent), inner_x, cy, label_width, ROW_H, "Preset", label_style());
+        let start = label_width.min(slider_w);
         let current = LOOKS.iter().find(|(look, _)| Some(*look) == info.look).map_or("Custom", |(_, name)| name);
         let id = tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x + label_w,
-            cy,
-            (inner_w - label_w).max(0.0),
-            ROW_H,
+            inner_x + start,
+            cy + (ROW_H - TOGGLE_BTN_H) * 0.5,
+            slider_w - start,
+            TOGGLE_BTN_H,
             crate::chrome::components::dropdown_trigger_style(btn_style().font_size),
             current,
             PRESET_BUTTON_KEY,
@@ -84,6 +87,22 @@ impl ScenePanel {
         tree.set_name(id, "material.add_feature");
         self.material_menus.push((id, MaterialMenu::AddFeature(addable)));
         cy + ROW_H + ROW_GAP
+    }
+
+    /// The app dispatched an add-feature menu item: that feature moves to the
+    /// end of the UI-local section order. An undone remove is not an add, so it
+    /// keeps its old slot. UI state only.
+    pub fn note_material_feature_added(&mut self, writes: &[MaterialParamWrite]) {
+        let added = self.material_menus.iter().find_map(|(_, menu)| match menu {
+            MaterialMenu::AddFeature(features) => {
+                features.iter().find(|(_, offered)| offered == writes).map(|(feature, _)| *feature)
+            }
+            MaterialMenu::Presets(_) => None,
+        });
+        if let Some(feature) = added {
+            self.material_feature_order.retain(|existing| *existing != feature);
+            self.material_feature_order.push(feature);
+        }
     }
 
     /// A click on a Material menu button: ask the app to open the dropdown.

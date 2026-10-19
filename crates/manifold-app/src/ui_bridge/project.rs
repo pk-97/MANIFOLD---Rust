@@ -304,6 +304,9 @@ pub(super) fn dispatch_project(
             writes,
             description,
         } => {
+            if *kind == manifold_ui::panels::actions::MaterialEditKind::Feature {
+                ui.scene_setup_panel.note_material_feature_added(writes);
+            }
             dispatch_material_batch(
                 project,
                 content_tx,
