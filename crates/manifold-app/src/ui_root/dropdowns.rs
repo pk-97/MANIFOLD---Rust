@@ -2254,6 +2254,11 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
+            PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id, items }) => {
+                let trigger = self.tree.get_bounds(*button_node_id);
+                self.open_dropdown_typed(items.clone(), trigger);
+                true
+            }
             _ => false,
         }
     }

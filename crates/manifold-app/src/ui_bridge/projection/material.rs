@@ -140,6 +140,7 @@ pub(super) fn inspector_info(
     project: &manifold_core::project::Project,
     def: &EffectGraphDef,
     object: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
+    inst: Option<&PresetInstance>,
 ) -> Option<manifold_ui::panels::scene_setup_panel::MaterialInspectorInfo> {
     use manifold_nodes_scene::node_graph::scene_vm::{MaterialTextureSource, MaterialVm};
     use manifold_ui::panels::scene_setup_panel::{MaterialInspectorInfo, MaterialTextureInfo};
@@ -207,7 +208,15 @@ pub(super) fn inspector_info(
             }
         })
         .collect();
+    let look = inst.and_then(|inst| {
+        let reference = manifold_core::scene_modifier_preset::SceneNodeRef {
+            scope: material_ref.scope.clone(),
+            node: material_ref.node.clone(),
+        };
+        super::super::material_looks::matching_look(inst, def, &reference)
+    });
     Some(MaterialInspectorInfo {
+        look,
         object_gain: def
             .preset_metadata
             .as_ref()

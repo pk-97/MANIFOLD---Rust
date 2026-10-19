@@ -553,7 +553,7 @@ pub fn sync_inspector_data(
                                                 ),
                                                 transform: transform.as_ref().map(&transform_row),
                                                 material: material_row(material),
-                                                material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known)),
+                                                material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known, l.gen_params())),
                                                 modifiers: object_modifier_rows(def.as_ref(), modifier_chain, &owned),
                                                 modifiers_addable: known.look_mesh.is_none() && *modifier_chain_parseable,
                                                 skin: if known.look_mesh.is_some() { None } else { skin },

@@ -27,6 +27,7 @@ mod host_parity_tests;
 mod row_gesture_tests;
 #[path = "scene_setup_panel/material_inspector.rs"]
 mod material_inspector;
+mod material_menus;
 #[path = "scene_setup_panel/object_modifiers.rs"]
 mod object_modifiers;
 #[path = "scene_setup_panel/forces.rs"]
@@ -333,6 +334,8 @@ pub struct MaterialInspectorInfo {
     pub object_gain: Option<manifold_foundation::ParamId>,
     pub material: ModifierObjectRef,
     pub shared_object_count: Option<usize>,
+    /// The starter look the material currently matches; `None` is Custom.
+    pub look: Option<MaterialLook>,
     pub textures: Vec<MaterialTextureInfo>,
     /// Exact inner material parameter bindings for the selected material.
     /// Names are descriptor keys; ids are the exposed graph parameters.
@@ -1041,17 +1044,8 @@ pub struct ScenePanel {
     material_visible_features: ahash::AHashSet<crate::param_surface::MaterialFeature>,
     material_feature_order: Vec<crate::param_surface::MaterialFeature>,
     material_remove_ids: Vec<(NodeId, crate::param_surface::MaterialFeature, manifold_foundation::ParamId)>,
-    /// Named material recipe buttons for the selected object's material.
-    material_look_ids: Vec<(NodeId, MaterialLook, ModifierObjectRef, ModifierObjectRef)>,
-    /// Add Feature controls and explicit feature mode headers for the selected
-    /// material. The refs are captured from the current structural projection.
-    material_feature_ids: Vec<(
-        NodeId,
-        crate::param_surface::MaterialFeature,
-        Vec<MaterialParamWrite>,
-        ModifierObjectRef,
-        ModifierObjectRef,
-    )>,
+    /// The Material section's preset and add-feature menu buttons.
+    material_menus: Vec<(NodeId, material_menus::MaterialMenu)>,
     active_material_info: Option<MaterialInspectorInfo>,
     /// The current properties pass's group for undescribed controls.
     property_fallback_group: ControlGroup,
@@ -1140,8 +1134,7 @@ impl Default for ScenePanel {
             material_visible_features: ahash::AHashSet::new(),
             material_feature_order: Vec::new(),
             material_remove_ids: Vec::new(),
-            material_look_ids: Vec::new(),
-            material_feature_ids: Vec::new(),
+            material_menus: Vec::new(),
             active_material_info: None,
             property_fallback_group: ControlGroup::Transform,
             material_block_stage: 0,
@@ -1313,8 +1306,7 @@ impl ScenePanel {
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
         self.material_mode_ids.clear();
-        self.material_look_ids.clear();
-        self.material_feature_ids.clear();
+        self.material_menus.clear();
         self.material_remove_ids.clear();
         // Object modifier cards are retained for collapse/gesture state, but
         // their widget ids are frame-local. Clear them before rebuilding so
@@ -1701,7 +1693,7 @@ impl ScenePanel {
             self.material_block_stage = 1;
         }
         if self.material_block_stage == 1 && group > material {
-            cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &info);
+            cy = self.build_material_add_menu(tree, inner_x, inner_w, cy);
             cy = self.build_material_inspector(tree, inner_x, inner_w, cy, object, object.skin.as_ref());
             self.material_block_stage = 2;
         }
@@ -1870,37 +1862,11 @@ impl ScenePanel {
                         return (true, self.material_remove_action(
                             *feature, mode_id, GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
                         ));
-                    } else if let Some((_, feature, writes, object, material)) = self
-                        .material_feature_ids
-                        .iter()
-                        .find(|(id, _, _, _, _)| *id == *node_id)
-                    {
-                        if !self.material_action_context(object, material, false) {
-                            return (true, Vec::new());
-                        }
-                        self.material_feature_order.retain(|existing| existing != feature);
-                        self.material_feature_order.push(*feature);
-                        self.section_folded.insert(Self::material_feature_label(*feature).into(), false);
-                        actions.push(PanelAction::Project(ProjectAction::MaterialParamsSet {
-                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
-                            object: object.clone(),
-                            material: material.clone(),
-                            kind: MaterialEditKind::Feature,
-                            writes: writes.clone(),
-                            description: format!("Add {} feature", Self::material_feature_label(*feature)),
-                        }));
-                    } else if let Some((_, look, object, material)) =
-                        self.material_look_ids.iter().find(|(id, _, _, _)| *id == *node_id)
-                    {
-                        if !self.material_action_context(object, material, true) {
-                            return (true, Vec::new());
-                        }
-                        actions.push(PanelAction::Project(ProjectAction::MaterialLookApply {
-                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
-                            object: object.clone(),
-                            material: material.clone(),
-                            look: *look,
-                        }));
+                    } else if let Some(menu) = self.material_menu_click(
+                        *node_id,
+                        GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
+                    ) {
+                        return (true, menu);
                     } else if let Some((_, row_value)) =
                         self.outliner_eye_ids.iter().find(|(id, _)| *id == *node_id)
                     {
