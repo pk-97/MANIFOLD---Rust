@@ -400,24 +400,28 @@ pub(crate) fn run_editor_frame(
         ui_root.input.refresh_hover(&mut ui_root.tree);
     }
 
-    let mut canvas_moved = false;
+    // Any planned work changed what the window shows, as the main window's
+    // `FramePlan::redraw`: a region that rebuilt empty (a closed popup) has
+    // no dirty node left to say so.
+    let mut redraw = plan != EditorPlan::default() || scrolled;
     if let Some(canvas) = canvas {
         let vp = layout.canvas_rect();
-        canvas_moved |= canvas.resolve_pending_focus(vp);
-        canvas_moved |= canvas.apply_pending_fit(vp);
+        redraw |= canvas.resolve_pending_focus(vp);
+        redraw |= canvas.apply_pending_fit(vp);
         // Wire-to-port magnetize needs port screen positions, so it ticks
         // here beside the draw rather than in the main canvas tick.
-        canvas_moved |= canvas.tick_wire_magnet(vp);
+        redraw |= canvas.tick_wire_magnet(vp);
     }
-    EditorFrameOut { smart_preview_toggle: state.smart_preview_toggle, canvas_moved }
+    EditorFrameOut { smart_preview_toggle: state.smart_preview_toggle, redraw }
 }
 
 /// What one editor frame hands back to its caller.
 pub(crate) struct EditorFrameOut {
     /// The smart-preview toggle's id, as the preview column drew it.
     pub smart_preview_toggle: Option<NodeId>,
-    /// The canvas view or its ghost wire moved this frame, so it must draw.
-    pub canvas_moved: bool,
+    /// The plan did work, or the canvas view or its ghost wire moved this
+    /// frame, so the offscreen must composite.
+    pub redraw: bool,
 }
 
 /// What the canvas was last fed, kept so a frame feeds only what moved.
@@ -664,8 +668,10 @@ impl LiveSurfaces {
 
 /// Whether the editor's offscreen must composite this frame: a dirty mark
 /// from input or the canvas (`dirty`), a live surface on screen or playback
-/// running, a moved [`CompositeKey`], an unpainted panel node or a dirty
-/// overlay. An idle editor composites nothing and re-presents its last frame.
+/// running, a moved [`CompositeKey`], an animating overlay
+/// (`EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6, the same keepalive as the main
+/// window's), an unpainted panel node or a dirty overlay. An idle editor
+/// composites nothing and re-presents its last frame.
 pub(crate) fn needs_composite(state: &mut EditorFrameState, ui_root: &UIRoot, dirty: bool, key: CompositeKey) -> bool {
     let moved = state.last_composite != Some(key);
     state.last_composite = Some(key);
@@ -673,6 +679,7 @@ pub(crate) fn needs_composite(state: &mut EditorFrameState, ui_root: &UIRoot, di
         || moved
         || key.live.any()
         || key.playing
+        || ui_root.overlay_redraw_needed()
         || editor_atlas_dirty(ui_root)
         || ui_root.tree.has_dirty_in_region(MainRegion::Overlays.id())
         || ui_root.tree.has_dirty_in_region(MainRegion::Ghosts.id())
@@ -893,6 +900,36 @@ mod tests {
             let plan = plan_editor_frame(&base(), &next);
             assert!(plan.overlays && !plan.cards && !plan.column, "{plan:?}");
         }
+    }
+
+    /// A closed popup rebuilds the overlays empty, leaving no dirty node to
+    /// say the screen changed; the frame's plan says it.
+    #[test]
+    fn planned_work_redraws_and_an_idle_frame_does_not() {
+        let mut ui = UIRoot::new();
+        let mut state = EditorFrameState::default();
+        let panel = GraphEditorPanel::new();
+        let layout = EditorLayout::compute(&manifold_ui::Dock::editor(), 1600, 1000, None);
+        let project = manifold_core::project::Project::default();
+        let content_state = crate::content_state::ContentState::default();
+        let mut run = |ui: &mut UIRoot| {
+            let inputs = EditorFrameInputs {
+                project: &project,
+                content_state: &content_state,
+                active_layer: None,
+                live: LiveInputs::default(),
+                dt: 1.0 / 60.0,
+                show_image: false,
+            };
+            run_editor_frame(ui, &mut state, &panel, None, &layout, inputs, false).redraw
+        };
+        assert!(run(&mut ui), "the first frame builds every region");
+        ui.inspector.skip_to_settled(&mut ui.tree);
+        run(&mut ui);
+        assert!(!run(&mut ui), "an idle frame plans nothing");
+        ui.mark_overlay_dirty();
+        assert!(run(&mut ui), "an overlay rebuild redraws");
+        assert!(!run(&mut ui));
     }
 
     #[test]

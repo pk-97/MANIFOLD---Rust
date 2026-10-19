@@ -937,12 +937,13 @@ impl Application {
                     last_y: cy,
                     fluid_domain,
                 });
-                ed.offscreen_dirty = true;
             }
             return true;
         }
 
-        // No gizmo hit (or nothing selected yet) — try an object pick.
+        // No gizmo hit (or nothing selected yet) — try an object pick. The
+        // gizmo, its drags and the selection draw over the viewport's rendered
+        // image, a live surface the editor composites every frame it shows.
         match manifold_nodes_scene::node_graph::viewport_gizmo::pick_object(&scene, &cam, w, h, (cx, cy)) {
             Some(obj_id) => {
                 self.ws.ui_root.scene_setup_panel.set_selection(
@@ -951,15 +952,12 @@ impl Application {
                 );
                 if let Some(ed) = self.graph_editor.as_mut() {
                     ed.viewport_selected_object = Some(obj_id);
-                    ed.offscreen_dirty = true;
                 }
                 true
             }
             None => {
-                if let Some(ed) = self.graph_editor.as_mut()
-                    && ed.viewport_selected_object.take().is_some()
-                {
-                    ed.offscreen_dirty = true;
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.viewport_selected_object = None;
                 }
                 false
             }
@@ -990,7 +988,6 @@ impl Application {
         {
             if !matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &drag.layer_id) {
                 ed.viewport_gizmo_drag = None;
-                ed.offscreen_dirty = true;
                 return true;
             }
             if let Some(delta) = domain.target.projected_drag_delta(
@@ -1004,7 +1001,6 @@ impl Application {
             }
             drag.last_x = x;
             drag.last_y = y;
-            ed.offscreen_dirty = true;
             return true;
         }
         let Some(drag) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_gizmo_drag.clone()) else {
@@ -1087,7 +1083,6 @@ impl Application {
         {
             d.last_x = x;
             d.last_y = y;
-            ed.offscreen_dirty = true;
         }
         true
     }
@@ -1160,9 +1155,9 @@ impl Application {
         // Editor window: node picker is open → keystrokes drive its
         // search field. Must run BEFORE the Delete/Backspace node-
         // delete arm below, or Backspace would delete a node instead
-        // of editing the filter. Escape dismisses; chars/space type;
-        // every transition sets offscreen_dirty so the editor
-        // repaints (it has no per-frame repaint loop when idle).
+        // of editing the filter. Escape dismisses; chars/space type.
+        // Each moves the overlays' version (filter, cursor) or open set
+        // (close), which the editor's plan rebuilds and composites.
         if is_graph_editor
             && self
                 .graph_editor
@@ -1199,12 +1194,14 @@ impl Application {
                     }
                     filter_changed = true;
                 }
-                // Picker keyboard nav (P2): arrows move the grid cursor.
+                // Picker keyboard nav (P2): arrows move the grid cursor,
+                // which the popup draws when it builds.
                 Key::Named(NamedKey::ArrowUp) => {
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.ui_root
                             .browser_popup
                             .handle_key_nav(manifold_ui::input::Key::Up);
+                        ed.ui_root.mark_overlay_dirty();
                     }
                 }
                 Key::Named(NamedKey::ArrowDown) => {
@@ -1212,6 +1209,7 @@ impl Application {
                         ed.ui_root
                             .browser_popup
                             .handle_key_nav(manifold_ui::input::Key::Down);
+                        ed.ui_root.mark_overlay_dirty();
                     }
                 }
                 // Enter picks (type-and-enter fast path when no cursor and a
@@ -1247,9 +1245,6 @@ impl Application {
                 if let Some(ed) = self.graph_editor.as_mut() {
                     ed.ui_root.set_browser_filter(filter);
                 }
-            }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
             }
             return true;
         }
@@ -1330,9 +1325,8 @@ impl Application {
                 let q = self.text_input.text().trim().to_string();
                 canvas.set_node_search(&q);
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
+            // The open field is a live surface of the editor's composite, and
+            // its close moves the composite key.
             return true;
         }
         // Editor window: Delete/Backspace removes the currently
@@ -1523,9 +1517,6 @@ impl Application {
                     crate::text_input::AnchorRect::new(sx, sy, sw.max(80.0), sh.max(18.0)),
                     13.0,
                 );
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
             }
             return true;
         }
@@ -1556,9 +1547,6 @@ impl Application {
                 anchor,
                 13.0,
             );
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
             return true;
         }
         // Editor window: Cmd+C copies the selected nodes (and the wires
@@ -1596,10 +1584,9 @@ impl Application {
                     (30.0, 30.0),
                     default,
                 );
+                // The pasted nodes arrive in the next graph snapshot, which
+                // the canvas feed draws.
                 self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-            }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
             }
             return true;
         }
@@ -1639,9 +1626,8 @@ impl Application {
                     crate::ui_bridge::undo(tx);
                 }
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
+            // The undone graph arrives in the next snapshot, which the canvas
+            // feed draws.
             return true;
         }
         false
@@ -1654,10 +1640,10 @@ impl Application {
         {
             surface.resize(size.width.max(1), size.height.max(1));
         }
+        // The new target resets the composite key, so the next pulse draws it.
         self.resize_graph_editor_offscreen(size.width.max(1), size.height.max(1));
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.surface_resized_this_frame = true;
-            ed.offscreen_dirty = true;
         }
     }
 
@@ -1680,7 +1666,6 @@ impl Application {
         self.resize_graph_editor_offscreen(new_size.0, new_size.1);
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.surface_resized_this_frame = true;
-            ed.offscreen_dirty = true;
         }
         let _ = scale_factor;
     }

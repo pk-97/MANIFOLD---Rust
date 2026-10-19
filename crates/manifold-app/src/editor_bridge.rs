@@ -1061,7 +1061,9 @@ impl Application {
             Some(ed) if in_editor => ed.ui_root.inspector.last_effect_tab(),
             _ => self.ws.ui_root.inspector.last_effect_tab(),
         };
-        if !crate::text_session::begin_inspector_entry(
+        // An editor-owned field is a live surface of the editor's composite
+        // while it is open, so opening one needs no repaint call.
+        crate::text_session::begin_inspector_entry(
             &mut self.text_input,
             action,
             in_editor,
@@ -1069,13 +1071,7 @@ impl Application {
             &self.active_layer_id,
             &self.selection,
             &self.local_project,
-        ) {
-            return false;
-        }
-        if in_editor && let Some(editor) = self.graph_editor.as_mut() {
-            editor.offscreen_dirty = true;
-        }
-        true
+        )
     }
 
     /// Open from the emitting card using the shared target resolver and its
@@ -1580,13 +1576,6 @@ impl Application {
             return;
         };
 
-        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the same keepalive the
-        // main window ORs into its own `offscreen_dirty`, one predicate for
-        // both windows.
-        if ws.ui_root.overlay_redraw_needed() {
-            ws.offscreen_dirty = true;
-        }
-
         // Consume editor vsync signal — skip when no pulse fired.
         // (Falls through to render when there's no display link, e.g.
         // non-macOS.)
@@ -1852,7 +1841,7 @@ impl Application {
             false,
         );
         self.editor_smart_preview_toggle_id = editor_out.smart_preview_toggle;
-        ws.offscreen_dirty |= editor_out.canvas_moved;
+        ws.offscreen_dirty |= editor_out.redraw;
 
         // ── Node output previews (BUG-027): register the current atlas front
         // under a fixed handle and hand each visible node its cell UV, so the

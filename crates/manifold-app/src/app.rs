@@ -2416,8 +2416,8 @@ impl Application {
             label: "Graph Editor Offscreen",
             mip_levels: 1,
         }));
-        // A new target holds nothing; the next pulse composites it whole.
+        // A new target holds nothing; with no composite key on record the
+        // next pulse composites it whole.
         ws.editor_frame.last_composite = None;
-        ws.offscreen_dirty = true;
     }
 }

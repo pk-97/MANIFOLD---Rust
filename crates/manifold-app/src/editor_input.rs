@@ -91,18 +91,14 @@ pub(crate) struct Moved {
 /// widget holds the press.
 pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
     // Column-divider drag or hover takes precedence over the canvas and
-    // panels. A live drag resizes the dock and consumes the move.
+    // panels. A live drag resizes the dock and consumes the move. The dock's
+    // sizes, drag and hover are its composite key (`Dock::draw_key`).
     let ws = &mut *cx.ws;
     let dock_dragging = if ws.dock.is_dragging() {
         ws.dock.drag(cx.area, pos);
-        ws.offscreen_dirty = true;
         true
     } else {
-        let before = ws.dock.highlighted();
         ws.dock.set_hover_from(cx.area, pos);
-        if ws.dock.highlighted() != before {
-            ws.offscreen_dirty = true;
-        }
         false
     };
     let mut moved = Moved { cursor: ws.dock.cursor().unwrap_or(TimelineCursor::Default), gizmo_move: None };
@@ -111,12 +107,12 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
     }
 
     // Mini-timeline scrub: a move while scrubbing seeks the playhead and
-    // consumes the move.
+    // consumes the move. The playhead is part of the composite key, so the
+    // seek draws when the content thread reports it.
     if ws.timeline_scrubbing {
         let bottom = ws.dock.rects(cx.area).bottom;
         let total = cx.project.timeline.duration_beats().as_f32();
         let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, pos.x);
-        cx.ws.offscreen_dirty = true;
         cx.send(ContentCommand::SeekToBeat(manifold_core::Beats::from_f32(beat)));
         return moved;
     }
@@ -129,7 +125,9 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
     }
 
     // 3D viewport navigation: a drag a press inside the viewport started
-    // claims every move until release, even outside the rect.
+    // claims every move until release, even outside the rect. The camera
+    // shows only in the viewport's rendered image, a live surface the editor
+    // composites every frame while it is on screen.
     if let Some((button, last_x, last_y)) = ws.viewport_drag {
         let (dx, dy) = (pos.x - last_x, pos.y - last_y);
         ws.viewport_drag = Some((button, pos.x, pos.y));
@@ -141,7 +139,6 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
                 gesture,
                 &crate::viewport_input::ViewportInputSensitivity::default(),
             );
-            ws.offscreen_dirty = true;
         }
         return moved;
     }
@@ -186,7 +183,6 @@ pub(crate) struct Button {
 /// pans (middle) until release.
 pub(crate) fn arm_viewport_drag(ws: &mut Workspace, button: MouseButton, pos: Vec2) {
     ws.viewport_drag = Some((button, pos.x, pos.y));
-    ws.offscreen_dirty = true;
 }
 
 /// `MouseInput` in the editor window: the node picker is modal; then the dock
@@ -203,9 +199,10 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
                 ElementState::Pressed => PointerAction::Down,
                 ElementState::Released => PointerAction::Up,
             };
+            // The picker is overlay-tree content: a press or release dirties
+            // its nodes, which the composite reads.
             let ui_root = &mut cx.ws.ui_root;
             ui_root.input.process_pointer(&mut ui_root.tree, pos, action, cx.time);
-            cx.ws.offscreen_dirty = true;
         }
         return out;
     }
@@ -216,14 +213,12 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
             ElementState::Pressed => {
                 if let Some(edge) = ws.dock.hit_test(cx.area, pos) {
                     ws.dock.begin(edge, pos);
-                    ws.offscreen_dirty = true;
                     return out;
                 }
             }
             ElementState::Released => {
                 if ws.dock.is_dragging() {
                     ws.dock.end();
-                    ws.offscreen_dirty = true;
                     return out;
                 }
             }
@@ -231,13 +226,15 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
     }
     // Bottom mini-timeline: the play button toggles transport, a gutter click
     // picks that row's layer, a press in the strip body seeks and scrubs.
+    // Each lands through an input the composite already reads: the play
+    // state and playhead in its key, the layer pick through the inspector
+    // projection that rebuilds the card lane.
     if button == MouseButton::Left && cx.ws.dock.show_bottom {
         let bottom = cx.ws.dock.rects(cx.area).bottom;
         match state {
             ElementState::Pressed => {
                 if manifold_ui::MiniTimeline::hit_play(bottom, pos) {
                     cx.send(if cx.is_playing { ContentCommand::Pause } else { ContentCommand::Play });
-                    cx.ws.offscreen_dirty = true;
                     return out;
                 }
                 // The same pick a main-timeline layer-header click makes, so
@@ -248,7 +245,6 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
                     let layer_id = layer.layer_id.clone();
                     *cx.active_layer = Some(layer_id.clone());
                     cx.selection.select_layer(layer_id);
-                    cx.ws.offscreen_dirty = true;
                     return out;
                 }
                 if manifold_ui::MiniTimeline::body_rect(bottom).contains(pos) {
@@ -256,13 +252,11 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
                     let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, pos.x);
                     cx.send(ContentCommand::SeekToBeat(manifold_core::Beats::from_f32(beat)));
                     cx.ws.timeline_scrubbing = true;
-                    cx.ws.offscreen_dirty = true;
                     return out;
                 }
             }
             ElementState::Released => {
                 if std::mem::take(&mut cx.ws.timeline_scrubbing) {
-                    cx.ws.offscreen_dirty = true;
                     return out;
                 }
             }
@@ -270,12 +264,12 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
     }
     // 3D viewport: a release always ends a gizmo or navigation drag first,
     // even outside the rect; a press inside it starts one. Both consume the
-    // event, so the canvas never sees clicks the viewport claims.
+    // event, so the canvas never sees clicks the viewport claims. What they
+    // change shows in the viewport's rendered image, a live surface.
     if state == ElementState::Released
         && button == MouseButton::Left
         && let Some(drag) = cx.ws.viewport_gizmo_drag.take()
     {
-        cx.ws.offscreen_dirty = true;
         if let Some(domain) = drag.fluid_domain
             && domain.changed()
             && matches!(cx.watched, Some(GraphTarget::Generator(layer)) if layer == &domain.layer_id)
@@ -286,7 +280,6 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
         return out;
     }
     if state == ElementState::Released && cx.ws.viewport_drag.take().is_some() {
-        cx.ws.offscreen_dirty = true;
         return out;
     }
     if state == ElementState::Pressed
@@ -401,14 +394,13 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
             gesture,
             &crate::viewport_input::ViewportInputSensitivity::default(),
         );
-        ws.offscreen_dirty = true;
         return true;
     }
-    // The card lane scrolls like the main window's inspector.
+    // The card lane scrolls like the main window's inspector: in place, its
+    // moved nodes dirty, the next editor frame's plan repaints the lane.
     if pos.x >= ws.dock.rects(cx.area).right.x {
         let (_, dy) = crate::window_input::normalize_scroll_delta(delta);
         ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
-        ws.offscreen_dirty = true;
         return true;
     }
     let Some(canvas) = cx.canvas.as_deref_mut() else { return false };
@@ -569,12 +561,12 @@ pub(crate) fn drain(
                         AnchorRect::new(r.x, r.y, r.width, r.height),
                         11.0,
                     );
-                    ed.offscreen_dirty = true;
                     continue;
                 }
                 // `handle_click` bypasses the overlay driver's closed-overlay
                 // tracking, so record a close here; the pump below cancels
-                // the popup's text session.
+                // the popup's text session. A close moves the overlays'
+                // open set, which the editor's plan rebuilds.
                 let was_open = ed.ui_root.browser_popup.is_open();
                 if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
                     ed.ui_root.note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
@@ -583,12 +575,12 @@ pub(crate) fn drain(
                     if let BrowserPopupAction::NodeSelected { type_id, graph_pos } = action {
                         out.graph_edits.push(GraphEditCommand::AddGraphNodeAt { type_id, graph_pos });
                     }
-                    ed.offscreen_dirty = true;
                 } else if ed.ui_root.browser_popup.contains_node(&ed.ui_root.tree, node_id) {
                     ed.ui_root.note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
                     // An internal click (category chip, background) does not
-                    // leak to the canvas.
-                    ed.offscreen_dirty = true;
+                    // leak to the canvas. A chip changes what the popup
+                    // lists, which shows only after the overlays rebuild.
+                    ed.ui_root.mark_overlay_dirty();
                 }
             }
         } else {
@@ -651,8 +643,8 @@ pub(crate) fn card_lane_entries<'x>(
     let mut mappings = Vec::new();
     for action in actions {
         let tab = ws.ui_root.inspector.last_effect_tab();
+        // The opened field is a live surface of the editor's composite.
         if crate::text_session::begin_inspector_entry(text_input, action, true, tab, active_layer, selection, project) {
-            ws.offscreen_dirty = true;
             continue;
         }
         if let PanelAction::Root(manifold_ui::RootAction::OpenCardMapping { target, param_id, anchor_node_id }) = action {
