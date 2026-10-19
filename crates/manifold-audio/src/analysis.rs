@@ -398,7 +398,7 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 /// rate before summing them into one send's analyzer. Linear interpolation is
 /// ample here — the result feeds energy/transient analysis, not playback, so band
 /// magnitudes are what matter, not reconstruction fidelity. When the rates match
-/// the runtime skips this entirely (see [`Self::is_identity`]).
+/// the runtime skips this entirely.
 pub struct LinearResampler {
     /// Input samples consumed per output sample (`in_rate / out_rate`).
     step: f64,
@@ -416,11 +416,6 @@ impl LinearResampler {
             pos: 0.0,
             last: 0.0,
         }
-    }
-
-    /// Whether input and output rates match (the runtime copies directly instead).
-    pub fn is_identity(&self) -> bool {
-        (self.step - 1.0).abs() < 1e-9
     }
 
     /// Resample `input` (at the input rate) into `out` (appended, at the output
@@ -2255,7 +2250,6 @@ mod tests {
     #[test]
     fn resampler_identity_passes_rate_through() {
         let mut r = LinearResampler::new(48_000, 48_000);
-        assert!(r.is_identity());
         let mut out = Vec::new();
         // At a 1:1 step the output count tracks the input across chunks (within
         // one sample of startup); content is what matters downstream, not phase.
@@ -2273,7 +2267,6 @@ mod tests {
     fn resampler_halves_count_when_downsampling_2to1() {
         // 48k → 24k: ~half the samples out, streamed in odd chunks (state carries).
         let mut r = LinearResampler::new(48_000, 24_000);
-        assert!(!r.is_identity());
         let mut out = Vec::new();
         let input = sine(440.0, 4096);
         for chunk in input.chunks(101) {

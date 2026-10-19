@@ -227,19 +227,6 @@ impl Buckets {
     }
 }
 
-/// `ParticleSheeter::generateSheetParticles` for markers at `positions`
-/// (grid-local, inside the grid) over the cell-centred surface level set
-/// `phi` (x fastest), before the engine's fill-rate draw.
-pub fn generate_sheet_particles(
-    positions: &[[f32; 3]],
-    phi: &[f32],
-    cells: [u32; 3],
-    dx: f64,
-    fill_threshold: f32,
-) -> Result<Vec<[f32; 3]>, FluidError> {
-    Ok(trace_sheet_particles(positions, phi, cells, dx, fill_threshold)?.seeds)
-}
-
 /// Each level-set decision the sheeter made, for comparing two level sets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SheetTrace {
@@ -262,7 +249,9 @@ pub struct SheetTrace {
     pub seed_candidates: Vec<usize>,
 }
 
-/// [`generate_sheet_particles`] with its decisions recorded.
+/// `ParticleSheeter::generateSheetParticles` for markers at `positions` (grid-local,
+/// inside the grid) over the cell-centred surface level set `phi` (x fastest), before
+/// the engine's fill-rate draw, with its decisions recorded.
 pub fn trace_sheet_particles(
     positions: &[[f32; 3]],
     phi: &[f32],

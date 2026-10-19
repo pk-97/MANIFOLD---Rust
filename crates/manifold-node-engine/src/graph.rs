@@ -646,8 +646,7 @@ manifold_core::testkit_visible! {
     /// same way.
     ///
     /// Use [`walk_wires`](Self::walk_wires) for whole-graph walks,
-    /// [`walk_wires_from`](Self::walk_wires_from) for outgoing walks,
-    /// [`walk_wires_into`](Self::walk_wires_into) for incoming walks.
+    /// [`walk_wires_from`](Self::walk_wires_from) for outgoing walks.
     pub fn walk_wires(&self, mode: WireWalkMode) -> impl Iterator<Item = &NodeWire> {
         self.wires.iter().filter(move |w| self.wire_matches(w, mode))
     }
@@ -661,17 +660,6 @@ manifold_core::testkit_visible! {
         self.wires
             .iter()
             .filter(move |w| w.from.0 == id && self.wire_matches(w, mode))
-    }
-
-    /// Incoming-wire walk filtered by `mode`. See [`walk_wires`](Self::walk_wires).
-    pub fn walk_wires_into(
-        &self,
-        id: NodeInstanceId,
-        mode: WireWalkMode,
-    ) -> impl Iterator<Item = &NodeWire> {
-        self.wires
-            .iter()
-            .filter(move |w| w.to.0 == id && self.wire_matches(w, mode))
     }
 
     /// Single source of truth for the state-capture predicate. All

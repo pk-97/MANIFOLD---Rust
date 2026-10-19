@@ -303,15 +303,6 @@ impl MetalBackend {
         self.device.as_deref()
     }
 
-    /// Pre-bind a real `RenderTarget` to a slot. Used by the host to feed
-    /// the input frame into `Source`'s output slot before each frame.
-    /// The previous binding (if any) is returned to the pool.
-    pub fn install_texture_2d(&mut self, slot: Slot, target: RenderTarget) {
-        if let Some(old) = self.textures_2d.insert(slot, target) {
-            self.pool.release(old);
-        }
-    }
-
     /// Install a *borrowed* `GpuTexture` clone at `slot` for the
     /// current frame. Subsequent `texture_2d(slot)` calls return this
     /// texture instead of the slot's owned `RenderTarget` texture.
@@ -328,8 +319,8 @@ impl MetalBackend {
     ///
     /// Used by `ChainGraph::run` to install the upstream input
     /// texture into the `Source` node's output slot each frame —
-    /// avoids the per-chain `copy_texture_to_texture` blit that
-    /// `install_texture_2d` would have caused, and avoids ending the
+    /// avoids the per-chain `copy_texture_to_texture` blit that a copy-in
+    /// install would cause, and avoids ending the
     /// active compute encoder (which the blit would trigger).
     pub fn replace_texture_2d(&mut self, slot: Slot, texture: GpuTexture) -> bool {
         if !self.textures_2d.contains_key(&slot) {
@@ -345,7 +336,7 @@ impl MetalBackend {
 
     /// Swap the `RenderTarget` at a slot, returning the previous one
     /// (or `None` if the slot was empty). Unlike
-    /// [`install_texture_2d`], the previous target is **not** released
+    /// a pool-owned install, the previous target is **not** released
     /// to the pool — the caller takes ownership and is responsible
     /// for its lifecycle.
     ///
@@ -354,7 +345,7 @@ impl MetalBackend {
     /// pre-bound source/output slots, executes, then moves them back
     /// out so the next effect's ping-pong swap can reuse them. Avoids
     /// the per-effect `copy_texture_to_texture` overhead that
-    /// `install_texture_2d` + pool ownership would force.
+    /// a copy-in install with pool ownership would force.
     pub fn swap_texture_2d(&mut self, slot: Slot, new: RenderTarget) -> Option<RenderTarget> {
         self.textures_2d.insert(slot, new)
     }
