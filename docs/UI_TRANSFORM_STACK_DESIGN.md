@@ -9,7 +9,7 @@ The motion layer's four pieces (`AnimF32`/`Transient`/`FlipList`/exit-state) pro
 ## Grounding (verified in this session — anchors for the worker)
 - One renderer, not two paths: `impl Painter for UIRenderer` (`crates/manifold-ui-paint/src/ui_renderer.rs:1465`) is a thin forwarder to `UIRenderer`'s inherent `draw_*` methods; the retained-mode chrome tree-walk and the immediate-mode canvas both emit through the same `UIRenderer`. A stack on `UIRenderer` covers both.
 - Rects/lines/text are stored as **commands** (`RectCommand`, `ui_renderer.rs:196`) and expanded to 4 corner vertices in `prepare()` at `ui_renderer.rs:~1128` (`position:[x0,y0]…`), carrying `uv`∈[0,1] and `rect_params:[w,h,corner,border]`.
-- The fragment shader (`ui_renderer.rs:75-153`) computes **every** shape feature — rounded-rect SDF, border ring, gradient, drop shadow — from `uv` and `rect_params` (local-space), never from screen position. The vertex position only maps to NDC (`ui_renderer.rs:63`). AA uses `fwidth(d)` (`:128`), self-correcting at any screen footprint.
+- The fragment shader (`ui_renderer.rs:75-153`) computes **every** shape feature — rounded-rect SDF, border ring, gradient — from `uv` and `rect_params` (local-space), never from screen position. The vertex position only maps to NDC (`ui_renderer.rs:63`). AA uses `fwidth(d)` (`:128`), self-correcting at any screen footprint.
 - `UIStyle` (`crates/manifold-ui/src/node.rs:410-439`) has no transform field. The disclosure/dropdown caret is renderer-drawn via `UIStyle.dropdown_caret` (`node.rs:426`), pinned after the main text.
 
 ## Design

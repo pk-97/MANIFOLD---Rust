@@ -1,13 +1,11 @@
 //! GPU clip-body emission (section 24 5b). Turns a clip's on-screen rect + state into
-//! `UIRenderer` rounded-rect / gradient / shadow draws, reusing the shared SDF
+//! `UIRenderer` rounded-rect / gradient draws, reusing the shared SDF
 //! rect pipeline. Replaces the CPU `bitmap_painter::draw_clip` fills — clips are
-//! GPU tiles (rounded, gradient body, lift-on-select) instead of baked pixels.
+//! GPU tiles (rounded, gradient body) instead of baked pixels.
 //!
-//! Layering: emit the shadows for the whole visible set FIRST (so a selected
-//! clip's lift sits under every neighbour), then the bodies. Both are scissored
-//! to the tracks rect by the caller, and run in their own `UIRenderer`
-//! prepare/render cycle BETWEEN the background bitmap (grid) and the front
-//! bitmap (waveform / overlays).
+//! The bodies are scissored to the tracks rect by the caller, and run in their own
+//! `UIRenderer` prepare/render cycle BETWEEN the background bitmap (grid) and
+//! the front bitmap (waveform / overlays).
 
 use crate::ui_renderer::UIRenderer;
 use manifold_ui::bitmap_painter::get_clip_color;
@@ -53,32 +51,6 @@ impl ClipBody {
 
     fn visible(&self) -> bool {
         self.rect.width > 0.0 && self.rect.height > 0.0
-    }
-}
-
-/// Emit the lift shadow under every selected clip. Call before the bodies so a
-/// selected clip's shadow never lands on top of a neighbouring body. (An *ambient*
-/// shadow under every clip — the mockup's `.clip` box-shadow — was tried and
-/// dropped: on MANIFOLD's near-black lanes a black drop-shadow doesn't read, so it
-/// was pure per-frame cost. The clips' depth comes from the inset card + identity
-/// border, not a shadow.)
-pub fn emit_clip_shadows(ui: &mut UIRenderer, clips: &[ClipBody]) {
-    if !color::SHADOWS_ENABLED {
-        return;
-    }
-    for c in clips {
-        if !c.selected || !c.visible() {
-            continue;
-        }
-        ui.draw_shadow(
-            c.rect.x,
-            c.rect.y + color::CLIP_SHADOW_OFFSET_Y,
-            c.rect.width,
-            c.rect.height,
-            color::CLIP_RADIUS,
-            color::CLIP_SHADOW_BLUR,
-            color::CLIP_SHADOW,
-        );
     }
 }
 
@@ -210,9 +182,8 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     }
 }
 
-/// Emit a whole visible set: shadows first (all selected), then every body.
+/// Emit a whole visible set: every body.
 pub fn emit_clips(ui: &mut UIRenderer, clips: &[ClipBody]) {
-    emit_clip_shadows(ui, clips);
     for c in clips {
         emit_clip_body(ui, c);
     }

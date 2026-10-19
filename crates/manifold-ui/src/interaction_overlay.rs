@@ -827,9 +827,7 @@ pub struct InteractionOverlay {
     // — is correct, not an approximation.
     /// Grab lift (D17): targets 1.0 while `drag_mode == Move`, 0.0
     /// otherwise. The render loop reads [`Self::lift_amount`] for a 1-2px
-    /// rise on every dragged clip (the shadow itself is unconditional on
-    /// `selected` already — see `clip_draw::emit_clip_shadows` — so lift
-    /// only adds the rise + lets the caller boost that shadow's opacity).
+    /// rise on every dragged clip.
     lift_anim: AnimF32,
     /// Duplicate-drag ghost (D17): targets 0.5 while alt-dragging
     /// (`drag_mode == Move && duplicate_on_release`), 1.0 otherwise — eases

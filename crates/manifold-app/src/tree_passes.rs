@@ -95,34 +95,10 @@ pub(crate) fn render_tree_overlay_passes(
     let overlays = crate::frame_plan::MainRegion::Overlays.id();
     for (i, &(start, end)) in ui_root.overlay_draw.iter().enumerate() {
         ui_renderer.push_depth(Depth::OVERLAY.above(i as i32));
-        // Soft drop-shadow under the floating panel (section 17). Drawn first so it
-        // sits under the panel's own fill at this depth. Skip a leading
-        // full-screen scrim (dim-modal backdrop) so the shadow lifts the
-        // panel, not the whole screen.
-        if start < end && manifold_ui::color::SHADOWS_ENABLED {
-            let tree = &ui_root.tree;
-            let mut r = tree.get_bounds(tree.id_in(overlays, start));
-            if r.width >= logical_w as f32 - 1.0
-                && r.height >= logical_h as f32 - 1.0
-                && start + 1 < end
-            {
-                r = tree.get_bounds(tree.id_in(overlays, start + 1));
-            }
-            ui_renderer.draw_shadow(
-                r.x,
-                r.y + manifold_ui::color::SHADOW_OFFSET_Y,
-                r.width,
-                r.height,
-                manifold_ui::color::POPUP_RADIUS,
-                manifold_ui::color::SHADOW_BLUR,
-                manifold_ui::color::SHADOW,
-            );
-        }
         // `render_sub_region`, not `render_tree_range`: each overlay's
         // `(start, end)` deliberately excludes its own
         // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root (see
-        // `UIRoot::build_overlays`'s doc comment — keeping `start` at the
-        // first REAL node is what the shadow-peek above depends on), so a
+        // `UIRoot::build_overlays`'s doc comment), so a
         // root-scan would never find that region and would render nothing.
         // `render_sub_region`'s ancestor-aware flat scan picks up the
         // region's `CLIPS_CHILDREN` regardless. This is the BUG-097 call
