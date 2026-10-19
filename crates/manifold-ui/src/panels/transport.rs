@@ -57,6 +57,12 @@ const STATUS_FONT: u16 = color::FONT_BODY;
 /// Stable key for the BPM field — the app anchors a numeric text-input session
 /// to this node ([`TransportPanel::bpm_field_id`]).
 const KEY_BPM_FIELD: u64 = 1;
+const KEY_AUTO_DRAW: u64 = 2;
+const KEY_AUTO_RESTORE: u64 = 3;
+
+const AUTO_DRAW_TOOLTIP: &str = "Draw mode: drag across an automation lane to paint its curve freehand.";
+const AUTO_RESTORE_TOOLTIP: &str =
+    "Hands every parameter you have overridden by hand back to its automation lane. Lights up red while any override is held.";
 
 // ── Style helpers ──────────────────────────────────────────────────
 
@@ -144,7 +150,17 @@ impl TransportPanel {
             return Reconcile::Updated;
         }
         let view = self.view();
-        self.host.update(tree, &view, self.rect)
+        let reconcile = self.host.update(tree, &view, self.rect);
+        self.apply_tooltips(tree);
+        reconcile
+    }
+
+    fn apply_tooltips(&self, tree: &mut UITree) {
+        for (key, help) in [(KEY_AUTO_DRAW, AUTO_DRAW_TOOLTIP), (KEY_AUTO_RESTORE, AUTO_RESTORE_TOOLTIP)] {
+            if let Some(node) = self.host.node_id_for_key(key).and_then(|id| tree.get_node_mut(id)) {
+                node.tooltip = Some(help.into());
+            }
+        }
     }
 
     /// The rect the bar last laid out at.
@@ -439,8 +455,8 @@ impl TransportPanel {
             .main_align(Align::End)
             .cross_align(Align::Center)
             .child(Self::btn("AUTOMATION", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::Transport(TransportAction::ToggleAutomationMode)))
-            .child(Self::btn("DRAW", AUTO_DRAW_BUTTON_W, button_style(draw_bg), PanelAction::Transport(TransportAction::ToggleAutomationDrawMode)))
-            .child(Self::btn("RESTORE ALL", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::Transport(TransportAction::AutomationBackToArrangement)))
+            .child(Self::btn("DRAW", AUTO_DRAW_BUTTON_W, button_style(draw_bg), PanelAction::Transport(TransportAction::ToggleAutomationDrawMode)).key(KEY_AUTO_DRAW))
+            .child(Self::btn("RESTORE ALL", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::Transport(TransportAction::AutomationBackToArrangement)).key(KEY_AUTO_RESTORE))
             .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::Transport(TransportAction::ToggleAutomationArm)))
     }
 
@@ -471,6 +487,7 @@ impl Panel for TransportPanel {
         self.rect = layout.transport_bar();
         let view = self.view();
         self.host.build(tree, &view, self.rect);
+        self.apply_tooltips(tree);
     }
 
     fn update(&mut self, tree: &mut UITree) {
@@ -530,6 +547,24 @@ mod tests {
 
         let rect_of = |t: &str| cells.iter().find(|c| c.0 == t).unwrap().1;
         assert_centred("transport cluster", rect_of("PLAY").x, rect_of("CLR").x_max(), bar);
+    }
+
+    #[test]
+    fn draw_and_restore_all_carry_tooltips_after_build_and_relayout() {
+        let mut tree = UITree::new();
+        let mut panel = TransportPanel::new();
+        panel.build(&mut tree, &ScreenLayout::new(1920.0, 1080.0));
+        let help = |tree: &UITree, text: &str| {
+            (0..tree.count())
+                .filter_map(|i| tree.get_node(tree.id_at(i)))
+                .find(|n| n.text.as_deref() == Some(text))
+                .and_then(|n| n.tooltip.clone())
+        };
+        assert_eq!(help(&tree, "DRAW").as_deref(), Some(AUTO_DRAW_TOOLTIP));
+        assert_eq!(help(&tree, "RESTORE ALL").as_deref(), Some(AUTO_RESTORE_TOOLTIP));
+        panel.set_automation_draw_mode(true);
+        panel.relayout(&mut tree);
+        assert_eq!(help(&tree, "DRAW").as_deref(), Some(AUTO_DRAW_TOOLTIP));
     }
 
     #[test]
