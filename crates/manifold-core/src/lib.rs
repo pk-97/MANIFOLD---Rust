@@ -33,6 +33,7 @@ pub mod change;
 pub mod clip;
 pub mod color;
 pub mod control_history;
+pub mod copies_body;
 pub mod effect_graph_def;
 pub mod effect_registration;
 pub mod effects;

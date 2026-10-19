@@ -168,6 +168,29 @@ pub struct RigidBody {
     /// unchanged.
     #[serde(skip)]
     pub wall: bool,
+    /// How many copies a Physics World makes of this body when it is wired
+    /// into the world's `copies` input, and how it lays them out. Any other
+    /// body ignores it.
+    #[serde(default)]
+    pub spawn: CopySpawn,
+}
+
+/// A copies body's box spawner: count, spacing, columns and arrangement,
+/// read by the Physics World at its reset latch points. Arrangement is 0
+/// Grid, 1 Pile.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopySpawn {
+    pub count: f32,
+    pub spacing: f32,
+    pub columns: f32,
+    pub layout: f32,
+}
+
+impl Default for CopySpawn {
+    fn default() -> Self {
+        Self { count: 100.0, spacing: 1.25, columns: 16.0, layout: 0.0 }
+    }
 }
 
 /// An authored graph sample retained until all fixed ticks that can use it
@@ -209,6 +232,7 @@ impl Default for RigidBody {
             bounce: 0.15,
             collider: None,
             wall: false,
+            spawn: CopySpawn::default(),
         }
     }
 }

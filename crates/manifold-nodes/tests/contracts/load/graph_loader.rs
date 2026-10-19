@@ -535,4 +535,96 @@ mod tests {
             assert!(node.params.get(param).is_none(), "{type_id}.{param}");
         }
     }
+
+    const WORLD_HANDLE: &str = "Boxes \u{2014} Apply Count with Reset";
+    const BOX_BODY_HANDLE: &str = "Box Body";
+
+    /// The bundled Physics Boxes as it was saved before the box spawner
+    /// moved onto the copies body and before the sky's sun followed the Sun
+    /// light: Count, Spacing, Columns and Arrangement on the world, Count's
+    /// card driving the world, and the bake with its own sun position and
+    /// no `sun` wire.
+    fn old_physics_boxes() -> EffectGraphDef {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/generator-presets/PhysicsBoxes.json")).unwrap();
+        let nodes = doc["nodes"].as_array_mut().unwrap();
+        let index = |nodes: &Vec<serde_json::Value>, handle: &str| {
+            nodes.iter().position(|n| n["handle"] == handle).unwrap()
+        };
+        let body = index(nodes, BOX_BODY_HANDLE);
+        let mut spawner = serde_json::Map::new();
+        for param in manifold_core::copies_body::COPY_PARAMS {
+            spawner.insert(param.into(), nodes[body]["params"][param].take());
+            nodes[body]["params"].as_object_mut().unwrap().remove(param);
+        }
+        nodes[body].as_object_mut().unwrap().remove("exposedParams");
+        let world = index(nodes, WORLD_HANDLE);
+        nodes[world]["params"] = serde_json::Value::Object(spawner);
+        nodes[world]["exposedParams"] = serde_json::json!(["copy_count", "reset"]);
+        let env = index(nodes, "environment");
+        for (axis, v) in [("sun_x", -0.4), ("sun_y", 0.8), ("sun_z", 0.5)] {
+            nodes[env]["params"][axis] = serde_json::json!({"type": "Float", "value": v});
+        }
+        doc["wires"].as_array_mut().unwrap().retain(|w| w["toPort"] != "sun");
+        for binding in doc["presetMetadata"]["bindings"].as_array_mut().unwrap() {
+            if binding["id"] == "40_copy_count" {
+                binding["target"]["nodeId"] = "physics_demo_40".into();
+            }
+        }
+        let def: EffectGraphDef = serde_json::from_value(doc).unwrap();
+        assert!(manifold_core::copies_body::carries_world_copies(&def));
+        assert!(manifold_core::sky_sun::carries_world_sun(&def));
+        def
+    }
+
+    /// The old Physics Boxes builds with the same boxes: the four controls
+    /// and their saved values on the copies body, none on the world.
+    fn assert_spawner_on_the_body(graph: &Graph) {
+        let id = |handle: &str| graph.node_id_by_handle(handle).unwrap();
+        let world = graph.get_node(id(WORLD_HANDLE)).unwrap();
+        for param in manifold_core::copies_body::COPY_PARAMS {
+            assert!(world.params.get(param).is_none(), "{param} left the world");
+        }
+        let body = graph.get_node(id(BOX_BODY_HANDLE)).unwrap();
+        let number = |param: &str| match body.params.get(param) {
+            Some(ParamValue::Float(v)) => *v,
+            Some(ParamValue::Enum(v)) => *v as f32,
+            other => panic!("{param}: {other:?}"),
+        };
+        assert_eq!(
+            ["copy_count", "copy_spacing", "copy_columns", "copy_layout"].map(number),
+            [256.0, 1.85, 24.0, 1.0],
+            "the same boxes"
+        );
+    }
+
+    /// A library preset with the box spawner on its world (never passed
+    /// project load) builds with the spawner on its copies body.
+    #[test]
+    fn library_preset_world_copies_migrate_at_instantiate() {
+        let mut graph = Graph::new();
+        instantiate_def(&mut graph, &old_physics_boxes(), &registry(), HandleScope::Global,
+            BoundaryHandling::Standalone, &PreparedMeshRules::default())
+            .unwrap_or_else(|e| panic!("old Physics Boxes must load: {e:?}"));
+        assert_spawner_on_the_body(&graph);
+    }
+
+    /// Every generator builds through `from_def_for_render`, which strips
+    /// retired params before it reaches `instantiate_def`. Both graph-shape
+    /// migrations must run first there too: the sky's sun is wired from the
+    /// Sun light, and the box spawner lands on the copies body.
+    #[test]
+    fn old_scene_migrates_through_from_def_for_render() {
+        use manifold_node_engine::runtime::PresetRuntime;
+
+        let runtime = PresetRuntime::from_def_for_render(old_physics_boxes(), &registry(), None, false)
+            .unwrap_or_else(|e| panic!("old Physics Boxes must build: {e:?}"));
+        let graph = &runtime.graph;
+        let id = |handle: &str| graph.node_id_by_handle(handle).unwrap();
+        let env = graph.get_node(id("environment")).unwrap();
+        assert!(["sun_x", "sun_y", "sun_z"].iter().all(|p| env.params.get(*p).is_none()));
+        let feeds: Vec<_> = graph.wires().iter().filter(|w| w.to == (id("environment"), "sun")).map(|w| w.from.0).collect();
+        assert_eq!(feeds, vec![id("sun")], "the Sun light feeds the sky");
+        assert_spawner_on_the_body(graph);
+    }
 }

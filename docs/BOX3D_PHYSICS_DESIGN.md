@@ -146,7 +146,12 @@ real-time limit or a Box3D engine limit.
 
 The existing `node.physics_world` accepts an optional `copies` rigid-body
 prototype alongside its 64 individual bodies. Copies share their native
-world and contacts. `copy_layout` selects the original centered Grid or a compact
+world and contacts. The box spawner (`copy_count`, `copy_spacing`,
+`copy_columns`, `copy_layout`) lives on that copies body, not on the world:
+the controls show only on a body wired into `copies`, so a scene without boxes
+has no box sliders, and any scene gets boxes by wiring a body there. Graphs
+saved with the spawner on the world move it onto the body at load
+(`copies_body::migrate_world_copies`). `copy_layout` selects the original centered Grid or a compact
 Pile: Pile caps its cube-root-derived row width at `copy_columns`, adds bounded
 position jitter, and varies each copy’s rotation with an index-seeded hash. Reset
 repeats the same initial arrangement; it does not introduce a new random seed.

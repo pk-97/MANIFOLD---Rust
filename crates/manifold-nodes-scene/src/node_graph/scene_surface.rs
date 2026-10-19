@@ -160,6 +160,12 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
         | "fragment_count" | "fragment_index" | "fragment_parent" | "compound_materials" => {
             hidden(Body)
         }
+        // The box spawner. Only a copies body stamps these
+        // (`copies_body::is_copies_body_param`), and the copies body belongs
+        // to its physics world's item, so they sit with the world's controls.
+        "copy_count" => card(ControlGroup::PhysicsWorld, CardBand::Scene, 0),
+        "copy_spacing" => setup(ControlGroup::PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+        "copy_columns" | "copy_layout" => setup(ControlGroup::PhysicsWorld),
         _ => return None,
     })
 }
@@ -167,14 +173,11 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
 fn physics_world(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::PhysicsWorld;
     Some(match param {
-        "copy_count" => card(PhysicsWorld, CardBand::Scene, 0),
         "reset" => card(PhysicsWorld, CardBand::Scene, 1),
         "gravity_x" | "gravity_y" | "gravity_z" => {
             setup(PhysicsWorld).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
         }
-        "copy_spacing" => setup(PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
-        "copy_columns" | "copy_layout" => setup(PhysicsWorld),
         _ => return None,
     })
 }

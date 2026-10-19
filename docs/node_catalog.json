@@ -32234,26 +32234,6 @@
           "type": "f32"
         },
         {
-          "name": "copy_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "copy_spacing",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "copy_columns",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "copy_layout",
-          "required": false,
-          "type": "f32"
-        },
-        {
           "name": "acceleration_field",
           "required": false,
           "type": "VectorField"
@@ -32906,50 +32886,6 @@
             "1"
           ],
           "type": "trigger"
-        },
-        {
-          "default": "100",
-          "label": "Count",
-          "name": "copy_count",
-          "range": [
-            "0",
-            "4000"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "1.25",
-          "label": "Spacing",
-          "name": "copy_spacing",
-          "range": [
-            "0.01",
-            "100"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "16",
-          "label": "Columns",
-          "name": "copy_columns",
-          "range": [
-            "1",
-            "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Grid",
-            "Pile"
-          ],
-          "label": "Arrangement",
-          "name": "copy_layout",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "enum"
         }
       ],
       "purpose": "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixty-four independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; an optional continuous acceleration field contributes m/s² at each native microstep. Reset restores the authored starting poses and copy layout.",
@@ -37736,6 +37672,26 @@
           "name": "release_count",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "copy_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "copy_spacing",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "copy_columns",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "copy_layout",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Rigid Body",
@@ -37947,6 +37903,50 @@
           "label": "Compound Materials",
           "name": "compound_materials",
           "type": "table"
+        },
+        {
+          "default": "100",
+          "label": "Count",
+          "name": "copy_count",
+          "range": [
+            "0",
+            "4000"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "1.25",
+          "label": "Spacing",
+          "name": "copy_spacing",
+          "range": [
+            "0.01",
+            "100"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "16",
+          "label": "Columns",
+          "name": "copy_columns",
+          "range": [
+            "1",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Grid",
+            "Pile"
+          ],
+          "label": "Arrangement",
+          "name": "copy_layout",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
         }
       ],
       "purpose": "Describe a rigid body's shape, starting transform, motion type, density and contact properties; Box3D gives it density times its installed hull volume as mass. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
@@ -79184,7 +79184,7 @@
           "id": "40_copy_count",
           "max": "4000",
           "min": "0",
-          "name": "Count"
+          "name": "Box Count"
         },
         {
           "default": "0",
@@ -79220,27 +79220,6 @@
           "max": "4",
           "min": "0",
           "name": "Speed"
-        },
-        {
-          "default": "1.85",
-          "id": "40_copy_spacing",
-          "max": "100",
-          "min": "0.01",
-          "name": "Spacing"
-        },
-        {
-          "default": "24",
-          "id": "40_copy_columns",
-          "max": "64",
-          "min": "1",
-          "name": "Columns"
-        },
-        {
-          "default": "1",
-          "id": "40_copy_layout",
-          "max": "1",
-          "min": "0",
-          "name": "Arrangement"
         },
         {
           "default": "0.55",
@@ -81831,6 +81810,27 @@
           "max": "64",
           "min": "1",
           "name": "Collider Detail"
+        },
+        {
+          "default": "1.85",
+          "id": "121_copy_spacing",
+          "max": "100",
+          "min": "0.01",
+          "name": "Spacing"
+        },
+        {
+          "default": "24",
+          "id": "121_copy_columns",
+          "max": "64",
+          "min": "1",
+          "name": "Columns"
+        },
+        {
+          "default": "1",
+          "id": "121_copy_layout",
+          "max": "1",
+          "min": "0",
+          "name": "Arrangement"
         },
         {
           "default": "0",
@@ -88560,34 +88560,6 @@
           "max": "1",
           "min": "0",
           "name": "Reset"
-        },
-        {
-          "default": "100",
-          "id": "40_copy_count",
-          "max": "4000",
-          "min": "0",
-          "name": "Count"
-        },
-        {
-          "default": "1.25",
-          "id": "40_copy_spacing",
-          "max": "100",
-          "min": "0.01",
-          "name": "Spacing"
-        },
-        {
-          "default": "16",
-          "id": "40_copy_columns",
-          "max": "64",
-          "min": "1",
-          "name": "Columns"
-        },
-        {
-          "default": "0",
-          "id": "40_copy_layout",
-          "max": "1",
-          "min": "0",
-          "name": "Arrangement"
         },
         {
           "default": "0.3",
@@ -151377,34 +151349,6 @@
           "max": "1",
           "min": "0",
           "name": "Reset"
-        },
-        {
-          "default": "100",
-          "id": "70_copy_count",
-          "max": "4000",
-          "min": "0",
-          "name": "Count"
-        },
-        {
-          "default": "1.25",
-          "id": "70_copy_spacing",
-          "max": "100",
-          "min": "0.01",
-          "name": "Spacing"
-        },
-        {
-          "default": "16",
-          "id": "70_copy_columns",
-          "max": "64",
-          "min": "1",
-          "name": "Columns"
-        },
-        {
-          "default": "0",
-          "id": "70_copy_layout",
-          "max": "1",
-          "min": "0",
-          "name": "Arrangement"
         },
         {
           "default": "0.2",

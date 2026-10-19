@@ -45,7 +45,7 @@
         "defaultValue": 256,
         "target": {
           "kind": "node",
-          "nodeId": "physics_demo_40",
+          "nodeId": "physics_demo_121",
           "param": "copy_count"
         },
         "convert": {
@@ -65,6 +65,20 @@
           "type": "Trigger"
         }
       }
+    ],
+    "paramAliases": [
+      {
+        "old": "40_copy_spacing",
+        "new": "121_copy_spacing"
+      },
+      {
+        "old": "40_copy_columns",
+        "new": "121_copy_columns"
+      },
+      {
+        "old": "40_copy_layout",
+        "new": "121_copy_layout"
+      }
     ]
   },
   "nodes": [
@@ -79,26 +93,8 @@
       "nodeId": "physics_demo_40",
       "typeId": "node.physics_world",
       "handle": "Boxes \u2014 Apply Count with Reset",
-      "params": {
-        "copy_count": {
-          "type": "Float",
-          "value": 256
-        },
-        "copy_columns": {
-          "type": "Float",
-          "value": 24
-        },
-        "copy_spacing": {
-          "type": "Float",
-          "value": 1.85
-        },
-        "copy_layout": {
-          "type": "Enum",
-          "value": 1
-        }
-      },
+      "params": {},
       "exposedParams": [
-        "copy_count",
         "reset"
       ]
     },
@@ -375,8 +371,27 @@
         "bounce": {
           "type": "Float",
           "value": 0.38
+        },
+        "copy_count": {
+          "type": "Float",
+          "value": 256
+        },
+        "copy_columns": {
+          "type": "Float",
+          "value": 24
+        },
+        "copy_spacing": {
+          "type": "Float",
+          "value": 1.85
+        },
+        "copy_layout": {
+          "type": "Enum",
+          "value": 1
         }
-      }
+      },
+      "exposedParams": [
+        "copy_count"
+      ]
     },
     {
       "id": 120,

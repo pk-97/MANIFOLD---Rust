@@ -242,6 +242,12 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     ("node.bake_environment", "sun_x"),
     ("node.bake_environment", "sun_y"),
     ("node.bake_environment", "sun_z"),
+    // The box spawner lives on the copies body; graph-shape migration moves
+    // saved values there first (`copies_body::migrate_world_copies`).
+    ("node.physics_world", "copy_count"),
+    ("node.physics_world", "copy_spacing"),
+    ("node.physics_world", "copy_columns"),
+    ("node.physics_world", "copy_layout"),
 ];
 
 /// Whether any param of `type_id` is listed in [`RETIRED_PARAMS`].

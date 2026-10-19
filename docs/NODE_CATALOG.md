@@ -595,7 +595,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
 | `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1334 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1999 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1995 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `Scene` | Scene | generator | Geometry | 368 |
@@ -612,7 +612,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2049 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1402 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2004 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1395 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1391 |
 | `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2332 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1070 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
