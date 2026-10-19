@@ -2,7 +2,7 @@
 //!
 //! Every `scripts/…`, `.claude/…`, `docs/…` or `crates/…` path a live doc
 //! cites must exist. Live means `CLAUDE.md` and `docs/**/*.md` outside the
-//! frozen records: `docs/archive/`, `docs/landings/` and `docs/BUG_BACKLOG.md`.
+//! frozen records: `docs/landings/` and `docs/BUG_BACKLOG.md`.
 //!
 //! Only file paths (last component has an extension) and directory paths
 //! written with a trailing `/` are checked, so prose like "docs/comments" is
@@ -40,8 +40,7 @@ fn live_docs(root: &Path) -> Vec<PathBuf> {
         for e in entries.flatten() {
             let p = e.path();
             let rel = p.strip_prefix(docs_root).unwrap_or(&p);
-            if rel == Path::new("archive")
-                || rel == Path::new("landings")
+            if rel == Path::new("landings")
                 || rel == Path::new("BUG_BACKLOG.md")
             {
                 continue;

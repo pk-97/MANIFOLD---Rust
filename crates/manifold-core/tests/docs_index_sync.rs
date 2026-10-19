@@ -1,8 +1,8 @@
 //! Drift guard for the generated docs index (`docs/README.md`).
 //!
 //! `docs/README.md` is produced by `scripts/gen_docs_index.py` and must list
-//! every active doc in `docs/` (top level; `docs/archive/` is the historical
-//! bin and is intentionally not indexed). This test fails the suite if the two
+//! every active doc in `docs/` (top level; subfolders are
+//! intentionally not indexed). This test fails the suite if the two
 //! fall out of sync — a doc added, removed, or renamed without regenerating the
 //! index. The fix is always: `scripts/gen_docs_index.py` and commit.
 //!
@@ -33,7 +33,7 @@ fn docs_on_disk() -> BTreeSet<String> {
 }
 
 /// Doc links in README.md of the form `](NAME.md)` with no path separator
-/// (so `archive/…` and any nested links are ignored).
+/// (so nested links are ignored).
 fn docs_linked_in_index() -> BTreeSet<String> {
     let readme = fs::read_to_string(docs_dir().join("README.md"))
         .expect("docs/README.md should exist — run scripts/gen_docs_index.py");

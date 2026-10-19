@@ -5,7 +5,7 @@ upgrading the entire GUI, UI, and interaction surface of MANIFOLD. It captures
 the full audit of what exists, an unbiased critique of what's weak, the target
 architecture, and the agent-authoring bar the new surface must meet.
 
-Companion: [`UI_ARCHITECTURE_AUDIT.md`](archive/UI_ARCHITECTURE_AUDIT.md) holds the detailed
+Companion: `UI_ARCHITECTURE_AUDIT.md (deleted)` holds the detailed
 as-built findings (every subsystem, file-level). This document is the *plan* built
 on top of that audit. Read the audit for "what is"; read this for "what should be
 and how we get there."

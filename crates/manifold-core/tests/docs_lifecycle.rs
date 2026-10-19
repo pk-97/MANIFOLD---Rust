@@ -1,10 +1,10 @@
 //! Lifecycle gate for shipped design docs (the docs-pile class fix).
 //!
 //! A SHIPPED design doc must either be cited by a live surface (CLAUDE.md,
-//! hooks, memory, any non-shipped doc) or live in `docs/archive/`. The
+//! hooks, memory, any non-shipped doc) or be deleted. The
 //! classifier is `.claude/hooks/design_status.py --lifecycle-check` — one
 //! classifier, shared with the status board, so this test cannot drift from
-//! what the board shows. Fix is always: `git mv` the doc to archive (+ regen
+//! what the board shows. Fix is always: `git rm` the doc (+ regen
 //! the index) or add a `Lifecycle: contract — <why>` header line.
 
 use std::path::PathBuf;

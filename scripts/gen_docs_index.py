@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate docs/README.md — an index of the active docs/ set.
 
-Scans docs/*.md (top level only;
-subfolders are not indexed), pulls each doc's title and a one-line summary, and writes a
+Scans docs/*.md (top level only; subfolders are not indexed), pulls each
+doc's title and a one-line summary, and writes a
 sorted table to docs/README.md.
 
 Do not hand-edit docs/README.md. Run this script to refresh it. A drift-guard

@@ -27,7 +27,7 @@ precedent: we already parse another app's format — .als — for interop).
 | PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` section 5 (Renderer integration) | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
 | DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` section 4 (TextureCodec backend — HAP and DXV) | A Resolume user's library plays natively |
 | Session grid | `SESSION_MODE_DESIGN.md` | Layer × scene ≅ Resolume layer × column |
-| Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` section 8b (Two cheap wins (added after review with Peter)) | TD/Resolume/AE names per atom — seeds the op-mapping tables |
+| Cross-tool alias dictionary | `NODE_VOCABULARY_AUDIT.md (deleted)` section 8b (Two cheap wins (added after review with Peter)) | TD/Resolume/AE names per atom — seeds the op-mapping tables |
 | .als interop parsing | `ABLETON_SHOW_SYNC_DESIGN.md` | The in-house precedent for parsing user-owned third-party files |
 | Beat atoms | `beat_ramp` etc. | The retimed-playhead drivers |
 

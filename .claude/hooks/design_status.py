@@ -15,7 +15,7 @@ Usage:
 
 Lifecycle check: a SHIPPED design doc must either be cited by a live surface (CLAUDE.md,
 hooks, memory, or any non-shipped doc — one hop, no credit for citations from other
-shipped docs) or move to docs/archive/. Liveness is recomputed every run — nothing is
+shipped docs) or be deleted (git keeps every version). Liveness is recomputed every run — nothing is
 hand-marked. Override for a deliberate uncited keep: a `Lifecycle: contract` line in the
 doc header. Enforced by crates/manifold-core/tests/docs_lifecycle.rs.
 
@@ -183,7 +183,7 @@ INDEX_DOCS = {"README.md", "DESIGN_BUILD_ORDER.md", "DESIGN_HARDENING_QUEUE.md"}
 
 def dead_shipped_docs() -> list[str]:
     """SHIPPED design docs in docs/ top level with no live citation and no
-    `Lifecycle: contract` override. These belong in docs/archive/."""
+    `Lifecycle: contract` override. These get deleted; git keeps every version."""
     docs = {p.name: p for p in DOCS.glob("*.md")}
     shipped = set()
     for p in DOCS.glob("*_DESIGN.md"):
@@ -274,7 +274,7 @@ def lifecycle_check() -> int:
         print(f)
     if dead:
         print(f"lifecycle: FAIL — {len(dead)} shipped doc(s) with no live citation. "
-              "Either `git mv docs/<doc> docs/archive/` (+ scripts/gen_docs_index.py) "
+              "Either `git rm docs/<doc>` (+ scripts/gen_docs_index.py) "
               "or add a `Lifecycle: contract — <why>` header line.")
     if header_fails:
         print(f"lifecycle: FAIL — {len(header_fails)} status header(s) over budget "
@@ -313,10 +313,6 @@ def check_dead_refs() -> int:
     all_missing: list[str] = []
 
     for doc_path in sorted(DOCS.glob("*.md")):
-        # Skip archived docs
-        if "archive" in doc_path.parts:
-            continue
-
         content = doc_path.read_text(errors="replace")
         for ref in RS_PATTERN.findall(content):
             if Path(ref).name not in existing:
