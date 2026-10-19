@@ -488,10 +488,6 @@ pub struct UIRenderer {
     // stamp the wrong scissor on already-enqueued rects; binding clip/depth
     // per command at enqueue makes that class of bug unrepresentable).
     scissor_batches: Vec<ScissorBatch>,
-    // BUG-060 trace: current panel slot (set by the cache manager per panel
-    // render) so batch logs can name the pass. Plain usize store — free when
-    // the trace is disarmed. Remove with BUG-060.
-    pub bug060_pass: usize,
     // GPU-ready batches produced by prepare().
     prepared_batches: Vec<PreparedBatch>,
     // Distinct depths present this frame, ascending — the union of rect/line
@@ -665,7 +661,6 @@ impl UIRenderer {
             depth_stack: Vec::with_capacity(4),
             transform_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
-            bug060_pass: 0,
             prepared_batches: Vec::with_capacity(8),
             prepared_depths: Vec::with_capacity(8),
             line_batch_scratch: Vec::with_capacity(8),
@@ -1103,39 +1098,6 @@ impl UIRenderer {
     /// Begin scissor tracking for a tree traversal: reset the clip context.
     fn begin_scissor_tracking(&mut self) {
         self.clip_stack.clear();
-    }
-
-    /// BUG-060 trace: with `MANIFOLD_BUG060_TRACE=x0,y0,x1,y1` (logical px) set,
-    /// log every rect in the batch that intersects that band, with the
-    /// batch's effective scissor, origin, and the panel slot set by the
-    /// cache manager. Attributes escaped pixels found in the surface dumps
-    /// to the exact draw that produced them. One `Option` check when
-    /// disarmed. Remove with BUG-060.
-    fn bug060_log_batch(&self, origin: &str, scissor: Option<Rect>, start: usize, count: usize) {
-        let Some(band) = bug060_trace_band() else {
-            return;
-        };
-        for rc in &self.rect_commands[start..start + count] {
-            let intersects = rc.x < band[2]
-                && rc.x + rc.w > band[0]
-                && rc.y < band[3]
-                && rc.y + rc.h > band[1];
-            if intersects {
-                eprintln!(
-                    "[BUG060-TRACE] {origin} pass={} rect=({:.1},{:.1} {:.1}x{:.1}) color=({:.3},{:.3},{:.3},{:.3}) scissor={:?}",
-                    self.bug060_pass,
-                    rc.x,
-                    rc.y,
-                    rc.w,
-                    rc.h,
-                    rc.color[0],
-                    rc.color[1],
-                    rc.color[2],
-                    rc.color[3],
-                    scissor,
-                );
-            }
-        }
     }
 
     /// Handle a PushClip event: push the intersected clip onto `clip_stack`.
@@ -1724,7 +1686,6 @@ impl UIRenderer {
                 if cmd_clip == run_clip && cmd_depth == run_depth {
                     run_count += 1;
                 } else {
-                    self.bug060_log_batch("prepared", run_clip, run_start, run_count);
                     self.scissor_batches.push(ScissorBatch {
                         scissor: run_clip,
                         rect_start: run_start,
@@ -1737,7 +1698,6 @@ impl UIRenderer {
                     run_count = 1;
                 }
             }
-            self.bug060_log_batch("prepared", run_clip, run_start, run_count);
             self.scissor_batches.push(ScissorBatch {
                 scissor: run_clip,
                 rect_start: run_start,
@@ -2182,18 +2142,6 @@ impl UIRenderer {
             self.text_renderer.render_depth_in_pass(encoder, depth);
         }
     }
-}
-
-/// BUG-060 trace band: parsed once from `MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`
-/// (logical px). `None` when unset — the trace is fully disarmed. Remove with
-/// BUG-060.
-fn bug060_trace_band() -> Option<[f32; 4]> {
-    static BAND: std::sync::OnceLock<Option<[f32; 4]>> = std::sync::OnceLock::new();
-    *BAND.get_or_init(|| {
-        let v = std::env::var("MANIFOLD_BUG060_TRACE").ok()?;
-        let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
-        (p.len() == 4).then(|| [p[0], p[1], p[2], p[3]])
-    })
 }
 
 /// Implement the immediate-mode `Painter` for `UIRenderer` so the graph canvas

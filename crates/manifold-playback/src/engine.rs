@@ -2600,10 +2600,6 @@ impl PlaybackEngine {
         }
     }
 
-    pub fn get_seconds_per_beat(&mut self) -> f32 {
-        self.get_seconds_per_beat_at_beat(Beats(self.current_beat))
-    }
-
     /// Get seconds-per-beat at a given beat. Checks live external tempo first.
     /// Returns a ratio (f32), not a Seconds value.
     /// Port of C# PlaybackEngine.GetSecondsPerBeatAtBeat (lines 1372-1387).
