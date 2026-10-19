@@ -128,6 +128,18 @@ pub(super) fn writes(
     }).collect()
 }
 
+/// An add-feature menu item went out: the Scene panel moves that feature to
+/// the end of its UI-local section order.
+pub(super) fn note_feature_add(
+    ui: &mut crate::ui_root::UIRoot,
+    kind: manifold_ui::panels::actions::MaterialEditKind,
+    writes: &[MaterialParamWrite],
+) {
+    if kind == manifold_ui::panels::actions::MaterialEditKind::Feature {
+        ui.scene_setup_panel.note_material_feature_added(writes);
+    }
+}
+
 /// The starter look whose values the material holds right now, or `None` for
 /// a custom mix. Decided from the stored base values each time the Scene tab
 /// is projected, so applying a look and then nudging a slider reads as Custom

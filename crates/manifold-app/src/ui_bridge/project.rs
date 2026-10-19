@@ -304,19 +304,8 @@ pub(super) fn dispatch_project(
             writes,
             description,
         } => {
-            if *kind == manifold_ui::panels::actions::MaterialEditKind::Feature {
-                ui.scene_setup_panel.note_material_feature_added(writes);
-            }
-            dispatch_material_batch(
-                project,
-                content_tx,
-                target,
-                object,
-                material,
-                *kind,
-                writes,
-                description,
-            );
+            dispatch_material_batch(project, content_tx, target, object, material, *kind, writes, description);
+            super::material_looks::note_feature_add(ui, *kind, writes);
             DispatchResult::handled()
         }
         ProjectAction::MaterialLookApply {
