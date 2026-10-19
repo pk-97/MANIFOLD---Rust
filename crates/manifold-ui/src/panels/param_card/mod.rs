@@ -1598,7 +1598,7 @@ pub(super) mod tests {
     /// for a generator's/effect's audio trigger response — Strobe's/the 11
     /// generators' `clip_trigger`), armed with a real `ParameterAudioMod` (a
     /// `trigger_mode`, not a separate config type) so the drawer builds.
-    /// Exercises `build_toggle_trigger_row`'s `is_trigger_gate` branch riding
+    /// Exercises `build_button_row`'s `is_trigger_gate` branch riding
     /// the SAME standard audio-mod drawer `effect_config_with_toggle_and_
     /// trigger`'s `is_trigger` (D5b) coverage above exercises, plus the
     /// trailing Mode row.
@@ -1991,7 +1991,7 @@ pub(super) mod tests {
 
     #[test]
     fn trigger_gate_drawer_tween_clips_midflight() {
-        // BUG-060 layer 2: `build_toggle_trigger_row`'s audio-mod drawer had no
+        // BUG-060 layer 2: `build_button_row`'s audio-mod drawer had no
         // reveal clip at all (unlike `build_param_row`'s tween path) — a
         // mid-flight open/close on an `is_trigger_gate` row rendered its full
         // natural height every frame instead of growing in. Same end-to-end
@@ -3549,6 +3549,104 @@ pub(super) mod tests {
             ],
             string_params: vec![],
             audio_sends: Vec::new(),
+        }
+    }
+
+    /// `gen_config` with row 0 a three-way choice (Sun, Point, Spot; showing
+    /// Spot) and row 2 the Off/On float a light's Cast Shadows is.
+    fn gen_config_with_choice_and_float_switch() -> ParamSurface {
+        let mut c = gen_config();
+        let choice = &mut c.rows[0];
+        choice.spec.whole_numbers = true;
+        (choice.spec.min, choice.spec.max, choice.spec.default) = (0.0, 2.0, 2.0);
+        choice.spec.value_labels = Some(vec!["Sun".into(), "Point".into(), "Spot".into()]);
+        let switch = &mut c.rows[2];
+        (switch.spec.min, switch.spec.max, switch.spec.default) = (0.0, 1.0, 1.0);
+        switch.spec.value_labels = Some(vec!["Off".into(), "On".into()]);
+        c
+    }
+
+    /// The one kind decision (`ParamRow::kind`): what each declared kind
+    /// draws as on a scene surface and on any other card.
+    #[test]
+    fn row_kind_follows_the_declared_kind() {
+        use crate::param_surface::RowKind;
+        let c = gen_config_with_choice_and_float_switch();
+        let (choice, toggle, float_switch) = (&c.rows[0], &c.rows[1], &c.rows[2]);
+        assert_eq!(choice.kind(true), RowKind::Choice);
+        assert_eq!(float_switch.kind(true), RowKind::Switch);
+        assert_eq!(toggle.kind(true), RowKind::Switch);
+        assert_eq!(toggle.kind(false), RowKind::Switch, "a toggle is a switch on every card");
+        assert_eq!(choice.kind(false), RowKind::Number, "off a scene a labelled row keeps its slider");
+        assert_eq!(float_switch.kind(false), RowKind::Number);
+        let mut trigger = toggle.clone();
+        (trigger.spec.is_toggle, trigger.spec.is_trigger) = (false, true);
+        assert_eq!(trigger.kind(true), RowKind::Trigger);
+        let mut driven = choice.clone();
+        driven.modulation.driver_active = true;
+        assert_eq!(driven.kind(true), RowKind::Number, "a driven choice keeps the slider that shows its driver");
+        let mut three_label_float = float_switch.clone();
+        three_label_float.spec.value_labels = Some(vec!["Low".into(), "Mid".into(), "High".into()]);
+        assert_eq!(three_label_float.kind(true), RowKind::Number);
+        assert!(!choice.grows_drawer(true) && !float_switch.grows_drawer(true));
+        assert!(choice.grows_drawer(false), "the slider it stays off a scene keeps its drawer");
+    }
+
+    /// A scene card draws a choice as a pick list showing its label and an
+    /// Off/On float as the switch; a pick-list click opens the shared
+    /// dropdown at the current label, a switch click toggles, and the value
+    /// sync redraws both. The same rows on an ordinary card stay sliders.
+    #[test]
+    fn scene_card_draws_choices_as_pick_lists_and_switches() {
+        use crate::param_surface::RowKind;
+        let config = gen_config_with_choice_and_float_switch();
+        let rect = Rect::new(0.0, 0.0, 340.0, 300.0);
+
+        let mut tree = UITree::new();
+        let mut ordinary = ParamCardPanel::new();
+        ordinary.configure(&config);
+        ordinary.build(&mut tree, rect);
+        assert!(ordinary.row_host.slider_ids[0].is_some() && ordinary.row_host.toggle_ids[0].is_none());
+        assert!(ordinary.row_host.slider_ids[2].is_some() && ordinary.row_host.toggle_ids[2].is_none());
+
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        panel.set_scene_sections(Some(&[]));
+        panel.build(&mut tree, rect);
+        let text = |tree: &UITree, id| tree.get_node(id).unwrap().text.clone();
+
+        assert!(panel.row_host.slider_ids[0].is_none());
+        let pick = panel.row_host.toggle_ids[0].as_ref().expect("the choice is a button row");
+        let pick_button = pick.button_id;
+        assert_eq!(pick.kind, RowKind::Choice);
+        assert_eq!(text(&tree, pick_button).as_deref(), Some("Spot"));
+        assert_eq!(tree.name_of(pick_button), Some("param_row.speed"));
+
+        let switch = panel.row_host.toggle_ids[2].as_ref().expect("the Off/On float is a button row");
+        let switch_button = switch.button_id;
+        assert_eq!(switch.kind, RowKind::Switch);
+        assert_eq!(text(&tree, switch_button).as_deref(), Some("ON"));
+
+        use crate::view::UiParamSlot as Slot;
+        let choice_slot = Slot { min: 0.0, max: 2.0, ..Slot::exposed(1.0) };
+        panel.sync_values_positional(&mut tree, &[choice_slot, Slot::exposed(1.0), Slot::exposed(0.0)]);
+        assert_eq!(text(&tree, pick_button).as_deref(), Some("Point"));
+        assert_eq!(text(&tree, switch_button).as_deref(), Some("OFF"));
+
+        match panel.handle_click(pick_button, &tree).as_slice() {
+            [PanelAction::Root(RootAction::ParamEnumDropdown { param_id, labels, current_index, cell_node_id, .. })] => {
+                assert_eq!(param_id.as_ref(), "speed");
+                assert_eq!(labels, &["Sun", "Point", "Spot"]);
+                assert_eq!(*current_index, 1, "checked at the live value, Point");
+                assert_eq!(*cell_node_id, pick_button, "the list opens under the pick list");
+            }
+            other => panic!("expected the shared dropdown, got {other:?}"),
+        }
+
+        match panel.handle_click(switch_button, &tree).as_slice() {
+            [PanelAction::Params(ParamsAction::ParamToggle(_, param_id))] => assert_eq!(param_id.as_ref(), "scale"),
+            other => panic!("expected ParamToggle, got {other:?}"),
         }
     }
 

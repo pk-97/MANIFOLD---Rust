@@ -881,7 +881,7 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usi
     }
     // section 9: a trigger-gate row's config is a normal `ParameterAudioMod`, so
     // `audio_active` above already covers it — no separate tab. The row is
-    // still built directly by `build_toggle_trigger_row` (bypassing the tab
+    // still built directly by `build_button_row` (bypassing the tab
     // strip, same as `is_trigger`'s `Audio` tab), but height computation now
     // shares the identical `ModTab::Audio` path every other Audio config uses.
     v
@@ -1060,7 +1060,7 @@ pub(crate) const ROW_ROLE_AUDIO_CONFIG: u64 = 11 << 4;
 pub(crate) const ROW_ROLE_ABLETON_CONFIG: u64 = 12 << 4;
 
 /// The reveal-height `ClipRegion` a drawer builds under while its open/close
-/// tween is in flight (`build_param_row`/`build_toggle_trigger_row`) — the
+/// tween is in flight (`build_param_row`/`build_button_row`) — the
 /// drawer container mints under THIS node, so it must be stable too or the
 /// container's own explicit key composes onto a moving parent.
 pub(crate) const ROW_ROLE_DRAWER_CLIP: u64 = 13 << 4;
@@ -1183,7 +1183,7 @@ fn add_row_label(
 // A toggle/trigger row stands in for a value, so its button is the same
 // width as the slider value box and right-aligns to the same column — the
 // right edge of every row lines up. Shared by both card kinds
-// (`build_toggle_trigger_row`).
+// (`build_button_row`).
 pub(crate) const TOGGLE_BTN_W: f32 = crate::slider::VALUE_BOX_W;
 
 pub(crate) const TOGGLE_BTN_H: f32 = 16.0;
@@ -1199,7 +1199,7 @@ pub(crate) const TRIGGER_GATE_BADGE_W: f32 = 40.0;
 /// Invert toggle + Sensitivity/Attack/Release shaping sliders, plus the
 /// conditional Action/Amount/Wrap/Mode rows). Shared by `build_param_row`'s
 /// Audio mod-tab branch (continuous params, behind the multi-tab drawer) and
-/// `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases (D5b/section 9 —
+/// `build_button_row`'s `is_trigger`/`is_trigger_gate` cases (D5b/section 9 —
 /// a fire-button OR a trigger-gate toggle reaches the SAME drawer, audio-only,
 /// no tab strip since Driver/Envelope/Ableton never apply to either). The
 /// layer clip-trigger surface uses its own [`build_clip_trigger_drawer`]
@@ -1214,7 +1214,7 @@ pub(crate) const TRIGGER_GATE_BADGE_W: f32 = 40.0;
 /// (Clip/Audio/Both, section 9 U2) appends for an `is_trigger_gate` target
 /// unconditionally, or for a slider row armed to Step/Random (D3) — computed
 /// here from `mod_state`/`info` rather than threaded in by the caller, so
-/// both call sites (`build_toggle_trigger_row`, `build_param_row`) just pass
+/// both call sites (`build_button_row`, `build_param_row`) just pass
 /// `info` and let this function derive which extra rows apply.
 ///
 /// This function only builds visuals plus the shaping sliders' right-click
@@ -1689,32 +1689,33 @@ pub(crate) fn audio_drawer_theme() -> Theme {
 }
 
 
-/// Build a toggle or trigger row — a label plus a single button (ON/OFF for
-/// a sticky toggle, "▶" for a momentary fire-once trigger) instead of a
-/// slider. Shared verbatim by the effect and generator cards (Task A of
-/// section 8.4 P3b: effect cards previously had no toggle-row branch at all and
-/// rendered `isToggle`/`isTrigger` params as raw sliders — the bug this
-/// function fixes at the root by giving both kinds one code path).
+/// Build a button row: a label plus one button instead of a slider. `kind`
+/// (from [`ParamRow::kind`]) picks the button: the switch (ON/OFF in the one
+/// `toggle_style` look), a pick list (the current label with a dropdown
+/// caret, over the lane a slider's track takes), or "▶" for a momentary
+/// fire. Shared by the effect and generator cards and the Scene tab, so
+/// every surface draws a kind the same way.
 ///
-/// The button right-aligns to the same column a slider row's VALUE cell
-/// uses (`x + slider_w - TOGGLE_BTN_W`) — a toggle can't be modulated, so
-/// the D/E/A lane further right stays empty for it. `is_trigger` (D5b) and
-/// `is_trigger_gate` (section 9) rows are the exception: both reach the standard
-/// per-param audio-mod "A" button + drawer at the SAME column a slider row's
-/// audio button would occupy, so the "A" column stays visually aligned down
-/// the whole card regardless of row kind. `is_trigger_gate` additionally
-/// shows the collapsed-row mode badge and gets the drawer's extra Mode row.
-/// Driver/Envelope never apply to either (no continuous value to drive), so
-/// only the Audio slot is ever built — no tab strip, no `active_mod_tabs`
-/// multi-config machinery.
+/// The switch and the fire button right-align to the column a slider row's
+/// VALUE cell uses (`x + slider_w - TOGGLE_BTN_W`); a switch and a pick list
+/// leave the D/E/A lane empty. `is_trigger` (D5b) and `is_trigger_gate`
+/// (section 9) rows are the exception: both reach the standard per-param
+/// audio-mod "A" button + drawer at the SAME column a slider row's audio
+/// button would occupy, so the "A" column stays aligned down the whole card.
+/// `is_trigger_gate` additionally shows the collapsed-row mode badge and
+/// gets the drawer's extra Mode row. Driver/Envelope never apply here, so
+/// only the Audio slot is ever built.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_toggle_trigger_row(
+pub(crate) fn build_button_row(
     tree: &mut UITree,
     parent: Option<NodeId>,
     x: f32,
     cy: f32,
     slider_w: f32,
+    // The slider rows' label lane; a pick list starts where their track does.
+    label_width: f32,
     info: &ParamRow,
+    kind: crate::param_surface::RowKind,
     mod_state: &ParamModState,
     i: usize,
     target: GraphParamTarget,
@@ -1729,6 +1730,7 @@ pub(crate) fn build_toggle_trigger_row(
     // The drawer's reveal height, as `build_param_row`'s `drawer_reveal`.
     drawer_reveal: Option<f32>,
 ) -> ToggleTriggerRowIds {
+    use crate::param_surface::RowKind;
     if mod_state.automation_selected.get(i).copied().unwrap_or(false) {
         tree.add_panel(parent, x - 1.0, cy - 1.0, slider_w + 2.0, ROW_HEIGHT + 2.0, UIStyle {
             border_color: color::AUTOMATION_LINE_COLOR,
@@ -1738,6 +1740,12 @@ pub(crate) fn build_toggle_trigger_row(
         });
     }
     let toggle_btn_x = x + slider_w - TOGGLE_BTN_W;
+    let (button_x, button_w) = if kind == RowKind::Choice {
+        let start = label_width.min(slider_w);
+        (x + start, slider_w - start)
+    } else {
+        (toggle_btn_x, TOGGLE_BTN_W)
+    };
     // Fire rows reserve a fixed slot for the collapsed-row mode
     // badge (D6) just left of the toggle button, regardless of whether the
     // current mode has anything to show there — so the name label's width
@@ -1747,7 +1755,7 @@ pub(crate) fn build_toggle_trigger_row(
     let name_label_w = if fire_mode_row {
         (slider_w - TOGGLE_BTN_W - GAP - TRIGGER_GATE_BADGE_W - GAP).max(0.0)
     } else {
-        (slider_w - TOGGLE_BTN_W - GAP).max(0.0)
+        (button_x - x - GAP).max(0.0)
     };
     // A disabled row (RowSpec.disabled — the projection's unsupported-reason)
     // follows the modifier-picker convention: the label greys out with the
@@ -1784,23 +1792,29 @@ pub(crate) fn build_toggle_trigger_row(
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
     }
 
-    let on = info.spec.default > 0.5;
-    let (button_text, mut button_style) = if info.spec.is_trigger {
+    // `spec.default` carries the value to show at build, as for every row.
+    let (button_text, mut button_style) = match kind {
         // Trigger renders as a momentary button — always neutral.
-        ("▶", toggle_btn_style(false))
-    } else {
-        (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
+        RowKind::Trigger => ("▶", toggle_btn_style(false)),
+        RowKind::Choice => (
+            choice_label(&info.spec, info.spec.default).unwrap_or(""),
+            dropdown_trigger_style(FONT_SIZE),
+        ),
+        RowKind::Switch | RowKind::Number => {
+            let on = info.spec.default > 0.5;
+            (switch_text(on), toggle_btn_style(on))
+        }
     };
-    if disabled_reason.is_some() {
+    if disabled_reason.is_some() || (kind == RowKind::Choice && info.spec.inactive_reason.is_some()) {
         button_style.text_color = color::TEXT_DIMMED_C32;
     }
     let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;
     let button_id = add_row_button(
         tree,
         parent,
-        toggle_btn_x,
+        button_x,
         toggle_y,
-        TOGGLE_BTN_W,
+        button_w,
         TOGGLE_BTN_H,
         button_style,
         button_text,
@@ -1949,6 +1963,7 @@ pub(crate) fn build_toggle_trigger_row(
     ToggleTriggerRowIds {
         label_id: Some(label_id),
         button_id,
+        kind,
         audio_btn,
         audio_config,
         mode_badge_id,
@@ -2100,7 +2115,7 @@ pub(crate) fn build_param_row(
         // no pad — the drawer's internal TOP_PAD already insets the last row. The top
         // pad folds into card_h so the bottom edge is unchanged.
         // A slider row is never `is_trigger_gate` (that's always a toggle
-        // row, built by `build_toggle_trigger_row` instead) — `mod_config_height`
+        // row, built by `build_button_row` instead) — `mod_config_height`
         // still derives the Action/Amount/Wrap/Mode rows (D8) from `info`/
         // `mod_state` for the Audio tab.
         let card_h = MOD_CARD_PAD
@@ -2452,7 +2467,7 @@ pub(crate) fn build_param_row(
 
     // Audio-modulation drawer — shown when the Audio config tab is active.
     // Extracted to `build_audio_mod_drawer` (shared with
-    // `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases,
+    // `build_button_row`'s `is_trigger`/`is_trigger_gate` cases,
     // D5b/section 9). A slider row is never `is_trigger_gate`, but it DOES get the
     // Action/Amount/Wrap rows (D8) — derived inside from `info`.
     if shown_tab == Some(ModTab::Audio) {

@@ -3,6 +3,7 @@
 //! `build_generator`, and the `sync_values*` family.
 
 use super::*;
+use crate::param_surface::RowKind;
 
 /// Packed right-aligned positions for the 0–4 header modulation badges.
 /// In display order [MOD, ABL, ENV, DRV]; `None` for a hidden badge.
@@ -266,14 +267,11 @@ impl ParamCardPanel {
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
                 h += self.inactive_reason_height(i);
-                // A plain toggle never gets a drawer (nothing to modulate) — zero
-                // lane, zero height, unconditionally. `is_trigger` and ordinary
-                // sliders both go through the general `active_mod_tabs`-driven
-                // height (`animated_drawer_height` already handles "no active
-                // config → 0" on its own; is_trigger only ever has Audio active,
-                // per D5b). `is_trigger_gate` is ALSO an `is_toggle` row (D6) but
-                // reaches its own `AudioTrigger` tab through the same path.
-                if !self.rows[i].spec.is_toggle || self.rows[i].spec.is_trigger_gate {
+                // A plain switch or a pick list never gets a drawer: zero
+                // height, unconditionally. Sliders, fire rows and trigger
+                // gates go through the general `active_mod_tabs`-driven
+                // height (`animated_drawer_height` is 0 with no active config).
+                if self.rows[i].grows_drawer(self.scene_sections) {
                     h += self.animated_drawer_height(i);
                 }
             }
@@ -307,12 +305,8 @@ impl ParamCardPanel {
                 for i in start..start + len {
                     h += ROW_HEIGHT + ROW_SPACING;
                     h += self.inactive_reason_height(i);
-                    // Same rule as `effect_body_natural_height`: only a plain
-                    // toggle forces zero drawer height. `is_trigger` reaches the
-                    // audio-mod drawer (D5b), `is_trigger_gate` reaches the
-                    // audio-TRIGGER-mod drawer (D6) — both via the same general
-                    // height path every slider row uses.
-                    if !self.rows[i].spec.is_toggle || self.rows[i].spec.is_trigger_gate {
+                    // Same rule as `effect_body_natural_height`.
+                    if self.rows[i].grows_drawer(self.scene_sections) {
                         h += self.animated_drawer_height(i);
                     }
                 }
@@ -1289,25 +1283,24 @@ impl ParamCardPanel {
                 continue;
             }
             let info = self.rows[i].clone();
+            let kind = info.kind(self.scene_sections);
 
-            if info.spec.is_toggle || info.spec.is_trigger {
-                // Toggle / Trigger row — shared builder (Task A of section 8.4 P3b:
-                // effect cards previously had no branch for this at all and
-                // fell through to `build_param_row`, rendering a boolean/
-                // fire-once param as a raw draggable slider). Same shared
-                // core the generator card uses; effects gate the driver-
-                // column reservation on `supports_envelopes` like their
-                // slider rows do, so an `is_trigger` row's lone "A" button
-                // still lands in the same column.
+            if kind != RowKind::Number {
+                // Button row — the shared builder the generator card and the
+                // Scene tab use. Effects gate the driver-column reservation
+                // on `supports_envelopes` like their slider rows do, so an
+                // `is_trigger` row's lone "A" button lands in the same column.
                 let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
                 let reveal = self.reveal_for_build(i);
-                let row = build_toggle_trigger_row(
+                let row = build_button_row(
                     tree,
                     Some(parent),
                     x + PADDING,
                     cy,
                     slider_w,
+                    label_width,
                     &info,
+                    kind,
                     &self.state.mod_state,
                     i,
                     self.param_target(),
@@ -1318,10 +1311,7 @@ impl ParamCardPanel {
                     reveal,
                 );
                 self.drawer_clips[i] = row.drawer_clip;
-                self.row_host.toggle_ids[i] = Some(ToggleParamIds {
-                    label_id: row.label_id,
-                    button_id: row.button_id,
-                });
+                self.row_host.toggle_ids[i] = Some(row.button_ids());
                 self.toggle_cache[i] = info.spec.default > 0.5;
                 self.row_host.audio_btn_ids[i] = row.audio_btn;
                 self.row_host.audio_configs[i] = row.audio_config;
@@ -1642,24 +1632,23 @@ impl ParamCardPanel {
 
             for i in start..start + len {
                 let info = self.rows[i].clone();
+                let kind = info.kind(self.scene_sections);
 
-                if info.spec.is_toggle || info.spec.is_trigger {
-                    // Toggle / Trigger row — shared builder (Task A of section 8.4
-                    // P3b unified this with the effect card's toggle/trigger
-                    // rendering; see `build_toggle_trigger_row`'s doc comment).
-                    // ON/OFF for sticky toggles, ▶ for momentary fire-once
-                    // triggers; `is_trigger` additionally reaches the audio-mod
-                    // "A" button + drawer (D5b). Click handler dispatches
-                    // differently (toggle vs fire) based on the is_trigger flag.
+                if kind != RowKind::Number {
+                    // Button row — the shared builder (see its doc comment):
+                    // a switch, a pick list on a scene card, or a fire button,
+                    // which additionally reaches the audio-mod "A" drawer (D5b).
                     let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
                     let reveal = self.reveal_for_build(i);
-                    let row = build_toggle_trigger_row(
+                    let row = build_button_row(
                         tree,
                         None,
                         cx,
                         cy,
                         slider_w,
+                        label_width,
                         &info,
+                        kind,
                         &self.state.mod_state,
                         i,
                         self.param_target(),
@@ -1670,10 +1659,7 @@ impl ParamCardPanel {
                         reveal,
                     );
                     self.drawer_clips[i] = row.drawer_clip;
-                    self.row_host.toggle_ids[i] = Some(ToggleParamIds {
-                        label_id: row.label_id,
-                        button_id: row.button_id,
-                    });
+                    self.row_host.toggle_ids[i] = Some(row.button_ids());
                     self.toggle_cache[i] = info.spec.default > 0.5;
                     self.row_host.audio_btn_ids[i] = row.audio_btn;
                     self.row_host.audio_configs[i] = row.audio_config;
@@ -1991,12 +1977,10 @@ impl ParamCardPanel {
             return;
         }
 
-        // Label dirty-check (slider rows only — toggle/trigger rows have
-        // their label baked into the row at build time).
-        if !info.spec.is_toggle
-            && !info.spec.is_trigger
-            && self.label_cache[i].as_deref() != Some(&*info.spec.name)
-        {
+        let kind = info.kind(self.scene_sections);
+        // Label dirty-check (slider rows only — button rows have their
+        // label baked into the row at build time).
+        if kind == RowKind::Number && self.label_cache[i].as_deref() != Some(&*info.spec.name) {
             self.label_cache[i] = Some(info.spec.name.clone());
             if let Some(ref ids) = self.row_host.slider_ids[i]
                 && let Some(label) = ids.label
@@ -2005,19 +1989,31 @@ impl ParamCardPanel {
             }
         }
 
-        if info.spec.is_toggle {
-            let on = val > 0.5;
-            if on != self.toggle_cache[i] {
-                self.toggle_cache[i] = on;
-                if let Some(ref ids) = self.row_host.toggle_ids[i] {
-                    tree.set_style(ids.button_id, toggle_btn_style(on));
-                    tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
+        match kind {
+            RowKind::Switch => {
+                let on = val > 0.5;
+                if on != self.toggle_cache[i] {
+                    self.toggle_cache[i] = on;
+                    self.row_host.push_button_value(tree, i, val, &info.spec);
                 }
             }
-        } else if info.spec.is_trigger {
+            RowKind::Choice => {
+                if val != self.param_cache[i] || self.param_cache[i].is_nan() {
+                    self.param_cache[i] = val;
+                    self.row_host.push_button_value(tree, i, val, &info.spec);
+                }
+            }
             // Trigger button stays neutral — the counter value isn't
             // user-visible; nothing to re-render per frame.
-        } else if val != self.param_cache[i] || self.param_cache[i].is_nan() {
+            RowKind::Trigger => {}
+            RowKind::Number => self.sync_slider_value(tree, i, val),
+        }
+    }
+
+    /// A slider row's per-frame push, when its value changed.
+    fn sync_slider_value(&mut self, tree: &mut UITree, i: usize, val: f32) {
+        let info = &self.rows[i];
+        if val != self.param_cache[i] || self.param_cache[i].is_nan() {
             // P2 value-change flash: only for a genuine change (not the
             // post-configure NaN resync) and only while this card's slider
             // isn't being dragged (the drag is its own feedback).

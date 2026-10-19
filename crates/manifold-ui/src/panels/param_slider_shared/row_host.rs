@@ -1164,6 +1164,27 @@ impl RowHost {
         None
     }
 
+    /// The button-row twin of [`Self::push_slider_value`]: redraw row `i`'s
+    /// switch (on/off) or pick list (its label) for `value`. A fire button
+    /// shows no value. No-op for a row built without a button.
+    pub(crate) fn push_button_value(&self, tree: &mut UITree, i: usize, value: f32, spec: &RowSpec) {
+        use crate::param_surface::RowKind;
+        let Some(ids) = self.toggle_ids.get(i).and_then(Option::as_ref) else { return };
+        match ids.kind {
+            RowKind::Switch => {
+                let on = value > 0.5;
+                tree.set_style(ids.button_id, toggle_btn_style(on));
+                tree.set_text(ids.button_id, switch_text(on));
+            }
+            RowKind::Choice => {
+                if let Some(label) = choice_label(spec, value) {
+                    tree.set_text(ids.button_id, label);
+                }
+            }
+            RowKind::Trigger | RowKind::Number => {}
+        }
+    }
+
     /// section 5.6 shared per-row value push: normalize → format → update row `i`'s
     /// slider fill + readout. The ONE place both parameter cards write a
     /// slider value (`ParamCardPanel::sync_param_value` and
@@ -1536,13 +1557,19 @@ impl RowHost {
                 self.focus_mod_tab(mod_active_tab, row, ModTab::Audio);
                 self.audio_toggle_action(target, row, rows, mod_state)
             }
+            // Every commit here rides the wire a slider commit lands on: one
+            // `ChangeGraphParamCommand` through the editing service.
             RowRole::ToggleBtn => {
-                let is_trigger = rows.get(row).map(|i| i.spec.is_trigger).unwrap_or(false);
-                let pid = rows[row].id.clone();
-                if is_trigger {
-                    vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))]
-                } else {
-                    vec![PanelAction::Params(ParamsAction::ParamToggle(target, pid))]
+                use crate::param_surface::RowKind;
+                let Some(info) = rows.get(row) else { return Vec::new() };
+                let pid = info.id.clone();
+                match self.toggle_ids[row].as_ref().map(|ids| ids.kind) {
+                    Some(RowKind::Trigger) => vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))],
+                    Some(RowKind::Choice) => {
+                        let value = base_values.get(row).copied().unwrap_or(info.value.base);
+                        pick_list_action(target, pid, &info.spec, value, node).into_iter().collect()
+                    }
+                    _ => vec![PanelAction::Params(ParamsAction::ParamToggle(target, pid))],
                 }
             }
             RowRole::DriverConfig => {

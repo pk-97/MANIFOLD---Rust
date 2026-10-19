@@ -684,8 +684,9 @@ impl ScenePanel {
             return cy + ROW_H + ROW_GAP;
         }
 
-        // Boolean and trigger parameters use the shared button/dispatch path.
-        if info.spec.is_toggle || info.spec.is_trigger {
+        // Switches, pick lists and fire buttons use the shared button row.
+        let kind = info.kind(true);
+        if kind != RowKind::Number {
             info.spec.default = self
                 .properties_card
                 .last_pushed_values
@@ -693,13 +694,15 @@ impl ScenePanel {
                 .copied()
                 .filter(|value| !value.is_nan())
                 .unwrap_or(self.properties_card.current_values[slot]);
-            let row = build_toggle_trigger_row(
+            let row = build_button_row(
                 tree,
                 Some(self.content_parent),
                 inner_x,
                 cy,
                 slider_w,
+                label_width,
                 &info,
+                kind,
                 &self.properties_card.mod_state,
                 slot,
                 target,
@@ -710,10 +713,7 @@ impl ScenePanel {
                 None,
             );
             let host = &mut self.properties_card.row_host;
-            host.toggle_ids[slot] = Some(ToggleParamIds {
-                label_id: row.label_id,
-                button_id: row.button_id,
-            });
+            host.toggle_ids[slot] = Some(row.button_ids());
             host.audio_btn_ids[slot] = row.audio_btn;
             host.audio_configs[slot] = row.audio_config;
             host.audio_trigger_mode_badge_ids[slot] = row.mode_badge_id;
