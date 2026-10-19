@@ -1,9 +1,10 @@
 //! The Scene tab of the inspector (SCENE_SURFACES_DESIGN.md D8 (Scene tab
 //! tree), D16 (the scene is a tab in the inspector)).
 //!
-//! The tree of scene items sits on top (`outliner.rs`), the selected item's
-//! header below it (`item_header.rs`), then the item's controls grouped by
-//! control group. The panel builds `UITree` nodes from data handed in via
+//! The tree of scene items sits in its own pane on top (`outliner.rs`), and
+//! the selected item's header (`item_header.rs`) and controls, grouped by
+//! control group, scroll in a second pane below a draggable split
+//! (`panes.rs`). The panel builds `UITree` nodes from data handed in via
 //! [`ScenePanel::configure`] and maps clicks and drags to
 //! [`super::PanelAction`]; it never writes the project itself. Param rows
 //! are the shared card rows, dispatched through the same `RowHost` every
@@ -36,6 +37,7 @@ mod parameter_navigation;
 mod value_sync;
 #[path = "scene_setup_panel/fluid_roles.rs"]
 mod fluid_roles;
+mod panes;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, View};
@@ -876,7 +878,9 @@ pub struct ScenePanel {
     state: SceneSetupState,
     panel_w: f32,
     host: ChromeHost,
+    /// The settings pane's scroll column; the tree pane's lives in `panes`.
     scroll: ScrollContainer,
+    panes: panes::ScenePanes,
     reveal_properties: bool,
     pub(crate) content_parent: NodeId,
     bg_id: NodeId,
@@ -1074,6 +1078,7 @@ impl Default for ScenePanel {
             panel_w: PANEL_W_MIN,
             host: ChromeHost::new(),
             scroll: ScrollContainer::new(),
+            panes: Default::default(),
             reveal_properties: false,
             content_parent: NodeId::PLACEHOLDER,
             bg_id: NodeId::PLACEHOLDER,
@@ -1157,10 +1162,6 @@ impl ScenePanel {
 
     pub fn is_open(&self) -> bool {
         self.open
-    }
-
-    pub fn content_viewport(&self) -> Rect {
-        self.scroll.viewport()
     }
 
     /// Node-intent dispatch for this panel's right-click gestures: the
@@ -1330,44 +1331,8 @@ impl ScenePanel {
         // otherwise register intents on whatever now sits in those slots.
         self.properties_card.clear_nodes();
         self.active_material_info = None;
-        let inner_x = x + PAD;
-        let inner_w = self.panel_w - PAD * 2.0;
-        let content_top = y + PAD;
-        let body_viewport = Rect::new(x, content_top, self.panel_w, (y + panel_h - PAD - content_top).max(0.0));
-        self.object_modifier_bounds = body_viewport;
-        let clip_id = self.scroll.begin(tree, body_viewport);
-        // The panel builds inside the inspector region (SCENE_SURFACES D16);
-        // this name keeps `under_name: "scene_setup"` selectors addressing it.
-        tree.set_name(clip_id, "scene_setup");
-        self.content_parent = clip_id;
-        let content_start = tree.count();
-        let mut cy = content_top;
-
-        cy = match self.state.clone() {
-            SceneSetupState::NoSelection(sentence) => {
-                self.build_sentence(tree, inner_x, inner_w, cy, &sentence)
-            }
-            SceneSetupState::NoGenerator { .. } => self.build_no_generator(tree, inner_x, inner_w, cy),
-            SceneSetupState::NoScene { .. } => self.build_no_scene(tree, inner_x, inner_w, cy),
-            SceneSetupState::Live(vm) => self.build_live(tree, inner_x, inner_w, cy, &vm),
-        };
-
-        let content_height = (cy - content_top + PAD).max(0.0);
-        self.scroll.set_content_height(content_height);
-        self.scroll.reparent_content(tree, content_start);
-        let offset = self.scroll.scroll_offset();
-        if offset != 0.0 {
-            self.scroll.offset_content(tree, -offset);
-        }
-        let sb_x = x + self.panel_w - SCROLLBAR_W - 2.0;
-        self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
-        if self.reveal_properties {
-            if let Some((_, node, _)) = self.object_name_ids.first() {
-                let bounds = tree.get_bounds(*node);
-                self.scroll.reveal_rect(tree, bounds);
-            }
-            self.reveal_properties = false;
-        }
+        let body = Rect::new(x, y + PAD, self.panel_w, (panel_h - PAD * 2.0).max(0.0));
+        self.build_body(tree, body);
         self.reveal_pending_parameter_response(tree);
         self.rebuild_object_modifier_drag_overlay(tree);
     }
@@ -1423,39 +1388,6 @@ impl ScenePanel {
             KEY_OPEN_GRAPH_EDITOR,
         ));
         cy + ROW_H + ROW_GAP
-    }
-
-    /// The tree over the selected item's header and controls (D8).
-    fn build_live(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
-        if vm.multiple_scenes {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                "This layer has more than one scene; showing the first",
-                label_style(),
-            );
-            cy += ROW_H + ROW_GAP;
-        }
-        self.show_gizmos_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            toggle_btn_style(self.show_gizmos),
-            "Show gizmos",
-            KEY_SHOW_GIZMOS,
-        ));
-        cy += ROW_H + ROW_GAP;
-        let selected = self.resolve_selection(vm);
-        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, &selected);
-        cy += ROW_GAP * 2.0;
-
-        // ── Properties ──
-        self.build_properties(tree, inner_x, inner_w, cy, vm, selected)
     }
 
     /// External selection write (REALTIME_3D_DESIGN.md P6): a viewport
@@ -1848,15 +1780,6 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// Mouse-wheel scroll for the docked body.
-    pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        let moved = self.scroll.apply_scroll_delta(delta);
-        if moved {
-            self.view_version += 1;
-        }
-        moved
-    }
-
     /// The docked body's view version: scroll and card tween frames.
     pub fn view_version(&self) -> u64 {
         self.view_version
@@ -1880,6 +1803,9 @@ impl ScenePanel {
     pub fn handle_event(&mut self, event: &UIEvent, tree: &mut UITree) -> (bool, Vec<PanelAction>) {
         if !self.open {
             return (false, Vec::new());
+        }
+        if let Some(handled) = self.handle_pane_event(event) {
+            return handled;
         }
         match event {
             UIEvent::RightClick { node_id: Some(node_id), .. } if self.select_outliner_node(*node_id) => {
@@ -2283,17 +2209,6 @@ impl ScenePanel {
                 let actions = self.properties_card.row_host.handle_drag_end();
                 let actions = self.rewrite_material_rgb_actions(actions);
                 (was_dragging || !actions.is_empty(), actions)
-            }
-            // BUG-199: mouse-wheel scroll over the docked body, routed here by
-            // `window_input.rs`'s `primary_mouse_wheel` through the generic
-            // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
-            // `window_input` already gated on `layout.scene_setup().contains(pos)`
-            // before emitting this, so no further position check is needed here.
-            // The scroll moves the panel's view version, so the planner
-            // rebuilds the inspector region that hosts the body.
-            UIEvent::Scroll { delta, .. } => {
-                self.handle_scroll(delta.y);
-                (true, Vec::new())
             }
             _ => (false, Vec::new()),
         }
