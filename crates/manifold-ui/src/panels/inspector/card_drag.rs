@@ -96,6 +96,7 @@ impl InspectorCompositePanel {
         if let Some(target) = self.pressed_target {
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_drag(pos.x, tree),
+                PressedTarget::RackWetDry => self.rack_drag_move(pos, tree),
                 PressedTarget::AudioTriggers => self.audio_trigger_section.handle_drag(pos.x, tree),
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag(pos, tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag(pos, tree),
@@ -137,6 +138,7 @@ impl InspectorCompositePanel {
         let actions = if let Some(target) = self.pressed_target {
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_release(),
+                PressedTarget::RackWetDry => self.rack_drag_end(),
                 PressedTarget::AudioTriggers => self.audio_trigger_section.handle_release(),
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag_end(tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag_end(tree),

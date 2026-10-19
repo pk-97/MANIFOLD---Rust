@@ -573,6 +573,13 @@ pub enum ParamsAction {
         group_id: manifold_foundation::EffectGroupId,
         collapsed: bool,
     },
+    /// The rack header bypass switch: `enabled` is the state to set.
+    EffectGroupBypass {
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+        group_id: manifold_foundation::EffectGroupId,
+        enabled: bool,
+    },
     GenTypeClicked(Option<LayerId>), // layer_id
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the inspector "+ Add Modifier"
     /// button on a scene layer's scope. Opens the modifier picker (one entry

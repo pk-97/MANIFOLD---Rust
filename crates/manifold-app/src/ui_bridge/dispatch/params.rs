@@ -513,6 +513,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::handled()
         }
+        ParamsAction::EffectGroupBypass { tab, layer_id, group_id, enabled } => {
+            super::super::rack_controls::dispatch_bypass(*tab, layer_id, group_id, *enabled, ctx)
+        }
         ParamsAction::EffectReorder(from_idx, to_idx) => {
             let tab = effective_tab;
             let target = super::resolve_effect_target(tab, active_layer, &ctx.project);

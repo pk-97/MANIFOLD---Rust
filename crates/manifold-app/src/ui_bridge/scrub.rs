@@ -129,6 +129,13 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
+    /// A rack header wet/dry slider; the target is resolved at Begin.
+    RackWetDry {
+        target: manifold_editing::commands::effect_target::EffectTarget,
+        group_id: manifold_core::EffectGroupId,
+        baseline: f32,
+        live: f32,
+    },
     /// A macro-bank knob (`idx`). Macros ride every ModulationSnapshot block, so
     /// the restore path re-applies through `apply_macro` — the same write Move
     /// uses — or a per-tick apply stomps the in-flight value.
@@ -344,6 +351,9 @@ impl ResolvedScrub {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
                     layer.opacity = *live;
                 }
+            }
+            ResolvedScrub::RackWetDry { target, group_id, live, .. } => {
+                super::rack_controls::set_wet_dry(project, target, group_id, *live);
             }
             ResolvedScrub::Macro { idx, live, .. } => {
                 manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *live);
@@ -2026,6 +2036,10 @@ pub(crate) fn dispatch_scrub(
                 DispatchResult::handled()
             }
         },
+
+        ValueRef::RackWetDry { tab, layer_id, group_id } => {
+            super::rack_controls::dispatch_wet_dry(*tab, layer_id, group_id, phase, ctx)
+        }
 
         ValueRef::AbletonMacroTrim(slot_idx) => match phase {
             ScrubPhase::Begin => {

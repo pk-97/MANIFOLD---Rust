@@ -2,6 +2,22 @@
   "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py. water-family-controls: rename gesture coverage is deferred to BUG-ajyri (share performer text input with ui-snap); CPU water_family_visibility_rename_round_trip covers parent/child rename and save/reload.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flows. Row entries are EXACT flow names, never families or substrings (a family is expanded to its flows when the row is written); only the positional CLI filter keeps substring matching. Test-only paths (/tests/, tests.rs, test.rs, _tests.rs, _test.rs) select nothing. A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
+    "crates/manifold-ui/src/panels/inspector/": [
+      "inspector-modifier-group",
+      "rack-bypass",
+      "rack-wet-dry"
+    ],
+    "crates/manifold-app/src/ui_bridge/rack_controls.rs": [
+      "rack-bypass",
+      "rack-wet-dry"
+    ],
+    "crates/manifold-app/src/ui_bridge/scrub.rs": [
+      "rack-wet-dry"
+    ],
+    "crates/manifold-ui/src/chrome/diff.rs": [
+      "rack-bypass",
+      "rack-wet-dry"
+    ],
     "crates/manifold-app/src/ui_bridge/dispatch/params.rs": [
       "trigger-lane-assignment",
       "scene-slider-range"
@@ -328,6 +344,8 @@
     "inspector-card-drag-reorder": "inspector",
     "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
+    "rack-bypass": "modifiergroup",
+    "rack-wet-dry": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
     "scene-setup-add-object": "gltfscene",
     "scene-setup-empty-states": "audiovisualizers",
