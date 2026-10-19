@@ -631,13 +631,14 @@ pub struct ParamSpecDef {
 impl ParamSpecDef {
     /// What this param's base value decides about which inspector rows exist,
     /// or `None` when it decides nothing (UI_INVALIDATION D21, D22). A scene
-    /// feature switch is on above 0.5. A material feature mode shows, hides
+    /// feature switch is on above 0.5; a scene mode switch decides by its
+    /// whole value. A material feature mode shows, hides
     /// or textures the feature by its whole value. A material feature's own
     /// value counts the feature as authored once it leaves the default.
     pub fn row_fact(&self, base: f32) -> Option<i32> {
         use crate::material_inspector::{MaterialGroup::Feature, MaterialParamRole as Role};
-        if self.scene.is_some_and(|scene| scene.switch.is_some()) {
-            return Some(i32::from(base > 0.5));
+        if let Some(feature) = self.scene.and_then(|scene| scene.switch) {
+            return Some(if feature.has_modes() { base.round() as i32 } else { i32::from(base > 0.5) });
         }
         match self.material_role {
             Some(Role::FeatureMode(_)) => Some(base.round() as i32),
@@ -1024,6 +1025,31 @@ pub struct ValueAliasEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mode switch moves the rows on every mode change, Point to Spot
+    /// included; a plain switch only across 0.5.
+    #[test]
+    fn row_fact_reads_a_mode_switch_whole() {
+        use crate::scene_surface::{CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole};
+        let switch = |feature| ParamSpecDef {
+            scene: Some(SceneParamDesc {
+                role: SurfaceRole::Setup,
+                group: ControlGroup::Light,
+                band: None,
+                card_order: 0,
+                card_label: CardLabel::Param,
+                gate: None,
+                switch: Some(feature),
+                colour: None,
+            }),
+            ..ParamSpecDef::default()
+        };
+        let light = switch(Feature::LightType);
+        assert_ne!(light.row_fact(1.0), light.row_fact(2.0));
+        let dof = switch(Feature::DepthOfField);
+        assert_eq!(dof.row_fact(1.0), dof.row_fact(2.0));
+        assert_ne!(dof.row_fact(0.0), dof.row_fact(1.0));
+    }
 
     fn sample_param_spec() -> ParamSpecDef {
         ParamSpecDef {

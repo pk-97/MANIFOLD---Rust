@@ -68,7 +68,9 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         }
         if param.choices.rename.is_none() {
             match (place.label, item) {
-                (CardLabel::ItemName, Some(item)) => row.spec.name = item.name.clone(),
+                (CardLabel::ItemName, Some(item)) => {
+                    row.spec.name = format!("{} {}", item.name, row.spec.name.to_lowercase());
+                }
                 (CardLabel::GroupName, _) => {
                     if let Some(scene) = param.spec.scene {
                         row.spec.name = scene.group.title().into();
@@ -356,7 +358,7 @@ mod tests {
         assert_eq!(sections(&rows)[0], "Camera", "camera comes first");
         assert_eq!(
             names_in(&rows, "Camera"),
-            ["Orbit", "Tilt", "Distance", "Target Height", "Field of View", "Focus Distance"],
+            ["Orbit", "Tilt", "Distance", "Target Height", "Field of View"],
         );
         let focus = rows.iter().find(|row| row.spec.name == "Focus Distance").unwrap();
         assert_eq!(
@@ -372,7 +374,7 @@ mod tests {
         assert_eq!(sections(&rows)[0], "Camera");
         assert_eq!(
             names_in(&rows, "Camera"),
-            ["Pan", "Tilt", "Position X", "Position Y", "Position Z", "Field of View", "Focus Distance"],
+            ["Pan", "Tilt", "Position X", "Position Y", "Position Z", "Field of View"],
         );
         assert!(!rows.iter().any(|row| matches!(row.spec.name.as_str(), "Orbit" | "Distance")));
     }
@@ -382,8 +384,8 @@ mod tests {
         let rows = card("PhysicsSolids");
         assert_eq!(sections(&rows), ["Camera", "Physics", "Lighting", "Look"]);
         assert_eq!(names_in(&rows, "Physics"), ["Count", "Reset"]);
-        assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Sun", "Fill Light"]);
-        assert_eq!(names_in(&rows, "Look"), ["Depth of Field", "Motion Blur"], "details fold while off");
+        assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Sun intensity", "Fill Light intensity"]);
+        assert_eq!(names_in(&rows, "Look"), ["Depth of Field", "Focus Distance", "Motion Blur"], "details fold while off, focus dims");
     }
 
     #[test]
@@ -400,7 +402,7 @@ mod tests {
         for id in ["sheet_fill_rate", "solve_level", "max_iterations", "particle_capacity"] {
             assert!(!rows.iter().any(|row| row.id.ends_with(id)), "{id} is setup, off the card");
         }
-        assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Light", "Rim Light"]);
+        assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Light intensity", "Rim Light intensity"]);
     }
 
     #[test]
@@ -461,7 +463,8 @@ mod tests {
         let rows = surface(&project, SurfaceVisibility::CuratedCard);
         let lighting = names_in(&rows, "Lighting");
         assert_eq!(lighting[..2], ["Exposure", "Environment"]);
-        assert_eq!(lighting[2..], names[..], "one intensity row per light, named by the light");
+        let expected: Vec<String> = names.iter().map(|name| format!("{name} intensity")).collect();
+        assert_eq!(lighting[2..], expected[..], "one intensity row per light, named by the light");
     }
 
     #[test]
@@ -546,7 +549,7 @@ mod tests {
     }
 
     /// INV-S8: a row reads the same on the card and in the Scene tab, except
-    /// item- and group-named rows, which read the item or group title.
+    /// item-named rows ("Sun intensity") and group-named rows (the group title).
     #[test]
     fn card_and_panel_labels_match() {
         for preset in ["PhysicsSolids", "Ocean", "WaterDamBreakGpuFlip", "WaterDamBreakMatter", "PhysicsBoxes"] {
@@ -561,9 +564,11 @@ mod tests {
                 let param = project.timeline.layers[0].gen_params().unwrap().params.get(&row.id).unwrap();
                 let expected = match param.spec.scene.map(|scene| scene.card_label) {
                     _ if param.choices.rename.is_some() => in_panel.spec.name.clone(),
-                    Some(CardLabel::ItemName) => {
-                        items[owner_of(&items, meta, &row.id).expect("an owned row")].name.clone()
-                    }
+                    Some(CardLabel::ItemName) => format!(
+                        "{} {}",
+                        items[owner_of(&items, meta, &row.id).expect("an owned row")].name,
+                        in_panel.spec.name.to_lowercase()
+                    ),
                     Some(CardLabel::GroupName) => param.spec.scene.unwrap().group.title().to_string(),
                     _ => in_panel.spec.name.clone(),
                 };

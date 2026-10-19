@@ -136,10 +136,7 @@ impl ScenePanel {
 
     pub(super) fn material_section_folded(&self, name: &str) -> bool {
         self.section_folded.get(name).copied().unwrap_or_else(|| {
-            name == "Advanced"
-                || name == "Advanced · Opacity"
-                || name == "Advanced · Dormant Textures"
-                || name.starts_with("Textures · ")
+            name == "Advanced" || name.starts_with("Advanced · ") || name.starts_with("Textures · ")
         })
     }
 

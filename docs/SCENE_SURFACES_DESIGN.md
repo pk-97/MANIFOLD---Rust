@@ -135,11 +135,11 @@ The cheapest catching tests are P1 gates: `every_bundled_and_fixture_param_resol
 
 | Band | Section(s) | Rows (performance role) |
 |---|---|---|
-| Camera | "Camera" | Orbit camera: Orbit, Tilt, Distance, Target Height, Field of View, Focus. Free camera: Pan, Tilt, Position X, Position Y, Position Z, Field of View, Focus. Look-at and loop cameras: Field of View, Focus (default; revisit when Peter asks for more). Focus dims while depth of field is off. |
+| Camera | "Camera" | Orbit camera: Orbit, Tilt, Distance, Target Height, Field of View. Free camera: Pan, Tilt, Position X, Position Y, Position Z, Field of View. Look-at and loop cameras: Field of View (default; revisit when Peter asks for more). |
 | Scene | one section per owning item, titled by item name; authored rows titled by the preset's display name | Physics world: Count, Reset. Liquid domains: Emission, Inflow Speed, Speed, Reset where the domain has them; Matter additionally Cohesion, Stiffness, FLIP Ratio. Authored preset controls (Ocean's wind and waves, composite macros): as authored. Water mesher controls (Surface Detail, Smoothing, Whitewater Budget, Particle Scale): setup role. |
 | Forces | one section per force, titled by `scene_modifier_display_name` (`cards.rs:938`, adds "#2") | Enabled, Strength, Kick (the recipe's `fire` trigger, usable by T and audio triggers), Kick Size (`impulse_strength`). Centre, axis, radius: setup. Rows dim with "No physics objects in this force's targets" when the force's eligible objects are empty (the fact `cards.rs:849-855` already computes). |
-| Lighting | "Lighting" | Exposure (lens `exposure_ev`), Environment (bake `intensity`, card label = group name), then one Intensity row per light, labelled with the light's name, in item order. |
-| Look | "Look" | Depth of Field (switch), then F-Stop and Max Blur only while it is on. Motion Blur (switch), then Shutter Angle and Max Blur only while it is on. |
+| Lighting | "Lighting" | Exposure (lens `exposure_ev`), Environment (bake `intensity`, card label = group name), then one Intensity row per light, labelled with the light's name and "intensity" ("Sun intensity"), in item order. |
+| Look | "Look" | Depth of Field (switch), then Focus, which dims while it is off, then F-Stop and Max Blur only while it is on. A switch always sits above the rows it controls. Motion Blur (switch), then Shutter Angle and Max Blur only while it is on. |
 
 Camera translate: Target Height (`look_y`) is the only translate the orbit camera has (`camera_orbit.rs:67-129`); lateral pan is Deferred (new primitive params). Rejected: "Main Light Intensity" (Peter, quoted above). Rejected: placeholder rows for absent targets (BUG-pmbd3.3 (hide controls the scene lacks)).
 
@@ -488,7 +488,7 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 | INV-S5 Attached rows on the card, and kept there | `scene_card::tests::attached_rows_stay_on_card` — the pin, not the live attachment, decides, on a Setup and a Hidden row; `inspector::tests::modulating_roll_keeps_it_on_the_card` — arm, disable, delete, undo through dispatch |
 | INV-S6 The join never writes user choices | `param_lookup::tests::join_preserves_choices_and_user_bindings` plus `migrate_twice_is_noop` (P1) |
 | INV-S7 Row set follows base values | `scene_card::tests::look_rows_follow_base_not_effective` (P4) |
-| INV-S8 Same label on both surfaces | `scene_card::tests::card_and_panel_labels_match` — every row on both surfaces has equal `spec.name` except `CardLabel::ItemName`/`GroupName` rows, whose text equals the item or group title shown in the panel (P4) |
+| INV-S8 Same label on both surfaces | `scene_card::tests::card_and_panel_labels_match` — every row on both surfaces has equal `spec.name` except `CardLabel::ItemName` rows, which read the item name then the panel label in lower case ("Sun intensity"), and `GroupName` rows, which read the group title (P4) |
 | INV-S9 No units in scene labels | `scene_surface::tests::no_unit_in_scene_labels` — vocabulary `ParamDef` labels, recipe and bundled scene preset names: no `(` and no unit suffix tokens (P5) |
 | INV-S10 Navigation by id only | negative gate: `rg -n 'spec\.section' crates/manifold-ui/src/panels/scene_setup_panel/parameter_navigation.rs` → 0 (P7) |
 | INV-S11 No private id schemes on scene surfaces | negative gate: `rg -n 'scene_performance\.' crates/` → 0 (P4) |
