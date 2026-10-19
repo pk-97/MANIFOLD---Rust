@@ -136,7 +136,7 @@ this desc-struct shape exists to avoid.
 `shared/depth.wgsl` (new, alongside the existing shared-header pattern):
 `fn linearize_depth(raw: f32, near: f32, far: f32) -> f32` implementing the
 exact inverse of `Camera::proj`'s reversed perspective depth mapping
-(`mesh_pipeline.rs:171-180`: `range = far/(near−far)`, so
+(`perspective_rh` in `mesh/pipeline.rs`: `range = far/(near−far)`, so
 `view_z = (range·near)/(raw + range)` — the doc commits this formula; the
 unit gate checks it against `Camera::project_to_pixel().view_z` at 5 depths).
 Consumers (CINEMATIC_POST atoms) take a `camera: Camera` port and read

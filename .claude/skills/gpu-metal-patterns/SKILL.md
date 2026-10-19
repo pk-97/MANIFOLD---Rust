@@ -134,7 +134,7 @@ compositor_cb.encode_wait_event(&event, signal_value);
 ## WGSL Shader Contract (Compute Effects)
 
 ```wgsl
-// Standard binding layout for ComputeBlitHelper
+// Standard binding layout for a compute effect
 struct Uniforms { /* matches Rust struct exactly */ }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

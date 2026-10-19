@@ -7,9 +7,9 @@ use crate::color;
 use crate::node::Color32;
 
 // ── Color constants ──
-// Clip fills/borders/separators/trim-hints moved to the GPU clip pass (section 24 5b,
-// `manifold_nodes::clip_draw`); their constants left with them. Region
-// highlight + insert cursor are still bitmap-painted (front buffer).
+// Clip fills, borders and trim hints are drawn by the GPU clip pass
+// (`manifold_nodes::clip_draw`). Region highlight and the insert cursor are
+// painted with `fill_rect` from `panels/viewport/render.rs`.
 
 
 /// Scale a logical pixel value to texture pixels, minimum 1.

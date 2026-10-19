@@ -151,7 +151,7 @@ irrelevant to the UI — both are just a cell in the same atlas.
   (`thumb_texture`). `find_parked_generator_clip` locates the clip; `clip_atlas`'s
   `contains` skips already-celled clips.
 - **P2b (video posters) — SHIPPED.** A parked video clip shows a poster (its first
-  decoded frame) via an ISOLATED async decode. `VideoRenderer::request_clip_poster`
+  decoded frame) via an ISOLATED async decode. `VideoRenderer::request_clip_filmstrip`
   registers the clip in a SEPARATE `poster_clips` map (never composited, never
   advanced by `pre_render`'s playback loop), acquires a render target, and submits
   Open+Prepare decode jobs. The async results route via `clip_state_mut` (active

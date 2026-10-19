@@ -87,7 +87,7 @@ Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is th
 
 Effects run through the node graph: every preset is a `ChainGraph` of typed primitives, walked by an `ExecutionPlan` once per frame. The graph runtime is the sole dispatcher.
 
-Primitives use compute dispatches via the `Primitive` trait (each primitive's `run` method binds inputs/outputs/params and submits its work to a `GpuEncoder`). The legacy `ComputeBlitHelper` (single source) and `ComputeDualBlitHelper` (dual source) helpers still back the 6 retained legacy effect impls. Render passes (`draw_fullscreen`) are only for non-effect paths: output presenter blit, UI atlas blit, line/dot rendering.
+Primitives use compute dispatches via the `Primitive` trait (each primitive's `run` method binds inputs/outputs/params and submits its work to a `GpuEncoder`). Render passes (`draw_fullscreen`) are only for non-effect paths: output presenter blit, UI atlas blit, instanced line rendering (`node.render_lines`).
 
 - Async compute: independent layers generate in parallel `MTLCommandBuffer`s, compositor waits via `MTLEvent`
 - Texture pool: frame-stamped recycling, zero per-frame allocations after 3-frame warmup

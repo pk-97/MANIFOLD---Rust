@@ -197,11 +197,8 @@ impl OscSyncController {
             // `drain_pending_osc_timecode()` once per frame, BEFORE calling
             // `update()`, which is what actually calls on_timecode_received().
             //
-            // Plain `subscribe` (not `subscribe_keyed`) is used deliberately:
-            // subscribe_keyed's `unsubscribe_keyed` uses swap_remove, which
-            // invalidates other callbacks' keys for the same address (a known bug,
-            // out of scope here). `unsubscribe_all` in disable_osc is exact for our
-            // single-subscriber use of this address.
+            // Plain `subscribe` is used deliberately: `unsubscribe_all` in
+            // disable_osc is exact for our single-subscriber use of this address.
             let slot = Arc::clone(&self.pending_osc_message);
             receiver.subscribe_stamped(
                 &self.timecode_address,

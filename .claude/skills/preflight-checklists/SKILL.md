@@ -47,7 +47,7 @@ CLAUDE.md says touch 6 locations:
 - [ ] `generators/registry.rs` — added to BOTH `prewarm_all()` array AND `create()` if-else chain
 
 **Line-based generator extra checks:**
-- [ ] Uses `LinePipeline` for rendering
+- [ ] Rasterizes with `node.render_lines`
 - [ ] Vertex buffer sized correctly
 - [ ] `@workgroup_size` respects Metal limits
 

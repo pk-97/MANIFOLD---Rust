@@ -424,10 +424,8 @@ pub fn dropdown_chip_style(surface: ChipSurface, font_size: u16, radius: f32) ->
     }
 }
 
-// ── Button (primary / secondary) ────────────────────────────────────
-// Primary = the one bold accent action (`Change`, a dialog's confirm).
-// Secondary = neutral control grey (everything else). One accent, used
-// sparingly — that is what keeps it meaning "this is the action".
+// ── Button (secondary) ────────────────────────────────────
+// Secondary = neutral control grey (every button that is not the one accent action).
 
 pub fn button_secondary_style() -> UIStyle {
     UIStyle {

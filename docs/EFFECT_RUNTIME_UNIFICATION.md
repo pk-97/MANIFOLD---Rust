@@ -688,9 +688,7 @@ step to misroute.
 
 **Outer routing source tag.** The snapshot's
 `OuterParamRouting` carries `source: OuterParamSource`
-(`Static | User`). `outer_routings_from_bindings` (runtime walk
-over `Vec<ResolvedBinding>`) translates the binding's tier source
-to the snapshot's tier marker. The registry walk in
+(`Static | User`). The registry walk in
 `effect_registry::outer_routings_from_spec` always emits `Static`
 (it operates on compile-time `ChainSpec.bindings` only). UI
 consumers no longer re-derive the static-vs-user split from
