@@ -756,86 +756,6 @@ impl LastAppliedCache {
 }
 
 // ─── Lookups + editor projections ────────────────────────────────────
-
-/// Read a host-visible parameter's current value by stable id. O(n)
-/// over the unified slice — n is typically <10, so the scan is faster
-/// than an `AHashMap` lookup at this scale and avoids per-effect
-/// allocation.
-///
-/// Used by effects that need to inspect a param value outside the
-/// normal [`apply_bindings`] flow (e.g. `should_skip` predicates).
-/// Returns `None` if the id matches no binding or the binding's
-/// `source_id` isn't in the manifest.
-pub fn binding_value(
-    bindings: &[ResolvedBinding],
-    values: &ParamManifest,
-    id: &str,
-) -> Option<f32> {
-    let b = bindings.iter().find(|b| b.id == id)?;
-    values.get(b.source_id.as_ref()).map(|p| p.value)
-}
-
-/// Walk the slot's unified bindings, a composite handle, and the live
-/// graph to produce the editor-facing list of
-/// [`OuterParamRouting`](crate::node_graph::OuterParamRouting) entries
-/// — one per outer slider whose value gets written into an inner-node
-/// param every frame. Static and user bindings both surface.
-///
-/// Both runtime routing styles are recognized:
-/// - [`ResolvedTarget::Composite`] — resolved via
-///   [`CompositeHandle::inner_routing_for`].
-/// - [`ResolvedTarget::Node`] — `(node_id, param)` is taken directly
-///   off the binding.
-///
-/// [`ResolvedTarget::Custom`] is skipped; it has no introspectable
-/// destination, so the editor can't surface it.
-pub fn outer_routings_from_bindings(
-    bindings: &[ResolvedBinding],
-    handle: Option<&crate::param_binding::composite_handle::CompositeHandle>,
-    graph: &Graph,
-) -> Vec<crate::snapshot::OuterParamRouting> {
-    let id_to_handle: ahash::AHashMap<u32, String> = graph
-        .handles()
-        .map(|(h, id)| (id.0, h.to_string()))
-        .collect();
-    let mut out = Vec::with_capacity(bindings.len());
-    for resolved in bindings {
-        let (node_id, inner_param) = match &resolved.target {
-            ResolvedTarget::Composite { outer_name } => {
-                let Some(h) = handle else {
-                    // Composite-target binding on an effect that
-                    // doesn't expose a `CompositeHandle` — can't
-                    // resolve. Skip rather than guess.
-                    continue;
-                };
-                let Some((n, p)) = h.inner_routing_for(outer_name.as_ref()) else {
-                    continue;
-                };
-                (n, Cow::Borrowed(p))
-            }
-            ResolvedTarget::Node { node, param } => (*node, param.clone()),
-            ResolvedTarget::Custom(_) => continue,
-        };
-        let Some(handle_str) = id_to_handle.get(&node_id.0) else {
-            // Inner node has no stable handle — without it the editor
-            // can't match it to a snapshot row, so the routing is
-            // un-surfaceable. Skip silently.
-            continue;
-        };
-        out.push(crate::snapshot::OuterParamRouting {
-            outer_label: resolved.label.to_string(),
-            outer_param_id: resolved.id.to_string(),
-            node_handle: handle_str.clone(),
-            inner_param: inner_param.to_string(),
-            source: match resolved.source {
-                BindingSource::Static => crate::snapshot::OuterParamSource::Static,
-                BindingSource::User => crate::snapshot::OuterParamSource::User,
-            },
-        });
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,43 +1433,6 @@ mod tests {
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(0.97)));
-    }
-
-    #[test]
-    fn binding_value_finds_id_in_either_tier() {
-        let mut g = Graph::new();
-        let feedback = add_feedback_node(&mut g);
-        let static_rb = resolved_feedback_amount(feedback);
-        let core_ub = manifold_core::effects::UserParamBinding {
-            id: "user.feedback.zoom.1".to_string(),
-            label: "User Zoom".to_string(),
-            node_id: NodeId::new("feedback"),
-            legacy_node_handle: None,
-            inner_param: "translate_x".to_string(),
-            min: 0.9,
-            max: 1.1,
-            default_value: 0.95,
-            convert: manifold_core::effects::ParamConvert::Float,
-            is_angle: false,
-            invert: false,
-            curve: Default::default(),
-            scale: 1.0,
-            offset: 0.0,
-            value_labels: Vec::new(),
-            section: None,
-        };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
-        let bindings = vec![static_rb, user_rb];
-        let values = ParamManifest::from_params(vec![
-            slot("amount", 0.5, true),
-            slot("user.feedback.zoom.1", 1.07, true),
-        ]);
-        assert_eq!(binding_value(&bindings, &values, "amount"), Some(0.5));
-        assert_eq!(
-            binding_value(&bindings, &values, "user.feedback.zoom.1"),
-            Some(1.07)
-        );
-        assert_eq!(binding_value(&bindings, &values, "nope"), None);
     }
 
     /// Architectural guard that mirrors the generator-side regression

@@ -260,9 +260,6 @@ pub const PLATONIC_SHAPES: &[&str] = &[
     "Dodecahedron",
 ];
 
-/// Number of Platonic-solid variants. Matches `PLATONIC_SHAPES.len()`.
-pub const PLATONIC_SHAPE_COUNT: u32 = 5;
-
 /// Maximum vertex count across the five shapes (Dodecahedron = 20).
 /// Array<MeshVertex> output capacity for `node.platonic_solid_points`.
 pub const PLATONIC_MAX_VERTS: u32 = 20;

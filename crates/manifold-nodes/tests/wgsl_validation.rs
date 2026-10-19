@@ -29,7 +29,6 @@ fn find_wgsl_files(dir: &std::path::Path) -> Vec<PathBuf> {
 /// Files that are partials (no entry points, included by other shaders).
 /// These won't validate standalone — skip them.
 const PARTIAL_SHADERS: &[&str] = &[
-    "particle_common.wgsl",
     "oily_fluid.wgsl",
     "noise_common.wgsl",
     // Specialization templates whose missing symbols are injected at

@@ -1748,12 +1748,6 @@ impl PresetRuntime {
         self.type_id()
     }
 
-    /// Replace the internal executor — used when a host wires a real backend
-    /// after a mock-backend construction.
-    pub fn set_executor(&mut self, executor: Executor) {
-        self.executor = executor;
-    }
-
     /// Any node in this graph with background file IO still in flight
     /// (`EffectNode::io_pending` — the IoBridge decode-thread sources).
     /// Headless convergence loops (`render-import`, conformance tests) call

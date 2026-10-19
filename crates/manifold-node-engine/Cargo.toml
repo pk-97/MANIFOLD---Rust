@@ -8,11 +8,9 @@ publish = false
 manifold-core = { path = "../manifold-core" }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-gpu = { path = "../manifold-gpu" }
-manifold-playback = { path = "../manifold-playback" }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 half = "2"
-png = "0.18"
 serde = { workspace = true }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 ahash = { workspace = true }
@@ -24,8 +22,6 @@ sha2 = "0.10"
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 
 
-[build-dependencies]
-sha2 = "0.10"
 
 [features]
 testkit = []

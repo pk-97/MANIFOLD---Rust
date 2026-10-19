@@ -130,7 +130,6 @@ pub mod testkit;
 pub mod background_worker;
 pub mod chain_dispatch;
 pub mod effect;
-pub mod effects;
 pub mod frame_status;
 pub mod layer_skin;
 pub mod plugin_prewarm;
