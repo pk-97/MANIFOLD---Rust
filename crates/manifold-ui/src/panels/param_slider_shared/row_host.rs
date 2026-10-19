@@ -1219,25 +1219,34 @@ impl RowHost {
         crate::slider::BitmapSlider::mark_past_end(tree, ids, super::state::past_slider_end(value, spec));
     }
 
-    /// The one param menu (`ParamLabelRightClick`) on every built slider row
-    /// whose row `skip` does not exclude: the label, the full-row catcher
-    /// behind the value cell and gaps, and the value cell itself, so a
-    /// right-click anywhere off the track opens it. Both the param card and
-    /// the Scene tab register their rows here (SCENE_SURFACES_DESIGN.md D10).
+    /// The one param menu (`ParamLabelRightClick`, where mapping lives) on
+    /// every built slider row: the label, the full-row catcher behind the
+    /// value cell and gaps, and the value cell itself, so a right-click
+    /// anywhere off the track opens it. A switch or pick-list row opens the
+    /// same menu from its label and its button. Both the param card and the
+    /// Scene tab register their rows here (SCENE_SURFACES_DESIGN.md D10).
     pub(crate) fn register_param_menus(
         &self,
         rows: &[ParamRow],
         target: &GraphParamTarget,
         intents: &mut crate::intent::IntentRegistry,
-        skip: impl Fn(&ParamRow) -> bool,
     ) {
         use crate::intent::Gesture::RightClick;
+        use crate::param_surface::RowKind;
         use crate::slider::BitmapSlider;
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            let (Some(ids), Some(row)) = (slider, rows.get(pi)) else { continue };
-            if skip(row) {
+        for (pi, buttons) in self.toggle_ids.iter().enumerate() {
+            let (Some(ids), Some(row)) = (buttons, rows.get(pi)) else { continue };
+            if !matches!(ids.kind, RowKind::Switch | RowKind::Choice) {
                 continue;
             }
+            let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
+            if let Some(label) = ids.label_id {
+                intents.on(label, RightClick, menu.clone());
+            }
+            intents.on(ids.button_id, RightClick, menu);
+        }
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            let (Some(ids), Some(row)) = (slider, rows.get(pi)) else { continue };
             let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
             BitmapSlider::register_label_mapping(ids, &menu, intents);
             if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
