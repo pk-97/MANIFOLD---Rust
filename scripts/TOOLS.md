@@ -10,7 +10,6 @@ Landing and gates:
   gate                    landing gate: collect cheap reds before flows/proofs; --keep-going diagnoses all legs  [scripts/landing_gate.py]  (cost: focused)
   land                    the whole landing ceremony: fetch, merge main in, gate, no-ff merge, push, bead close  [scripts/land_branch.py]  (cost: focused)
   watch-land              watch a gate or landing: --pid PID --log PATH [--kind land]; exit on red, hang or end  [scripts/watch_land.py]  (cost: unit)
-  land-wave               land one or a batch of wave branches without the main checkout  [scripts/land_wave.py]  (cost: focused)
   gpu-proofs              GPU proof tests scoped to the branch diff; --filter <test> runs one; --all is nightly  [scripts/gpu_proofs_gate.py]  (cost: focused)
   gpu-scope               dry run: which GPU proofs these paths select (args: paths)  [scripts/gpu_scope.py]  (cost: unit)
   flows                   UI flow suite; bare = flows the branch touched (the gate set), <name> runs one flow, --all runs everything  [scripts/run_ui_flows.py]  (cost: broad)

@@ -3,8 +3,8 @@
 
 One command after the lead's review passes: merges origin/main into the
 branch (in its slot worktree), runs landing_gate.py, then under the landing
-lock merges --no-ff to main in the main checkout, commits any no-gate verdict
-and bead closes, and pushes once, so a landing moves main once. Deletes the
+lock merges --no-ff to main in the main checkout, commits bead closes, and
+pushes once, so a landing moves main once. Deletes the
 branch when it is an ancestor of origin/main.
 
 The landing lock is an flock in the git common dir, shared by every worktree.
@@ -192,7 +192,7 @@ def land_gated(a, worktree, base, gated_commit, verdict):
     """The critical section, run under the landing lock. Returns the new
     origin/main when main moved since the gate's base, else None once pushed.
 
-    Main moves once per landing: merge, verdict and bead closes go in one push."""
+    Main moves once per landing: merge and bead closes go in one push."""
     step('fetch', ['git', 'fetch', 'origin', 'main'], MAIN)
     origin = git_out('origin/main', ['git', 'rev-parse', 'origin/main'], MAIN)
     if origin != base:
@@ -215,13 +215,6 @@ def land_gated(a, worktree, base, gated_commit, verdict):
     if step('pending merge', ['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'],
             MAIN, check=False).returncode == 0:
         step('commit gated merge', ['git', 'commit', '--no-edit'], MAIN)
-    if verdict:
-        step("no-gate verdict", ["scripts/gate_runner.py", "no-gate", "--task", a.named_red,
-                                 "--reason", f"{a.reason} {a.lead}"], MAIN)
-        step("commit verdict", ["git", "add", "--", ".beads/interactions.jsonl"], MAIN, check=False)
-        step("commit verdict", ["git", "commit", "-m",
-                                f"beads: no-gate verdict on {a.named_red} for landing {a.branch}. {a.lead}",
-                                "--", ".beads/interactions.jsonl"], MAIN, check=False)
     for bead in a.close_bead:
         step(f"close {bead}", ["bd", "close", bead, "-r", f"{a.close_reason} {a.lead}"], MAIN)
     if a.close_bead:

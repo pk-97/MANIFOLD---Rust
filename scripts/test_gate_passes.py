@@ -1181,41 +1181,6 @@ class CacheTests(unittest.TestCase):
         package_args = {c[c.index('-p') + 1] for c in cargo if '-p' in c}
         self.assertEqual(package_args, expected_packages)
 
-    def test_changed_tree_during_gate_never_stamps_verdict(self):
-        with patch.object(landing, 'GATED_HEAD') as expected, \
-                patch.object(landing, 'MAIN_CHECKOUT', self.repo):
-            expected.get.return_value = 'obsolete-commit'
-            self.assertEqual(landing.finish(self.repo, 'origin/main', [('PASS', 'reused', 0, [])]), 1)
-        self.assertFalse((self.repo / '.claude/orchestration/verdicts/BUG-cache.jsonl').exists())
-
-    def test_reused_verdict_is_accepted_by_existing_merge_guard(self):
-        # Use the real verdict writer and real guard without changing rules.
-        source = Path(__file__).resolve().parent.parent
-        for path in ('scripts/gate_runner.py', '.claude/hooks/agent-launch-guard.py'):
-            self.write(path, (source / path).read_text())
-            (self.repo / path).chmod((source / path).stat().st_mode & 0o777)
-        self.write('scripts/ui-flows/manifest.json', '{"flows":{"a-flow":"scene"},"path_triggers":{"crates/a/":["a-flow"]}}')
-        self.write('scripts/ui-flows/a-flow.json', '[]')
-        self.commit('gate writer fixture')
-        self.assertEqual(self.run_landing()[0], 0)
-        self.assertEqual(self.run_landing()[1], [])
-        verdict = json.loads((self.repo / '.claude/orchestration/verdicts/BUG-cache.jsonl').read_text().splitlines()[-1])
-        self.assertTrue(verdict['pass'])
-        spec = importlib.util.spec_from_file_location('merge_hook_cache_test', source / '.claude/hooks/preToolUseBash.py')
-        hook = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(hook)
-        with patch.object(hook, '_in_main_checkout', return_value=True), \
-                patch.object(hook, '_current_branch', return_value='main'), \
-                patch.object(hook, '_ORCH_VERDICTS_DIR', self.repo / '.claude/orchestration/verdicts'), \
-                patch.object(hook, '_FLOW_MARKER_PATH', self.repo / '.claude/orchestration/flow-gate-marker.json'), \
-                patch.object(hook, '_FLOW_MANIFEST_PATH', self.repo / 'scripts/ui-flows/manifest.json'):
-            reason, context = hook.merge_verdict_guard('git merge --no-ff work', str(self.repo))
-            flow_reason, flow_context = hook.flow_gate_guard('git merge --no-ff work', str(self.repo))
-        self.assertIsNone(reason)
-        self.assertIn('All BUG- tasks have passing verdicts', context)
-        self.assertIsNone(flow_reason)
-        self.assertIn('green marker matches', flow_context)
-
 
 class ExternalReadCoverageTests(unittest.TestCase):
     """A false reuse lands a broken main: every out-of-crate path a crate's

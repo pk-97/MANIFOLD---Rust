@@ -523,7 +523,6 @@ class LandingTests(unittest.TestCase):
         self.assertNotIn(['git', 'log', 'base..HEAD', '--format=%B'], commands)
         self.assertNotIn('[COMPLETE] landing gate', output)
         self.assertNotIn('landing gate: ', output)
-        self.assertNotIn('verdict stamped', output)
         self.assertIsNone(timings)
 
     def test_cheap_passes_are_reused_by_the_following_full_gate(self):
@@ -557,27 +556,6 @@ class LandingTests(unittest.TestCase):
         self.assertIn('REUSED clippy', output)
         self.assertNotIn('clippy', called)
         self.assertIn('tests', called)
-
-    def test_terminal_success_follows_verdict_publication(self):
-        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
-            root = Path(directory)
-            (root / 'scripts').mkdir()
-            (root / 'scripts/gate_runner.py').write_text(
-                'def append_verdict(*args): print("publication completed")\n')
-            stack.enter_context(patch.object(landing_gate, 'MAIN_CHECKOUT', root))
-            stack.enter_context(patch.object(landing_gate, 'run_cmd',
-                return_value=(0, 'BUG-fake', '', 0)))
-            for changes in (([], []), ([], ['changed-input'])):
-                with patch.object(landing_gate.gate_passes, 'changed_passes', side_effect=changes), \
-                        contextlib.redirect_stdout(io.StringIO()) as output:
-                    code = landing_gate.finish(root, 'base', [('PASS', 'fake', 1, [])])
-                text = output.getvalue()
-                self.assertIn('landing gate: 1 passed, 0 failed', text)
-                if code == 0:
-                    self.assertLess(text.index('publication completed'), text.index('[COMPLETE]'))
-                else:
-                    self.assertIn('[FAIL] inputs changed', text)
-                    self.assertNotIn('[COMPLETE]', text)
 
     def test_planning_fail_fast_stops_before_any_leg(self):
         code, called, *_ = self.exercise(extra=['--fail-fast'],
@@ -1995,7 +1973,7 @@ class DeliveryTests(unittest.TestCase):
             stack.enter_context(patch.object(land_branch, 'run_landing_gate', return_value=1))
             with self.assertRaises(SystemExit):
                 land_branch.main()
-            self.assertFalse(any(c.args[0] in ('no-gate verdict', 'merge --no-ff to main', 'push main')
+            self.assertFalse(any(c.args[0] in ('merge --no-ff to main', 'push main')
                                  for c in step.call_args_list))
 
     def test_failed_gate_never_merges_or_pushes(self):
