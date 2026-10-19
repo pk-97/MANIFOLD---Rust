@@ -1510,24 +1510,21 @@ impl UIRoot {
                     .layer_info(*layer)
                     .map(|info| manifold_core::LayerId::new(&info.layer_id))
                 {
-                    let is_trigger = self
-                        .layer_headers
-                        .layer_info(*layer)
-                        .is_some_and(|info| info.is_trigger);
-                    if !is_trigger {
-                        items.push(
-                            DropdownItem::new("Import MIDI File")
-                                .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
-                        );
-                    }
-                    if !is_trigger {
-                        items.push(
-                            DropdownItem::new("Add trigger lane")
-                                .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
-                                    owner: layer_id.clone(),
-                                    assignment: None,
-                                })),
-                        );
+                    let info = self.layer_headers.layer_info(*layer);
+                    let is_trigger = info.is_some_and(|info| info.is_trigger);
+                    // A trigger lane adds its sibling under the same parent.
+                    let lane_owner = if is_trigger {
+                        info.and_then(|i| i.parent_layer_id.as_deref()).map(manifold_core::LayerId::new)
+                    } else {
+                        items.push(DropdownItem::new("Import MIDI File").with_action(PanelAction::Editing(
+                            EditingAction::ContextImportMidi(layer_id.clone()),
+                        )));
+                        Some(layer_id.clone())
+                    };
+                    if let Some(owner) = lane_owner {
+                        items.push(DropdownItem::new("Add trigger lane").with_action(PanelAction::Params(
+                            ParamsAction::CreateTriggerLane { owner, assignment: None },
+                        )));
                     }
                     items.push(
                         DropdownItem::new("Insert Video Layer")
@@ -1629,13 +1626,19 @@ impl UIRoot {
                             .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
                     );
                 }
-                if !is_trigger {
+                // A trigger lane adds its sibling under the same parent.
+                let lane_owner = if is_trigger {
+                    layer_info
+                        .and_then(|i| i.parent_layer_id.as_deref())
+                        .map(manifold_core::LayerId::new)
+                } else {
+                    Some(layer_id.clone())
+                };
+                if let Some(owner) = lane_owner {
                     items.push(
-                        DropdownItem::new("Add trigger lane")
-                            .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
-                                owner: layer_id.clone(),
-                                assignment: None,
-                            })),
+                        DropdownItem::new("Add trigger lane").with_action(PanelAction::Params(
+                            ParamsAction::CreateTriggerLane { owner, assignment: None },
+                        )),
                     );
                 }
                 items.push(

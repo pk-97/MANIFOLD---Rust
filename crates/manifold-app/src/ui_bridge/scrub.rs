@@ -2189,7 +2189,7 @@ fn dispatch_rgb_scrub(
                 let t = captured.clone();
                 let pids = param_ids.clone();
                 let preset = preset.clone();
-                ctx.project.gesture_move(crate::content_command::touch::VALUES, move |project| {
+                ctx.gesture_move(crate::content_command::touch::VALUES, move |project| {
                     if project
                         .preset_instance(&t)
                         .is_some_and(|inst| inst.effect_type() == &preset)

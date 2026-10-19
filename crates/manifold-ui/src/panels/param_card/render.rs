@@ -5,6 +5,9 @@
 use super::*;
 use crate::param_surface::RowKind;
 
+/// The scene card section's row-end button that opens the Scene tab.
+const REVEAL_LABEL: &str = "Open in Scene";
+
 /// Packed right-aligned positions for the 0–4 header modulation badges.
 /// In display order [MOD, ABL, ENV, DRV]; `None` for a hidden badge.
 /// `name_right` is the right edge of the name cell (left edge of the badge
@@ -1117,10 +1120,10 @@ impl ParamCardPanel {
         Self::build_section_header_with_title(tree, parent, rect, name, folded, row_count, key_base, false).0
     }
 
-    /// `build_section_header`, plus, when `title_navigates`, the title as its
-    /// own button sized to the text (`card_section.title`): the fold
-    /// triangle and the bar's empty space still fold, the title opens the
-    /// Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    /// `build_section_header`, plus, when `title_navigates`, an "Open in
+    /// Scene" button at the row end (`card_section.reveal`): the heading
+    /// (`card_section.title`), the triangle and the bar only fold, the button
+    /// opens the Scene tab (SCENE_SURFACES_DESIGN.md D10).
     pub(crate) fn build_section_header_with_title(
         tree: &mut UITree,
         parent: Option<NodeId>,
@@ -1174,28 +1177,37 @@ impl ParamCardPanel {
             ..UIStyle::default()
         };
         let mut title_id = None;
+        let mut label_room = title_room;
         if title_navigates {
             tree.set_name(header_id, "card_section.header");
-            let text_w = tree.text_width(name, FONT_SIZE, title_style.font_weight);
+            // The reveal button sits at the row end, left of the folded
+            // count chip; the heading itself only folds.
+            let reveal_w = (tree.text_width(REVEAL_LABEL, color::FONT_CAPTION, title_style.font_weight) + GAP * 2.0)
+                .min(title_room / 2.0);
+            label_room = (title_room - reveal_w - GAP).max(0.0);
             let id = tree.add_button_keyed(
                 Some(header_id),
-                title_x,
-                y,
-                (text_w + GAP).min(title_room),
-                row_h,
+                x + w - GAP - count_w - reveal_w,
+                y + 2.0,
+                reveal_w,
+                row_h - 4.0,
                 UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: color::FONT_CAPTION,
                     hover_bg_color: color::HOVER_OVERLAY,
                     pressed_bg_color: color::PRESS_OVERLAY,
                     corner_radius: color::SMALL_RADIUS,
-                    ..title_style
+                    ..UIStyle::default()
                 },
-                name,
+                REVEAL_LABEL,
                 key_base | ROW_ROLE_SECTION_TITLE,
             );
-            tree.set_name(id, "card_section.title");
+            tree.set_name(id, "card_section.reveal");
             title_id = Some(id);
-        } else {
-            tree.add_label(Some(header_id), title_x, y, title_room, row_h, name, title_style);
+        }
+        let title_label = tree.add_label(Some(header_id), title_x, y, label_room, row_h, name, title_style);
+        if title_navigates {
+            tree.set_name(title_label, "card_section.title");
         }
         if folded {
             tree.add_label(

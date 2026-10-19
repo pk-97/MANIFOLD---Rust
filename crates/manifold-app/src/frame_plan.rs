@@ -49,6 +49,31 @@ impl UiStamps {
     }
 }
 
+/// Take a published project snapshot into the UI's copy. Only a different
+/// allocation is cloned; modulation-only frames send the same Arc. A new Arc
+/// whose data version and stamps did not move (the content thread republishing
+/// after an export dropped edits) still replaces the project wholesale, so
+/// every part moves and the panels re-project from the corrected copy.
+/// Returns whether the Arc was new.
+pub(crate) fn take_project_snapshot(
+    local: &mut manifold_core::project::Project,
+    stamps: &mut UiStamps,
+    last_arc: &mut Option<std::sync::Arc<manifold_core::project::Project>>,
+    snapshot: std::sync::Arc<manifold_core::project::Project>,
+    version_changed: bool,
+) -> bool {
+    let is_new_arc = last_arc.as_ref().is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+    if is_new_arc {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
+        *local = (*snapshot).clone();
+        *last_arc = Some(snapshot);
+        if !version_changed {
+            stamps.project_replaced();
+        }
+    }
+    is_new_arc
+}
+
 /// The main window's regions, in build order (`UIRoot::build`), which is also
 /// the region rank of paint order (D7). The discriminant is the region's
 /// arena id in the tree.

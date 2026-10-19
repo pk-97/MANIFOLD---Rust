@@ -225,24 +225,95 @@ pub struct DispatchCtx<'a> {
 }
 
 impl DispatchCtx<'_> {
-    /// See [`ProjectRef::mutate`].
+    /// An export owns the project: the content thread drops every edit sent
+    /// meanwhile (BUG-v2o9y), so applying one locally would leave the UI
+    /// showing a change the show never took. Refused here for every window
+    /// and shortcut that dispatches.
+    fn export_locks_edits(&self) -> bool {
+        self.content_state.is_exporting
+    }
+
+    /// See [`ProjectRef::mutate`]. Refused during an export.
     pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
     where
         F: FnOnce(&mut Project) + Clone + Send + 'static,
     {
+        if self.export_locks_edits() {
+            return;
+        }
         self.project.mutate(touches, f);
     }
 
-    /// See [`ProjectRef::execute`].
+    /// See [`ProjectRef::execute`]. Refused during an export.
     pub fn execute(&mut self, cmd: Box<dyn Command>) {
+        if self.export_locks_edits() {
+            return;
+        }
         self.project.execute(cmd);
     }
 
-    /// See [`ProjectRef::gesture_move`].
+    /// See [`ProjectRef::execute_batch`]. Refused during an export.
+    pub fn execute_batch(&mut self, cmds: Vec<Box<dyn Command>>, label: String) {
+        if self.export_locks_edits() {
+            return;
+        }
+        self.project.execute_batch(cmds, label);
+    }
+
+    /// See [`ProjectRef::gesture_move`]. Refused during an export.
     pub fn gesture_move<F>(&mut self, touches: ChangeSet, f: F)
     where
         F: FnOnce(&mut Project) + Clone + Send + 'static,
     {
+        if self.export_locks_edits() {
+            return;
+        }
         self.project.gesture_move(touches, f);
+    }
+}
+
+#[cfg(test)]
+mod export_lock_tests {
+    use super::*;
+
+    /// BUG-v2o9y: during an export an edit is refused in the UI copy and
+    /// never sent; outside one it applies and is sent.
+    #[test]
+    fn export_refuses_edits_in_dispatch_ctx() {
+        for (exporting, applied) in [(true, false), (false, true)] {
+            let mut project = Project::default();
+            let (content_tx, content_rx) = crossbeam_channel::unbounded();
+            let mut edits = Default::default();
+            let content_state = ContentState { is_exporting: exporting, ..ContentState::default() };
+            let mut ui = UIRoot::new();
+            let mut selection = manifold_ui::UIState::new();
+            let mut active_layer = None;
+            let mut user_prefs = UserPrefs::in_memory();
+            let mut scrub = ScrubState::default();
+            let mut ctx = DispatchCtx {
+                project: ProjectRef::new(&mut project, &mut edits, &content_tx),
+                content_tx: &content_tx,
+                content_state: &content_state,
+                ui: &mut ui,
+                selection: &mut selection,
+                active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs,
+                editor_target: None,
+                scrub: &mut scrub,
+                dialogs: Default::default(),
+            };
+            ctx.mutate(crate::content_command::touch::VALUES, |p| p.settings.frame_rate = 24.0);
+            let sent_mutate = content_rx.try_iter().count();
+            ctx.execute(Box::new(manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
+                manifold_core::TonemapCurve::default(),
+                false,
+                manifold_core::TonemapCurve::default(),
+                true,
+            )));
+            let sent_execute = content_rx.try_iter().count();
+            assert_eq!(ctx.project.settings.frame_rate == 24.0, applied, "exporting={exporting}");
+            assert_eq!(ctx.project.settings.tonemap_enabled, applied, "exporting={exporting}");
+            assert_eq!((sent_mutate, sent_execute), (usize::from(applied), usize::from(applied)), "exporting={exporting}");
+        }
     }
 }

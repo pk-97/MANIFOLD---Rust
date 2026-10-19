@@ -88,7 +88,7 @@ fn scene_modifier_angular_wrap_journey() {
             driver.enabled = false;
             driver
         });
-        assert!(crate::project_io::migrate_project_scene_graphs(&mut project).is_empty());
+        assert!(super::notices::migrate_notices(&mut project).is_empty());
         let graph = generator_graph(&project, &layer);
         let local = graph.scene_modifiers[0]
             .graph

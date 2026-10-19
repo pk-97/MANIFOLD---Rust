@@ -11,6 +11,7 @@ mod consolidation;
 mod resize;
 mod scene_add;
 mod object_cards;
+mod notices;
 
 use std::path::{Path, PathBuf};
 
@@ -886,7 +887,7 @@ fn legacy_math_view_migration_journey() {
     manifold_io::saver::save_project_v1(&project, &pre_save).expect("save legacy project");
     let mut reopened = manifold_io::loader::load_project(&pre_save).expect("reopen legacy project");
 
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut reopened);
+    let notices = notices::migrate_notices(&mut reopened);
     assert!(notices.is_empty(), "clean migration, got: {notices:?}");
 
     let graph = generator_graph(&reopened, &layer_id);
@@ -1741,11 +1742,8 @@ fn legacy_math_view_embedded_value_migration_journey() {
     }
 
     let mut migrated = project.clone();
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut migrated);
-    assert!(
-        notices.is_empty(),
-        "clean migration expected, got: {notices:?}"
-    );
+    let notices = notices::migrate_notices(&mut migrated);
+    assert!(notices.is_empty(), "clean migration expected, got: {notices:?}");
     let graph = generator_graph(&migrated, &layer_id);
     assert_eq!(graph.scene_modifiers.len(), 2, "carrier plus one view");
     let view = &graph.scene_modifiers[1];
@@ -1839,7 +1837,7 @@ fn legacy_math_view_reuse_guards_migration_journey() {
         false,
     );
     let mut migrated = project.clone();
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut migrated);
+    let notices = notices::migrate_notices(&mut migrated);
     assert!(notices.is_empty(), "clean reuse, got: {notices:?}");
     let graph = generator_graph(&migrated, &layer_id);
     assert_eq!(graph.scene_modifiers.len(), 2, "existing view absorbs the section, no append");
@@ -2046,8 +2044,8 @@ fn legacy_math_view_reuse_guards_migration_journey() {
     let fresh_view = graph.scene_modifiers[1].id.clone();
     assert_eq!(
         targets_for(&fresh_view),
-        mv::CONTROLS.len() + 1,
-        "the fresh view carries the carrier's bindings, including hidden Scope"
+        mv::CONTROLS.len(),
+        "the fresh view carries the carrier's bindings, and no Scope (dropped on load)"
     );
     // Rejected: the existing view samples different objects than the carrier
     // — reusing it would move the carrier's bindings onto the wrong geometry
@@ -2145,7 +2143,7 @@ fn legacy_math_view_scope_is_dropped_with_its_lfo_journey() {
         owner.refresh_manifest_from_graph();
     }
     let mut migrated = project.clone();
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut migrated);
+    let notices = notices::migrate_notices(&mut migrated);
     assert!(notices.is_empty(), "clean migration: {notices:?}");
     let graph = generator_graph(&migrated, &layer_id);
     assert_eq!(graph.scene_modifiers.len(), 3, "preceding modifier, carrier, view");
@@ -2421,11 +2419,8 @@ fn legacy_math_view_historical_snapshots_migration_journey() {
         manifold_io::saver::save_project_v1(&project, &pre_save).expect("save legacy project");
         let mut reopened =
             manifold_io::loader::load_project(&pre_save).expect("reopen legacy project");
-        let notices = crate::project_io::migrate_project_scene_graphs(&mut reopened);
-        assert!(
-            notices.is_empty(),
-            "{era}: clean single-carrier migration, got: {notices:?}"
-        );
+        let notices = notices::migrate_notices(&mut reopened);
+        assert!(notices.is_empty(), "{era}: clean single-carrier migration, got: {notices:?}");
 
         let graph = generator_graph(&reopened, &layer_id);
         assert_eq!(

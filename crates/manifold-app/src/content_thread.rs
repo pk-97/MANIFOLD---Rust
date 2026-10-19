@@ -1562,7 +1562,7 @@ impl ContentThread {
     /// Send a `ContentState` snapshot only if the project has mutated since
     /// the last publish. Used outside the render tick so the UI confirms
     /// edits while the GPU is behind. Coalesces: one publish per drain pass.
-    fn publish_snapshot_if_dirty(&mut self, state_tx: &StateTx) {
+    pub(crate) fn publish_snapshot_if_dirty(&mut self, state_tx: &StateTx) {
         // The drain pass is over: react once to everything it moved (D4).
         self.run_reactions();
         if self.editing_service.data_version() != self.last_data_version

@@ -41,7 +41,7 @@ fn consolidated_modifier_native_toggle_journey() {
         .unwrap()
         .graph;
         owner.refresh_manifest_from_graph();
-        assert!(crate::project_io::migrate_project_scene_graphs(&mut project).is_empty());
+        assert!(super::notices::migrate_notices(&mut project).is_empty());
         let clip = host_binding(&project, &layer, &modifier, "clip_trigger");
         assert_eq!(
             project

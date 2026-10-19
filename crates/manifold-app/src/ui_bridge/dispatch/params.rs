@@ -309,7 +309,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 }
             }
             if !commands.is_empty() {
-                ctx.project.execute_batch(commands, "Toggle effects".into());
+                ctx.execute_batch(commands, "Toggle effects".into());
             }
             DispatchResult::handled()
         }

@@ -400,7 +400,9 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
     // moved nodes dirty, the next editor frame's plan repaints the lane.
     if pos.x >= ws.dock.rects(cx.area).right.x {
         let (_, dy) = crate::window_input::normalize_scroll_delta(delta);
-        ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
+        if !ws.ui_root.try_inspector_scroll(dy, pos.x) {
+            ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
+        }
         return true;
     }
     let Some(canvas) = cx.canvas.as_deref_mut() else { return false };

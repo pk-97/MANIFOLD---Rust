@@ -209,6 +209,12 @@ impl Application {
     /// Save only a content-owned snapshot after queued edits and recording have
     /// reached the undo service. Never silently serialize a stale UI replica.
     fn prepare_recording_save(&mut self) -> Option<u64> {
+        // The content thread owns the project while it renders an export and
+        // would drop the request; say why instead of timing out.
+        if self.content_state.is_exporting {
+            crate::alerts::error("Export Running", "An export is running, so the project cannot be saved now. Cancel the export, then save.");
+            return None;
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         self.send_content_cmd(ContentCommand::PrepareProjectSave(tx));
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {

@@ -448,7 +448,8 @@
     "audio-clip-trigger-add": "inspector",
     "rt-dynamic-modifier": "mushroomscene",
     "work-browser-search": "inspector",
-    "work-perform-exit": "timeline"
+    "work-perform-exit": "timeline",
+    "trigger-lane-sibling": "envmod"
   },
   "expected_fail": {
     "scene-forces-controls": {
