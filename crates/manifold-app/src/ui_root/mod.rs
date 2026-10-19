@@ -1855,7 +1855,7 @@ mod tick_parity_tests {
                 },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: false,
                 audio: Default::default(),
                 clip_trigger: None,
             }],

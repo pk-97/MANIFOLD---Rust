@@ -352,6 +352,42 @@ mod tests {
         project.timeline.layers[0].gen_params()?.params.get(id)?.spec.scene
     }
 
+    /// A disarmed driver or envelope stays stored on its param, and the
+    /// row's D, E and A lane is the only way back to it, so a stored
+    /// modulator keeps a labelled scene row a slider, armed or not.
+    /// Deleting it gives the row its pick list back.
+    #[test]
+    fn a_stored_modulator_keeps_a_choice_a_slider_until_deleted() {
+        use manifold_ui::param_surface::RowKind;
+        const ID: &str = "4_shadow_softness";
+        let mut project = project("PhysicsBoxes");
+        let kind = |project: &Project| {
+            let rows = surface(project, SurfaceVisibility::All);
+            let row = rows.iter().find(|row| row.id == ID).expect("Shadow Softness row");
+            (row.kind(true), row.modulator_stored, row.is_attached())
+        };
+        assert_eq!(kind(&project), (RowKind::Choice, false, false));
+
+        let mut driver = manifold_core::effects::ParameterDriver::new(
+            ID,
+            manifold_core::types::BeatDivision::Quarter,
+            manifold_core::types::DriverWaveform::Sine,
+        );
+        driver.enabled = false;
+        let mut envelope = manifold_core::effects::ParamEnvelope::new(ID);
+        envelope.enabled = false;
+        let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+        fx.drivers = Some(vec![driver]);
+        assert_eq!(kind(&project), (RowKind::Number, true, false), "a disarmed driver keeps the slider");
+        let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+        fx.drivers = None;
+        fx.envelopes = Some(vec![envelope]);
+        assert_eq!(kind(&project), (RowKind::Number, true, false), "a disarmed envelope keeps the slider");
+
+        project.timeline.layers[0].gen_params_mut().unwrap().envelopes = Some(Vec::new());
+        assert_eq!(kind(&project), (RowKind::Choice, false, false), "deleted, the row is a pick list again");
+    }
+
     #[test]
     fn orbit_card_order() {
         let rows = card("PhysicsSolids");

@@ -685,7 +685,7 @@ mod tests {
                 },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: false,
             }],
             has_graph_mod: false,
             audio_sends: Vec::new(),

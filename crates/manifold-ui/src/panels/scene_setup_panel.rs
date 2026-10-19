@@ -865,7 +865,7 @@ fn placeholder_param_info() -> ParamRow {
         },
         scene_addr: None,
         rgb_members: None,
-        material_attached: false,
+        modulator_stored: false,
     }
 }
 

@@ -329,6 +329,16 @@ fn empty_generator_surface(inst: &PresetInstance) -> ParamSurface {
 /// a plain "seen once" set is enough here, not a reconnect transition.
 /// `debug_assert!` already screams in dev builds; this is the release-mode
 /// signal that a load/ingest path skipped `reconcile_param_manifests()`.
+/// Whether a driver, envelope, audio mod, Ableton mapping or automation lane
+/// is stored on param `id`, enabled or not: the attachment a disarm keeps.
+pub(super) fn modulator_stored(inst: &PresetInstance, id: &str) -> bool {
+    inst.drivers.iter().flatten().any(|x| x.param_id == id)
+        || inst.envelopes.iter().flatten().any(|x| x.param_id == id)
+        || inst.audio_mods.iter().flatten().any(|x| x.param_id == id)
+        || inst.ableton_mappings.iter().flatten().any(|x| x.param_id == id)
+        || inst.automation_lanes.iter().flatten().any(|x| x.param_id == id)
+}
+
 fn warn_provisional_manifest_once(id: &manifold_core::EffectId) {
     use std::sync::{Mutex, OnceLock};
     static WARNED: OnceLock<Mutex<std::collections::HashSet<manifold_core::EffectId>>> =
@@ -476,6 +486,7 @@ fn param_surface(
             } else {
                 Some(p.spec.value_labels.clone())
             };
+            let stored = modulator_stored(inst, &id);
             ParamRow {
                 id: std::borrow::Cow::Owned(id),
                 spec: RowSpec {
@@ -507,7 +518,7 @@ fn param_surface(
                 mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
                 scene_addr: None,
                 rgb_members: None,
-                material_attached: false,
+                modulator_stored: stored,
                 audio: Default::default(),
                 clip_trigger: None,
             }
