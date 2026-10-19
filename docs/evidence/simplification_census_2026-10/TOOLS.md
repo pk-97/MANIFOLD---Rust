@@ -16,6 +16,8 @@ Order: `run_screens.sh` calls `build_corpus.sh`, `census_refs.py` (with `pub_ite
 #   STEPS=pub    only the pub-reference scan; CRATES="manifold-core manifold-io"
 #                limits it to those crates (each run appends to summary.txt)
 #   SKIP_CORPUS=1 reuses the corpus an earlier run built.
+#   PUB_REFS_DIR=DIR writes the pub scan there instead of $OUT/raw/pub_refs
+#                (a rescreen keeps the earlier TSVs and main_commit.txt untouched).
 set -u
 STEPS="${STEPS:-all}"
 if [ "$STEPS" = pub ]; then SKIP_CORPUS=1; SKIP_PUB_REFS=0; fi
@@ -27,11 +29,12 @@ RAW="$OUT/raw"
 CORPUS="$OUT/corpus"
 CR="$REPO/crates"
 TRANSCRIPTS=/Users/peterkiemann/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust
-mkdir -p "$RAW/pub_refs"
-git -C "$REPO" rev-parse --short HEAD > "$RAW/main_commit.txt"
+PUBDIR="${PUB_REFS_DIR:-$RAW/pub_refs}"
+mkdir -p "$PUBDIR"
+[ -n "${PUB_REFS_DIR:-}" ] || git -C "$REPO" rev-parse --short HEAD > "$RAW/main_commit.txt"
 step() { echo "[$(date +%H:%M:%S)] $*"; }
 
-[ "$STEPS" = pub ] || : > "$RAW/pub_refs/summary.txt"
+[ "$STEPS" = pub ] || : > "$PUBDIR/summary.txt"
 step "1 corpus"
 [ "${SKIP_CORPUS:-0}" = 1 ] || "$T/build_corpus.sh" "$CORPUS"
 
@@ -39,7 +42,7 @@ step "2 pub item references per crate"
 if [ "${SKIP_PUB_REFS:-0}" != 1 ]; then
   members=$(rg -o '"crates/(manifold-[a-z0-9-]+)"' -r '$1' "$REPO/Cargo.toml" | sort -u)
   for n in ${CRATES:-$members}; do
-    "$T/census_refs.py" "$CR/$n" --corpus "$CORPUS/projects" > "$RAW/pub_refs/$n.tsv" 2>> "$RAW/pub_refs/summary.txt"
+    "$T/census_refs.py" "$CR/$n" --corpus "$CORPUS/projects" > "$PUBDIR/$n.tsv" 2>> "$PUBDIR/summary.txt"
   done
 fi
 [ "$STEPS" = pub ] && { step "pub scan done"; exit 0; }
@@ -197,12 +200,19 @@ sorts every hit into a bucket:
   asset                  JSON and fixture files (presets, flows, fixtures)
   other_file             any other non-Rust file (wgsl, swift, toml, ...)
   mention                docs, markdown, beads, txt: never counted as a use
+  comment                a Rust line whose every hit of the name sits after `//`
+                         (covers `///` and `//!`): never counted as a use
+  impl                   for a struct or enum, a line that opens its own
+                         `impl X` or `impl Trait for X` block: never counted
+                         as a use
 
 Verdicts: DEAD (no use anywhere), TEST-ONLY (only tests use it), CRATE-ONLY
 (only its own crate uses it: over-exposed, not dead), USED.
 Text search over-counts (a same-named item elsewhere counts as a use), so every
 verdict errs towards keeping code. Names shared with common words (new, title,
 legacy) are never judged by this tool; read them with ast-grep instead.
+A trait method that shares the item's name still counts as a use, so a dead
+free fn named like a trait method reads USED: check by reading.
 With --corpus, DEAD and TEST-ONLY rows also count corpus files that hold the
 name (serde field and variant spellings need their own corpus search).
 Prints TSV, candidates first; a summary line goes to stderr.
@@ -318,6 +328,21 @@ def bucket(rel, line, crate_rel):
     return "other_file"
 
 
+def is_impl_header(text, name):
+    """True for `impl NAME {` / `impl Trait for NAME {` lines: the type's own impl block is not a use."""
+    pat = r"^\s*(?:unsafe\s+)?impl(?:<[^>]*>)?\s+(?:[A-Za-z0-9_:<>, '&]+?\s+for\s+)?" + re.escape(name) + r"\b(?!\s+for\b)"
+    return re.match(pat, text) is not None
+
+
+def is_comment_hit(text, name):
+    """True when every whole-word occurrence of `name` on the line sits in a // comment."""
+    idx = text.find("//")
+    if idx < 0:
+        return False
+    word = re.compile(r"\b" + re.escape(name) + r"\b")
+    return all(m.start() >= idx for m in word.finditer(text))
+
+
 def census(item, crate_rel, corpus):
     name, kind, rel, line, span = item
     out = subprocess.run(
@@ -335,8 +360,14 @@ def census(item, crate_rel, corpus):
         if hrel == rel and ln == line:
             continue
         b = bucket(hrel, ln, crate_rel)
+        if hrel.endswith(".rs") and is_comment_hit(parts[2], name):
+            counts["comment"] = counts.get("comment", 0) + 1
+            continue
+        if hrel.endswith(".rs") and kind in ("struct", "enum") and is_impl_header(parts[2], name):
+            counts["impl"] = counts.get("impl", 0) + 1
+            continue
         counts[b] = counts.get(b, 0) + 1
-    code = sum(v for k, v in counts.items() if k != "mention")
+    code = sum(v for k, v in counts.items() if k not in ("mention", "comment", "impl"))
     tests = counts.get("own_test", 0) + counts.get("other_test", 0)
     if code == 0:
         verdict = "DEAD"
@@ -367,7 +398,7 @@ def main():
         rows = list(pool.map(lambda it: census(it, crate_rel, corpus), items))
     order = {"DEAD": 0, "TEST-ONLY": 1, "CRATE-ONLY": 2, "USED": 3}
     rows.sort(key=lambda r: (order[r[0]], r[3]))
-    cols = ["own_src", "own_test", "other_src", "other_test", "tooling", "asset", "other_file", "mention"]
+    cols = ["own_src", "own_test", "other_src", "other_test", "tooling", "asset", "other_file", "mention", "comment", "impl"]
     print("verdict\tname\tkind\tdef\tlines\t" + "\t".join(cols) + "\tcorpus_files")
     summary = {}
     for verdict, name, kind, loc, span, counts, corpus_hits in rows:

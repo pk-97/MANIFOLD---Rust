@@ -62,6 +62,8 @@ rg -l -w -F NAME /tmp/simplification_census/corpus/projects
 
 **Traps:**
 - Cascades. An item used only by dead items reads CRATE-ONLY or USED. List the cluster when it is obvious; the deleting lane's `cargo check` finds the rest.
+- `census_refs.py` counts a type's own `impl` blocks as uses, so a whole dead module can read CRATE-ONLY. Follow every DEAD row into its module and check whether the module's types are used only by their own impls and each other; if so, the module is one row.
+- The screen also counts comment and doc-comment mentions as uses. Recount low-use rows with comment-only hits excluded.
 - manifold-app is a binary, so the compiler already flags its dead items. App DEAD rows are only the ones under `#[allow(dead_code)]` (section 3.3).
 - Names that are common words (new, get, title, legacy) never read DEAD, because text search over-counts. That is the safe direction. Do not chase them in this pass.
 - Trait methods carry no `pub` and are not listed. Traits are judged in section 3.10.
@@ -294,6 +296,7 @@ The lead writes `docs/evidence/simplification_census_2026-10/REPORT.md`; Fable r
 
 - First, three numbers: lines removable at grade A, lines at grade B, and how many decisions Peter owes.
 - Then by area (engine, graph, water, app and UI, content, tooling, tools), biggest win first. Each item: what it is, what it means on stage, the one-line proof, risk, action, lines.
+- Then "bugs, not slop": rows where the dead or write-only code is a symptom of a missing wire or wasted hot-path work (for example engine-041, a BPM-change command nothing builds; graph-020, a uniform arena written every frame and never read; app-ui-065 and 066, view models built on every projection and never read). These are fixed or wired, never deleted or deferred by accident.
 - Then Peter's decisions, one line each with the two options and what each costs.
 - Then the over-engineering patterns that produced the slop, each with the rule that would stop it. Seed list from the pilot and the screens, to be confirmed or replaced by the sweeps:
   - **The caller goes, the callee stays.** `pub` hides it from the compiler. Rule: a deletion landing runs `census_refs.py` on every crate it touched.
