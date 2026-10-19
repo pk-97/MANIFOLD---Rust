@@ -411,3 +411,103 @@ fn new_video_clip_seeks_to_in_point_when_ready() {
         "a newly ready clip must seek to in_point + elapsed ({expected:.3}s); it sits at {played:.3}s"
     );
 }
+
+/// Runs an untrimmed video clip that starts at realtime 0 and whose decoder
+/// is ready after `hold_ticks` ticks. Returns (realtime the decoder became
+/// ready, realtime the clip first reached the compositor).
+fn untrimmed_clip_ready_and_visible_times(hold_ticks: u32) -> (f64, f64) {
+    let project = single_video_clip_project(120.0);
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+
+    let renderers: Vec<Box<dyn ClipRenderer>> =
+        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let mut engine = PlaybackEngine::new(renderers);
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+
+    let mut realtime = 0.0_f64;
+    let mut frame = 0_u64;
+    for _ in 0..hold_ticks {
+        let result = tick(&mut engine, &mut realtime, &mut frame, 1);
+        assert!(
+            !result.ready_clips.iter().any(|r| r.clip_id == clip_id),
+            "a clip whose decoder is still opening must not reach the compositor"
+        );
+    }
+    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+
+    engine.renderers_mut()[1]
+        .as_any_mut()
+        .downcast_mut::<DeferredReadyVideo>()
+        .expect("renderer index 1 is the deferred video renderer")
+        .held
+        .clear();
+    let ready_at = realtime;
+    for _ in 0..60 {
+        let now = realtime;
+        let result = tick(&mut engine, &mut realtime, &mut frame, 1);
+        if result.ready_clips.iter().any(|r| r.clip_id == clip_id) {
+            return (ready_at, now);
+        }
+    }
+    panic!("the clip never reached the compositor within a second of its decoder being ready");
+}
+
+/// An untrimmed clip (in point 0) is already where it should start when its
+/// decoder opens, so becoming ready must not restart its first-frame gate: it
+/// shows at max(ready, start + 100 ms), never ready + 100 ms, or every video
+/// cut lands late by the decoder's open time.
+#[test]
+fn untrimmed_clip_visible_at_later_of_ready_and_start_gate() {
+    let gate = manifold_playback::engine::RECENTLY_STARTED_TIME as f64;
+    let one_tick = 1.0 / 60.0 + 1e-6;
+    // hold 10 ticks: ready after the start gate expired; hold 2: before it.
+    for hold in [10_u32, 2] {
+        let (ready_at, visible_at) = untrimmed_clip_ready_and_visible_times(hold);
+        let expected = ready_at.max(gate);
+        assert!(
+            visible_at <= expected + one_tick,
+            "hold {hold}: decoder ready at {ready_at:.3}s, start gate ends at {gate:.3}s, so \
+             the clip must show by {expected:.3}s; it first showed at {visible_at:.3}s"
+        );
+    }
+}
+
+/// An untrimmed clip that starts mid-way, here because the transport jumped
+/// into it, is not on its start when the decoder opens: it must still seek
+/// to the playhead on the ready tick, not play the file head until drift
+/// correction comes round.
+#[test]
+fn untrimmed_clip_started_mid_way_seeks_when_ready() {
+    let project = single_video_clip_project(120.0);
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+
+    let renderers: Vec<Box<dyn ClipRenderer>> =
+        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let mut engine = PlaybackEngine::new(renderers);
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+    engine.seek_to(Seconds(5.0));
+
+    let mut realtime = 0.0_f64;
+    let mut frame = 0_u64;
+    for _ in 0..10 {
+        tick(&mut engine, &mut realtime, &mut frame, 1);
+    }
+    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+
+    engine.renderers_mut()[1]
+        .as_any_mut()
+        .downcast_mut::<DeferredReadyVideo>()
+        .expect("renderer index 1 is the deferred video renderer")
+        .held
+        .clear();
+    tick(&mut engine, &mut realtime, &mut frame, 1);
+
+    let expected = engine.current_time().as_f32();
+    let played = engine.renderers_mut()[1].get_clip_playback_time(&clip_id);
+    assert!(
+        (played - expected).abs() < 0.05,
+        "a clip started mid-way must seek to the playhead ({expected:.3}s) when ready; it sits at {played:.3}s"
+    );
+}
