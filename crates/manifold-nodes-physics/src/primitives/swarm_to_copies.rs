@@ -55,6 +55,12 @@ impl Primitive for SwarmToCopies {
         (port_name == "copies").then(|| input_capacities.iter().find(|(p, _)| *p == "particles").map(|&(_, n)| n)).flatten()
     }
 
+    /// A copy stands where its particle is: a force on the copies moves the
+    /// particles.
+    fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
+        (output == "copies").then_some(&["particles"])
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let size = ctx.scalar_or_param("size", 0.05);
         let (Some(particles), Some(copies)) = (ctx.inputs.array("particles"), ctx.outputs.array("copies")) else {

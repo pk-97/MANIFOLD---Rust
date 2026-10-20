@@ -32,7 +32,7 @@ use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use manifold_physics::clock::TICK;
-use crate::clock::{ClockFrame, LiquidClock, FIELD_RESERVE_INTERVALS};
+use crate::clock::{ClockFrame, LiquidClock};
 use crate::coupling::LiquidRigidOwner;
 use manifold_physics::force_lattice::{ForceLattice, TickForces};
 use manifold_water_rigid::physics::ResolvedRigidImpulse;
@@ -490,7 +490,6 @@ impl LiquidFields {
         let Some(lattice) = self.lattice else { return Ok(()) };
         let data = LatticeUpload {
             lattice,
-            reserve_lattices: FIELD_RESERVE_INTERVALS as usize,
             forces: self.forces.forces(),
             forces_dirty: self.forces.is_dirty(),
             impulses: &self.impulses,

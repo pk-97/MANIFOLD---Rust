@@ -11,6 +11,11 @@ use crate::{FieldValue, VectorField};
 /// (GPU_MPM_SOLVER_DESIGN.md D13).
 pub const FORCE_LATTICE_STRIDE: u32 = 4;
 
+/// Force lattices a buffer keeps room for up front: more than a live frame's
+/// ticks (`clock::MAX_LIVE_INTERVALS`). Offline catch-up grows it; not a time
+/// or quality cap.
+pub const FORCE_LATTICE_RESERVE: u32 = 3;
+
 /// A field value is not finite at some lattice node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NotFinite;
@@ -36,10 +41,14 @@ impl ForceLattice {
         }
     }
 
-    /// The lattice over a box from `min` of `size`, nodes `spacing` apart,
-    /// reaching at least the far corner.
-    pub fn over_box(min: [f32; 3], size: [f32; 3], spacing: f32) -> Self {
-        Self { min, spacing, nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32).saturating_add(1)) }
+    /// The lattice over a box from `min` of `size` with `detail` nodes along
+    /// its longest side, reaching at least the far corner on every axis. No
+    /// axis takes more than `detail` nodes, so any box holds at most
+    /// `detail³` whatever its size.
+    pub fn over_box(min: [f32; 3], size: [f32; 3], detail: u32) -> Self {
+        let detail = detail.max(2);
+        let spacing = size.into_iter().fold(0.0_f32, f32::max) / (detail - 1) as f32;
+        Self { min, spacing, nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32 + 1).min(detail)) }
     }
 
     pub fn min(&self) -> [f32; 3] {
@@ -261,6 +270,23 @@ mod tests {
         for axis in 0..3 {
             assert!((beyond[axis] - last[axis]).abs() < 1e-5);
         }
+    }
+
+    /// Detail is nodes along the longest side; the others reach the far
+    /// corner and never pass the detail, even where the division rounds up.
+    #[test]
+    fn force_lattice_over_a_box_keeps_its_detail_on_every_axis() {
+        for (size, detail) in [([4.0, 4.0, 4.0], 17), ([3.0, 0.7, 1.9], 64), ([0.3, 0.3, 9.1], 2), ([1.0e3, 1.0, 1.0e-3], 64)] {
+            let lattice = ForceLattice::over_box([-1.0; 3], size, detail);
+            let longest = size.into_iter().fold(0.0_f32, f32::max);
+            assert!((lattice.spacing() - longest / (detail - 1) as f32).abs() <= 1e-6 * longest, "{size:?}");
+            for (nodes, extent) in lattice.nodes().into_iter().zip(size) {
+                assert!(nodes <= detail && nodes >= 2, "{size:?}: {nodes} nodes");
+                assert!((nodes - 1) as f32 * lattice.spacing() >= extent * (1.0 - 1e-6), "{size:?} reaches {extent}");
+            }
+            assert!(lattice.node_count() <= (detail as usize).pow(3));
+        }
+        assert_eq!(ForceLattice::over_box([0.0; 3], [4.0; 3], 17).nodes(), [17; 3]);
     }
 
     #[test]

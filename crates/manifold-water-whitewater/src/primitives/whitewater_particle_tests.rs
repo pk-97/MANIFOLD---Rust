@@ -11,7 +11,7 @@ use super::whitewater_cpu::Rng;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
 use super::spawn_whitewater::SpawnWhitewater;
 use super::wavecrest_potential::WavecrestPotential;
-use manifold_water_liquid::testkit::codegen::run;
+use manifold_node_engine::testkit::fused_atoms::run;
 use {crate::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3, super::whitewater_particle_cpu::Crest, super::whitewater_particle_cpu::Emission};
 use super::whitewater_type::WhitewaterType;
 use manifold_water_liquid::fluid_particles::WhitewaterSpawn;

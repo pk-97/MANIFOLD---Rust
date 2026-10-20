@@ -176,7 +176,11 @@ const DOMAIN_BOX: SceneShapeDecl = {
 static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] = [DOMAIN_BOX, transform_box("initial_volume", false)];
 /// The `transform` input places the role's volume.
 static FLUID_ROLE_SOURCE_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
-/// A swarm's `bounds` transform is the box its forces are laid over.
+/// A swarm's forces node (manifold-nodes-physics, which this crate does not
+/// depend on).
+pub(crate) const SWARM_FORCES_TYPE_ID: &str = "node.swarm_forces";
+/// A swarm's `bounds` transform is the box its forces are laid over. Any
+/// size above zero is valid: Force Detail fits the lattice to the box.
 static SWARM_SHAPES: [SceneShapeDecl; 1] = [transform_box("bounds", false)];
 
 /// Every shape `type_id` declares, in order (PHYSICS_ENGINE_BOUNDARY_DESIGN.md
@@ -186,7 +190,7 @@ pub fn scene_shape(type_id: &str) -> &'static [SceneShapeDecl] {
     match type_id {
         "node.scene_object" => &SCENE_OBJECT_SHAPES,
         "node.fluid_role_source" => &FLUID_ROLE_SOURCE_SHAPES,
-        "node.swarm_forces" => &SWARM_SHAPES,
+        SWARM_FORCES_TYPE_ID => &SWARM_SHAPES,
         domain if is_liquid_domain(domain) => &LIQUID_DOMAIN_SHAPES,
         _ => &[],
     }

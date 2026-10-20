@@ -256,7 +256,7 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
                 inputs.particles = &particles;
                 inputs.faces = if variant == 1 { FaceSource::Packed(&packed) } else { FaceSource::Axes(axes.each_ref()) };
                 inputs.motion = Some(MotionInputs { schedule: &schedule, faces: history.each_ref(), count: 2,
-                    fields: ForceLatticeBinding { nodes: [2; 3], spacing: 0.5, force_lattices: 0, impulse_tick: 0,
+                    fields: ForceLatticeBinding { nodes: [2; 3], spacing: 0.5, min: [0.0; 3], force_lattices: 0, impulse_tick: 0,
                         first_tick: 0, forces: None, impulses: None }, tick_index: tick as f32,
                     regions: None, shapes: None, atlas: None, region_count: 0 });
                 let mut frame = fixture.frame(true);

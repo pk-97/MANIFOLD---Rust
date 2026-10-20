@@ -4,7 +4,7 @@ use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
-use manifold_water_liquid::clock::FIELD_RESERVE_INTERVALS;
+use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
 use manifold_water_liquid::fields::FieldFrame;
 use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
@@ -35,8 +35,8 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("interval_duration", TICK as f32);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
-    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: FIELD_RESERVE_INTERVALS, impulse_tick: Some(0) };
-    let forces = u64::from(FIELD_RESERVE_INTERVALS) * field.lattice.bytes();
+    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: FORCE_LATTICE_RESERVE, impulse_tick: Some(0) };
+    let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }

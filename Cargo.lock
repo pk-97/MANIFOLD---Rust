@@ -2565,8 +2565,10 @@ dependencies = [
 name = "manifold-nodes-physics"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "bytemuck",
  "inventory",
+ "manifold-foundation",
  "manifold-gpu",
  "manifold-node-engine",
  "manifold-physics",

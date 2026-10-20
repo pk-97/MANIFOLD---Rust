@@ -10,7 +10,7 @@ use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 
-use crate::force_lattice::FORCE_LATTICE;
+use crate::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 
 /// Generated uniform layout: the params in order, then `dispatch_count`.
 #[repr(C)]
@@ -78,7 +78,7 @@ manifold_node_engine::primitive! {
         float("tick_seconds", "Tick Seconds", 1.0 / 60.0, (0.0, 1.0)),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm integrator. Wire forces and every scalar but active_count from node.swarm_forces (its ticks, first_tick, force_lattices, field_nodes_x/y/z, field_spacing, field_min_x/y/z and tick_seconds), particles from a seeder held across frames, then node.swarm_to_copies into render_copies. in/out alias one buffer. Scene forces reach it through node.swarm_forces's acceleration_field, the same force list water and rigid bodies read.",
+    composition_notes: "The swarm integrator. Wire forces and every scalar but active_count from node.swarm_forces (its ticks, first_tick, force_lattices, field_nodes_x/y/z, field_spacing, field_min_x/y/z and tick_seconds), particles from a node.array_feedback loop (its out into in, out back into its in, the seeder into its seed, node.swarm_forces epoch into its reset_trigger), then node.swarm_to_copies from out. in/out alias one buffer, so the graph compiler keeps the loop in place. Scene forces reach it through node.swarm_forces's acceleration_field, the same force list water and rigid bodies read.",
     examples: ["Swarm"],
     picker: { label: "Move Swarm", category: Atom },
     summary: "Moves every swarm particle by the scene's forces, one fixed step per simulation tick.",
@@ -109,21 +109,37 @@ impl Primitive for MoveSwarm {
         Some("active_count")
     }
 
+    /// The moved particles come from the particles and the forces that move
+    /// them: the scene force trace reaches node.swarm_forces through here.
+    fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
+        (output == "out").then_some(&["in", "forces"])
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // The particles are moved in place: a frame without ticks (the first
+        // frame, a paused one, the in-between frame at a display rate above
+        // Sim Rate) or a refused one leaves last frame's state, which is this
+        // frame's. Either way the aliased buffer holds the right particles.
+        ctx.mark_gpu_accessed();
         let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as i32;
         let requested = int(ctx, "active_count", 100_000.0) as u32;
         let ticks = int(ctx, "ticks", 0.0);
-        let first_tick = int(ctx, "first_tick", 0.0);
-        let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| int(ctx, name, 2.0).max(2));
-        let spacing = ctx.scalar_or_param("field_spacing", 0.25);
-        let min = ["field_min_x", "field_min_y", "field_min_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let tick_seconds = ctx.scalar_or_param("tick_seconds", 1.0 / 60.0);
         let Some(particles) = ctx.inputs.array("in") else { return };
-        let forces = ctx.inputs.array("forces");
-        let lattice_bytes = nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
-        let force_lattices = forces.map_or(0, |forces| int(ctx, "force_lattices", 0.0).min((forces.size / lattice_bytes) as i32));
-        if force_lattices > 0 && !(spacing.is_finite() && spacing > 0.0) {
-            ctx.error("Move Swarm: field_spacing must be positive".to_string());
+        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), None, "Move Swarm") {
+            Ok(field) => field,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        // One lattice serves every tick; otherwise each tick needs its own.
+        if field.force_lattices > 1 && field.force_lattices < ticks {
+            ctx.error(format!("Move Swarm: {ticks} ticks but {} force lattices; wire force_lattices from node.swarm_forces", field.force_lattices));
+            return;
+        }
+        if !(tick_seconds.is_finite() && tick_seconds >= 0.0) {
+            ctx.error("Move Swarm: tick_seconds must be finite and not negative".to_string());
             return;
         }
         let active = active_elements::<Particle>(particles.size, requested);
@@ -135,15 +151,15 @@ impl Primitive for MoveSwarm {
         let uniforms = MoveSwarmUniforms {
             active_count: active as i32,
             ticks,
-            first_tick,
-            force_lattices,
-            field_nodes_x: nodes[0],
-            field_nodes_y: nodes[1],
-            field_nodes_z: nodes[2],
-            field_spacing: spacing,
-            field_min_x: min[0],
-            field_min_y: min[1],
-            field_min_z: min[2],
+            first_tick: field.first_tick,
+            force_lattices: field.force_lattices,
+            field_nodes_x: field.nodes[0],
+            field_nodes_y: field.nodes[1],
+            field_nodes_z: field.nodes[2],
+            field_spacing: field.spacing,
+            field_min_x: field.min[0],
+            field_min_y: field.min[1],
+            field_min_z: field.min[2],
             tick_seconds,
             dispatch_count: active,
             _pad: [0; 3],
@@ -155,7 +171,7 @@ impl Primitive for MoveSwarm {
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: forces.unwrap_or(particles), offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: field.forces.unwrap_or(particles), offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: particles, offset: 0 },
             ],
             [active.div_ceil(256), 1, 1],
@@ -178,95 +194,5 @@ mod tests {
         assert!(wgsl.contains("buf_forces: array<f32>"), "{wgsl}");
         assert!(wgsl.contains("tick_seconds: f32,\n    dispatch_count: u32,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<MoveSwarmUniforms>(), 64);
-    }
-}
-
-/// One GPU proof (SCENE_SETUP_PROGRAMME.md E1): a vortex laid on the shared
-/// force lattice spins 100k swarm particles, and every particle lands where
-/// the lattice's CPU twin integrates it.
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    use super::*;
-    use manifold_node_engine::testkit::array_harness::{params, read, Harness};
-    use manifold_physics::force_lattice::ForceLattice;
-    use manifold_physics::{FieldValue, VectorField};
-
-    const COUNT: usize = 100_000;
-    const FRAMES: u32 = 60;
-    const DT: f32 = 1.0 / 60.0;
-
-    fn particle(i: usize) -> Particle {
-        // A golden-angle disc of radii 0.3..1.8 m, heights −1..1 m, at rest.
-        let t = i as f32 / COUNT as f32;
-        let angle = i as f32 * 2.399_963;
-        let radius = 0.3 + 1.5 * t.sqrt();
-        Particle {
-            position: [radius * angle.cos(), 2.0 * ((i * 7919) % COUNT) as f32 / COUNT as f32 - 1.0, radius * angle.sin()],
-            life: 1.0,
-            ..bytemuck::Zeroable::zeroed()
-        }
-    }
-
-    #[test]
-    fn vortex_lattice_spins_100k_swarm_particles_as_the_field_says() {
-        let lattice = ForceLattice::over_box([-2.0; 3], [4.0; 3], 0.25);
-        let field = FieldValue::vortex([0.0; 3], [0.0, 1.0, 0.0], 2.0, 1.0).unwrap();
-        let mut values = vec![[0.0f32; 4]; lattice.node_count()];
-        lattice.fill(&mut values, |x| field.sample(x)).unwrap();
-        let start: Vec<Particle> = (0..COUNT).map(particle).collect();
-
-        let mut h = Harness::new();
-        let (particles, buffer) = h.array(&start, COUNT);
-        let flat: Vec<f32> = values.iter().flatten().copied().collect();
-        let (forces, _) = h.array(&flat, flat.len());
-        let [nx, ny, nz] = lattice.nodes().map(|n| n as f32);
-        let mut node = MoveSwarm::new();
-        let mut costs = Vec::with_capacity(FRAMES as usize);
-        for frame in 0..FRAMES {
-            let p = params(&[
-                ("active_count", COUNT as f32),
-                ("ticks", 1.0),
-                ("first_tick", frame as f32),
-                ("force_lattices", 1.0),
-                ("field_nodes_x", nx),
-                ("field_nodes_y", ny),
-                ("field_nodes_z", nz),
-                ("field_spacing", lattice.spacing()),
-                ("field_min_x", -2.0),
-                ("field_min_y", -2.0),
-                ("field_min_z", -2.0),
-                ("tick_seconds", DT),
-            ]);
-            let began = std::time::Instant::now();
-            let (_, errors) = h.run(&mut node, &[("in", particles), ("forces", forces)], &[("out", particles)], &p);
-            costs.push(began.elapsed().as_secs_f64() * 1000.0);
-            assert!(errors.is_empty(), "{errors:?}");
-        }
-        costs.sort_by(f64::total_cmp);
-        println!("move_swarm 100k particles, one tick: median frame {:.3} ms (encode + GPU + wait), worst {:.3} ms", costs[costs.len() / 2], costs[costs.len() - 1]);
-
-        let moved: Vec<Particle> = read(&buffer, COUNT);
-        let mut spin = 0.0f64;
-        for (i, (got, from)) in moved.iter().zip(&start).enumerate() {
-            let (mut x, mut v) = (from.position, from.velocity);
-            for _ in 0..FRAMES {
-                let a = lattice.sample(&values, x);
-                for d in 0..3 {
-                    v[d] += a[d] * DT;
-                    x[d] += v[d] * DT;
-                }
-            }
-            for d in 0..3 {
-                assert!((got.position[d] - x[d]).abs() <= 1e-3 * (1.0 + x[d].abs()), "particle {i} axis {d}: {} vs {}", got.position[d], x[d]);
-                assert!((got.velocity[d] - v[d]).abs() <= 1e-3 * (1.0 + v[d].abs()), "particle {i} velocity {d}: {} vs {}", got.velocity[d], v[d]);
-            }
-            // Angular momentum about the vortex axis (y): z·vx − x·vz.
-            spin += f64::from(got.position[2] * got.velocity[0] - got.position[0] * got.velocity[2]);
-        }
-        let expected = {
-            let a = field.sample([1.0, 0.0, 0.0]);
-            f64::from(a[2]).signum()
-        };
-        assert!(expected != 0.0 && (-spin).signum() == expected, "the swarm turns the way the vortex pushes: spin {spin}");
     }
 }

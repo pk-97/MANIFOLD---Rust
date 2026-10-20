@@ -39,6 +39,7 @@ use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
+use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
 use manifold_node_engine::scene::transform::Transform;
@@ -696,14 +697,6 @@ impl PhysicsNode for MatterDomain {
         manifold_water_liquid::gizmos::write_liquid_gizmos(&layout, &self.bodies, self.acceleration.as_ref(), out);
     }
 
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
-        self.fields.request_samples(&self.clock, from, until, out);
-        self.bodies.request_samples(&self.clock, from, until, out);
-        if self.coupled.mode {
-            self.coupled.scenes.request(&self.clock, from, until, out);
-        }
-    }
-
     fn set_coupled_physics(&mut self, enabled: bool) {
         if self.coupled.mode != enabled {
             self.coupled.mode = enabled;
@@ -794,6 +787,18 @@ impl PhysicsNode for MatterDomain {
 }
 
 inventory::submit! { PhysicsNodeRegistration::new::<MatterDomain>() }
+
+impl TickSampled for MatterDomain {
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.fields.request_samples(&self.clock, from, until, out);
+        self.bodies.request_samples(&self.clock, from, until, out);
+        if self.coupled.mode {
+            self.coupled.scenes.request(&self.clock, from, until, out);
+        }
+    }
+}
+
+inventory::submit! { TickSampledRegistration::new::<MatterDomain>() }
 
 impl MatterDomain {
     /// Keep the reaction and the provided body, shape and atlas buffers

@@ -1,6 +1,9 @@
-use manifold_node_engine::testkit::array_harness::{Harness, read};
-use manifold_node_engine::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
-use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
+//! Fused-versus-unfused GPU proofs for buffer atoms: a region member from
+//! an atom's spec, one fused dispatch of a region, and one standalone run.
+
+use crate::testkit::array_harness::{Harness, read};
+use crate::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
+use crate::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
 use manifold_gpu::{GpuBinding, GpuBuffer};
 pub fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {
@@ -21,6 +24,9 @@ pub fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode
         quantize_f16: false,
     }
 }
+/// The region of `nodes` fused into one kernel and run once over `count`
+/// elements; the last node's `out` read back. `values` override param
+/// defaults by name.
 pub fn fused<T: bytemuck::Pod + KnownItem>(
     h: &mut Harness,
     nodes: Vec<RegionNode<'_>>,
@@ -28,11 +34,23 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
     count: usize,
     values: &[(&str, f32)],
 ) -> Vec<T> {
+    fused_into(h, nodes, external, count, values, "out")
+}
+
+/// [`fused`], reading the last node's `output` port.
+pub fn fused_into<T: bytemuck::Pod + KnownItem>(
+    h: &mut Harness,
+    nodes: Vec<RegionNode<'_>>,
+    external: &[&GpuBuffer],
+    count: usize,
+    values: &[(&str, f32)],
+    output: &str,
+) -> Vec<T> {
     let last = nodes.last().unwrap().node_id;
     let region = FusionRegion {
         nodes,
         num_external_inputs: external.len(),
-        outputs: vec![(last, "out".to_owned())],
+        outputs: vec![(last, output.to_owned())],
         in_place_alias: None,
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
@@ -65,7 +83,7 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
                     _ => panic!("unexpected uniform {name}"),
                 });
             match param.ty {
-                manifold_node_engine::parameters::ParamType::Int => value as i32 as u32,
+                crate::parameters::ParamType::Int => value as i32 as u32,
                 _ => value.to_bits(),
             }
         })
@@ -74,8 +92,8 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
     let output = h.array::<T>(&[], count);
     let pipeline = h.device.create_compute_pipeline(
         &generated.wgsl,
-        manifold_node_engine::freeze::codegen::ENTRY,
-        "whitewater-reference-fused",
+        crate::freeze::codegen::ENTRY,
+        "fused atoms",
     );
     let mut bindings = vec![GpuBinding::Bytes {
         binding: 0,
@@ -93,20 +111,20 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
         buffer: &output.1,
         offset: 0,
     });
-    let mut enc = h.device.create_encoder("whitewater-reference-fused");
+    let mut enc = h.device.create_encoder("fused atoms");
     enc.dispatch_compute(
         &pipeline,
         &bindings,
         [(count as u32).div_ceil(256), 1, 1],
-        "whitewater-reference-fused",
+        "fused atoms",
     );
     enc.commit_and_wait_completed();
     read(&output.1, count)
 }
-pub fn run<P: Primitive, T: bytemuck::Pod + manifold_node_engine::ports::KnownItem>(
+pub fn run<P: Primitive, T: bytemuck::Pod + crate::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
-    inputs: &[(&'static str, manifold_node_engine::bindings::Slot)],
+    inputs: &[(&'static str, crate::bindings::Slot)],
     len: usize,
     step_params: &ParamValues,
 ) -> Vec<T> {

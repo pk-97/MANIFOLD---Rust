@@ -8,6 +8,7 @@ publish = false
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-physics = { path = "../manifold-physics" }
+ahash = { workspace = true }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 inventory = "0.3"
 
@@ -19,5 +20,6 @@ gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-pr
 workspace = true
 
 [dev-dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }

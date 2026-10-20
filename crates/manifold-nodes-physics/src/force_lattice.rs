@@ -6,7 +6,7 @@
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_physics::force_lattice::ForceLattice;
+use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice};
 
 /// Trilinear reads of a force lattice; pure math, included by each atom that
 /// reads one (its own buffer reads stay in its body).
@@ -20,6 +20,9 @@ pub const STAGING_SLOTS: usize = 4;
 pub struct ForceLatticeBinding<'a> {
     pub nodes: [i32; 3],
     pub spacing: f32,
+    /// The lattice's first node, from `field_min_x/y/z`; 0 where an atom
+    /// places the lattice itself.
+    pub min: [f32; 3],
     pub force_lattices: i32,
     pub impulse_tick: i32,
     pub first_tick: i32,
@@ -37,6 +40,7 @@ impl<'a> ForceLatticeBinding<'a> {
         let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"]
             .map(|name| ctx.scalar_or_param(name, 2.0).round().max(2.0) as i32);
         let spacing = ctx.scalar_or_param("field_spacing", 0.25);
+        let min = ["field_min_x", "field_min_y", "field_min_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let force_lattices =
             if forces.is_some() { ctx.scalar_or_param("force_lattices", 0.0).round().max(0.0) as i32 } else { 0 };
         let impulse_tick = if impulses.is_some() { ctx.scalar_or_param("impulse_tick", -1.0).round().max(-1.0) as i32 } else { -1 };
@@ -55,7 +59,10 @@ impl<'a> ForceLatticeBinding<'a> {
         if (force_lattices > 0 || impulse_tick >= 0) && !(spacing.is_finite() && spacing > 0.0) {
             return Err(format!("{atom}: field_spacing must be positive"));
         }
-        Ok(Self { nodes, spacing, force_lattices, impulse_tick, first_tick, forces, impulses })
+        if min.iter().any(|v| !v.is_finite()) {
+            return Err(format!("{atom}: field_min must be finite"));
+        }
+        Ok(Self { nodes, spacing, min, force_lattices, impulse_tick, first_tick, forces, impulses })
     }
 }
 
@@ -63,8 +70,6 @@ impl<'a> ForceLatticeBinding<'a> {
 /// dirty flag, and the hit records (copied whenever there are any).
 pub struct LatticeUpload<'a> {
     pub lattice: ForceLattice,
-    /// Force lattices the buffer keeps room for even when fewer are live.
-    pub reserve_lattices: usize,
     pub forces: &'a [[f32; 4]],
     pub forces_dirty: bool,
     pub impulses: &'a [[f32; 4]],
@@ -116,7 +121,7 @@ impl LatticeBuffers {
     /// waits for a staging slot; offline waits for the oldest. A resize
     /// rewrites everything.
     pub fn upload(&mut self, gpu: &mut GpuEncoder<'_>, offline: bool, data: LatticeUpload<'_>) -> Result<(), String> {
-        let LatticeUpload { lattice, reserve_lattices, forces, impulses, hits, .. } = data;
+        let LatticeUpload { lattice, forces, impulses, hits, .. } = data;
         let (mut forces_dirty, mut impulses_dirty) = (data.forces_dirty, data.impulses_dirty);
         if self.clock.is_none() {
             self.clock = gpu.device.frame_clock();
@@ -133,7 +138,7 @@ impl LatticeBuffers {
                 || buffers.hit_capacity < hits.len()
         }) {
             // Room for a live frame's ticks up front; offline catch-up grows it.
-            let force_capacity = force_lattices.max(reserve_lattices);
+            let force_capacity = force_lattices.max(FORCE_LATTICE_RESERVE as usize);
             let create = |what: &str, size: u64| {
                 gpu.device
                     .try_create_buffer_shared(size)

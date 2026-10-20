@@ -80,14 +80,6 @@ pub(super) fn resolve(
 /// declare it yet is still water (pairing finds it) but takes no forces.
 const LIQUID_ACCELERATION_PORT: &str = "acceleration_field";
 
-/// The swarm chain the trace crosses: copies from particles, particles moved
-/// by the step, the step's lattice from the forces node, whose
-/// `acceleration_field` receives scene forces.
-const SWARM_COPIES: &str = "node.swarm_to_copies";
-const SWARM_STEP: &str = "node.move_swarm";
-const SWARM_FORCES: &str = "node.swarm_forces";
-const SWARM_ACCELERATION_PORT: &str = "acceleration_field";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Candidate {
     node: SceneNodeRef,
@@ -140,33 +132,18 @@ fn trace(
                 continue;
             }
         }
-        // A swarm's copies come from its particles, and the particles are
-        // moved by the swarm forces node that takes the scene's field.
-        if def.type_id == SWARM_COPIES {
-            if let Some(wire) = index.input(&node, "particles")? {
-                let producer = index.by_id.get(&wire.from_node).ok_or_else(|| {
-                    unsupported(format!("{node:?}.particles"), "swarm particles have no stable producer reference")
-                })?;
-                pending.push((producer.clone(), wire.from_port.clone(), false));
-            }
-            continue;
-        }
-        if def.type_id == SWARM_STEP
-            && let Some(wire) = index.input(&node, "forces")?
-        {
-            let producer = index.by_id.get(&wire.from_node).ok_or_else(|| {
-                unsupported(format!("{node:?}.forces"), "swarm forces have no stable producer reference")
-            })?;
-            if index.node(producer)?.type_id == SWARM_FORCES {
-                candidates.push(Candidate { node: producer.clone(), port: SWARM_ACCELERATION_PORT.into() });
-            }
-        }
         let primitive = registry.construct(&def.type_id).ok_or_else(|| {
             unsupported(
                 def.type_id.clone(),
                 "physical source chain contains an unregistered producer",
             )
         })?;
+        // A node that declares where scene forces enter (a swarm's forces
+        // node) ends the trace there.
+        if let Some(input) = primitive.acceleration_input() {
+            candidates.push(Candidate { node, port: input.into() });
+            continue;
+        }
         let Some(output) = primitive
             .outputs()
             .iter()
@@ -180,11 +157,15 @@ fn trace(
         // Inspect connected provenance, not the number of declared inputs. A
         // render-only combine stays inactive; a combine/mux with two physical
         // sources is rejected by resolve rather than silently picking one.
-        for input in primitive
-            .inputs()
-            .iter()
-            .filter(|input| input.ty == output.ty)
-        {
+        // A node may name the inputs its output comes from (copies from
+        // particles); otherwise they are the inputs of the output's type. A
+        // state capture is last frame's loop, never a new source.
+        let sources = primitive.physical_sources(port.as_str());
+        let captures = primitive.state_capture_input_ports();
+        for input in primitive.inputs().iter().filter(|input| {
+            let name = input.name.as_ref();
+            sources.map_or(input.ty == output.ty, |sources| sources.contains(&name)) && !captures.contains(&name)
+        }) {
             let Some(wire) = index.input(&node, input.name.as_ref())? else {
                 continue;
             };

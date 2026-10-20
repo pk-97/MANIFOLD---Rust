@@ -15,7 +15,7 @@
 | `manifold-nodes-image` / `manifold-nodes-scene` | Image and scene primitive implementations |
 | `manifold-fluids` | Safe owned access to the pinned FLIP Fluids CPU reference engine |
 | `manifold-physics` | Small owned Rust interface to the pinned Box3D C library |
-| `manifold-nodes-physics` | Physics graph nodes over the shared engine vocabulary: the GPU side of the force lattice water, matter and swarms sample. Names no liquid solver |
+| `manifold-nodes-physics` | Physics graph nodes over the shared engine vocabulary: the GPU side of the force lattice water, matter and swarms sample, the tick-sampled registration the physics history replay finds them by, and the swarm nodes. Names no liquid solver |
 | `manifold-nodes-water` | Water registration: links the six water crates; owns migrations, bundled water presets, the physics scene, the runtime extension and cross-solver harnesses |
 | `manifold-water-rigid` | Box3D rigid-body graph adapter and the native pair contract that coupled liquids implement |
 | `manifold-water-liquid` | The liquid seam every solver shares: clock, lattice, bodies, coupling, fields (impulses and per-tick force lattices), frame ring, roles and the shared atoms |

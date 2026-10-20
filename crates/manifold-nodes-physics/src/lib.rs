@@ -5,3 +5,4 @@
 
 pub mod force_lattice;
 pub mod primitives;
+pub mod tick_sampled;

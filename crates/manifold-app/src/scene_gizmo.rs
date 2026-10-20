@@ -369,19 +369,20 @@ fn place(ctx: &mut DispatchCtx, layer: &LayerId, target: &GizmoTarget) -> Option
 }
 
 /// The Scene panel item a target belongs to, by its kind: a force selects
-/// itself; an object, a liquid domain and a placed fluid source select their
-/// object row.
+/// itself; an object, a liquid domain, a placed fluid source and a swarm box
+/// select their object row.
 pub(crate) fn scene_selection(target: &GizmoTarget) -> Option<SceneSelection> {
     match target.kind {
         GizmoTargetKind::Force => match &target.id.owner {
             ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
-            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } => None,
+            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } | ShapeOwner::Swarm(_) => None,
         },
         GizmoTargetKind::Object
         | GizmoTargetKind::FluidDomain
         | GizmoTargetKind::Inflow
         | GizmoTargetKind::Drain
-        | GizmoTargetKind::Collider => target.row.map(SceneSelection::Object),
+        | GizmoTargetKind::Collider
+        | GizmoTargetKind::Swarm => target.row.map(SceneSelection::Object),
     }
 }
 

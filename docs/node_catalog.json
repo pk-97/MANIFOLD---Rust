@@ -1346,7 +1346,8 @@
         "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
-        "ParticleText"
+        "ParticleText",
+        "Swarm"
       ],
       "fusion": "boundary:cross_frame_state",
       "inputs": [
@@ -43700,6 +43701,11 @@
           "name": "speed",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "reset",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Swarm Forces",
@@ -43764,14 +43770,14 @@
       ],
       "params": [
         {
-          "default": "0.25",
+          "default": "17",
           "label": "Force Detail",
-          "name": "field_spacing",
+          "name": "force_detail",
           "range": [
-            "0.02",
-            "10"
+            "2",
+            "64"
           ],
-          "type": "float"
+          "type": "int"
         },
         {
           "default": "1",
@@ -43784,7 +43790,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks.",
+      "purpose": "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's simulated seconds (Speed scales them), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Runs a swarm's simulation clock and lays the scene's forces over its box.",

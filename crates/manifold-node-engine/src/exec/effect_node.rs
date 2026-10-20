@@ -970,6 +970,20 @@ pub trait EffectNode: Send + AsAny {
         &[]
     }
 
+    /// The input that takes the scene's forces when a scene object's
+    /// physical chain reaches this node: the scene force list expands into
+    /// it. `None`: the node passes forces by.
+    fn acceleration_input(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The inputs whose producers own what `output` carries physically, for
+    /// the scene force trace from an object back to its simulation. `None`:
+    /// every input of the output's own type.
+    fn physical_sources(&self, _output: &str) -> Option<&'static [&'static str]> {
+        None
+    }
+
     /// Whether this node is a **liveness root** — must run every frame
     /// regardless of whether any per-frame wire consumes its output.
     ///

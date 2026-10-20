@@ -1,7 +1,7 @@
 //! BUG-g75v.7: engine value and fusion proofs, 8³ CPU-proven extents only.
 use manifold_node_engine::testkit::array_harness::{params, read, Harness};
-use manifold_water_liquid::testkit::codegen::{fused, member};
-use manifold_water_liquid::testkit::codegen::run;
+use manifold_node_engine::testkit::fused_atoms::{fused, member};
+use manifold_node_engine::testkit::fused_atoms::run;
 use super::advect_whitewater::AdvectWhitewater;
 use manifold_water_liquid::primitives::{offset_lattice::OffsetLattice, upwind_distance::UpwindDistance};
 use {manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::freeze::codegen::InputSource, manifold_water_liquid::whitewater::WhitewaterParticle};

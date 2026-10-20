@@ -91,11 +91,12 @@ Negative claims, checked: no serialized value names a Rust module or crate (`rg 
 | Crate | Owns | Depends on (workspace) |
 |---|---|---|
 | `manifold-water-rigid` | The Box3D graph adapter and the native pair contract: `physics.rs` tree, `physics_mesh`, `physics_events`, `physics_metrics` (until 6.8 moves the record types), `vector_field`, `node.rs` (`PhysicsNode`), `node.physics_world`, `node.rigid_body`, the vector-field source nodes, `CoupledRigidFrame`/`CoupledRigidLayout` (re-homed from the deleted `fluid/coupled.rs`) | core, foundation, gpu, node-engine, physics |
-| `manifold-water-liquid` | The liquid seam: clock, lattice, grid, bodies, body buffers, coupling, fields, frame ring and history, display cursor, tick samples, substep history, roles (`fluid_role`, `fluid_particles`, `node.fluid_role_source`), the whitewater grid vocabulary (`whitewater.rs`), the shared atoms of section 1.1, `liquid::extent` production helpers | rigid + its set, fluids (reference oracles only, behind `testkit`) |
+| `manifold-water-liquid` | The liquid seam: clock, lattice, grid, bodies, body buffers, coupling, fields, frame ring and history, display cursor, substep history, roles (`fluid_role`, `fluid_particles`, `node.fluid_role_source`), the whitewater grid vocabulary (`whitewater.rs`), the shared atoms of section 1.1, `liquid::extent` production helpers | rigid + its set, nodes-physics, fluids (reference oracles only, behind `testkit`) |
 | `manifold-water-gpu-flip` | `gpu_flip_*`, `liquid_state`, `liquid_fill`, `liquid_solid_distance`, `clamp_liquid_to_solids`, `push_out_of_solid`, `euler_step_particles(_3d)`, `apply_radial_burst(_3d)_to_particles` | liquid + its set |
 | `manifold-water-gpu-mpm` | `matter.rs` tree, every `matter_*` node, `grid_to_matter` | liquid + its set |
 | `manifold-water-whitewater` | `whitewater_step` and its lifecycle, type, handoff, emitters, potentials, `nearest_crossing`, `surface_crossings`, `crossing_distance`, `keep/advect/age/retype/spawn_whitewater`, `preserve_foam`, `jitter_particles`, `sample_faces_at_particles`, `extend_lattice`, `lattice_curvature`, `pad_distance_lattice` | liquid + its set |
 | `manifold-water-surface` | The mesher: `lattice_bricks`, `liquid_frame`, `particle_volume`, `volume_surface_mesh`, `count_surface_edges/triangles`, `relax/smooth_surface_mesh`, `surface_mesh_normals`, `surface_mesh_parity`, `lattice_closing_tests`, `shape_particle_blobs`, `blob_bounds` | liquid + its set |
+| `manifold-nodes-physics` (D-98 (physics nodes crate)) | The shared physics nodes under every liquid: the force lattice's GPU side (`LatticeBuffers`, `ForceLatticeBinding`, the trilinear include), the tick-sampled registration the history replay finds simulations by, and the swarm nodes. Names no liquid solver | gpu, node-engine, physics |
 | `manifold-nodes-water` (kept) | Registration and runtime: `lib.rs` linking every crate, `graph_install`, `physics_scene`, `migration/`, `runtime/`, `presets/` (the Dam Break builders), the cross-solver testkit and conformance harness | every crate above |
 
 Rejected: *two crates (seam + everything else)* — a leaf edit would still rebuild and retest every solver; the bead's goal is per-solver scope. Rejected: *rigid as a leaf beside the solvers* (the bead's first sketch) — `liquid/coupling.rs` owns a `RigidSimulation` and `liquid/bodies.rs` calls `pose_from_transform`; the rigid owner of a coupled liquid is part of the seam, so rigid sits below it. Inverting that through a trait would be the new framework the bead forbids. Rejected: *merging surface into liquid* — the mesher is a look surface Peter tunes (GPU_FLUID_SURFACE_DESIGN), it is 42 files with its own proofs, and nothing in the seam needs it once `liquid_bricks` moves down. Rejected: *merging rigid into liquid* — a body-in-water bug fix would then rerun the whole seam contract; separate, the compiler also proves rigid never knows liquids (INV-W2), which is the PHYSICS_ENGINE_BOUNDARY direction.
@@ -203,7 +204,7 @@ Rule (RENDERER_CRATE_SPLIT D8): visibility widens only on compiler demand during
 
 What a solver gets, and all it gets, from the seam:
 
-- `clock::{LiquidClock, ClockFrame, FIELD_RESERVE_INTERVALS}`; `tick_samples::TickSamples`; `substep_history::*` (the accepted-substep MAC-face seam).
+- `clock::{LiquidClock, ClockFrame}`; `substep_history::*` (the accepted-substep MAC-face seam). Tick samples, the force lattice and its reserve (`FORCE_LATTICE_RESERVE`) live in `manifold-physics`; the lattice's GPU side and the tick-sampled registration in `manifold-nodes-physics`.
 - `lattice::{LiquidLattice, FlipSolverGrid, PADDING_NODES, SURFACE_PADDING_CELLS, SURFACE_EXTRA_NODES, MAX_LATTICE_NODES, closed_faces}` (cut 3).
 - `grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_dims, face_len, face_bytes, interior_len, interior_bytes, face_index, face_coords, face_position, InteriorOps, PublishedFaces, stats_failed}` (cut 2).
 - `bodies::{LiquidBody, LIQUID_BODY_SPECS, LiquidShape, BodySupports, pack_supports, unpack_supports, GpuFlipBodyVertex, LIQUID_POSE, LIQUID_COLLIDER}` (cut 1); `body_buffers::*`.
@@ -280,7 +281,7 @@ Each crate: lib tests (`#[cfg(test)]` sibling `_tests.rs` modules as today) and 
 
 ### 6.2 Testkit placement
 
-A testkit module lives in the lowest crate whose tests use it and references only that crate or lower (section 3 places each). The engine's `testkit::water_codegen` (named by BUG-hkbdp.6.3 (scene types out of the engine) for a move into water) lands in `manifold-water-liquid::testkit::codegen`, the lowest crate whose proofs build codegen members; the whitewater `member` fixtures in the whitewater crate's testkit call it.
+A testkit module lives in the lowest crate whose tests use it and references only that crate or lower (section 3 places each). The fused-atom proof helpers (`member`, `fused`, `run`) live in `manifold_node_engine::testkit::fused_atoms`: they name no water type, and swarm proofs below every liquid use them too; the whitewater `member` fixtures in the whitewater crate's testkit call them.
 
 ### 6.3 Contract suites — the behaviour the compiler cannot see
 
