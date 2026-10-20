@@ -268,7 +268,7 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
     - `encode_replay_parity`: replay on against off, byte-equal readback of every declared output and dump array over 30 frames, for the nested-region and copy-chain graphs `tests/gpu_proofs/substeps.rs` already builds, and for the bundled WaterDamBreakMatter at its default 64.
     - `encode_replay_survives_changes`: change a param that changes a grid, an iteration count and an array capacity mid-run; output still matches replay off, and `recorded` shows the re-record.
     - `replay_off_under_profiling_and_dump`.
-  - `encode_replay_probe`: frame CPU with replay on and off, and GPU ms, for the bundled Dam Break.
+  - The `encode_replay_probe` example in manifold-nodes (`cargo run --release -p manifold-nodes --features gpu-proofs --example encode_replay_probe`): frame CPU with replay on and off, and GPU ms, for the bundled Dam Break. A report, not a test.
   - Path (a) of the FFT decision (section 8 (Deferred)), moved here by the lead: `GpuFft::encode` stops making its tensor data, arrays and execution descriptor on every call. The FFT's CPU µs per call is reported before and after on SWASH 64, and the `manifold-gpu` fft tests stay green. As built, on feat/fft-encode-cache off feat/fft-water, where the 3D plans are: the descriptor is built once and each plan keeps tensor data for its last four buffer pairs. The command-buffer wrapper stays per call, because a kept one outlives its command buffer and MPS then encodes into the committed one (a Metal assertion, seen). SWASH 64: 23.3–24.7 µs a call before, 19.5–19.8 after; `one_plan_encodes_many_buffer_pairs` proves eight pairs through one plan match a fresh plan bit for bit.
 - **Gate:**
   - Positive:

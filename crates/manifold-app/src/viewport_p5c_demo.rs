@@ -1,8 +1,12 @@
 //! P5c demo/evidence (`docs/REALTIME_3D_DESIGN.md`): drives the actual
 //! `viewport_input` classification layer against a copied navigation camera,
 //! applies the same classified gesture to an isolated renderer session for
-//! headless evidence, then dumps before/after PNGs and asserts the pixels
-//! actually changed — the L2 acceptance-demo bar (`docs/DESIGN_DOC_STANDARD.md` section 10).
+//! headless evidence, and asserts the pixels actually changed — the L2
+//! acceptance-demo bar (`docs/DESIGN_DOC_STANDARD.md` section 10). Set
+//! `MANIFOLD_VIEWPORT_ARTIFACT_DIR` to also write the before/after PNGs.
+//! It stays in the app because it compares the app's own `viewport_input`
+//! navigation against the session; the P6 gizmo demos live in
+//! `manifold-nodes-scene`'s GPU proofs.
 //!
 //! **Why this lives here instead of a `scripts/ui-flows/*.json` L3 script**
 //! (the preferred bar): the flow driver (`ui_snapshot::script::run`) only
@@ -137,11 +141,7 @@ fn viewport_input_orbit_drag_changes_framing() {
 
     let overlay_cfg = ViewportOverlayConfig::default();
     let before = session.render_if_dirty(&ctx(width, height, 1), &overlay_cfg, None, &[], &[]);
-    std::fs::write(
-        "/tmp/viewport_p5c_before.png",
-        encode_rgba8_png(&before, width, height),
-    )
-    .expect("write /tmp/viewport_p5c_before.png");
+    artifact("viewport_p5c_before", &before, width, height);
 
     // The exact production input shape: a left-drag with no shift held
     // classifies as Orbit, then `apply` updates the navigation camera at the
@@ -164,24 +164,26 @@ fn viewport_input_orbit_drag_changes_framing() {
     assert!(session.is_dirty(), "mirrored orbit must mark the fixture dirty");
 
     let after = session.render_if_dirty(&ctx(width, height, 2), &overlay_cfg, None, &[], &[]);
-    std::fs::write(
-        "/tmp/viewport_p5c_after.png",
-        encode_rgba8_png(&after, width, height),
-    )
-    .expect("write /tmp/viewport_p5c_after.png");
+    artifact("viewport_p5c_after", &after, width, height);
 
     assert_eq!(before.len(), after.len(), "readback dimensions must be stable across an orbit");
     let diff_count = before.iter().zip(after.iter()).filter(|(a, b)| a != b).count();
     assert!(
         diff_count > (before.len() / 20),
         "orbiting the viewport camera via viewport_input::apply must change a visible \
-         fraction of pixels (only {diff_count}/{} bytes differed) — see \
-         /tmp/viewport_p5c_before.png and /tmp/viewport_p5c_after.png",
+         fraction of pixels (only {diff_count}/{} bytes differed) — rerun with \
+         MANIFOLD_VIEWPORT_ARTIFACT_DIR set to see the before and after renders",
         before.len()
     );
-    eprintln!(
-        "[P5c demo] wrote /tmp/viewport_p5c_before.png + /tmp/viewport_p5c_after.png \
-         ({width}x{height}, {diff_count}/{} bytes differed after an orbit drag)",
-        before.len()
-    );
+}
+
+/// Write `rgba` as `<MANIFOLD_VIEWPORT_ARTIFACT_DIR>/<name>.png` when the
+/// directory is set; a plain run writes nothing.
+fn artifact(name: &str, rgba: &[u8], w: u32, h: u32) {
+    let Some(dir) = std::env::var_os("MANIFOLD_VIEWPORT_ARTIFACT_DIR").map(std::path::PathBuf::from) else {
+        return;
+    };
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+    let path = dir.join(format!("{name}.png"));
+    std::fs::write(&path, encode_rgba8_png(rgba, w, h)).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }

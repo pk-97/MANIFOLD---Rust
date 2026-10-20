@@ -328,12 +328,12 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-app/src/ui_bridge/project.rs:697,1478,1743,1802,1870`
 * `crates/manifold-app/src/ui_bridge/projection/cards.rs:1073`
 * `crates/manifold-app/src/ui_snapshot/mod.rs:715`
-* `crates/manifold-app/src/viewport_p6_demo.rs:136,162,188`
 * `crates/manifold-app/src/window_input.rs:1009,1110`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/gltf_card_precedence.rs:75`
 * `crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs:64,385,447,746,988,1001,1581,2181,2246,2807,2903,3212,3270,3543,3598,3832`
 * `crates/manifold-node-engine/src/load/loaded_preset_view.rs:230`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/expand_compiler_tests.rs:264`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/viewport_p6_demo.rs:151,176,201`
 * `crates/manifold-nodes-scene/src/node_graph/scene_vm.rs:482,1231,1237,1250,1279,1283,1322,1357,1375,1401,1468,1508,1542,1577,1614,1645,1683,1719,1737,1738,1754,1787,1803,1823,1842,1862,1898,1929,1980,2002,2100,2141`
 * `crates/manifold-node-engine/src/snapshot/scene_modifier_tests.rs:16,26`
 * `crates/manifold-node-engine/src/snapshot.rs:530,1054,1274,1326,1393,1428`

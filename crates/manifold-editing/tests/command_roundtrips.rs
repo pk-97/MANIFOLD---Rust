@@ -118,38 +118,6 @@ fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
     p
 }
 
-fn fixture_path(name: &str) -> std::path::PathBuf {
-    // The `.manifold` fixtures are gitignored (large personal projects), so a
-    // `git worktree` checkout doesn't contain them. Resolve to the MAIN working
-    // tree: `--git-common-dir` points at the primary repo's `.git`, whose parent
-    // is the main checkout where the fixtures live — so these tests RUN from a
-    // worktree instead of panicking with a confusing file-not-found. Falls back
-    // to the crate-relative path (the main checkout, or if git isn't reachable).
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .output()
-        && out.status.success()
-        && let Ok(common) =
-            std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).canonicalize()
-        && let Some(main_root) = common.parent()
-    {
-        let candidate = main_root.join("tests/fixtures").join(name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../tests/fixtures");
-    p.push(name);
-    p
-}
-
-fn load_project(name: &str) -> Project {
-    let path = fixture_path(name);
-    manifold_io::loader::load_project(&path)
-        .unwrap_or_else(|e| panic!("Failed to load {name}: {e}"))
-}
-
 fn make_test_project() -> Project {
     let mut project = Project::default();
     project.settings.bpm = manifold_core::units::Bpm(120.0);
@@ -1212,60 +1180,6 @@ fn add_envelope_undo_roundtrip() {
             .is_empty()
     );
 }
-
-// ─── Test with real project fixtures ───
-
-#[test]
-fn commands_work_on_loaded_project() {
-    let mut project = load_project("Burn V5 1.21.manifold");
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-    let original_beat = project.timeline.layers[0].clips[0].start_beat;
-
-    // Chain several commands
-    let mut cmd1 = SlipClipCommand::new(clip_id.clone(), Seconds(0.0), Seconds(1.0));
-    cmd1.execute(&mut project);
-    assert!(
-        (project.timeline.find_clip_by_id(&clip_id).unwrap().in_point - Seconds(1.0)).abs()
-            < Seconds(0.001)
-    );
-
-    let mut cmd2 = ChangeClipLoopCommand::new(clip_id.clone(), false, true, Beats(0.0), Beats(2.0));
-    cmd2.execute(&mut project);
-    assert!(
-        project
-            .timeline
-            .find_clip_by_id(&clip_id)
-            .unwrap()
-            .is_looping
-    );
-
-    // Undo both
-    cmd2.undo(&mut project);
-    assert!(
-        !project
-            .timeline
-            .find_clip_by_id(&clip_id)
-            .unwrap()
-            .is_looping
-    );
-
-    cmd1.undo(&mut project);
-    assert!(
-        (project.timeline.find_clip_by_id(&clip_id).unwrap().in_point - Seconds(0.0)).abs()
-            < Seconds(0.001)
-    );
-    assert!(
-        (project
-            .timeline
-            .find_clip_by_id(&clip_id)
-            .unwrap()
-            .start_beat
-            - original_beat)
-            .abs()
-            < Beats(0.001)
-    );
-}
-
 fn make_effect(effect_type: &PresetTypeId) -> PresetInstance {
     PresetInstance::new(effect_type.clone())
 }

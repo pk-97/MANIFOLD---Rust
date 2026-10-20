@@ -115,7 +115,7 @@ Rules: lanes commit once and stop; the lead reviews with Opus agents and lands t
 
 Every lane deletes what it replaces in the same commit. Named now so no wave ends with two paths:
 
-- A1: the overlay's bespoke drawing (`PhysicsOverlayFrame::for_each_gizmo` and its test); lane/physics-overlay-shapes' `physics_gizmo_lines`, the grid, light and domain composition folded into one core composition entry both hosts call, keeping the branch's force shapes as the display layer. The demo files `crates/manifold-app/src/viewport_p5c_demo.rs` and `crates/manifold-app/src/viewport_p6_demo.rs` (D-73) and their references: `crates/manifold-app/src/main.rs:174-177`, `.config/nextest.toml:61,76`, `scripts/gate_policy.py:32`, `docs/TEST_SUITE_REDUCTION_DESIGN.md:75,157` (row C10), `docs/SCENE_MODIFIER_RT_INVENTORY.md:331`.
+- A1: the overlay's bespoke drawing (`PhysicsOverlayFrame::for_each_gizmo` and its test); lane/physics-overlay-shapes' `physics_gizmo_lines`, the grid, light and domain composition folded into one core composition entry both hosts call, keeping the branch's force shapes as the display layer. The demo files `crates/manifold-app/src/viewport_p5c_demo.rs` and `crates/manifold-nodes-scene/tests/gpu_proofs/viewport_p6_demo.rs` (D-73) and their references: `crates/manifold-app/src/main.rs:175-176`, `crates/manifold-nodes-scene/tests/gpu_proofs/main.rs:38`, `.config/nextest.toml:61,76` and `scripts/gate_policy.py:32` (P5c only), `docs/TEST_SUITE_REDUCTION_DESIGN.md:75,157,252` (row C10), `docs/SCENE_MODIFIER_RT_INVENTORY.md:336`.
 - B1: `viewport_fluid_domains` and `apply_runtime_domains` (the FluidDomain target derives from the declaration); the domain drag's private path (`FluidDomainDrag`, `ContentCommand::FluidDomainEdit`) and the object drag's per-move command, both replaced by the knob's scrub. Force card drag stays: it is the knob (D-70).
 - B2: the Add Fluid special-case insertion and its family literals; the wiring-based water recognition (BUG-4lfm (GPU-surface water object not recognised as water)).
 - C1: the open-mesh rejection and any caller that worked around it.
@@ -134,7 +134,7 @@ The run is unattended. Each call carries the default the lead applies when Peter
 
 ## 8. Report
 
-The run ends with `docs/evidence/scene_setup_<date>/REPORT.md` in the style of the overnight reports: before and after renders for every visible change, every bead closed, every default applied under the calls above, everything parked and why. Everything lands on main, so no launch command is owed; anything left on a branch names its ref and the exact binary path to run.
+The run ends with `docs/evidence/scene_setup_<date>/REPORT.md` in the style of the overnight reports: an after render for every visible change, every bead closed, every default applied under the calls above, everything parked and why. Everything lands on main, so no launch command is owed; anything left on a branch names its ref and the exact binary path to run.
 
 ## 9. Decided — do not reopen
 

@@ -582,7 +582,7 @@ A new release's goldens are held-out input for the Rust code: no Rust phase deve
 | One runtime | after P3: `rg "KickDetector|SnareDetector|RECIPE_VERSION|recipe_version" crates/manifold-audio crates/manifold-app` → 0 |
 | Decisions run in emission order | `debug_assert!` in `TrainedDetector` on `avail_hop` |
 | The runtime and the release cutoff average nets by one rule | `parity_cover_kick`, `parity_cover_snare` (N = 2); `test_lab.py::test_release_averages_like_runtime` |
-| Detector cost stays under the ceiling | `trained::tests::detector_cost` prints per set; release-build numbers recorded at P2, P3, P4 (D16 trigger). Enforcement: none automatic — timing tests are not gates on shared machines |
+| Detector cost stays under the ceiling | the `detector_cost` example in manifold-audio (`cargo run --release -p manifold-audio --example detector_cost`) prints per set; release-build numbers recorded at P2, P3, P4 (D16 trigger). Enforcement: none automatic — timing tests are not gates on shared machines |
 
 ## 8. The plausible-wrong turns, by name
 
@@ -663,7 +663,7 @@ into `feat/detector-runtime`, and P3's landing is **blocked** on his yes (open d
   constructors over `TrainedDetector` until P3 deletes them.
 - **Deliverables:** section 5.1 modules; fall16; N averaged nets; section 5.2 types; tests from section 6 and 7
   (`refuses_each_bad_entry`, `registry_matches_runtime_parts`, `parity_kick`, `parity_snare`, `parity_cover_kick`,
-  `parity_cover_snare`, `every_golden_set_runs`, `detector_cost`).
+  `parity_cover_snare`, `every_golden_set_runs`; the cost report is now the `detector_cost` example).
 - **Gate:** `cargo nextest run -p manifold-audio trained detectors`; `cargo clippy -p manifold-audio -- -D warnings`;
   cost A/B in release, interleaved (`TrainedDetector` on the kick set vs the old `KickDetector` from P1's base,
   per memory `feedback_frame_timing_method`): within 10%, else stop and report.

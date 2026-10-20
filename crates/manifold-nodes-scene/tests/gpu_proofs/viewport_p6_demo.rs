@@ -1,24 +1,22 @@
 //! P6 demo/evidence (`docs/REALTIME_3D_DESIGN.md` P6 — Viewport Tier 2
-//! gizmos): drives the ACTUAL `manifold_nodes::node_graph` gizmo
-//! functions (`pick_object`, `gizmo_target_for`, `gizmo_lines`, `drag_write`)
-//! against a real `node.scene_object`-shaped scene through a real
-//! `ViewportSession`, then dumps headless PNGs and asserts pixels actually
-//! changed — the same L2 acceptance-demo bar `viewport_p5c_demo.rs`
-//! establishes for P5c (see that module's doc comment for why an L3
-//! click-script isn't reachable yet: the flow driver has no graph-editor-
-//! window routing).
+//! gizmos): drives the gizmo functions (`pick_object`, `gizmo_target_for`,
+//! `gizmo_lines`, `drag_write`) against a real `node.scene_object`-shaped
+//! scene through a real `ViewportSession`, and asserts pixels actually
+//! changed — the same L2 acceptance-demo bar the app's `viewport_p5c_demo.rs`
+//! holds for P5c.
 //!
-//! `window_input.rs`'s `editor_viewport_gizmo_press`/
+//! The app's `window_input.rs` `editor_viewport_gizmo_press`/
 //! `editor_viewport_gizmo_drag_move` (the real winit-facing call sites) are
-//! thin wrappers around exactly these same renderer functions plus a
-//! `SetGraphNodeParamCommand`/`AddObjectTransformCommand` dispatch — the
+//! thin wrappers around these same functions plus a
+//! `SetGraphNodeParamCommand`/`AddObjectTransformCommand` dispatch. The
 //! undo/redo round-trip half of P6's gate is proven at the command level in
-//! `manifold-editing`'s own test suite
-//! (`add_object_transform_then_gizmo_param_drag_round_trips_undo_redo`),
-//! not re-proven here; this module's job is the RENDER half: pick
-//! highlighting, gizmo-mode geometry, and a drag actually moving the
-//! rendered object.
-#![cfg(test)]
+//! `manifold-editing`
+//! (`add_object_transform_then_gizmo_param_drag_round_trips_undo_redo`);
+//! this module is the RENDER half: pick highlighting, gizmo-mode geometry,
+//! and a drag moving the rendered object.
+//!
+//! Every test renders on the shared GPU-proof device. Set
+//! `MANIFOLD_VIEWPORT_ARTIFACT_DIR` to also write the renders as PNGs.
 
 use std::sync::Arc;
 
@@ -118,6 +116,21 @@ fn ctx(width: u32, height: u32, frame_count: i64) -> PresetContext {
     }
 }
 
+fn device() -> Arc<GpuDevice> {
+    Arc::clone(&manifold_node_engine::testkit::gpu_harness::shared().device)
+}
+
+/// Write `rgba` as `<MANIFOLD_VIEWPORT_ARTIFACT_DIR>/<name>.png` when the
+/// directory is set; a plain run writes nothing.
+fn artifact(name: &str, rgba: &[u8], w: u32, h: u32) {
+    let Some(dir) = std::env::var_os("MANIFOLD_VIEWPORT_ARTIFACT_DIR").map(std::path::PathBuf::from) else {
+        return;
+    };
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+    let path = dir.join(format!("{name}.png"));
+    std::fs::write(&path, encode_rgba8_png(rgba, w, h)).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+}
+
 fn open_session(def: &EffectGraphDef, device: &Arc<GpuDevice>, w: u32, h: u32) -> ViewportSession {
     let registry = PrimitiveRegistry::with_builtin();
     ViewportSession::open(def, &NodeId::new("scene"), &registry, Arc::clone(device), w, h, &ctx(w, h, 0))
@@ -126,10 +139,10 @@ fn open_session(def: &EffectGraphDef, device: &Arc<GpuDevice>, w: u32, h: u32) -
 
 /// (a) Pick-highlight: `pick_object` finds the cube under its own projected
 /// screen position, and the resulting gizmo overlay (Move mode) is visibly
-/// composited onto the render — `/tmp/viewport_p6_pick_highlight.png`.
+/// composited onto the render (artifact `viewport_p6_pick_highlight`).
 #[test]
 fn pick_object_highlights_the_clicked_object() {
-    let device = Arc::new(GpuDevice::new_queued("viewport_p6_demo"));
+    let device = device();
     let def: EffectGraphDef = serde_json::from_str(&scene_json(false)).expect("parse scene def");
     let (w, h) = (320_u32, 240_u32);
     let mut session = open_session(&def, &device, w, h);
@@ -146,17 +159,16 @@ fn pick_object_highlights_the_clicked_object() {
     assert_eq!(lines.len(), 3, "move gizmo draws 3 axis handles");
 
     let rgba = session.render_if_dirty(&ctx(w, h, 1), &overlay_cfg, None, &[], &lines);
-    std::fs::write("/tmp/viewport_p6_pick_highlight.png", encode_rgba8_png(&rgba, w, h))
-        .expect("write /tmp/viewport_p6_pick_highlight.png");
+    artifact("viewport_p6_pick_highlight", &rgba, w, h);
 }
 
-/// (b) Each gizmo mode renders distinct handle geometry —
-/// `/tmp/viewport_p6_gizmo_move.png` / `_rotate.png` / `_scale.png`. A
-/// fourth render (`_locked.png`) uses the wired-`pos_x` fixture to show D8's
-/// "wired axis locks gray" refusal visibly.
+/// (b) Each gizmo mode renders distinct handle geometry (artifacts
+/// `viewport_p6_gizmo_move` / `_rotate` / `_scale`). A fourth render
+/// (`_locked`) uses the wired-`pos_x` fixture to show D8's "wired axis locks
+/// gray" refusal visibly.
 #[test]
 fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
-    let device = Arc::new(GpuDevice::new_queued("viewport_p6_demo"));
+    let device = device();
     let def: EffectGraphDef = serde_json::from_str(&scene_json(false)).expect("parse scene def");
     let (w, h) = (320_u32, 240_u32);
     let mut session = open_session(&def, &device, w, h);
@@ -174,8 +186,7 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
         let lines = gizmo_lines(mode, &target);
         assert!(!lines.is_empty(), "{name} gizmo must draw handle geometry");
         let rgba = session.render_if_dirty(&ctx(w, h, frame), &overlay_cfg, None, &[], &lines);
-        std::fs::write(format!("/tmp/viewport_p6_gizmo_{name}.png"), encode_rgba8_png(&rgba, w, h))
-            .unwrap_or_else(|_| panic!("write /tmp/viewport_p6_gizmo_{name}.png"));
+        artifact(&format!("viewport_p6_gizmo_{name}"), &rgba, w, h);
         renders.push(rgba);
         frame += 1;
     }
@@ -196,8 +207,7 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
     let locked_lines = gizmo_lines(GizmoMode::Move, &locked_target);
     let mut locked_session = open_session(&locked_def, &device, w, h);
     let rgba = locked_session.render_if_dirty(&ctx(w, h, 1), &overlay_cfg, None, &[], &locked_lines);
-    std::fs::write("/tmp/viewport_p6_gizmo_locked.png", encode_rgba8_png(&rgba, w, h))
-        .expect("write /tmp/viewport_p6_gizmo_locked.png");
+    artifact("viewport_p6_gizmo_locked", &rgba, w, h);
 }
 
 /// (c) A move-gizmo drag actually moves the rendered object: mutate the
@@ -207,19 +217,18 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
 /// round-trip of that exact write is proven at the command level in
 /// `manifold-editing`), rebuild the session against the mutated def via
 /// `sync_def` (same call `app_render.rs` makes every present frame), and
-/// assert the rendered pixels actually moved —
-/// `/tmp/viewport_p6_move_before.png` / `_after.png`.
+/// assert the rendered pixels actually moved (artifacts
+/// `viewport_p6_move_before` / `_after`).
 #[test]
 fn move_gizmo_drag_moves_the_rendered_object() {
-    let device = Arc::new(GpuDevice::new_queued("viewport_p6_demo"));
+    let device = device();
     let def: EffectGraphDef = serde_json::from_str(&scene_json(false)).expect("parse scene def");
     let (w, h) = (320_u32, 240_u32);
     let mut session = open_session(&def, &device, w, h);
     let overlay_cfg = ViewportOverlayConfig { grid: false, ..ViewportOverlayConfig::default() };
 
     let before = session.render_if_dirty(&ctx(w, h, 1), &overlay_cfg, None, &[], &[]);
-    std::fs::write("/tmp/viewport_p6_move_before.png", encode_rgba8_png(&before, w, h))
-        .expect("write /tmp/viewport_p6_move_before.png");
+    artifact("viewport_p6_move_before", &before, w, h);
 
     // The exact write a move-axis drag dispatches: the transform atom's
     // pos_x param moves by a few world units.
@@ -233,8 +242,7 @@ fn move_gizmo_drag_moves_the_rendered_object() {
     assert!(session.is_dirty(), "a real transform param change must mark the session dirty");
 
     let after = session.render_if_dirty(&ctx(w, h, 3), &overlay_cfg, None, &[], &[]);
-    std::fs::write("/tmp/viewport_p6_move_after.png", encode_rgba8_png(&after, w, h))
-        .expect("write /tmp/viewport_p6_move_after.png");
+    artifact("viewport_p6_move_after", &after, w, h);
 
     assert_eq!(before.len(), after.len());
     let diff_count = before.iter().zip(after.iter()).filter(|(a, b)| a != b).count();
