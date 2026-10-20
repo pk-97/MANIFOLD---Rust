@@ -10,4 +10,6 @@ mod layer_compositor;
 mod physics_impulses;
 mod preset_thumbnail;
 mod registered_assets;
+#[cfg(feature = "gpu-proofs")]
+mod scene_viewport_frame_order;
 mod whitewater_io;
