@@ -179,12 +179,12 @@ impl<C: crate::command::Command> crate::command::Command for Prepared<C> {
     }
     fn do_execute(&mut self, project: &mut Project) {
         if let Self::Ready(command) = self {
-            command.do_execute(project);
+            command.execute(project);
         }
     }
     fn do_undo(&mut self, project: &mut Project) {
         if let Self::Ready(command) = self {
-            command.do_undo(project);
+            command.undo(project);
         }
     }
     fn description(&self) -> &str {
