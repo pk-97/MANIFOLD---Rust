@@ -290,38 +290,18 @@ fn scene_physics_template_name_prefix_preserves_collision_numbering() {
 }
 
 #[test]
-fn scene_physics_duplicate_fluid_keeps_shared_world_controls() {
-    use crate::commands::graph::DuplicateSceneObjectCommand;
+fn scene_physics_duplicate_refuses_water() {
+    use crate::commands::graph::test_support::duplicate_object;
 
     let baseline = render_scene_graph(0, false);
     let (mut project, target) = project_with_graph(baseline.clone());
     add(&mut project, &target, &baseline);
     let before = graph(&project, &target).clone();
-    let original = before.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
-    let incoming: Vec<_> = before.wires.iter().filter(|wire| wire.to_node == original.id).cloned().collect();
-    assert_eq!(incoming.len(), 5);
-
-    let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 10, 0, baseline);
+    let mut duplicate = duplicate_object(&project, target.clone(), vec![], 10, 0, baseline);
     duplicate.execute(&mut project);
-    assert!(duplicate.was_applied(), "{:?}", duplicate.rejection_reason());
-    let after = graph(&project, &target).clone();
-    let copied = after.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID && node.id != original.id).unwrap();
-    for source in incoming {
-        assert!(after.wires.contains(&source), "original keeps its source");
-        assert!(
-            after.wires.contains(&EffectGraphWire { to_node: copied.id, ..source }),
-            "copy keeps the same World signal"
-        );
-    }
-    assert_eq!(after.nodes.iter().filter(|node| node.type_id == "node.value").count(), 5);
-    let reloaded: manifold_core::project::Project =
-        serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
-    assert_eq!(graph(&reloaded, &target), &after);
-    assert!(manifold_core::flatten::flatten_groups(&after).is_ok());
-    duplicate.undo(&mut project);
+    assert!(!duplicate.was_applied());
+    assert_eq!(duplicate.rejection_reason(), Some("Water cannot be duplicated"));
     assert_eq!(graph(&project, &target), &before);
-    duplicate.execute(&mut project);
-    assert_eq!(graph(&project, &target), &after);
 }
 
 #[test]

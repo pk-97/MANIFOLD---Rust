@@ -2,6 +2,9 @@
 
 use super::*;
 use manifold_core::change::ChangeSet;
+use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
+
+use crate::scene_transaction::SceneGraphTransaction;
 
 /// The source and authored-transform facts needed by standard scene-object
 /// physics authoring. Keeping this discovery local to editing is
@@ -69,22 +72,6 @@ pub(super) fn source_param_default(name: &str) -> SerializedParamValue {
         _ if name.starts_with("translate_") => SerializedParamValue::Float { value: 0.0 },
         _ => SerializedParamValue::Float { value: 0.0 },
     }
-}
-
-pub(super) fn object_node_in_group(group: &GroupDef) -> Option<u32> {
-    let output = group
-        .nodes
-        .iter()
-        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)?;
-    let object_wire = group
-        .wires
-        .iter()
-        .find(|wire| wire.to_node == output.id && wire.to_port == "object")?;
-    let object = group
-        .nodes
-        .iter()
-        .find(|node| node.id == object_wire.from_node)?;
-    (object.type_id == "node.scene_object").then_some(object.id)
 }
 
 pub(super) fn object_node_for_group_output(group: &GroupDef, output_port: &str) -> Option<u32> {
@@ -639,121 +626,10 @@ pub(super) fn add_group_physics(
     Ok((body_node_id, input_node_id))
 }
 
-pub(super) fn remove_group_physics(
-    group: &mut GroupDef,
-    body_id: u32,
-    object_id: u32,
-    authored_transform_id: u32,
-) -> Result<(), &'static str> {
-    let input_id = group_pose_input_id(group, object_id)?;
-    let output_id = group
-        .nodes
-        .iter()
-        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
-        .ok_or("Physics group body output is unavailable")?
-        .id;
-    if !group.wires.iter().any(|wire| {
-        wire.from_node == input_id
-            && wire.from_port == "pose"
-            && wire.to_node == object_id
-            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
-    }) {
-        return Err("Physics group pose input is malformed");
-    }
-    if !group.wires.iter().any(|wire| {
-        wire.from_node == body_id
-            && wire.from_port == "body"
-            && wire.to_node == output_id
-            && wire.to_port == "body"
-    }) {
-        return Err("Physics group body output is malformed");
-    }
-    let input_ids: std::collections::HashSet<_> = group
-        .nodes
-        .iter()
-        .filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-        .map(|node| node.id)
-        .collect();
-    for wire in &mut group.wires {
-        if input_ids.contains(&wire.from_node) && wire.from_port == "pose"
-        {
-            wire.from_node = authored_transform_id;
-            wire.from_port = "transform".into();
-        }
-    }
-    group
-        .wires
-        .retain(|wire| wire.from_node != body_id && wire.to_node != body_id);
-    group.nodes.retain(|node| {
-        node.id != body_id
-            && (node.id != input_id
-                || group.wires.iter().any(|wire| {
-                    wire.from_node == input_id || wire.to_node == input_id
-                }))
-    });
-    // Remove the boundary only when it has no other non-object output; the
-    // imported object shape has exactly one output and this keeps malformed
-    // hand-authored groups from losing unrelated ports.
-    let body_output_used = group
-        .wires
-        .iter()
-        .any(|wire| wire.to_node == output_id && wire.to_port == "body");
-    if !body_output_used {
-        let pose_input_used = group.wires.iter().any(|wire| {
-            wire.from_port == "pose"
-                && group
-                    .nodes
-                    .iter()
-                    .any(|node| node.id == wire.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
-        });
-        if !pose_input_used {
-            group.interface.inputs.retain(|port| port.name != "pose");
-        }
-        group.interface.outputs.retain(|port| port.name != "body");
-        let output_still_used = group.wires.iter().any(|wire| wire.to_node == output_id);
-        if !output_still_used {
-            group.nodes.retain(|node| node.id != output_id);
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn strip_group_physics_for_split(group: &mut GroupDef) -> Result<(), &'static str> {
-    let body_id = group
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.rigid_body")
-        .map(|node| node.id)
-        .ok_or("Split Physics group body is unavailable")?;
-    if !group
-        .nodes
-        .iter()
-        .any(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-    {
-        return Err("Split Physics group pose input is unavailable");
-    }
-    let object_id =
-        object_node_in_group(group).ok_or("Split Physics group object is unavailable")?;
-    let authored_transform_id = group
-        .wires
-        .iter()
-        .find(|wire| wire.to_node == body_id && wire.to_port == "transform")
-        .map(|wire| wire.from_node)
-        .ok_or("Split Physics authored transform is unavailable")?;
-    remove_group_physics(group, body_id, object_id, authored_transform_id)
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ImportedPhysicsBinding {
-    pub(super) world_id: u32,
-    pub(super) body_slot: u32,
-    pub(super) body_id: u32,
-}
-
-pub(super) fn scene_physics_binding(
-    def: &EffectGraphDef,
-    parts: &SceneObjectParts,
-) -> Result<ImportedPhysicsBinding, &'static str> {
+/// Ok when the object already carries a well-formed standard physics body:
+/// a rigid body wired into a body slot of a Physics World whose matching
+/// pose drives the object.
+pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObjectParts) -> Result<(), &'static str> {
     let Some(group_id) = parts.group_id else {
         let pose_wire = def
             .wires
@@ -787,11 +663,7 @@ pub(super) fn scene_physics_binding(
         if body.type_id != "node.rigid_body" {
             return Err("Physics object body has the wrong type");
         }
-        return Ok(ImportedPhysicsBinding {
-            world_id: world.id,
-            body_slot: slot,
-            body_id: body.id,
-        });
+        return Ok(());
     };
 
     let group = def
@@ -862,19 +734,7 @@ pub(super) fn scene_physics_binding(
         })
         .ok_or("Physics object group body slot is missing")?;
     let _ = (body, top_body_wire);
-    Ok(ImportedPhysicsBinding {
-        world_id,
-        body_slot: slot,
-        body_id,
-    })
-}
-
-pub(super) fn remove_string_binding_target(def: &mut EffectGraphDef, node_id: &NodeId) {
-    if let Some(meta) = def.preset_metadata.as_mut() {
-        meta.string_bindings.retain(|binding| {
-            !matches!(&binding.target, BindingTarget::Node { node_id: target, .. } if target == node_id)
-        });
-    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -931,7 +791,7 @@ pub(super) fn scene_object_physics_plan(
     if parts.render_indices.is_empty() {
         return Err("Selected scene object has no render outputs".into());
     }
-    if scene_physics_binding(def, &parts).is_ok() {
+    if scene_physics_body_wired(def, &parts).is_ok() {
         return Err("Selected object already has standard physics enabled".into());
     }
     let has_fluid_role = match parts.group_id {
@@ -1004,425 +864,154 @@ pub fn scene_object_physics_eligibility(
     scene_object_physics_plan(def, render_scene_node_id, object_index).map(|_| ())
 }
 
-/// Enable standard physics for one scene object. Grouped imports expose a
-/// `body` output and accept a `pose` input so the shared root world remains
-/// outside the visual object group; the flattener then folds that boundary to
-/// the same flat wiring used by a bare object.
-#[derive(Debug)]
-pub struct EnableSceneObjectPhysicsCommand {
-    target: GraphTarget,
+/// The graph with standard physics enabled on one scene object: a rigid body
+/// in the next free slot of the scene's one shared Physics World (created
+/// with the first body), its controls stamped from `body_metadata` and, for a
+/// new world, `world_metadata`. Grouped imports expose a `body` output and
+/// take a `pose` input so the world stays outside the object's group; the
+/// flattener folds that boundary into the wiring a bare object has.
+pub fn enable_physics_edit(
+    graph: &EffectGraphDef,
     render_scene_node_id: u32,
     object_index: u32,
-    body_metadata: Vec<NodeParamMetadata>,
-    world_metadata: Option<Vec<NodeParamMetadata>>,
-    catalog_default: EffectGraphDef,
-    prev: Option<(
-        Vec<EffectGraphNode>,
-        Vec<EffectGraphWire>,
-        Option<PresetMetadata>,
-    )>,
-    rejection: Option<String>,
+    body_metadata: &[NodeParamMetadata],
+    world_metadata: &[NodeParamMetadata],
+) -> Result<SceneGraphEdit, SceneGraphEditError> {
+    let refuse = |message: &str| SceneGraphEditError { at: None, message: message.into() };
+    let ScenePhysicsPlan { parts, body_params, world_id, body_slot, world_exists } =
+        scene_object_physics_plan(graph, render_scene_node_id, object_index).map_err(|message| refuse(&message))?;
+    let mut def = graph.clone();
+    let mut next_id = max_node_id_over(&def.nodes)
+        .checked_add(1)
+        .ok_or_else(|| refuse("Enable Physics document id space is exhausted"))?;
+    let mut taken = std::collections::HashSet::new();
+    collect_all_handles(&def.nodes, &mut taken);
+    if !world_exists {
+        let handle = dedup_handle("Physics World", &mut taken);
+        def.nodes.push(fresh_scene_node(next_id, "node.physics_world", Some(handle), BTreeMap::new()));
+        next_id += 1;
+    }
+    let body_id = next_id;
+    let body_handle = dedup_handle(&format!("{} Physics", parts.object_handle), &mut taken);
+    let builtin_source =
+        (parts.source.kind == ScenePhysicsSourceKind::Builtin).then_some(parts.source.source_id);
+    let body_node_id = if let Some(group_id) = parts.group_id {
+        let group = def
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == group_id)
+            .and_then(|node| node.group.as_deref_mut())
+            .ok_or_else(|| refuse("Enable Physics object group is unavailable"))?;
+        let (node_id, _) = add_group_physics(
+            group,
+            body_id,
+            body_params.clone(),
+            body_handle,
+            body_id + 1,
+            body_id + 2,
+            parts.authored_transform_id,
+            parts.object_id,
+            builtin_source,
+        )
+        .map_err(refuse)?;
+        def.wires.push(scene_build_wire(group_id, "body", world_id, &format!("body_{body_slot}")));
+        def.wires.push(scene_build_wire(world_id, &format!("pose_{body_slot}"), group_id, "pose"));
+        node_id
+    } else {
+        let object_wire = def
+            .wires
+            .iter_mut()
+            .find(|wire| wire.to_node == parts.object_id && wire.to_port == "transform")
+            .ok_or_else(|| refuse("Enable Physics requires an authored transform"))?;
+        object_wire.from_node = world_id;
+        object_wire.from_port = format!("pose_{body_slot}");
+        let body = fresh_scene_node(body_id, "node.rigid_body", Some(body_handle), body_params.clone());
+        let body_node_id = body.node_id.clone();
+        def.nodes.push(body);
+        def.wires.push(scene_build_wire(parts.authored_transform_id, "transform", body_id, "transform"));
+        if let Some(source_id) = builtin_source {
+            def.wires.push(scene_build_wire(source_id, "source", body_id, "source"));
+        }
+        def.wires.push(scene_build_wire(body_id, "body", world_id, &format!("body_{body_slot}")));
+        body_node_id
+    };
+    let string_binding = source_string_binding(&def, &parts.source, body_node_id.clone());
+    let world = (!world_exists)
+        .then(|| def.nodes.iter().find(|node| node.id == world_id).cloned())
+        .flatten();
+    let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
+    stamp_scene_node_exposures_into(
+        &mut meta.params,
+        &mut meta.bindings,
+        body_id,
+        &body_node_id,
+        &format!("{} — Physics", parts.object_handle),
+        body_metadata,
+        &body_params,
+    );
+    if let Some(world) = world {
+        stamp_scene_node_exposures_into(
+            &mut meta.params,
+            &mut meta.bindings,
+            world.id,
+            &world.node_id,
+            "Physics World",
+            world_metadata,
+            &world.params,
+        );
+    }
+    meta.string_bindings.extend(string_binding);
+    Ok(SceneGraphEdit { graph: def, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() })
+}
+
+/// Enable standard physics on one scene object ([`enable_physics_edit`]),
+/// prepared when made so a refusal surfaces before submission and redo
+/// reuses the same ids. Switching an existing body off and on writes its
+/// `enabled` param instead; this command only creates the body.
+#[derive(Debug)]
+pub struct EnableSceneObjectPhysicsCommand {
+    transaction: SceneGraphTransaction,
 }
 
 impl EnableSceneObjectPhysicsCommand {
     pub fn new(
+        project: &Project,
         target: GraphTarget,
         render_scene_node_id: u32,
         object_index: u32,
-        body_metadata: Vec<NodeParamMetadata>,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
-        Self {
-            target,
-            render_scene_node_id,
-            object_index,
-            body_metadata,
-            world_metadata: None,
-            catalog_default,
-            prev: None,
-            rejection: None,
-        }
-    }
-
-    pub fn with_world_metadata(mut self, metadata: Vec<NodeParamMetadata>) -> Self {
-        self.world_metadata = Some(metadata);
-        self
+        body_metadata: &[NodeParamMetadata],
+        world_metadata: &[NodeParamMetadata],
+        catalog_default: &EffectGraphDef,
+    ) -> Result<Self, SceneGraphEditError> {
+        Ok(Self {
+            transaction: SceneGraphTransaction::prepare(project, target, catalog_default, "Enable Physics", |graph| {
+                enable_physics_edit(graph, render_scene_node_id, object_index, body_metadata, world_metadata)
+            })?,
+        })
     }
 }
 
 impl Command for EnableSceneObjectPhysicsCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
+    fn touches(&self) -> ChangeSet {
+        self.transaction.touches()
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
-        targets.push(self.target.clone());
-    }
-
-    fn do_execute(&mut self, project: &mut Project) {
-        self.prev = None;
-        self.rejection = None;
-        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
-            return;
-        };
-        let plan = match scene_object_physics_plan(
-            def,
-            self.render_scene_node_id,
-            self.object_index,
-        ) {
-            Ok(plan) => plan,
-            Err(reason) => {
-                self.rejection = Some(reason);
-                return;
-            }
-        };
-        let ScenePhysicsPlan {
-            parts,
-            body_params,
-            world_id,
-            body_slot,
-            world_exists,
-        } = plan;
-        let mut candidate = def.clone();
-        let result = (|| {
-            let def = &mut candidate;
-            let previous = (
-                def.nodes.clone(),
-                def.wires.clone(),
-                def.preset_metadata.clone(),
-            );
-            let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
-            let mut taken = std::collections::HashSet::new();
-            collect_all_handles(&def.nodes, &mut taken);
-            if !world_exists {
-                let handle = dedup_handle("Physics World", &mut taken);
-                def.nodes.push(fresh_scene_node(
-                    next_id,
-                    "node.physics_world",
-                    Some(handle),
-                    BTreeMap::new(),
-                ));
-                next_id += 1;
-            }
-            let body_id = next_id;
-            next_id += 1;
-            let body_handle = dedup_handle(&format!("{} Physics", parts.object_handle), &mut taken);
-            let body_node_id = if let Some(group_id) = parts.group_id {
-                let group = def
-                    .nodes
-                    .iter_mut()
-                    .find(|node| node.id == group_id)?
-                    .group
-                    .as_deref_mut()?;
-                let input_id = next_id;
-                next_id += 1;
-                let output_id = next_id;
-                let (node_id, _) = add_group_physics(
-                    group,
-                    body_id,
-                    body_params.clone(),
-                    body_handle,
-                    input_id,
-                    output_id,
-                    parts.authored_transform_id,
-                    parts.object_id,
-                    (parts.source.kind == ScenePhysicsSourceKind::Builtin)
-                        .then_some(parts.source.source_id),
-                )
-                .ok()?;
-                def.wires.push(scene_build_wire(
-                    group_id,
-                    "body",
-                    world_id,
-                    &format!("body_{body_slot}"),
-                ));
-                def.wires.push(scene_build_wire(
-                    world_id,
-                    &format!("pose_{body_slot}"),
-                    group_id,
-                    "pose",
-                ));
-                node_id
-            } else {
-                let object_wire = def
-                    .wires
-                    .iter_mut()
-                    .find(|wire| wire.to_node == parts.object_id && wire.to_port == "transform")?;
-                object_wire.from_node = world_id;
-                object_wire.from_port = format!("pose_{body_slot}");
-                let body = fresh_scene_node(
-                    body_id,
-                    "node.rigid_body",
-                    Some(body_handle),
-                    body_params.clone(),
-                );
-                let body_node_id = body.node_id.clone();
-                def.nodes.push(body);
-                def.wires.push(scene_build_wire(
-                    parts.authored_transform_id,
-                    "transform",
-                    body_id,
-                    "transform",
-                ));
-                if parts.source.kind == ScenePhysicsSourceKind::Builtin {
-                    def.wires.push(scene_build_wire(
-                        parts.source.source_id,
-                        "source",
-                        body_id,
-                        "source",
-                    ));
-                }
-                def.wires.push(scene_build_wire(
-                    body_id,
-                    "body",
-                    world_id,
-                    &format!("body_{body_slot}"),
-                ));
-                body_node_id
-            };
-            let string_binding = source_string_binding(def, &parts.source, body_node_id.clone());
-            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                shape: None,
-                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                display_name: "Scene".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "scene".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
-                layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                scene_modifier: None,
-                scene_bounds: None,
-            });
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                body_id,
-                &body_node_id,
-                &format!("{} — Physics", parts.object_handle),
-                &self.body_metadata,
-                &body_params,
-            );
-            if !world_exists
-                && let (Some(world), Some(world_metadata)) = (
-                    def.nodes.iter().find(|node| node.id == world_id),
-                    self.world_metadata.as_ref(),
-                )
-            {
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    world.id,
-                    &world.node_id,
-                    "Physics World",
-                    world_metadata,
-                    &world.params,
-                );
-            }
-            if let Some(binding) = string_binding {
-                meta.string_bindings.push(binding);
-            }
-            Some(previous)
-        })();
-        if let Some(previous) = result {
-            let _ =
-                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                    *def = candidate
-                });
-            self.prev = Some(previous);
-            refresh_target_manifest(project, &self.target);
-        } else {
-            self.rejection =
-                Some("Physics edit requires an unmodified scene object graph".into());
-        }
-    }
-
-    fn do_undo(&mut self, project: &mut Project) {
-        let Some((nodes, wires, metadata)) = self.prev.take() else {
-            return;
-        };
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            def.nodes = nodes;
-            def.wires = wires;
-            def.preset_metadata = metadata;
-        });
-        refresh_target_manifest(project, &self.target);
-    }
-
-    fn description(&self) -> &str {
-        "Enable Physics"
-    }
-    fn was_applied(&self) -> bool {
-        self.prev.is_some()
-    }
-    fn rejection_reason(&self) -> Option<&str> {
-        self.rejection.as_deref()
-    }
-}
-
-/// Remove the body/world wiring while leaving the scene visual object and
-/// its authored transform intact.  The world node itself is retained as the
-/// shared scene service, so disabling one object never invalidates another.
-#[derive(Debug)]
-pub struct DisableSceneObjectPhysicsCommand {
-    target: GraphTarget,
-    render_scene_node_id: u32,
-    object_index: u32,
-    catalog_default: EffectGraphDef,
-    prev: Option<(
-        Vec<EffectGraphNode>,
-        Vec<EffectGraphWire>,
-        Option<PresetMetadata>,
-    )>,
-    rejection: Option<String>,
-}
-
-impl DisableSceneObjectPhysicsCommand {
-    pub fn new(
-        target: GraphTarget,
-        render_scene_node_id: u32,
-        object_index: u32,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
-        Self {
-            target,
-            render_scene_node_id,
-            object_index,
-            catalog_default,
-            prev: None,
-            rejection: None,
-        }
-    }
-}
-
-impl Command for DisableSceneObjectPhysicsCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
-    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
-        targets.push(self.target.clone());
+        targets.push(self.transaction.owner.clone());
     }
     fn do_execute(&mut self, project: &mut Project) {
-        self.prev = None;
-        self.rejection = None;
-        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
-            return;
-        };
-        let Ok(parts) = scene_object_parts(def, self.render_scene_node_id, self.object_index)
-        else {
-            self.rejection =
-                Some("Disable Physics supports standard scene object mesh sources only".into());
-            return;
-        };
-        let Ok(binding) = scene_physics_binding(def, &parts) else {
-            self.rejection = Some("Selected object does not have standard physics enabled".into());
-            return;
-        };
-        let mut candidate = def.clone();
-        let result = (|| {
-            let def = &mut candidate;
-            let previous = (
-                def.nodes.clone(),
-                def.wires.clone(),
-                def.preset_metadata.clone(),
-            );
-            if let Some(group_id) = parts.group_id {
-                let group = def
-                    .nodes
-                    .iter_mut()
-                    .find(|node| node.id == group_id)?
-                    .group
-                    .as_deref_mut()?;
-                remove_group_physics(
-                    group,
-                    binding.body_id,
-                    parts.object_id,
-                    parts.authored_transform_id,
-                )
-                .ok()?;
-                def.wires.retain(|wire| {
-                    !(wire.from_node == group_id
-                        && wire.to_node == binding.world_id
-                        && wire.to_port == format!("body_{}", binding.body_slot)
-                        || wire.from_node == binding.world_id
-                            && wire.from_port == format!("pose_{}", binding.body_slot)
-                            && wire.to_node == group_id)
-                });
-            } else {
-                def.wires.retain(|wire| {
-                    !((wire.from_node == binding.world_id
-                        && wire.from_port == format!("pose_{}", binding.body_slot)
-                        && wire.to_node == parts.object_id)
-                        || wire.from_node == binding.body_id
-                        || wire.to_node == binding.body_id)
-                });
-                def.wires.push(scene_build_wire(
-                    parts.authored_transform_id,
-                    "transform",
-                    parts.object_id,
-                    "transform",
-                ));
-                def.nodes.retain(|node| node.id != binding.body_id);
-            }
-            // A removed body must not leave a force attached to a reusable slot.
-            def.wires.retain(|wire| {
-                !(wire.to_node == binding.world_id
-                    && wire.to_port == format!("body_acceleration_{}", binding.body_slot))
-            });
-            let body_node_id = if parts.group_id.is_some() {
-                // The body is inside the group; use its stable NodeId before
-                // removing the node so the exposure sweep can prune it.
-                previous
-                    .0
-                    .iter()
-                    .flat_map(|node| node.group.as_ref().map(|g| g.nodes.iter()))
-                    .flatten()
-                    .find(|node| node.id == binding.body_id)
-                    .map(|node| node.node_id.clone())
-            } else {
-                previous
-                    .0
-                    .iter()
-                    .find(|node| node.id == binding.body_id)
-                    .map(|node| node.node_id.clone())
-            };
-            if let Some(body_node_id) = body_node_id {
-                prune_scene_object_metadata(def, std::slice::from_ref(&body_node_id));
-                remove_string_binding_target(def, &body_node_id);
-            }
-            Some(previous)
-        })();
-        if let Some(previous) = result {
-            let _ =
-                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                    *def = candidate
-                });
-            self.prev = Some(previous);
-            refresh_target_manifest(project, &self.target);
-        } else {
-            self.rejection =
-                Some("Physics edit requires an unmodified scene object graph".into());
-        }
+        self.transaction.execute(project);
     }
     fn do_undo(&mut self, project: &mut Project) {
-        let Some((nodes, wires, metadata)) = self.prev.take() else {
-            return;
-        };
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            def.nodes = nodes;
-            def.wires = wires;
-            def.preset_metadata = metadata;
-        });
-        refresh_target_manifest(project, &self.target);
+        self.transaction.undo(project);
     }
     fn description(&self) -> &str {
-        "Disable Physics"
+        self.transaction.description
     }
     fn was_applied(&self) -> bool {
-        self.prev.is_some()
+        self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.rejection.as_deref()
+        self.transaction.rejection_reason()
     }
 }
+

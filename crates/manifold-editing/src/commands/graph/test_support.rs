@@ -152,6 +152,82 @@ pub(super) fn abc_graph() -> EffectGraphDef {
     }
 }
 
+/// A command prepared against the project when made, as the app sends it.
+/// A preparation refusal becomes a command that changes nothing and reports
+/// why, so a test reads a refusal at preparation and one at execute alike.
+#[derive(Debug)]
+pub(super) enum Prepared<C> {
+    Ready(C),
+    Refused(String),
+}
+
+impl<C> From<Result<C, manifold_core::scene_graph_edit::SceneGraphEditError>> for Prepared<C> {
+    fn from(result: Result<C, manifold_core::scene_graph_edit::SceneGraphEditError>) -> Self {
+        match result {
+            Ok(command) => Self::Ready(command),
+            Err(error) => Self::Refused(error.message),
+        }
+    }
+}
+
+impl<C: crate::command::Command> crate::command::Command for Prepared<C> {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        match self {
+            Self::Ready(command) => command.touches(),
+            Self::Refused(_) => manifold_core::change::ChangeSet::default(),
+        }
+    }
+    fn do_execute(&mut self, project: &mut Project) {
+        if let Self::Ready(command) = self {
+            command.do_execute(project);
+        }
+    }
+    fn do_undo(&mut self, project: &mut Project) {
+        if let Self::Ready(command) = self {
+            command.do_undo(project);
+        }
+    }
+    fn description(&self) -> &str {
+        match self {
+            Self::Ready(command) => command.description(),
+            Self::Refused(_) => "Refused",
+        }
+    }
+    fn was_applied(&self) -> bool {
+        matches!(self, Self::Ready(command) if command.was_applied())
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        match self {
+            Self::Ready(command) => command.rejection_reason(),
+            Self::Refused(reason) => Some(reason),
+        }
+    }
+}
+
+/// Enable Physics on render slot `index` of scene `render`, prepared now.
+pub(super) fn enable_physics(
+    project: &Project,
+    target: GraphTarget,
+    render: u32,
+    index: u32,
+    body: Vec<manifold_core::scene_exposure::NodeParamMetadata>,
+    default: EffectGraphDef,
+) -> Prepared<EnableSceneObjectPhysicsCommand> {
+    EnableSceneObjectPhysicsCommand::new(project, target, render, index, &body, &[], &default).into()
+}
+
+/// One copy of render slot `index` of scene `render`, prepared now.
+pub(super) fn duplicate_object(
+    project: &Project,
+    target: GraphTarget,
+    scope: Vec<u32>,
+    render: u32,
+    index: u32,
+    default: EffectGraphDef,
+) -> Prepared<DuplicateSceneObjectCommand> {
+    DuplicateSceneObjectCommand::new(project, target, scope, render, index, 1, &default).into()
+}
+
 pub(super) fn project_with_graph(def: EffectGraphDef) -> (Project, EffectId) {
     let mut project = Project::default();
     let effect_id = EffectId::new("test-group-fx");

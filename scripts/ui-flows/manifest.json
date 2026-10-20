@@ -144,6 +144,17 @@
       "scene-physics-template",
       "water-family-preset"
     ],
+    "crates/manifold-editing/src/commands/graph/scene/physics.rs": [
+      "scene-physics-switch",
+      "scene-imported-physics"
+    ],
+    "crates/manifold-editing/src/commands/graph/scene/duplicate.rs": [
+      "scene-physics-duplicate-count",
+      "scene-physics-duplicate-paused"
+    ],
+    "crates/manifold-ui/src/panels/scene_setup_panel/copies.rs": [
+      "scene-physics-duplicate-count"
+    ],
     "crates/manifold-core/src/scene_exposure.rs": [
       "scene-fluid-dam-break-controls",
       "water-family-preset"
@@ -450,6 +461,8 @@
     "scene-physics-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
+    "scene-physics-switch": "gltfscene",
+    "scene-physics-duplicate-count": "gltfscene",
     "scene-imported-physics": "gltfscene",
     "render-mode-solid": "gltfscene",
     "render-mode-points": "gltfscene",

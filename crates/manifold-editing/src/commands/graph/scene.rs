@@ -27,23 +27,17 @@ mod duplicate;
 mod fluid;
 mod physics;
 mod physics_match;
-mod split;
 
 use physics::*;
 use physics_match::*;
 use manifold_core::scene_object_migration::loose_scene_object_owned_ids;
-use split::*;
-pub use physics::{
-    scene_object_physics_eligibility, DisableSceneObjectPhysicsCommand,
-    EnableSceneObjectPhysicsCommand,
-};
-pub use split::SplitSceneObjectCommand;
+pub use physics::{enable_physics_edit, scene_object_physics_eligibility, EnableSceneObjectPhysicsCommand};
 
 #[cfg(test)]
 mod fluid_object_lifecycle_tests;
 
 pub use fluid::*;
-pub use duplicate::DuplicateSceneObjectCommand;
+pub use duplicate::{physics_free_body_slots, DuplicateSceneObjectCommand};
 
 /// The card metadata a scene def gets when a scene edit stamps exposures
 /// into a def that has none.

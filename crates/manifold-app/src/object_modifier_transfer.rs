@@ -933,11 +933,11 @@ mod tests {
             .id;
         let mut add = crate::scene_item_transfer::build_action(
             &project,
-            crate::scene_item_transfer::SceneItemAction::Duplicate {
+            crate::scene_item_transfer::SceneItemAction::DuplicateObject {
                 layer: destination_layer.clone(),
                 scene,
-                kind: crate::scene_item_transfer::SceneItemKind::Object,
                 index: 0,
+                copies: 1,
             },
         )
         .unwrap();

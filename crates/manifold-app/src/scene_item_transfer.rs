@@ -172,10 +172,17 @@ pub(crate) enum SceneItemAction {
         scene: u32,
         clipboard: Box<SceneItemClipboard>,
     },
-    Duplicate {
+    /// N copies of an object in one undo step, each with its own body when
+    /// the source has physics (PHYSICS_ENGINE_BOUNDARY_DESIGN.md P6a).
+    DuplicateObject {
         layer: LayerId,
         scene: u32,
-        kind: SceneItemKind,
+        index: u32,
+        copies: u32,
+    },
+    DuplicateLight {
+        layer: LayerId,
+        scene: u32,
         index: u32,
     },
     Move {
@@ -191,7 +198,8 @@ impl SceneItemAction {
     pub(crate) fn selection_request(&self) -> Option<crate::edit_selection::SelectAfterEdit> {
         let (layer, kind) = match self {
             Self::Paste { layer, clipboard, .. } => (layer, clipboard.kind),
-            Self::Duplicate { layer, kind, .. } => (layer, *kind),
+            Self::DuplicateObject { layer, .. } => (layer, SceneItemKind::Object),
+            Self::DuplicateLight { layer, .. } => (layer, SceneItemKind::Light),
             Self::Move { .. } => return None,
         };
         Some(match kind {
@@ -641,13 +649,17 @@ pub(crate) fn build_action(
             scene,
             clipboard,
         } => paste(project, layer, scene, *clipboard, "Paste Scene Item", CopyNaming::Deduped),
-        SceneItemAction::Duplicate {
-            layer,
-            scene,
-            kind,
-            index,
-        } => {
-            let clipboard = SceneItemClipboard::capture(project, &layer, scene, kind, index)?;
+        SceneItemAction::DuplicateObject { layer, scene, index, copies } => {
+            let target = GraphTarget::Generator(layer);
+            let default = crate::graph_target::resolve(project, &target).ok_or("Scene graph is unavailable")?;
+            let command = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
+                project, target.clone(), Vec::new(), scene, index, copies, &default,
+            )
+            .map_err(|error| error.message)?;
+            Ok(Box::new(command))
+        }
+        SceneItemAction::DuplicateLight { layer, scene, index } => {
+            let clipboard = SceneItemClipboard::capture(project, &layer, scene, SceneItemKind::Light, index)?;
             paste(project, layer, scene, clipboard, "Duplicate Scene Item", CopyNaming::Numbered)
         }
         SceneItemAction::Move {
@@ -1075,7 +1087,7 @@ mod tests {
         let layer = add_transfer_layer(&mut project, "Scene", "dup", false);
         let mut editing = EditingService::new();
         for _ in 0..2 {
-            let action = SceneItemAction::Duplicate { layer: layer.clone(), scene: 1, kind: SceneItemKind::Object, index: 0 };
+            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), scene: 1, index: 0, copies: 1 };
             editing.execute(build_action(&project, action).unwrap(), &mut project);
             assert!(editing.take_rejection().is_none());
         }

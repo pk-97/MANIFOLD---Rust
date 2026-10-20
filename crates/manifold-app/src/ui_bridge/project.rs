@@ -805,11 +805,10 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
 
-        // Buttons and keyboard duplication use the same content-owned transfer.
-        ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index) => {
-            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Duplicate {
-                layer: layer_id.clone(), scene: *render_scene_node_id,
-                kind: crate::scene_item_transfer::SceneItemKind::Object, index: *source_index,
+        // Buttons and keyboard duplication build on the content thread.
+        ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index, copies) => {
+            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::DuplicateObject {
+                layer: layer_id.clone(), scene: *render_scene_node_id, index: *source_index, copies: *copies,
             }));
             DispatchResult::handled()
         }
@@ -831,8 +830,12 @@ pub(super) fn dispatch_project(
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
             use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
             let enabled = matches!(action, ProjectAction::SceneSetupEnablePhysics(..));
+            // P6a: the switch is the body's own `enabled` param once a body
+            // exists (off keeps its settings, D6); the first switch-on adds
+            // the body, and the shared world when there is none.
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
-                manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
+                migrate_scene_exposures(&mut default);
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let physics = project.graph_for_target(&target, Some(&default))
                     .and_then(SceneVm::from_def)
@@ -841,22 +844,25 @@ pub(super) fn dispatch_project(
                         SceneObjectVm::Known(row) if row.index == *object_index as usize => row.physics,
                         _ => None,
                     }));
-                let cmd: Box<dyn manifold_editing::command::Command + Send> = if let Some(physics) = physics {
-                    Box::new(manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                        target, physics.body_node_id, "enabled".into(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
-                        default,
-                    ).with_scope(physics.body_scope_path))
-                } else if enabled {
-                    Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
-                        target, *render_scene_node_id, *object_index,
-                        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
-                        default,
-                    ).with_world_metadata(manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world")))
-                } else {
-                    return DispatchResult::handled();
+                let command = match physics {
+                    Some(physics) => apply_scene_param_write(
+                        project, layer_id, physics.body_scope_path, physics.body_node_id,
+                        "enabled", if enabled { 1.0 } else { 0.0 },
+                    ).ok_or_else(|| "The body's switch is unavailable".to_string()),
+                    None if enabled => manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
+                        project, target, *render_scene_node_id, *object_index,
+                        &metadata_for_node_type("node.rigid_body"),
+                        &metadata_for_node_type("node.physics_world"),
+                        &default,
+                    )
+                    .map(|command| Box::new(command) as Box<dyn manifold_editing::command::Command + Send>)
+                    .map_err(|error| error.message),
+                    None => return DispatchResult::handled(),
                 };
-                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd));
+                ContentCommand::send(content_tx, match command {
+                    Ok(command) => ContentCommand::ExecuteOnContent(command),
+                    Err(message) => ContentCommand::GraphEditRejected(message),
+                });
             }
             DispatchResult::handled()
         }
@@ -2533,6 +2539,7 @@ mod tests {
             layer_id.clone(),
             render_scene_id,
             source_index,
+            1,
         );
         dispatch_project(
             &duplicate,
@@ -2586,8 +2593,8 @@ mod tests {
         assert_eq!(section, Some(format!("{duplicate_name} — Transform").as_str()));
         assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_y"), 2.25,
             "the duplicate keeps the source's authored control values");
-        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.25,
-            "the shared scene clipboard duplicates the authored position in place");
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.75,
+            "the copy sits 0.5 m on from its source (D11)");
         command.undo(&mut project);
         assert_eq!(serde_json::to_value(&project).unwrap(), before_duplicate);
         command.execute(&mut project);
@@ -2657,6 +2664,7 @@ mod tests {
             layer_id.clone(),
             render_scene_id,
             source_index,
+            1,
         );
         dispatch_project(
             &duplicate,

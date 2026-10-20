@@ -258,6 +258,10 @@ pub struct SceneObjectCapabilities {
     pub modifiers: bool,
 }
 
+/// The most copies one Duplicate makes: one per body slot of a Physics
+/// World, so every copy of a physics object can carry its own body.
+pub const MAX_DUPLICATE_COPIES: u32 = 64;
+
 /// What the one Add menu inserts into a scene through a template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SceneTemplateKind {

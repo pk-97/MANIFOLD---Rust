@@ -152,12 +152,22 @@ fn scene_param_write(
             ),
         ));
     }
+    // The def keeps the param's declared shape: a toggle such as a body's
+    // `enabled` stays a Bool, so the readers that match on it see the write.
+    let declared = find_node_by_scope(effective, &scope_path, node_doc_id).and_then(|node| {
+        manifold_core::param_lookup::node_params(&node.type_id)
+            .into_iter()
+            .find(|meta| meta.name == param_id)
+    });
+    let serialized = declared
+        .and_then(|meta| crate::scene_gizmo::scalar_to_serialized(meta.convert, value))
+        .unwrap_or(manifold_core::effect_graph_def::SerializedParamValue::Float { value });
     let cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
         manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
             target,
             node_doc_id,
             param_id.to_string(),
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+            serialized,
             default,
         )
         .with_scope(scope_path),

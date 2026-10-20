@@ -119,9 +119,9 @@ fn physics_catalog_host() -> EffectGraphDef {
         owner.preset_metadata.as_ref().unwrap().id.clone());
     project.timeline.layers[layer].gen_params_mut().unwrap().graph = Some(owner.clone());
     let target = GraphTarget::Generator(project.timeline.layers[layer].layer_id.clone());
-    let mut enable = EnableSceneObjectPhysicsCommand::new(target, scene_id, 0,
-        metadata_for_node_type("node.rigid_body"), owner)
-        .with_world_metadata(metadata_for_node_type("node.physics_world"));
+    let mut enable = EnableSceneObjectPhysicsCommand::new(&project, target, scene_id, 0,
+        &metadata_for_node_type("node.rigid_body"), &metadata_for_node_type("node.physics_world"), &owner)
+        .expect("catalog Physics source takes physics");
     enable.execute(&mut project);
     assert!(enable.was_applied(), "catalog Physics: {:?}", enable.rejection_reason());
     with_catalog_environment(project.timeline.layers[layer].generator_graph().unwrap().clone())
