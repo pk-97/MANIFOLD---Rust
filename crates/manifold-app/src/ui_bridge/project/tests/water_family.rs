@@ -432,3 +432,61 @@ fn visibility_rename_round_trip(preset: &'static str) {
         for (a, b) in first.into_iter().zip(values(&reloaded)) { assert!((a - b).abs() > 0.00001); }
     }
 }
+
+fn insert_water(project: &Project, layer: &LayerId, render: u32) -> Result<manifold_editing::scene_template::InsertSceneTemplateCommand, String> {
+    let target = GraphTarget::Generator(layer.clone());
+    let default = (*manifold_nodes::bundled_presets::bundled_preset_def(&project.timeline.find_layer_by_id(layer).unwrap().1.generator_type().clone()).unwrap()).clone();
+    let def = effective_def(project, layer);
+    let render_node = def.nodes.iter().find(|node| node.id == render).unwrap().node_id.clone();
+    let scene = manifold_core::SceneNodeRef::locate(&def, &render_node).unwrap();
+    manifold_editing::scene_template::InsertSceneTemplateCommand::new(
+        project, target, scene, manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(), &default,
+    )
+    .map_err(|error| error.message)
+}
+
+/// The Water template routes all five outputs to consecutive object slots,
+/// bumps the object count by five, and merges its exposures under unique ids
+/// that each bind to a node that exists.
+#[test]
+fn physics_boundary_insert_water_family() {
+    use manifold_editing::command::Command;
+    let (mut project, layer, render) = super::scene_layer_project();
+    let before = effective_def(&project, &layer);
+    let first_free = super::objects_param(&project, &layer, render) as u32;
+    let mut command = insert_water(&project, &layer, render).expect("the template inserts");
+    command.execute(&mut project);
+    assert!(command.was_applied());
+    let def = effective_def(&project, &layer);
+    assert_eq!(super::objects_param(&project, &layer, render), (first_free + 5) as f32);
+    let group = def.nodes.iter().find(|node| node.type_id == "group" && before.nodes.iter().all(|old| old.id != node.id)).expect("the family group");
+    let mut slots: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == group.id && wire.to_node == render).map(|wire| wire.to_port.clone()).collect();
+    slots.sort();
+    assert_eq!(slots, (first_free..first_free + 5).map(|n| format!("object_{n}")).collect::<Vec<_>>());
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let ids: std::collections::HashSet<_> = meta.params.iter().map(|spec| spec.id.as_str()).collect();
+    assert_eq!(ids.len(), meta.params.len(), "exposure ids are unique");
+    assert!(meta.bindings.iter().all(|binding| ids.contains(binding.id.as_str())));
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("the family flattens");
+    let domain = flat.nodes.iter().find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    assert!(flat.wires.iter().any(|wire| wire.to_node == domain.id && wire.to_port == "gravity"), "the World drives the domain");
+}
+
+/// A scene with too few free slots refuses the five-output family and the
+/// project stays exactly as it was.
+#[test]
+fn physics_boundary_insert_capacity_rejects() {
+    let (mut project, layer, render) = super::scene_layer_project();
+    let target = GraphTarget::Generator(layer.clone());
+    let mut def = effective_def(&project, &layer);
+    let limit = manifold_core::param_lookup::node_params("node.render_scene").iter().find(|meta| meta.name == "objects").expect("objects declares a range").max;
+    def.nodes.iter_mut().find(|node| node.id == render).unwrap().params.insert(
+        "objects".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::Float { value: limit - 2.0 },
+    );
+    project.graph_target_owner_mut(&target).unwrap().graph = Some(def);
+    let before = serde_json::to_value(&project).unwrap();
+    let refused = insert_water(&project, &layer, render).expect_err("no room for five objects");
+    assert!(refused.contains("no free slots"), "{refused}");
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+}

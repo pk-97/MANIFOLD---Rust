@@ -141,7 +141,7 @@
     ],
     "crates/manifold-editing/src/commands/graph/scene/fluid": [
       "scene-fluid-authoring",
-      "scene-fluid-template",
+      "scene-physics-template",
       "water-family-preset"
     ],
     "crates/manifold-core/src/scene_exposure.rs": [
@@ -447,7 +447,7 @@
     "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
-    "scene-fluid-template": "fluidauthoring",
+    "scene-physics-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-imported-physics": "gltfscene",
