@@ -18,6 +18,7 @@ pub mod registry;
 pub mod bundled_presets;
 pub mod catalog_gen;
 pub mod scene_modifier_qualify;
-pub mod starter_scenes;
+#[cfg(test)]
+mod starter_scenes;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;

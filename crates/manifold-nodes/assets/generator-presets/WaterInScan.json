@@ -4393,8 +4393,160 @@
       "typeId": "group"
     },
     {
+      "handle": "Scan Mesh",
+      "id": 476,
+      "nodeId": "scan_mesh",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 2900000
+        },
+        "path": {
+          "type": "String",
+          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
+        },
+        "recenter": {
+          "type": "Bool",
+          "value": true
+        }
+      },
+      "typeId": "node.gltf_mesh_source"
+    },
+    {
+      "handle": "Scan Base Color Map",
+      "id": 477,
+      "nodeId": "scan_base_color_map",
+      "params": {
+        "color_space": {
+          "type": "Enum",
+          "value": 0
+        },
+        "height": {
+          "type": "Int",
+          "value": 2048
+        },
+        "path": {
+          "type": "String",
+          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
+        },
+        "texture_index": {
+          "type": "Int",
+          "value": 1
+        },
+        "width": {
+          "type": "Int",
+          "value": 2048
+        }
+      },
+      "typeId": "node.gltf_texture_source"
+    },
+    {
+      "handle": "Scan Normal Map",
+      "id": 478,
+      "nodeId": "scan_normal_map",
+      "params": {
+        "color_space": {
+          "type": "Enum",
+          "value": 1
+        },
+        "height": {
+          "type": "Int",
+          "value": 2048
+        },
+        "path": {
+          "type": "String",
+          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
+        },
+        "texture_index": {
+          "type": "Int",
+          "value": 0
+        },
+        "width": {
+          "type": "Int",
+          "value": 2048
+        }
+      },
+      "typeId": "node.gltf_texture_source"
+    },
+    {
+      "handle": "Scan Mr Map",
+      "id": 479,
+      "nodeId": "scan_mr_map",
+      "params": {
+        "color_space": {
+          "type": "Enum",
+          "value": 1
+        },
+        "height": {
+          "type": "Int",
+          "value": 2048
+        },
+        "path": {
+          "type": "String",
+          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
+        },
+        "texture_index": {
+          "type": "Int",
+          "value": 2
+        },
+        "width": {
+          "type": "Int",
+          "value": 2048
+        }
+      },
+      "typeId": "node.gltf_texture_source"
+    },
+    {
+      "handle": "Scan Material",
+      "id": 480,
+      "nodeId": "scan_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.45
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Scan Object",
+      "id": 481,
+      "nodeId": "scan_object",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "typeId": "node.scene_object"
+    },
+    {
       "handle": "Scan Transform",
-      "id": 601,
+      "id": 482,
       "nodeId": "scan_transform",
       "params": {
         "pos_x": {
@@ -4430,13 +4582,9 @@
     },
     {
       "handle": "Scan Collider",
-      "id": 602,
+      "id": 483,
       "nodeId": "scan_collider",
       "params": {
-        "fit": {
-          "type": "Enum",
-          "value": 0
-        },
         "geometry": {
           "type": "Enum",
           "value": 1
@@ -4455,161 +4603,10 @@
         },
         "shell_thickness": {
           "type": "Float",
-          "value": 0.06
+          "value": 0.125
         }
       },
       "typeId": "node.fluid_role_source"
-    },
-    {
-      "handle": "Scan Mesh",
-      "id": 603,
-      "nodeId": "scan_mesh",
-      "params": {
-        "fit": {
-          "type": "Enum",
-          "value": 0
-        },
-        "max_capacity": {
-          "type": "Int",
-          "value": 2900000
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": true
-        }
-      },
-      "typeId": "node.gltf_mesh_source"
-    },
-    {
-      "handle": "Scan Base Colour",
-      "id": 604,
-      "nodeId": "scan_base_color_map",
-      "params": {
-        "color_space": {
-          "type": "Enum",
-          "value": 0
-        },
-        "height": {
-          "type": "Int",
-          "value": 2048
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "texture_index": {
-          "type": "Int",
-          "value": 1
-        },
-        "width": {
-          "type": "Int",
-          "value": 2048
-        }
-      },
-      "typeId": "node.gltf_texture_source"
-    },
-    {
-      "handle": "Scan Normal",
-      "id": 605,
-      "nodeId": "scan_normal_map",
-      "params": {
-        "color_space": {
-          "type": "Enum",
-          "value": 1
-        },
-        "height": {
-          "type": "Int",
-          "value": 2048
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "texture_index": {
-          "type": "Int",
-          "value": 0
-        },
-        "width": {
-          "type": "Int",
-          "value": 2048
-        }
-      },
-      "typeId": "node.gltf_texture_source"
-    },
-    {
-      "handle": "Scan Roughness",
-      "id": 606,
-      "nodeId": "scan_mr_map",
-      "params": {
-        "color_space": {
-          "type": "Enum",
-          "value": 1
-        },
-        "height": {
-          "type": "Int",
-          "value": 2048
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "texture_index": {
-          "type": "Int",
-          "value": 2
-        },
-        "width": {
-          "type": "Int",
-          "value": 2048
-        }
-      },
-      "typeId": "node.gltf_texture_source"
-    },
-    {
-      "handle": "Scan Material",
-      "id": 607,
-      "nodeId": "scan_material",
-      "params": {
-        "ambient": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "color_b": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "color_g": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "color_r": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "ior": {
-          "type": "Float",
-          "value": 1.45
-        },
-        "metallic": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "roughness": {
-          "type": "Float",
-          "value": 1.0
-        }
-      },
-      "typeId": "node.pbr_material"
-    },
-    {
-      "handle": "Scan",
-      "id": 608,
-      "nodeId": "scan_object",
-      "params": {},
-      "typeId": "node.scene_object"
     }
   ],
   "presetMetadata": {
@@ -5519,6 +5516,56 @@
           "nodeId": "sky_environment",
           "param": "path"
         }
+      },
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
+        "id": "scan_file",
+        "label": "Scan Model",
+        "target": {
+          "kind": "node",
+          "nodeId": "scan_mesh",
+          "param": "path"
+        }
+      },
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
+        "id": "scan_file",
+        "label": "Scan Model",
+        "target": {
+          "kind": "node",
+          "nodeId": "scan_base_color_map",
+          "param": "path"
+        }
+      },
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
+        "id": "scan_file",
+        "label": "Scan Model",
+        "target": {
+          "kind": "node",
+          "nodeId": "scan_normal_map",
+          "param": "path"
+        }
+      },
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
+        "id": "scan_file",
+        "label": "Scan Model",
+        "target": {
+          "kind": "node",
+          "nodeId": "scan_mr_map",
+          "param": "path"
+        }
+      },
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
+        "id": "scan_file",
+        "label": "Scan Model",
+        "target": {
+          "kind": "node",
+          "nodeId": "scan_collider",
+          "param": "path"
+        }
       }
     ],
     "stringParams": [
@@ -5528,6 +5575,14 @@
         "id": "hdri_file",
         "isFilePicker": true,
         "name": "HDRI File",
+        "useDropdown": false
+      },
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
+        "file_path": true,
+        "id": "scan_file",
+        "isFilePicker": true,
+        "name": "Scan Model",
         "useDropdown": false
       }
     ]
@@ -5721,55 +5776,55 @@
       "toPort": "object_6"
     },
     {
-      "fromNode": 601,
+      "fromNode": 482,
       "fromPort": "transform",
-      "toNode": 602,
+      "toNode": 483,
       "toPort": "transform"
     },
     {
-      "fromNode": 602,
+      "fromNode": 483,
       "fromPort": "role",
       "toNode": 475,
       "toPort": "role_0"
     },
     {
-      "fromNode": 603,
+      "fromNode": 476,
       "fromPort": "vertices",
-      "toNode": 608,
+      "toNode": 481,
       "toPort": "vertices"
     },
     {
-      "fromNode": 607,
+      "fromNode": 480,
       "fromPort": "out",
-      "toNode": 608,
+      "toNode": 481,
       "toPort": "material"
     },
     {
-      "fromNode": 601,
+      "fromNode": 482,
       "fromPort": "transform",
-      "toNode": 608,
+      "toNode": 481,
       "toPort": "transform"
     },
     {
-      "fromNode": 604,
+      "fromNode": 477,
       "fromPort": "out",
-      "toNode": 608,
+      "toNode": 481,
       "toPort": "base_color_map"
     },
     {
-      "fromNode": 605,
+      "fromNode": 478,
       "fromPort": "out",
-      "toNode": 608,
+      "toNode": 481,
       "toPort": "normal_map"
     },
     {
-      "fromNode": 606,
+      "fromNode": 479,
       "fromPort": "out",
-      "toNode": 608,
+      "toNode": 481,
       "toPort": "mr_map"
     },
     {
-      "fromNode": 608,
+      "fromNode": 481,
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"
