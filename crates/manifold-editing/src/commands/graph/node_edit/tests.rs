@@ -220,6 +220,7 @@ fn remove_graph_node_prunes_bound_card_slider_and_undo_restores() {
     // Diverged graph carrying a card slider bound to node 1 (uv_transform).
     let mut def = mirror_catalog_default();
     def.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: PresetTypeId::new("Mirror"),
         display_name: "Mirror".into(),
         category: String::new(),
@@ -364,6 +365,7 @@ fn remove_group_node_prunes_card_slider_bound_to_a_nested_node() {
     };
     def.nodes[1] = group_node;
     def.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: PresetTypeId::new("Mirror"),
         display_name: "Mirror".into(),
         category: String::new(),

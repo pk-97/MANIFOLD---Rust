@@ -444,6 +444,7 @@ mod ownership_tests {
     /// fan-out targets).
     fn azalea_like_fixture() -> EffectGraphDef {
         let meta = PresetMetadata {
+            shape: None,
             scene_modifier: None,
             id: PresetTypeId::new("gltf_import_fixture"),
             display_name: "glTF Import Fixture".to_string(),

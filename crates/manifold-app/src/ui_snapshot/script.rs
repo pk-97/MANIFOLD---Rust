@@ -549,6 +549,42 @@ struct Runner {
     /// absorbed watch commands set, and its snapshot cache.
     content_watched: Option<manifold_core::GraphTarget>,
     graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
+    /// The main preview's gizmo host, as the App's `ws.preview_gizmo`.
+    preview_gizmo: crate::physics_overlay::PreviewGizmo,
+    /// The content thread's gizmo report for the Scene panel's scene, one
+    /// entry per frame. No scene renders here, so each entry carries
+    /// [`stand_in_camera`] and no lights, domains or physics shapes.
+    physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
+    overlay_frame: u64,
+    /// The preview's handle grips this frame, the `gizmo` surface.
+    gizmo_grips: Vec<(String, Vec2)>,
+}
+
+/// The camera the runner's gizmo report says the scene rendered through:
+/// a front view of the origin a few units back, where the fixtures' scene
+/// objects sit.
+/// The render size the preview shows: the project's output, as the App's
+/// content pipeline renders it.
+fn preview_dims(project: &manifold_core::project::Project) -> (u32, u32) {
+    (project.settings.output_width.max(1) as u32, project.settings.output_height.max(1) as u32)
+}
+
+/// Where the show picture sits in the main window, fitted as the App's
+/// draw and input paths fit it (`ui_frame::video_fit_rect`).
+fn preview_fit(ui: &UIRoot, project: &manifold_core::project::Project) -> Option<Rect> {
+    let (w, h) = preview_dims(project);
+    crate::ui_frame::video_fit_rect(ui.layout.video_area(), (w as f32, h as f32))
+}
+
+fn stand_in_camera() -> manifold_node_engine::scene::camera::Camera {
+    manifold_node_engine::scene::camera::Camera::look_at(
+        [0.0, 1.5, 6.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        std::f32::consts::FRAC_PI_3,
+        0.05,
+        200.0,
+    )
 }
 
 /// The graph editor window as the App holds it (`graph_editor`,
@@ -650,6 +686,10 @@ impl Runner {
             editor_mapping: crate::mapping_popover::MappingPopover::new(),
             content_watched: None,
             graph_snapshot: None,
+            preview_gizmo: Default::default(),
+            physics_overlay: Default::default(),
+            overlay_frame: 0,
+            gizmo_grips: Vec::new(),
         }
     }
 
@@ -1234,8 +1274,21 @@ impl Runner {
         );
         data.content.active_graph_target = target;
         data.content.active_graph_snapshot = snapshot;
+        // The Scene panel's gizmo report, as the content thread records one
+        // per rendered frame (D7a), and the preview host's present-time read
+        // of it: no bridge here, so the newest entry is the one shown.
+        let gizmo_layer = ui.scene_setup_panel.gizmo_layer().cloned();
+        self.physics_overlay.set_layer(gizmo_layer.clone());
+        if gizmo_layer.is_some() {
+            self.overlay_frame += 1;
+            self.physics_overlay.record(0, self.overlay_frame, |_, _, _, _| Some(stand_in_camera()));
+        }
+        data.content.physics_overlay_frames = self.physics_overlay.frames.clone();
         let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
         self.work.excluded = self.work.excluded.plus(&content_work);
+        self.preview_gizmo.show(data.content.physics_overlay_frames[0].as_ref(), preview_dims(&data.project));
+        let _ = self.preview_gizmo.compose(&data.project, &ui.scene_setup_panel, &self.edits.stamps.parts());
+        self.gizmo_grips = preview_fit(ui, &data.project).map_or_else(Vec::new, |fit| self.preview_gizmo.grips(fit));
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
@@ -1253,20 +1306,23 @@ impl Runner {
         crate::ui_bridge::intake_overlay_state(ui, &data.content);
         crate::ui_bridge::check_auto_scroll(ui, &data.content);
         let automation_draw_mode = data.selection.automation_draw_mode;
-        let inputs = crate::ui_frame::gather_frame_inputs(
-            &mut self.planner,
-            ui,
-            &mut data.selection,
-            &self.active_layer,
-            &self.edits,
-            &data.content,
-            crate::frame_plan::ChromeSource {
-                project: &data.project,
-                is_dirty: false,
-                project_path: None,
-                automation_draw_mode,
-            },
-        );
+        let inputs = crate::frame_plan::FrameInputs {
+            gizmo_view: self.preview_gizmo.version(),
+            ..crate::ui_frame::gather_frame_inputs(
+                &mut self.planner,
+                ui,
+                &mut data.selection,
+                &self.active_layer,
+                &self.edits,
+                &data.content,
+                crate::frame_plan::ChromeSource {
+                    project: &data.project,
+                    is_dirty: false,
+                    project_path: None,
+                    automation_draw_mode,
+                },
+            )
+        };
         let mut plan = self.planner.plan(inputs);
         let fresh = std::mem::take(&mut self.fresh_reference);
         if fresh {
@@ -1811,22 +1867,53 @@ impl Runner {
 
     /// A left press through the text gate, then the tree, as the App routes it.
     fn press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
-        if !self.text_press(ui, data, pos, self.modifiers.shift) {
+        if !self.text_press(ui, data, pos, self.modifiers.shift) && !self.preview_gizmo(ui, data, |host, ctx, fit| host.press(ctx, fit, pos)) {
             ui.pointer_event(pos, PointerAction::Down, self.clock);
         }
     }
 
-    /// A left release: it ends a text drag, then reaches the tree.
-    fn release(&mut self, ui: &mut UIRoot, pos: Vec2) {
+    /// A left release: it ends a text drag, then a preview gizmo drag
+    /// (`window_input`'s release order), else reaches the tree.
+    fn release(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         crate::text_session::pointer_up(&mut self.text_input);
-        ui.pointer_event(pos, PointerAction::Up, self.clock);
+        if !self.preview_gizmo(ui, data, |host, ctx, _| host.release(ctx)) {
+            ui.pointer_event(pos, PointerAction::Up, self.clock);
+        }
     }
 
-    /// Pointer motion: an armed text drag takes it, else the tree.
-    fn move_to(&mut self, ui: &mut UIRoot, pos: Vec2) {
-        if !crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos) {
+    /// Pointer motion: an armed text drag takes it, then a preview gizmo
+    /// drag, else the tree.
+    fn move_to(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
+        if !crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos)
+            && !self.preview_gizmo(ui, data, |host, ctx, fit| host.drag_to(ctx, fit, pos))
+        {
             ui.pointer_event(pos, PointerAction::Move, self.clock);
         }
+    }
+
+    /// Run `f` with the main preview's gizmo host, a dispatch context and
+    /// the picture's fit, as `window_input`'s preview handlers do. A press
+    /// over an open overlay never reaches the preview.
+    fn preview_gizmo(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        f: impl FnOnce(&mut crate::physics_overlay::PreviewGizmo, &mut crate::ui_bridge::DispatchCtx, Option<Rect>) -> bool,
+    ) -> bool {
+        let fit = preview_fit(ui, &data.project);
+        let mut dctx = crate::ui_bridge::DispatchCtx {
+            project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
+            content_tx: &self.content_tx,
+            content_state: &self.content_state,
+            ui: &mut *ui,
+            selection: &mut data.selection,
+            active_layer: &mut self.active_layer,
+            user_prefs: &mut self.user_prefs,
+            editor_target: None,
+            scrub: &mut self.scrub,
+            dialogs: Default::default(),
+        };
+        f(&mut self.preview_gizmo, &mut dctx, fit)
     }
 
     /// What a frame shows that the tree dump cannot see: the inputs of the
@@ -2117,12 +2204,6 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
-                ContentCommand::FluidDomainEdit(drag) => {
-                    match crate::fluid_domain_edit::build_action(&data.project, *drag) {
-                        Ok(command) => ContentCommand::ExecuteOnContent(command),
-                        Err(message) => ContentCommand::GraphEditRejected(message),
-                    }
-                }
                 ContentCommand::ObjectModifier(action) => {
                     match crate::object_modifier_transfer::build_action(&data.project, action) {
                         Ok(command) => ContentCommand::ExecuteOnContent(command),
@@ -2234,9 +2315,14 @@ impl Runner {
         let automation_targets = AutomationHitTargets(&automation_lanes);
         // The perform screen's exit button is a surface only while it shows.
         let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        // The preview gizmo's handles are a surface while Show gizmos draws them.
+        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo_grips);
         let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
         if self.perform.active {
             surfaces.push(&perform_targets);
+        }
+        if !self.gizmo_grips.is_empty() {
+            surfaces.push(&gizmo_targets);
         }
         automation::resolve(&ui.tree, &surfaces, target)
             .map(|r| r.rect)
@@ -2253,9 +2339,14 @@ impl Runner {
         let automation_targets = AutomationHitTargets(&automation_lanes);
         // The perform screen's exit button is a surface only while it shows.
         let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        // The preview gizmo's handles are a surface while Show gizmos draws them.
+        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo_grips);
         let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
         if self.perform.active {
             surfaces.push(&perform_targets);
+        }
+        if !self.gizmo_grips.is_empty() {
+            surfaces.push(&gizmo_targets);
         }
         // The focused window answers first; a selector nothing there matches
         // is looked up in the other open window, so a flow can assert on
@@ -2307,7 +2398,7 @@ impl Runner {
             }
             Gesture::Release => {
                 self.last_gesture_points.push(center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Click { modifiers } => {
@@ -2315,16 +2406,16 @@ impl Runner {
                 ui.input.set_modifiers(*modifiers);
                 self.last_gesture_points.push(center);
                 self.press(ui, data, center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DoubleClick => {
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
                 self.press(ui, data, center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.press(ui, data, center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::RightClick => {
@@ -2334,7 +2425,7 @@ impl Runner {
             }
             Gesture::Hover => {
                 self.last_gesture_points.push(center);
-                self.move_to(ui, center);
+                self.move_to(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Scroll { delta } => {
@@ -2351,10 +2442,10 @@ impl Runner {
                 self.press(ui, data, center);
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.last_gesture_points.push(pt);
-                    self.move_to(ui, pt);
+                    self.move_to(ui, data, pt);
                 }
                 self.last_gesture_points.push(to_center);
-                self.release(ui, to_center);
+                self.release(ui, data, to_center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
@@ -2369,7 +2460,7 @@ impl Runner {
                 if pressed {
                     self.press(ui, data, center);
                 } else {
-                    self.move_to(ui, center);
+                    self.move_to(ui, data, center);
                     self.overlay_hover(ui, data, center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -2377,7 +2468,7 @@ impl Runner {
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.clock += DT;
                     self.last_gesture_points.push(pt);
-                    self.move_to(ui, pt);
+                    self.move_to(ui, data, pt);
                     self.overlay_hover(ui, data, pt);
                     self.drain_and_dispatch(ui, data);
                     self.live_frame(ui, data, render, false, true);
@@ -2385,9 +2476,9 @@ impl Runner {
                 self.clock += DT;
                 self.last_gesture_points.push(to_center);
                 if pressed {
-                    self.release(ui, to_center);
+                    self.release(ui, data, to_center);
                 } else {
-                    self.move_to(ui, to_center);
+                    self.move_to(ui, data, to_center);
                     self.overlay_hover(ui, data, to_center);
                 }
                 self.drain_and_dispatch(ui, data);

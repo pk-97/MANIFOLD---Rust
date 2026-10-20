@@ -30,6 +30,18 @@ pub(crate) fn fmt_table_cell_seed(v: f32) -> String {
 }
 
 impl Application {
+    /// The size of the render the main preview shows. The draw path and
+    /// the preview's input path both fit the picture from it.
+    pub(crate) fn video_source_dims(&self) -> (f32, f32) {
+        self.content_pipeline_output
+            .as_ref()
+            .map(|p| {
+                let (w, h) = p.get_dimensions();
+                (w as f32, h as f32)
+            })
+            .unwrap_or((1920.0, 1080.0))
+    }
+
     pub(crate) fn present_all_windows(&mut self, front_index: usize) {
         let Some(gpu) = &self.gpu else { return };
 
@@ -172,15 +184,10 @@ impl Application {
         let compositor_tex = self.ui_preview_textures[preview_slot].as_ref();
         #[cfg(not(target_os = "macos"))]
         let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
-        let video_source_dims = self
-            .content_pipeline_output
-            .as_ref()
-            .map(|p| {
-                let (w, h) = p.get_dimensions();
-                (w as f32, h as f32)
-            })
-            .unwrap_or((1920.0, 1080.0));
+        let video_source_dims = self.video_source_dims();
         // The Scene panel's gizmos, only for the exact frame being shown.
+        // The preview host remembers it, so input picks against what the eye
+        // sees.
         #[cfg(target_os = "macos")]
         let gizmo_frame = preview_lease
             .zip(self.preview_texture_bridge.as_ref())
@@ -192,11 +199,12 @@ impl Application {
             });
         #[cfg(not(target_os = "macos"))]
         let gizmo_frame: Option<&crate::physics_overlay::PhysicsOverlayFrame> = None;
-        let gizmos = gizmo_frame.map(|frame| crate::ui_frame::MainGizmos {
-            frame,
-            grid: &self.ws.viewport_grid_lines,
-            output: (video_source_dims.0 as u32, video_source_dims.1 as u32),
-        });
+        self.ws.preview_gizmo.show(gizmo_frame, (video_source_dims.0 as u32, video_source_dims.1 as u32));
+        let gizmos = self
+            .ws
+            .preview_gizmo
+            .compose(&self.local_project, &self.ws.ui_root.scene_setup_panel, &self.ui_edits.stamps.parts())
+            .map(|(lines, view)| crate::ui_frame::MainGizmos { lines, view });
         if let (
             Some(cm),
             Some(ui),

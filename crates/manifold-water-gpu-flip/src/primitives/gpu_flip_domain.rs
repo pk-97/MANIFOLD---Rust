@@ -27,6 +27,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_water_liquid::fluid_role::FluidRole;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
@@ -217,9 +218,11 @@ const OUTPUTS: [&str; 57] = [
     "initial_obstacle_speed", "mesh_wall_inset", "max_iterations", "display_cursor", "sheet_fill_rate",
     "handover_position", "handover_velocity", "handover_rotation"];
 const TICKS: usize = 19;
+const EPOCH: usize = 20;
 const IMPULSE_TICK: usize = 33;
 const INITIAL_OBSTACLE_SPEED: usize = 49;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
+const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 const _: () = assert!(matches!(OUTPUTS[INITIAL_OBSTACLE_SPEED].as_bytes(), b"initial_obstacle_speed"));
 
@@ -439,6 +442,8 @@ manifold_node_engine::primitive! {
         clock: LiquidClock = LiquidClock::default(),
         scheduled_frame: Option<manifold_physics::clock::ClockFrame> = None,
         setup: Option<GpuFlipSetup> = None,
+        // The domain box of the accepted setup.
+        layout: Option<FluidDomainLayout> = None,
         published: Option<[f32; OUTPUTS.len()]> = None,
         bodies: LiquidBodies = LiquidBodies::with_regions(),
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
@@ -652,6 +657,28 @@ impl Primitive for GpuFlipDomain {
 }
 
 impl PhysicsNode for GpuFlipDomain {
+    fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
+        let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
+        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch))
+    }
+
+    /// The pool under the fill height and the initial column as the fill
+    /// seeds them (whole half-cell sites), then bodies, regions and forces.
+    fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
+        let (Some(layout), Some(setup)) = (self.layout, self.setup) else { return };
+        let site = (layout.cell_size * 0.5) as f32;
+        let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
+        if setup.pool_sites > 0 {
+            let top = layout.min[1] + setup.pool_sites as f32 * site;
+            out.push(PhysicsGizmo::aabb(PhysicsGizmoFamily::Fill, layout.min, [max[0], top, max[2]]));
+        }
+        if setup.box_sites.iter().all(|[lo, hi]| hi > lo) {
+            let corner = |end: usize| std::array::from_fn(|i| layout.min[i] + setup.box_sites[i][end] as f32 * site);
+            out.push(PhysicsGizmo::aabb(PhysicsGizmoFamily::Fill, corner(0), corner(1)));
+        }
+        manifold_water_liquid::gizmos::write_liquid_gizmos(&layout, &self.bodies, self.acceleration.as_ref(), out);
+    }
+
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
@@ -700,6 +727,18 @@ impl PhysicsNode for GpuFlipDomain {
         self.impulses.epoch()
     }
 
+    /// A pending liquid (roles or field still preparing, clock not started)
+    /// makes a hit wait; a failed one refuses it.
+    fn physics_impulse_readiness(&self) -> Result<bool, String> {
+        if let Some(error) = self.impulses.failure() {
+            return Err(error.into());
+        }
+        if self.coupled.failed {
+            return Err("GPU FLIP impulses: the liquid failed; this hit is refused".into());
+        }
+        Ok(!self.holding && self.impulses.epoch().is_some())
+    }
+
     /// A hit fired this frame is stamped at the liquid's simulated time, so
     /// it lands on the first tick of the next frame.
     fn physics_impulse_stamp(
@@ -708,8 +747,8 @@ impl PhysicsNode for GpuFlipDomain {
         sequence: u64,
         step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
-        if self.holding {
-            return Err("GPU FLIP impulses: cannot capture an impulse while the liquid is pending or failed".into());
+        if !self.physics_impulse_readiness()? {
+            return Err("GPU FLIP impulses: the liquid is still preparing; fire waits for it".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
         stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
@@ -731,8 +770,8 @@ impl PhysicsNode for GpuFlipDomain {
         self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
     }
 
-    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
-        self.impulses.drain_discarded(consume);
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) -> u64 {
+        self.impulses.drain_discarded(consume, self.coupled.owner.as_mut())
     }
 }
 
@@ -805,6 +844,7 @@ impl GpuFlipDomain {
             }
         }
         self.setup = Some(geometry.setup);
+        self.layout = Some(geometry.layout);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
             ctx.sim_step.interval.0,
@@ -1080,6 +1120,22 @@ mod tests {
         assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", -1.0)], "another tick's bound");
     }
 
+    /// A pending liquid makes a hit wait for it; only a failed one refuses
+    /// (BUG-mo4oa (scene force trigger skipped)).
+    #[test]
+    fn gpu_flip_pending_liquid_makes_hits_wait() {
+        use manifold_physics::clock::{SimulationClock, TICK};
+        let mut domain = GpuFlipDomain::new();
+        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
+        let frame = SimulationClock::default().advance(0.0, TICK, 1.0, 0.0, false, false);
+        domain.impulses.observe_frame(0.0, &frame).unwrap();
+        assert_eq!(domain.physics_impulse_readiness(), Ok(true));
+        domain.holding = true;
+        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role or the field is still preparing");
+        domain.coupled.failed = true;
+        assert!(domain.physics_impulse_readiness().unwrap_err().contains("refused"));
+    }
+
     #[test]
     fn gpu_flip_domain_fields_cover_the_native_solver_faces() {
         let geometry = geometry(64.0, 0.16, None).unwrap();
@@ -1135,6 +1191,39 @@ mod tests {
         assert_eq!(at64.setup.lattice.nodes(), [71; 3]);
         let mass = at64.outputs().iter().find(|(name, _)| *name == "particle_mass").expect("mass").1;
         assert!((mass - 0.030_517_578).abs() < 1e-9, "{mass}");
+    }
+
+    /// The Dam Break's fill gizmos are the sites the fill seeds: the pool
+    /// up to its five site layers and the column within a site of the
+    /// authored box. The accepted domain reports Ready with its layout.
+    #[test]
+    fn gpu_flip_dam_break_fill_gizmos_are_the_seeded_sites() {
+        use manifold_core::physics_gizmo::PhysicsGizmoShape;
+        let column = Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() };
+        let at64 = geometry(64.0, 0.16, Some(column)).expect("64 fills");
+        let mut domain = GpuFlipDomain::new();
+        let mut out = Vec::new();
+        domain.write_physics_gizmos(&mut out);
+        assert!(out.is_empty(), "nothing before a setup is accepted");
+        assert!(domain.fluid_domain_snapshot().unwrap().accepted_layout.is_none());
+        (domain.setup, domain.layout) = (Some(at64.setup), Some(at64.layout));
+        let snapshot = domain.fluid_domain_snapshot().unwrap();
+        assert_eq!((snapshot.state, snapshot.accepted_layout), (manifold_core::fluid_domain::FluidDomainState::Ready, Some(at64.layout)));
+        domain.write_physics_gizmos(&mut out);
+        assert!(out.iter().all(|gizmo| gizmo.family == PhysicsGizmoFamily::Fill));
+        let boxes: Vec<_> = out.iter().map(|gizmo| match gizmo.shape {
+            PhysicsGizmoShape::Box { center, half, .. } => (center, half),
+            other => panic!("{other:?}"),
+        }).collect();
+        let layout = at64.layout;
+        let site = (layout.cell_size * 0.5) as f32;
+        let pool_top = boxes[0].0[1] + boxes[0].1[1];
+        assert!((pool_top - (layout.min[1] + 5.0 * site)).abs() < 1e-6 && (boxes[0].1[0] - layout.size[0] * 0.5).abs() < 1e-6);
+        for axis in 0..3 {
+            assert!((boxes[1].0[axis] - column.pos[axis]).abs() <= site, "axis {axis}: {:?}", boxes[1]);
+            assert!((2.0 * boxes[1].1[axis] - column.scale[axis]).abs() <= 2.0 * site, "axis {axis}: {:?}", boxes[1]);
+        }
+        assert_eq!(boxes.len(), 2, "no bodies or forces in a bare domain");
     }
 
     #[test]

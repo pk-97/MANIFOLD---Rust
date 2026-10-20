@@ -88,6 +88,7 @@ mod tests {
             name: Some("My Oily Fluid".to_string()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 scene_modifier: None,
                 id: PresetTypeId::new("project.OilyFluid.variant1"),
                 display_name: "My Oily Fluid".to_string(),

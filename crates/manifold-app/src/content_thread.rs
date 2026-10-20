@@ -1372,6 +1372,15 @@ impl ContentThread {
             .tapped_send_index()
             .and_then(|i| audio_snapshot.sends.get(i).copied());
 
+        let scene_impulses = {
+            let (renderers, _) = self.engine.split_renderer_project();
+            renderers
+                .iter()
+                .find_map(|r| r.as_any().downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>())
+                .map(|renderer| renderer.scene_impulse_diagnostics().clone())
+                .unwrap_or_default()
+        };
+
         let state = ContentState {
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
@@ -1524,6 +1533,7 @@ impl ContentThread {
             undo_redo_event: self.pending_undo_redo_event.take(),
             graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),
             trigger_delivery_failure: self.engine.trigger_delivery_failure(),
+            scene_impulses,
             edit_selection_update: self.edit_selection_update.clone(),
             modifier_selection_update: self.modifier_selection_update.clone(),
             object_modifier_selection_update: self.object_modifier_selection_update.clone(),

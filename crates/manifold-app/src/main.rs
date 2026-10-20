@@ -80,7 +80,7 @@ pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
-mod fluid_domain_edit;
+mod scene_gizmo;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_item_transfer;
@@ -172,8 +172,6 @@ mod live_ui;
 mod viewport_input;
 mod scene_viewport;
 mod physics_overlay;
-// P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
-mod viewport_p5c_demo;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;

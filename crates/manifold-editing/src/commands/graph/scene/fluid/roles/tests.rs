@@ -216,6 +216,7 @@ fn imported_compound_graph(two_fluids_in_boundary: bool) -> EffectGraphDef {
         wires,
     };
     def.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: manifold_core::PresetTypeId::from_string("Imported".into()),
         display_name: "Imported".into(),
         category: "Geometry".into(),

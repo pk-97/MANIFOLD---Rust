@@ -1558,6 +1558,7 @@ pub(crate) mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("ColorGrade"),
                 display_name: String::new(),
                 category: String::new(),

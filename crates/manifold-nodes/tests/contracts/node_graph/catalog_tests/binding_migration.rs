@@ -12,6 +12,7 @@ use manifold_core::project::Project;
     /// `userParamBindings` but no per-instance graph.
     fn stub_with_user_binding(node_handle: &str, inner: &str, id: &str) -> EffectGraphDef {
         let meta = PresetMetadata {
+            shape: None,
             id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),

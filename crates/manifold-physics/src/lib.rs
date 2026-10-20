@@ -18,7 +18,7 @@ pub mod particle_duration;
 pub mod coupled_motion;
 mod field_value;
 use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
-pub use field_value::FieldValue;
+pub use field_value::{FieldLeaf, FieldValue};
 pub use interaction::{
     FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
     VectorField, VortexField,

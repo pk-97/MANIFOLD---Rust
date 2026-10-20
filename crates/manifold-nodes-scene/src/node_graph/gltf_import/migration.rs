@@ -435,6 +435,7 @@ mod tests {
     }
     fn minimal_preset_metadata() -> manifold_core::effect_graph_def::PresetMetadata {
         manifold_core::effect_graph_def::PresetMetadata {
+            shape: None,
             id: manifold_core::PresetTypeId::new("test.migration_fixture"),
             display_name: "Migration Fixture".to_string(),
             category: "Spatial".to_string(),

@@ -287,6 +287,7 @@ mod tests {
             wires: Vec::new(),
         };
         def.preset_metadata = Some(crate::effect_graph_def::PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string("OilyFluid#layer2".to_string()),
             display_name: "Oily Fluid (Layer 2 variant)".to_string(),
             category: String::new(),

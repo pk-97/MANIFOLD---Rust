@@ -45,7 +45,9 @@ manifold_core::testkit_visible! {
 pub const LIQUID_FIELD: &str = include_str!("primitives/shaders/liquid_field.wgsl");
 }
 
-/// Impulses held at once: queued, discarded and undrained receipts together.
+/// Hits in flight at once: queued, this frame's and undrained applied
+/// receipts. Discard receipts hold no slot. A hit past it is refused on its
+/// own; the next one is tried again.
 pub const IMPULSE_CAPACITY: usize = 256;
 /// Solver cells per field cell along each axis (D13).
 pub const FIELD_STRIDE: u32 = 4;
@@ -226,11 +228,26 @@ pub struct LiquidImpulses {
     /// Receipts of committed frames, undrained.
     applied: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     impulse_tick: Option<u64>,
+    /// Discard receipts, undrained, at most `IMPULSE_CAPACITY`; sized when
+    /// the clock starts so a held fire never allocates.
     discarded: Vec<EventStamp>,
+    /// Discards past that bound, counted without a stamp.
+    discarded_beyond: u64,
     /// Sequences sent to both queues: the liquid receipt names them, so the
     /// rigid receipt is dropped.
     combined: Vec<u64>,
+    /// The clock broke (a tick out of order): every hit is refused until a
+    /// restart. A full history is never this; it refuses one hit at a time.
     failure: Option<String>,
+}
+
+/// Keep one discard receipt within the bound, else count it without a stamp.
+fn record_discard(discarded: &mut Vec<EventStamp>, beyond: &mut u64, stamp: EventStamp) {
+    if discarded.len() < IMPULSE_CAPACITY {
+        discarded.push(stamp);
+    } else {
+        *beyond += 1;
+    }
 }
 
 impl LiquidImpulses {
@@ -250,11 +267,13 @@ impl LiquidImpulses {
                         EventQueue::new(self.epoch, Seconds::ZERO, Seconds(TICK), IMPULSE_CAPACITY)
                             .map_err(|error| format!("Liquid impulses: {error}"))?,
                     );
+                    self.discarded.reserve_exact(IMPULSE_CAPACITY);
                 }
             }
             self.pending.clear();
             self.applied.clear();
             self.discarded.clear();
+            self.discarded_beyond = 0;
             self.combined.clear();
             self.last_sequence = None;
             self.failure = None;
@@ -303,7 +322,10 @@ impl LiquidImpulses {
 
     /// This frame's ticks will not run: its hits are discarded, with a receipt.
     pub fn abandon_frame(&mut self) {
-        self.discarded.extend(self.pending.drain(..).map(|event| event.source));
+        let Self { pending, discarded, discarded_beyond, .. } = self;
+        for event in pending.drain(..) {
+            record_discard(discarded, discarded_beyond, event.source);
+        }
     }
 
     /// The epoch stamps must carry, once the clock has started.
@@ -332,9 +354,14 @@ impl LiquidImpulses {
         })
     }
 
+    /// Whether hits are refused because the clock broke; cleared by a restart.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
     /// Admit one resolved hit. Rigid targets need the coupled rigid owner. A
     /// held clock discards the hit (a receipt in `drain_discarded`) and still
-    /// succeeds, so the producer rearms.
+    /// succeeds, so the producer rearms. A full history refuses this hit only.
     pub fn enqueue(
         &mut self,
         stamp: EventStamp,
@@ -358,18 +385,17 @@ impl LiquidImpulses {
             (Some(_), None) => return Err("Liquid impulses: rigid targets need a coupled rigid world".into()),
             (None, _) => None,
         };
-        let outstanding =
-            queue.len() + self.pending.len() + self.applied.len() + self.discarded.len() + self.combined.len();
-        if outstanding >= IMPULSE_CAPACITY {
-            let error = "Liquid impulses: impulse history is full; restart the simulation or bake the scene";
-            self.failure = Some(error.into());
-            return Err(error.into());
-        }
         let next = queue.next_tick();
         if self.held {
             self.last_sequence = Some(stamp.sequence);
-            self.discarded.push(stamp);
+            record_discard(&mut self.discarded, &mut self.discarded_beyond, stamp);
             return Ok(next);
+        }
+        let outstanding = queue.len() + self.pending.len() + self.applied.len() + self.combined.len();
+        if outstanding >= IMPULSE_CAPACITY {
+            return Err(format!(
+                "Liquid impulses: {IMPULSE_CAPACITY} hits are already in flight; this hit is refused"
+            ));
         }
         let mut planned = None;
         if let Some((targets, owner)) = rigid {
@@ -390,11 +416,7 @@ impl LiquidImpulses {
             .as_mut()
             .expect("checked above")
             .enqueue(stamp, impulse)
-            .map_err(|error| {
-                let error = format!("Liquid impulses: {error}");
-                self.failure = Some(error.clone());
-                error
-            })
+            .map_err(|error| format!("Liquid impulses: {error}"))
     }
 
     /// Receipts of committed frames: the liquid's, then the rigid owner's that
@@ -419,12 +441,29 @@ impl LiquidImpulses {
         }
     }
 
-    /// Stamps of hits discarded while the clock was held or by a failed frame.
-    pub fn drain_discarded(&mut self, consume: &mut dyn FnMut(EventStamp)) {
+    /// Stamps of hits discarded while the clock was held or by a failed frame,
+    /// then the rigid owner's. A hit both halves discarded reads once.
+    /// Returns the count of further discards past either bounded receipt
+    /// list: discarded hits with no stamp.
+    pub fn drain_discarded(&mut self, consume: &mut dyn FnMut(EventStamp), rigid: Option<&mut LiquidRigidOwner>) -> u64 {
         self.abandon_frame();
-        for stamp in self.discarded.drain(..) {
-            consume(stamp);
+        let Self { discarded, discarded_beyond, combined, .. } = self;
+        let beyond = std::mem::take(discarded_beyond);
+        let Some(owner) = rigid else {
+            discarded.drain(..).for_each(&mut *consume);
+            return beyond;
+        };
+        let rigid = owner.rigid_mut();
+        for stamp in rigid.drain_discarded_impulses() {
+            if let Some(index) = combined.iter().position(|&sequence| sequence == stamp.sequence) {
+                combined.swap_remove(index);
+            }
+            if !discarded.iter().any(|liquid| liquid.sequence == stamp.sequence) {
+                consume(stamp);
+            }
         }
+        discarded.drain(..).for_each(&mut *consume);
+        beyond + rigid.take_discarded_beyond()
     }
 
     /// The tick this frame's hits land on, if any.

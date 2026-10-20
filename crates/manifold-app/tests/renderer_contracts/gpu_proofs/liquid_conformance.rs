@@ -1536,7 +1536,7 @@ impl LiquidRun {
             frame_count: i64::from(self.frame),
         };
         let fired = self.runtime.water().fire_scene_impulse(param, source, sequence);
-        assert_eq!(fired, Ok(true), "{}: the impulse was not accepted", self.domain_type);
+        assert_eq!(fired, Ok(manifold_core::scene_impulse::ImpulseFire::Admitted), "{}: the impulse was not accepted", self.domain_type);
     }
 
     fn applied_receipts(&mut self) -> usize {

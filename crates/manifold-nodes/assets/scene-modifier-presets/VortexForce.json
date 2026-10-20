@@ -221,6 +221,7 @@
         }
       }
     ],
+    "shape": {"kind": "axis", "origin": ["center_x", "center_y", "center_z"], "direction": ["axis_x", "axis_y", "axis_z"], "radius": "radius"},
     "sceneModifier": {
       "schemaVersion": 1,
       "singleton": false,

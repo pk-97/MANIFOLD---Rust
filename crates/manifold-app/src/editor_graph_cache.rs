@@ -1,8 +1,9 @@
-//! The graph editor's MODIFIED badge and scene viewport def, keyed on their
-//! inputs (docs/UI_INVALIDATION_DESIGN.md section 4): the watched target, the
+//! The graph editor's MODIFIED badge and a gizmo host's scene, keyed on their
+//! inputs (docs/UI_INVALIDATION_DESIGN.md section 4): the target, the
 //! catalog default the badge compares against, the preset catalog generation,
-//! and the project parts that can change the watched graph. Both used to be
-//! recomputed every frame the editor was open.
+//! and the project parts that can change the graph. Each gizmo host (the
+//! editor viewport, the main preview) holds one; nothing here is rebuilt on a
+//! frame whose inputs did not move.
 
 use std::sync::Arc;
 
@@ -10,6 +11,7 @@ use manifold_core::GraphTarget;
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
+use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
 
 /// Parts whose writes can change the watched graph or which graph resolves.
 /// Graph edits declare Overrides; Values is left out so a slider drag does not
@@ -26,12 +28,13 @@ pub(crate) struct EditorGraphCache {
 /// (watched target, catalog default version, catalog generation, parts key)
 type GraphKey = (Option<GraphTarget>, u64, u64, u64);
 
-/// The viewport's graph: whether the watched graph resolves, and its authored
-/// projection (`None` when the projection fails).
+/// The viewport's graph: whether the target's graph resolves, and the scene
+/// its authored projection shows (`None` when the projection fails or the
+/// graph holds no scene).
 #[derive(Clone, Default)]
 pub(crate) struct ViewportDef {
     pub(crate) resolved: bool,
-    pub(crate) authored: Option<Arc<EffectGraphDef>>,
+    pub(crate) scene: Option<Arc<SceneVm>>,
 }
 
 impl EditorGraphCache {
@@ -88,8 +91,8 @@ impl EditorGraphCache {
         has_mod
     }
 
-    /// The scene viewport's graph. It also reads the owner's base values, so
-    /// it keys on Values too.
+    /// The scene a gizmo host shows. It also reads the owner's base values,
+    /// so it keys on Values too.
     pub(crate) fn viewport_def(
         &mut self,
         project: &Project,
@@ -104,7 +107,7 @@ impl EditorGraphCache {
         }
         let def = target.map_or_else(ViewportDef::default, |target| ViewportDef {
             resolved: crate::graph_target::resolve(project, target).is_some(),
-            authored: crate::fluid_domain_edit::authored_def(project, target).map(Arc::new),
+            scene: crate::scene_gizmo::authored_def(project, target).as_ref().and_then(SceneVm::from_def).map(Arc::new),
         });
         self.viewport = Some((key, def.clone()));
         def
@@ -161,23 +164,24 @@ mod tests {
     }
 
     #[test]
-    fn viewport_def_reuses_until_its_inputs_move() {
-        let (project, target) = project_with_override();
+    fn viewport_scene_reuses_until_its_inputs_move() {
+        let project = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
+        let target = GraphTarget::Generator(manifold_core::LayerId::new("scene"));
         let mut parts = PartStamps::default();
         let mut cache = EditorGraphCache::default();
         let first = cache.viewport_def(&project, Some(&target), &parts);
         assert!(first.resolved);
-        let first = first.authored.expect("an effect projects as authored");
+        let first = first.scene.expect("a scene layer projects its scene");
 
         bump(&mut parts, Part::Clips);
-        let same = cache.viewport_def(&project, Some(&target), &parts).authored.unwrap();
-        assert!(Arc::ptr_eq(&first, &same), "an unrelated part reuses the def");
+        let same = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
+        assert!(Arc::ptr_eq(&first, &same), "an unrelated part reuses the scene");
 
         bump(&mut parts, Part::Values);
-        let fresh = cache.viewport_def(&project, Some(&target), &parts).authored.unwrap();
+        let fresh = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
         assert!(!Arc::ptr_eq(&first, &fresh), "base values feed the authored projection");
 
         let none = cache.viewport_def(&project, None, &parts);
-        assert!(!none.resolved && none.authored.is_none());
+        assert!(!none.resolved && none.scene.is_none());
     }
 }
