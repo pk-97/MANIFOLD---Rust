@@ -71,7 +71,6 @@
           "cardLabel": "param"
         },
         "name": "Radius",
-        "unit": "metres",
         "min": 0.01,
         "max": 100.0,
         "defaultValue": 1.0

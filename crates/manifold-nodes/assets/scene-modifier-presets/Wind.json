@@ -293,6 +293,10 @@
               "z": {
                 "type": "Float",
                 "value": 0.0
+              },
+              "normalize": {
+                "type": "Bool",
+                "value": true
               }
             }
           },

@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use manifold_physics::{FalloffCurve, FieldValue, PhysicsError};
+use manifold_physics::{FalloffCurve, FieldValue, PhysicsError, TurbulenceField};
 
 /// The radial and vortex fields' Falloff Curve choices, by index.
 const FALLOFF_CURVES: &[&str] = &["Edge", "Inverse"];
@@ -67,9 +67,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("x"), label: "X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("y"), label: "Y", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("z"), label: "Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("normalize"), label: "Normalize", ty: ParamType::Bool, default: ParamValue::Bool(false), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use as a constant world-space source. Wire x, y, or z to scalar controls when the vector should change over time; unwired components use their parameters.",
+    composition_notes: "Use as a constant world-space source. Wire x, y, or z to scalar controls when the vector should change over time; unwired components use their parameters. Normalize keeps only the direction (length 1, zero stays zero), so a scale after it sets the strength exactly: a wind's speed in m/s whatever direction is dialled.",
     examples: [],
     picker: { label: "Uniform Vector Field", category: Atom },
     summary: "Outputs the same vector at every world-space sample.",
@@ -82,11 +83,15 @@ manifold_node_engine::primitive! {
 
 impl Primitive for UniformVectorField {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let vector = [
+        let mut vector = [
             ctx.scalar_or_param("x", 0.0),
             ctx.scalar_or_param("y", 1.0),
             ctx.scalar_or_param("z", 0.0),
         ];
+        let length = vector.iter().map(|c| c * c).sum::<f32>().sqrt();
+        if matches!(ctx.params.get("normalize"), Some(ParamValue::Bool(true))) && length > 0.0 {
+            vector = vector.map(|c| c / length);
+        }
         write_result(ctx, FieldValue::uniform(vector), "uniform vector field");
     }
 }
@@ -350,10 +355,14 @@ impl Primitive for TurbulenceVectorField {
         let speed = ctx.scalar_or_param("drift_speed", 0.0);
         let seed = ctx.scalar_or_param("seed", 0.0).round().max(0.0) as u32;
         let length = drift.iter().map(|c| c * c).sum::<f32>().sqrt();
-        // Transport time, so a sample at a past tick reads the swirls as they were then.
-        let travel = ctx.time.seconds.0 as f32 * speed;
-        let offset = if length > 0.0 { drift.map(|c| c / length * travel) } else { [0.0; 3] };
-        write_result(ctx, FieldValue::turbulence(size, offset, seed), "turbulence vector field");
+        // Transport time, so a sample at a past tick reads the swirls as they
+        // were then; in f64 and wrapped to the noise period, so the gusts keep
+        // their precision through a long set.
+        let travel = ctx.time.seconds.0 * f64::from(speed);
+        let offset = if length > 0.0 { drift.map(|c| f64::from(c / length) * travel) } else { [0.0; 3] };
+        // A size that is not positive is refused before the offset is read.
+        let field = FieldValue::turbulence(size, TurbulenceField::wrap_offset(size, offset), seed);
+        write_result(ctx, field, "turbulence vector field");
     }
 }
 

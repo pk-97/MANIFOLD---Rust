@@ -119,3 +119,21 @@ fn turbulence_is_a_leaf_that_can_become_wind() {
     });
     assert_eq!(leaves, 1);
 }
+
+/// A Wind card at Turbulence 0, or disabled, holds still from tick to tick
+/// though its gusts drift: a zero scale drops the gusts, so the force
+/// lattice is laid once and cached instead of refilled every tick.
+#[test]
+fn zero_scaled_gusts_hold_the_field_still() {
+    let card = |travel: f32, gusts: f32, enabled: f32| {
+        let steady = FieldValue::uniform([5.0, 0.0, 0.0]).unwrap();
+        let turbulence = FieldValue::turbulence(2.0, [travel, 0.0, 0.0], 0).unwrap().scaled(gusts).unwrap();
+        steady.sum(&turbulence).unwrap().air(1.0).unwrap().scaled(enabled).unwrap()
+    };
+    assert_eq!(card(0.0, 0.0, 1.0), card(0.083, 0.0, 1.0), "steady wind: one lattice");
+    assert_eq!(card(0.0, 2.0, 0.0), card(0.083, 2.0, 0.0), "disabled card: one lattice");
+    assert_ne!(card(0.0, 2.0, 1.0), card(0.083, 2.0, 1.0), "real gusts move every tick");
+    let x = [0.3, 1.1, -0.4];
+    assert_eq!(card(0.0, 0.0, 1.0).sample_force(x), wind([5.0, 0.0, 0.0], 1.0).sample_force(x));
+    assert_eq!(card(0.0, 2.0, 0.0).sample_force(x), ForceSample::default());
+}

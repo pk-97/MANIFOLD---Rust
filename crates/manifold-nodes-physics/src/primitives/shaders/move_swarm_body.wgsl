@@ -3,7 +3,7 @@
 // (semi-implicit Euler, one step per tick):
 //   a, k, k·w = forces(x) at the tick's lattice   (force_lattice.wgsl, trilinear)
 //   v = drag step of v under a, k, k·w over dt
-//   v += impulses(x)                              (on impulse_tick only)
+//   v += impulses(x) at the tick's impulse lattice (frames with a hit only)
 //   x += v · dt
 // where k is the air's drag rate and w its wind: with no air, v += a · dt.
 // Each tick reads the lattice of its own tick (one per tick from first_tick,
@@ -11,8 +11,9 @@
 // own length dt = tick_seconds[t], so a swarm moves the same at any frame
 // rate, Speed ramps included. Dead particles (life <= 0) pass through. `in`
 // is coincident (Element = Particle); `forces`, `tick_seconds` and
-// `impulses` are gathered. A scene hit lands once: impulse_tick is −1 on
-// every frame without one.
+// `impulses` are gathered. A frame with scene hits carries one impulse lattice
+// per tick from impulse_tick (zero on ticks no hit landed on), so each hit
+// lands once on its own tick; impulse_tick is −1 on every frame without one.
 
 // The tick's force at x: push and drag rate, then drag rate × wind.
 struct MoveSwarmForce {
@@ -33,12 +34,13 @@ fn move_swarm_force(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u3
     return f;
 }
 
-// The hit's velocity change at x, from the impulse lattice (4 floats a node).
-fn move_swarm_impulse(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
+// The hits' velocity change at x, from the impulse lattice starting at node
+// `base` (4 floats a node).
+fn move_swarm_impulse(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> vec3<f32> {
     var kick = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
         let c = force_lattice_corner(x, origin, spacing, dims, k);
-        let w = c.index * 4u;
+        let w = (base + c.index) * 4u;
         kick = kick + vec3<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u]) * c.weight;
     }
     return kick;
@@ -76,8 +78,10 @@ fn body(
                 p.velocity[axis] = force_lattice_drag_step(p.velocity[axis], f.push_drag[axis], f.push_drag.w, f.drag_wind[axis], dt);
             }
         }
-        if first_tick + t == impulse_tick {
-            p.velocity = p.velocity + move_swarm_impulse(p.position, origin, field_spacing, dims);
+        let slot = first_tick + t - impulse_tick;
+        if impulse_tick >= 0 && slot >= 0 && slot < ticks {
+            let base = u32(slot) * dims.x * dims.y * dims.z;
+            p.velocity = p.velocity + move_swarm_impulse(p.position, origin, field_spacing, dims, base);
         }
         p.position = p.position + p.velocity * dt;
         p.age = p.age + dt;

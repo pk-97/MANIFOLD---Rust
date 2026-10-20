@@ -715,6 +715,11 @@ fn industry_force_recipes_attach_and_evaluate() {
     let wind = [("direction_x", 0.0), ("direction_y", 0.0), ("direction_z", 1.0), ("speed", 4.0)];
     let windy = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.5)]].concat()], false);
     assert!(close(windy, [1.0, 2.0, 5.0]), "{windy:?}");
+    // The direction is only a direction: a diagonal wind still blows at Speed.
+    let diagonal = [("direction_x", 1.0), ("direction_y", 0.0), ("direction_z", 1.0), ("speed", 4.0), ("air_resistance", 0.5)];
+    let gust = evaluate_force_output(&["Wind"], &[diagonal.to_vec()], false);
+    let side = 2.0 * std::f32::consts::FRAC_1_SQRT_2;
+    assert!(close(gust, [1.0 + side, 2.0, 3.0 + side]), "{gust:?}");
     let still = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.0)]].concat()], false);
     assert!(close(still, previous), "{still:?}");
 

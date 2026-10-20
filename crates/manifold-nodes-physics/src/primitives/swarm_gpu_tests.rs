@@ -202,17 +202,19 @@ fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
     let (forces, forces_buffer) = h.array(&flat, flat.len());
     let lengths = [0.8 * TICK as f32, TICK as f32, 1.3 * TICK as f32];
     let (tick_seconds, tick_seconds_buffer) = h.array(&lengths, lengths.len());
-    // A hit landing on the middle tick: the fused kernel kicks exactly as
+    // A hit landing on the middle tick: one impulse lattice per tick from
+    // the first, zero where no hit landed. The fused kernel kicks exactly as
     // the standalone one.
-    let mut kicks = vec![[0.0f32; 4]; lattice.node_count()];
-    lattice.fill(&mut kicks, |x| field(0.0).sample(x).map(|v| -0.5 * v)).unwrap();
+    let count = lattice.node_count();
+    let mut kicks = vec![[0.0f32; 4]; 3 * count];
+    lattice.fill(&mut kicks[count..2 * count], |x| field(0.0).sample(x).map(|v| -0.5 * v)).unwrap();
     let kicks: Vec<f32> = kicks.into_iter().flatten().collect();
     let (impulses, impulses_buffer) = h.array(&kicks, kicks.len());
     let (particles, particles_buffer) = h.array(&start, N);
     let values = [
         ("active_count", N as f32), ("ticks", 3.0), ("first_tick", 5.0), ("force_lattices", 3.0),
         ("field_nodes_x", 17.0), ("field_nodes_y", 17.0), ("field_nodes_z", 17.0), ("field_spacing", 0.25),
-        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("impulse_tick", 6.0),
+        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("impulse_tick", 5.0),
         ("size", 0.07),
     ];
     let region = vec![
@@ -235,4 +237,50 @@ fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
     assert_eq!(bits(&fused), bits(&unfused), "fused and unfused swarm copies differ");
     let moved: Vec<Particle> = read(&particles_buffer, N);
     assert!(moved.iter().zip(&start).filter(|(a, b)| a.position != b.position).count() > N / 2, "the ticks moved the swarm");
+}
+
+/// A frame of three ticks with hits on the first and last: each tick reads
+/// its own impulse lattice, so a particle at rest gains the first kick before
+/// its first step and the second before its last.
+#[test]
+fn move_swarm_kicks_each_tick_from_its_own_impulse_lattice() {
+    const N: usize = 1024;
+    let mut h = Harness::new();
+    let start: Vec<Particle> = (0..N).map(|i| particle(i * (COUNT / N))).collect();
+    let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 5);
+    let count = lattice.node_count();
+    let (a, b) = ([0.5f32, 0.0, 0.0], [0.0f32, 0.0, -2.0]);
+    let mut kicks = vec![[0.0f32; 4]; 3 * count];
+    kicks[..count].fill([a[0], a[1], a[2], 0.0]);
+    kicks[2 * count..].fill([b[0], b[1], b[2], 0.0]);
+    let kicks: Vec<f32> = kicks.into_iter().flatten().collect();
+    let (impulses, _) = h.array(&kicks, kicks.len());
+    let lengths = [0.8 * TICK as f32, TICK as f32, 1.3 * TICK as f32];
+    let (tick_seconds, _) = h.array(&lengths, lengths.len());
+    let (particles, particles_buffer) = h.array(&start, N);
+    let values = [
+        ("active_count", N as f32), ("ticks", 3.0), ("first_tick", 9.0), ("force_lattices", 0.0),
+        ("field_nodes_x", 5.0), ("field_nodes_y", 5.0), ("field_nodes_z", 5.0), ("field_spacing", 1.0),
+        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("impulse_tick", 9.0),
+    ];
+    let inputs = [("in", particles), ("tick_seconds", tick_seconds), ("impulses", impulses)];
+    let (_, errors) = h.run(&mut MoveSwarm::new(), &inputs, &[("out", particles)], &params(&values));
+    assert!(errors.is_empty(), "{errors:?}");
+    let moved: Vec<Particle> = read(&particles_buffer, N);
+    for (moved, start) in moved.iter().zip(&start) {
+        let mut v = [0.0f32; 3];
+        let mut x = start.position;
+        for (tick, dt) in lengths.into_iter().enumerate() {
+            let kick = [a, [0.0; 3], b][tick];
+            for axis in 0..3 {
+                v[axis] += kick[axis];
+                x[axis] += v[axis] * dt;
+            }
+        }
+        // Trilinear weights sum to 1 up to rounding.
+        for axis in 0..3 {
+            assert!((moved.velocity[axis] - v[axis]).abs() < 1e-6, "every particle took both kicks, once each: {:?} vs {v:?}", moved.velocity);
+            assert!((moved.position[axis] - x[axis]).abs() < 1e-5, "{:?} vs {x:?}", moved.position);
+        }
+    }
 }

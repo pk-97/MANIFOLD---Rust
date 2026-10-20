@@ -12,6 +12,11 @@ const STRENGTH_NORMALIZE: f32 = 0.6;
 /// Offsets that decorrelate the three potentials.
 const POTENTIAL_OFFSETS: [[f32; 3]; 3] = [[0.0; 3], [31.416, -47.853, 12.734], [-73.19, 19.27, 58.61]];
 
+/// The noise repeats every this many cells (`size` metres each) along every
+/// axis, so a drift offset can be wrapped to one period and keep its
+/// precision through a long set.
+pub const TURBULENCE_PERIOD_CELLS: u32 = 256;
+
 /// Curl noise with features about `size` metres across, sampled at
 /// `(x − offset) / size`, so moving `offset` drifts the swirls through space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,6 +48,14 @@ impl TurbulenceField {
     pub fn seed(&self) -> u32 {
         self.seed
     }
+
+    /// A drift offset in metres, wrapped to the noise's period on each axis:
+    /// the same swirls, with f32 precision kept however far they have
+    /// travelled (an hour at 50 m/s is 180 km).
+    pub fn wrap_offset(size: f32, offset: [f64; 3]) -> [f32; 3] {
+        let period = f64::from(TURBULENCE_PERIOD_CELLS) * f64::from(size);
+        offset.map(|c| c.rem_euclid(period) as f32)
+    }
 }
 
 impl VectorField for TurbulenceField {
@@ -68,6 +81,7 @@ impl VectorField for TurbulenceField {
 }
 
 fn hash(x: i32, y: i32, z: i32, seed: u32) -> u32 {
+    let [x, y, z] = [x, y, z].map(|c| c.rem_euclid(TURBULENCE_PERIOD_CELLS as i32));
     let mut h = seed ^ (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ (z as u32).wrapping_mul(0xcb1a_b31f);
     h ^= h >> 16;
     h = h.wrapping_mul(0x7feb_352d);
@@ -186,5 +200,22 @@ mod tests {
         let drifted = TurbulenceField::new(2.0, [1.0, 0.0, 0.0], 3).unwrap();
         assert_eq!(drifted.sample([1.5, 0.2, 0.3]), field.sample([0.5, 0.2, 0.3]));
         assert!(TurbulenceField::new(0.0, [0.0; 3], 0).is_err());
+    }
+
+    /// The swirls repeat every period on each axis, so a drift that has
+    /// travelled any distance wraps to the same swirls at full precision.
+    #[test]
+    fn turbulence_repeats_so_a_long_drift_wraps_exactly() {
+        let field = TurbulenceField::new(2.0, [0.0; 3], 3).unwrap();
+        let period = TURBULENCE_PERIOD_CELLS as f32 * 2.0;
+        // Equal up to the f32 rounding of a coordinate a period out.
+        for p in [[1.5, 0.25, -0.75], [-3.0, 7.5, 2.25]] {
+            let (far, near) = (field.sample([p[0] + period, p[1] - period, p[2] + 2.0 * period]), field.sample(p));
+            assert!(far.iter().zip(near).all(|(a, b)| (a - b).abs() < 1e-3), "{far:?} vs {near:?}");
+        }
+        // An hour at 50 m/s, plus a quarter metre.
+        let wrapped = TurbulenceField::wrap_offset(2.0, [180_000.25 + 512.0 * 351.0, -0.75, 0.0]);
+        assert_eq!(wrapped, [288.25, 511.25, 0.0]);
+        assert!(wrapped.iter().all(|c| (0.0..period).contains(c)));
     }
 }

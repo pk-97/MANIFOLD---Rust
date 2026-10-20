@@ -145,12 +145,18 @@ impl FieldValue {
     }
 
     /// Scale the push; the drag rate scales by the strength's size and the
-    /// wind keeps its speed (see [`ForceSample::scaled`]).
+    /// wind keeps its speed (see [`ForceSample::scaled`]). A zero strength
+    /// drops the field for a zero leaf: it samples the same, and a field that
+    /// moves over time (drifting gusts) held at zero, or a disabled force, no
+    /// longer changes from tick to tick, so its lattice is laid once.
     pub fn scaled(&self, strength: f32) -> Result<Self, PhysicsError> {
         if !strength.is_finite() {
             return Err(PhysicsError::InvalidInput(
                 "vector field scale must be finite",
             ));
+        }
+        if strength == 0.0 {
+            return Self::uniform([0.0; 3]);
         }
         self.push_unary(Operation::Scale(strength))
     }

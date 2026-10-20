@@ -48,7 +48,7 @@ const fn float(name: &'static str, label: &'static str, default: f32, range: (f3
 manifold_node_engine::primitive! {
     name: MoveSwarm,
     type_id: "node.move_swarm",
-    purpose: "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, the trilinear read of that tick's lattice at the particle gives the push a, the air's drag rate k and its wind w; v moves to v·e^(−k·dt) + (a + k·w)(1 − e^(−k·dt))/k (v + a·dt with no air), then on impulse_tick v gains the impulse lattice's kick at the particle (a scene hit, once), then x += v·dt (dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
+    purpose: "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, the trilinear read of that tick's lattice at the particle gives the push a, the air's drag rate k and its wind w; v moves to v·e^(−k·dt) + (a + k·w)(1 − e^(−k·dt))/k (v + a·dt with no air), then v gains that tick's impulse lattice kick at the particle (scene hits, each once on its own tick; a frame with hits carries one impulse lattice per tick from impulse_tick), then x += v·dt (dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
     inputs: {
         in: Array(Particle) required,
         forces: Array(f32) optional,
@@ -154,6 +154,12 @@ impl Primitive for MoveSwarm {
             ctx.error(format!("Move Swarm: {ticks} ticks need {ticks} tick lengths; wire tick_seconds from node.swarm_forces"));
             return;
         };
+        // A frame with hits carries one impulse lattice per tick.
+        let node_bytes = field.nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
+        if field.impulse_tick >= 0 && field.impulses.is_some_and(|impulses| impulses.size < ticks as u64 * node_bytes) {
+            ctx.error(format!("Move Swarm: {ticks} ticks need {ticks} impulse lattices; wire impulses from node.swarm_forces"));
+            return;
+        }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = MoveSwarmUniforms {

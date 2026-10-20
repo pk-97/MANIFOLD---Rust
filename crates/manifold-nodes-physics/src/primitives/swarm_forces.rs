@@ -37,7 +37,7 @@ const fn param(name: &'static str, label: &'static str, ty: ParamType, default: 
 manifold_node_engine::primitive! {
     name: SwarmForces,
     type_id: "node.swarm_forces",
-    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Scene hits (a force's Impulse) land on the first tick after they fire, once: the hit's field is laid on the impulses lattice and impulse_tick names the tick (−1 none). Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
+    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Scene hits (a force's Impulse) land once, on the tick whose simulated interval holds the fire: a frame with hits lays one impulse lattice per tick (zero where none landed) and impulse_tick names the frame's first tick (−1 none). Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
     inputs: {
         bounds: Transform optional,
         acceleration_field: VectorField optional,
@@ -107,8 +107,8 @@ impl TakesHits for SwarmForces {
         }
     }
 
-    /// A hit fired this frame is stamped at the swarm's simulated time, so it
-    /// lands on the first tick of the next frame.
+    /// A hit is stamped at the fire's own simulated time, so it lands on the
+    /// tick whose interval holds that time, the same tick at any frame rate.
     fn hit_stamp(&self, transport: Seconds, sequence: u64, step: SimStep) -> Result<EventStamp, String> {
         if !self.hit_readiness()? {
             return Err("Swarm impulses: the swarm has not started; fire waits for it".into());
@@ -157,12 +157,14 @@ impl SwarmForces {
             false,
             ctx.sim_step.offline(),
         );
+        // Hits follow the clock before anything else can fail, so a refused
+        // frame never leaves them a frame behind it.
+        self.hits.observe_frame(ctx.time.seconds.0, &frame)?;
         if frame.numerical_error {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
         self.forces.prepare(lattice, field.as_ref(), &self.clock, &frame)?;
-        self.hits.observe_frame(ctx.time.seconds.0, &frame)?;
-        let impulse_tick = self.lay_impulses(lattice)?;
+        let impulse_tick = self.lay_impulses(lattice, frame.first_sequence, frame.ticks)?;
         // Speed changes each tick's simulated length, not the tick count, and
         // a Speed ramp gives each tick its own: one length per tick, as water
         // steps each tick by its own interval.
@@ -183,30 +185,35 @@ impl SwarmForces {
         ])
     }
 
-    /// Lay this frame's hits onto the impulse lattice: every hit is stamped
-    /// at a frame's simulated time, so all of them land on the frame's first
-    /// tick.
-    fn lay_impulses(&mut self, lattice: ForceLattice) -> Result<Option<u64>, String> {
-        if self.impulses.len() != lattice.node_count() {
-            self.impulses.clear();
-            self.impulses.resize(lattice.node_count(), [0.0; 4]);
-            self.impulses_dirty = true;
+    /// Lay this frame's hits, one impulse lattice per tick of the frame from
+    /// `first`, each the sum of the hits landing on that tick (zero where
+    /// none did), as the liquids do offline. Returns the first tick.
+    fn lay_impulses(&mut self, lattice: ForceLattice, first: u64, ticks: u32) -> Result<Option<u64>, String> {
+        if self.hits.impulse_tick().is_none() {
+            return Ok(None);
         }
-        let Some(tick) = self.hits.impulse_tick() else { return Ok(None) };
         let events = self.hits.frame_events();
-        if events.iter().any(|event| event.applied.tick != tick) {
-            return Err("Swarm impulses: hits landed on two ticks of one frame; restart the simulation".into());
+        if events.iter().any(|event| !(first..first + u64::from(ticks)).contains(&event.applied.tick)) {
+            return Err("Swarm impulses: a hit landed outside the frame's ticks".into());
         }
-        lattice
-            .fill(&mut self.impulses, |x| {
-                events.iter().fold([0.0; 3], |sum, event| {
-                    let kick = event.value.sample(x);
-                    std::array::from_fn(|axis| sum[axis] + kick[axis])
+        let count = lattice.node_count();
+        self.impulses.clear();
+        self.impulses.resize(ticks as usize * count, [0.0; 4]);
+        for (tick, values) in (first..).zip(self.impulses.chunks_exact_mut(count)) {
+            if !events.iter().any(|event| event.applied.tick == tick) {
+                continue;
+            }
+            lattice
+                .fill(values, |x| {
+                    events.iter().filter(|event| event.applied.tick == tick).fold([0.0; 3], |sum, event| {
+                        let kick = event.value.sample(x);
+                        std::array::from_fn(|axis| sum[axis] + kick[axis])
+                    })
                 })
-            })
-            .map_err(|_| "Swarm impulses: the impulse field is not finite inside the swarm's box".to_string())?;
+                .map_err(|_| "Swarm impulses: the impulse field is not finite inside the swarm's box".to_string())?;
+        }
         self.impulses_dirty = true;
-        Ok(Some(tick))
+        Ok(Some(first))
     }
 
     fn upload(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
@@ -371,7 +378,42 @@ mod tests {
             }
             let errors = self.run(until, params, self.step);
             assert!(errors.is_empty(), "{errors:?}");
+            // The GPU upload commits the frame's hits; this rig has no GPU.
+            self.node.hits.commit_frame();
             Frame(self.node.published)
+        }
+
+        /// Fire a scene hit at transport `at`, as the impulse runtime does.
+        fn fire(&mut self, at: f64, sequence: u64, field: FieldValue) {
+            let stamp = self.node.hit_stamp(Seconds(at), sequence, self.step).expect("the swarm takes hits");
+            self.node.enqueue_hit(stamp, field).expect("the hit is queued");
+        }
+
+        /// The last frame's kicks: each tick that a hit landed on, with its
+        /// impulse lattice.
+        fn kicks(&self, frame: &Frame) -> Vec<(u64, Vec<[f32; 4]>)> {
+            let (first, ticks) = (frame.get("impulse_tick"), frame.get("ticks") as usize);
+            if first < 0.0 {
+                return Vec::new();
+            }
+            assert_eq!(first, frame.get("first_tick"), "a frame's impulse lattices start at its first tick");
+            self.node.impulses.chunks_exact(self.node.impulses.len() / ticks).enumerate()
+                .filter(|(_, lattice)| lattice.iter().any(|node| *node != [0.0; 4]))
+                .map(|(slot, lattice)| (first as u64 + slot as u64, lattice.to_vec()))
+                .collect()
+        }
+
+        /// Frames at `fps` from `from` to `until`, every kick by tick.
+        fn kicks_until(&mut self, fps: f64, from: f64, until: f64) -> Vec<(u64, Vec<[f32; 4]>)> {
+            let mut kicks = Vec::new();
+            let mut previous = from;
+            for index in 1..=((until - from) * fps).round() as u64 {
+                let now = from + index as f64 / fps;
+                let frame = self.frame(previous, now, &[]);
+                kicks.extend(self.kicks(&frame));
+                previous = now;
+            }
+            kicks
         }
 
         /// Frames at `fps` over `[from, from + seconds]`: every frame's
@@ -517,6 +559,78 @@ mod tests {
         let epoch = played.frames.last().unwrap().get("epoch");
         let next = rig.frame(0.5, 0.5 + TICK, &[("reset", 1.0)]);
         assert_eq!((next.get("epoch"), next.get("ticks"), next.get("simulation_time")), (epoch + 1.0, 0.0, 0.0));
+    }
+
+    /// Two hits whose fires fall in different ticks of one frame each land
+    /// once, on their own tick, and the same fires land the same at 30 and
+    /// 120 fps.
+    #[test]
+    fn swarm_hits_land_on_their_own_ticks_at_any_frame_rate() {
+        let push = |v: [f32; 3]| FieldValue::uniform(v).unwrap();
+        let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 17);
+        let laid = |v: [f32; 3]| vec![[v[0], v[1], v[2], 0.0]; lattice.node_count()];
+        let mut kicks = Vec::new();
+        for fps in [30.0, 120.0] {
+            let mut rig = Rig::new(None, SimStep::live(Seconds(TICK)));
+            rig.play(fps, 1.0, 0.0, &[]);
+            rig.fire(1.0 + 0.3 * TICK, 1, push([1.0, 0.0, 0.0]));
+            rig.fire(1.0 + 1.4 * TICK, 2, push([0.0, 2.0, 0.0]));
+            kicks.push(rig.kicks_until(fps, 1.0, 1.0 + 4.0 * TICK));
+            let mut applied = Vec::new();
+            rig.node.drain_applied_hits(&mut |event| applied.push(event.applied.tick));
+            assert_eq!(applied.len(), 2, "each hit lands once");
+        }
+        let ticks: Vec<u64> = kicks[0].iter().map(|(tick, _)| *tick).collect();
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks[1], ticks[0] + 1, "two fires a tick apart land a tick apart");
+        assert_eq!(kicks[0], vec![(ticks[0], laid([1.0, 0.0, 0.0])), (ticks[1], laid([0.0, 2.0, 0.0]))]);
+        assert_eq!(kicks[0], kicks[1], "the same fires kick the same ticks at 30 and 120 fps");
+    }
+
+    /// A fire while the swarm is paused (Speed 0) is discarded with a
+    /// receipt, never held for later (D-91).
+    #[test]
+    fn swarm_hit_while_paused_is_discarded() {
+        let mut rig = Rig::new(None, SimStep::live(Seconds(TICK)));
+        rig.play(60.0, 0.5, 0.0, &[]);
+        rig.frame(0.5, 0.5 + TICK, &[("speed", 0.0)]);
+        rig.fire(0.5 + TICK, 1, FieldValue::uniform([1.0, 0.0, 0.0]).unwrap());
+        let mut discarded = Vec::new();
+        assert_eq!(rig.node.drain_discarded_hits(&mut |stamp| discarded.push(stamp.sequence)), 0);
+        assert_eq!(discarded, [1]);
+        let mut previous = 0.5 + TICK;
+        for index in 1..=10 {
+            let now = previous + TICK;
+            let frame = rig.frame(previous, now, &[]);
+            assert_eq!(frame.get("impulse_tick"), -1.0, "frame {index} after the pause kicks nothing");
+            previous = now;
+        }
+        let mut applied = 0;
+        rig.node.drain_applied_hits(&mut |_| applied += 1);
+        assert_eq!(applied, 0);
+    }
+
+    /// A frame refused after the clock advanced (here a missed history
+    /// replay) keeps the hits in step with the clock: the next frames still
+    /// tick and take hits.
+    #[test]
+    fn swarm_recovers_from_a_refused_frame_and_still_takes_hits() {
+        let mut rig = Rig::new(Some(swelling), SimStep::live(Seconds(TICK)));
+        rig.play(60.0, 0.5, 0.0, &[]);
+        let errors = rig.run(0.5 + 2.0 * TICK, &[], rig.step);
+        assert!(errors.iter().any(|error| error.contains("never sampled")), "{errors:?}");
+        assert_eq!(rig.node.published[0], 0.0, "a refused frame runs no tick");
+        let mut kicked = Vec::new();
+        let mut previous = 0.5 + 2.0 * TICK;
+        rig.fire(previous, 1, FieldValue::uniform([0.0, 1.0, 0.0]).unwrap());
+        for _ in 0..4 {
+            let now = previous + TICK;
+            let frame = rig.frame(previous, now, &[]);
+            assert_eq!(frame.get("ticks"), 1.0);
+            kicked.extend(rig.kicks(&frame).into_iter().map(|(tick, _)| tick));
+            previous = now;
+        }
+        assert_eq!(kicked.len(), 1, "the hit lands once after the refused frame");
     }
 
     /// Every Force Detail the manifest allows fits any box.

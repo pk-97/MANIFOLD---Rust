@@ -17,6 +17,14 @@ pub const FORCE_LATTICE_STRIDE: u32 = 4;
 /// or quality cap.
 pub const FORCE_LATTICE_RESERVE: u32 = 3;
 
+/// Lattices below this many nodes fill on the calling thread: a thread costs
+/// more than the work it would take (water 64 is about 7k nodes).
+const PARALLEL_FILL_NODES: usize = 32_768;
+
+/// Most threads one fill uses, leaving cores for the GPU driver, audio and
+/// the UI.
+pub const FILL_THREADS: usize = 8;
+
 /// A field value is not finite at some lattice node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NotFinite;
@@ -102,10 +110,36 @@ impl ForceLattice {
     }
 
     /// Sample a force `field` at every node into `values`, two `[f32; 4]` per
-    /// node: (push, drag rate) then (drag rate × wind, 0).
-    pub fn fill_forces(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
+    /// node: (push, drag rate) then (drag rate × wind, 0). A large lattice is
+    /// split across up to [`FILL_THREADS`] threads: a field that moves every
+    /// tick (drifting gusts) is laid again each tick, which one core cannot
+    /// do at water resolution 128 inside a frame. Every node is computed the
+    /// same way whatever the split, so the result is bit for bit the same.
+    pub fn fill_forces(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> ForceSample + Sync) -> Result<(), NotFinite> {
+        let nodes = values.len() / 2;
+        let threads = if nodes < PARALLEL_FILL_NODES {
+            1
+        } else {
+            std::thread::available_parallelism().map_or(1, |n| n.get()).min(FILL_THREADS)
+        };
+        if threads <= 1 {
+            return self.fill_forces_from(0, values, &field);
+        }
+        let per_thread = nodes.div_ceil(threads);
+        std::thread::scope(|scope| {
+            let field = &field;
+            let workers: Vec<_> = values
+                .chunks_mut(2 * per_thread)
+                .enumerate()
+                .map(|(part, values)| scope.spawn(move || self.fill_forces_from(part * per_thread, values, field)))
+                .collect();
+            workers.into_iter().try_for_each(|worker| worker.join().expect("force fill worker panicked"))
+        })
+    }
+
+    fn fill_forces_from(&self, first: usize, values: &mut [[f32; 4]], field: &impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
         for (index, node) in values.chunks_exact_mut(2).enumerate() {
-            let s = field(self.position(index));
+            let s = field(self.position(first + index));
             if !s.is_finite() {
                 return Err(NotFinite);
             }
