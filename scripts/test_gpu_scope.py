@@ -128,6 +128,10 @@ class ScopeTests(unittest.TestCase):
 
     def test_audited_catalog_edit_selects_three_owned_harnesses(self):
         repo = Path(__file__).resolve().parents[1]
+        # Pins ownership only. Changed-test-body widening reads the live branch
+        # diff, so a branch editing these files' test bodies would change the
+        # answer; that widening has its own tests.
+        self.enterContext(mock.patch.object(g, "changed_test_filters", return_value=set()))
         result = g.plan_for_paths([
             "crates/manifold-nodes/src/bundled_presets.rs",
             "crates/manifold-nodes/src/bundled_generator_presets.rs",
