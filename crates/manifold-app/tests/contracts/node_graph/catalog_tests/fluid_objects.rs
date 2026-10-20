@@ -144,18 +144,15 @@
 
     #[test]
     fn enabling_physics_on_loose_obstacle_with_a_collider_is_refused() {
-        use manifold_editing::command::Command;
         use manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand;
 
         let def: EffectGraphDef =
             serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
         let (render_id, index) = obstacle_slot(&def);
-        let (mut project, target) = project_with(&def, "WaterDamBreakGpuFlip");
-        let mut enable =
-            EnableSceneObjectPhysicsCommand::new(target, render_id, index, Vec::new(), def);
-        enable.execute(&mut project);
-        assert!(!enable.was_applied());
-        let reason = enable.rejection_reason().unwrap_or_default();
+        let (project, target) = project_with(&def, "WaterDamBreakGpuFlip");
+        let refused = EnableSceneObjectPhysicsCommand::new(&project, target, render_id, index, &[], &[], &def)
+            .expect_err("a collider obstacle refuses before submission");
+        let reason = refused.message;
         assert!(reason.contains("Fluid Role"), "{reason}");
     }
 

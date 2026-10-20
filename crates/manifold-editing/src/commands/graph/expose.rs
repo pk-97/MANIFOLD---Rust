@@ -515,8 +515,9 @@ fn find_node_by_id_or_handle_mut<'a>(
 /// Convert an effective f32 value to the `SerializedParamValue` shape its
 /// `ParamConvert` implies — the def-slot write shape for D9's freeze, mirror
 /// of `param_binding::convert_param_value` (which targets the renderer-side
-/// `ParamValue` instead of the wire `SerializedParamValue`).
-fn effective_value_to_serialized(
+/// `ParamValue` instead of the wire `SerializedParamValue`). The scene panel's
+/// unbound writes take the same shape.
+pub fn effective_value_to_serialized(
     convert: manifold_core::effects::ParamConvert,
     value: f32,
 ) -> SerializedParamValue {
