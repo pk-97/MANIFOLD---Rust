@@ -257,6 +257,8 @@ impl WaterRuntimeRef<'_> {
             }
             let node = self.graph.get_node(id).expect("compiled ancestry node");
             let kind = node.node.type_id().as_str();
+            // A capture evaluates its field once, at the fire, outside the
+            // replay's time order, so a time-integrating node stays refused.
             let pure = node.node.is_pure()
                 || matches!(
                     kind,

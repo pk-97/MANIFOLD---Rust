@@ -244,8 +244,9 @@ impl PhysicsInputSnapshot {
 }
 
 /// The retained CPU ancestry of every physics world. Historical sampling
-/// evaluates this closure only; GPU nodes and stateful upstream nodes cannot
-/// be replayed safely at a past transport time.
+/// evaluates this closure only; GPU nodes and stateful upstream nodes other
+/// than time-integrating ones cannot be replayed safely at a past transport
+/// time.
 pub(crate) fn physics_sample_steps(
     graph: &Graph,
     plan: &ExecutionPlan,
@@ -290,7 +291,13 @@ pub(crate) fn physics_sample_steps(
         let node = graph.get_node(*node_id).expect("ancestry node exists");
         let kind = node.node.type_id();
         let type_id = kind.as_str();
-        let stateless_cpu = matches!(
+        // The replay evaluates the ancestry once per sample time, in time
+        // order, so a node may join it when its answer at a time does not
+        // depend on which other times were evaluated (pure nodes and these
+        // functions of time), or when it integrates over the replay's own
+        // non-decreasing times and restarts when time goes back, as the
+        // solver clocks do.
+        let replayable = matches!(
             type_id,
             "node.physics_world"
                 | "node.fluid_role_source"
@@ -302,15 +309,16 @@ pub(crate) fn physics_sample_steps(
                 | "node.value"
                 | "node.math"
                 | "node.affine_scalar"
-        ) || node.node.is_pure();
+        ) || node.node.is_pure()
+            || node.node.integrates_time();
         // A GPU liquid's sample run only records its field; it never encodes.
         if is_tick_sampled(node.node.as_ref()) {
             continue;
         }
         let requires = node.node.requires();
-        if !stateless_cpu || requires.gpu_encoder || requires.state_store {
+        if !replayable || requires.gpu_encoder || requires.state_store {
             return Err(format!(
-                "Physics cannot sample historical motion through `{type_id}`; use stateless CPU controls before the simulation"
+                "Physics cannot sample historical motion through `{type_id}`; use CPU controls that replay past ticks before the simulation"
             ));
         }
     }

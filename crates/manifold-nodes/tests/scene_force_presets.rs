@@ -749,7 +749,11 @@ fn render_scene(host: &EffectGraphDef) -> manifold_core::scene_modifier_preset::
 
 /// `host` with the force `name` on every object of its scene.
 fn with_force(host: &EffectGraphDef, name: &str) -> EffectGraphDef {
-    let instance = prepare_new_scene_modifier(host, &recipe(name), NodeId::new(format!("all-{name}")), render_scene(host), SceneTargetSelection::AllObjects)
+    with_recipe(host, name, &recipe(name))
+}
+
+fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> EffectGraphDef {
+    let instance = prepare_new_scene_modifier(host, recipe, NodeId::new(format!("all-{name}")), render_scene(host), SceneTargetSelection::AllObjects)
         .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
     insert_scene_modifier(host, 0, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}")).graph
 }
@@ -807,4 +811,24 @@ fn a_swarm_takes_force_hits_and_builds_beside_water_and_a_physics_world() {
     assert!(recipients.iter().any(|(_, target)| target.affects_fluid()), "{recipients:?}");
     assert!(recipients.iter().any(|(_, target)| target.rigid_targets().is_some()), "{recipients:?}");
     PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("water, a physics world and a swarm install under one force");
+}
+
+/// A Wind with Turbulence on drifts its gusts over time, and they replay
+/// with the physics ticks: the card builds over water, a physics world and
+/// a swarm together, and over the stock solids.
+#[test]
+fn a_gusty_wind_builds_over_water_a_physics_world_and_a_swarm() {
+    use manifold_node_engine::runtime::PresetRuntime;
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut wind = recipe("Wind");
+    let metadata = wind.preset_metadata.as_mut().unwrap();
+    metadata.params.iter_mut().find(|param| param.id == "turbulence").unwrap().default_value = 6.0;
+    for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == "turbulence") {
+        binding.default_value = 6.0;
+    }
+    let host: EffectGraphDef = serde_json::from_str(FLOATING_BOX).unwrap();
+    let mixed = with_recipe(&graft_swarm(&host), "Wind", &wind);
+    PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("gusts over water, a physics world and a swarm build");
+    let solids: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
+    PresetRuntime::from_def_for_render(with_recipe(&solids, "Wind", &wind), &registry, None, false).expect("gusts over the solids build");
 }

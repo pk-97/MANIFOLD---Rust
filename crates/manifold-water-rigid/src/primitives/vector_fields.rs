@@ -344,6 +344,7 @@ manifold_node_engine::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["turbulence", "noise field", "curl noise", "gusts"],
+    integrates_time: true,
     boundary_reason: NonGpu,
     extra_fields: {
         drift: TurbulenceDrift = TurbulenceDrift::default(),

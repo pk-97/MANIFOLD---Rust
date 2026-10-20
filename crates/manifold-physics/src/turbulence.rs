@@ -87,7 +87,8 @@ impl VectorField for TurbulenceField {
 /// evaluates at the same transport times at any display rate (the physics
 /// history replay's fixed grid and tick starts, with frame ends on that grid
 /// at the usual rates), so live and export travel the same way. Time going
-/// back (a seek or loop) starts again from zero, as a simulation restarts.
+/// back (a seek or loop) starts again from zero, by the simulation clock's
+/// own rule, so the drift restarts exactly when the solvers it feeds do.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TurbulenceDrift {
     last: Option<f64>,
@@ -99,16 +100,20 @@ impl TurbulenceDrift {
     /// The offset travelled by `transport`, then hold `velocity` (m/s) from
     /// here on.
     pub fn advance(&mut self, transport: f64, velocity: [f64; 3]) -> [f64; 3] {
-        match self.last {
-            Some(last) if transport >= last => {
-                let elapsed = transport - last;
+        self.last = Some(match self.last {
+            Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => {
+                // A step back inside the tolerance holds still.
+                let elapsed = (transport - last).max(0.0);
                 for (travelled, velocity) in self.travelled.iter_mut().zip(self.velocity) {
                     *travelled += velocity * elapsed;
                 }
+                last.max(transport)
             }
-            _ => self.travelled = [0.0; 3],
-        }
-        self.last = Some(transport);
+            _ => {
+                self.travelled = [0.0; 3];
+                transport
+            }
+        });
         self.velocity = velocity;
         self.travelled
     }
@@ -307,5 +312,8 @@ mod tests {
         drift.advance(0.0, [5.0, 0.0, 0.0]);
         assert_eq!(drift.advance(1.0, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
         assert_eq!(drift.advance(0.25, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
+        // Rounding below the clock's seek tolerance holds, as the clock does.
+        assert_eq!(drift.advance(0.25 - 1e-12, [5.0, 0.0, 0.0]), [0.0; 3]);
+        assert_eq!(drift.advance(0.75, [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
     }
 }

@@ -582,7 +582,8 @@ PREFIX_ROWS += [
       "runtime::physics_sampling"], []),
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
-      "contracts::node_graph::catalog_tests::physics_host_modulation", "physics_scene"], []),
+      "contracts::node_graph::catalog_tests::physics_host_modulation",
+      "contracts::node_graph::catalog_tests::wind_gust_replay", "physics_scene"], []),
 ]
 
 # The GPU MPM leaf's CPU contract: the default-build tests that construct Matter nodes.

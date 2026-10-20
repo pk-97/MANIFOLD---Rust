@@ -1574,6 +1574,15 @@ pub trait EffectNode: Send + AsAny {
         false
     }
 
+    /// TIME-INTEGRATING node: accumulates its inputs over frame time,
+    /// advancing by the elapsed time at non-decreasing evaluation times and
+    /// starting again when time goes back. A host that replays past ticks in
+    /// time order may evaluate it. Default `false`; the `primitive!` macro's
+    /// `integrates_time:` field opts in.
+    fn integrates_time(&self) -> bool {
+        false
+    }
+
     /// Data-driven skip, REPORTER side: did this frame's `evaluate` produce
     /// EMPTY output — zero detected blobs, zero spawned particles, zero live
     /// tracks? The executor queries this immediately after `evaluate` and
