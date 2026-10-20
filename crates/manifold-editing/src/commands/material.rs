@@ -648,6 +648,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: preset_id.clone(),
                 display_name: "Material test".to_string(),
                 category: "Test".to_string(),

@@ -678,6 +678,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: preset,
                 display_name: String::new(),
                 category: String::new(),

@@ -140,6 +140,7 @@ pub(super) fn role_graph(with_nested: bool, fanout: bool) -> EffectGraphDef {
     };
     if with_nested && fanout {
         def.preset_metadata = Some(PresetMetadata {
+            shape: None,
             id: manifold_core::PresetTypeId::from_string("roles".into()),
             display_name: "Roles".into(),
             category: "Geometry".into(),

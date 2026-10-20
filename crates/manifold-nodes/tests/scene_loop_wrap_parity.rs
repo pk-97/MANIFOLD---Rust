@@ -99,6 +99,7 @@ fn build_loop_graph() -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: Some(PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string("WrapParityTest".to_string()),
             display_name: "Wrap Parity Test".to_string(),
             category: "Test".to_string(),
@@ -219,6 +220,7 @@ fn build_red_graph() -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: Some(PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string("WrapParityRedTest".to_string()),
             display_name: "Wrap Parity Red Test".to_string(),
             category: "Test".to_string(),

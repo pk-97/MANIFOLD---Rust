@@ -93,6 +93,7 @@ pub fn stamp_scene_node_exposures(
 /// a hand-built def with none doesn't silently drop the new card entries.
 fn empty_scene_preset_metadata() -> PresetMetadata {
     PresetMetadata {
+        shape: None,
         id: crate::PresetTypeId::from_string("__scene_exposure__".to_string()),
         display_name: String::new(),
         category: String::new(),

@@ -1520,6 +1520,8 @@ impl Application {
         if let Some(wid) = self.graph_editor_window_id.take() {
             self.window_registry.remove(&wid);
         }
+        let gesture = self.graph_editor.as_mut().and_then(|ed| ed.viewport_gizmo_drag.take());
+        self.end_gizmo_gesture(gesture);
         self.graph_editor = None;
         self.graph_canvas = None;
         // Stop per-node thumbnail capture on the content thread now the editor

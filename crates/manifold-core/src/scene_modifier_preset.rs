@@ -835,6 +835,15 @@ fn validate_def(
             detail: "modifier instance graph requires a recipe".into(),
         });
     }
+    if let Some(meta) = metadata
+        && let Some(shape) = meta.shape.as_ref()
+        && let Some(id) = shape.shape.param_ids().find(|id| find_param(&meta.params, id).is_none())
+    {
+        return Err(SceneModifierSchemaError::InvalidRecipe {
+            path: format!("{path}.presetMetadata.shape"),
+            detail: format!("shape names undeclared card param '{id}'"),
+        });
+    }
     if let Some(meta) = metadata {
         for (target, is_string) in meta
             .bindings

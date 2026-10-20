@@ -217,6 +217,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("local-recipe"),
                 display_name: "Local Recipe".into(),
                 category: "Geometry".into(),
@@ -320,6 +321,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("host"),
                 display_name: "Host".into(),
                 category: "Geometry".into(),

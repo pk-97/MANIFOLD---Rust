@@ -104,7 +104,7 @@ impl EditorGraphCache {
         }
         let def = target.map_or_else(ViewportDef::default, |target| ViewportDef {
             resolved: crate::graph_target::resolve(project, target).is_some(),
-            authored: crate::fluid_domain_edit::authored_def(project, target).map(Arc::new),
+            authored: crate::scene_gizmo::authored_def(project, target).map(Arc::new),
         });
         self.viewport = Some((key, def.clone()));
         def

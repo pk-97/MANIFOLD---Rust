@@ -80,7 +80,7 @@ pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
-mod fluid_domain_edit;
+mod scene_gizmo;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_item_transfer;

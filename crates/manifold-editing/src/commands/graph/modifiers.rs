@@ -470,6 +470,7 @@ impl Command for InsertMeshModifierCommand {
         .map(|name| format!("{name} — {}", modifier_section_label(&self.type_id)))
         .unwrap_or_else(|| modifier_section_label(&self.type_id));
         let meta = candidate.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            shape: None,
             id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
             display_name: "Scene".to_string(), category: "Geometry".to_string(),
             osc_prefix: "scene".to_string(), legacy_discriminant: None, available: true,

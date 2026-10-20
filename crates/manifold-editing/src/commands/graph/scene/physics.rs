@@ -1309,6 +1309,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
             };
             let string_binding = source_string_binding(def, &parts.source, body_node_id.clone());
             let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                shape: None,
                 id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                 display_name: "Scene".to_string(),
                 category: "Geometry".to_string(),

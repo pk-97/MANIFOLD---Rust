@@ -254,6 +254,7 @@ impl AddSceneObjectCommand {
                     (added, prev)
                 };
                 let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    shape: None,
                     id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                     display_name: "Scene".to_string(),
                     category: "Geometry".to_string(),
@@ -566,6 +567,7 @@ impl Command for AddSceneObjectCommand {
                 // nodes, into the def's TOP-LEVEL preset_metadata, targeting each
                 // node's bare NodeId — same convention the glTF importer uses.
                 let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    shape: None,
                     id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                     display_name: "Scene".to_string(),
                     category: "Geometry".to_string(),
@@ -871,6 +873,7 @@ impl Command for AddSceneLightCommand {
                 // 0-based, used only for wire/lookup bookkeeping).
                 let section = format!("Light {}", k + 1);
                 let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    shape: None,
                     id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                     display_name: "Scene".to_string(),
                     category: "Geometry".to_string(),
@@ -2290,6 +2293,7 @@ impl Command for AddSceneEnvironmentCommand {
                 // `sections_for_doc_ids`) comes back empty and
                 // `build_filtered_properties` renders nothing for the row.
                 let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    shape: None,
                     id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                     display_name: "Scene".to_string(),
                     category: "Geometry".to_string(),
@@ -2444,6 +2448,7 @@ impl Command for AddSceneFogCommand {
                 // `build_filtered_properties` renders nothing for the row —
                 // the R1 bug: freshly-added fog was structurally invisible.
                 let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    shape: None,
                     id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                     display_name: "Scene".to_string(),
                     category: "Geometry".to_string(),
@@ -2770,6 +2775,7 @@ impl Command for ImportModelIntoSceneCommand {
                         // hand-built def with none doesn't silently drop the new
                         // card entries rather than panic.
                         PresetMetadata {
+                            shape: None,
                             id: manifold_core::PresetTypeId::from_string(
                                 "UnnamedScene".to_string(),
                             ),

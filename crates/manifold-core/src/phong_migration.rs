@@ -736,6 +736,7 @@ mod tests {
 
     fn metadata(binding: BindingDef) -> PresetMetadata {
         PresetMetadata {
+            shape: None,
             id: crate::PresetTypeId::new("legacy"),
             display_name: "Legacy".to_string(),
             category: "Test".to_string(),

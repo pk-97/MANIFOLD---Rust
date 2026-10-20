@@ -1173,6 +1173,7 @@ mod tests {
             name: Some("Fluid Sim 3D".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: graph_id,
                 display_name: "Fluid Sim 3D".into(),
                 category: String::new(),

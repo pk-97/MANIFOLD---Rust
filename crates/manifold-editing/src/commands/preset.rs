@@ -545,6 +545,7 @@ mod tests {
             name: Some(id.to_string()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::from_string(id.to_string()),
                 display_name: id.to_string(),
                 category: String::new(),

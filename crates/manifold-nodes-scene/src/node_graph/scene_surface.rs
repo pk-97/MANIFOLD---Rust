@@ -14,10 +14,12 @@
 use manifold_core::liquid_domain::{
     GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain, liquid_dial_params,
 };
+use std::borrow::Cow;
+
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{
-    CardBand, CardLabel, ControlGroup, Feature, Gate, Modes, RgbChannel, SceneParamDesc, SurfaceRole,
-    Unit,
+    CardBand, CardLabel, ControlGroup, Feature, Gate, Modes, ParamTriple, RgbChannel, SceneParamDesc,
+    SceneShape, SceneShapeDecl, SurfaceRole, Unit,
 };
 
 use crate::node_graph::material_inspector::material_param_role;
@@ -139,6 +141,44 @@ pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> 
         "node.whitewater_step" => whitewater(param),
         domain if is_liquid_domain(domain) => liquid_domain(domain, param),
         _ => None,
+    }
+}
+
+const fn id(name: &'static str) -> Cow<'static, str> {
+    Cow::Borrowed(name)
+}
+
+const POS: ParamTriple = [id("pos_x"), id("pos_y"), id("pos_z")];
+const ROT: ParamTriple = [id("rot_x"), id("rot_y"), id("rot_z")];
+const SCALE: ParamTriple = [id("scale_x"), id("scale_y"), id("scale_z")];
+
+/// A `node.transform_3d` box behind `port`: placed, turned and sized by
+/// the transform's own params.
+const fn transform_box(port: &'static str, rotates: bool) -> SceneShapeDecl {
+    SceneShapeDecl {
+        shape: SceneShape::Box { center: POS, rotation: if rotates { Some(ROT) } else { None }, size: SCALE },
+        via: Some(id(port)),
+    }
+}
+
+static SCENE_OBJECT_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
+/// The solvers take axis-aligned boxes only, so neither box rotates. The
+/// Initial Fill height is a level above the domain floor, not a world
+/// value, so it has no handle yet.
+static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] =
+    [transform_box("domain", false), transform_box("initial_volume", false)];
+/// The `transform` input places the role's volume.
+static FLUID_ROLE_SOURCE_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
+
+/// Every shape `type_id` declares, in order (PHYSICS_ENGINE_BOUNDARY_DESIGN.md
+/// section 5.2 (One scene-object model)). A gizmo target is one entry of
+/// this list on one node.
+pub fn scene_shape(type_id: &str) -> &'static [SceneShapeDecl] {
+    match type_id {
+        "node.scene_object" => &SCENE_OBJECT_SHAPES,
+        "node.fluid_role_source" => &FLUID_ROLE_SOURCE_SHAPES,
+        domain if is_liquid_domain(domain) => &LIQUID_DOMAIN_SHAPES,
+        _ => &[],
     }
 }
 

@@ -1,6 +1,6 @@
 //! P6 demo/evidence (`docs/REALTIME_3D_DESIGN.md` P6 — Viewport Tier 2
 //! gizmos): drives the ACTUAL `manifold_nodes::node_graph` gizmo
-//! functions (`pick_object`, `gizmo_target_for`, `gizmo_lines`, `drag_write`)
+//! functions (`pick_target`, `gizmo_target_for`, `gizmo_lines`)
 //! against a real `node.scene_object`-shaped scene through a real
 //! `ViewportSession`, then dumps headless PNGs and asserts pixels actually
 //! changed — the same L2 acceptance-demo bar `viewport_p5c_demo.rs`
@@ -10,14 +10,11 @@
 //!
 //! `window_input.rs`'s `editor_viewport_gizmo_press`/
 //! `editor_viewport_gizmo_drag_move` (the real winit-facing call sites) are
-//! thin wrappers around exactly these same renderer functions plus a
-//! `SetGraphNodeParamCommand`/`AddObjectTransformCommand` dispatch — the
-//! undo/redo round-trip half of P6's gate is proven at the command level in
-//! `manifold-editing`'s own test suite
-//! (`add_object_transform_then_gizmo_param_drag_round_trips_undo_redo`),
-//! not re-proven here; this module's job is the RENDER half: pick
-//! highlighting, gizmo-mode geometry, and a drag actually moving the
-//! rendered object.
+//! thin wrappers around exactly these same renderer functions plus the
+//! knob scrub `scene_gizmo::GizmoGesture` runs — its write and one-step
+//! undo are proven in that module's tests, not re-proven here; this
+//! module's job is the RENDER half: pick highlighting, gizmo-mode
+//! geometry, and a drag actually moving the rendered object.
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -27,7 +24,11 @@ use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use {manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode, manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_session::ViewportSession, manifold_nodes_scene::node_graph::viewport_gizmo::drag_write, manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_lines, manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for, manifold_nodes_scene::node_graph::viewport_gizmo::pick_object};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_nodes_scene::node_graph::scene_vm::ShapeOwner;
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoAxis, GizmoMode, GizmoTargetId, gizmo_lines, gizmo_target_for, pick_target};
+use manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig;
+use manifold_nodes_scene::node_graph::viewport_session::ViewportSession;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A `node.scene_object`-shaped scene (SCENE_OBJECT_AND_PANEL_V2_DESIGN
@@ -118,13 +119,18 @@ fn ctx(width: u32, height: u32, frame_count: i64) -> PresetContext {
     }
 }
 
+/// The cube's object box: node 6, its first declared shape.
+fn cube() -> GizmoTargetId {
+    GizmoTargetId { owner: ShapeOwner::Object(6), shape: 0 }
+}
+
 fn open_session(def: &EffectGraphDef, device: &Arc<GpuDevice>, w: u32, h: u32) -> ViewportSession {
     let registry = PrimitiveRegistry::with_builtin();
     ViewportSession::open(def, &NodeId::new("scene"), &registry, Arc::clone(device), w, h, &ctx(w, h, 0))
         .expect("viewport session must open against a top-level render_scene node")
 }
 
-/// (a) Pick-highlight: `pick_object` finds the cube under its own projected
+/// (a) Pick-highlight: `pick_target` finds the cube under its own projected
 /// screen position, and the resulting gizmo overlay (Move mode) is visibly
 /// composited onto the render — `/tmp/viewport_p6_pick_highlight.png`.
 #[test]
@@ -138,10 +144,10 @@ fn pick_object_highlights_the_clicked_object() {
     let scene = SceneVm::from_def(&def).expect("scene resolves");
     let cam = session.camera().to_camera();
     let obj_proj = cam.project_to_pixel([0.0, 0.0, 0.0], w, h).expect("cube origin is in front of the camera");
-    let picked = pick_object(&scene, &cam, w, h, (obj_proj.px, obj_proj.py));
-    assert_eq!(picked, Some(6), "clicking the cube's own projected position must pick it (node id 6)");
+    let picked = pick_target(&scene, &cam, w, h, (obj_proj.px, obj_proj.py));
+    assert_eq!(picked, Some(cube()), "clicking the cube's own projected position must pick it (node id 6)");
 
-    let target = gizmo_target_for(&scene, picked.unwrap()).expect("gizmo target resolves");
+    let target = gizmo_target_for(&scene, &picked.unwrap()).expect("gizmo target resolves");
     let lines = gizmo_lines(GizmoMode::Move, &target);
     assert_eq!(lines.len(), 3, "move gizmo draws 3 axis handles");
 
@@ -162,7 +168,7 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
     let mut session = open_session(&def, &device, w, h);
     let overlay_cfg = ViewportOverlayConfig { grid: false, ..ViewportOverlayConfig::default() };
     let scene = SceneVm::from_def(&def).expect("scene resolves");
-    let target = gizmo_target_for(&scene, 6).expect("gizmo target resolves");
+    let target = gizmo_target_for(&scene, &cube()).expect("gizmo target resolves");
 
     let mut frame = 1_i64;
     let mut renders = Vec::new();
@@ -188,11 +194,9 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
     // LOCKED-gray, not its normal red.
     let locked_def: EffectGraphDef = serde_json::from_str(&scene_json(true)).expect("parse locked scene def");
     let locked_scene = SceneVm::from_def(&locked_def).expect("locked scene resolves");
-    let locked_target = gizmo_target_for(&locked_scene, 6).expect("locked gizmo target resolves");
-    let (_, _, driven) =
-        drag_write(GizmoMode::Move, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis::X, &locked_target)
-            .expect("transform is wired, drag_write must resolve");
-    assert!(driven, "pos_x is wired in the locked fixture — drag_write must report it driven");
+    let locked_target = gizmo_target_for(&locked_scene, &cube()).expect("locked gizmo target resolves");
+    let handle = locked_target.handle(GizmoMode::Move, GizmoAxis::X).expect("the transform places the cube");
+    assert!(handle.write.locked(), "pos_x is wired in the locked fixture — its handle must show locked");
     let locked_lines = gizmo_lines(GizmoMode::Move, &locked_target);
     let mut locked_session = open_session(&locked_def, &device, w, h);
     let rgba = locked_session.render_if_dirty(&ctx(w, h, 1), &overlay_cfg, None, &[], &locked_lines);

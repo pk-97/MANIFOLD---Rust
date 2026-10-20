@@ -832,18 +832,25 @@ impl Application {
     /// Ends every editor-owned pointer gesture on focus loss or Escape
     /// (`editor_input::cancel_capture`). True when something was cancelled.
     pub(crate) fn cancel_editor_pointer_capture(&mut self, window_id: WindowId) -> bool {
-        self.editor_pointer(window_id).is_some_and(|mut cx| crate::editor_input::cancel_capture(&mut cx))
+        let Some(cancelled) = self.editor_pointer(window_id).map(|mut cx| crate::editor_input::cancel_capture(&mut cx)) else {
+            return false;
+        };
+        self.end_gizmo_gesture(cancelled.gizmo_release);
+        cancelled.any
     }
 
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
-    /// open 3D viewport, tried BEFORE the orbit-drag arm below — a gizmo
-    /// axis grab on the current selection first, then an object pick.
-    /// Returns `true` if the press was consumed (a drag armed, or a
-    /// pick/deselect happened) — the caller must not also arm an orbit
-    /// drag. A miss on empty space returns `false` so the existing
-    /// orbit-arm still fires (drag-on-nothing orbits, drag-on-an-object
-    /// doesn't — the usual DCC convention).
+    /// open 3D viewport, tried BEFORE the orbit-drag arm below — a handle
+    /// grab on the selected shape first, then a pick. Returns `true` if the
+    /// press was consumed (a drag armed, a locked handle refused, or a pick
+    /// happened) — the caller must not also arm an orbit drag. A miss on
+    /// empty space returns `false` so the orbit arm still fires
+    /// (drag-on-nothing orbits, drag-on-an-object doesn't — the usual DCC
+    /// convention).
     fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner};
+        use manifold_nodes_scene::node_graph::viewport_gizmo as gizmo;
+        use manifold_ui::panels::scene_setup_panel::SceneSelection;
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
         };
@@ -853,236 +860,144 @@ impl Application {
         {
             return false;
         }
-        let Some(def) = self.viewport_def_cloned() else { return false };
-        let Some(mut scene) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else {
-            return false;
-        };
-        if let Some(ed) = self.graph_editor.as_ref() {
-            crate::fluid_domain_edit::apply_runtime_domains(&mut scene, &ed.viewport_fluid_domains);
-        }
+        let Some(scene) = self.viewport_def_cloned().as_ref().and_then(SceneVm::from_def) else { return false };
         let (w, h, cam, mode, selected) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
                 return false;
             };
-            (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected_object)
+            (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected.clone())
         };
         let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
         let Some((cx, cy)) = crate::viewport_input::gizmo_point(rect, (w, h), (cx, cy)) else { return false };
 
-        // Try the currently selected object's gizmo handles first.
-        if let Some(obj_id) = selected
-            && let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(&scene, obj_id)
-            && let Some(axis) = manifold_nodes_scene::node_graph::viewport_gizmo::pick_axis(mode, &target, &cam, w, h, (cx, cy))
+        // Try the selected shape's handles first.
+        if let Some(id) = selected
+            && let Some(target) = gizmo::gizmo_target_for(&scene, &id)
+            && let Some(axis) = gizmo::pick_axis(mode, &target, &cam, w, h, (cx, cy))
         {
-            if let Some((_, _, driven)) = manifold_nodes_scene::node_graph::viewport_gizmo::drag_write(mode, axis, &target)
-                && driven
-            {
-                // D8: "the viewport never fights the graph" — refuse the
-                // drag (the axis already draws locked-gray via
-                // `gizmo_lines`); consume the press so it doesn't fall
-                // through to orbit.
+            // D8: "the viewport never fights the graph" — a locked handle
+            // draws gray and refuses the drag; the press is still consumed
+            // so it doesn't fall through to orbit.
+            if target.handle(mode, axis).is_none_or(|handle| handle.write.locked()) {
                 return true;
             }
-            let fluid_domain = if target.kind == manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetKind::FluidDomain {
-                match crate::fluid_domain_edit::FluidDomainDrag::begin(
-                    &self.local_project, layer_id.clone(), obj_id, mode, axis,
-                ) {
-                    Ok(draft) => Some(draft),
-                    Err(message) => {
-                        self.send_content_cmd(ContentCommand::GraphEditRejected(message));
-                        return true;
-                    }
+            let target = if target.unplaced {
+                let ShapeOwner::Object(obj_id) = target.id.owner else { return true };
+                if !self.add_object_transform(&layer_id, obj_id) {
+                    return true;
                 }
-            } else {
-                None
-            };
-            if target.transform.is_none() {
-                // P6 entry state (D8 amendment): the object's `transform`
-                // port is unwired — create the atom now (one undo unit).
-                // The drag itself re-decodes the scene on every move
-                // (`editor_viewport_gizmo_drag_move`), so it picks up the
-                // freshly-wired atom without needing to remember its id
-                // here.
-                let Some(catalog) = crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
+                let Some(target) = self
+                    .viewport_def_cloned()
+                    .as_ref()
+                    .and_then(SceneVm::from_def)
+                    .and_then(|scene| gizmo::gizmo_target_for(&scene, &id))
                 else {
                     return true;
                 };
-                let mut cmd = manifold_editing::commands::graph::AddObjectTransformCommand::new(
-                    manifold_core::GraphTarget::Generator(layer_id.clone()),
-                    Vec::new(),
-                    obj_id,
-                    (0.0, 0.0),
-                    catalog,
-                );
-                let created = self.content_tx.as_ref().and_then(|tx| {
-                    self.local_project.edit(&mut self.ui_edits, tx).executed_by(|project| {
-                        cmd.execute(project);
-                        cmd.created_node_id()?;
-                        Some((Box::new(cmd) as Box<dyn manifold_editing::command::Command>, ()))
-                    })
-                });
-                if created.is_none() {
-                    return true;
+                target
+            } else {
+                target
+            };
+            let Some(drag) = gizmo::GizmoDrag::begin(target, mode, axis, (cx, cy)) else { return true };
+            match self.with_dispatch_ctx(|ctx| crate::scene_gizmo::GizmoGesture::begin(ctx, layer_id, drag)) {
+                Some(Ok(gesture)) => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.viewport_gizmo_drag = Some(gesture);
+                    }
                 }
-            }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.viewport_gizmo_drag = Some(crate::workspace::GizmoDrag {
-                    axis,
-                    object_node_id: obj_id,
-                    layer_id,
-                    last_x: cx,
-                    last_y: cy,
-                    fluid_domain,
-                });
+                Some(Err(message)) => self.send_content_cmd(ContentCommand::GraphEditRejected(message)),
+                None => {}
             }
             return true;
         }
 
-        // No gizmo hit (or nothing selected yet) — try an object pick. The
-        // gizmo, its drags and the selection draw over the viewport's rendered
+        // No handle hit (or nothing selected yet) — try a pick. The gizmo,
+        // its drags and the selection draw over the viewport's rendered
         // image, a live surface the editor composites every frame it shows.
-        match manifold_nodes_scene::node_graph::viewport_gizmo::pick_object(&scene, &cam, w, h, (cx, cy)) {
-            Some(obj_id) => {
-                self.ws.ui_root.scene_setup_panel.set_selection(
-                    layer_id,
-                    manifold_ui::panels::scene_setup_panel::SceneSelection::Object(obj_id),
-                );
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.viewport_selected_object = Some(obj_id);
-                }
-                true
+        let picked = gizmo::pick_target(&scene, &cam, w, h, (cx, cy));
+        let selection = picked.as_ref().and_then(|id| match &id.owner {
+            ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
+            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } => {
+                gizmo::gizmo_target_for(&scene, id).and_then(|target| target.row).map(SceneSelection::Object)
             }
-            None => {
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.viewport_selected_object = None;
-                }
-                false
-            }
+        });
+        if let Some(selection) = selection {
+            self.ws.ui_root.scene_setup_panel.set_selection(layer_id, selection);
         }
+        let hit = picked.is_some();
+        if let Some(ed) = self.graph_editor.as_mut() {
+            ed.viewport_selected = picked;
+        }
+        hit
     }
 
-    /// P6: feed one mouse-move delta through the armed gizmo drag (if any),
-    /// dispatching a `SetGraphNodeParamCommand` for the new axis value
-    /// through the SAME local-execute + `ContentCommand::Execute` path
-    /// `ui_bridge::project::dispatch_project`'s `SceneSetupParamChanged` arm
-    /// uses (P6's brief: that's the precedent for how the app routes
-    /// gizmo-written params). Re-decodes `SceneVm` fresh each call — an
-    /// editor-thread convenience read, not a hot-path allocation (the same
-    /// def is already cloned once per present frame for `sync_def`).
-    /// Returns `true` if a drag was armed and handled (whether or not the
-    /// axis turned out to be driven mid-drag, which just no-ops the write).
-    fn editor_viewport_gizmo_drag_move(&mut self, x: f32, y: f32) -> bool {
-        let Some(ed) = self.graph_editor.as_ref() else { return false };
-        if ed.viewport_gizmo_drag.is_none() { return false; }
-        let Some(rect) = ed.viewport_rect else { return true };
-        let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
-            return true;
-        };
-        let Some((x, y)) = crate::viewport_input::gizmo_point(rect, (config.width, config.height), (x, y)) else { return true };
-        if let Some(ed) = self.graph_editor.as_mut()
-            && let Some(drag) = ed.viewport_gizmo_drag.as_mut()
-            && let Some(domain) = drag.fluid_domain.as_mut()
-        {
-            if !matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &drag.layer_id) {
-                ed.viewport_gizmo_drag = None;
-                return true;
-            }
-            if let Some(delta) = domain.target.projected_drag_delta(
-                drag.axis,
-                &config.camera.to_camera(),
-                config.width,
-                config.height,
-                (x - drag.last_x, y - drag.last_y),
-            ) {
-                domain.update(domain.value + delta);
-            }
-            drag.last_x = x;
-            drag.last_y = y;
-            return true;
-        }
-        let Some(drag) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_gizmo_drag.clone()) else {
+    /// D8 entry state: an object's `transform` port is unwired, so the
+    /// first drag creates the atom (one undo unit). False when it could not.
+    fn add_object_transform(&mut self, layer_id: &manifold_core::LayerId, obj_id: u32) -> bool {
+        let Some(catalog) = crate::ui_bridge::generator_catalog_default(&self.local_project, layer_id) else {
             return false;
         };
-        let Some(def) = self.viewport_def_cloned() else { return true };
-        let Some(scene) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else {
-            return true;
+        let mut cmd = manifold_editing::commands::graph::AddObjectTransformCommand::new(
+            manifold_core::GraphTarget::Generator(layer_id.clone()),
+            Vec::new(),
+            obj_id,
+            (0.0, 0.0),
+            catalog,
+        );
+        self.content_tx.as_ref().is_some_and(|tx| {
+            self.local_project.edit(&mut self.ui_edits, tx).executed_by(|project| {
+                cmd.execute(project);
+                cmd.created_node_id()?;
+                Some((Box::new(cmd) as Box<dyn manifold_editing::command::Command>, ()))
+            }).is_some()
+        })
+    }
+
+    /// Run `f` in the context a card scrub dispatches in, with the editor's
+    /// watched graph as the target. `None` without a content thread.
+    fn with_dispatch_ctx<R>(&mut self, f: impl FnOnce(&mut crate::ui_bridge::DispatchCtx) -> R) -> Option<R> {
+        let content_tx = self.content_tx.as_ref()?;
+        let mut dctx = crate::ui_bridge::DispatchCtx {
+            project: self.local_project.edit(&mut self.ui_edits, content_tx),
+            content_tx,
+            content_state: &self.content_state,
+            ui: &mut self.ws.ui_root,
+            selection: &mut self.selection,
+            active_layer: &mut self.active_layer_id,
+            user_prefs: &mut self.user_prefs,
+            editor_target: self.watched_graph_target.as_ref(),
+            scrub: &mut self.scrub,
+            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
         };
-        let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(&scene, drag.object_node_id) else {
-            // The object vanished mid-drag (deleted, or the graph edit that
-            // just ran wasn't self-consistent) — drop the drag rather than
-            // write against stale state (no-silent-fallbacks).
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.viewport_gizmo_drag = None;
-            }
-            return true;
-        };
-        let (w, h, cam, mode) = {
-            let Some(ed) = self.graph_editor.as_ref() else { return true };
-            let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
-                return true;
-            };
-            (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode)
-        };
-        let Some((addr, current, driven)) =
-            manifold_nodes_scene::node_graph::viewport_gizmo::drag_write(mode, drag.axis, &target)
-        else {
-            return true;
-        };
-        if driven {
-            return true;
+        Some(f(&mut dctx))
+    }
+
+    /// P6: move the armed gizmo drag (if any) to the pointer. The gesture
+    /// scrubs each param's knob, so the write is the live, non-undoable one
+    /// the knob makes. Returns `true` if a drag was armed.
+    fn editor_viewport_gizmo_drag_move(&mut self, x: f32, y: f32) -> bool {
+        let Some(ed) = self.graph_editor.as_mut() else { return false };
+        let Some(mut gesture) = ed.viewport_gizmo_drag.take() else { return false };
+        let point = ed.viewport_rect.zip(ed.viewport_session.as_ref().and_then(|session| session.displayed_config()))
+            .and_then(|(rect, config)| {
+                let point = crate::viewport_input::gizmo_point(rect, (config.width, config.height), (x, y))?;
+                Some((config.width, config.height, config.camera.to_camera(), point))
+            });
+        if let Some((w, h, cam, point)) = point {
+            self.with_dispatch_ctx(|ctx| gesture.drag_to(ctx, &cam, w, h, point));
         }
-        let mouse_delta = (x - drag.last_x, y - drag.last_y);
-        let new_value = match mode {
-            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Move => {
-                target.projected_drag_delta(drag.axis, &cam, w, h, mouse_delta)
-                    .map(|d| current + d)
-            }
-            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Scale => {
-                target.projected_drag_delta(drag.axis, &cam, w, h, mouse_delta)
-                    .map(|d| (current + d).max(0.01))
-            }
-            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Rotate => manifold_nodes_scene::node_graph::viewport_gizmo::rotate_drag_delta(
-                target.origin,
-                &cam,
-                w,
-                h,
-                (drag.last_x, drag.last_y),
-                (x, y),
-            )
-            .map(|d| current + d),
-        };
-        if let Some(new_value) = new_value {
-            let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                manifold_core::GraphTarget::Generator(drag.layer_id.clone()),
-                addr.node_doc_id,
-                addr.param_id.clone(),
-                manifold_core::effect_graph_def::SerializedParamValue::Float { value: new_value },
-                // `catalog_default` is only consulted by `with_target_graph_mut`
-                // when the target's def doesn't already exist in the project —
-                // impossible here (the drag only arms against a node the live
-                // def just resolved), so an empty def is a safe placeholder,
-                // same posture the panel's own drag-commit path would need if
-                // it ever hit this branch.
-                manifold_core::effect_graph_def::EffectGraphDef {
-                    version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
-                    name: None,
-                    description: None,
-                    preset_metadata: None,
-                    scene_modifiers: Vec::new(),
-                    nodes: Vec::new(),
-                    wires: Vec::new(),
-                },
-            );
-            self.execute_local(Box::new(cmd));
-        }
-        if let Some(ed) = self.graph_editor.as_mut()
-            && let Some(d) = ed.viewport_gizmo_drag.as_mut()
-        {
-            d.last_x = x;
-            d.last_y = y;
+        if let Some(ed) = self.graph_editor.as_mut() {
+            ed.viewport_gizmo_drag = Some(gesture);
         }
         true
+    }
+
+    /// End a gizmo drag: its scrub commits one undo entry.
+    pub(crate) fn end_gizmo_gesture(&mut self, gesture: Option<crate::scene_gizmo::GizmoGesture>) {
+        if let Some(gesture) = gesture {
+            self.with_dispatch_ctx(|ctx| gesture.commit(ctx));
+        }
     }
 
     /// `MouseInput` in the editor window, through the editor-input seam. A
@@ -1096,6 +1011,7 @@ impl Application {
     ) {
         let Some(mut cx) = self.editor_pointer(window_id) else { return };
         let out = crate::editor_input::button(&mut cx, button, state);
+        self.end_gizmo_gesture(out.gizmo_release);
         if let Some(pos) = out.viewport_press
             && !self.editor_viewport_gizmo_press(pos.x, pos.y)
             && let Some(ws) = self.graph_editor.as_mut()
@@ -1395,13 +1311,16 @@ impl Application {
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.viewport_open = !ed.viewport_open;
                         ed.viewport_drag = None;
-                        ed.viewport_gizmo_drag = None;
-                        if !ed.viewport_open {
-                            // Stop sending viewport requests immediately; the
-                            // content thread owns rendering resources.
-                            ed.viewport_session = None;
-                            ed.viewport_rect = None;
-                        }
+                    }
+                    let gesture = self.graph_editor.as_mut().and_then(|ed| ed.viewport_gizmo_drag.take());
+                    self.end_gizmo_gesture(gesture);
+                    if let Some(ed) = self.graph_editor.as_mut()
+                        && !ed.viewport_open
+                    {
+                        // Stop sending viewport requests immediately; the
+                        // content thread owns rendering resources.
+                        ed.viewport_session = None;
+                        ed.viewport_rect = None;
                     }
                     handled = true;
                 }

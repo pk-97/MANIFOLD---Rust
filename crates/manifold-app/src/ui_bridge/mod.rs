@@ -20,7 +20,7 @@ mod rack_controls;
 pub use projection::timeline::sync_automation_lane_order;
 pub(crate) use projection::trigger_routing::modifier_label_for_param;
 #[cfg(test)]
-pub(crate) use projection::trigger_routing::tests::duplicate_force_project;
+pub(crate) use projection::trigger_routing::tests::{duplicate_force_project, force_project};
 pub(crate) use projection::trigger_routing::{TriggerRoutingCatalog, TriggerSourceChoice, TriggerTargetChoice};
 // `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor
 // mapping drags, graph-canvas node-param drags) can name `ResolvedScrub`

@@ -131,6 +131,7 @@
         }
       }
     ],
+    "shape": {"kind": "axis", "direction": ["direction_x", "direction_y", "direction_z"]},
     "sceneModifier": {
       "schemaVersion": 1,
       "singleton": false,

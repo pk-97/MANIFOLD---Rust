@@ -92,12 +92,6 @@ pub struct Workspace {
     /// Owner and render node of the cached scene; identical graphs on two
     /// owners must still have separate simulation and parameter histories.
     pub viewport_target: Option<(manifold_core::GraphTarget, manifold_core::NodeId)>,
-    /// Accepted domains from the runtime that produced the cached viewport.
-    /// Reused by rendering and picking, never substituted from another solver.
-    pub viewport_fluid_domains: Vec<(
-        manifold_core::NodeId,
-        manifold_core::fluid_domain::FluidDomainSnapshot,
-    )>,
     /// Request most recently sent to the content thread. The redraw path
     /// replaces this when the target or requested camera changes.
     pub viewport_request_sent: Option<Arc<crate::scene_viewport::SceneViewportRequest>>,
@@ -126,32 +120,17 @@ pub struct Workspace {
     pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
     /// The gizmo layer last sent to the content thread (`SetPhysicsOverlay`).
     pub gizmo_layer_sent: Option<manifold_core::LayerId>,
-    /// The `node.scene_object` doc id the gizmo is attached to this session,
-    /// set by a viewport object-pick (`viewport_gizmo::pick_object`) and
-    /// cleared when the viewport closes or the def no longer resolves it
-    /// (`gizmo_target_for` returning `None`). Also routed into the Scene
-    /// Setup panel's own `SceneSelection` (`window_input.rs`) so Properties
-    /// follows a viewport click — one selection store, not two.
-    pub viewport_selected_object: Option<u32>,
-    /// Active gizmo axis drag, cleared on release or cancellation. Fluid
-    /// bounds preview without editing the graph; ordinary object transforms
-    /// retain their existing live-write path.
-    pub viewport_gizmo_drag: Option<GizmoDrag>,
+    /// The shape the gizmo is attached to this session, set by a viewport
+    /// pick and cleared when the viewport closes or the def no longer
+    /// declares it. A pick also selects the owner in the Scene Setup panel
+    /// (`window_input.rs`), so Properties follows a viewport click.
+    pub viewport_selected: Option<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
+    /// The gizmo drag in progress, a knob scrub ended on release or
+    /// cancellation.
+    pub viewport_gizmo_drag: Option<crate::scene_gizmo::GizmoGesture>,
     /// The graph editor's frame planner state and atlas (P5c); unused by
     /// the main window.
     pub(crate) editor_frame: crate::editor_frame::EditorFrameState,
-}
-
-/// One active gizmo axis drag. Fluid setup edits remain a UI-only bounds
-/// preview until release; content commits the complete gesture once.
-#[derive(Debug, Clone)]
-pub struct GizmoDrag {
-    pub axis: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis,
-    pub object_node_id: u32,
-    pub layer_id: manifold_core::LayerId,
-    pub last_x: f32,
-    pub last_y: f32,
-    pub fluid_domain: Option<crate::fluid_domain_edit::FluidDomainDrag>,
 }
 
 impl Workspace {
@@ -183,7 +162,6 @@ impl Workspace {
             timeline_scrubbing: false,
             viewport_session: None,
             viewport_target: None,
-            viewport_fluid_domains: Vec::new(),
             viewport_request_sent: None,
             viewport_open: false,
             viewport_rect: None,
@@ -194,7 +172,7 @@ impl Workspace {
             // fit without a display-frame reallocation.
             viewport_overlay_lines: Vec::with_capacity(viewport_overlay_capacity),
             gizmo_layer_sent: None,
-            viewport_selected_object: None,
+            viewport_selected: None,
             viewport_gizmo_drag: None,
             editor_frame: Default::default(),
         }

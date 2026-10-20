@@ -2,6 +2,8 @@
 //! (SCENE_SURFACES_DESIGN.md section 3.1 (vocabulary)). Declaration order is
 //! display order.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -250,5 +252,98 @@ impl RgbChannel {
             Self::G => 1,
             Self::B => 2,
         }
+    }
+}
+
+/// Three param ids, one per axis.
+pub type ParamTriple = [Cow<'static, str>; 3];
+
+/// A scene object's extent and handles, by the param ids that place it
+/// (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model)).
+/// Handles, the out-of-domain check and the card all read this one
+/// declaration; no kind has handle code of its own.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum SceneShape {
+    /// A solid oriented box: `center` moves, `rotation` rotates, `size`
+    /// scales per axis.
+    Box {
+        center: ParamTriple,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<ParamTriple>,
+        size: ParamTriple,
+    },
+    /// A solid ball: `center` moves, `radius` scales uniformly.
+    Sphere { center: ParamTriple, radius: Cow<'static, str> },
+    /// An infinite plane through `center`; rotating writes `normal`
+    /// normalized.
+    Plane { center: ParamTriple, normal: ParamTriple },
+    /// A point with a reach: `center` moves, `radius` scales uniformly.
+    PointRadius { center: ParamTriple, radius: Cow<'static, str> },
+    /// A direction, optionally placed and bounded. Rotating writes
+    /// `direction` with its length kept.
+    Axis {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<ParamTriple>,
+        direction: ParamTriple,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius: Option<Cow<'static, str>>,
+    },
+}
+
+impl SceneShape {
+    /// Every param id the shape names.
+    pub fn param_ids(&self) -> impl Iterator<Item = &str> {
+        let (triples, singles): (Vec<&ParamTriple>, Vec<&Cow<'static, str>>) = match self {
+            Self::Box { center, rotation, size } => {
+                (std::iter::once(center).chain(rotation).chain(std::iter::once(size)).collect(), Vec::new())
+            }
+            Self::Sphere { center, radius } | Self::PointRadius { center, radius } => (vec![center], vec![radius]),
+            Self::Plane { center, normal } => (vec![center, normal], Vec::new()),
+            Self::Axis { origin, direction, radius } => {
+                (origin.iter().chain(std::iter::once(direction)).collect(), radius.iter().collect())
+            }
+        };
+        triples.into_iter().flatten().chain(singles).map(|id| id.as_ref())
+    }
+}
+
+/// One declared shape of a scene object.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SceneShapeDecl {
+    #[serde(flatten)]
+    pub shape: SceneShape,
+    /// The input port whose upstream `node.transform_3d` owns the params;
+    /// `None` when the declaring node or card owns them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<Cow<'static, str>>,
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    #[test]
+    fn shape_declaration_reads_the_manifest_form() {
+        let decl: SceneShapeDecl = serde_json::from_str(
+            r#"{"kind": "point_radius", "center": ["center_x", "center_y", "center_z"], "radius": "radius"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decl,
+            SceneShapeDecl {
+                shape: SceneShape::PointRadius {
+                    center: [Cow::Borrowed("center_x"), Cow::Borrowed("center_y"), Cow::Borrowed("center_z")],
+                    radius: Cow::Borrowed("radius"),
+                },
+                via: None,
+            }
+        );
+        let axis: SceneShapeDecl =
+            serde_json::from_str(r#"{"kind": "axis", "direction": ["x", "y", "z"], "via": "transform"}"#).unwrap();
+        assert!(matches!(axis.shape, SceneShape::Axis { origin: None, radius: None, .. }));
+        assert_eq!(axis.via.as_deref(), Some("transform"));
+        let round: SceneShapeDecl = serde_json::from_str(&serde_json::to_string(&axis).unwrap()).unwrap();
+        assert_eq!(round, axis);
     }
 }

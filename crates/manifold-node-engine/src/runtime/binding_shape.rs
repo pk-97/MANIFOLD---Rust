@@ -61,6 +61,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::from_string("test.binding_shape".into()),
                 display_name: String::new(),
                 category: String::new(),

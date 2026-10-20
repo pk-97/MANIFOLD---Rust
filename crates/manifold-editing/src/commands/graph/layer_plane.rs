@@ -317,6 +317,7 @@ impl Command for AddSceneLayerPlaneCommand {
                 // ("Layer Plane N") and its material section is
                 // "{handle} — Material", matching the object gesture.
                 let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    shape: None,
                     id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
                     display_name: "Scene".to_string(),
                     category: "Geometry".to_string(),

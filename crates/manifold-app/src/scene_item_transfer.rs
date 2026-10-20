@@ -888,6 +888,7 @@ mod tests {
 
     fn metadata(node_id: NodeId) -> PresetMetadata {
         PresetMetadata {
+            shape: None,
             id: PresetTypeId::new("transfer_test"),
             display_name: "Transfer test".to_string(),
             category: "Test".to_string(),

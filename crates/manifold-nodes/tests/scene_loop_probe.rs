@@ -208,6 +208,7 @@ fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: Some(PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string("ProbeFanout".to_string()),
             display_name: "ProbeFanout".to_string(),
             category: "Test".to_string(),
