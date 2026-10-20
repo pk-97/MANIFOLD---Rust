@@ -8,11 +8,19 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     let mut def = fixture();
     let recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON)
     .unwrap();
-    let mut metadata = recipe.preset_metadata.clone().unwrap();
-    metadata.scene_modifier = None;
-    metadata.params.clear();
-    metadata.bindings.clear();
-    def.preset_metadata = Some(metadata);
+    // The host carries its own metadata. Copying the recipe's would hand the
+    // host recipe-only fields, such as a shape naming the recipe's params.
+    def.preset_metadata = Some(
+        serde_json::from_value(serde_json::json!({
+            "id": "CapturedSceneImpulses",
+            "displayName": "Captured scene impulses",
+            "category": "Physics",
+            "oscPrefix": "captured",
+            "params": [],
+            "bindings": []
+        }))
+        .unwrap(),
+    );
     // No continuous acceleration; isolate velocity changes from Fire.
     def.wires.retain(|wire| wire.from_node != 1);
     def = manifold_core::scene_modifier_edit::insert_scene_modifier(
