@@ -32,7 +32,7 @@ type Gizmos = [PhysicsGizmo];
 
 /// Lines a host frame draws without reallocating: the grid, a domain box
 /// and the largest handle set.
-pub(crate) const CHROME_LINES: usize = 128;
+pub(crate) const CHROME_LINES: usize = 128 + manifold_nodes_scene::node_graph::viewport_overlay::LATTICE_LINE_BUDGET;
 
 /// What one output surface's scene was rendered with.
 #[derive(Clone)]

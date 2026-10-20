@@ -97,6 +97,48 @@ pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
     ]
 }
 
+/// Most interior cell lines drawn along one axis. A cell grid on three box
+/// faces then never exceeds `2 * 3 * LATTICE_LINES_PER_AXIS` lines however
+/// fine the domain's resolution, and a coarser stride keeps the picture
+/// readable (Blender and Houdini draw the cell grid on the box faces, not
+/// through the volume).
+pub const LATTICE_LINES_PER_AXIS: u32 = 256;
+
+/// Upper bound on the lines [`fluid_lattice_lines`] appends.
+pub const LATTICE_LINE_BUDGET: usize = 6 * LATTICE_LINES_PER_AXIS as usize;
+
+const LATTICE_COLOR: [u8; 4] = [230, 200, 60, 70];
+
+/// The solver's cell grid on the three faces of the domain box farthest from
+/// `eye`, so the grid reads as a backdrop and never fills the view. The
+/// lines sit on the layout's own cell boundaries (`min + i * cell_size`);
+/// when an axis has more than [`LATTICE_LINES_PER_AXIS`] interior
+/// boundaries, every `stride`th is drawn. The box edges themselves are
+/// [`fluid_domain_lines`].
+pub fn fluid_lattice_lines(layout: FluidDomainLayout, eye: [f32; 3], out: &mut Vec<WorldLine>) {
+    let cell = layout.cell_size as f32;
+    let stride = layout.cells.map(|n| n.saturating_sub(1).div_ceil(LATTICE_LINES_PER_AXIS).max(1));
+    let face: [f32; 3] = std::array::from_fn(|k| {
+        if eye[k] < layout.min[k] + layout.size[k] * 0.5 { layout.min[k] + layout.size[k] } else { layout.min[k] }
+    });
+    for k in 0..3 {
+        let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+        for (along, across) in [(i, j), (j, i)] {
+            let mut step = stride[across];
+            while step < layout.cells[across] {
+                let mut a = [0.0; 3];
+                a[k] = face[k];
+                a[across] = layout.min[across] + step as f32 * cell;
+                a[along] = layout.min[along];
+                let mut b = a;
+                b[along] = layout.min[along] + layout.size[along];
+                out.push(WorldLine { a, b, color: LATTICE_COLOR });
+                step += stride[across];
+            }
+        }
+    }
+}
+
 /// A ground-plane (XZ, y=0) grid centred at the origin. The two lines through
 /// the origin are tinted to read as the X/Z axes (Blender/Maya convention),
 /// every other line is neutral gray.

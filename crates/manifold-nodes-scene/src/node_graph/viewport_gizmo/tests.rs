@@ -734,3 +734,66 @@ fn a_camera_moving_mid_drag_never_shifts_the_grab() {
     let HandleValues::One(x) = drag.update(&moved, at(&moved, target.origin)).unwrap() else { panic!("one value") };
     assert!((x + len).abs() < len * 0.01, "moved back by the grabbed length {len}, got {x}");
 }
+
+/// A3: the selected domain draws the solver's own cell grid, within the line
+/// budget at 256 cells, and only while it is selected.
+#[test]
+fn selected_domain_draws_the_solvers_cell_grid_within_budget() {
+    use manifold_core::fluid_domain::{DomainBox, FluidDomainSnapshot, FluidDomainState, domain_layout};
+    let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
+    let shape = node_shape(owner, 0, &decls[0], &[("pos_y", 2.0), ("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
+    let scene = scene_of(Vec::new(), vec![shape]);
+    let target = gizmo_target_for(&scene, &GizmoTargetId { owner: ShapeOwner::LiquidDomain(NodeId::new("domain")), shape: 0 }).unwrap();
+    let pose = DomainBox { pos: [0.0, 2.0, 0.0], rot_euler: [0.0; 3], scale: [4.0, 2.0, 4.0], billboard: false };
+    let layout = domain_layout(Some(pose), 4.0, 256).unwrap();
+    assert!(layout.cells.iter().all(|n| *n <= 256));
+    let snapshot = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
+    let domains = [(NodeId::new("domain"), snapshot)];
+    let mut chrome = GizmoChrome {
+        view: view(),
+        lights: &[],
+        domains: &domains,
+        physics: &[],
+        selected: None,
+        mode: GizmoMode::Move,
+        fade_handles: false,
+    };
+    let mut bare = Vec::new();
+    compose_lines(&chrome, &mut bare);
+    chrome.selected = Some(&target);
+    let mut lines = Vec::new();
+    compose_lines(&chrome, &mut lines);
+    let handles = lines_of(GizmoMode::Move, &target).len();
+    let grid = lines.len() - bare.len() - handles;
+    assert!(grid > 0 && grid <= crate::node_graph::viewport_overlay::LATTICE_LINE_BUDGET, "{grid} lines");
+    // Unselected draws no lattice: only the box and the ground.
+    assert_eq!(bare.len(), GROUND_GRID.len() + 12);
+
+    // Every lattice line lies on a cell boundary of the reported layout.
+    let cell = layout.cell_size as f32;
+    let lattice = &lines[bare.len()..bare.len() + grid];
+    let boundary = |axis: usize, v: f32| {
+        let steps = (v - layout.min[axis]) / cell;
+        (steps - steps.round()).abs() < 1e-3
+    };
+    let mut spacing_seen = false;
+    for line in lattice {
+        let along = (0..3).find(|&k| (line.a[k] - line.b[k]).abs() > 1e-6).unwrap();
+        for k in (0..3).filter(|&k| k != along) {
+            assert!(
+                boundary(k, line.a[k]) || line.a[k] == layout.min[k] + layout.size[k] || line.a[k] == layout.min[k],
+                "off the solver's cells"
+            );
+        }
+        spacing_seen = true;
+    }
+    assert!(spacing_seen);
+    // Consecutive lines on one face step by exactly the solver's cell size.
+    let zs: Vec<f32> = lattice
+        .iter()
+        .filter(|l| l.a[1] == l.b[1] && l.a[0] != l.b[0] && (l.a[1] == layout.min[1] || l.a[1] == layout.min[1] + layout.size[1]))
+        .map(|l| l.a[2])
+        .collect();
+    assert!(zs.windows(2).all(|w| ((w[1] - w[0]).abs() - cell).abs() < 1e-4), "cell size {cell}");
+}

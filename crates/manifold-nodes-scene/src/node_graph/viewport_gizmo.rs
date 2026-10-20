@@ -38,7 +38,7 @@ use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 use crate::node_graph::scene_vm::{FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, ShapeOwner, ShapeParamVm, ShapeWrite};
 use crate::node_graph::viewport_overlay::{
-    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, grid_lines, light_billboard_lines,
+    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, fluid_lattice_lines, grid_lines, light_billboard_lines,
     physics_gizmo_lines,
 };
 
@@ -513,6 +513,15 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
         .filter_map(|(_, snapshot)| snapshot.accepted_layout);
     for layout in accepted {
         out.extend(fluid_domain_lines(layout));
+    }
+    // The cell grid shows only for the selected domain, from what its solver
+    // accepted (D7a); handles and cards read the declaration instead.
+    if let Some(ShapeOwner::LiquidDomain(selected)) = chrome.selected.map(|target| &target.id.owner)
+        && let Some((_, snapshot)) = chrome.domains.iter().find(|(id, _)| id == selected)
+        && snapshot.state == FluidDomainState::Ready
+        && let Some(layout) = snapshot.accepted_layout
+    {
+        fluid_lattice_lines(layout, chrome.view.camera.pos, out);
     }
     let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
     for gizmo in chrome.physics {

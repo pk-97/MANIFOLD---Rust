@@ -53,7 +53,7 @@ Outcome: grab any scene object, domain, inflow, drain, collider or force on the 
 
 - **A1 Host the core on the preview.** Second input site in `window_input.rs` calling the same pick and drag over the preview rect, with the camera of the overlay frame on screen and targets from `SceneVm` and the shape declaration (D2). Merges lane/physics-overlay-shapes (D-71); its solver-reported shapes stay as the display layer. Built once, on B1's branch and B1's final core API. Seat: Opus lane, high. Files: `window_input.rs`, `physics_overlay.rs`, `ui_frame.rs` (`MainGizmos`), `frame/present.rs`, `viewport_overlay.rs`, `viewport_gizmo.rs` (the composition entry only).
 - **A2 Preview-only navigation.** Orbit, pan, dolly on the preview through the existing viewport camera session, output untouched (D9 gate). Fixes the viewport dolly bead in passing. Seat: Opus lane, high.
-- **A3 Lattice grid.** Draw the domain's lattice at its real resolution, same line generator. Seat: Sonnet, medium, after B1.
+- **A3 Lattice grid (done: selected domain, cell grid on the three far faces, 6 x 256 line budget).** Draw the domain's lattice at its real resolution, same line generator. Seat: Sonnet, medium, after B1.
 
 ### B. One object model, one Add menu
 

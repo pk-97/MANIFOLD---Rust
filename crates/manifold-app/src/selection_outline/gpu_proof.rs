@@ -309,3 +309,47 @@ fn an_export_with_a_selection_renders_no_mask() {
     assert!(!masked(&thread), "the export's frames drew no mask");
     assert_eq!(thread.content_pipeline.take_selection_outline(), (Some(request), None), "the selection is back after the export");
 }
+
+/// A3 after render: a selected 8 x 4 x 8 m water domain at 64 cells, its
+/// solver-reported cell grid on the three far faces, through the same
+/// `compose_lines` and line renderer the preview uses. Writes
+/// `/tmp/a3_domain_lattice_after.png`.
+#[test]
+fn a_selected_domain_shows_its_cell_grid() {
+    use manifold_core::NodeId;
+    use manifold_core::fluid_domain::{DomainBox, FluidDomainSnapshot, FluidDomainState, domain_layout};
+    use manifold_node_engine::scene::camera::Camera;
+    let device = std::sync::Arc::new(GpuDevice::new_queued("a3 lattice render"));
+    let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
+    let scene = SceneVm::from_def(&def).expect("a scene");
+    let mut target_domain = gizmo_targets(&scene).find(|t| t.id.owner == ShapeOwner::Object(41)).expect("a target");
+    target_domain.id.owner = ShapeOwner::LiquidDomain(NodeId::new("dom"));
+    let pose = DomainBox { pos: [0.0, 2.0, 0.0], rot_euler: [0.0; 3], scale: [8.0, 4.0, 8.0], billboard: false };
+    let layout = domain_layout(Some(pose), 8.0, 64).expect("a layout");
+    let domains = [(NodeId::new("dom"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) })];
+    let camera = Camera::look_at([9.0, 7.0, 13.0], [0.0, 1.5, 0.0], [0.0, 1.0, 0.0], 0.8, 0.1, 200.0);
+    let view = GizmoView::new(camera, W, H);
+    let mut lines = Vec::new();
+    compose_lines(
+        &GizmoChrome { view, lights: &[], domains: &domains, physics: &[], selected: Some(&target_domain), mode: GizmoMode::Move, fade_handles: false },
+        &mut lines,
+    );
+    let composite = target(&device, "a3 composite");
+    let mut enc = device.create_encoder("a3 chrome");
+    let mut ui = manifold_ui_paint::ui_renderer::UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
+    ui.begin_frame();
+    crate::scene_viewport::draw_world_lines(&mut ui, manifold_ui::Rect::new(0.0, 0.0, W as f32, H as f32), &camera, W, H, &lines);
+    if ui.prepare(&device, W, H, 1.0) {
+        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Clear);
+    }
+    enc.commit_and_wait_completed();
+    let shown = readback(&device, &composite);
+    let mut png = Vec::with_capacity((W * H * 4) as usize);
+    for px in &shown {
+        for (c, v) in px.iter().enumerate() {
+            let v = if c == 3 { 1.0 } else { v.clamp(0.0, 1.0).powf(1.0 / 2.2) };
+            png.push((v * 255.0).round() as u8);
+        }
+    }
+    image::save_buffer("/tmp/a3_domain_lattice_after.png", &png, W, H, image::ExtendedColorType::Rgba8).expect("write png");
+}
