@@ -97,7 +97,7 @@ convention archaeology: find the `scene_object` feeding `object_k`, read ITS inp
 grouped or not, a scene built from `scene_object`s gets first-class panel rows.
 *Rejected:* **pass-through marker node** (scene_object re-emits mesh/transform/… on mirrored
 output ports, no new PortType) — visibility has no mechanism: skip-alias machinery is
-texture-only (`metal_backend.rs` `alias_2d`/`install_texture_2d`), and "decline to write the
+texture-only (`metal_backend.rs` `alias_2d`), and "decline to write the
 output" fights the prebind invariant (`feedback_node_graph_prebind_all_textures`).
 *Rejected:* **per-object params on `render_scene`** (`visible_k`/`name_k`) — re-opens
 SCENE_BUILD D3 (render_scene carries no per-object state), gives modifiers/discovery no

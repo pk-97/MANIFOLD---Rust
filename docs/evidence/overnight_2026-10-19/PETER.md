@@ -1,6 +1,6 @@
 # For Peter — what only you can do or decide
 
-Written at the end of the 2026-10-19 overnight run, on main at 77f8c7844. Four parts: the one thing to read first, the designs waiting on your look or call, the open decision beads, and the list of things to try in the live app. Notes at the end.
+Written at the end of the 2026-10-19 overnight run, on main at 3caad3144. Five parts: the one thing to read first, the designs waiting on your look or call, the open decision beads, the test-suite cut list, and the list of things to try in the live app. Notes at the end. The night's record is `REPORT.md` next to this file.
 
 ## Top: quitting with unsaved changes loses them
 
@@ -59,6 +59,17 @@ The board (`.claude/hooks/design_status.py`) lists these. One line each.
 
 The census decision bead BUG-g98wz (Peter's 18 stage and look decisions from the simplification census) is closed: all 18 have an outcome in its notes.
 
+## Test suite cut list waiting on you
+
+`docs/TEST_SUITE_REDUCTION_DESIGN.md` (the test suite review, child 1 of BUG-hkbdp (renderer crate split)) proposes going from 7,899 tests to 7,884 and cutting the nightly GPU leg from 2,090 s to about 1,990 s. Nothing is cut yet. Its section 10 (Decisions for Peter) asks you:
+
+- Approve cuts C1 to C10 and C12 as written.
+- C1 to C3: turn the cost measurements into examples, or delete them.
+- C7: fold the finite-pixel check into the first-frame sweep and delete the smoke sweep.
+- C10: move the four viewport demos to manifold-nodes-scene, or shrink them where they are.
+- C11: merge the seven Liveschool fixture checks into one load (about a minute saved, the per-check names lost), or keep seven.
+- Trimming the long golden audio clips is not proposed; say if you want it. The water coupling gravity tests (1,296 s, the longest single chain) go to a water bead instead.
+
 ## Live test list: things only you can check in the app on main
 
 Rebuild main yourself, then:
@@ -77,7 +88,7 @@ Rebuild main yourself, then:
 ## Notes
 
 - The GitHub repo is public, so the `.manifold` show fixtures stay gitignored and untracked. Do not add one.
-- `.claude/hooks/cargo-check-on-stop.sh` is still on disk (BUG-qfi9a (Leftovers from lane 10 process-layer deletions)). Lanes may not delete hooks, so it waits for you or the lead.
+- `.claude/hooks/cargo-check-on-stop.sh` is still on disk (BUG-qfi9a (Leftovers from lane 10 process-layer deletions)). Lanes may not delete hooks, so it waits for you.
 - The perf baseline identity is stale. Re-baseline before trusting a perf comparison.
 - Old history snapshots open only in the legacy build.
 - The heightfield_shadow palette node is gone.

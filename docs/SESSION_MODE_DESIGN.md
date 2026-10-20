@@ -137,7 +137,7 @@ Statelessness rule: everything except `playing`/`pending`/`session_override`/`la
 
 ### Seek behavior
 
-Large seeks currently clear live slots (`clear_on_seek`, live_clip_manager.rs:209). Session slots are the opposite: they are beat-anchored and stateless, so **seeking does not stop them** — `elapsed` just changes. This is correct for the Ableton-sync case (timeline jumps while session clips keep looping). Pending launches DO get retargeted: on seek, recompute each `target_beat` to the next quantize boundary after the new position.
+Session slots are beat-anchored and stateless, so **seeking does not stop them** — `elapsed` just changes. This is correct for the Ableton-sync case (timeline jumps while session clips keep looping). Pending launches DO get retargeted: on seek, recompute each `target_beat` to the next quantize boundary after the new position.
 
 ### Transport stop / start
 
