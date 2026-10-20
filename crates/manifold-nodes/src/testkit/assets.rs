@@ -2,6 +2,7 @@
 
 pub const CATALOG_ASSETS_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 pub const ASSETS_GENERATOR_PRESETS_PHYSICSSOLIDS_JSON: &str = include_str!("../../assets/generator-presets/PhysicsSolids.json");
+pub const ASSETS_GENERATOR_PRESETS_SWARM_JSON: &str = include_str!("../../assets/generator-presets/Swarm.json");
 pub const ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpuFlip.json");
 pub const ASSETS_GENERATOR_PRESETS_WATERDAMBREAKMATTER_JSON: &str = include_str!("../../assets/generator-presets/WaterDamBreakMatter.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_ELASTICSCULPTURE_JSON: &str = include_str!("../../assets/scene-modifier-presets/ElasticSculpture.json");

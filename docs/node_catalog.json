@@ -25474,6 +25474,11 @@
           "type": "Array"
         },
         {
+          "name": "tick_seconds",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "active_count",
           "required": false,
           "type": "f32"
@@ -25525,11 +25530,6 @@
         },
         {
           "name": "field_min_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "tick_seconds",
           "required": false,
           "type": "f32"
         }
@@ -25652,19 +25652,9 @@
             "10000"
           ],
           "type": "float"
-        },
-        {
-          "default": "0.016666668",
-          "label": "Tick Seconds",
-          "name": "tick_seconds",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "float"
         }
       ],
-      "purpose": "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, a = the trilinear read of that tick's lattice at the particle, then v += a·dt and x += v·dt (semi-implicit Euler, dt = tick_seconds). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
+      "purpose": "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, a = the trilinear read of that tick's lattice at the particle, then v += a·dt and x += v·dt (semi-implicit Euler, dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves every swarm particle by the scene's forces, one fixed step per simulation tick.",
@@ -43723,10 +43713,6 @@
           "type": "f32"
         },
         {
-          "name": "tick_seconds",
-          "type": "f32"
-        },
-        {
           "name": "force_lattices",
           "type": "f32"
         },
@@ -43766,6 +43752,11 @@
           "capacity": "fixed:1",
           "name": "forces",
           "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "tick_seconds",
+          "type": "Array"
         }
       ],
       "params": [
@@ -43790,7 +43781,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's simulated seconds (Speed scales them), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
+      "purpose": "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Runs a swarm's simulation clock and lays the scene's forces over its box.",

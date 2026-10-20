@@ -3,8 +3,9 @@
 //! clock, the history replay and the staged upload, and node.move_swarm moves
 //! 100k particles with it. At 30 fps every frame runs two ticks on two
 //! lattices; at 120 fps every other frame runs none. Every particle lands
-//! where the lattice's CPU twin integrates it. And the fused swarm kernel
-//! matches the unfused pair.
+//! where the lattice's CPU twin integrates it. Under a Speed ramp, 30 and
+//! 120 fps land on the same particles. And the fused swarm kernel matches the
+//! unfused pair.
 
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
@@ -28,10 +29,10 @@ use crate::tick_sampled::TickSampled;
 
 const COUNT: usize = 100_000;
 
-/// node.swarm_forces's outputs node.move_swarm reads, by the same name.
-const WIRED: [&str; 11] = [
+/// node.swarm_forces's scalars node.move_swarm reads, by the same name.
+const WIRED: [&str; 10] = [
     "ticks", "first_tick", "force_lattices", "field_nodes_x", "field_nodes_y", "field_nodes_z",
-    "field_spacing", "field_min_x", "field_min_y", "field_min_z", "tick_seconds",
+    "field_spacing", "field_min_x", "field_min_y", "field_min_z",
 ];
 
 fn particle(i: usize) -> Particle {
@@ -53,45 +54,54 @@ fn field(seconds: f64) -> FieldValue {
     FieldValue::vortex([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 2.0, 1.0).unwrap().scaled(1.0 + seconds as f32).unwrap()
 }
 
-#[test]
-fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
-    let start: Vec<Particle> = (0..COUNT).map(particle).collect();
+/// What a flown swarm ends as: its particles, and each tick it ran with that
+/// tick's length.
+struct Flown {
+    particles: Vec<Particle>,
+    ran: Vec<(u64, f32)>,
+    costs: Vec<f64>,
+}
+
+/// node.swarm_forces into node.move_swarm over frames at `times`, the
+/// history replay sampling each tick's start, with Speed `speed` over
+/// transport time.
+fn fly(start: &[Particle], times: &[f64], speed: fn(f64) -> f32) -> Flown {
     let mut h = Harness::new();
-    let (particles, buffer) = h.array(&start, COUNT);
+    let (particles, buffer) = h.array(start, start.len());
     let field_slot = h.cpu_input(PortType::VectorField, field(0.0));
     let (forces, _) = h.array::<f32>(&[], 1);
+    let (tick_seconds, _) = h.array::<f32>(&[], 1);
     let scalars: Vec<(&'static str, Slot)> = WIRED.iter().map(|&name| (name, h.scalar())).collect();
     let mut forces_outputs = scalars.clone();
-    forces_outputs.push(("forces", forces));
-    let mut mover_inputs = vec![("in", particles), ("forces", forces)];
+    forces_outputs.extend([("forces", forces), ("tick_seconds", tick_seconds)]);
+    let mut mover_inputs = vec![("in", particles), ("forces", forces), ("tick_seconds", tick_seconds)];
     mover_inputs.extend(&scalars);
-    let none = params(&[]);
-    let mover_params = params(&[("active_count", COUNT as f32)]);
+    let mover_params = params(&[("active_count", start.len() as f32)]);
     let step = SimStep::export(Seconds(TICK));
     let mut forces_node = SwarmForces::new();
     let mut mover = MoveSwarm::new();
-
-    // One second at 30 fps, then half a second at 120 fps.
-    let times: Vec<f64> = (0..=30).map(|i| f64::from(i) / 30.0).chain((1..=60).map(|i| 1.0 + f64::from(i) / 120.0)).collect();
     let (mut previous, mut ran, mut costs) = (0.0, Vec::new(), Vec::new());
-    for &now in &times {
+    for &now in times {
         let mut starts = Vec::new();
         forces_node.request_physics_samples(previous, now, &mut starts);
         for at in starts {
             Backend::cpu_values_mut(&mut h.backend).set(field_slot, field(at));
-            let (_, errors) = h.run_at(&mut forces_node, &[("acceleration_field", field_slot)], &[], &none, at, step.authored_sample());
+            let knob = params(&[("speed", speed(at))]);
+            let (_, errors) = h.run_at(&mut forces_node, &[("acceleration_field", field_slot)], &[], &knob, at, step.authored_sample());
             assert!(errors.is_empty(), "{errors:?}");
         }
         Backend::cpu_values_mut(&mut h.backend).set(field_slot, field(now));
-        let (writes, errors) = h.run_at(&mut forces_node, &[("acceleration_field", field_slot)], &forces_outputs, &none, now, step);
+        let knob = params(&[("speed", speed(now))]);
+        let (writes, errors) = h.run_at(&mut forces_node, &[("acceleration_field", field_slot)], &forces_outputs, &knob, now, step);
         assert!(errors.is_empty(), "{errors:?}");
         let told = |name: &str| {
             let slot = scalars.iter().find(|(port, _)| *port == name).map(|&(_, slot)| slot).unwrap();
             writes.iter().find(|(s, _)| *s == slot).map(|(_, value)| match value { ParamValue::Float(v) => *v, other => panic!("{other:?}") }).unwrap()
         };
-        let (ticks, first, lattices, dt) = (told("ticks") as u64, told("first_tick") as u64, told("force_lattices"), told("tick_seconds"));
+        let (ticks, first, lattices) = (told("ticks") as u64, told("first_tick") as u64, told("force_lattices"));
         assert!(ticks == 0 || lattices == ticks as f32, "a moving field lays one lattice per tick: {ticks} ticks, {lattices} lattices");
-        ran.extend((first..first + ticks).map(|tick| (tick, dt)));
+        assert_eq!(forces_node.tick_seconds.len() as u64, ticks, "one length per tick");
+        ran.extend((first..first + ticks).zip(forces_node.tick_seconds.iter().copied()));
         for (slot, value) in writes {
             h.backend.set_scalar(slot, value);
         }
@@ -103,6 +113,15 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
         assert!(errors.is_empty(), "{errors:?}");
         previous = now;
     }
+    Flown { particles: read(&buffer, start.len()), ran, costs }
+}
+
+#[test]
+fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
+    let start: Vec<Particle> = (0..COUNT).map(particle).collect();
+    // One second at 30 fps, then half a second at 120 fps.
+    let times: Vec<f64> = (0..=30).map(|i| f64::from(i) / 30.0).chain((1..=60).map(|i| 1.0 + f64::from(i) / 120.0)).collect();
+    let Flown { particles: moved, ran, mut costs } = fly(&start, &times, |_| 1.0);
     costs.sort_by(f64::total_cmp);
     println!("move_swarm 100k particles: median frame {:.3} ms (encode + GPU + wait), worst {:.3} ms", costs[costs.len() / 2], costs[costs.len() - 1]);
     assert_eq!(ran.iter().map(|&(tick, _)| tick).collect::<Vec<_>>(), (0..90).collect::<Vec<_>>(), "every tick runs once, in order");
@@ -118,7 +137,6 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
             values
         })
         .collect();
-    let moved: Vec<Particle> = read(&buffer, COUNT);
     let mut spin = 0.0f64;
     for (i, (got, from)) in moved.iter().zip(&start).enumerate() {
         if i % 4 == 0 {
@@ -142,9 +160,30 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
     assert!(pushes != 0.0 && (-spin).signum() == pushes, "the swarm turns the way the vortex pushes: spin {spin}");
 }
 
+/// Speed rising tick by tick while the swarm plays: at 30 fps every frame runs two ticks
+/// of different lengths, at 120 fps every other frame runs one. The swarm
+/// lands on the same particles, bit for bit.
+#[test]
+fn swarm_speed_ramp_lands_the_same_at_30_and_120_fps() {
+    const N: usize = 16_384;
+    let start: Vec<Particle> = (0..N).map(|i| particle(i * (COUNT / N))).collect();
+    // Stepped on tick starts: the clock applies a Speed edit from where it is
+    // observed, so a smooth curve would differ in the clock itself.
+    let ramp = |seconds: f64| 0.5 + 0.75 * ((seconds / TICK + 1e-6).floor() * TICK) as f32;
+    let at = |fps: f64| (0..=(fps as u32)).map(|i| f64::from(i) / fps).collect::<Vec<_>>();
+    let slow = fly(&start, &at(30.0), ramp);
+    let fast = fly(&start, &at(120.0), ramp);
+    assert_eq!(slow.ran.len(), 60);
+    assert_eq!(slow.ran, fast.ran, "every tick runs with its own length at any frame rate");
+    assert!(slow.ran.chunks(2).all(|pair| pair[1].1 > pair[0].1), "a 30 fps frame's two ticks keep their own lengths");
+    let bits = |particles: &[Particle]| bytemuck::cast_slice::<Particle, u32>(particles).to_vec();
+    assert_eq!(bits(&slow.particles), bits(&fast.particles), "a Speed ramp moves the swarm the same at any frame rate");
+    assert!(slow.particles.iter().zip(&start).all(|(a, b)| a.position != b.position), "the ramp moved the swarm");
+}
+
 /// node.move_swarm into node.swarm_to_copies, fused into one kernel by the
 /// graph compiler's codegen, matches the two standalone kernels bit for bit
-/// over three ticks that each read their own lattice.
+/// over three ticks that each read their own lattice and length.
 #[test]
 fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
     const N: usize = 4096;
@@ -160,20 +199,24 @@ fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
         .flatten()
         .collect();
     let (forces, forces_buffer) = h.array(&flat, flat.len());
+    let lengths = [0.8 * TICK as f32, TICK as f32, 1.3 * TICK as f32];
+    let (tick_seconds, tick_seconds_buffer) = h.array(&lengths, lengths.len());
     let (particles, particles_buffer) = h.array(&start, N);
     let values = [
         ("active_count", N as f32), ("ticks", 3.0), ("first_tick", 5.0), ("force_lattices", 3.0),
         ("field_nodes_x", 17.0), ("field_nodes_y", 17.0), ("field_nodes_z", 17.0), ("field_spacing", 0.25),
-        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("tick_seconds", TICK as f32), ("size", 0.07),
+        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("size", 0.07),
     ];
     let region = vec![
-        member::<MoveSwarm>(0, vec![InputSource::External(0), InputSource::External(1)]),
+        member::<MoveSwarm>(0, vec![InputSource::External(0), InputSource::External(1), InputSource::External(2)]),
         member::<SwarmToCopies>(1, vec![InputSource::Node(NodeInstanceId(0))]),
     ];
-    let fused: Vec<InstanceTransform> = fused_into(&mut h, region, &[&particles_buffer, &forces_buffer], N, &values, "copies");
+    let externals = [&particles_buffer, &forces_buffer, &tick_seconds_buffer];
+    let fused: Vec<InstanceTransform> = fused_into(&mut h, region, &externals, N, &values, "copies");
 
     let p = params(&values);
-    let (_, errors) = h.run(&mut MoveSwarm::new(), &[("in", particles), ("forces", forces)], &[("out", particles)], &p);
+    let inputs = [("in", particles), ("forces", forces), ("tick_seconds", tick_seconds)];
+    let (_, errors) = h.run(&mut MoveSwarm::new(), &inputs, &[("out", particles)], &p);
     assert!(errors.is_empty(), "{errors:?}");
     let (copies, copies_buffer) = h.array::<InstanceTransform>(&[], N);
     let (_, errors) = h.run(&mut SwarmToCopies::new(), &[("particles", particles)], &[("copies", copies)], &p);

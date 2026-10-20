@@ -4,9 +4,11 @@
 //   a = forces(x) at the tick's lattice   (force_lattice.wgsl, trilinear)
 //   v += a · dt;  x += v · dt
 // Each tick reads the lattice of its own tick (one per tick from first_tick,
-// or one for every tick when force_lattices is 1; 0 means no forces), so a
-// swarm moves the same at any frame rate. Dead particles (life <= 0) pass
-// through. `in` is coincident (Element = Particle); `forces` is gathered.
+// or one for every tick when force_lattices is 1; 0 means no forces) and its
+// own length dt = tick_seconds[t], so a swarm moves the same at any frame
+// rate, Speed ramps included. Dead particles (life <= 0) pass through. `in`
+// is coincident (Element = Particle); `forces` and `tick_seconds` are
+// gathered.
 fn move_swarm_force(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
@@ -32,7 +34,6 @@ fn body(
     field_min_x: f32,
     field_min_y: f32,
     field_min_z: f32,
-    tick_seconds: f32,
 ) -> Element {
     var p = e_in;
     if p.life <= 0.0 {
@@ -46,9 +47,10 @@ fn body(
             let base = force_lattice_base(first_tick + t, first_tick, force_lattices, dims);
             a = move_swarm_force(p.position, origin, field_spacing, dims, base);
         }
-        p.velocity = p.velocity + a * tick_seconds;
-        p.position = p.position + p.velocity * tick_seconds;
+        let dt = buf_tick_seconds[u32(t)];
+        p.velocity = p.velocity + a * dt;
+        p.position = p.position + p.velocity * dt;
+        p.age = p.age + dt;
     }
-    p.age = p.age + f32(max(ticks, 0)) * tick_seconds;
     return p;
 }

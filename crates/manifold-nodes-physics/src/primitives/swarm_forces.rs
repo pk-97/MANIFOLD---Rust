@@ -11,7 +11,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_physics::FieldValue;
 use manifold_physics::clock::{LiveLoad, SimulationClock};
-use manifold_physics::force_lattice::{ForceLattice, TickForces};
+use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, TickForces};
 
 use crate::force_lattice::{LatticeBuffers, LatticeUpload};
 use crate::tick_sampled::{TickSampled, TickSampledRegistration};
@@ -19,8 +19,8 @@ use crate::tick_sampled::{TickSampled, TickSampledRegistration};
 /// Force Detail's top: 64³ lattice nodes laid on the CPU per tick at most.
 const MAX_FORCE_DETAIL: f32 = 64.0;
 
-const OUTPUTS: [&str; 13] = [
-    "ticks", "first_tick", "epoch", "tick_seconds", "force_lattices",
+const OUTPUTS: [&str; 12] = [
+    "ticks", "first_tick", "epoch", "force_lattices",
     "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing",
     "field_min_x", "field_min_y", "field_min_z", "simulation_time",
 ];
@@ -32,7 +32,7 @@ const fn param(name: &'static str, label: &'static str, ty: ParamType, default: 
 manifold_node_engine::primitive! {
     name: SwarmForces,
     type_id: "node.swarm_forces",
-    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's simulated seconds (Speed scales them), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
+    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
     inputs: {
         bounds: Transform optional,
         acceleration_field: VectorField optional,
@@ -43,13 +43,13 @@ manifold_node_engine::primitive! {
         ticks: ScalarF32,
         first_tick: ScalarF32,
         epoch: ScalarF32,
-        tick_seconds: ScalarF32,
         force_lattices: ScalarF32,
         field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
         field_spacing: ScalarF32,
         field_min_x: ScalarF32, field_min_y: ScalarF32, field_min_z: ScalarF32,
         simulation_time: ScalarF32,
         forces: Array(f32),
+        tick_seconds: Array(f32),
     },
     params: [
         param("force_detail", "Force Detail", ParamType::Int, 17.0, (2.0, MAX_FORCE_DETAIL)),
@@ -69,6 +69,7 @@ manifold_node_engine::primitive! {
         forces: TickForces = TickForces::default(),
         buffers: LatticeBuffers = LatticeBuffers::default(),
         published: [f32; OUTPUTS.len()] = [0.0; OUTPUTS.len()],
+        tick_seconds: Vec<f32> = Vec::with_capacity(FORCE_LATTICE_RESERVE as usize),
     },
 }
 
@@ -107,16 +108,17 @@ impl SwarmForces {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
         self.forces.prepare(lattice, field.as_ref(), &self.clock, &frame)?;
-        // Speed changes each tick's simulated length, not the tick count. A
-        // frame without ticks reports one Sim Rate interval, as water does.
-        let tick_seconds = if frame.ticks == 0 { ctx.sim_step.interval.0 } else { frame.duration().0 };
+        // Speed changes each tick's simulated length, not the tick count, and
+        // a Speed ramp gives each tick its own: one length per tick, as water
+        // steps each tick by its own interval.
+        self.tick_seconds.clear();
+        self.tick_seconds.extend((0..u64::from(frame.ticks)).map(|tick| frame.interval(tick).map_or(0.0, |i| i.duration().0) as f32));
         let [nx, ny, nz] = lattice.nodes().map(|n| n as f32);
         let min = lattice.min();
         Ok([
             frame.ticks as f32,
             frame.first_sequence as f32,
             frame.epoch as f32,
-            tick_seconds as f32,
             self.forces.lattices() as f32,
             nx, ny, nz,
             lattice.spacing(),
@@ -136,6 +138,7 @@ impl SwarmForces {
             impulses: &[],
             impulses_dirty: false,
             hits: &[],
+            tick_seconds: &self.tick_seconds,
         };
         self.buffers.upload(gpu, offline, data)?;
         self.forces.mark_uploaded();
@@ -145,15 +148,19 @@ impl SwarmForces {
 
 impl Primitive for SwarmForces {
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "forces"
+        matches!(port, "forces" | "tick_seconds")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "forces").then(|| self.buffers.forces()).flatten()
+        match port {
+            "forces" => self.buffers.forces(),
+            "tick_seconds" => self.buffers.tick_seconds(),
+            _ => None,
+        }
     }
 
     fn array_output_capacity(&self, port_name: &str, _params: &ParamValues, _input_capacities: &[(&str, u32)]) -> Option<u32> {
-        (port_name == "forces").then_some(1)
+        self.provides_array_output(port_name).then_some(1)
     }
 
     fn acceleration_input(&self) -> Option<&'static str> {
@@ -220,22 +227,33 @@ mod tests {
     /// The authored field at a transport time.
     type Field = fn(f64) -> FieldValue;
 
+    /// What a played run told node.move_swarm, tick by tick.
+    struct Played {
+        frames: Vec<Frame>,
+        lattices: Vec<Vec<[f32; 4]>>,
+        tick_seconds: Vec<f32>,
+    }
+
     struct Rig {
         node: SwarmForces,
         backend: MockBackend,
         field: Option<(Slot, Field)>,
         step: SimStep,
+        /// The Speed knob over transport time, when it moves.
+        speed: Option<fn(f64) -> f32>,
     }
 
     impl Rig {
         fn new(field: Option<Field>, step: SimStep) -> Self {
             let mut backend = MockBackend::new();
             let field = field.map(|at| (backend.acquire(ResourceId(1), PortType::VectorField, None, (0, 0)), at));
-            Self { node: SwarmForces::new(), backend, field, step }
+            Self { node: SwarmForces::new(), backend, field, step, speed: None }
         }
 
         fn run(&mut self, seconds: f64, params: &[(&'static str, f32)], step: SimStep) -> Vec<String> {
-            let params: ParamValues = params.iter().map(|&(name, value)| (Cow::Borrowed(name), ParamValue::Float(value))).collect();
+            let speed = self.speed.map(|at| (Cow::Borrowed("speed"), ParamValue::Float(at(seconds))));
+            let params: ParamValues =
+                params.iter().map(|&(name, value)| (Cow::Borrowed(name), ParamValue::Float(value))).chain(speed).collect();
             if let Some((slot, at)) = self.field {
                 self.backend.cpu_values_mut().set(slot, at(seconds));
             }
@@ -264,23 +282,25 @@ mod tests {
             Frame(self.node.published)
         }
 
-        /// Frames at `fps` over `[0, seconds]`; every frame's outputs and
-        /// force lattices, the lattices read per tick.
-        fn play(&mut self, fps: f64, seconds: f64, from: f64, params: &[(&'static str, f32)]) -> (Vec<Frame>, Vec<Vec<[f32; 4]>>) {
-            let (mut frames, mut ticks) = (Vec::new(), Vec::new());
+        /// Frames at `fps` over `[from, from + seconds]`: every frame's
+        /// outputs, and the lattice and length each tick reads.
+        fn play(&mut self, fps: f64, seconds: f64, from: f64, params: &[(&'static str, f32)]) -> Played {
+            let mut played = Played { frames: Vec::new(), lattices: Vec::new(), tick_seconds: Vec::new() };
             let mut previous = from;
             for index in 0..=(seconds * fps).round() as u64 {
                 let now = from + index as f64 / fps;
                 let frame = self.frame(previous, now, params);
                 previous = now;
                 let lattice_len = self.node.forces.forces().len() / self.node.forces.lattices().max(1);
+                assert_eq!(self.node.tick_seconds.len(), frame.get("ticks") as usize, "one length per tick");
                 for tick in 0..frame.get("ticks") as usize {
                     let slot = tick.min(self.node.forces.lattices().saturating_sub(1));
-                    ticks.push(self.node.forces.forces().get(slot * lattice_len..(slot + 1) * lattice_len).unwrap_or(&[]).to_vec());
+                    played.lattices.push(self.node.forces.forces().get(slot * lattice_len..(slot + 1) * lattice_len).unwrap_or(&[]).to_vec());
                 }
-                frames.push(frame);
+                played.tick_seconds.extend(&self.node.tick_seconds);
+                played.frames.push(frame);
             }
-            (frames, ticks)
+            played
         }
     }
 
@@ -300,32 +320,28 @@ mod tests {
     #[test]
     fn swarm_ticks_and_lattices_match_at_30_and_120_fps() {
         let step = SimStep::live(Seconds(TICK));
-        let mut slow = Rig::new(Some(swelling), step);
-        let mut fast = Rig::new(Some(swelling), step);
-        let (slow_frames, slow_ticks) = slow.play(30.0, 2.0, 0.0, &[]);
-        let (fast_frames, fast_ticks) = fast.play(120.0, 2.0, 0.0, &[]);
-        assert_eq!(total(&slow_frames, "ticks"), 120.0);
-        assert_eq!(total(&fast_frames, "ticks"), 120.0);
-        assert_eq!(slow_ticks.len(), 120);
-        assert_eq!(slow_ticks, fast_ticks, "every tick reads its own start's lattice at any frame rate");
-        assert!(slow_ticks.iter().all(|lattice| lattice.len() == 17 * 17 * 17));
-        assert!(slow_ticks.windows(2).all(|pair| pair[0] != pair[1]), "a moving field lays one lattice per tick");
-        assert!(slow_frames.iter().all(|frame| frame.get("force_lattices") == frame.get("ticks")));
+        let slow = Rig::new(Some(swelling), step).play(30.0, 2.0, 0.0, &[]);
+        let fast = Rig::new(Some(swelling), step).play(120.0, 2.0, 0.0, &[]);
+        assert_eq!(total(&slow.frames, "ticks"), 120.0);
+        assert_eq!(total(&fast.frames, "ticks"), 120.0);
+        assert_eq!(slow.lattices.len(), 120);
+        assert_eq!(slow.lattices, fast.lattices, "every tick reads its own start's lattice at any frame rate");
+        assert!(slow.lattices.iter().all(|lattice| lattice.len() == 17 * 17 * 17));
+        assert!(slow.lattices.windows(2).all(|pair| pair[0] != pair[1]), "a moving field lays one lattice per tick");
+        assert!(slow.frames.iter().all(|frame| frame.get("force_lattices") == frame.get("ticks")));
         // Tick k reads the field at its own start, k Sim Rate intervals in.
         let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 17);
         let mut expected = vec![[0.0; 4]; lattice.node_count()];
         lattice.fill(&mut expected, |x| swelling(37.0 * TICK).sample(x)).unwrap();
-        assert_eq!(slow_ticks[37], expected);
-        // The 120 fps in-between frames run no tick and still report one
-        // Sim Rate interval.
-        assert!(fast_frames.iter().any(|frame| frame.get("ticks") == 0.0));
-        for frame in slow_frames.iter().chain(&fast_frames) {
-            assert!((frame.get("tick_seconds") - TICK as f32).abs() < 1e-7, "{frame:?}");
-        }
+        assert_eq!(slow.lattices[37], expected);
+        // The 120 fps in-between frames run no tick.
+        assert!(fast.frames.iter().any(|frame| frame.get("ticks") == 0.0));
+        assert_eq!(slow.tick_seconds, vec![TICK as f32; 120]);
+        assert_eq!(fast.tick_seconds, slow.tick_seconds);
         let last = |frames: &[Frame]| frames.last().unwrap().get("simulation_time");
-        assert!((last(&slow_frames) - 2.0).abs() < 1e-5 && (last(&fast_frames) - 2.0).abs() < 1e-5);
+        assert!((last(&slow.frames) - 2.0).abs() < 1e-5 && (last(&fast.frames) - 2.0).abs() < 1e-5);
         // The default box: a 4 m cube on the floor.
-        let first = slow_frames[1];
+        let first = slow.frames[1];
         assert_eq!([first.get("field_min_x"), first.get("field_min_y"), first.get("field_min_z")], [-2.0, 0.0, -2.0]);
         assert_eq!(first.get("field_spacing"), 0.25);
     }
@@ -335,18 +351,45 @@ mod tests {
     #[test]
     fn swarm_speed_scales_tick_seconds_not_ticks() {
         let step = SimStep::export(Seconds(TICK));
-        let (full, _) = Rig::new(None, step).play(60.0, 1.0, 0.0, &[("speed", 1.0)]);
-        let (half, _) = Rig::new(None, step).play(60.0, 1.0, 0.0, &[("speed", 0.5)]);
-        let (held, _) = Rig::new(None, step).play(60.0, 1.0, 0.0, &[("speed", 0.0)]);
-        assert_eq!(total(&full, "ticks"), 60.0);
-        assert_eq!(total(&half, "ticks"), 60.0);
-        assert_eq!(total(&held, "ticks"), 0.0, "Speed 0 holds the swarm");
-        for (full, half) in full.iter().zip(&half).filter(|(frame, _)| frame.get("ticks") > 0.0) {
-            assert!((half.get("tick_seconds") - 0.5 * full.get("tick_seconds")).abs() < 1e-7, "{full:?} {half:?}");
+        let full = Rig::new(None, step).play(60.0, 1.0, 0.0, &[("speed", 1.0)]);
+        let half = Rig::new(None, step).play(60.0, 1.0, 0.0, &[("speed", 0.5)]);
+        let held = Rig::new(None, step).play(60.0, 1.0, 0.0, &[("speed", 0.0)]);
+        assert_eq!(total(&full.frames, "ticks"), 60.0);
+        assert_eq!(total(&half.frames, "ticks"), 60.0);
+        assert_eq!(total(&held.frames, "ticks"), 0.0, "Speed 0 holds the swarm");
+        assert_eq!(half.tick_seconds.len(), full.tick_seconds.len());
+        for (full, half) in full.tick_seconds.iter().zip(&half.tick_seconds) {
+            assert!((half - 0.5 * full).abs() < 1e-7, "{full} {half}");
         }
-        let moved = |frames: &[Frame]| frames.iter().map(|frame| f64::from(frame.get("ticks") * frame.get("tick_seconds"))).sum::<f64>();
+        let moved = |played: &Played| played.tick_seconds.iter().map(|&s| f64::from(s)).sum::<f64>();
         assert!((moved(&full) - 1.0).abs() < 1e-5 && (moved(&half) - 0.5).abs() < 1e-5);
-        assert!((half.last().unwrap().get("simulation_time") - 0.5).abs() < 1e-5);
+        assert!((half.frames.last().unwrap().get("simulation_time") - 0.5).abs() < 1e-5);
+    }
+
+    /// Speed rising under a playing swarm, one step per Sim Rate tick. The
+    /// clock applies a Speed edit from where it is observed, so only edits on
+    /// tick starts read the same at every display rate.
+    fn stepped_ramp(seconds: f64) -> f32 {
+        0.5 + 0.75 * ((seconds / TICK + 1e-6).floor() * TICK) as f32
+    }
+
+    /// While Speed moves, each tick runs for its own length: a 30 fps frame's
+    /// two ticks differ, and every tick is told exactly what it is at 120 fps.
+    #[test]
+    fn swarm_speed_ramp_ticks_match_at_30_and_120_fps() {
+        let step = SimStep::live(Seconds(TICK));
+        let rig = |speed| Rig { speed: Some(speed), ..Rig::new(Some(swelling), step) };
+        let slow = rig(stepped_ramp).play(30.0, 2.0, 0.0, &[]);
+        let fast = rig(stepped_ramp).play(120.0, 2.0, 0.0, &[]);
+        assert_eq!(slow.tick_seconds.len(), 120);
+        let bits = |seconds: &[f32]| seconds.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&slow.tick_seconds), bits(&fast.tick_seconds), "a Speed ramp ticks the same at any frame rate");
+        assert_eq!(slow.lattices, fast.lattices);
+        // At 30 fps each frame after the first runs ticks 2k and 2k + 1.
+        assert!(slow.frames[1..].iter().all(|frame| frame.get("ticks") == 2.0));
+        assert!(slow.tick_seconds.chunks(2).all(|pair| pair[1] > pair[0]), "a frame's ticks keep their own lengths: {:?}", &slow.tick_seconds[..8]);
+        let moved = slow.tick_seconds.iter().map(|&s| f64::from(s)).sum::<f64>();
+        assert!((moved - f64::from(slow.frames.last().unwrap().get("simulation_time"))).abs() < 1e-4);
     }
 
     /// A loop back (or any backward seek) restarts the clock in a new epoch
@@ -355,30 +398,31 @@ mod tests {
     #[test]
     fn swarm_loop_restarts_in_a_new_epoch_and_matches_an_export() {
         let mut live = Rig::new(Some(swelling), SimStep::live(Seconds(TICK)));
-        let (before, _) = live.play(60.0, 1.0, 0.0, &[]);
-        let epoch = before.last().unwrap().get("epoch");
-        let (after, after_ticks) = live.play(60.0, 0.5, 0.25, &[]);
-        assert_eq!(after[0].get("ticks"), 0.0, "the restart frame runs no tick");
-        assert_eq!(after[0].get("epoch"), epoch + 1.0, "a loop is a new epoch: the particles reseed");
-        assert!(after.iter().all(|frame| frame.get("epoch") == epoch + 1.0));
+        let before = live.play(60.0, 1.0, 0.0, &[]);
+        let epoch = before.frames.last().unwrap().get("epoch");
+        let after = live.play(60.0, 0.5, 0.25, &[]);
+        assert_eq!(after.frames[0].get("ticks"), 0.0, "the restart frame runs no tick");
+        assert_eq!(after.frames[0].get("epoch"), epoch + 1.0, "a loop is a new epoch: the particles reseed");
+        assert!(after.frames.iter().all(|frame| frame.get("epoch") == epoch + 1.0));
         let mut export = Rig::new(Some(swelling), SimStep::export(Seconds(TICK)));
-        let (fresh, fresh_ticks) = export.play(60.0, 0.5, 0.25, &[]);
+        let fresh = export.play(60.0, 0.5, 0.25, &[]);
         // A frame without ticks reads no lattice, so its lattice count is
         // whatever the last tick left.
-        let told = |frames: &[Frame]| -> Vec<[f32; 5]> {
+        let told = |frames: &[Frame]| -> Vec<[f32; 4]> {
             let lattices = |f: &Frame| if f.get("ticks") > 0.0 { f.get("force_lattices") } else { 0.0 };
-            frames.iter().map(|f| [f.get("ticks"), f.get("first_tick"), f.get("tick_seconds"), lattices(f), f.get("simulation_time")]).collect()
+            frames.iter().map(|f| [f.get("ticks"), f.get("first_tick"), lattices(f), f.get("simulation_time")]).collect()
         };
-        assert_eq!(told(&after), told(&fresh));
-        assert_eq!(after_ticks, fresh_ticks);
+        assert_eq!(told(&after.frames), told(&fresh.frames));
+        assert_eq!(after.lattices, fresh.lattices);
+        assert_eq!(after.tick_seconds, fresh.tick_seconds);
     }
 
     /// A reset edge (a clip trigger) restarts the clock too.
     #[test]
     fn swarm_reset_edge_starts_a_new_epoch() {
         let mut rig = Rig::new(None, SimStep::export(Seconds(TICK)));
-        let (frames, _) = rig.play(60.0, 0.5, 0.0, &[("reset", 0.0)]);
-        let epoch = frames.last().unwrap().get("epoch");
+        let played = rig.play(60.0, 0.5, 0.0, &[("reset", 0.0)]);
+        let epoch = played.frames.last().unwrap().get("epoch");
         let next = rig.frame(0.5, 0.5 + TICK, &[("reset", 1.0)]);
         assert_eq!((next.get("epoch"), next.get("ticks"), next.get("simulation_time")), (epoch + 1.0, 0.0, 0.0));
     }
