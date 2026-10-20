@@ -129,6 +129,12 @@ pub fn fit_box(layout: &FluidDomainLayout, min: [f32; 3], max: [f32; 3]) -> BoxF
     BoxFit::Clipped { min: std::array::from_fn(|d| clipped(d).0), max: std::array::from_fn(|d| clipped(d).1) }
 }
 
+/// The initial column centred on `pos` of size `scale` as a world box, in
+/// f32: what [`fit_column`] classifies and what a warning outlines.
+pub fn column_box(pos: [f32; 3], scale: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    (std::array::from_fn(|d| pos[d] - scale[d] * 0.5), std::array::from_fn(|d| pos[d] + scale[d] * 0.5))
+}
+
 /// The initial column's edges as the solvers site them: `centre ± half` in
 /// f64, so a column that fits sites exactly as it always did, with the wall
 /// value on a side that was clipped. `None` when the column is wholly
@@ -142,8 +148,7 @@ pub fn fit_column(
     if pos.iter().chain(&scale).any(|v| !v.is_finite()) || scale.iter().any(|v| *v <= 0.0) {
         return Err("the initial volume must be a finite box");
     }
-    let lo32: [f32; 3] = std::array::from_fn(|d| pos[d] - scale[d] * 0.5);
-    let hi32: [f32; 3] = std::array::from_fn(|d| pos[d] + scale[d] * 0.5);
+    let (lo32, hi32) = column_box(pos, scale);
     let (clip_lo, clip_hi, outcome) = match fit_box(layout, lo32, hi32) {
         BoxFit::Outside => return Ok((None, ColumnOutcome::Outside)),
         BoxFit::Inside => (lo32, hi32, ColumnOutcome::Fits),

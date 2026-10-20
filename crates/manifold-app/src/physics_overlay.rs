@@ -87,9 +87,9 @@ pub(crate) struct PreviewGizmo {
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
     lines: Vec<WorldLine>,
-    /// The shown scene's authored setup problems plus what the solver
-    /// reported for the shown frame, reused.
-    problems: Vec<manifold_nodes_scene::node_graph::scene_vm::SetupProblem>,
+    /// The shown scene's setup problems with what the shown frame's solvers
+    /// reported, for the red boxes.
+    problems: crate::setup_check::GizmoProblems,
     /// Render slots of the selected object, for its outline (D-102); empty
     /// while an effect moves the picture off the scene.
     outline: Vec<u32>,
@@ -188,21 +188,13 @@ impl PreviewGizmo {
         }
         let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
         let (frame, _) = self.shown.as_ref()?;
-        match self.target.as_ref() {
-            Some((key, ..)) => manifold_nodes_scene::node_graph::scene_vm::problems_with_runtime(
-                &key.0.setup_anchors,
-                &key.0.problems,
-                &frame.domains,
-                &mut self.problems,
-            ),
-            None => self.problems.clear(),
-        }
+        self.problems.update(self.target.as_ref().map(|(key, ..)| &key.0), Some(&frame.domains));
         let chrome = GizmoChrome {
             view,
             lights: &frame.lights,
             domains: &frame.domains,
             physics: &frame.gizmos,
-            problems: &self.problems,
+            problems: self.problems.problems(),
             selected,
             mode: self.mode,
             fade_handles,

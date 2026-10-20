@@ -25,7 +25,7 @@ const FLUID_ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
 /// `role` values 1 to 3). Initial Fill (0) is refused by the GPU domains
 /// and has no shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FluidRole {
     Inflow,
     Outflow,
@@ -33,7 +33,7 @@ pub enum FluidRole {
 }
 
 /// Who declares a shape.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShapeOwner {
     /// A scene object row, by its `object_node_id`.
     Object(u32),

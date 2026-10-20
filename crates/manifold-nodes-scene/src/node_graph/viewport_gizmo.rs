@@ -542,8 +542,8 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
         let count = physics_gizmo_lines(gizmo, &mut shape);
         out.extend_from_slice(&shape[..count]);
     }
-    for problem in chrome.problems {
-        out.extend(box_lines(problem.bounds.0, problem.bounds.1, PROBLEM_COLOR));
+    for (lo, hi) in chrome.problems.iter().filter_map(|problem| problem.bounds) {
+        out.extend(box_lines(lo, hi, PROBLEM_COLOR));
     }
     if let Some(target) = chrome.selected {
         let start = out.len();

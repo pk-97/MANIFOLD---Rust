@@ -54,7 +54,7 @@ use liquid::locate_node;
 use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
 mod setup_check;
-pub use setup_check::{SetupAnchor, SetupProblem, SetupProblemKind, problems_with_runtime};
+pub use setup_check::{RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, problems_with_runtime};
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;
@@ -110,7 +110,7 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
 const TRANSFORM_MODIFIER_TYPE_IDS: &[&str] = &["node.transform_shake"];
 /// A write address for one editable value: the exact addressing
 /// `SetGraphNodeParamCommand::with_scope` takes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParamAddr {
     pub scope_path: Vec<u32>,
     pub node_doc_id: u32,

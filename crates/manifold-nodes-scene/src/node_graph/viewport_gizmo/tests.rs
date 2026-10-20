@@ -400,7 +400,7 @@ fn composition_draws_what_physics_did_then_the_selected_handles() {
     use manifold_core::fluid_domain::FluidDomainLayout;
     use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
     let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
-    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), refusal: None };
+    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None };
     let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready.clone() };
     let domains = [(NodeId::new("a"), ready), (NodeId::new("b"), pending)];
     let physics = [
@@ -442,7 +442,7 @@ fn a_setup_problem_draws_a_red_box_in_the_composed_lines() {
         owner: ShapeOwner::LiquidDomain(NodeId::new("domain")),
         kind: SetupProblemKind::ColumnOutside,
         params: Vec::new(),
-        bounds: ([5.0, 0.0, 0.0], [6.0, 1.0, 1.0]),
+        bounds: Some(([5.0, 0.0, 0.0], [6.0, 1.0, 1.0])),
     };
     let compose = |problems: &[SetupProblem]| {
         let chrome = GizmoChrome {
@@ -460,6 +460,8 @@ fn a_setup_problem_draws_a_red_box_in_the_composed_lines() {
         lines
     };
     let plain = compose(&[]);
+    let unplaced = SetupProblem { bounds: None, ..problem.clone() };
+    assert_eq!(compose(&[unplaced]).len(), plain.len(), "a problem nothing places draws no box");
     let flagged = compose(&[problem]);
     assert_eq!(flagged.len(), plain.len() + 12);
     assert!(
@@ -787,7 +789,7 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
     let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let scene = scene_of(Vec::new(), vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
-    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), refusal: None })];
+    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None })];
     let chrome = GizmoChrome {
         view,
         lights: &[],

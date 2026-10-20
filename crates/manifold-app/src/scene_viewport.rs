@@ -389,6 +389,7 @@ mod tests {
                 state: FluidDomainState::Initializing,
                 accepted_layout: None,
                 fit: Default::default(),
+                column_box: None,
                 refusal: None,
             },
         ));

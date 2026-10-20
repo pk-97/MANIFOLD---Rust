@@ -241,10 +241,7 @@ pub fn intake_overlay_state(ui: &mut UIRoot, content_state: &crate::content_stat
         ui.mark_overlay_dirty();
     }
 
-    ui.setup_runtime.clear();
-    ui.setup_runtime.extend(
-        content_state.physics_overlay_frames.iter().flatten().map(|frame| (frame.layer.clone(), frame.domains.clone())),
-    );
+    ui.setup_fits.clone_from(&content_state.setup_fits);
 
     // Runtime-only presentation state rides every ContentState, including
     // paused command snapshots; it must not wait for a project-version change.

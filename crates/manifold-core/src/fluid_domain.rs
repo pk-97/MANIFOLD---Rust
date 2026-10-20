@@ -120,6 +120,9 @@ pub struct FluidDomainSnapshot {
     pub accepted_layout: Option<FluidDomainLayout>,
     /// What the solver capped or clipped in the fill it ran this frame.
     pub fit: crate::liquid_setup::SetupFit,
+    /// The initial column as the solver ran it, when it did not fit: where
+    /// a driven column's warning box draws.
+    pub column_box: Option<([f32; 3], [f32; 3])>,
     /// Why the solver refused the setup it was handed, when it did.
     pub refusal: Option<std::sync::Arc<str>>,
 }

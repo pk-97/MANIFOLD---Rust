@@ -13,6 +13,12 @@ impl ContentPipeline {
     pub fn physics_overlay_frames(&self) -> &crate::physics_overlay::PhysicsOverlayFrames {
         &self.physics_overlay.frames
     }
+
+    /// What the solvers capped, clipped or refused on the layers that
+    /// rendered, for the cards; recorded whatever Show gizmos says.
+    pub fn setup_fits(&self) -> &crate::setup_check::SetupFitReport {
+        &self.setup_fits.report
+    }
 }
 
 #[cfg(target_os = "macos")]

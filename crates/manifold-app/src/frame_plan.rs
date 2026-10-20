@@ -338,10 +338,10 @@ pub(crate) struct FrameInputs {
     /// (`PreviewNavigation::frame_input`): a navigated frame, or the end of
     /// navigation, redraws the preview.
     pub preview_navigation: (u64, u64),
-    /// What the setup check reads for the active layer and the Scene
-    /// panel's layer (`setup_check::input_key`): a shape leaving or entering
-    /// its domain, or the solver capping a driven value, moves the cards'
-    /// warning lines.
+    /// The problem list the active layer's card and the Scene panel's card
+    /// show (`setup_check::CardCheck`): a warning appearing, changing or
+    /// clearing moves it, whether an edit or a solver's live cap did it; a
+    /// scrub that leaves the list alone does not.
     pub setup_check: u64,
 }
 
@@ -851,6 +851,8 @@ pub(crate) struct FramePlanner {
     active_layer_seen: Option<manifold_core::LayerId>,
     active_layer_version: u64,
     chrome_text: ChromeText,
+    /// The cards' setup-check list, kept between frames for its input.
+    pub setup_check: crate::setup_check::CardCheck,
 }
 
 impl FramePlanner {

@@ -1011,6 +1011,7 @@ pub struct ContentPipeline {
     /// its own bridge, never the workspace preview bridge (D9).
     scene_viewport: scene_viewport_capture::SceneViewportCapture,
     physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
+    setup_fits: crate::setup_check::SetupFitObservations,
     /// The selection outline's requests and mask bridges (D-102).
     #[cfg(target_os = "macos")]
     outline: crate::selection_outline::OutlineCapture,
@@ -1188,6 +1189,7 @@ impl ContentPipeline {
             last_node_preview_info: None,
             scene_viewport: Default::default(),
             physics_overlay: Default::default(),
+            setup_fits: Default::default(),
             #[cfg(target_os = "macos")]
             outline: Default::default(),
             last_live_node_params: Vec::new(),
@@ -2591,6 +2593,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
                 generators?.write_physics_overlay(layer, domains, lights, gizmos)
             });
+            self.setup_fits.record(|domains, each| generators.into_iter().for_each(|g| g.each_rendered_fluid_domains(domains, &mut *each)));
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,

@@ -26,6 +26,7 @@ use manifold_water_liquid::lattice::closed_faces;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_core::liquid_setup::{ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height};
+use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
@@ -441,10 +442,9 @@ manifold_node_engine::primitive! {
         clock: LiquidClock = LiquidClock::default(),
         scheduled_frame: Option<manifold_physics::clock::ClockFrame> = None,
         setup: Option<GpuFlipSetup> = None,
-        // What the accepted setup capped or clipped, and the reason the
-        // last refused one was; both ride the domain snapshot.
-        fit: SetupFit = SetupFit::default(),
-        refusal: Option<std::sync::Arc<str>> = None,
+        // What the setup this frame ran capped or clipped, or why it was
+        // refused; it rides the domain snapshot.
+        setup_report: SetupReport = SetupReport::default(),
         // The domain box of the accepted setup.
         layout: Option<FluidDomainLayout> = None,
         published: Option<[f32; OUTPUTS.len()]> = None,
@@ -662,7 +662,7 @@ impl Primitive for GpuFlipDomain {
 impl PhysicsNode for GpuFlipDomain {
     fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
-        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch, self.fit, self.refusal.clone()))
+        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch, &self.setup_report))
     }
 
     /// The pool under the fill height and the initial column as the fill
@@ -788,13 +788,15 @@ impl GpuFlipDomain {
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let geometry = gpu_flip_geometry(
-            |name, default| ctx.scalar_or_param(name, default),
-            ctx.inputs.transform("domain"),
-            ctx.inputs.transform("initial_volume"),
-        );
-        self.refusal = geometry.as_ref().err().map(|reason| reason.as_str().into());
-        let geometry = geometry?;
+        let column = ctx.inputs.transform("initial_volume");
+        let geometry = match gpu_flip_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.inputs.transform("domain"), column) {
+            Ok(geometry) => geometry,
+            Err(reason) => {
+                self.setup_report.refuse(&reason);
+                return Err(reason);
+            }
+        };
+        self.setup_report.accept(geometry.fit, column.map(|column| (column.pos, column.scale)));
         let speed = ctx.scalar_or_param("speed", 1.0);
         let gravity = [
             ctx.scalar_or_param("gravity_x", 0.0),
@@ -849,7 +851,6 @@ impl GpuFlipDomain {
             }
         }
         self.setup = Some(geometry.setup);
-        self.fit = geometry.fit;
         self.layout = Some(geometry.layout);
         let frame = self.clock.advance(
             ctx.time.seconds.0,

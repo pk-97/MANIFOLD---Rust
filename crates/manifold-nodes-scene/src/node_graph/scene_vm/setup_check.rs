@@ -5,22 +5,23 @@
 //! outline in the viewport both read it, and the rule is
 //! `manifold_core::liquid_setup`, the same fit the solvers fill from.
 
-use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::NodeId;
-use manifold_core::fluid_domain::FluidDomainSnapshot;
-use manifold_core::liquid_setup::{AxisFit, BoxFit, ColumnOutcome, FillFit, LATTICE_PADDING_CELLS, axis_fits, fit_box, fit_fill_height};
+use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot};
+use manifold_core::liquid_setup::{
+    AxisFit, BoxFit, ColumnOutcome, FillFit, LATTICE_PADDING_CELLS, SetupFit, axis_fits, fit_box, fit_fill_height,
+};
 use manifold_foundation::scene_surface::SceneShape;
 
 use super::{FluidRole, ParamAddr, SceneShapeVm, ShapeOwner, ShapeWrite};
 
 /// What does not fit. Each names the defined behaviour the solver applies,
 /// so the warning says what was changed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SetupProblemKind {
     /// The domain box itself is not one the solvers take; the water does not
     /// run. Carries the solver's reason.
     DomainRefused(String),
-    /// Fill Height is at or past the domain's top; the pool fills to the top.
+    /// Fill Height is past the domain's top; the pool fills to the top.
     FillCapped,
     /// The initial column reaches past a wall; the part inside fills.
     ColumnClipped,
@@ -66,9 +67,29 @@ pub struct SetupProblem {
     /// The node params that place the shape, most telling first: the card
     /// puts the warning on the first one a card row shows.
     pub params: Vec<ParamAddr>,
-    /// The shape as authored, as a world box. The viewport outlines it in
-    /// red; the fill is a flat box on the domain's top.
-    pub bounds: ([f32; 3], [f32; 3]),
+    /// The shape as a world box: as authored, or as the solver ran it. The
+    /// viewport outlines it in red; a capped fill is a flat box on the
+    /// domain's top. `None` when nothing places it (a refused domain sized
+    /// by its params alone): the card still warns, the viewport draws no box.
+    pub bounds: Option<([f32; 3], [f32; 3])>,
+}
+
+impl SetupProblem {
+    /// What the card shows of it: who, what and the rows it sits under,
+    /// never where. The planner keys the cards on this alone, so a driven
+    /// shape moving inside its warning never re-projects them.
+    pub fn hash_card(&self, state: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.owner.hash(state);
+        self.kind.hash(state);
+        self.params.hash(state);
+    }
+}
+
+/// The flat box a capped fill outlines: the domain's top face.
+fn fill_top(layout: &FluidDomainLayout) -> ([f32; 3], [f32; 3]) {
+    let y = layout.min[1] + layout.size[1];
+    ([layout.min[0], y, layout.min[2]], [layout.min[0] + layout.size[0], y, layout.min[2] + layout.size[2]])
 }
 
 /// A domain whose setup is read: the layout the solver takes, or the reason
@@ -164,7 +185,7 @@ pub(super) fn check_domain(
                     owner: domain.clone(),
                     kind: SetupProblemKind::DomainRefused(reason.to_owned()),
                     params: placing_params(shape, 0..3),
-                    bounds,
+                    bounds: Some(bounds),
                 });
             }
             return;
@@ -173,13 +194,7 @@ pub(super) fn check_domain(
     if let Some((addr, height)) = fill
         && let Ok(FillFit::Capped(_)) = fit_fill_height(layout, height)
     {
-        let y = layout.min[1] + layout.size[1];
-        out.push(SetupProblem {
-            owner: domain.clone(),
-            kind: SetupProblemKind::FillCapped,
-            params: vec![addr],
-            bounds: ([layout.min[0], y, layout.min[2]], [layout.min[0] + layout.size[0], y, layout.min[2] + layout.size[2]]),
-        });
+        out.push(SetupProblem { owner: domain.clone(), kind: SetupProblemKind::FillCapped, params: vec![addr], bounds: Some(fill_top(layout)) });
     }
     if let Some(shape) = column
         && let Some((lo, hi)) = declared_box(shape)
@@ -190,7 +205,7 @@ pub(super) fn check_domain(
             BoxFit::Outside => Some(SetupProblemKind::ColumnOutside),
         };
         if let Some(kind) = kind {
-            out.push(SetupProblem { owner: domain.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: (lo, hi) });
+            out.push(SetupProblem { owner: domain.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: Some((lo, hi)) });
         }
     }
 }
@@ -225,7 +240,111 @@ pub(super) fn check_source(
             BoxFit::Outside => SetupProblemKind::SourceOutside(role),
         },
     };
-    out.push(SetupProblem { owner: owner.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: (lo, hi) });
+    out.push(SetupProblem { owner: owner.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: Some((lo, hi)) });
+}
+
+/// Where a liquid's setup shapes sit in the graph, whether or not a wire
+/// drives them: what a problem the solver reports at run time hangs its card
+/// line and outline on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetupAnchor {
+    pub owner: ShapeOwner,
+    pub fill: ParamAddr,
+    pub column: Vec<ParamAddr>,
+    pub column_bounds: Option<([f32; 3], [f32; 3])>,
+    pub domain: Vec<ParamAddr>,
+    pub domain_bounds: Option<([f32; 3], [f32; 3])>,
+}
+
+impl SetupAnchor {
+    pub(super) fn new(owner: ShapeOwner, fill: ParamAddr, box_shape: Option<&SceneShapeVm>, column: Option<&SceneShapeVm>) -> Self {
+        Self {
+            owner,
+            fill,
+            column: column.map_or_else(Vec::new, |shape| placing_params(shape, 0..3)),
+            column_bounds: column.and_then(declared_box),
+            domain: box_shape.map_or_else(Vec::new, |shape| placing_params(shape, 0..3)),
+            domain_bounds: box_shape.and_then(declared_box),
+        }
+    }
+}
+
+/// What one liquid domain's solver reported about the setup it ran: the
+/// cards read it from the content thread's fit report, the gizmo hosts from
+/// the frame's domain snapshots.
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeFit<'a> {
+    pub node: &'a NodeId,
+    pub fit: SetupFit,
+    pub refusal: Option<&'a str>,
+    /// The domain box the solver accepted, where a capped fill outlines.
+    pub layout: Option<&'a FluidDomainLayout>,
+    /// The initial column as it ran, when it did not fit.
+    pub column_box: Option<([f32; 3], [f32; 3])>,
+}
+
+impl<'a> RuntimeFit<'a> {
+    pub fn of((node, snapshot): &'a (NodeId, FluidDomainSnapshot)) -> Self {
+        Self {
+            node,
+            fit: snapshot.fit,
+            refusal: snapshot.refusal.as_deref(),
+            layout: snapshot.accepted_layout.as_ref(),
+            column_box: snapshot.column_box,
+        }
+    }
+}
+
+/// Two problems a card shows in one place: the fill, the column (clipped or
+/// outside), or one refusal reason.
+fn same_slot(a: &SetupProblemKind, b: &SetupProblemKind) -> bool {
+    use SetupProblemKind::{ColumnClipped, ColumnOutside};
+    matches!((a, b), (ColumnClipped | ColumnOutside, ColumnClipped | ColumnOutside)) || a == b
+}
+
+/// The scene's authored problems, then what each domain's solver reported
+/// it did on the values it ran: a driven, modulated or wired fill or column
+/// is capped or clipped the same as an authored one, and shows the same
+/// way. Where both name one slot, what ran wins and the authored rows keep
+/// their order. `out` is cleared first.
+pub fn problems_with_runtime<'a>(
+    anchors: &[SetupAnchor],
+    authored: &[SetupProblem],
+    runtime: impl IntoIterator<Item = RuntimeFit<'a>>,
+    out: &mut Vec<SetupProblem>,
+) {
+    out.clear();
+    out.extend_from_slice(authored);
+    for report in runtime {
+        let Some(anchor) = anchors.iter().find(|anchor| matches!(&anchor.owner, ShapeOwner::LiquidDomain(node) if node == report.node)) else {
+            continue;
+        };
+        let mut add = |kind: SetupProblemKind, params: &[ParamAddr], bounds: Option<([f32; 3], [f32; 3])>| {
+            match out.iter_mut().find(|problem| problem.owner == anchor.owner && same_slot(&problem.kind, &kind)) {
+                Some(problem) => {
+                    problem.kind = kind;
+                    problem.bounds = bounds.or(problem.bounds);
+                }
+                None => out.push(SetupProblem { owner: anchor.owner.clone(), kind, params: params.to_vec(), bounds }),
+            }
+        };
+        if report.fit.fill_capped {
+            add(SetupProblemKind::FillCapped, std::slice::from_ref(&anchor.fill), report.layout.map(fill_top));
+        }
+        let column = match report.fit.column {
+            ColumnOutcome::Fits => None,
+            ColumnOutcome::Clipped => Some(SetupProblemKind::ColumnClipped),
+            ColumnOutcome::Outside => Some(SetupProblemKind::ColumnOutside),
+        };
+        if let Some(kind) = column {
+            add(kind, &anchor.column, report.column_box.or(anchor.column_bounds));
+        }
+        if let Some(reason) = report.refusal {
+            let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
+            let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
+            add(SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -287,7 +406,7 @@ mod tests {
         let clipped = problem(FluidRole::Inflow, &past).expect("a problem");
         assert_eq!(clipped.kind, SetupProblemKind::SourceClipped(FluidRole::Inflow));
         assert_eq!(clipped.kind.message(), "Inflow leaves the domain; the rest is unused");
-        assert_eq!(clipped.bounds, ([1.75, 2.75, -0.25], [2.25, 3.25, 0.25]));
+        assert_eq!(clipped.bounds, Some(([1.75, 2.75, -0.25], [2.25, 3.25, 0.25])));
         // The x params lead: they are the ones that took it past the wall.
         assert_eq!(clipped.params.first().map(|addr| addr.param_id.as_str()), Some("scale_x"));
         let away = source([9.0, 3.0, 0.0], [0.5; 3], &[]);
@@ -321,80 +440,73 @@ mod tests {
         let (lo, hi) = declared_box(&slab).expect("a box");
         assert!(hi[1] - lo[1] > 1.9 && hi[0] - lo[0] < 0.3, "turned about Z: {lo:?} {hi:?}");
     }
-}
 
-/// Where a liquid's setup shapes sit in the graph, whether or not a wire
-/// drives them: what a problem the solver reports at run time hangs its card
-/// line and outline on.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SetupAnchor {
-    pub owner: ShapeOwner,
-    pub fill: ParamAddr,
-    pub column: Vec<ParamAddr>,
-    pub column_bounds: Option<([f32; 3], [f32; 3])>,
-    pub domain: Vec<ParamAddr>,
-    pub domain_bounds: Option<([f32; 3], [f32; 3])>,
-}
-
-impl SetupAnchor {
-    pub(super) fn new(owner: ShapeOwner, fill: ParamAddr, box_shape: Option<&SceneShapeVm>, column: Option<&SceneShapeVm>) -> Self {
-        Self {
-            owner,
-            fill,
-            column: column.map_or_else(Vec::new, |shape| placing_params(shape, 0..3)),
-            column_bounds: column.and_then(declared_box),
-            domain: box_shape.map_or_else(Vec::new, |shape| placing_params(shape, 0..3)),
-            domain_bounds: box_shape.and_then(declared_box),
+    fn anchor() -> SetupAnchor {
+        let addr = |param: &str| ParamAddr { scope_path: vec![1], node_doc_id: 3, param_id: param.to_owned() };
+        SetupAnchor {
+            owner: ShapeOwner::LiquidDomain(NodeId::new("water")),
+            fill: addr("fill_height"),
+            column: vec![addr("scale_x"), addr("pos_x")],
+            column_bounds: None,
+            domain: Vec::new(),
+            domain_bounds: None,
         }
     }
-}
 
-/// The scene's authored problems, then what each domain's solver reports it
-/// did on the values it ran (`FluidDomainSnapshot::fit` and `refusal`): a
-/// driven, modulated or wired fill or column is capped or clipped the same
-/// as an authored one, and shows the same way. A problem the authored list
-/// already names for that domain is not added twice. `out` is cleared first.
-pub fn problems_with_runtime(
-    anchors: &[SetupAnchor],
-    authored: &[SetupProblem],
-    domains: &[(NodeId, FluidDomainSnapshot)],
-    out: &mut Vec<SetupProblem>,
-) {
-    out.clear();
-    out.extend_from_slice(authored);
-    let has = |out: &[SetupProblem], owner: &ShapeOwner, kind: &SetupProblemKind| {
-        out.iter().any(|problem| &problem.owner == owner && std::mem::discriminant(&problem.kind) == std::mem::discriminant(kind))
-    };
-    for (id, snapshot) in domains {
-        let Some(anchor) = anchors.iter().find(|anchor| matches!(&anchor.owner, ShapeOwner::LiquidDomain(node) if node == id)) else {
-            continue;
+    fn runtime(anchors: &[SetupAnchor], authored: &[SetupProblem], report: RuntimeFit<'_>) -> Vec<SetupProblem> {
+        let mut out = Vec::new();
+        problems_with_runtime(anchors, authored, [report], &mut out);
+        out
+    }
+
+    #[test]
+    fn a_wired_column_outlines_where_it_ran() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        let ran = ([2.5, 0.0, -0.5], [3.5, 1.0, 0.5]);
+        let report = RuntimeFit {
+            node: &node,
+            fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside },
+            refusal: None,
+            layout: Some(&layout()),
+            column_box: Some(ran),
         };
-        let layout_box = snapshot.accepted_layout.map(|layout| {
-            (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d]))
-        });
-        let add = |out: &mut Vec<SetupProblem>, kind: SetupProblemKind, params: Vec<ParamAddr>, bounds: Option<([f32; 3], [f32; 3])>| {
-            if has(out, &anchor.owner, &kind) {
-                return;
-            }
-            if let Some(bounds) = bounds {
-                out.push(SetupProblem { owner: anchor.owner.clone(), kind, params, bounds });
-            }
+        let problems = runtime(&anchors, &[], report);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
+        assert_eq!(problems[0].bounds, Some(ran), "the live column, not the whole domain");
+    }
+
+    #[test]
+    fn a_refusal_with_nothing_to_outline_still_warns_the_card() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        let report = RuntimeFit { node: &node, fit: SetupFit::default(), refusal: Some("Fluid: too big"), layout: None, column_box: None };
+        let problems = runtime(&anchors, &[], report);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].kind, SetupProblemKind::DomainRefused("Fluid: too big".to_owned()));
+        assert_eq!(problems[0].bounds, None);
+        assert_eq!(problems[0].params, vec![anchors[0].fill.clone()], "no domain rows: the warning sits on the fill row");
+    }
+
+    #[test]
+    fn what_ran_replaces_the_authored_column_problem() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        // The knob's base value clips; a modulator took the column wholly out.
+        let authored = SetupProblem {
+            owner: anchors[0].owner.clone(),
+            kind: SetupProblemKind::ColumnClipped,
+            params: vec![anchors[0].column[1].clone()],
+            bounds: Some(([1.5; 3], [2.5; 3])),
         };
-        if snapshot.fit.fill_capped {
-            let top = layout_box.map(|(min, max)| ([min[0], max[1], min[2]], max));
-            add(out, SetupProblemKind::FillCapped, vec![anchor.fill.clone()], top);
-        }
-        let column = match snapshot.fit.column {
-            ColumnOutcome::Fits => None,
-            ColumnOutcome::Clipped => Some(SetupProblemKind::ColumnClipped),
-            ColumnOutcome::Outside => Some(SetupProblemKind::ColumnOutside),
-        };
-        if let Some(kind) = column {
-            add(out, kind, anchor.column.clone(), anchor.column_bounds.or(layout_box));
-        }
-        if let Some(reason) = snapshot.refusal.as_deref() {
-            let params = if anchor.domain.is_empty() { vec![anchor.fill.clone()] } else { anchor.domain.clone() };
-            add(out, SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
-        }
+        let ran = ([4.0; 3], [5.0; 3]);
+        let report =
+            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran) };
+        let problems = runtime(&anchors, std::slice::from_ref(&authored), report);
+        assert_eq!(problems.len(), 1, "one column, one warning: {problems:?}");
+        assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
+        assert_eq!(problems[0].bounds, Some(ran));
+        assert_eq!(problems[0].params, authored.params, "the authored row order stays");
     }
 }
