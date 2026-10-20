@@ -2601,7 +2601,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 renderers.iter().find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>()),
                 self.write_surface_index, frame_count)
             {
-                Self::copy_scene_viewport(&mut gen_enc, copy, &self.preview_pipelines(), self.preview_sampler.as_ref());
+                self.copy_scene_viewport(&mut gen_enc, copy);
             }
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
@@ -3419,7 +3419,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // An effect scene's viewport frame goes to the viewport bridge
             // (D7a), beside the output, never into it (D9).
             if let Some(copy) = self.scene_viewport.observe_effect(&*self.compositor, self.write_surface_index, frame_count) {
-                Self::copy_scene_viewport(&mut native_enc, copy, &self.preview_pipelines(), self.preview_sampler.as_ref());
+                self.copy_scene_viewport(&mut native_enc, copy);
             }
 
             // ── Node-output preview (downscaled IOSurface) ──────────

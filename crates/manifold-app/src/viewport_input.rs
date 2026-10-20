@@ -48,7 +48,6 @@ pub struct ViewportInputSensitivity {
     pub pan: f32,
     pub dolly: f32,
     pub trackpad_pan: f32,
-    pub trackpad_pinch_dolly: f32,
 }
 
 impl Default for ViewportInputSensitivity {
@@ -64,7 +63,6 @@ impl Default for ViewportInputSensitivity {
             // Per wheel notch: `classify_wheel` passes notches, never pixels.
             dolly: 0.08,
             trackpad_pan: 0.0015,
-            trackpad_pinch_dolly: 0.05,
         }
     }
 }
@@ -80,7 +78,6 @@ pub enum ViewportGesture {
     Pan { dx: f32, dy: f32 },
     Dolly { delta: f32 },
     TrackpadPan { dx: f32, dy: f32 },
-    TrackpadPinchDolly { delta: f32 },
 }
 
 /// Classify a mouse-drag delta into a navigation gesture per D7's bindings:
@@ -104,15 +101,29 @@ pub fn classify_scroll(notches: f32) -> ViewportGesture {
     ViewportGesture::Dolly { delta: notches }
 }
 
+/// Wheel notches one event may dolly. A momentum flick or an accelerated
+/// wheel reports many at once; past this the step would jump.
+pub const MAX_DOLLY_NOTCHES_PER_EVENT: f32 = 5.0;
+
 /// The one wheel mapping every viewport host uses: a `LineDelta` is wheel
 /// notches and dollies; a Ctrl-held `PixelDelta` (Ctrl + two-finger scroll)
-/// dollies; a bare `PixelDelta` is a two-finger pan. A trackpad pinch is a
+/// dollies by the notches its pixels make, at the line height the timeline
+/// scrolls by; a bare `PixelDelta` is a two-finger pan. Each event's dolly
+/// is clamped to [`MAX_DOLLY_NOTCHES_PER_EVENT`]. `None` for a zero delta,
+/// which moves nothing and must not start navigation. A trackpad pinch is a
 /// separate `PinchGesture` event and never arrives here.
-pub fn classify_wheel(delta: winit::event::MouseScrollDelta, ctrl_held: bool) -> ViewportGesture {
+pub fn classify_wheel(delta: winit::event::MouseScrollDelta, ctrl_held: bool) -> Option<ViewportGesture> {
+    let dolly = |notches: f32| {
+        (notches != 0.0 && notches.is_finite())
+            .then(|| classify_scroll(notches.clamp(-MAX_DOLLY_NOTCHES_PER_EVENT, MAX_DOLLY_NOTCHES_PER_EVENT)))
+    };
     match delta {
-        winit::event::MouseScrollDelta::LineDelta(_, y) => classify_scroll(y),
-        winit::event::MouseScrollDelta::PixelDelta(p) if ctrl_held => classify_trackpad_pinch_dolly(p.y as f32),
-        winit::event::MouseScrollDelta::PixelDelta(p) => classify_trackpad_pan(p.x as f32, p.y as f32),
+        winit::event::MouseScrollDelta::LineDelta(_, y) => dolly(y),
+        winit::event::MouseScrollDelta::PixelDelta(p) if ctrl_held => dolly(p.y as f32 / crate::window_input::LINE_DELTA_PX),
+        winit::event::MouseScrollDelta::PixelDelta(p) => {
+            let (dx, dy) = (p.x as f32, p.y as f32);
+            (dx != 0.0 || dy != 0.0).then(|| classify_trackpad_pan(dx, dy))
+        }
     }
 }
 
@@ -121,11 +132,6 @@ pub fn classify_wheel(delta: winit::event::MouseScrollDelta, ctrl_held: bool) ->
 /// see `ViewportInputSensitivity`).
 pub fn classify_trackpad_pan(dx: f32, dy: f32) -> ViewportGesture {
     ViewportGesture::TrackpadPan { dx, dy }
-}
-
-/// Trackpad pinch-to-zoom gesture.
-pub fn classify_trackpad_pinch_dolly(delta: f32) -> ViewportGesture {
-    ViewportGesture::TrackpadPinchDolly { delta }
 }
 
 /// Apply a classified gesture to the requested navigation camera. The
@@ -137,15 +143,13 @@ pub fn apply(camera: &mut ViewportCamera, gesture: ViewportGesture, sens: &Viewp
         ViewportGesture::Pan { dx, dy } => camera.pan(dx, dy, sens.pan),
         ViewportGesture::Dolly { delta } => camera.dolly(delta, sens.dolly),
         ViewportGesture::TrackpadPan { dx, dy } => camera.trackpad_pan(dx, dy, sens.trackpad_pan),
-        ViewportGesture::TrackpadPinchDolly { delta } => {
-            camera.trackpad_pinch_dolly(delta, sens.trackpad_pinch_dolly)
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::event::MouseScrollDelta;
 
     #[test]
     fn gizmo_pointer_uses_dock_origin_and_actual_texture_scale() {
@@ -198,35 +202,67 @@ mod tests {
             classify_trackpad_pan(1.0, 2.0),
             ViewportGesture::TrackpadPan { dx: 1.0, dy: 2.0 }
         );
-        assert_eq!(
-            classify_trackpad_pinch_dolly(0.5),
-            ViewportGesture::TrackpadPinchDolly { delta: 0.5 }
-        );
+    }
+
+    fn line(notches: f32) -> MouseScrollDelta {
+        MouseScrollDelta::LineDelta(0.0, notches)
+    }
+
+    fn pixels(dy: f64) -> MouseScrollDelta {
+        MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, dy))
+    }
+
+    /// Distance after one wheel event, relative to the start.
+    fn dolly_ratio(delta: MouseScrollDelta, ctrl: bool) -> f32 {
+        let mut camera = ViewportCamera::default();
+        let d0 = camera.distance;
+        if let Some(gesture) = classify_wheel(delta, ctrl) {
+            apply(&mut camera, gesture, &ViewportInputSensitivity::default());
+        }
+        camera.distance / d0
     }
 
     #[test]
     fn wheel_notches_dolly_a_bounded_proportional_amount() {
-        use winit::event::MouseScrollDelta;
-        let sens = ViewportInputSensitivity::default();
-        let d0 = ViewportCamera::default().distance;
-        let after = |notches: f32| {
-            let mut camera = ViewportCamera::default();
-            apply(&mut camera, classify_wheel(MouseScrollDelta::LineDelta(0.0, notches), false), &sens);
-            camera.distance / d0
-        };
-        let one = after(1.0);
+        let one = dolly_ratio(line(1.0), false);
         assert!(one > 0.9 && one < 0.95, "one notch in moves about 8%, got {one}");
-        let out = after(-1.0);
+        let out = dolly_ratio(line(-1.0), false);
         assert!(out > 1.05 && out < 1.1, "one notch out moves about 8%, got {out}");
-        for n in [2.0_f32, 3.0, 10.0] {
-            assert!((after(n) - one.powf(n)).abs() < 1e-4, "{n} notches is one notch applied {n} times");
+        for n in [2.0_f32, 3.0, MAX_DOLLY_NOTCHES_PER_EVENT] {
+            assert!((dolly_ratio(line(n), false) - one.powf(n)).abs() < 1e-4, "{n} notches is one notch applied {n} times");
         }
+        assert_eq!(dolly_ratio(line(40.0), false), dolly_ratio(line(MAX_DOLLY_NOTCHES_PER_EVENT), false),
+            "an accelerated wheel is clamped to one event's bound");
+    }
+
+    /// Ctrl + two-finger scroll reports pixels: 20 px is one wheel notch and
+    /// a 100 px momentum event stays inside one event's bound, so the camera
+    /// never leaps toward the pivot.
+    #[test]
+    fn ctrl_pixel_scroll_dollies_by_notches_and_stays_bounded() {
+        let one = dolly_ratio(line(1.0), false);
+        assert!((dolly_ratio(pixels(crate::window_input::LINE_DELTA_PX as f64), true) - one).abs() < 1e-6,
+            "20 px is one notch");
+        let flick = dolly_ratio(pixels(100.0), true);
+        assert!((flick - one.powf(5.0)).abs() < 1e-4, "100 px is five notches, got {flick}");
+        let bound = one.powf(MAX_DOLLY_NOTCHES_PER_EVENT);
+        assert!(dolly_ratio(pixels(2000.0), true) >= bound - 1e-6, "a long flick is clamped");
+        assert!(bound > 0.6, "one event never moves more than about a third of the way in");
+        assert_eq!(dolly_ratio(pixels(100.0), false), 1.0, "without Ctrl the same scroll pans");
+    }
+
+    #[test]
+    fn zero_wheel_events_are_no_gesture() {
+        assert_eq!(classify_wheel(line(0.0), false), None);
+        assert_eq!(classify_wheel(pixels(0.0), true), None);
+        assert_eq!(classify_wheel(pixels(0.0), false), None);
+        assert_eq!(classify_wheel(line(f32::NAN), false), None);
     }
 
     #[test]
     fn sensitivity_defaults_are_all_positive() {
         let s = ViewportInputSensitivity::default();
         assert!(s.orbit > 0.0 && s.pan > 0.0 && s.dolly > 0.0);
-        assert!(s.trackpad_pan > 0.0 && s.trackpad_pinch_dolly > 0.0);
+        assert!(s.trackpad_pan > 0.0);
     }
 }

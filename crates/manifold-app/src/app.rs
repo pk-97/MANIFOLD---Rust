@@ -1976,7 +1976,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // is delivered while the window is out of focus.
                 // Matches Unity OnApplicationFocus(false) in UIBitmapRoot.cs.
                 if is_primary {
-                    self.preview_gizmo_release();
+                    self.release_preview_pointer();
                     log::debug!("Window lost focus — synthesizing PointerUp to cancel drag");
                     self.ws.ui_root.pointer_event(
                         self.cursor_pos,

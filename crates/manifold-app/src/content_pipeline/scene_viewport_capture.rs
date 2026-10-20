@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use manifold_compositor::generator_renderer::GeneratorRenderer;
+use manifold_compositor::presentation::DisplayDestination;
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::scene::scene_viewport::SceneViewportHostError;
 
@@ -26,9 +27,14 @@ pub(crate) struct SceneViewportCapture {
 }
 
 /// One frame's copy into the viewport bridge: the rendered view (`None`
-/// clears the surface) and the bridge surface it lands on.
+/// clears the surface), the bridge surface it lands on, and the host that
+/// shows it.
 #[cfg(target_os = "macos")]
-pub(super) type ViewportCopy = (Option<manifold_gpu::GpuTexture>, manifold_gpu::GpuTexture);
+pub(super) struct ViewportCopy {
+    source: Option<manifold_gpu::GpuTexture>,
+    target: manifold_gpu::GpuTexture,
+    host: ViewportHost,
+}
 
 impl SceneViewportCapture {
     /// Record a generator scene's frame for surface `slot`; what to copy
@@ -75,8 +81,9 @@ impl SceneViewportCapture {
         texture: Option<manifold_gpu::GpuTexture>,
     ) -> Option<ViewportCopy> {
         let generation = self.bridge.as_ref().map_or(0, |bridge| bridge.generation());
+        let host = request.host;
         self.observations.record(slot, frame, generation, request, status);
-        Some((texture, self.textures[slot].clone()?))
+        Some(ViewportCopy { source: texture, target: self.textures[slot].clone()?, host })
     }
 
     /// The bridge takes the owning host's view size (D7a). Both sides
@@ -127,18 +134,38 @@ impl ContentPipeline {
         &self.scene_viewport.observations.frames
     }
 
-    /// Copy one frame's view into the viewport bridge, display-mapped like
-    /// the node preview's colour path.
+    /// Copy one frame's view into the viewport bridge, display-mapped for
+    /// the host that shows it: the output preview maps like the workspace
+    /// preview it sits in (its headroom, the SDR preview toggle), the graph
+    /// editor like the graph editor window.
     #[cfg(target_os = "macos")]
-    pub(super) fn copy_scene_viewport(
-        enc: &mut manifold_gpu::GpuEncoder,
-        (source, target): ViewportCopy,
-        pipelines: &super::PreviewPipelines<'_>,
-        sampler: Option<&manifold_gpu::GpuSampler>,
-    ) {
-        match source {
-            Some(source) => Self::update_node_preview(enc, &source, Some(&target), false, Default::default(), pipelines, sampler),
-            None => enc.clear_texture(&target, 0.0, 0.0, 0.0, 1.0),
-        }
+    pub(super) fn copy_scene_viewport(&self, enc: &mut manifold_gpu::GpuEncoder, copy: ViewportCopy) {
+        let target = &copy.target;
+        let Some(source) = copy.source.as_ref() else {
+            enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
+            return;
+        };
+        let mut pipelines = self.preview_pipelines();
+        pipelines.plan = self.display_presentation_plan(display_destination(copy.host));
+        Self::update_node_preview(enc, source, Some(target), false, Default::default(), &pipelines, self.preview_sampler.as_ref());
+    }
+}
+
+/// Where a host's viewport frame is shown, for its display mapping.
+fn display_destination(host: ViewportHost) -> DisplayDestination {
+    match host {
+        ViewportHost::GraphEditor => DisplayDestination::GraphEditor,
+        ViewportHost::OutputPreview => DisplayDestination::Workspace,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_host_maps_its_view_for_the_window_that_shows_it() {
+        assert_eq!(display_destination(ViewportHost::OutputPreview), DisplayDestination::Workspace);
+        assert_eq!(display_destination(ViewportHost::GraphEditor), DisplayDestination::GraphEditor);
     }
 }

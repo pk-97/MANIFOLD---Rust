@@ -265,15 +265,16 @@ impl GeneratorRenderer {
     /// generator (no preview active). Clearing the dump here too means a closed
     /// editor leaves no generator dumping — a live show pays nothing — without
     /// depending on the unfused→fused executor rebuild to reset it.
+    ///
+    /// The scene viewport is left alone: the pipeline calls this every frame
+    /// the editor watches nothing, and a viewport pass torn down here would be
+    /// rebuilt each frame and never finish its warmup. Its lifetime belongs to
+    /// [`Self::set_scene_viewport_request`].
     pub fn clear_preview(&mut self) {
         self.preview_layer = None;
-        self.scene_viewport_request = None;
-        self.scene_viewport_modifier = None;
-        self.scene_viewport_error = None;
         for state in self.layer_generators.values_mut() {
             state.generator.set_preview_node(None);
             state.generator.clear_dump_set();
-            state.generator.clear_scene_viewport();
         }
     }
 

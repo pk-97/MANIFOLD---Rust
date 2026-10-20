@@ -373,12 +373,13 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
         && rect.contains(pos)
         && let Some(session) = ws.viewport_session.as_mut()
     {
-        let gesture = crate::viewport_input::classify_wheel(delta, cx.modifiers.ctrl);
-        crate::viewport_input::apply(
-            session.camera_mut(),
-            gesture,
-            &crate::viewport_input::ViewportInputSensitivity::default(),
-        );
+        if let Some(gesture) = crate::viewport_input::classify_wheel(delta, cx.modifiers.ctrl) {
+            crate::viewport_input::apply(
+                session.camera_mut(),
+                gesture,
+                &crate::viewport_input::ViewportInputSensitivity::default(),
+            );
+        }
         return true;
     }
     // The card lane scrolls like the main window's inspector: in place, its

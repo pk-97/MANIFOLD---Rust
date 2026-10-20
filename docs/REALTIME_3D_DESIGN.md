@@ -137,13 +137,16 @@ between this doc and execution.
   separate Output window gets no chrome.
 
   Preview-only navigation: with Show gizmos on, a drag on the picture orbits
-  (Shift or the middle button pans) and the wheel dollies, through the same
-  camera session and input mapping as the graph editor viewport
-  (`scene_viewport.rs`, `viewport_input.rs`), seeded from the output camera so
-  the first move starts on the picture on screen
+  (Shift or the middle button pans), a bare two-finger trackpad scroll pans,
+  and the wheel or a Ctrl + two-finger scroll dollies, each wheel event
+  bounded. It runs through the same camera session and input mapping as the
+  graph editor viewport (`scene_viewport.rs`, `viewport_input.rs`), seeded
+  from the output camera so the first move starts on the picture on screen
   (`crates/manifold-app/src/preview_navigation.rs`). While it navigates, the
   preview shows the scene's extra view (D9) and lines, picks and drags project
-  through the navigated camera. Escape, Show gizmos off, another scene, or
+  through the navigated camera. That view is the `render_scene` node's raw
+  output: no downstream nodes, layer effects, other layers or master effects,
+  so it can look different from the output beyond the camera. Escape, Show gizmos off, another scene, or
   opening the editor viewport returns the preview to the output. The two hosts
   own the one viewport request in turn: whichever starts navigating ends the
   other. Its frames travel through their own bridge, sized from the request,

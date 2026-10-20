@@ -2284,3 +2284,56 @@ mod warmup_tests {
         assert!(matches!(thread.held_commands.front(), Some(ContentCommand::Shutdown)), "the quit stays queued");
     }
 }
+
+#[cfg(test)]
+mod scene_viewport_host_tests {
+    use crate::content_command::ContentCommand::{SetGraphPreviewNode, SetSceneViewport, WatchGraphTarget};
+    use crate::content_thread::ContentThread;
+    use crate::scene_viewport::{SceneViewportNavigation, SceneViewportRequest, ViewportHost};
+    use manifold_core::{GraphTarget, NodeId};
+    use std::sync::Arc;
+
+    fn thread_with_scene() -> (ContentThread, GraphTarget) {
+        let mut project = manifold_core::project::Project::default();
+        let layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
+        let target = GraphTarget::Generator(layer.layer_id.clone());
+        project.timeline.layers.push(layer);
+        (crate::headless_harness::headless_content_thread(project, 64, 64), target)
+    }
+
+    fn request(host: ViewportHost, target: &GraphTarget) -> Option<Arc<SceneViewportRequest>> {
+        Some(SceneViewportNavigation::new(host, 64, 64).request(target, &NodeId::new("scene"), None, None))
+    }
+
+    /// One request, owned by one host at a time (D7a): the editor may ask
+    /// only for what it watches and loses its request when that moves; the
+    /// output preview names its own scene, outlives editor watch changes,
+    /// and each host's request replaces the other's in either order. None
+    /// of it edits the show (D9).
+    #[test]
+    fn each_host_keeps_the_one_request_by_its_own_rules() {
+        let (mut thread, target) = thread_with_scene();
+        let version = thread.editing_service.data_version();
+        let send = |thread: &mut ContentThread, cmd| {
+            thread.handle_command(cmd);
+            thread.content_pipeline.scene_viewport_host()
+        };
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), None,
+            "the editor cannot ask for a scene it does not watch");
+        send(&mut thread, WatchGraphTarget(Some(target.clone())));
+        send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("scene"))));
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), Some(ViewportHost::GraphEditor));
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::OutputPreview, &target))), Some(ViewportHost::OutputPreview),
+            "preview navigation takes the editor's request");
+        assert_eq!(send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))), Some(ViewportHost::OutputPreview),
+            "the preview's request does not follow what the editor watches");
+        assert_eq!(send(&mut thread, WatchGraphTarget(None)), Some(ViewportHost::OutputPreview));
+        send(&mut thread, WatchGraphTarget(Some(target.clone())));
+        send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("scene"))));
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), Some(ViewportHost::GraphEditor),
+            "the editor's viewport takes the preview's request");
+        assert_eq!(send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))), None,
+            "what the editor watches moved: its request is stale");
+        assert_eq!(thread.editing_service.data_version(), version, "navigation never edits the show");
+    }
+}
