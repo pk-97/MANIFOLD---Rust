@@ -338,6 +338,10 @@ pub(crate) struct FrameInputs {
     /// (`PreviewNavigation::frame_input`): a navigated frame, or the end of
     /// navigation, redraws the preview.
     pub preview_navigation: (u64, u64),
+    /// The setup check's list for the active layer and the Scene panel's
+    /// layer (`setup_check::key`): a shape leaving or entering its domain
+    /// moves the cards' warning lines.
+    pub setup_check: u64,
 }
 
 impl FrameInputs {
@@ -575,6 +579,7 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         // outliner item, and takes a queued row reveal.
         || last.scene_selection != next.scene_selection
         || last.inspector_reveal != next.inspector_reveal
+        || last.setup_check != next.setup_check
         || runtime.automation_latches != last.runtime.automation_latches
         || runtime.led_preview_presence != last.runtime.led_preview_presence
         || runtime.chain_failures != last.runtime.chain_failures
@@ -845,6 +850,16 @@ pub(crate) struct FramePlanner {
     active_layer_seen: Option<manifold_core::LayerId>,
     active_layer_version: u64,
     chrome_text: ChromeText,
+    setup_check: SetupCheckSeen,
+}
+
+/// The setup check's last answer and what it was asked of: it runs again
+/// only when a part stamp or one of the two layers moved.
+#[derive(Default)]
+struct SetupCheckSeen {
+    parts: PartStamps,
+    layers: [Option<manifold_core::LayerId>; 2],
+    key: u64,
 }
 
 impl FramePlanner {
@@ -883,6 +898,34 @@ impl FramePlanner {
             is_dirty: source.is_dirty,
             text: self.chrome_text.version(content, source.project_path),
         }
+    }
+
+    /// The setup check's key for the generator layers the cards show: the
+    /// active layer and the Scene panel's. Recomputed when a part stamp or
+    /// either layer moved; edit rate, never per frame.
+    pub(crate) fn setup_check_key(
+        &mut self,
+        project: &manifold_core::project::Project,
+        layers: [Option<&manifold_core::LayerId>; 2],
+        parts: PartStamps,
+    ) -> u64 {
+        let seen = &mut self.setup_check;
+        if seen.parts == parts && seen.layers.iter().zip(layers).all(|(seen, now)| seen.as_ref() == now) {
+            return seen.key;
+        }
+        seen.parts = parts;
+        seen.layers = layers.map(|layer| layer.cloned());
+        let mut problems = Vec::new();
+        for (index, layer) in layers.into_iter().flatten().enumerate() {
+            if index == 1 && layers[0] == Some(layer) {
+                continue;
+            }
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(layer.as_str()) {
+                problems.extend(crate::setup_check::layer_problems(layer));
+            }
+        }
+        seen.key = crate::setup_check::key(&problems);
+        seen.key
     }
 
     pub(crate) fn active_layer_version(&mut self, current: &Option<manifold_core::LayerId>) -> u64 {
@@ -1500,6 +1543,18 @@ mod tests {
         assert!(runs(&plan(next), Projection::ProjectSync));
         let mut next = base();
         next.inspector_reveal = 1;
+        let p = plan(next);
+        assert!(runs(&p, Projection::InspectorSync));
+        assert!(!runs(&p, Projection::ProjectSync));
+        assert!(p.rebuild.contains(MainRegion::Inspector));
+    }
+
+    #[test]
+    fn row_setup_check() {
+        // A shape entering or leaving its domain re-projects the cards that
+        // carry the warning line, whatever else is still.
+        let mut next = base();
+        next.setup_check = 5;
         let p = plan(next);
         assert!(runs(&p, Projection::InspectorSync));
         assert!(!runs(&p, Projection::ProjectSync));

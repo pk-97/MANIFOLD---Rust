@@ -407,6 +407,11 @@ pub(crate) fn gather_frame_inputs(
         // D16). Both counters only grow, so their sum moves when either does.
         inspector_view: ui_root.inspector.view_version().wrapping_add(ui_root.scene_setup_panel.view_version()),
         scene_selection: ui_root.scene_setup_panel.selection_version(),
+        setup_check: planner.setup_check_key(
+            chrome.project,
+            [active_layer.as_ref(), ui_root.scene_setup_panel.gizmo_layer()],
+            edits.stamps.parts(),
+        ),
         inspector_reveal: ui_root.inspector_reveal_version(),
         layer_reveal: ui_root.layer_reveal_version(),
         dock_view: ui_root.audio_setup_panel.view_version(),

@@ -14,6 +14,7 @@ use manifold_core::scene_modifier_preset::{
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 use manifold_node_engine::load::catalog_source::preset_def;
 
+use super::setup_check::{DEFAULT_FILL_HEIGHT, DomainState, SetupProblem, check_domain, check_source};
 use super::{Level, ParamAddr, SceneObjectVm, TRANSFORM_3D_TYPE_ID, TransformVm, locate_node, param_f32, resolve_producer_through_group, trace_transform};
 use crate::node_graph::scene_surface::scene_shape;
 
@@ -94,16 +95,21 @@ pub struct SceneShapeVm {
 
 use manifold_core::NodeId;
 
-pub(super) fn trace_shapes(root: &Level<'_>, def: &EffectGraphDef, objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
+pub(super) fn trace_shapes(
+    root: &Level<'_>,
+    def: &EffectGraphDef,
+    objects: &[SceneObjectVm],
+) -> (Vec<SceneShapeVm>, Vec<SetupProblem>) {
     let rows = known_rows(objects);
     let mut out = object_shapes(objects);
-    liquid_shapes(root, &rows, &mut out);
+    let mut problems = Vec::new();
+    liquid_shapes(root, &rows, &mut out, &mut problems);
     for instance in &def.scene_modifiers {
         if let Some(shape) = force_shape(def, instance, &rows, root) {
             out.push(shape);
         }
     }
-    out
+    (out, problems)
 }
 
 fn known_rows(objects: &[SceneObjectVm]) -> Vec<&super::SceneObjectKnownRow> {
@@ -160,7 +166,12 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
 }
 
 /// Each liquid domain's shapes and its fluid role sources' shapes.
-fn liquid_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &mut Vec<SceneShapeVm>) {
+fn liquid_shapes(
+    root: &Level<'_>,
+    rows: &[&super::SceneObjectKnownRow],
+    out: &mut Vec<SceneShapeVm>,
+    problems: &mut Vec<SetupProblem>,
+) {
     let mut seen = Vec::new();
     for row in rows {
         let Some(domain) = row.liquid_domain.as_ref() else { continue };
@@ -170,7 +181,22 @@ fn liquid_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &m
         seen.push(domain.node.clone());
         let Some(at) = locate_node(root, domain) else { continue };
         let pickable = row.visible_value && row.parent_group_id.is_none();
-        node_shapes(&at, ShapeOwner::LiquidDomain(at.node.node_id.clone()), Some(row.object_node_id), pickable, out);
+        let first = out.len();
+        let owner = ShapeOwner::LiquidDomain(at.node.node_id.clone());
+        node_shapes(&at, owner.clone(), Some(row.object_node_id), pickable, out);
+        let declared = |via: &str| out[first..].iter().find(|shape| shape.decl.via.as_deref() == Some(via)).cloned();
+        let state = match (row.fluid_domain.as_ref(), row.fluid_domain_error.as_deref()) {
+            (Some(layout), _) => Some(DomainState::Layout(layout)),
+            (None, Some(reason)) => Some(DomainState::Refused(reason)),
+            (None, None) => None,
+        };
+        if let Some(state) = state {
+            let fill = at.level.producer(at.node.id, "fill_height").is_none().then(|| {
+                let addr = ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: "fill_height".to_owned() };
+                (addr, param_f32(at.node, "fill_height", DEFAULT_FILL_HEIGHT))
+            });
+            check_domain(&owner, state, declared("domain").as_ref(), declared("initial_volume").as_ref(), fill, problems);
+        }
         for k in 0..manifold_core::fluid_domain::MAX_FLUID_ROLES {
             let Some((role_level, crossed, role, _)) = resolve_producer_through_group(&at.level, at.node.id, &format!("role_{k}"))
             else {
@@ -194,7 +220,13 @@ fn liquid_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &m
             let parent = crossed.map(|group| (Level { nodes: at.level.nodes, wires: at.level.wires }, group));
             let role_at = NodeAt { level: role_level, scope, node: role, parent };
             let owner = ShapeOwner::RoleSource { node: role.node_id.clone(), role: kind };
-            node_shapes(&role_at, owner, Some(row.object_node_id), pickable, out);
+            let first = out.len();
+            node_shapes(&role_at, owner.clone(), Some(row.object_node_id), pickable, out);
+            if let Some(layout) = row.fluid_domain.as_ref() {
+                for shape in &out[first..] {
+                    check_source(layout, &owner, kind, shape, problems);
+                }
+            }
         }
     }
 }

@@ -791,6 +791,7 @@ pub fn sync_inspector_data(
                                 );
                                 attach_project_sources(std::slice::from_mut(&mut surface), project);
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
+                                if let Some(d) = authored.as_ref() { crate::setup_check::mark_rows(&mut surface.rows, &vm.problems, d); }
                                 surface
                             });
                             let tree_items =

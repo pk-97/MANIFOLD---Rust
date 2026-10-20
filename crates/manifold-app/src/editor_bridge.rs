@@ -1739,6 +1739,7 @@ impl Application {
                     lights: &[],
                     domains,
                     physics: &[],
+                    problems: viewport_def.scene.as_deref().map_or(&[][..], |scene| &scene.problems[..]),
                     selected: target.as_ref(),
                     mode: ws.viewport_gizmo_mode,
                     fade_handles: false,

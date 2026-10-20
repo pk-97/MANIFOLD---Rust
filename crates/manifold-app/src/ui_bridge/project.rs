@@ -1358,6 +1358,7 @@ mod tests {
     mod water_family_draw;
     mod water_family_expansion;
     mod water_family_sources;
+    mod setup_check;
 
     fn scene_layer_project() -> (Project, LayerId, u32) {
         let mut project = Project::default();

@@ -1845,6 +1845,7 @@ mod tick_parity_tests {
                     section: None,
                     material_role: None,
                     inactive_reason: None,
+                    setup_warning: None,
                     scene: None,
                     limit: Default::default(),
                     disabled: None,

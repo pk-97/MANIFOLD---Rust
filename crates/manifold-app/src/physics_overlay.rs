@@ -183,12 +183,14 @@ impl PreviewGizmo {
             }
         }
         let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
+        let problems = self.target.as_ref().map_or(&[][..], |(key, ..)| &key.0.problems[..]);
         let (frame, _) = self.shown.as_ref()?;
         let chrome = GizmoChrome {
             view,
             lights: &frame.lights,
             domains: &frame.domains,
             physics: &frame.gizmos,
+            problems,
             selected,
             mode: self.mode,
             fade_handles,

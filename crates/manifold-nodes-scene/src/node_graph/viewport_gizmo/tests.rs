@@ -52,6 +52,7 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
         physics_imported: false,
         liquid_domain: None,
         fluid_domain: None,
+        fluid_domain_error: None,
         fluid_domain_transform: None,
         placed_sources: Vec::new(),
     }))
@@ -77,6 +78,7 @@ fn scene_of(objects: Vec<SceneObjectVm>, shapes: Vec<SceneShapeVm>) -> SceneVm {
         physics_nodes: Vec::new(),
         scene_bounds: None,
         shapes,
+        problems: Vec::new(),
     }
 }
 
@@ -411,6 +413,7 @@ fn composition_draws_what_physics_did_then_the_selected_handles() {
         lights: &[[0.0, 4.0, 0.0], [2.0, 1.0, -1.0]],
         domains: &domains,
         physics: &physics,
+        problems: &[],
         selected: Some(&target),
         mode: GizmoMode::Move,
         fade_handles: false,
@@ -427,6 +430,44 @@ fn composition_draws_what_physics_did_then_the_selected_handles() {
     compose_lines(&chrome, &mut lines);
     assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == FADED_HANDLE_ALPHA), "handles fade");
     assert!(lines[..lines.len() - 3].iter().all(|line| line.color[3] == 255), "what physics did never fades");
+}
+
+/// B3: a shape the setup check finds outside its domain draws a red box in
+/// every host's composed lines, and nothing else changes.
+#[test]
+fn a_setup_problem_draws_a_red_box_in_the_composed_lines() {
+    use crate::node_graph::scene_vm::{SetupProblem, SetupProblemKind};
+    let problem = SetupProblem {
+        owner: ShapeOwner::LiquidDomain(NodeId::new("domain")),
+        kind: SetupProblemKind::ColumnOutside,
+        params: Vec::new(),
+        bounds: ([5.0, 0.0, 0.0], [6.0, 1.0, 1.0]),
+    };
+    let compose = |problems: &[SetupProblem]| {
+        let chrome = GizmoChrome {
+            view: view(),
+            lights: &[],
+            domains: &[],
+            physics: &[],
+            problems,
+            selected: None,
+            mode: GizmoMode::Move,
+            fade_handles: false,
+        };
+        let mut lines = Vec::new();
+        compose_lines(&chrome, &mut lines);
+        lines
+    };
+    let plain = compose(&[]);
+    let flagged = compose(&[problem]);
+    assert_eq!(flagged.len(), plain.len() + 12);
+    assert!(
+        flagged.iter().zip(&plain).all(|(a, b)| a.a == b.a && a.b == b.b && a.color == b.color),
+        "the rest of the chrome is untouched"
+    );
+    let red = &flagged[plain.len()..];
+    assert!(red.iter().all(|line| line.color == PROBLEM_COLOR));
+    assert!(red.iter().flat_map(|line| [line.a, line.b]).all(|p| (5.0..=6.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1])));
 }
 
 #[test]
@@ -489,6 +530,7 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
             lights: &[],
             domains: &[],
             physics: &[],
+            problems: &[],
             selected: Some(&target),
             mode: GizmoMode::Move,
             fade_handles: false,
@@ -750,6 +792,7 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
         lights: &[],
         domains: &domains,
         physics: &[],
+        problems: &[],
         selected: selected.then_some(&target),
         mode: GizmoMode::Move,
         fade_handles: false,

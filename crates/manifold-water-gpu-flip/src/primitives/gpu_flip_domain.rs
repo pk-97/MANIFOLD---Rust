@@ -25,6 +25,7 @@ use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use manifold_water_liquid::lattice::closed_faces;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::liquid_setup::{BoxFit, fit_box, fit_fill_height};
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
@@ -115,16 +116,17 @@ manifold_core::testkit_visible! {
 }
 
 /// The fill in the layout's half-cell sites: the pool's height and the
-/// initial volume's site range per axis (empty without one), refused by name
-/// when either does not fit the domain.
+/// initial volume's site range per axis (empty without one). A height past
+/// the top is capped there and a volume past a wall is clipped to the domain;
+/// one wholly outside fills nothing (`manifold_core::liquid_setup`, which the
+/// setup check reports from). An unusable height or a volume that is not an
+/// axis-aligned finite box is refused by name.
 fn fill_sites(
     layout: &FluidDomainLayout,
     fill_height: f32,
     initial_volume: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3]), String> {
-    if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
-        return Err("GPU FLIP: Fill Height must lie within the domain height".into());
-    }
+    let fill_height = fit_fill_height(layout, fill_height).map_err(|reason| format!("GPU FLIP: {reason}"))?.height();
     let min = layout.min.map(f64::from);
     let h = layout.cell_size;
     let pool = site_range(min[1], min[1] + f64::from(fill_height), min[1], h, layout.cells[1])[1];
@@ -133,19 +135,20 @@ fn fill_sites(
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
             return Err("GPU FLIP: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
-        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
-            || volume.scale.iter().any(|v| *v <= 0.0)
-            || (0..3).any(|d| {
-                let half = volume.scale[d] * 0.5;
-                volume.pos[d] - half < layout.min[d] - 1e-4 || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
-            })
-        {
-            return Err("GPU FLIP: the initial volume must be a finite box fully inside the domain".into());
+        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite()) || volume.scale.iter().any(|v| *v <= 0.0) {
+            return Err("GPU FLIP: the initial volume must be a finite box".into());
         }
-        for (d, range) in sites.iter_mut().enumerate() {
-            let half = f64::from(volume.scale[d]) * 0.5;
-            let centre = f64::from(volume.pos[d]);
-            *range = site_range(centre - half, centre + half, min[d], h, layout.cells[d]);
+        let lo = std::array::from_fn(|d| volume.pos[d] - volume.scale[d] * 0.5);
+        let hi = std::array::from_fn(|d| volume.pos[d] + volume.scale[d] * 0.5);
+        let fitted = match fit_box(layout, lo, hi) {
+            BoxFit::Outside => None,
+            BoxFit::Inside => Some((lo, hi)),
+            BoxFit::Clipped { min, max } => Some((min, max)),
+        };
+        if let Some((lo, hi)) = fitted {
+            for (d, range) in sites.iter_mut().enumerate() {
+                *range = site_range(f64::from(lo[d]), f64::from(hi[d]), min[d], h, layout.cells[d]);
+            }
         }
     }
     Ok((pool, sites))
@@ -155,7 +158,7 @@ manifold_core::testkit_visible! {
 /// The domain box, lattice and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`). Refused by name, in this order: a lattice
 /// the pressure solve cannot take, a solve level the lattice lacks, a fill
-/// that does not fit the domain, and a fill past the count a wire carries
+/// that is not a usable shape, and a fill past the count a wire carries
 /// exactly.
 pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
@@ -1229,12 +1232,37 @@ mod tests {
     #[test]
     fn gpu_flip_domain_refuses_by_name() {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
-        assert!(refused(geometry(64.0, 4.0, None)).contains("Fill Height"));
+        assert!(refused(geometry(64.0, -1.0, None)).contains("Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
         assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Fill Height"), "{over}");
+    }
+
+    /// A fill that does not fit the domain gets the shared fit's defined
+    /// result, the one the setup check reports: the pool caps at the top, a
+    /// column past a wall fills what is inside, one wholly outside fills
+    /// nothing (`manifold_core::liquid_setup`).
+    #[test]
+    fn gpu_flip_domain_caps_the_fill_and_clips_the_column() {
+        let top = geometry(64.0, 4.0, None).expect("a pool to the top fills");
+        let past = geometry(64.0, 9.0, None).expect("a pool past the top is capped");
+        assert_eq!(past.setup.pool_sites, top.setup.pool_sites);
+        assert_eq!(past.particles, top.particles);
+
+        // The default 4 m domain spans x from -2 to 2.
+        let at_wall = Transform { pos: [1.5, 1.0, 0.0], scale: [1.0; 3], ..Transform::default() };
+        let past_wall = Transform { pos: [2.0, 1.0, 0.0], scale: [2.0, 1.0, 1.0], ..Transform::default() };
+        let inside = geometry(64.0, 0.16, Some(at_wall)).expect("fills");
+        let clipped = geometry(64.0, 0.16, Some(past_wall)).expect("a clipped column fills");
+        assert_eq!(clipped.setup.box_sites, inside.setup.box_sites, "the part inside is the same fill");
+        assert!(clipped.particles > geometry(64.0, 0.16, None).unwrap().particles);
+
+        let away = Transform { pos: [9.0, 1.0, 0.0], scale: [1.0; 3], ..Transform::default() };
+        let none = geometry(64.0, 0.16, Some(away)).expect("a column outside fills nothing");
+        assert_eq!(none.setup.box_sites, [[0; 2]; 3]);
+        assert_eq!(none.particles, geometry(64.0, 0.16, None).unwrap().particles);
     }
 
     /// Max Iterations defaults to the engine's 900, rides the geometry to the

@@ -79,6 +79,11 @@ pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
         min[1] + layout.size[1],
         min[2] + layout.size[2],
     ];
+    box_lines(min, max, FRUSTUM_COLOR)
+}
+
+/// The twelve edges of the world box `min`..`max`, in `color`.
+pub fn box_lines(min: [f32; 3], max: [f32; 3], color: [u8; 4]) -> [WorldLine; 12] {
     let corners = [
         [min[0], min[1], min[2]],
         [max[0], min[1], min[2]],
@@ -89,7 +94,7 @@ pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
         [max[0], max[1], max[2]],
         [min[0], max[1], max[2]],
     ];
-    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color: FRUSTUM_COLOR };
+    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color };
     [
         edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 0),
         edge(4, 5), edge(5, 6), edge(6, 7), edge(7, 4),

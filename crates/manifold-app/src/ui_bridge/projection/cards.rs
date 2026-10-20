@@ -495,6 +495,7 @@ fn param_surface(
                     section: p.spec.section.clone(),
                     material_role: p.spec.material_role.map(super::material::role),
                     inactive_reason: None,
+                    setup_warning: None,
                     scene: p.spec.scene,
                     limit: p.drag_limit(),
                     disabled: None,
@@ -539,6 +540,7 @@ fn param_surface(
 
     if let Some(def) = scene_graph {
         super::scene_card::scene_card_rows(&mut rows, inst, def);
+        crate::setup_check::mark_rows(&mut rows, &crate::setup_check::problems_of(def, inst), def);
     }
 
     // String params are sourced from the registry def. Graph-backed audio-send

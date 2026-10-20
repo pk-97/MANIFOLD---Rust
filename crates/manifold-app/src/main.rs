@@ -81,6 +81,7 @@ mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
 mod scene_gizmo;
+mod setup_check;
 mod scene_insert;
 mod selection_outline;
 mod scene_modifier_edit;

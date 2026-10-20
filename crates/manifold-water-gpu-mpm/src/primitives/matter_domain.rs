@@ -19,6 +19,7 @@ use manifold_physics::FieldValue;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::liquid_setup::{BoxFit, fit_box, fit_fill_height};
 use manifold_physics::clock::TICK;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
@@ -102,8 +103,10 @@ impl MatterGeometry {
 }
 
 /// The fill in the layout's cells: the pool's height in cells and the
-/// initial volume's cell range per axis (empty without one), refused by name
-/// when either does not fit the domain.
+/// initial volume's cell range per axis (empty without one). A height past the
+/// top is capped there and a volume past a wall is clipped to the domain, one
+/// wholly outside fills nothing (`manifold_core::liquid_setup`); an unusable
+/// height or a volume that is not an axis-aligned finite box is refused by name.
 pub(crate) fn fill_region(
     layout: &FluidDomainLayout,
     fill_height: f32,
@@ -111,31 +114,28 @@ pub(crate) fn fill_region(
 ) -> Result<(u32, [[u32; 2]; 3]), String> {
     // The lattice's f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
-    if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
-        return Err("Matter: Fill Height must lie within the domain height".into());
-    }
+    let fill_height = fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
     let mut column = [[0u32; 2]; 3];
     if let Some(volume) = initial_volume {
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
             return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
-        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
-            || volume.scale.iter().any(|v| *v <= 0.0)
-            || (0..3).any(|d| {
-                let half = volume.scale[d] * 0.5;
-                volume.pos[d] - half < layout.min[d] - 1e-4
-                    || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
-            })
-        {
-            return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
+        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite()) || volume.scale.iter().any(|v| *v <= 0.0) {
+            return Err("Matter: the initial volume must be a finite box".into());
         }
-        for (d, range) in column.iter_mut().enumerate() {
-            let cell = |x: f32| {(((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
-            *range = [
-                cell(volume.pos[d] - volume.scale[d] * 0.5),
-                cell(volume.pos[d] + volume.scale[d] * 0.5),
-            ];
+        let lo = std::array::from_fn(|d| volume.pos[d] - volume.scale[d] * 0.5);
+        let hi = std::array::from_fn(|d| volume.pos[d] + volume.scale[d] * 0.5);
+        let fitted = match fit_box(layout, lo, hi) {
+            BoxFit::Outside => None,
+            BoxFit::Inside => Some((lo, hi)),
+            BoxFit::Clipped { min, max } => Some((min, max)),
+        };
+        if let Some((lo, hi)) = fitted {
+            for (d, range) in column.iter_mut().enumerate() {
+                let cell = |x: f32| {(((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
+                *range = [cell(lo[d]), cell(hi[d])];
+            }
         }
     }
     Ok((pool_cells, column))
@@ -143,7 +143,7 @@ pub(crate) fn fill_region(
 
 /// The domain box, lattice, walls and fill from the domain's params and
 /// wires (`read` is `scalar_or_param`), refused by name when the lattice is
-/// over Grid Budget or the fill does not fit the domain.
+/// over Grid Budget or the fill is not a usable shape.
 pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
@@ -1286,6 +1286,27 @@ mod extent;
 mod gizmo_tests {
     use super::*;
     use manifold_core::physics_gizmo::PhysicsGizmoShape;
+
+    /// A fill that does not fit the domain gets the shared fit's defined
+    /// result, the one the setup check reports: the pool caps at the top, a
+    /// column past a wall fills what is inside, one wholly outside fills
+    /// nothing (`manifold_core::liquid_setup`).
+    #[test]
+    fn matter_fill_caps_the_pool_and_clips_the_column() {
+        let geometry = |fill: f32, column: Option<Transform>| {
+            let read = |name: &str, default: f32| if name == "fill_height" { fill } else { default };
+            matter_geometry(read, &ParamValues::default(), None, column).expect("fits or is fitted")
+        };
+        let top = geometry(4.0, None);
+        assert_eq!(geometry(9.0, None).setup.pool_cells, top.setup.pool_cells);
+
+        // The default 4 m domain spans x from -2 to 2.
+        let at_wall = Transform { pos: [1.5, 1.0, 0.0], scale: [1.0; 3], ..Transform::default() };
+        let past_wall = Transform { pos: [2.0, 1.0, 0.0], scale: [2.0, 1.0, 1.0], ..Transform::default() };
+        assert_eq!(geometry(0.16, Some(past_wall)).setup.column, geometry(0.16, Some(at_wall)).setup.column);
+        let away = Transform { pos: [9.0, 1.0, 0.0], scale: [1.0; 3], ..Transform::default() };
+        assert_eq!(geometry(0.16, Some(away)).setup.column, [[0; 2]; 3]);
+    }
 
     /// The fill gizmos are the cells the fill seeds: the pool up to its cell
     /// layers and the column within half a cell of the authored box.
