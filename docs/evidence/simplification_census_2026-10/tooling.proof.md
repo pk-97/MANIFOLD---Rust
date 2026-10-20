@@ -93,11 +93,11 @@ rg -c "(\"command\":\"|&& |; |\| |\(|python3? (-I )?|bash |sh |nohup |time |\./|
 
 ### tooling-001
 
-Claim: `scripts/audit_rename.py` (2,251 lines) is a one-shot rename tool whose table is spent.
+Claim: `audit_rename.py (deleted)` (2,251 lines) is a one-shot rename tool whose table is spent.
 
 - `STD audit_rename` -> 7 hits: 4 in its own docstring, 2 in `scripts/dev.py` (INTERNAL set line 201, COST_CLASSES line 213), 1 in `docs/PRIMITIVE_LIBRARY_DESIGN.md:820`, which says the script "is not the right tool" for project-file migration.
 - `rg -c -F audit_rename C` -> 0 (no transcript command in 30 days, run or mention).
-- `git log --format='%h %ad %s' -- scripts/audit_rename.py` -> renames applied in 9 commits on 2026-05-17 (phases 1 to 7c); later commits only change paths and permissions.
+- `git log --format='%h %ad %s' -- audit_rename.py (deleted)` -> renames applied in 9 commits on 2026-05-17 (phases 1 to 7c); later commits only change paths and permissions.
 - Script header: apply mode reports `[skip-applied]` for every done rename and then runs `cargo test ... -- --ignored` and the whole lib test set, which would also run against today's tree.
 - Crates, hooks, tests, assets: no hit (the `STD` search covers them).
 
@@ -255,7 +255,7 @@ Claim (ask): four archived docs have open beads.
 
 ### tooling-019
 
-Claim: `docs/HARNESS_SEAM_EXTRACTION_SPEC.md` is a build sheet for built work.
+Claim: `HARNESS_SEAM_EXTRACTION_SPEC.md (deleted)` is a build sheet for built work.
 
 - Spec: "BUILD SPEC ... folds the main-window immediate-pass assembly into shared code ... Deletes draw_immediate_passes".
 - `rg -n -w 'render_main_ui_passes|draw_immediate_passes' R/crates` -> `ui_snapshot/script.rs:3143` calls `crate::ui_frame::render_main_ui_passes(...)`; `draw_immediate_passes` appears only in comments (`script.rs:3092`). The seam exists and the old function is gone.

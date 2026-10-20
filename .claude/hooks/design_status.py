@@ -337,7 +337,7 @@ def check_dead_refs() -> int:
             print(f"DEAD-REF: docs/{doc_ref}")
         print(f"dead-refs: FAIL — {len(new_hits)} NEW missing .rs reference(s) in "
               f"docs/*.md (baseline holds {len(baseline & set(all_missing))} known; "
-              f"fix the doc or, for intentional historical prose, move the doc to archive/)")
+              f"fix the doc, or delete it if it is only history; git keeps every version)")
         return 1
 
     print(f"dead-refs: OK — no new missing .rs references "
@@ -355,7 +355,7 @@ def main() -> int:
     if "--raw" not in sys.argv and not compact:
         dead = dead_shipped_docs()
         if dead:
-            board += (f"\n\nARCHIVE CANDIDATES — shipped, cited by nothing live "
+            board += (f"\n\nDELETE CANDIDATES — shipped, cited by nothing live "
                       f"({len(dead)}): " + ", ".join(dead))
     print(board)
     return 0
