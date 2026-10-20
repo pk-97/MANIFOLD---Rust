@@ -734,3 +734,148 @@ fn a_camera_moving_mid_drag_never_shifts_the_grab() {
     let HandleValues::One(x) = drag.update(&moved, at(&moved, target.origin)).unwrap() else { panic!("one value") };
     assert!((x + len).abs() < len * 0.01, "moved back by the grabbed length {len}, got {x}");
 }
+
+fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, view: GizmoView, selected: bool) -> (Vec<WorldLine>, usize) {
+    use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
+    let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
+    let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
+    let scene = scene_of(Vec::new(), vec![shape]);
+    let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
+    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) })];
+    let chrome = GizmoChrome {
+        view,
+        lights: &[],
+        domains: &domains,
+        physics: &[],
+        selected: selected.then_some(&target),
+        mode: GizmoMode::Move,
+        fade_handles: false,
+    };
+    let mut lines = Vec::new();
+    compose_lines(&chrome, &mut lines);
+    let handles = if selected { lines_of(GizmoMode::Move, &target).len() } else { 0 };
+    let base = GROUND_GRID.len() + 12;
+    let lattice = lines.len() - base - handles;
+    (lines, lattice)
+}
+
+fn is_lattice(line: &WorldLine) -> bool {
+    line.color == [230, 200, 60, 70]
+}
+
+/// A3: the selected domain draws the solver's own cells, only while selected.
+#[test]
+fn selected_domain_draws_cell_boundaries_of_the_reported_layout() {
+    use manifold_core::fluid_domain::{DomainBox, domain_layout};
+    let pose = DomainBox { pos: [0.0, 2.0, 0.0], rot_euler: [0.0; 3], scale: [4.0, 2.0, 4.0], billboard: false };
+    let layout = domain_layout(Some(pose), 4.0, 64).unwrap();
+    let eye = Camera::look_at([30.0, 20.0, 40.0], [0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 0.9, 0.1, 500.0);
+    let view = GizmoView::new(eye, 1920, 1080);
+    let (_, none) = domain_chrome_lines(layout, view, false);
+    assert_eq!(none, 0, "an unselected domain draws no cell grid");
+    let (lines, count) = domain_chrome_lines(layout, view, true);
+    assert!(count > 0);
+    let cell = layout.cell_size as f32;
+    for line in lines.iter().filter(|l| is_lattice(l)) {
+        let along = (0..3).find(|&k| (line.a[k] - line.b[k]).abs() > 1e-6).unwrap();
+        let mut fixed = (0..3).filter(|&k| k != along);
+        // One fixed axis is the face (a box wall), the other a cell boundary.
+        let on_boundary = |k: usize| {
+            let steps = (line.a[k] - layout.min[k]) / cell;
+            (steps - steps.round()).abs() < 1e-3
+        };
+        assert!(fixed.all(on_boundary), "off the solver's cells: {line:?}");
+    }
+}
+
+/// A3: which faces draw. Outside the box the face away from the eye; inside
+/// it the wall the camera looks toward.
+#[test]
+fn lattice_faces_are_far_outside_and_looked_at_inside() {
+    use manifold_core::fluid_domain::FluidDomainLayout;
+    let layout = FluidDomainLayout { min: [-10.0, 0.5, -10.0], size: [20.0, 0.5, 20.0], cells: [320, 8, 320], cell_size: 0.0625 };
+    let outside = crate::node_graph::viewport_overlay::lattice_faces(&layout, [30.0, 5.0, -40.0], [-0.5, -0.1, 0.8]);
+    assert_eq!(outside, [-10.0, 0.5, 10.0], "away from an eye at +x, above, -z");
+    let inside_toward_max = crate::node_graph::viewport_overlay::lattice_faces(&layout, [1.0, 0.7, 2.0], [0.6, 0.0, 0.8]);
+    assert_eq!(inside_toward_max, [10.0, 1.0, 10.0], "the walls ahead");
+    let inside_toward_min = crate::node_graph::viewport_overlay::lattice_faces(&layout, [1.0, 0.7, 2.0], [-0.6, -0.2, -0.8]);
+    assert_eq!(inside_toward_min, [-10.0, 0.5, -10.0]);
+}
+
+/// A3: past 257 cells on an axis the stride runs: the count stays in budget
+/// and neighbours sit a whole number of cells apart.
+#[test]
+fn a_wide_domain_strides_within_the_line_budget() {
+    use crate::node_graph::viewport_overlay::{LATTICE_LINE_BUDGET, fluid_lattice_lines};
+    use manifold_core::fluid_domain::{DomainBox, domain_layout};
+    let pose = DomainBox { pos: [0.0, 4.0, 0.0], rot_euler: [0.0; 3], scale: [20.0, 0.5, 20.0], billboard: false };
+    let layout = domain_layout(Some(pose), 20.0, 1280).unwrap();
+    assert!(layout.cells[0] > 257, "{:?}", layout.cells);
+    let mut lines = Vec::new();
+    // No screen thinning: the cap alone.
+    fluid_lattice_lines(layout, [60.0, 40.0, 60.0], [-0.6, -0.4, -0.6], |_, _| None, &mut lines);
+    assert!(!lines.is_empty() && lines.len() <= LATTICE_LINE_BUDGET, "{} lines", lines.len());
+    let cell = layout.cell_size as f32;
+    let stride = layout.cells[0].saturating_sub(1).div_ceil(256);
+    assert!(stride > 1);
+    let mut xs: Vec<f32> = lines.iter().filter(|l| l.a[0] == l.b[0] && l.a[1] == l.b[1] && l.a[1] == layout.min[1]).map(|l| l.a[0]).collect();
+    xs.sort_by(f32::total_cmp);
+    assert!(xs.windows(2).all(|w| ((w[1] - w[0]) / cell - stride as f32).abs() < 1e-2), "stride {stride}");
+}
+
+/// A3: a 256-cell domain from a typical distance keeps neighbouring lines at
+/// least the chosen spacing apart on screen, and a floor on the ground plane
+/// draws no face over the ground grid.
+#[test]
+fn a_dense_domain_is_thinned_to_the_screen_spacing() {
+    use crate::node_graph::viewport_overlay::LATTICE_MIN_POINTS;
+    use manifold_core::fluid_domain::{DomainBox, domain_layout};
+    let pose = DomainBox { pos: [0.0, 3.0, 0.0], rot_euler: [0.0; 3], scale: [6.0, 4.0, 6.0], billboard: false };
+    let layout = domain_layout(Some(pose), 6.0, 256).unwrap();
+    let cam = Camera::look_at([9.0, 7.0, 13.0], [0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 0.8, 0.1, 200.0);
+    let view = GizmoView::new(cam, 1280, 720);
+    let (lines, count) = domain_chrome_lines(layout, view, true);
+    assert!(count > 0 && count <= crate::node_graph::viewport_overlay::LATTICE_LINE_BUDGET);
+    let lattice: Vec<&WorldLine> = lines.iter().filter(|l| is_lattice(l)).collect();
+    // Group parallel lines of one face; consecutive ones are neighbours.
+    let mut groups: std::collections::BTreeMap<(usize, usize, i64), Vec<(f32, f32)>> = Default::default();
+    for l in &lattice {
+        let along = (0..3).find(|&k| (l.a[k] - l.b[k]).abs() > 1e-6).unwrap();
+        let face = (0..3).find(|&k| k != along && (l.a[k] == layout.min[k] || l.a[k] == layout.min[k] + layout.size[k])).unwrap();
+        let across = 3 - along - face;
+        let mid = [0, 1, 2].map(|k| (l.a[k] + l.b[k]) * 0.5);
+        let p = cam.project_to_pixel(mid, 1280, 720).unwrap();
+        groups.entry((along, face, (l.a[face] * 1000.0) as i64)).or_default().push((l.a[across], p.px));
+        let _ = p.py;
+    }
+    assert!(groups.len() >= 4, "grid faces drawn: {}", groups.len());
+    for ((along, face, _), mut v) in groups {
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for w in v.windows(2) {
+            let (p0, p1) = (pt(&cam, along, face, &layout, w[0].0), pt(&cam, along, face, &layout, w[1].0));
+            let gap = (p0.0 - p1.0).hypot(p0.1 - p1.1);
+            assert!(gap >= LATTICE_MIN_POINTS * 0.9, "lines {gap} px apart (axis {along}, face {face})");
+        }
+    }
+    // A floor resting on y = 0 skips its face.
+    let on_ground = manifold_core::fluid_domain::FluidDomainLayout { min: [-3.0, 0.0, -3.0], size: [6.0, 4.0, 6.0], cells: [64, 43, 64], cell_size: 6.0 / 64.0 };
+    let top = Camera::look_at([0.0, 40.0, 0.1], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.8, 0.1, 200.0);
+    let (floor_lines, _) = domain_chrome_lines(on_ground, GizmoView::new(top, 1280, 720), true);
+    assert!(
+        floor_lines.iter().filter(|l| is_lattice(l)).all(|l| l.a[1] != l.b[1] || l.a[1] != 0.0),
+        "no cell lines lie flat on the ground plane"
+    );
+}
+
+/// Pixel position of the midpoint of the line across `across`=`value` on the
+/// given face, for the spacing check.
+fn pt(cam: &Camera, along: usize, face: usize, layout: &manifold_core::fluid_domain::FluidDomainLayout, value: f32) -> (f32, f32) {
+    let across = 3 - along - face;
+    let mut mid = [0.0; 3];
+    mid[along] = layout.min[along] + layout.size[along] * 0.5;
+    mid[across] = value;
+    mid[face] = if cam.pos[face] < layout.min[face] + layout.size[face] * 0.5 { layout.min[face] + layout.size[face] } else { layout.min[face] };
+    let p = cam.project_to_pixel(mid, 1280, 720).unwrap();
+    (p.px, p.py)
+}

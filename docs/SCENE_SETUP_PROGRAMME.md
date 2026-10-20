@@ -21,7 +21,7 @@ Peter's direction, 2026-10-20: configure complex 3D scenes with photoscans in th
 | Force evaluation | No GPU force-list evaluator. Scene forces expand to a `FieldValue` wire into each recipient's acceleration port; water bakes it on the CPU into coarse lattices each tick; the GPU only reads them through one shared trilinear include (FLIP and MPM) | `crates/manifold-node-engine/src/load/expand/acceleration.rs:31`, `crates/manifold-water-liquid/src/fields.rs:494`, `crates/manifold-water-liquid/src/primitives/shaders/liquid_field.wgsl:10` |
 | Water solids from meshes | Signed distance lattice; open meshes rejected | `crates/manifold-physics/src/sdf.rs:66-71`, `crates/manifold-water-gpu-flip/src/primitives/liquid_solid_distance.rs:44` |
 | Inflow | Solver supports it (`inflow_jitter`, `emit_flags` in `gpu_flip_step.rs`); no inflow object in the panel, placed by coordinates | `crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step.rs:465,2276` |
-| Lattice grid | Never drawn | — |
+| Lattice grid | Selected domain draws the solver's cell grid on three box faces (far faces outside the box, the wall in view from inside), thinned to at least 5 points between lines and 256 lines per axis; a floor on y = 0 skips its face | `crates/manifold-nodes-scene/src/node_graph/viewport_overlay.rs` (`fluid_lattice_lines`) |
 | 3D particles | 72 nodes: scatter, seed, noise, diffuse, swirl, container-repel forces, Euler step, `particles_to_copies` into instanced `render_scene`. Two particle types: the 3D atoms use `Particle`, `particles_to_copies` takes `FluidParticle`, and no atom converts between them. `move_particles_3d` moves positions only; velocity is not integrated | `docs/NODE_CATALOG.md` Particles 3D; `crates/manifold-node-engine/src/particles.rs:8-20,82-94`; `crates/manifold-nodes-scene/src/node_graph/primitives/particles_to_copies.rs`; `crates/manifold-water-gpu-flip/src/primitives/euler_step_particles_3d.rs:4`; [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) section 10 (per-object instancing addendum) |
 | Physics boundary | P1 landed; P2 (general template insertion), P3 (shared object cards), P6a (rigid add, enable, split, duplicate) open | [PHYSICS_ENGINE_BOUNDARY_DESIGN.md](PHYSICS_ENGINE_BOUNDARY_DESIGN.md) section 7 (Phasing) |
 
@@ -53,7 +53,7 @@ Outcome: grab any scene object, domain, inflow, drain, collider or force on the 
 
 - **A1 Host the core on the preview.** Second input site in `window_input.rs` calling the same pick and drag over the preview rect, with the camera of the overlay frame on screen and targets from `SceneVm` and the shape declaration (D2). Merges lane/physics-overlay-shapes (D-71); its solver-reported shapes stay as the display layer. Built once, on B1's branch and B1's final core API. Seat: Opus lane, high. Files: `window_input.rs`, `physics_overlay.rs`, `ui_frame.rs` (`MainGizmos`), `frame/present.rs`, `viewport_overlay.rs`, `viewport_gizmo.rs` (the composition entry only).
 - **A2 Preview-only navigation.** Orbit, pan, dolly on the preview through the existing viewport camera session, output untouched (D9 gate). Fixes the viewport dolly bead in passing. Seat: Opus lane, high.
-- **A3 Lattice grid.** Draw the domain's lattice at its real resolution, same line generator. Seat: Sonnet, medium, after B1.
+- **A3 Lattice grid (done).** Draw the domain's lattice at its real resolution, same line generator. Seat: Sonnet, medium, after B1.
 
 ### B. One object model, one Add menu
 
