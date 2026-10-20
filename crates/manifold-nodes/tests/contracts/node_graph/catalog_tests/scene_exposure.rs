@@ -436,7 +436,7 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
     /// R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md), manifest level: the
     /// REAL production metadata (`metadata_for_node_type`, not a synthetic
     /// fixture) stamped through `stamp_scene_node_exposures_into` (the exact
-    /// call `AddSceneLightCommand::execute` makes) must produce a
+    /// call Add Light's template makes) must produce a
     /// `ParamSpecDef` for `cast_shadows` carrying `value_labels`, so the
     /// scene panel's `format_param_value` (which reads straight off the
     /// manifest's `ParamSpecDef.value_labels`) substitutes "On"/"Off" text

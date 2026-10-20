@@ -12,12 +12,13 @@ use manifold_core::effect_graph_def::{
 use manifold_core::layer::Layer;
 use manifold_core::scene_exposure::NodeParamMetadata;
 use manifold_core::types::LayerType;
+use manifold_core::scene_modifier_preset::SceneNodeRef;
+use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, insert_scene_template};
 
 mod force_targets;
 
 /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
-/// the given counts — the fixture `AddSceneObjectCommand`/
-/// `AddSceneLightCommand` operate against.
+/// the given counts: the scene insertions and removals operate against it.
 fn render_scene_graph(objects: u32, lights: u32) -> EffectGraphDef {
     let mut render = EffectGraphNode {
         id: 0,
@@ -71,8 +72,7 @@ fn scene_insertions_allocate_ids_across_nested_groups() {
         let (mut project, effect) = project_with_graph(graph.clone());
         let target = GraphTarget::Effect(effect.clone());
         let mut command: Box<dyn Command> = match kind {
-            0 => Box::new(AddSceneLightCommand::new(target, vec![], 0, 0,
-                (0.0, 0.0), Vec::new(), mirror_catalog_default())),
+            0 => Box::new(insert_template(&project, &target, 0, test_light_template((0.0, 0.0))).unwrap()),
             1 => Box::new(AddSceneEnvironmentCommand::new(target, vec![], 0,
                 (0.0, 0.0), Vec::new(), mirror_catalog_default())),
             2 => Box::new(AddSceneFogCommand::new(target, vec![], 0,
@@ -1067,17 +1067,8 @@ fn scene_physics_append_object_uses_physical_slot_and_undoes_exactly() {
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
 
-    let mut command = AddSceneObjectCommand::new(
-        target,
-        vec![],
-        0,
-        1, // stale logical parent count; physical object_0 and object_1 exist
-        (100.0, 200.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
+    // The compound's two parts fill object_0 and object_1.
+    let mut command = insert_template(&project, &target, 0, test_object_template((100.0, 200.0))).unwrap();
     command.execute(&mut project);
     assert!(command.was_applied(), "add rejected: {:?}", command.rejection_reason());
 
@@ -1099,64 +1090,16 @@ fn scene_physics_append_object_uses_physical_slot_and_undoes_exactly() {
 }
 
 #[test]
-fn scene_physics_append_physics_object_uses_physical_slot() {
-    let mut graph = physics_scene_graph();
-    graph.nodes.iter_mut().find(|node| node.id == 0).unwrap().params.insert(
-        "objects".into(),
-        SerializedParamValue::Float { value: 2.0 },
-    );
-    graph.wires.push(EffectGraphWire {
-        from_node: 104,
-        from_port: "object".into(),
-        to_node: 0,
-        to_port: "object_1".into(),
-    });
-    let (mut project, fx) = project_with_graph(graph);
-    let mut command = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        1,
-        (100.0, 200.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    )
-    .with_physics_world(body_params(), Vec::new());
-    command.execute(&mut project);
-    assert!(command.was_applied(), "physics add rejected: {:?}", command.rejection_reason());
-    let after = graph_of(&project, &fx);
-    assert_eq!(
-        after.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"),
-        Some(&SerializedParamValue::Float { value: 3.0 })
-    );
-    assert!(after.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_2"));
-}
-
-#[test]
 fn scene_physics_append_rejects_malformed_count_without_mutation() {
     let mut graph = render_scene_graph(0, 0);
     graph.nodes.iter_mut().find(|node| node.id == 0).unwrap().params.insert(
         "objects".into(),
         SerializedParamValue::Float { value: f32::NAN },
     );
-    let (mut project, fx) = project_with_graph(graph.clone());
+    let (project, fx) = project_with_graph(graph.clone());
     let version = project.find_effect_by_id(&fx).unwrap().graph_structure_version;
-    let mut command = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
-    command.execute(&mut project);
-    assert!(!command.was_applied());
-    assert_eq!(command.rejection_reason(), Some("Add scene object render scene has an invalid object count"));
+    let refused = insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((0.0, 0.0)));
+    assert_eq!(refused.err().as_deref(), Some("Render scene has an invalid slot count"));
     assert_eq!(serde_json::to_value(graph_of(&project, &fx)).unwrap(), serde_json::to_value(&graph).unwrap());
     assert_eq!(project.find_effect_by_id(&fx).unwrap().graph_structure_version, version);
 }
@@ -1164,14 +1107,9 @@ fn scene_physics_append_rejects_malformed_count_without_mutation() {
 #[test]
 fn scene_physics_append_rejects_unrepresentable_count_increment() {
     let graph = render_scene_graph(16_777_216, 0);
-    let (mut project, fx) = project_with_graph(graph.clone());
-    let mut command = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()), vec![], 0, 0, (0.0, 0.0),
-        Vec::new(), Vec::new(), Vec::new(), mirror_catalog_default(),
-    );
-    command.execute(&mut project);
-    assert!(!command.was_applied());
-    assert_eq!(command.rejection_reason(), Some("Add scene object object count is exhausted"));
+    let (project, fx) = project_with_graph(graph.clone());
+    let refused = insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((0.0, 0.0)));
+    assert_eq!(refused.err().as_deref(), Some("Render scene slot count is exhausted"));
     assert_eq!(graph_of(&project, &fx), &graph);
 }
 
@@ -1184,90 +1122,41 @@ fn scene_physics_append_rejects_occupied_destination_without_mutation() {
         to_node: 0,
         to_port: "object_2".into(),
     });
-    let (mut project, fx) = project_with_graph(graph.clone());
+    let (project, fx) = project_with_graph(graph.clone());
     let version = project.find_effect_by_id(&fx).unwrap().graph_structure_version;
-    let mut command = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        1,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
-    command.execute(&mut project);
-    assert!(!command.was_applied());
-    assert_eq!(command.rejection_reason(), Some("Add scene object destination object slot is occupied"));
+    let refused = insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((0.0, 0.0)));
+    assert_eq!(refused.err().as_deref(), Some("Render scene slot is occupied"));
     assert_eq!(graph_of(&project, &fx), &graph);
     assert_eq!(project.find_effect_by_id(&fx).unwrap().graph_structure_version, version);
 }
 
 #[test]
-fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
+fn add_scene_object_bumps_count_builds_group_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
     let before = graph_of(&project, &fx).clone();
 
-    let mut cmd = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        2, // next_index — matches the fixture's current `objects` (2)
-        (100.0, 200.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
+    let mut cmd =
+        insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((100.0, 200.0))).unwrap();
     cmd.execute(&mut project);
 
     let def = graph_of(&project, &fx);
     let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-    assert_eq!(
-        render.params.get("objects"),
-        Some(&SerializedParamValue::Float { value: 3.0 }),
-        "objects bumped by one"
-    );
+    assert_eq!(render.params.get("objects"), Some(&SerializedParamValue::Float { value: 3.0 }), "objects bumped by one");
 
-    let group = def
-        .nodes
-        .iter()
-        .find(|n| n.handle.as_deref() == Some("Object 3"))
-        .expect("named group created");
+    // A single-output template is named for the slot it takes.
+    let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 3")).expect("named group created");
     assert_eq!(group.editor_pos, Some((100.0, 200.0)));
     let body = group.group.as_deref().expect("is a group node");
-    assert_eq!(
-        body.nodes.len(),
-        5,
-        "cube + material + transform + scene_object bind + group_output boundary"
-    );
-    assert!(body.nodes.iter().any(|n| n.type_id == "node.cube_mesh"));
-    assert!(body.nodes.iter().any(|n| n.type_id == "node.pbr_material"));
-    assert!(body.nodes.iter().any(|n| n.type_id == "node.transform_3d"));
-    assert!(body.nodes.iter().any(|n| n.type_id == "node.scene_object"));
-    assert_eq!(
-        body.wires.len(),
-        4,
-        "mesh/material/transform wired to scene_object, scene_object wired to the group_output"
-    );
+    assert_eq!(body.nodes.len(), 5, "cube + material + transform + scene_object bind + group_output boundary");
+    assert_eq!(body.wires.len(), 4, "mesh/material/transform wired to scene_object, scene_object wired to the group_output");
     assert_eq!(body.interface.outputs.len(), 1, "a single Object output");
-    assert_eq!(body.interface.outputs[0].name, "object");
-    assert_eq!(body.interface.outputs[0].port_type, "Object");
-
-    // SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D3/D4: the group's single
-    // `object` output wired to render_scene's new object_2 slot.
     assert!(def.wires.iter().any(|w| w.from_node == group.id
         && w.from_port == "object"
         && w.to_node == 0
         && w.to_port == "object_2"));
 
     cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert_eq!(
-        def, &before,
-        "undo restores the pre-add graph exactly (inverse-pair)"
-    );
+    assert_eq!(graph_of(&project, &fx), &before, "undo restores the pre-add graph exactly (inverse-pair)");
 }
 
 #[test]
@@ -1276,48 +1165,17 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
     use std::collections::HashSet;
 
     let existing_node_id = NodeId::new("nested-transform");
-    let mut existing_params = BTreeMap::new();
-    existing_params.insert(
-        "pos_x".to_string(),
-        SerializedParamValue::Float { value: 0.25 },
-    );
-    let existing_node = EffectGraphNode {
-        id: 900,
-        node_id: existing_node_id.clone(),
-        type_id: "node.transform_3d".to_string(),
-        handle: Some("nested_transform".to_string()),
-        params: existing_params,
-        exposed_params: Default::default(),
-        editor_pos: None,
-        wgsl_source: None,
-        title: None,
-        output_formats: BTreeMap::new(),
-        output_canvas_scales: BTreeMap::new(),
-        group: None,
-    };
-    let nested_group = EffectGraphNode {
-        id: 700,
-        node_id: NodeId::new("nested-group"),
-        type_id: GROUP_TYPE_ID.to_string(),
-        handle: Some("Nested".to_string()),
-        params: BTreeMap::new(),
-        exposed_params: Default::default(),
-        editor_pos: None,
-        wgsl_source: None,
-        title: None,
-        output_formats: BTreeMap::new(),
-        output_canvas_scales: BTreeMap::new(),
-        group: Some(Box::new(GroupDef {
-            interface: GroupInterface {
-                inputs: Vec::new(),
-                outputs: Vec::new(),
-                params: Vec::new(),
-            },
-            nodes: vec![existing_node],
-            wires: Vec::new(),
-            tint: None,
-        })),
-    };
+    let mut existing_node = scene_build_node(900, "node.transform_3d", Some("nested_transform".into()), BTreeMap::new());
+    existing_node.node_id = existing_node_id.clone();
+    existing_node.params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 0.25 });
+    let mut nested_group = scene_build_node(700, GROUP_TYPE_ID, Some("Nested".into()), BTreeMap::new());
+    nested_group.node_id = NodeId::new("nested-group");
+    nested_group.group = Some(Box::new(GroupDef {
+        interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+        nodes: vec![existing_node],
+        wires: Vec::new(),
+        tint: None,
+    }));
 
     let binding_id = "authored_pos_x".to_string();
     let mut def = render_scene_graph(1, 0);
@@ -1344,10 +1202,7 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
             id: binding_id.clone(),
             label: "Position X".to_string(),
             default_value: 0.25,
-            target: BindingTarget::Node {
-                node_id: existing_node_id,
-                param: "pos_x".to_string(),
-            },
+            target: BindingTarget::Node { node_id: existing_node_id, param: "pos_x".to_string() },
             convert: ParamConvert::Float,
             user_added: true,
             scale: 1.0,
@@ -1375,20 +1230,9 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
     let before_graph = graph_of(&project, &fx).clone();
     let before_manifest = project.find_effect_by_id(&fx).unwrap().params.clone();
 
-    let mut command = AddSceneObjectCommand::new(
-        target.clone(),
-        vec![],
-        0,
-        1,
-        (20.0, 30.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
+    let mut command = insert_template(&project, &target, 0, test_object_template((20.0, 30.0))).unwrap();
     command.execute(&mut project);
 
-    let after_add = graph_of(&project, &fx);
     fn assert_unique_recursive(nodes: &[EffectGraphNode], ids: &mut HashSet<u32>) {
         for node in nodes {
             assert!(ids.insert(node.id), "duplicate document id {}", node.id);
@@ -1397,12 +1241,9 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
             }
         }
     }
+    let after_add = graph_of(&project, &fx);
     assert_unique_recursive(after_add.nodes.as_slice(), &mut HashSet::new());
-    let added_group = after_add
-        .nodes
-        .iter()
-        .find(|node| node.handle.as_deref() == Some("Object 2"))
-        .unwrap();
+    let added_group = after_add.nodes.iter().find(|node| node.handle.as_deref() == Some("Object 2")).unwrap();
     let added_ids: HashSet<u32> = added_group
         .group
         .as_deref()
@@ -1413,106 +1254,39 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
         .chain(std::iter::once(added_group.id))
         .collect();
     assert_eq!(added_ids, (901..=906).collect());
-
-    let after_add_host = project.find_effect_by_id(&fx).unwrap();
-    assert_eq!(after_add_host.params, before_manifest);
-    assert!(
-        after_add
-            .preset_metadata
-            .as_ref()
-            .unwrap()
-            .bindings
-            .iter()
-            .any(|binding| binding.id == binding_id)
-    );
+    assert_eq!(project.find_effect_by_id(&fx).unwrap().params, before_manifest);
+    let has_authored = |project: &Project| {
+        graph_of(project, &fx).preset_metadata.as_ref().unwrap().bindings.iter().any(|binding| binding.id == binding_id)
+    };
+    assert!(has_authored(&project));
 
     command.undo(&mut project);
     assert_eq!(graph_of(&project, &fx), &before_graph);
-    assert_eq!(
-        project.find_effect_by_id(&fx).unwrap().params,
-        before_manifest
-    );
+    assert_eq!(project.find_effect_by_id(&fx).unwrap().params, before_manifest);
 
     command.execute(&mut project);
-    assert_unique_recursive(
-        graph_of(&project, &fx).nodes.as_slice(),
-        &mut HashSet::new(),
-    );
-    assert_eq!(
-        project.find_effect_by_id(&fx).unwrap().params,
-        before_manifest
-    );
-    assert!(
-        graph_of(&project, &fx)
-            .preset_metadata
-            .as_ref()
-            .unwrap()
-            .bindings
-            .iter()
-            .any(|binding| binding.id == binding_id)
-    );
+    assert_unique_recursive(graph_of(&project, &fx).nodes.as_slice(), &mut HashSet::new());
+    assert_eq!(project.find_effect_by_id(&fx).unwrap().params, before_manifest);
+    assert!(has_authored(&project));
 }
 
 #[test]
-fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
+fn add_scene_light_bumps_count_wires_bare_light_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
     let before = graph_of(&project, &fx).clone();
 
-    let mut cmd = AddSceneLightCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        1, // next_index — matches the fixture's current `lights` (1)
-        (-260.0, 50.0),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
+    let mut cmd =
+        insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_light_template((-260.0, 50.0))).unwrap();
     cmd.execute(&mut project);
 
     let def = graph_of(&project, &fx);
     let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-    assert_eq!(
-        render.params.get("lights"),
-        Some(&SerializedParamValue::Float { value: 2.0 }),
-        "lights bumped by one"
-    );
-
-    let light = def
-        .nodes
-        .iter()
-        .find(|n| n.handle.as_deref() == Some("light_1"))
-        .expect("bare light node created");
+    assert_eq!(render.params.get("lights"), Some(&SerializedParamValue::Float { value: 2.0 }), "lights bumped by one");
+    let light = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Light 2")).expect("bare light node created");
     assert!(light.group.is_none(), "D7a: no group around the light");
     assert_eq!(light.type_id, "node.light");
     assert_eq!(light.editor_pos, Some((-260.0, 50.0)));
-
-    // D7a defaults, transcribed.
-    assert_eq!(
-        light.params.get("mode"),
-        Some(&SerializedParamValue::Enum { value: 0 })
-    );
-    assert_eq!(
-        light.params.get("color_r"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert_eq!(
-        light.params.get("color_g"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert_eq!(
-        light.params.get("color_b"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert_eq!(
-        light.params.get("intensity"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert_eq!(
-        light.params.get("cast_shadows"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-
-    // Auto-wired into the new light_1 slot — "add means added," never a
+    // Auto-wired into the new light_1 slot: "add means added," never a
     // bumped count with a dead port.
     assert!(def.wires.iter().any(|w| w.from_node == light.id
         && w.from_port == "out"
@@ -1520,21 +1294,13 @@ fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
         && w.to_port == "light_1"));
 
     cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert_eq!(
-        def, &before,
-        "undo restores the pre-add graph exactly (inverse-pair)"
-    );
+    assert_eq!(graph_of(&project, &fx), &before, "undo restores the pre-add graph exactly (inverse-pair)");
 }
 
-/// A fixture with 3 objects wired as `AddSceneObjectCommand` builds them
-/// (group + mesh_k/material_k/transform_k wires), so removal tests can
-/// exercise the middle-object renumbering case (BUG-193's core claim).
-/// Builds `count` bare `node.scene_object` producers wired directly to
-/// `render_scene`'s `object_k` ports (the D3/D4 shape) — hand-built
-/// rather than via `AddSceneObjectCommand`, whose `catalog_default` still
-/// emits the pre-migration legacy-port shape (P3's job to retarget, see
-/// docs/BUG_BACKLOG.md). Returns the def and each producer's node id.
+/// A fixture with `count` bare `node.scene_object` producers wired directly
+/// to `render_scene`'s `object_k` ports (the D3/D4 shape), so removal tests
+/// can exercise the middle-object renumbering case (BUG-193's core claim).
+/// Returns the def and each producer's node id.
 fn render_scene_with_objects(count: u32) -> (EffectGraphDef, Vec<u32>) {
     let mut def = render_scene_graph(0, 0);
     def.nodes
@@ -1810,8 +1576,9 @@ fn sky_sun_follows_scene_light_add_and_remove() {
         "id": 50, "nodeId": "envmap", "typeId": "node.bake_environment", "handle": "envmap"
     })).unwrap());
     let (mut project, fx) = project_with_graph(graph);
-    let add = |project: &mut Project, k: u32| {
-        AddSceneLightCommand::new(GraphTarget::Effect(fx.clone()), vec![], 0, k, (0.0, 0.0), Vec::new(), mirror_catalog_default())
+    let add = |project: &mut Project| {
+        insert_template(project, &GraphTarget::Effect(fx.clone()), 0, test_light_template((0.0, 0.0)))
+            .unwrap()
             .execute(project);
     };
     let sky_sun = |def: &EffectGraphDef| {
@@ -1823,8 +1590,8 @@ fn sky_sun_follows_scene_light_add_and_remove() {
         def.wires.iter().find(|w| w.to_node == 0 && w.to_port == port).map(|w| w.from_node)
     };
 
-    add(&mut project, 0);
-    add(&mut project, 1);
+    add(&mut project);
+    add(&mut project);
     let def = graph_of(&project, &fx).clone();
     let (first, second) = (light_at(&def, "light_0").unwrap(), light_at(&def, "light_1").unwrap());
     assert_eq!(sky_sun(&def), Some(first), "the first Sun light feeds the sky");
@@ -1841,21 +1608,10 @@ fn sky_sun_follows_scene_light_add_and_remove() {
 
 #[test]
 fn remove_scene_light_only_light_removes_node_and_zeroes_count() {
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 1));
-    // Wire the fixture's declared single light exactly like
-    // AddSceneLightCommand would (bare node, no group).
-    {
-        let mut cmd = AddSceneLightCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (-260.0, 50.0),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-    }
+    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+    insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_light_template((-260.0, 50.0)))
+        .unwrap()
+        .execute(&mut project);
     let before = graph_of(&project, &fx).clone();
     let light_id = before
         .nodes
@@ -2547,11 +2303,18 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
 /// execute/undo/redo, and preserve fresh graph identity through save/load.
 #[test]
 fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity() {
-    let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+    let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
     )))
     .unwrap();
+    // The Cube's transform height is a card control, so its copy gets one.
+    manifold_core::scene_exposure::stamp_scene_node_exposures(
+        &mut graph,
+        120,
+        "Cube — Transform",
+        &[scene_param_meta("pos_y", "Y")],
+    );
     let (mut project, layer_id) = project_with_generator_graph(graph);
     project
         .timeline
@@ -2561,38 +2324,23 @@ fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity()
         .gen_params_mut().unwrap()
         .set_preset_id(PresetTypeId::from_string("PhysicsSolids".to_string()));
     let target = GraphTarget::Generator(layer_id.clone());
-
-    let mut add = AddSceneObjectCommand::new(
-        target.clone(),
-        vec![],
-        30,
-        6,
-        (900.0, 200.0),
-        vec![scene_param_meta("color_r", "Red")],
-        vec![scene_param_meta("pos_y", "Y")],
-        vec![scene_param_meta("visible", "Visible")],
-        mirror_catalog_default(),
-    )
-    .with_physics_world(
-        vec![scene_param_meta("density", "Density")],
-        vec![scene_param_meta("color_r", "Red")],
-    );
-    add.execute(&mut project);
-    assert!(
-        add.was_applied(),
-        "the production physics add shape is valid"
-    );
+    refresh_target_manifest(&mut project, &target);
 
     let mut duplicate =
-        DuplicateSceneObjectCommand::new(target.clone(), vec![], 30, 6, mirror_catalog_default());
+        DuplicateSceneObjectCommand::new(target.clone(), vec![], 30, 2, mirror_catalog_default());
     duplicate.execute(&mut project);
-    assert!(duplicate.was_applied(), "PhysicsSolids duplicate applies");
+    assert!(duplicate.was_applied(), "PhysicsSolids duplicate applies: {:?}", duplicate.rejection_reason());
 
     let def = graph_of_generator(&project, &layer_id);
+    let is_clone_transform = |node: &&EffectGraphNode| {
+        node.type_id == "node.transform_3d"
+            && node.id != 120
+            && node.handle.as_deref().is_some_and(|handle| handle.starts_with("Cube Transform"))
+    };
     let clone_transform = def
         .nodes
         .iter()
-        .find(|node| node.handle.as_deref() == Some("Object 7 Transform_2"))
+        .find(is_clone_transform)
         .expect("duplicate has a fresh authored transform");
     let clone_identity = clone_transform.node_id.clone();
     let clone_param_id =
@@ -2714,7 +2462,7 @@ fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity()
     let reloaded_transform = reloaded_def
         .nodes
         .iter()
-        .find(|node| node.handle.as_deref() == Some("Object 7 Transform_2"))
+        .find(|node| node.node_id == clone_identity)
         .expect("duplicate transform survives save/load");
     assert_eq!(reloaded_transform.node_id, clone_identity);
     assert!(
@@ -2832,141 +2580,6 @@ fn nonphysical_object_coexists_with_physics_world_through_duplicate_remove_undo_
     assert_eq!(body_wires(&project), before_bodies);
     remove.execute(&mut project);
     assert_eq!(body_wires(&project), before_bodies);
-}
-
-#[test]
-fn add_scene_object_to_shipped_physics_presets_creates_dynamic_cube_and_undoes() {
-    for (source, current_objects, expected_slot) in [
-        (
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
-            )),
-            6,
-            6,
-        ),
-        (
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
-            )),
-            4,
-            3,
-        ),
-    ] {
-        let graph: EffectGraphDef = serde_json::from_str(source).unwrap();
-        let (mut project, fx) = project_with_graph(graph.clone());
-        let mut command = AddSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            30,
-            current_objects,
-            (800.0, 200.0),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        )
-        .with_physics_world(Vec::new(), Vec::new());
-        command.execute(&mut project);
-        assert!(command.was_applied());
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|node| node.id == 30).unwrap();
-        assert_eq!(
-            render.params.get("objects"),
-            Some(&SerializedParamValue::Float {
-                value: (current_objects + 1) as f32
-            })
-        );
-        let object_id = def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == 30 && wire.to_port == format!("object_{current_objects}"))
-            .map(|wire| wire.from_node)
-            .unwrap();
-        let object = def.nodes.iter().find(|node| node.id == object_id).unwrap();
-        assert_eq!(object.type_id, "node.scene_object");
-        let body_wire = def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == 40 && wire.to_port == format!("body_{expected_slot}"))
-            .unwrap();
-        let body = def
-            .nodes
-            .iter()
-            .find(|node| node.id == body_wire.from_node)
-            .unwrap();
-        assert_eq!(body.type_id, "node.rigid_body");
-        let transform_id = def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == body.id && wire.to_port == "transform")
-            .unwrap()
-            .from_node;
-        assert_eq!(
-            def.nodes
-                .iter()
-                .find(|node| node.id == transform_id)
-                .unwrap()
-                .params
-                .get("pos_y"),
-            Some(&SerializedParamValue::Float { value: 2.0 })
-        );
-        assert_eq!(
-            body.params.get("motion"),
-            Some(&SerializedParamValue::Enum { value: 1 })
-        );
-        assert!(def.wires.iter().any(|wire| {
-            wire.from_node == 40
-                && wire.from_port == format!("pose_{expected_slot}")
-                && wire.to_node == object_id
-                && wire.to_port == "transform"
-        }));
-        let before_undo = def.clone();
-        command.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &graph);
-        assert_ne!(&before_undo, graph_of(&project, &fx));
-    }
-}
-
-#[test]
-fn add_scene_object_rejects_a_full_physics_world_atomically() {
-    let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
-    )))
-    .unwrap();
-    for slot in 6..64 {
-        graph.wires.push(EffectGraphWire {
-            from_node: 101,
-            from_port: "body".to_string(),
-            to_node: 40,
-            to_port: format!("body_{slot}"),
-        });
-        graph.wires.push(EffectGraphWire {
-            from_node: 40,
-            from_port: format!("pose_{slot}"),
-            to_node: 104,
-            to_port: "transform_extra".to_string(),
-        });
-    }
-    let (mut project, fx) = project_with_graph(graph.clone());
-    let mut command = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        30,
-        6,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    )
-    .with_physics_world(Vec::new(), Vec::new());
-    command.execute(&mut project);
-    assert!(!command.was_applied());
-    assert!(command.rejection_reason().is_some());
-    assert_eq!(graph_of(&project, &fx), &graph);
 }
 
 #[test]
@@ -3143,18 +2756,9 @@ fn collect_ids(nodes: &[EffectGraphNode], doc_ids: &mut Vec<u32>, node_ids: &mut
 #[test]
 fn duplicate_scene_object_command_clones_grouped_object_with_fresh_ids_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-    AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    )
-    .execute(&mut project);
+    insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((0.0, 0.0)))
+        .unwrap()
+        .execute(&mut project);
     let before = graph_of(&project, &fx).clone();
     let (mut orig_doc_ids, mut orig_node_ids) = (Vec::new(), Vec::new());
     collect_ids(&before.nodes, &mut orig_doc_ids, &mut orig_node_ids);
@@ -3289,18 +2893,9 @@ fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_
     use manifold_core::effect_graph_def::BindingTarget;
 
     let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-    AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    )
-    .execute(&mut project);
+    insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((0.0, 0.0)))
+        .unwrap()
+        .execute(&mut project);
 
     // Simulate the importer's "Model File" binding: one string_bindings
     // entry targeting the object's mesh node by its stable NodeId.
@@ -3411,18 +3006,9 @@ fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_
 #[test]
 fn rename_scene_object_command_renames_group_and_sweeps_section_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-    AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        mirror_catalog_default(),
-    )
-    .execute(&mut project);
+    insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_object_template((0.0, 0.0)))
+        .unwrap()
+        .execute(&mut project);
     let def = graph_of(&project, &fx).clone();
     let group = def
         .nodes
@@ -3577,16 +3163,9 @@ fn rename_scene_object_command_ungrouped_renames_bare_node_and_undo_restores() {
 #[test]
 fn set_node_handle_command_renames_light_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-    AddSceneLightCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        Vec::new(),
-        mirror_catalog_default(),
-    )
-    .execute(&mut project);
+    insert_template(&project, &GraphTarget::Effect(fx.clone()), 0, test_light_template((0.0, 0.0)))
+        .unwrap()
+        .execute(&mut project);
     let before = graph_of(&project, &fx).clone();
     let light_id = before
         .nodes
@@ -3821,16 +3400,9 @@ fn fog_density_range_unit() {
 fn add_scene_fog_command_refresh_preserves_existing_param_values() {
     let (mut project, lid) = project_with_generator_graph(render_scene_graph(0, 0));
 
-    let mut add_light = AddSceneLightCommand::new(
-        GraphTarget::Generator(lid.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        vec![scene_param_meta("intensity", "Intensity")],
-        mirror_catalog_default(),
-    );
-    add_light.execute(&mut project);
+    let mut light = test_light_template((0.0, 0.0));
+    stamp_template_rows(&mut light, 1, HANDLE_TOKEN, &[scene_param_meta("intensity", "Intensity")]);
+    insert_template(&project, &GraphTarget::Generator(lid.clone()), 0, light).unwrap().execute(&mut project);
 
     let intensity_id = project
         .timeline
@@ -4178,56 +3750,53 @@ fn local_modifier_scene_project(mut local: EffectGraphDef) -> (Project, GraphTar
     (project, target)
 }
 
+/// Place `template` in a scene modifier's local scene (render scene id 0)
+/// as a fixture: insertion through the command takes whole owners only.
+fn insert_into_local(project: &mut Project, target: &GraphTarget, template: SceneTemplate) {
+    let owner_target = target.host_target().unwrap().clone();
+    let host = project.graph_target_owner_mut(&owner_target).unwrap();
+    let local = target.graph_in_mut(host.graph.as_mut().unwrap()).unwrap();
+    let scene = SceneNodeRef { scope: Vec::new(), node: local.nodes[0].node_id.clone() };
+    *local = insert_scene_template(local, &scene, None, &template).unwrap().graph;
+    refresh_target_manifest(project, target);
+}
+
+/// Add Object's template with one card row each on its material, transform
+/// and scene object.
+fn object_with_rows() -> SceneTemplate {
+    let mut template = test_object_template((0.0, 0.0));
+    stamp_template_rows(&mut template, 2, &format!("{HANDLE_TOKEN} — Material"), &[scene_param_meta("ambient", "Ambient")]);
+    stamp_template_rows(&mut template, 3, &format!("{HANDLE_TOKEN} — Transform"), &[scene_param_meta("pos_x", "X")]);
+    stamp_template_rows(&mut template, 4, HANDLE_TOKEN, &[scene_param_meta("visible", "Visible")]);
+    template
+}
+
 #[test]
 fn scene_modifier_structural_refresh_updates_host_manifest_and_roundtrips() {
     let (mut project, target) = local_modifier_scene_project(render_scene_graph(0, 0));
+    insert_into_local(&mut project, &target, object_with_rows());
     let before_params = project.graph_target_owner(&target).unwrap().params.clone();
-    let mut command = AddSceneObjectCommand::new(
-        target.clone(),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        vec![scene_param_meta("ambient", "Ambient")],
-        vec![scene_param_meta("pos_x", "X")],
-        vec![scene_param_meta("visible", "Visible")],
-        render_scene_graph(0, 0),
-    );
+    assert_eq!(before_params.len(), 3, "local metadata refreshes the owning generator manifest");
+    let mut command = DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, render_scene_graph(0, 0));
 
     command.execute(&mut project);
+    assert!(command.was_applied(), "{:?}", command.rejection_reason());
     let host = project.graph_target_owner(&target).unwrap();
     let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
-    assert_eq!(local.preset_metadata.as_ref().unwrap().params.len(), 3);
-    assert_eq!(
-        host.params.len(),
-        3,
-        "local metadata refreshes the owning generator manifest"
-    );
+    assert_eq!(local.preset_metadata.as_ref().unwrap().params.len(), 6);
+    assert_eq!(host.params.len(), 6, "a structural local edit refreshes the owning generator manifest");
 
     command.undo(&mut project);
     let host = project.graph_target_owner(&target).unwrap();
-    assert!(
-        target
-            .graph_in(host.graph.as_ref().unwrap())
-            .unwrap()
-            .preset_metadata
-            .as_ref()
-            .unwrap()
-            .params
-            .is_empty()
-    );
     assert_eq!(
-        host.params, before_params,
-        "undo restores host live values exactly"
+        target.graph_in(host.graph.as_ref().unwrap()).unwrap().preset_metadata.as_ref().unwrap().params.len(),
+        3
     );
+    assert_eq!(host.params, before_params, "undo restores host live values exactly");
 
     command.execute(&mut project);
     let host = project.graph_target_owner(&target).unwrap();
-    assert_eq!(
-        host.params.len(),
-        3,
-        "redo refreshes the host manifest again"
-    );
+    assert_eq!(host.params.len(), 6, "redo refreshes the host manifest again");
 }
 
 #[test]
@@ -4235,18 +3804,7 @@ fn scene_modifier_duplicate_copies_local_string_binding_and_preserves_sibling() 
     use manifold_core::effect_graph_def::BindingTarget;
 
     let (mut project, target) = local_modifier_scene_project(render_scene_graph(0, 0));
-    AddSceneObjectCommand::new(
-        target.clone(),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        render_scene_graph(0, 0),
-    )
-    .execute(&mut project);
+    insert_into_local(&mut project, &target, test_object_template((0.0, 0.0)));
     let source_mesh = {
         let host = project.graph_target_owner(&target).unwrap();
         let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
@@ -4345,7 +3903,7 @@ fn find_typed<'a>(def: &'a EffectGraphDef, type_id: &str) -> &'a EffectGraphNode
 
 struct StampCase {
     name: &'static str,
-    build: fn(GraphTarget) -> Box<dyn Command>,
+    build: fn(&Project, GraphTarget) -> Box<dyn Command>,
     /// (node type, exposed param, panel section) per stamped exposure.
     exposures: &'static [(&'static str, &'static str, &'static str)],
 }
@@ -4359,13 +3917,7 @@ fn scene_item_add_commands_stamp_exposures_and_undo_redo_are_stable() {
     let cases = [
         StampCase {
             name: "object",
-            build: |t| Box::new(AddSceneObjectCommand::new(
-                t, vec![], 0, 0, (0.0, 0.0),
-                vec![scene_param_meta("ambient", "Ambient")],
-                vec![scene_param_meta("pos_x", "X")],
-                vec![scene_param_meta("visible", "Visible")],
-                mirror_catalog_default(),
-            )),
+            build: |project, t| Box::new(insert_template(project, &t, 0, object_with_rows()).unwrap()),
             exposures: &[
                 ("node.pbr_material", "ambient", "Object 1 — Material"),
                 ("node.transform_3d", "pos_x", "Object 1 — Transform"),
@@ -4374,16 +3926,16 @@ fn scene_item_add_commands_stamp_exposures_and_undo_redo_are_stable() {
         },
         StampCase {
             name: "light",
-            build: |t| Box::new(AddSceneLightCommand::new(
-                t, vec![], 0, 0, (-260.0, 50.0),
-                vec![scene_param_meta("intensity", "Intensity")],
-                mirror_catalog_default(),
-            )),
+            build: |project, t| {
+                let mut light = test_light_template((-260.0, 50.0));
+                stamp_template_rows(&mut light, 1, HANDLE_TOKEN, &[scene_param_meta("intensity", "Intensity")]);
+                Box::new(insert_template(project, &t, 0, light).unwrap())
+            },
             exposures: &[("node.light", "intensity", "Light 1")],
         },
         StampCase {
             name: "environment",
-            build: |t| Box::new(AddSceneEnvironmentCommand::new(
+            build: |_, t| Box::new(AddSceneEnvironmentCommand::new(
                 t, vec![], 0, (10.0, 20.0),
                 vec![scene_param_meta("intensity", "Intensity")],
                 mirror_catalog_default(),
@@ -4392,7 +3944,7 @@ fn scene_item_add_commands_stamp_exposures_and_undo_redo_are_stable() {
         },
         StampCase {
             name: "fog",
-            build: |t| Box::new(AddSceneFogCommand::new(
+            build: |_, t| Box::new(AddSceneFogCommand::new(
                 t, vec![], 0, (30.0, 40.0),
                 vec![scene_param_meta("density", "Density")],
                 mirror_catalog_default(),
@@ -4402,7 +3954,7 @@ fn scene_item_add_commands_stamp_exposures_and_undo_redo_are_stable() {
     ];
     for case in &cases {
         let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        let mut cmd = (case.build)(GraphTarget::Effect(fx.clone()));
+        let mut cmd = (case.build)(&project, GraphTarget::Effect(fx.clone()));
         let assert_stamped = |project: &Project| {
             let def = graph_of(project, &fx);
             let meta = def.preset_metadata.as_ref().unwrap_or_else(|| panic!("{}: nothing stamped", case.name));

@@ -163,7 +163,7 @@ mod routing;
 mod state;
 
 pub use state::{
-    CardContext, ParamCardKind, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
+    CardContext, CardHost, ParamCardKind, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
     RowMod,
 };
 
@@ -301,6 +301,7 @@ pub struct ParamCardPanel {
     /// The card sits under a Scene tab item header that owns its name and
     /// delete (SCENE_SURFACES D8), so its own header shows neither.
     item_hosted: bool,
+    card_host: CardHost,
     modifier_remove_btn_id: Option<NodeId>,
     modifier_objects_btn_id: Option<NodeId>,
 
@@ -489,6 +490,7 @@ impl ParamCardPanel {
             modifier: None,
             object_modifier: None,
             item_hosted: false,
+            card_host: CardHost::Inspector,
             modifier_remove_btn_id: None,
             modifier_objects_btn_id: None,
             cached_enabled: true,
@@ -1198,6 +1200,11 @@ impl ParamCardPanel {
 
     pub fn is_scene_card(&self) -> bool {
         self.scene_sections
+    }
+
+    /// The surface fact `ParamRow::kind` reads, from the card's host.
+    pub(crate) fn draws_by_kind(&self) -> bool {
+        self.card_host != CardHost::Inspector
     }
 
     pub fn row(&self, param_id: &str) -> Option<&ParamRow> {
@@ -3552,126 +3559,7 @@ pub(super) mod tests {
         }
     }
 
-    /// `gen_config` with row 0 a three-way choice (Sun, Point, Spot; showing
-    /// Spot) and row 2 the Off/On float a light's Cast Shadows is.
-    fn gen_config_with_choice_and_float_switch() -> ParamSurface {
-        let mut c = gen_config();
-        let choice = &mut c.rows[0];
-        choice.spec.whole_numbers = true;
-        (choice.spec.min, choice.spec.max, choice.spec.default) = (0.0, 2.0, 2.0);
-        choice.spec.value_labels = Some(vec!["Sun".into(), "Point".into(), "Spot".into()]);
-        let switch = &mut c.rows[2];
-        (switch.spec.min, switch.spec.max, switch.spec.default) = (0.0, 1.0, 1.0);
-        switch.spec.value_labels = Some(vec!["Off".into(), "On".into()]);
-        c
-    }
-
-    /// The one kind decision (`ParamRow::kind`): what each declared kind
-    /// draws as on a scene surface and on any other card.
-    #[test]
-    fn row_kind_follows_the_declared_kind() {
-        use crate::param_surface::RowKind;
-        let c = gen_config_with_choice_and_float_switch();
-        let (choice, toggle, float_switch) = (&c.rows[0], &c.rows[1], &c.rows[2]);
-        assert_eq!(choice.kind(true), RowKind::Choice);
-        assert_eq!(float_switch.kind(true), RowKind::Switch);
-        assert_eq!(toggle.kind(true), RowKind::Switch);
-        assert_eq!(toggle.kind(false), RowKind::Switch, "a toggle is a switch on every card");
-        assert_eq!(choice.kind(false), RowKind::Number, "off a scene a labelled row keeps its slider");
-        assert_eq!(float_switch.kind(false), RowKind::Number);
-        let mut trigger = toggle.clone();
-        (trigger.spec.is_toggle, trigger.spec.is_trigger) = (false, true);
-        assert_eq!(trigger.kind(true), RowKind::Trigger);
-        let mut driven = choice.clone();
-        driven.modulation.driver_active = true;
-        assert_eq!(driven.kind(true), RowKind::Number, "a driven choice keeps the slider that shows its driver");
-        let mut three_label_float = float_switch.clone();
-        three_label_float.spec.value_labels = Some(vec!["Low".into(), "Mid".into(), "High".into()]);
-        assert_eq!(three_label_float.kind(true), RowKind::Number);
-        assert!(!choice.grows_drawer(true) && !float_switch.grows_drawer(true));
-        assert!(choice.grows_drawer(false), "the slider it stays off a scene keeps its drawer");
-    }
-
-    /// A scene card draws a choice as a pick list showing its label and an
-    /// Off/On float as the switch; a pick-list click opens the shared
-    /// dropdown at the current label, a switch click toggles, and the value
-    /// sync redraws both. The same rows on an ordinary card stay sliders.
-    #[test]
-    fn scene_card_draws_choices_as_pick_lists_and_switches() {
-        use crate::param_surface::RowKind;
-        let config = gen_config_with_choice_and_float_switch();
-        let rect = Rect::new(0.0, 0.0, 340.0, 300.0);
-
-        let mut tree = UITree::new();
-        let mut ordinary = ParamCardPanel::new();
-        ordinary.configure(&config);
-        ordinary.build(&mut tree, rect);
-        assert!(ordinary.row_host.slider_ids[0].is_some() && ordinary.row_host.toggle_ids[0].is_none());
-        assert!(ordinary.row_host.slider_ids[2].is_some() && ordinary.row_host.toggle_ids[2].is_none());
-
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&config);
-        panel.set_scene_sections(Some(&[]));
-        panel.build(&mut tree, rect);
-        let text = |tree: &UITree, id| tree.get_node(id).unwrap().text.clone();
-
-        assert!(panel.row_host.slider_ids[0].is_none());
-        let pick = panel.row_host.toggle_ids[0].as_ref().expect("the choice is a button row");
-        let pick_button = pick.button_id;
-        assert_eq!(pick.kind, RowKind::Choice);
-        assert_eq!(text(&tree, pick_button).as_deref(), Some("Spot"));
-        assert_eq!(tree.name_of(pick_button), Some("param_row.speed"));
-
-        let switch = panel.row_host.toggle_ids[2].as_ref().expect("the Off/On float is a button row");
-        let switch_button = switch.button_id;
-        assert_eq!(switch.kind, RowKind::Switch);
-        assert_eq!(text(&tree, switch_button).as_deref(), Some("ON"));
-
-        use crate::view::UiParamSlot as Slot;
-        let choice_slot = Slot { min: 0.0, max: 2.0, ..Slot::exposed(1.0) };
-        panel.sync_values_positional(&mut tree, &[choice_slot, Slot::exposed(1.0), Slot::exposed(0.0)]);
-        assert_eq!(text(&tree, pick_button).as_deref(), Some("Point"));
-        assert_eq!(text(&tree, switch_button).as_deref(), Some("OFF"));
-
-        match panel.handle_click(pick_button, &tree).as_slice() {
-            [PanelAction::Root(RootAction::ParamEnumDropdown { param_id, labels, current_index, cell_node_id, .. })] => {
-                assert_eq!(param_id.as_ref(), "speed");
-                assert_eq!(labels, &["Sun", "Point", "Spot"]);
-                assert_eq!(*current_index, 1, "checked at the live value, Point");
-                assert_eq!(*cell_node_id, pick_button, "the list opens under the pick list");
-            }
-            other => panic!("expected the shared dropdown, got {other:?}"),
-        }
-
-        match panel.handle_click(switch_button, &tree).as_slice() {
-            [PanelAction::Params(ParamsAction::ParamToggle(_, param_id))] => assert_eq!(param_id.as_ref(), "scale"),
-            other => panic!("expected ParamToggle, got {other:?}"),
-        }
-    }
-
-    /// A switch row and a pick-list row keep the right-click mapping menu
-    /// their slider had: label and button both open `ParamLabelRightClick`
-    /// for that row's param, the menu a slider row's label opens.
-    #[test]
-    fn button_rows_open_the_mapping_menu_on_right_click() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&gen_config_with_choice_and_float_switch());
-        panel.set_scene_sections(Some(&[]));
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 300.0));
-        let mut reg = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut reg);
-        let menu_for = |node| match reg.resolve(&tree, Some(node), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(_, param_id))) => Some(param_id.to_string()),
-            _ => None,
-        };
-        for (row, param) in [(0, "speed"), (1, "invert"), (2, "scale")] {
-            let ids = panel.row_host.toggle_ids[row].as_ref().expect("a button row");
-            assert_eq!(menu_for(ids.button_id).as_deref(), Some(param), "{param} button");
-            assert_eq!(menu_for(ids.label_id.expect("label")).as_deref(), Some(param), "{param} label");
-        }
-    }
+    mod choice_row_tests;
 
     #[test]
     fn build_gen_param() {

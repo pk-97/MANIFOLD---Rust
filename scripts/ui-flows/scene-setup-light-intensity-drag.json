@@ -28,7 +28,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Sun"
+          "name": "scene_tree.item", "text": "Lighting"
         }
       },
       "gesture": {
@@ -73,7 +73,8 @@
           "to": {
             "Query": {
               "text": "Intensity",
-              "under_name": "scene_setup"
+              "under_name": "scene_setup",
+              "nth": 1
             }
           },
           "steps": 8

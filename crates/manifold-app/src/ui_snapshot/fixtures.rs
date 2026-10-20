@@ -71,6 +71,7 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
     match scene {
         "timeline" => Some(timeline_scene()),
         "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
+        "newscene" => Some(new_scene("PhysicsSolids", "Physics Solids")),
         "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
         "fluidauthoring" => Some(physics_scene("Scene", "Fluid Authoring")),
         "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
@@ -187,7 +188,8 @@ fn empty_scene() -> SceneData {
 /// Real-project scene (`project:<abs-or-relative-path>`): loads an actual
 /// `.manifold` file through the SAME path the live app uses
 /// (`ProjectIOService::open_project_from_path`) — `load_project_with` plus the
-/// embedded-preset install hook, so project-local forked presets resolve
+/// embedded-preset install hook and the app's load steps
+/// (`prepare_loaded_project`), so project-local forked presets resolve
 /// their params exactly as the app would show them (BUG-036). Missing
 /// media does not fail the load: `run_post_load_validation` only logs
 /// (`manifold-io/src/loader.rs`'s step 6), so real projects with unreachable
@@ -199,13 +201,16 @@ fn project_scene(path: &str) -> Option<SceneData> {
         std::path::Path::new(path),
         crate::project_io::install_embedded_presets,
     );
-    let project = match load_result {
+    let mut project = match load_result {
         Ok(p) => p,
         Err(e) => {
             eprintln!("ui-snap: failed to load project '{path}': {e}");
             return None;
         }
     };
+    for notice in crate::project_io::prepare_loaded_project(&mut project) {
+        eprintln!("ui-snap: load notice: {notice}");
+    }
     Some(SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() })
 }
 
@@ -225,8 +230,17 @@ fn gltf_scene_cached(cache: &mut FixtureCache) -> SceneData {
     imported_gltf_scene(&path, "gltfscene", "Azalea", cache)
 }
 
-/// The bundled physics demo through the production preset and scene-panel path.
+/// The bundled physics demo through the production preset and scene-panel
+/// path, with the performer's card set up (see [`set_up_scene_cards`]).
 fn physics_scene(preset: &'static str, name: &str) -> SceneData {
+    let mut scene = new_scene(preset, name);
+    set_up_scene_cards(&mut scene.project);
+    scene
+}
+
+/// `newscene`: a scene layer exactly as it is added, card untouched. A new
+/// scene's card is empty until the user puts controls on it.
+fn new_scene(preset: &'static str, name: &str) -> SceneData {
     let mut project = Project::default();
     let mut layer = Layer::new_generator(name.into(), PresetTypeId::new(preset), 0);
     layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));
@@ -236,6 +250,38 @@ fn physics_scene(preset: &'static str, name: &str) -> SceneData {
     let mut selection = UIState::default();
     selection.select_layer(id);
     SceneData { project, content: ContentState::default(), active: Some(0), selection }
+}
+
+/// The card a performer builds: every performance control shown on it, as
+/// Show on Card would pin it. The scene card shows only what the user chose,
+/// so the flows that drive card rows start from a card that has them.
+fn set_up_scene_cards(project: &mut Project) {
+    use manifold_core::scene_surface::{CardPin, Gate, SurfaceRole};
+    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
+    use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+    for layer in &mut project.timeline.layers {
+        let Some(host) = layer.gen_params_mut() else { continue };
+        let Some(def) = host
+            .graph
+            .clone()
+            .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(host.effect_type()).map(|def| (*def).clone()))
+        else {
+            continue;
+        };
+        let Some(vm) = SceneVm::from_def(&def) else { continue };
+        let items = scene_items(&def, &vm);
+        let Some(meta) = def.preset_metadata.as_ref() else { continue };
+        for param in host.params.iter_mut() {
+            // A control no item owns drives nothing on screen, so a performer
+            // would not put it on the card.
+            let wanted = param.spec.scene.is_some_and(|scene| {
+                scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_)))
+            }) && owner_of(&items, meta, param.id()).is_some();
+            if wanted && param.choices.pin.is_none() {
+                param.choices.pin = Some(CardPin::Shown);
+            }
+        }
+    }
 }
 
 /// `mushroomscene`: the compact production photoscan fixture used by the
@@ -283,6 +329,7 @@ fn imported_gltf_scene(
     // registering an embedded preset: resolve the tracking layer's manifest
     // against it (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1).
     project.reconcile_param_manifests();
+    set_up_scene_cards(&mut project);
 
     let lid = cmd.inserted_layer_id().expect("layer inserted");
     let mut selection = UIState::default();
@@ -343,6 +390,7 @@ pub(super) fn heldout_merge_scene() -> SceneData {
     let mut cmd = ImportModelLayerCommand::new("Warehouse + Skull".to_string(), embedded, 0, None);
     cmd.execute(&mut project);
     project.reconcile_param_manifests();
+    set_up_scene_cards(&mut project);
 
     let lid = cmd.inserted_layer_id().expect("layer inserted");
     let mut selection = UIState::default();
@@ -386,6 +434,7 @@ pub(super) fn gltf_anim_scene() -> SceneData {
     let mut cmd = ImportModelLayerCommand::new(display_name, embedded, 0, None);
     cmd.execute(&mut project);
     project.reconcile_param_manifests();
+    set_up_scene_cards(&mut project);
 
     let lid = cmd.inserted_layer_id().expect("layer inserted");
     let mut selection = UIState::default();

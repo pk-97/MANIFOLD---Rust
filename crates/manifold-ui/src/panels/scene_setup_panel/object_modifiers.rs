@@ -87,6 +87,7 @@ impl ScenePanel {
                 .map(|index| existing.swap_remove(index))
                 .unwrap_or_else(ParamCardPanel::new);
             card.configure_object_modifier(surface, address.clone());
+            card.set_host(crate::panels::param_card::CardHost::SceneTab);
             cards.push(card);
         }
         self.object_modifier_cards = cards;

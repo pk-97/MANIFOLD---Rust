@@ -1,8 +1,9 @@
-//! The Scene tab tree (SCENE_SURFACES D8): fixed groups Camera, Lights,
+//! The Scene tab tree (SCENE_SURFACES D8): fixed groups Camera, Lighting,
 //! Objects, Forces, Physics, World. Each row is the item's type icon, its
-//! name, and an eye where the item has `visible`. Lights, Objects and Forces
-//! each own one add button beside their fold header; Camera and World are
-//! single rows. Rows read `SceneSetupVm.items`.
+//! name, and an eye where the item has `visible`. Camera, Lighting and World
+//! are single rows; Lighting holds every light, and its add button sits on
+//! its row. Objects and Forces own one add button beside their fold header.
+//! Rows read `SceneSetupVm.items`.
 
 use super::*;
 use crate::icons::scene_item_icon;
@@ -12,7 +13,7 @@ use manifold_foundation::scene_surface::SceneItemKind;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SceneGroup {
     Camera,
-    Lights,
+    Lighting,
     Objects,
     Forces,
     Physics,
@@ -22,7 +23,7 @@ pub enum SceneGroup {
 impl SceneGroup {
     pub const ORDER: [SceneGroup; 6] = [
         SceneGroup::Camera,
-        SceneGroup::Lights,
+        SceneGroup::Lighting,
         SceneGroup::Objects,
         SceneGroup::Forces,
         SceneGroup::Physics,
@@ -32,7 +33,7 @@ impl SceneGroup {
     pub fn title(self) -> &'static str {
         match self {
             SceneGroup::Camera => "Camera",
-            SceneGroup::Lights => "Lights",
+            SceneGroup::Lighting => "Lighting",
             SceneGroup::Objects => "Objects",
             SceneGroup::Forces => "Forces",
             SceneGroup::Physics => "Physics",
@@ -43,21 +44,21 @@ impl SceneGroup {
     pub fn of(kind: SceneItemKind) -> Self {
         match kind {
             SceneItemKind::Camera => SceneGroup::Camera,
-            SceneItemKind::Light => SceneGroup::Lights,
-            SceneItemKind::Object(_) => SceneGroup::Objects,
+            SceneItemKind::Light => SceneGroup::Lighting,
+            SceneItemKind::Object(_) | SceneItemKind::Source(_) => SceneGroup::Objects,
             SceneItemKind::Force => SceneGroup::Forces,
             SceneItemKind::Physics => SceneGroup::Physics,
             SceneItemKind::World => SceneGroup::World,
         }
     }
 
-    /// Camera and World are one row each, with no fold header.
+    /// Camera, Lighting and World are one row each, with no fold header.
     fn is_single(self) -> bool {
-        matches!(self, SceneGroup::Camera | SceneGroup::World)
+        matches!(self, SceneGroup::Camera | SceneGroup::Lighting | SceneGroup::World)
     }
 
     fn has_add(self) -> bool {
-        matches!(self, SceneGroup::Lights | SceneGroup::Objects | SceneGroup::Forces)
+        matches!(self, SceneGroup::Lighting | SceneGroup::Objects | SceneGroup::Forces)
     }
 }
 
@@ -115,11 +116,13 @@ fn outliner_row_key(sel: &SceneSelection) -> u64 {
     match sel {
         SceneSelection::Camera => OUTLINER_KEY_BASE,
         SceneSelection::World => OUTLINER_KEY_BASE + 1,
+        SceneSelection::Lighting => OUTLINER_KEY_BASE + 2,
         SceneSelection::OutlinerFold(group) => GROUP_HEADER_KEY_BASE + *group as u64,
         SceneSelection::Light(id) => OUTLINER_KEY_BASE + 4 + (*id as u64) * 2,
         SceneSelection::Object(id) => OUTLINER_KEY_BASE + 5 + (*id as u64) * 2,
         SceneSelection::Force(id) => crate::param_surface::stable_key(&format!("scene.force.{id}")),
         SceneSelection::Physics(id) => crate::param_surface::stable_key(&format!("scene.physics.{id}")),
+        SceneSelection::Source(id) => crate::param_surface::stable_key(&format!("scene.source.{id}")),
     }
 }
 
@@ -183,11 +186,18 @@ impl ScenePanel {
         selected: &SceneSelection,
     ) -> f32 {
         for group in SceneGroup::ORDER {
-            let items: Vec<&SceneItemVm> =
-                vm.items.iter().filter(|item| SceneGroup::of(item.kind) == group).collect();
+            // Lights are listed inside Lighting, never as rows of their own.
+            let items: Vec<&SceneItemVm> = vm
+                .items
+                .iter()
+                .filter(|item| SceneGroup::of(item.kind) == group && !matches!(item.selection, SceneSelection::Light(_)))
+                .collect();
             if group.is_single() {
                 for item in &items {
                     cy = self.build_tree_row(tree, (inner_x, inner_w, 0.0), cy, item, selected, EyeSlot::Empty);
+                    if group.has_add() {
+                        self.build_add_button(tree, (inner_x, inner_w), cy - ROW_H, group);
+                    }
                 }
                 if !items.is_empty() {
                     self.tree_groups.push(group);
@@ -195,7 +205,6 @@ impl ScenePanel {
                 continue;
             }
             let custom_count = match group {
-                SceneGroup::Lights => vm.lights.iter().filter(|l| matches!(l, LightRowVm::Custom { .. })).count(),
                 SceneGroup::Objects => vm.objects.iter().filter(|o| matches!(o, ObjectRowVm::Custom { .. })).count(),
                 _ => 0,
             };
@@ -211,7 +220,6 @@ impl ScenePanel {
                 continue;
             }
             cy = match group {
-                SceneGroup::Lights => self.build_light_rows(tree, (inner_x, inner_w), cy, vm, &items, selected),
                 SceneGroup::Objects => self.build_object_rows(tree, (inner_x, inner_w), cy, vm, &items, selected),
                 SceneGroup::Physics if items.is_empty() => self.build_physics_empty(tree, inner_x, inner_w, cy, vm),
                 _ => items.iter().fold(cy, |cy, item| {
@@ -247,45 +255,29 @@ impl ScenePanel {
         restyle_as_heading(tree, first_slot, group.title());
         self.outliner_row_ids.push((header, SceneSelection::OutlinerFold(group)));
         if group.has_add() {
-            let add = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + inner_w - STEP_W,
-                cy,
-                STEP_W,
-                ROW_H,
-                btn_style(),
-                "+",
-                GROUP_ADD_KEY_BASE + group as u64,
-            );
-            tree.set_name(add, format!("scene_tree.add.{}", group.title()));
-            match group {
-                SceneGroup::Lights => self.add_light_id = Some(add),
-                SceneGroup::Objects => self.add_object_id = Some(add),
-                _ => self.add_force_id = Some(add),
-            }
+            self.build_add_button(tree, (inner_x, inner_w), cy, group);
         }
         cy + ROW_H
     }
 
-    fn build_light_rows(
-        &mut self,
-        tree: &mut UITree,
-        (inner_x, inner_w): (f32, f32),
-        mut cy: f32,
-        vm: &SceneSetupVm,
-        items: &[&SceneItemVm],
-        selected: &SceneSelection,
-    ) -> f32 {
-        for item in items {
-            cy = self.build_tree_row(tree, (inner_x, inner_w, 0.0), cy, item, selected, EyeSlot::Empty);
+    /// A group's add button, at the right end of the row at `cy`.
+    fn build_add_button(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, group: SceneGroup) {
+        let add = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + inner_w - STEP_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "+",
+            GROUP_ADD_KEY_BASE + group as u64,
+        );
+        tree.set_name(add, format!("scene_tree.add.{}", group.title()));
+        match group {
+            SceneGroup::Lighting => self.add_light_id = Some(add),
+            SceneGroup::Objects => self.add_object_id = Some(add),
+            _ => self.add_force_id = Some(add),
         }
-        for light in &vm.lights {
-            if let LightRowVm::Custom { index } = light {
-                let label = format!("Light {index} — custom (edit in graph)");
-                cy = self.build_static_row(tree, (inner_x, inner_w), cy, SceneItemKind::Light, &label);
-            }
-        }
-        cy
     }
 
     /// Object rows; a compound parent folds its children under a chevron
@@ -309,7 +301,7 @@ impl ScenePanel {
                 continue;
             };
             let eye = EyeSlot::Live(row.visible.clone());
-            if row.is_group {
+            let indent = if row.is_group {
                 let open = expanded.contains(&id);
                 let toggle = tree.add_button_keyed(
                     Some(self.content_parent),
@@ -323,13 +315,33 @@ impl ScenePanel {
                 );
                 tree.set_name(toggle, "scene_setup.objects.group_toggle");
                 self.group_toggle_ids.push((toggle, id));
-                cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, item, selected, eye);
+                STEP_W
             } else if let Some(parent) = item.parent {
-                if expanded.contains(&parent) {
-                    cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, item, selected, eye);
+                if !expanded.contains(&parent) {
+                    continue;
                 }
+                STEP_W
             } else {
-                cy = self.build_tree_row(tree, (inner_x, inner_w, 0.0), cy, item, selected, eye);
+                0.0
+            };
+            cy = self.build_tree_row(tree, (inner_x, inner_w, indent), cy, item, selected, eye);
+            // A water's Inflow, Drain and Collider rows sit under it after its
+            // other children, at their indent, and fold with them (D-94).
+            let owner = item.parent.unwrap_or(id);
+            let child_of_owner =
+                |other: &SceneItemVm| matches!(other.selection, SceneSelection::Object(_)) && other.parent == Some(owner);
+            let last_of_owner = match item.parent {
+                Some(_) => !items
+                    .iter()
+                    .skip_while(|other| !std::ptr::eq(**other, *item))
+                    .skip(1)
+                    .any(|other| child_of_owner(other)),
+                None => (!row.is_group || expanded.contains(&id)) && !items.iter().any(|other| child_of_owner(other)),
+            };
+            if last_of_owner {
+                for source in items.iter().filter(|source| matches!(source.selection, SceneSelection::Source(_)) && source.parent == Some(owner)) {
+                    cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, source, selected, EyeSlot::Empty);
+                }
             }
         }
         for object in &vm.objects {
@@ -446,16 +458,13 @@ impl ScenePanel {
     /// Tree clicks that are not selection: the group add buttons and the
     /// empty Physics group's enable action.
     pub(super) fn outliner_click(&self, node_id: NodeId, vm: &SceneSetupVm) -> Option<PanelAction> {
+        let add = |group| Some(PanelAction::Root(RootAction::SceneSetupAddClicked(vm.layer_id.clone(), group)));
         if self.add_object_id == Some(node_id) {
-            Some(PanelAction::Root(RootAction::SceneSetupAddObjectMenuClicked(vm.layer_id.clone())))
+            add(SceneGroup::Objects)
         } else if self.add_light_id == Some(node_id) {
-            Some(PanelAction::Project(ProjectAction::SceneSetupAddLight(
-                vm.layer_id.clone(),
-                vm.scene_root_node_id,
-                vm.light_count as u32,
-            )))
+            add(SceneGroup::Lighting)
         } else if self.add_force_id == Some(node_id) {
-            Some(PanelAction::Root(RootAction::SceneSetupAddForceClicked(vm.layer_id.clone())))
+            add(SceneGroup::Forces)
         } else if let Some((_, index)) = self.physics_enable_id.filter(|(id, _)| *id == node_id) {
             Some(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
                 vm.layer_id.clone(),
@@ -467,9 +476,11 @@ impl ScenePanel {
         }
     }
 
-    /// The Objects add menu for the live scene; empty when not live.
-    pub fn add_object_menu(&self) -> Vec<(&'static str, PanelAction)> {
-        self.state.as_live().map(crate::panels::scene_setup_actions::add_object_menu).unwrap_or_default()
+    /// The one Add menu for the live scene, starting on `group`'s entries;
+    /// empty when not live.
+    pub fn add_menu(&self, group: SceneGroup) -> Vec<crate::panels::scene_setup_actions::AddMenuItem> {
+        let selected = self.live_selection();
+        self.state.as_live().map(|vm| crate::panels::scene_setup_actions::add_menu(vm, group, selected)).unwrap_or_default()
     }
 
     /// The groups the tree drew last build, in order.

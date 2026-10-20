@@ -27,9 +27,7 @@ use scans::{max_known_source_bbox_radius, max_local_k_recursive};
 /// groups into an EXISTING scene's `render_scene`, without touching that
 /// scene's own chrome (camera/envmap/lights/lens — the target scene keeps
 /// its own). Every field is a plain `manifold_core` type so the editing
-/// crate — which cannot depend on `manifold-nodes` (see
-/// `AddSceneObjectCommand`'s own doc comment for the same constraint) —
-/// can consume it without a dependency-direction violation: the caller
+/// crate, which cannot depend on `manifold-nodes`, can consume it without a dependency-direction violation: the caller
 /// (`manifold-app`, which depends on both) builds this plan here, then
 /// hands its fields to `ImportModelIntoSceneCommand::new`.
 #[derive(Debug, Clone)]

@@ -663,10 +663,12 @@ pub(crate) struct ToggleTriggerRowIds {
     pub(crate) label_id: Option<NodeId>,
     pub(crate) button_id: NodeId,
     pub(crate) kind: crate::param_surface::RowKind,
-    /// The "A" audio-mod button — `Some` for `is_trigger` (D5b) AND
-    /// `is_trigger_gate` (section 9) rows alike; both reach the SAME per-param
-    /// drawer mechanism now. Plain toggles never build one (`None`, zero
-    /// lane reserved).
+    /// A pick list's T and D lane buttons; `None` on every other button row.
+    pub(crate) envelope_btn: Option<NodeId>,
+    pub(crate) driver_btn: Option<NodeId>,
+    /// The "A" audio-mod button: `Some` for `is_trigger` (D5b),
+    /// `is_trigger_gate` (section 9) and pick-list rows. Plain toggles never
+    /// build one (`None`, zero lane reserved).
     pub(crate) audio_btn: Option<NodeId>,
     /// The audio-mod drawer, when armed. Same shape as a slider row's
     /// `audio_config` so retained drawer intents resolve both identically.

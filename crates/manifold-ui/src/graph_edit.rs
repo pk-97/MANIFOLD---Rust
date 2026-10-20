@@ -227,7 +227,7 @@ pub enum GraphEditCommand {
     /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): build a placeholder
     /// cube+material+transform group and wire it into `render_scene`'s next
     /// object slot. Emitted by the `NodeRow::Action(AddSceneObject)` button on
-    /// the `render_scene` node face. Routed to `AddSceneObjectCommand`.
+    /// the `render_scene` node face. Routed to Add Object's template.
     /// `next_index` is the live `objects` count read straight off the node
     /// face at click time (the render_scene primitive's own defaults are
     /// private to `manifold-nodes`, unreachable from the command crate —
@@ -242,7 +242,7 @@ pub enum GraphEditCommand {
     /// the D7a defaults (Sun, white, intensity 1.0, ~45° elevation,
     /// `cast_shadows` ON) and wire it into `render_scene`'s next light slot.
     /// Emitted by the `NodeRow::Action(AddSceneLight)` button. Routed to
-    /// `AddSceneLightCommand`.
+    /// Add Light's template.
     AddSceneLight {
         scope_path: Vec<u32>,
         render_scene_node_id: u32,

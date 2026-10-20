@@ -19,11 +19,11 @@ fn water_project_with_preset(preset: &'static str) -> (Project, LayerId, u32) {
     (project, id, render)
 }
 
-fn add_water(project: &mut Project, layer: &LayerId, render: u32, editing: &mut EditingService) {
+fn add_water(project: &mut Project, layer: &LayerId, _render: u32, editing: &mut EditingService) {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let before = effective_def(project, layer);
     let (tx, rx) = crossbeam_channel::unbounded();
-    dispatch_project(&ProjectAction::SceneSetupAddFluid(layer.clone(), render), &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx), &tx, &state,
+    dispatch_project(&crate::ui_bridge::project::insert_template_action(project, layer.clone(), manifold_core::scene_surface::SceneTemplateKind::Water), &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx), &tx, &state,
         &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
     assert_eq!(effective_def(project, layer), before, "UI only queues content edits");
     let ContentCommand::ExecuteSelecting(command, selection) = rx.try_recv().unwrap() else { panic!("content insertion") };
@@ -132,8 +132,8 @@ fn water_family_add_undo_redo() {
         let metadata = added.preset_metadata.as_ref().unwrap();
         // The three looks carry a Size; the dots are drawn at particle radius.
         for child in &family[1..4] {
-            let mesh = child.look_mesh.as_ref().expect("look mesh");
-            let size = binding(&added, mesh, "radius");
+            let mesh = child.look_node().expect("look mesh");
+            let size = binding(&added, &mesh, "radius");
             assert!(size.ends_with("_size"), "recipe-authored Size survives fresh IDs");
             assert_eq!(metadata.params.iter().find(|spec| spec.id == size).unwrap().name, "Size");
             assert!(!metadata.bindings.iter().any(|binding| matches!(&binding.target,
@@ -162,7 +162,7 @@ fn water_family_add_through_content_admission_discovers_children() {
     project.on_after_deserialize();
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let (tx, rx) = crossbeam_channel::unbounded();
-    dispatch_project(&ProjectAction::SceneSetupAddFluid(layer.clone(), render),
+    dispatch_project(&crate::ui_bridge::project::insert_template_action(&project, layer.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
         &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
     let ContentCommand::ExecuteSelecting(command, _) = rx.try_recv().unwrap() else {
         panic!("Add Water must execute on content");
@@ -177,7 +177,7 @@ fn water_family_add_through_content_admission_discovers_children() {
     let children: Vec<_> = family.iter().filter(|row| row.parent_group_id == Some(water.object_node_id)
         && (initial_objects..initial_objects + 4).contains(&row.index)).collect();
     assert_eq!(children.len(), 3);
-    assert!(children.iter().all(|row| row.look_mesh.is_some()));
+    assert!(children.iter().all(|row| row.look_node().is_some()));
 }
 
 #[test]
@@ -218,10 +218,10 @@ fn water_family_visibility_round_trip() {
     let foam = families.iter().find(|row| row.parent_group_id == Some(water.object_node_id)).unwrap();
     assert_eq!(family_value(&reloaded, &layer, foam, "visible"), 0.0);
     assert_eq!(family_value(&reloaded, &layer, water, "parent_visible"), 1.0);
-    let whitewater = water.fluid_controls.iter().find(|node| manifold_core::scene_modifier_preset::SceneNodeRef::locate(&after, node)
+    let whitewater = water.control_nodes().into_iter().find(|node| manifold_core::scene_modifier_preset::SceneNodeRef::locate(&after, node)
         .and_then(|reference| reference.resolve(&after)).is_some_and(|node| node.type_id == "node.whitewater_step")).unwrap();
-    let amount = binding(&after, whitewater, "amount");
-    let size = binding(&after, foam.look_mesh.as_ref().unwrap(), "radius");
+    let amount = binding(&after, &whitewater, "amount");
+    let size = binding(&after, foam.look_node().as_ref().unwrap(), "radius");
     assert_ne!(amount, size);
     for id in [&amount, &size] {
         editing.execute(Box::new(manifold_editing::commands::drivers::AddDriverCommand::new(
@@ -236,13 +236,13 @@ fn water_family_visibility_round_trip() {
     manifold_playback::modulation::evaluate_all_drivers(&mut reloaded, manifold_core::Beats(0.25), manifold_core::Seconds(0.125));
     let second = values(&reloaded);
     for index in 0..2 { assert!((first[index] - second[index]).abs() > 0.00001, "distinct reloaded target {index} modulates"); }
-    assert_eq!(binding(&after, whitewater, "amount"), amount);
-    assert_eq!(binding(&after, foam.look_mesh.as_ref().unwrap(), "radius"), size);
+    assert_eq!(binding(&after, &whitewater, "amount"), amount);
+    assert_eq!(binding(&after, foam.look_node().as_ref().unwrap(), "radius"), size);
 }
 
 #[test]
 fn water_family_delete_undo() {
-    use manifold_editing::commands::graph::{AddSceneObjectCommand, AssignSceneFluidRoleCommand,
+    use manifold_editing::commands::graph::{AssignSceneFluidRoleCommand,
         RemoveSceneObjectCommand, scene_fluid_role_assignments};
     let (mut project, layer, render) = water_project();
     let target = GraphTarget::Generator(layer.clone());
@@ -252,10 +252,11 @@ fn water_family_delete_undo() {
     let family = rows(&def);
     let water = family.iter().find(|row| row.name == "Water 1").unwrap().clone();
     let source_slot = objects_param(&project, &layer, render) as u32;
-    let metadata = manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
-    editing.execute(Box::new(AddSceneObjectCommand::new(target.clone(), vec![], render,
-        source_slot, (0.0, 0.0), metadata("node.pbr_material"), metadata("node.transform_3d"),
-        metadata("node.scene_object"), def)), &mut project);
+    let add = crate::scene_insert::prepare(
+        &project, &target, &def, &[], render,
+        manifold_nodes_scene::node_graph::scene_templates::object_template(source_slot, (0.0, 0.0)),
+    ).unwrap();
+    editing.execute(Box::new(add), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let def = effective_def(&project, &layer);
     let source = rows(&def).into_iter().find(|row| row.index == source_slot as usize).unwrap();
@@ -315,29 +316,102 @@ fn water_family_visibility_rename_round_trip() {
 
 #[test]
 fn water_family_recognizers_agree() {
+    use manifold_core::scene_object_model::SceneObjectRowKind;
+    // Editing's rename sweeps the enclosing group exactly when the model
+    // makes the row a water's parent.
+    let agree = |project: &Project, layer: &LayerId, label: &str| {
+        let mut editing = EditingService::new();
+        let before = effective_def(project, layer);
+        let rows = rows(&before);
+        assert!(rows.iter().any(|row| row.kind == SceneObjectRowKind::PhysicsParent && row.liquid_domain.is_some()), "{label}: a water");
+        for row in rows.iter().filter(|row| row.parent_group_id.is_none()) {
+            let mut renamed = project.clone();
+            editing.execute(super::water_family_actions::panel_rename_command(
+                &renamed, layer, row.object_node_id, "Recognizer probe"), &mut renamed);
+            assert_eq!(editing.take_rejection(), None);
+            let after = effective_def(&renamed, layer);
+            let changed_groups = before.nodes.iter().filter(|node| node.group.is_some())
+                .filter(|node| after.nodes.iter().find(|after| after.id == node.id)
+                    .unwrap().handle != node.handle).count();
+            let water = row.kind == SceneObjectRowKind::PhysicsParent && row.liquid_domain.is_some();
+            assert_eq!(changed_groups, usize::from(water), "{label}: editing and the model must agree for {}", row.name);
+        }
+    };
     for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
         let (mut project, layer, render) = water_project_with_preset(preset);
         let mut editing = EditingService::new();
         add_water(&mut project, &layer, render, &mut editing);
-        let before = effective_def(&project, &layer);
-        let family_rows: Vec<_> = rows(&before).into_iter().filter(|row|
-            row.look_mesh.is_some() || (row.is_group && row.liquid_domain.is_some())).collect();
+        let family_rows = rows(&effective_def(&project, &layer))
+            .into_iter()
+            .filter(|row| row.kind == SceneObjectRowKind::LookChild || (row.kind == SceneObjectRowKind::PhysicsParent && row.liquid_domain.is_some()))
+            .count();
         // Water, three looks and the dots per family; Particle View has no dots.
         let shipped = if preset == "WaterDamBreakGpuFlip" { 5 } else { 4 };
-        assert_eq!(family_rows.len(), shipped + 5, "shipped and Add Water families");
-        for row in family_rows {
-            // Renaming the enclosing group is editing's observable parent predicate.
-            let mut renamed = project.clone();
-            editing.execute(super::water_family_actions::panel_rename_command(
-                &renamed, &layer, row.object_node_id, "Recognizer probe"), &mut renamed);
-            assert_eq!(editing.take_rejection(), None);
-            let after = effective_def(&renamed, &layer);
-            let changed_groups = before.nodes.iter().filter(|node| node.group.is_some())
-                .filter(|node| after.nodes.iter().find(|after| after.id == node.id)
-                    .unwrap().handle != node.handle).count();
-            assert_eq!(changed_groups, usize::from(row.is_group && row.liquid_domain.is_some()),
-                "{preset}: editing and renderer must agree for {}", row.name);
+        assert_eq!(family_rows, shipped + 5, "{preset}: shipped and Add Water families");
+        agree(&project, &layer, preset);
+    }
+
+    // BUG-4lfm: a water whose object leaves its group on a port named
+    // "water" is still recognised by its liquid domain.
+    let (project, layer) = water_port_project();
+    agree(&project, &layer, "water port");
+}
+
+/// The shipped water with its object leaving the family group on a port
+/// named "water": not the family wiring the old walkers demanded.
+fn water_port_project() -> (Project, LayerId) {
+    let (mut project, layer, _) = water_project();
+    let mut def = effective_def(&project, &layer);
+    let family = def.nodes.iter().position(|node| node.group.as_deref().and_then(manifold_core::scene_object_model::water_family).is_some()).unwrap();
+    let group_id = def.nodes[family].id;
+    let body = def.nodes[family].group.as_deref_mut().unwrap();
+    let parent = manifold_core::scene_object_model::water_family(body).unwrap().parent;
+    let wire = body.wires.iter_mut().find(|wire| wire.from_node == parent && wire.from_port == "object").expect("the water leaves its group");
+    let port = std::mem::replace(&mut wire.to_port, "water".into());
+    body.interface.outputs.iter_mut().find(|output| output.name == port).unwrap().name = "water".into();
+    for wire in def.wires.iter_mut().filter(|wire| wire.from_node == group_id && wire.from_port == port) {
+        wire.from_port = "water".into();
+    }
+    let (_, owner) = project.timeline.find_layer_by_id_mut(&layer).unwrap();
+    owner.gen_params_mut().unwrap().graph = Some(def);
+    (project, layer)
+}
+
+/// A water the panel hid through its object's own `visible`, before it read
+/// as Water, shows hidden. Hidden by that flag, or by both flags, one eye
+/// click shows it, and one undo hides it again.
+#[test]
+fn water_family_saved_hidden_water_shows_from_its_eye() {
+    let (mut project, layer) = water_port_project();
+    let target = GraphTarget::Generator(layer.clone());
+    let water_row = |project: &Project| {
+        rows(&crate::scene_gizmo::authored_def(project, &target).unwrap())
+            .into_iter()
+            .find(|row| row.is_group && row.liquid_domain.is_some())
+            .expect("a water")
+    };
+    let water = water_row(&project);
+    assert_eq!(water.visible_addr.param_id, "parent_visible", "a water's eye is its family flag");
+    let addr = water.visible_addr.clone();
+    let mut editing = EditingService::new();
+    let write = |project: &Project, param: &str, value: f32| {
+        apply_scene_param_write(project, &layer, addr.scope_path.clone(), addr.node_doc_id, param, value).expect("a write")
+    };
+    editing.execute(write(&project, "visible", 0.0), &mut project);
+    assert!(!water_row(&project).visible_value, "hidden by its own flag, the eye shows it hidden");
+
+    for both in [false, true] {
+        if both {
+            editing.execute(write(&project, "parent_visible", 0.0), &mut project);
+            assert!(!water_row(&project).visible_value);
         }
+        editing.execute(write(&project, "parent_visible", 1.0), &mut project);
+        assert!(water_row(&project).visible_value, "one eye click shows it (both flags hidden: {both})");
+        assert!(editing.undo(&mut project));
+        assert!(!water_row(&project).visible_value, "one undo hides it again");
+        let own = crate::ui_bridge::project::scene_param_value(&effective_def(&project, &layer), project.graph_target_owner(&target),
+            &addr.scope_path, addr.node_doc_id, "visible");
+        assert_eq!(own, 0.0, "the one undo puts back the object's own flag too");
     }
 }
 
@@ -396,9 +470,10 @@ fn visibility_rename_round_trip(preset: &'static str) {
             spray.object_node_id, &format!("Mist {}", spray.object_node_id)), &mut project);
         let child_renamed = effective_def(&project, &layer);
         let after = rows(&child_renamed).into_iter().find(|row| row.object == spray.object).unwrap();
-        assert_eq!(after.look_mesh, spray.look_mesh);
+        assert_eq!(after.look_node(), spray.look_node());
         assert_eq!(after.parent_group_id, spray.parent_group_id);
-        assert!(after.liquid_domain.is_none() && after.fluid_controls.is_empty());
+        assert!(after.liquid_domain.is_none(), "a renamed look simulates nothing");
+        assert_eq!(after.control_nodes(), after.look_node().into_iter().collect::<Vec<_>>(), "a look owns only its look mesh");
         assert_eq!(family_value(&project, &layer, spray, "visible"), 0.0);
         assert_eq!(family_value(&project, &layer, water, "parent_visible"), 1.0);
     }
@@ -415,10 +490,10 @@ fn visibility_rename_round_trip(preset: &'static str) {
         let spray = family.iter().find(|row| row.parent_group_id == Some(water.object_node_id) && row.name.starts_with("Mist ")).unwrap();
         assert_eq!(family_value(&reloaded, &layer, spray, "visible"), 0.0);
         assert_eq!(family_value(&reloaded, &layer, water, "parent_visible"), 1.0);
-        let size = binding(&before_reload, spray.look_mesh.as_ref().unwrap(), "radius");
-        let whitewater = water.fluid_controls.iter().find(|node| manifold_core::SceneNodeRef::locate(&before_reload, node)
+        let size = binding(&before_reload, spray.look_node().as_ref().unwrap(), "radius");
+        let whitewater = water.control_nodes().into_iter().find(|node| manifold_core::SceneNodeRef::locate(&before_reload, node)
             .and_then(|reference| reference.resolve(&before_reload)).is_some_and(|node| node.type_id == "node.whitewater_step")).unwrap();
-        let amount = binding(&before_reload, whitewater, "amount");
+        let amount = binding(&before_reload, &whitewater, "amount");
         assert_ne!(size, amount);
         for id in [&size, &amount] {
             editing.execute(Box::new(manifold_editing::commands::drivers::AddDriverCommand::new(
@@ -431,4 +506,62 @@ fn visibility_rename_round_trip(preset: &'static str) {
         manifold_playback::modulation::evaluate_all_drivers(&mut reloaded, manifold_core::Beats(0.25), manifold_core::Seconds(0.125));
         for (a, b) in first.into_iter().zip(values(&reloaded)) { assert!((a - b).abs() > 0.00001); }
     }
+}
+
+fn insert_water(project: &Project, layer: &LayerId, render: u32) -> Result<manifold_editing::scene_template::InsertSceneTemplateCommand, String> {
+    let target = GraphTarget::Generator(layer.clone());
+    let default = (*manifold_nodes::bundled_presets::bundled_preset_def(&project.timeline.find_layer_by_id(layer).unwrap().1.generator_type().clone()).unwrap()).clone();
+    let def = effective_def(project, layer);
+    let render_node = def.nodes.iter().find(|node| node.id == render).unwrap().node_id.clone();
+    let scene = manifold_core::SceneNodeRef::locate(&def, &render_node).unwrap();
+    manifold_editing::scene_template::InsertSceneTemplateCommand::new(
+        project, target, scene, None, manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(), &default,
+    )
+    .map_err(|error| error.message)
+}
+
+/// The Water template routes all five outputs to consecutive object slots,
+/// bumps the object count by five, and merges its exposures under unique ids
+/// that each bind to a node that exists.
+#[test]
+fn physics_boundary_insert_water_family() {
+    use manifold_editing::command::Command;
+    let (mut project, layer, render) = super::scene_layer_project();
+    let before = effective_def(&project, &layer);
+    let first_free = super::objects_param(&project, &layer, render) as u32;
+    let mut command = insert_water(&project, &layer, render).expect("the template inserts");
+    command.execute(&mut project);
+    assert!(command.was_applied());
+    let def = effective_def(&project, &layer);
+    assert_eq!(super::objects_param(&project, &layer, render), (first_free + 5) as f32);
+    let group = def.nodes.iter().find(|node| node.type_id == "group" && before.nodes.iter().all(|old| old.id != node.id)).expect("the family group");
+    let mut slots: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == group.id && wire.to_node == render).map(|wire| wire.to_port.clone()).collect();
+    slots.sort();
+    assert_eq!(slots, (first_free..first_free + 5).map(|n| format!("object_{n}")).collect::<Vec<_>>());
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let ids: std::collections::HashSet<_> = meta.params.iter().map(|spec| spec.id.as_str()).collect();
+    assert_eq!(ids.len(), meta.params.len(), "exposure ids are unique");
+    assert!(meta.bindings.iter().all(|binding| ids.contains(binding.id.as_str())));
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("the family flattens");
+    let domain = flat.nodes.iter().find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    assert!(flat.wires.iter().any(|wire| wire.to_node == domain.id && wire.to_port == "gravity"), "the World drives the domain");
+}
+
+/// A scene with too few free slots refuses the five-output family and the
+/// project stays exactly as it was.
+#[test]
+fn physics_boundary_insert_capacity_rejects() {
+    let (mut project, layer, render) = super::scene_layer_project();
+    let target = GraphTarget::Generator(layer.clone());
+    let mut def = effective_def(&project, &layer);
+    let limit = manifold_core::param_lookup::node_params("node.render_scene").iter().find(|meta| meta.name == "objects").expect("objects declares a range").max;
+    def.nodes.iter_mut().find(|node| node.id == render).unwrap().params.insert(
+        "objects".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::Float { value: limit - 2.0 },
+    );
+    project.graph_target_owner_mut(&target).unwrap().graph = Some(def);
+    let before = serde_json::to_value(&project).unwrap();
+    let refused = insert_water(&project, &layer, render).expect_err("no room for five objects");
+    assert!(refused.contains("no free slots"), "{refused}");
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
 }

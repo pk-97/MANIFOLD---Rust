@@ -32,6 +32,7 @@ impl ScenePanel {
             let collapsed = index.is_some() && card.is_collapsed();
             card.configure(config);
             card.set_item_hosted(true);
+            card.set_host(crate::panels::param_card::CardHost::SceneTab);
             if collapsed {
                 card.set_collapsed(true);
             }
@@ -520,7 +521,7 @@ mod tests {
         );
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Root(RootAction::SceneSetupAddForceClicked(layer))]
+            [PanelAction::Root(RootAction::SceneSetupAddClicked(layer, SceneGroup::Forces))]
                 if layer == &LayerId::new("layer-a")
         ));
 

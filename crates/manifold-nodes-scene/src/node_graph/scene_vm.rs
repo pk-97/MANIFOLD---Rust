@@ -26,7 +26,7 @@
 //! invariant) — found either directly wired to `render_scene`'s `object_k`
 //! port (a hand-built, ungrouped object) or through one `GROUP_TYPE_ID`
 //! wrapper whose body contains the `node.scene_object` feeding a
-//! `system.group_output`'s `object` port (the importer/`AddSceneObjectCommand`
+//! `system.group_output`'s `object` port (the importer/Add Object's template
 //! shape). The old "whatever named group happens to wrap `mesh_k`" trace is
 //! gone — `render_scene` v2 has no `mesh_k`/`transform_k`/… port families
 //! left to look at.
@@ -50,7 +50,9 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 mod item_nodes;
 use item_nodes::{camera_nodes, physics_nodes, world_nodes};
 mod liquid;
-use liquid::{LiquidDomainAt, discover_water_families, family_liquid_domain, family_look_mesh, locate_node, slot_liquid_domain};
+use liquid::locate_node;
+use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
+use manifold_foundation::scene_surface::SourceRole;
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;
@@ -68,9 +70,6 @@ const HDRI_SOURCE_TYPE_ID: &str = "node.hdri_source";
 const EXPOSURE_TYPE_ID: &str = "node.exposure";
 const SWITCH_TEXTURE_TYPE_ID: &str = "node.switch_texture";
 const SWITCH_MESH_TYPE_ID: &str = "node.switch_mesh";
-const SWITCH_INDICES_TYPE_ID: &str = "node.switch_indices";
-const SWITCH_TYPE_IDS: [&str; 4] =
-    ["node.switch_value", SWITCH_MESH_TYPE_ID, SWITCH_INDICES_TYPE_ID, "node.switch_instances"];
 const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
 const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
 const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
@@ -223,12 +222,15 @@ pub struct SceneObjectKnownRow {
     pub object_node_id: u32,
     /// The stable identity behind `object_node_id`.
     pub object: NodeId,
-    /// The family child's platonic mesh. Water looks expose this node's
-    /// radius as their Size control; the simulation-owning Water row leaves
-    /// it empty because its geometry comes from the liquid surface.
-    pub look_mesh: Option<NodeId>,
+    /// Where the row sits, from the scene object model.
+    pub kind: SceneObjectRowKind,
+    /// The nodes whose controls the row owns beyond its object, transform,
+    /// material and modifiers (the model's controls): a water's simulation,
+    /// a look's mesh.
+    pub controls: Vec<SceneNodeRef>,
+    pub capabilities: SceneObjectCapabilities,
     /// `Some(group_id)` when the scene_object is wrapped in a
-    /// `GROUP_TYPE_ID` node (the importer/`AddSceneObjectCommand` shape) —
+    /// `GROUP_TYPE_ID` node (the importer/Add Object's template shape) —
     /// the rename sweep's group target. `None` for a bare scene_object
     /// wired directly to `object_k` (D1's first-class "hand-built graph, no
     /// group" case).
@@ -275,15 +277,41 @@ pub struct SceneObjectKnownRow {
     /// (`manifold_core::liquid_domain::liquid_domain_of`, the walk forces and
     /// pairing use).
     pub liquid_domain: Option<SceneNodeRef>,
-    /// The liquid domain, its transforms and the object-owned role nodes:
-    /// their controls belong to this object.
-    pub fluid_controls: Vec<NodeId>,
     /// Static domain bounds when the fluid domain is fully authored by
     /// unwired scalar/transform parameters.
     pub fluid_domain: Option<FluidDomainLayout>,
     /// The domain transform's addresses and current values, independent of
     /// the visible mesh object's ordinary transform.
     pub fluid_domain_transform: Option<TransformVm>,
+    /// The Inflow, Drain and Collider groups feeding this water: each is its
+    /// own row under the water (D-94), so the water does not own them.
+    pub placed_sources: Vec<PlacedSourceVm>,
+}
+
+impl SceneObjectKnownRow {
+    /// The stable ids of the row's controls.
+    pub fn control_nodes(&self) -> Vec<NodeId> {
+        self.controls.iter().map(|control| control.node.clone()).collect()
+    }
+
+    /// A Water look's mesh, whose radius is its Size control.
+    pub fn look_node(&self) -> Option<NodeId> {
+        (self.kind == SceneObjectRowKind::LookChild).then(|| self.controls.first().map(|control| control.node.clone()))?
+    }
+}
+
+/// A standalone fluid source group wired into a water: a group holding a
+/// `node.fluid_role_source` and no scene object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedSourceVm {
+    /// The role node: the row's identity and its gizmo's owner.
+    pub node: NodeId,
+    /// The group's handle, else its title.
+    pub name: String,
+    /// Every node in the group whose controls the row owns.
+    pub owned: Vec<NodeId>,
+    /// What the source does to its water, from its role node.
+    pub role: manifold_foundation::scene_surface::SourceRole,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -314,7 +342,7 @@ pub struct ModifierVm {
 
 /// One `node.transform_3d`'s write addresses + current values — D4's "3
 /// compact triplets" (Position/Rotation/Scale), each X/Y/Z. Traced
-/// independently of the object's group (the importer/`AddSceneObjectCommand`
+/// independently of the object's group (the importer/Add Object's template
 /// shape places it in the same group by convention, but the trace never
 /// assumes that — a hand-wired `transform` input still resolves here as long
 /// as the producer IS a `node.transform_3d`).
@@ -593,31 +621,46 @@ impl SceneVm {
     /// skin whose `layer` id no longer resolves (D8 missing-layer chip). Tests
     /// and other callers without a layer list can use [`Self::from_def`].
     pub fn from_def_with_layers(def: &EffectGraphDef, layer_ids: &[LayerId]) -> Option<SceneVm> {
+        Self::from_def_with_models(def, layer_ids, None)
+    }
+
+    /// The object model of the scene [`Self::from_def`] shows, for a host
+    /// that caches it across value-only rebuilds. `None` when `def` holds no
+    /// live scene.
+    pub fn object_models(def: &EffectGraphDef) -> Option<Vec<SceneObjectModel>> {
         let root = Level { nodes: &def.nodes, wires: &def.wires };
+        let scene_node = root.node(*scene_candidates(&root).first()?)?;
+        let scene = SceneNodeRef { scope: Vec::new(), node: scene_node.node_id.clone() };
+        Some(scene_object_models(def, &scene).unwrap_or_default())
+    }
 
-        // Liveness: reachable-from-output, walked backward from
-        // `system.final_output`'s `in` wire — the same liveness notion the
-        // canvas already computes (D3).
-        let sink = root.nodes.iter().find(|n| n.type_id == FINAL_OUTPUT_TYPE_ID)?;
-        let reachable = reachable_backward(&root, sink.id);
-
-        let mut candidates: Vec<u32> = root
-            .nodes
-            .iter()
-            .filter(|n| n.type_id == RENDER_SCENE_TYPE_ID && reachable.contains(&n.id))
-            .map(|n| n.id)
-            .collect();
-        candidates.sort_unstable();
+    /// The scene of `def` over its object model. A host that rebuilds on
+    /// value changes passes the model it cached on the graph's structure
+    /// (see [`Self::object_models`]); `None` derives it here.
+    pub fn from_def_with_models(
+        def: &EffectGraphDef,
+        layer_ids: &[LayerId],
+        models: Option<&[SceneObjectModel]>,
+    ) -> Option<SceneVm> {
+        let root = Level { nodes: &def.nodes, wires: &def.wires };
+        let candidates = scene_candidates(&root);
         let scene_root_node_id = *candidates.first()?;
         let multiple_scenes = candidates.len() > 1;
         let scene_node = root.node(scene_root_node_id)?;
 
         let layer_id_set: HashSet<&str> = layer_ids.iter().map(|id| id.as_ref()).collect();
-        // A graph the index refuses has no stable paths, so nothing in it is
-        // recognised as water; forces and pairing refuse the same graph.
         let index = FlatSceneIndex::build(def).ok();
+        let derived;
+        let models = match models {
+            Some(models) => models,
+            None => {
+                let scene = SceneNodeRef { scope: Vec::new(), node: scene_node.node_id.clone() };
+                derived = scene_object_models_in(def, &scene, index.as_ref()).unwrap_or_default();
+                &derived
+            }
+        };
         let (objects, vertex_count, vertex_count_exact) =
-            trace_objects(&root, scene_node, &layer_id_set, index.as_ref());
+            trace_objects(&root, scene_node, &layer_id_set, models);
         let lights = trace_lights(&root, scene_node);
         let camera = trace_camera(&root, scene_node);
         let camera_nodes = camera_nodes(&root, &camera, scene_node, index.as_ref());
@@ -703,6 +746,24 @@ fn light_casts_shadows(level: &Level, light: &SceneLightVm) -> bool {
     param_f32(node, "cast_shadows", 0.0) > 0.5
 }
 
+/// The live render scenes at the root, lowest doc id first: those the
+/// `system.final_output` sink reaches backward over wires, the same liveness
+/// the canvas computes (D3).
+fn scene_candidates(root: &Level) -> Vec<u32> {
+    let Some(sink) = root.nodes.iter().find(|n| n.type_id == FINAL_OUTPUT_TYPE_ID) else {
+        return Vec::new();
+    };
+    let reachable = reachable_backward(root, sink.id);
+    let mut candidates: Vec<u32> = root
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == RENDER_SCENE_TYPE_ID && reachable.contains(&n.id))
+        .map(|n| n.id)
+        .collect();
+    candidates.sort_unstable();
+    candidates
+}
+
 /// BFS backward over wires from `start` (inclusive), within one graph level.
 fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
     let mut seen = HashSet::new();
@@ -716,23 +777,6 @@ fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
         }
     }
     seen
-}
-
-/// D12: find the `node.scene_object` bound inside `group`'s body — the
-/// producer of its `system.group_output`'s `object` port. Returns the node
-/// plus a [`Level`] scoped to the group's own nodes/wires (needed for every
-/// further trace INSIDE that scope). `None` when the group doesn't have this
-/// shape at all (an unparseable/hand-edited group — the caller degrades to
-/// `Custom`, never errors).
-fn find_scene_object_in_group<'a>(
-    group: &'a manifold_core::effect_graph_def::GroupDef,
-    output_port: &str,
-) -> Option<(&'a EffectGraphNode, Level<'a>)> {
-    let inner = Level { nodes: &group.nodes, wires: &group.wires };
-    let (producer_id, _) = inner.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
-        .find_map(|out| inner.producer(out.id, output_port))?;
-    let node = inner.node(producer_id)?;
-    (node.type_id == SCENE_OBJECT_TYPE_ID).then_some((node, inner))
 }
 
 /// Resolve `to_node`'s `to_port` producer, transparently crossing ONE level
@@ -749,7 +793,7 @@ fn find_scene_object_in_group<'a>(
 /// (for `ParamAddr::scope_path`, `None` when no crossing happened). `None`
 /// when unwired, or when a bare group doesn't have the expected
 /// group-output/re-export shape — the caller degrades to `Custom`/absent,
-/// never errors (same tolerance doctrine as `find_scene_object_in_group`).
+/// never errors (the object model's tolerant level walk).
 fn resolve_producer_through_group<'a>(
     level: &Level<'a>,
     to_node: u32,
@@ -839,175 +883,209 @@ fn assign_shared_material_counts(objects: &mut [SceneObjectVm]) {
 /// (`false` — at least one object's mesh source didn't resolve to a known
 /// count, e.g. a hand-wired procedural generator outside the closed-form
 /// table, or an unparseable chain).
+///
+/// Rows follow the scene object model: its order, parents, kinds and
+/// controls. A render slot the model has no row for is a custom row.
 fn trace_objects(
-    level: &Level,
+    root: &Level,
     scene_node: &EffectGraphNode,
     layer_id_set: &HashSet<&str>,
-    index: Option<&FlatSceneIndex>,
+    models: &[SceneObjectModel],
 ) -> (Vec<SceneObjectVm>, u64, bool) {
     let objects = param_f32(scene_node, "objects", 0.0).max(0.0) as usize;
-    let water_families = discover_water_families(level, scene_node, objects);
+    let doc_of = |reference: &SceneNodeRef| {
+        models.iter().find(|model| &model.object == reference).and_then(|model| model.doc_path.last().copied())
+    };
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
-    let mut out = Vec::with_capacity(objects);
-    let mut seen_groups = HashSet::new();
-    for k in 0..objects {
-        let port = format!("object_{k}");
-        let liquid = slot_liquid_domain(level, index, scene_node, k).or_else(|| {
-            let (group_id, output_port) = level.producer(scene_node.id, &port)?;
-            let family = water_families.get(&group_id)?;
-            (output_port == "object").then(|| family_liquid_domain(level, group_id, family.domain_node_id))?
-        });
-        let (mut row, source_vertex_count) = match level.producer(scene_node.id, &port) {
-            Some((producer_id, output_port)) => match level.node(producer_id) {
-                Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
-                    trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set, liquid)
-                }
-                Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
-                    match producer_node
-                        .group
-                        .as_deref()
-                        .and_then(|group| find_scene_object_in_group(group, output_port))
-                    {
-                        Some((inner_node, inner_level)) => trace_scene_object(
-                            &inner_level,
-                            vec![producer_id],
-                            inner_node,
-                            Some(producer_id),
-                            k,
-                            layer_id_set,
-                            liquid,
-                        ),
-                        None => (SceneObjectVm::Custom { index: k }, None),
-                    }
-                }
-                _ => (SceneObjectVm::Custom { index: k }, None),
-            },
-            None => (SceneObjectVm::Custom { index: k }, None),
-        };
-        match source_vertex_count {
-            Some(v) => vertex_count += v as u64,
-            None => vertex_count_exact = false,
+    // (anchor slot, row): a child sorts with its parent's block.
+    let mut out: Vec<(usize, SceneObjectVm)> = Vec::with_capacity(objects);
+    let mut anchor = usize::MAX;
+    for (position, model) in models.iter().enumerate() {
+        if model.parent.is_none() {
+            anchor = model
+                .slot
+                .or_else(|| models[position + 1..].iter().take_while(|child| child.parent.is_some()).find_map(|child| child.slot))
+                .map_or(usize::MAX, |slot| slot as usize);
         }
-        if let SceneObjectVm::Known(child) = &mut row
-            && let Some(group_id) = child.group_node_id
-            && let Some(group_node) = level.node(group_id)
-            && let Some(group) = group_node.group.as_ref()
-        {
-            let inner = Level { nodes: &group.nodes, wires: &group.wires };
-            if !water_families.contains_key(&group_id)
-                && let Some((parent_source, _)) = inner.producer(child.object_node_id, "parent_transform")
-            {
-                if seen_groups.insert(group_id) {
-                    let mut parent = child.clone();
-                    parent.is_group = true;
-                    parent.object_node_id = group_id;
-                    parent.object = group_node.node_id.clone();
-                    parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
-                    parent.visible_addr.param_id = "parent_visible".into();
-                    parent.visible_value = inner.node(child.object_node_id)
-                        .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
-                    parent.visible_driven = inner.producer(child.object_node_id, "parent_visible").is_some();
-                    let authored = inner.node(parent_source)
-                        .filter(|node| node.type_id == "node.transform_3d")
-                        .map(|node| node.id)
-                        .or_else(|| group_body_id(&inner).and_then(|body| inner.producer(body, "transform").map(|(id, _)| id)));
-                    parent.transform = authored.map(|id| trace_transform(&inner, vec![group_id], id));
-                    parent.material = MaterialVm::None;
-                    parent.skin = None;
-                    parent.transform_chain.clear();
-                    parent.modifier_chain.clear();
-                    out.push(SceneObjectVm::Known(parent));
+        match model.slot {
+            Some(slot) if (slot as usize) < objects => {
+                let Some((row, source_vertex_count)) = trace_model_object(root, model, layer_id_set) else {
+                    out.push((anchor, SceneObjectVm::Custom { index: slot as usize }));
+                    vertex_count_exact = false;
+                    continue;
+                };
+                match source_vertex_count {
+                    Some(v) => vertex_count += v as u64,
+                    None => vertex_count_exact = false,
                 }
-                child.parent_group_id = Some(group_id);
-                child.physics = None;
-                child.physics_imported = false;
+                let mut row = row;
+                if let SceneObjectVm::Known(known) = &mut row {
+                    let parent = model.parent.as_ref().and_then(doc_of);
+                    shape_row_for_kind(root, model, known, parent);
+                }
+                out.push((anchor, row));
             }
-        }
-        out.push(row);
-    }
-    for (group_id, family) in &water_families {
-        let Some(group_node) = level.node(*group_id) else { continue; };
-        for object in &mut out {
-            let SceneObjectVm::Known(row) = object else { continue; };
-            if row.group_node_id != Some(*group_id) { continue; }
-            if row.object_node_id == family.water_object_id {
-                // Water is the physical row itself. Its object identity stays
-                // the scene_object doc id so selection, rename and deletion
-                // address the actual render slot rather than a virtual group.
-                row.is_group = true;
-                row.parent_group_id = None;
-                row.look_mesh = None;
-                let Some(group) = group_node.group.as_ref() else { continue; };
+            Some(_) => {}
+            None if model.kind == SceneObjectRowKind::PhysicsParent => {
+                // An imported model's group: a virtual row shaped from its
+                // first part.
+                let Some(child) = models[position + 1..].iter().find(|child| child.parent.as_ref() == Some(&model.object)) else {
+                    continue;
+                };
+                let Some((SceneObjectVm::Known(first), _)) = trace_model_object(root, child, layer_id_set) else { continue };
+                let Some((_, group_node)) = locate_doc_path(root, &model.doc_path) else { continue };
+                let Some(group) = group_node.group.as_ref() else { continue };
                 let inner = Level { nodes: &group.nodes, wires: &group.wires };
-                row.visible_addr.param_id = "parent_visible".into();
-                row.visible_value = inner
-                    .node(row.object_node_id)
+                let parent_source = inner.producer(first.object_node_id, "parent_transform").map(|(id, _)| id);
+                let mut parent = first;
+                parent.is_group = true;
+                parent.kind = model.kind;
+                parent.capabilities = model.capabilities;
+                parent.controls = model.controls.clone();
+                parent.object_node_id = group_node.id;
+                parent.object = group_node.node_id.clone();
+                parent.group_node_id = Some(group_node.id);
+                parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
+                parent.visible_addr.param_id = "parent_visible".into();
+                parent.visible_value = inner.node(parent.visible_addr.node_doc_id)
                     .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
-                row.visible_driven = inner.producer(row.object_node_id, "parent_visible").is_some();
-                // Switches feeding a child (Physics View's dots: visibility,
-                // mesh, instances) are the water's controls, not the child's.
-                let mut children: Vec<_> = family.output_order.iter().collect();
-                children.sort_unstable_by_key(|(_, order)| **order);
-                for (child, _) in children {
-                    for port in ["visible", "vertices", "indices", "instances"] {
-                        if let Some((id, _)) = inner.producer(*child, port)
-                            && let Some(switch) = inner.node(id).filter(|node| SWITCH_TYPE_IDS.contains(&node.type_id.as_str()))
-                            && !row.fluid_controls.contains(&switch.node_id)
-                        {
-                            row.fluid_controls.push(switch.node_id.clone());
+                parent.visible_driven = inner.producer(parent.visible_addr.node_doc_id, "parent_visible").is_some();
+                let authored = parent_source
+                    .and_then(|id| inner.node(id))
+                    .filter(|node| node.type_id == TRANSFORM_3D_TYPE_ID)
+                    .map(|node| node.id)
+                    .or_else(|| group_body_id(&inner).and_then(|body| inner.producer(body, "transform").map(|(id, _)| id)));
+                parent.transform = authored.map(|id| trace_transform(&inner, model.doc_path.clone(), id));
+                parent.material = MaterialVm::None;
+                parent.skin = None;
+                parent.transform_chain.clear();
+                parent.modifier_chain.clear();
+                parent.liquid_domain = None;
+                parent.fluid_domain = None;
+                parent.fluid_domain_transform = None;
+                out.push((anchor, SceneObjectVm::Known(parent)));
+            }
+            None => {
+                // A placed fluid source: its own row under the water it feeds,
+                // named by its role. An Initial Fill group stays the water's:
+                // its controls join the water's row. The model reads no
+                // values, so the role is read here.
+                let Some(water) = model.parent.as_ref().and_then(doc_of) else { continue };
+                let Some((_, SceneObjectVm::Known(row))) =
+                    out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if row.object_node_id == water))
+                else {
+                    continue;
+                };
+                let role = match locate_node(root, &model.object).map_or(1, |at| param_f32(at.node, "role", 1.0).round() as i32) {
+                    0 => None,
+                    2 => Some(SourceRole::Drain),
+                    3 => Some(SourceRole::Collider),
+                    _ => Some(SourceRole::Inflow),
+                };
+                let Some(role) = role else {
+                    for control in &model.controls {
+                        if !row.controls.contains(control) {
+                            row.controls.push(control.clone());
                         }
                     }
-                }
-            } else if family.output_order.contains_key(&row.object_node_id) {
-                // The other outputs are looks: they own material, Size and
-                // their local eye only. Simulation and object-editing fields
-                // belong exclusively to Water.
-                row.parent_group_id = Some(family.water_object_id);
-                row.look_mesh = family_look_mesh(group_node, row.object_node_id);
-                row.transform = None;
-                row.transform_chain.clear();
-                row.transform_chain_parseable = false;
-                row.modifier_chain.clear();
-                row.modifier_chain_parseable = false;
-                row.skin = None;
-                row.physics = None;
-                row.physics_imported = false;
-                row.liquid_domain = None;
-                row.fluid_controls.clear();
-                row.fluid_domain = None;
-                row.fluid_domain_transform = None;
+                    continue;
+                };
+                let name = locate_node(root, &model.owner)
+                    .and_then(|at| at.node.handle.clone().or_else(|| at.node.title.clone()))
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "Source".into());
+                row.placed_sources.push(PlacedSourceVm {
+                    node: model.object.node.clone(),
+                    name,
+                    owned: model.controls.iter().map(|control| control.node.clone()).collect(),
+                    role,
+                });
             }
         }
     }
-    // A duplicated child may occupy a later render slot, after another group.
-    // Keep the outliner in parent/children order without changing physical slots.
-    let group_indices: HashMap<_, _> = out.iter().filter_map(|row| match row {
-        SceneObjectVm::Known(row) if row.is_group => Some((row.object_node_id, row.index)),
-        _ => None,
-    }).collect();
-    let family_order: HashMap<(u32, u32), usize> = water_families
-        .iter()
-        .flat_map(|(group_id, family)| {
-            std::iter::once((*group_id, family.water_object_id, 0usize))
-                .chain(family.output_order.iter().map(|(object_id, order)| (*group_id, *object_id, *order)))
-        })
-        .map(|(group_id, object_id, order)| ((group_id, object_id), order))
-        .collect();
-    out.sort_by_key(|row| match row {
-        SceneObjectVm::Known(row) => {
-            let group_order = row
-                .group_node_id
-                .and_then(|group_id| family_order.get(&(group_id, row.object_node_id)).copied());
-            let anchor = row.parent_group_id
-                .and_then(|id| group_indices.get(&id).copied())
-                .unwrap_or(row.index);
-            (anchor, row.parent_group_id.is_some(), group_order.unwrap_or(row.index), row.index)
+    for k in 0..objects {
+        if !models.iter().any(|model| model.slot == Some(k as u32)) {
+            out.push((k, SceneObjectVm::Custom { index: k }));
+            vertex_count_exact = false;
         }
-        SceneObjectVm::Custom { index } => (*index, false, *index, *index),
-    });
+    }
+    // A duplicated child may occupy a later render slot, after another group:
+    // rows keep the model's parent/children order without changing slots.
+    out.sort_by_key(|(anchor, _)| *anchor);
+    let mut out: Vec<SceneObjectVm> = out.into_iter().map(|(_, row)| row).collect();
     assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)
+}
+
+/// The level holding the node at `doc_path` (group doc ids, then its own).
+fn locate_doc_path<'a>(root: &Level<'a>, doc_path: &[u32]) -> Option<(Level<'a>, &'a EffectGraphNode)> {
+    let (last, groups) = doc_path.split_last()?;
+    let mut level = Level { nodes: root.nodes, wires: root.wires };
+    for id in groups {
+        let body = level.node(*id)?.group.as_deref()?;
+        level = Level { nodes: &body.nodes, wires: &body.wires };
+    }
+    let node = level.node(*last)?;
+    Some((level, node))
+}
+
+/// Trace the scene object a model row names.
+fn trace_model_object(
+    root: &Level,
+    model: &SceneObjectModel,
+    layer_id_set: &HashSet<&str>,
+) -> Option<(SceneObjectVm, Option<u32>)> {
+    let (level, node) = locate_doc_path(root, &model.doc_path)?;
+    let (_, scope) = model.doc_path.split_last()?;
+    model.slot?;
+    Some(trace_scene_object(&level, scope.to_vec(), node, layer_id_set, root, model))
+}
+
+/// What a row's kind takes away or adds: Water's real object answers for the
+/// whole family, a look keeps only its look, an imported model's part leaves
+/// its body to the model row.
+fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObjectKnownRow, parent: Option<u32>) {
+    match model.kind {
+        SceneObjectRowKind::PhysicsParent => {
+            // Its object identity stays the scene object's doc id so
+            // selection, rename and deletion address the render slot.
+            row.is_group = true;
+            row.parent_group_id = None;
+            // The family's eye is `parent_visible`, and it shows the water as
+            // drawn: hidden by either flag. A water saved hidden by its own
+            // `visible` (built before it read as Water) reads hidden, and
+            // showing it raises both flags in one write
+            // (`apply_scene_param_write`).
+            if let Some((level, _)) = locate_doc_path(root, &model.doc_path) {
+                let shown = |param: &str| level.node(row.object_node_id).is_none_or(|node| param_f32(node, param, 1.0) > 0.5);
+                row.visible_addr.param_id = "parent_visible".into();
+                row.visible_value = shown("visible") && shown("parent_visible");
+                row.visible_driven = level.producer(row.object_node_id, "parent_visible").is_some();
+            }
+        }
+        SceneObjectRowKind::LookChild => {
+            row.parent_group_id = parent;
+            row.transform = None;
+            row.transform_chain.clear();
+            row.transform_chain_parseable = false;
+            row.modifier_chain.clear();
+            row.modifier_chain_parseable = false;
+            row.skin = None;
+            row.physics = None;
+            row.physics_imported = false;
+            row.liquid_domain = None;
+            row.fluid_domain = None;
+            row.fluid_domain_transform = None;
+        }
+        SceneObjectRowKind::Object => {
+            if parent.is_some() {
+                row.parent_group_id = parent;
+                row.physics = None;
+                row.physics_imported = false;
+            }
+        }
+    }
 }
 
 /// Walk the P3 Transform modifier chain feeding `scene_object.transform`,
@@ -1219,11 +1297,12 @@ fn trace_scene_object(
     level: &Level,
     scope_path: Vec<u32>,
     node: &EffectGraphNode,
-    group_node_id: Option<u32>,
-    k: usize,
     layer_id_set: &HashSet<&str>,
-    liquid: Option<LiquidDomainAt<'_>>,
+    root: &Level,
+    model: &SceneObjectModel,
 ) -> (SceneObjectVm, Option<u32>) {
+    let group_node_id = scope_path.last().copied();
+    let k = model.slot.unwrap_or_default() as usize;
     let object_node_id = node.id;
     let object_scope_path = scope_path.clone();
     let name = node.handle.clone().unwrap_or_else(|| format!("Object {k}"));
@@ -1294,15 +1373,6 @@ fn trace_scene_object(
     let mut mesh_scope_path = scope_path.clone();
     let mut parseable = cursor.is_some();
     let mut source_vertex_count: Option<u32> = None;
-    let mut switches: Vec<NodeId> = level
-        .producer(object_node_id, "indices")
-        .and_then(|(id, _)| level.node(id))
-        .filter(|node| node.type_id == SWITCH_INDICES_TYPE_ID)
-        .map(|node| node.node_id.clone())
-        .into_iter()
-        .collect();
-    let mut fluid_domain = None;
-    let mut fluid_domain_transform = None;
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
@@ -1336,9 +1406,7 @@ fn trace_scene_object(
         }
         if n.type_id == SWITCH_MESH_TYPE_ID {
             // A mesh switch is transparent: the mesh is its first wired
-            // input (Physics View's surface on in_0), and the switch is
-            // the water's control.
-            switches.push(n.node_id.clone());
+            // input (Physics View's surface on in_0).
             cursor = ["in_0", "in_1"].into_iter().find_map(|port| current_level.producer(n.id, port));
             parseable = cursor.is_some();
             continue;
@@ -1352,113 +1420,11 @@ fn trace_scene_object(
     }
     chain.reverse(); // wire order: source → … → scene_object.
 
-    let mut fluid_controls: Vec<NodeId> = Vec::new();
-    let mut own = |node: &EffectGraphNode| {
-        if !node.node_id.is_empty() && !fluid_controls.contains(&node.node_id) {
-            fluid_controls.push(node.node_id.clone());
-        }
-    };
-    let liquid_domain = liquid.as_ref().map(|domain| domain.stable.clone());
-    let surface_controls = liquid.as_ref().is_some_and(|domain| domain.surface_controls);
-    if let Some(LiquidDomainAt { level: domain_level, scope: domain_scope, node: n, parent, .. }) = liquid {
-        (fluid_domain, fluid_domain_transform) = trace_fluid_domain(&domain_level, &domain_scope, n);
-        own(n);
-        for port in ["domain", "emitter", "initial_volume"] {
-            let Some((_, _, source, source_port)) = resolve_producer_through_group(&domain_level, n.id, port) else {
-                continue;
-            };
-            // A volume wired into the domain's group from outside (Dam Break
-            // Matter's Initial Column) is the water's too.
-            let source = if source.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID {
-                parent.as_ref().and_then(|(outer, group_id)| {
-                    outer.producer(*group_id, source_port).and_then(|(id, _)| outer.node(id))
-                })
-            } else {
-                Some(source)
-            };
-            if let Some(source) = source.filter(|source| source.type_id == "node.transform_3d") {
-                own(source);
-            }
-        }
-        // The whitewater stepping on this domain's clock is the water's: the
-        // legacy step reads its ticks, the per-tick step its epoch.
-        let mut water_nodes = vec![n.id];
-        for whitewater in domain_level.nodes.iter().filter(|node| node.type_id == "node.whitewater_step") {
-            if ["ticks", "epoch"].iter().any(|port| domain_level.producer(whitewater.id, port).is_some_and(|(from, _)| from == n.id)) {
-                own(whitewater);
-                water_nodes.push(whitewater.id);
-            }
-        }
-        // A shared value wired into the water's own nodes is the water's
-        // control: the whitewater budget feeds the step and the state at once.
-        for wire in domain_level.wires.iter().filter(|wire| water_nodes.contains(&wire.to_node)) {
-            if let Some(value) = domain_level.node(wire.from_node).filter(|node| node.type_id == "node.value") {
-                own(value);
-            }
-        }
-        for index in 0..manifold_core::fluid_domain::MAX_FLUID_ROLES {
-            let role_port = format!("role_{index}");
-            let Some((role_level, role_group, role, _)) =
-                resolve_producer_through_group(&domain_level, n.id, &role_port)
-            else {
-                continue;
-            };
-            if role.type_id != "node.fluid_role_source" {
-                continue;
-            }
-            // A visible source object owns its role controls. Only
-            // standalone source groups belong in the liquid's panel.
-            if role_group.is_some() && role_level.nodes.iter().any(|node| node.type_id == "node.scene_object") {
-                continue;
-            }
-            own(role);
-            for port in ["transform", "source_transform"] {
-                if let Some((source_level, _, source, _)) = resolve_producer_through_group(&role_level, role.id, port)
-                    && source.type_id == "node.transform_3d"
-                    // A scene object drawing the same transform owns it: the
-                    // box a collider role follows is the Obstacle's, not the
-                    // water's.
-                    && !source_level.nodes.iter().any(|object| {
-                        object.type_id == "node.scene_object"
-                            && source_level.producer(object.id, "transform").is_some_and(|(from, _)| from == source.id)
-                    })
-                {
-                    own(source);
-                }
-            }
-        }
-    }
-
-    if liquid_domain.is_some() && surface_controls {
-        // Surface controls belong to the water whose mesh consumes them.
-        // Stay inside this mesh level: group inputs are the ownership boundary
-        // for simulation, collider and source objects in the enclosing scene.
-        let mut pending: Vec<u32> = cursor.map(|(id, _)| id).into_iter().collect();
-        let mut seen = HashSet::new();
-        while let Some(id) = pending.pop() {
-            if !seen.insert(id) { continue; }
-            let Some(source) = current_level.node(id) else { continue; };
-            if source.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID
-                || manifold_core::liquid_domain::is_liquid_domain(&source.type_id)
-            { continue; }
-            own(source);
-            pending.extend(current_level.wires.iter().filter(|wire| wire.to_node == id)
-                .map(|wire| wire.from_node));
-        }
-    }
-
-    if group_node_id.is_some() {
-        level.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source").for_each(&mut own);
-    }
-    // The switches between the water and its surface (Physics View) are the
-    // water's controls.
-    if liquid_domain.is_some() {
-        for switch in switches {
-            if !switch.is_empty() && !fluid_controls.contains(&switch) {
-                fluid_controls.push(switch);
-            }
-        }
-    }
+    let liquid_domain = model.liquid_domain.clone();
+    let (fluid_domain, fluid_domain_transform) = liquid_domain
+        .as_ref()
+        .and_then(|domain| locate_node(root, domain))
+        .map_or((None, None), |at| trace_fluid_domain(&at.level, &at.scope, at.node));
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
         is_group: false,
@@ -1466,7 +1432,9 @@ fn trace_scene_object(
         index: k,
         object_node_id,
         object: node.node_id.clone(),
-        look_mesh: None,
+        kind: model.kind,
+        controls: model.controls.clone(),
+        capabilities: model.capabilities,
         group_node_id,
         name,
         visible_addr,
@@ -1482,9 +1450,9 @@ fn trace_scene_object(
         physics,
         physics_imported,
         liquid_domain,
-        fluid_controls,
         fluid_domain,
         fluid_domain_transform,
+        placed_sources: Vec::new(),
     }));
     (row, source_vertex_count)
 }
@@ -1867,7 +1835,7 @@ mod tests {
                 wire(5, "transform", 4, "initial_volume")]);
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
-        assert_eq!(row.fluid_controls, ["n4", "n6", "n5"].map(NodeId::new));
+        assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4", "n6", "n5"].map(NodeId::new));
         let domain_transform = row.fluid_domain_transform.as_ref().expect("domain transform");
         assert_eq!(domain_transform.node_doc_id, 6);
         assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
@@ -1894,7 +1862,7 @@ mod tests {
                 wire(4, "vertices", 3, "vertices"), wire(4, "ticks", 7, "ticks")]);
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
-        assert_eq!(row.fluid_controls, ["n4", "n7"].map(NodeId::new), "n8 steps no clock of this water");
+        assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4", "n7"].map(NodeId::new), "n8 steps no clock of this water");
     }
 
     #[test]
@@ -1911,7 +1879,7 @@ mod tests {
                 wire(9, "out", 7, "capacity"), wire(10, "out", 8, "capacity")]);
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
-        assert_eq!(row.fluid_controls, ["n4", "n7", "n9"].map(NodeId::new), "n10 feeds no node of this water");
+        assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4", "n7", "n9"].map(NodeId::new), "n10 feeds no node of this water");
     }
 
     #[test]
@@ -1941,9 +1909,29 @@ mod tests {
                 wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
                 wire(10, "role", 4, "role_1")]);
         let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        // Each role names its row; an Initial Fill group stays the water's.
+        let with_role = |role: f32| {
+            let mut graph = restored.clone();
+            let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_deref_mut().unwrap();
+            group.nodes.iter_mut().find(|node| node.id == 11).unwrap().params.insert("role".into(), SerializedParamValue::Float { value: role });
+            let vm = SceneVm::from_def(&graph).unwrap();
+            let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+            (row.placed_sources.iter().map(|source| source.role).collect::<Vec<_>>(), row.control_nodes())
+        };
+        assert_eq!(with_role(2.0).0, [SourceRole::Drain]);
+        assert_eq!(with_role(3.0).0, [SourceRole::Collider]);
+        let (sources, controls) = with_role(0.0);
+        assert!(sources.is_empty(), "an Initial Fill group is no source row");
+        assert_eq!(controls, ["n4", "n11", "n12"].map(NodeId::new), "its controls stay the water's");
         let vm = SceneVm::from_def(&restored).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
-        assert_eq!(row.fluid_controls, ["n4", "n11", "n12"].map(NodeId::new));
+        assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4"].map(NodeId::new), "a placed source is its own row, not the water's");
+        assert_eq!(row.placed_sources, [PlacedSourceVm {
+            node: NodeId::new("n11"),
+            name: "Source".into(),
+            owned: ["n11", "n12"].map(NodeId::new).to_vec(),
+            role: SourceRole::Inflow,
+        }], "a role wired twice is one row");
         assert!(row.transform.is_none());
         let role = vm.shapes.iter().find(|shape| matches!(shape.owner, ShapeOwner::RoleSource { .. })).expect("role shape");
         assert_eq!(role.owner, ShapeOwner::RoleSource { node: NodeId::new("n11"), role: FluidRole::Inflow });
@@ -2196,7 +2184,7 @@ mod tests {
         }
     }
 
-    /// The importer/`AddSceneObjectCommand` shape: mesh/material/transform +
+    /// The importer/Add Object's template shape: mesh/material/transform +
     /// `node.scene_object` all live INSIDE a group; the group's own `object`
     /// interface output re-exports the scene_object's `object` port to the
     /// root `object_k` wire.

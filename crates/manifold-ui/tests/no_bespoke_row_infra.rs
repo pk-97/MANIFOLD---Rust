@@ -248,3 +248,35 @@ fn parameter_hosts_delegate_registration_and_gestures_to_row_host() {
         }
     }
 }
+
+/// Shared scene cards (PHYSICS_ENGINE_BOUNDARY_DESIGN.md P3, BUG-9rai8):
+/// a card draws a labelled param as a pick list or switch through its host.
+/// Production code never forces a slider with a literal, only the Scene
+/// tab's own surfaces (always a scene surface) pass a literal scene fact,
+/// and every shared scene card host names its scene host.
+#[test]
+fn shared_scene_cards_draw_by_their_host() {
+    let mut files = Vec::new();
+    rs_files(&panels_dir(), &mut files);
+    let forced = [".kind(", "false)"].concat();
+    let scene = [".kind(", "true)"].concat();
+    let mut violations = Vec::new();
+    for path in files.iter().filter(|path| !path.to_string_lossy().ends_with("_tests.rs")) {
+        let source = fs::read_to_string(path).expect("read panel source");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let scene_surface = scene_panel_file(path) || is_allowlisted(path, &["param_slider_shared/colour_row.rs"]);
+        if production.contains(forced.as_str()) || (!scene_surface && production.contains(scene.as_str())) {
+            violations.push(path.display().to_string());
+        }
+    }
+    assert!(violations.is_empty(), "row kinds come from the card host (`draws_by_kind`): {violations:?}");
+
+    for (relative, host) in [
+        ("scene_setup_panel/forces.rs", "CardHost::SceneTab"),
+        ("scene_setup_panel/object_modifiers.rs", "CardHost::SceneTab"),
+        ("inspector/render.rs", "CardHost::SceneCard"),
+    ] {
+        let source = fs::read_to_string(panels_dir().join(relative)).expect("read card host source");
+        assert!(source.contains(host), "{relative} hosts shared scene cards without {host}");
+    }
+}

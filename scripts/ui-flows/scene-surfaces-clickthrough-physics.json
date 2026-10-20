@@ -69,7 +69,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Sun"
+          "name": "scene_tree.item", "text": "Lighting"
         }
       },
       "gesture": {
@@ -95,7 +95,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Fill Light"
+          "name": "scene_tree.item", "text": "Lighting"
         }
       },
       "gesture": {

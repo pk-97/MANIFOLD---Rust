@@ -249,12 +249,17 @@ pub enum ProjectAction {
     SceneSetupNewScene(LayerId),
     /// Restore standard camera dependencies through one undoable content edit.
     SceneSetupPrepareCamera(LayerId),
-    /// P2 "+ Object" button: `(layer_id, render_scene_node_doc_id,
-    /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
-    /// (SCENE_BUILD P5) — no new mutation path.
-    SceneSetupAddObject(LayerId, u32, u32),
-    /// Add a liquid domain to the existing scene, with a source and material.
-    SceneSetupAddFluid(LayerId, u32),
+    /// An Add menu entry: insert one template into the layer's scene. The
+    /// app resolves the scene and builds the template.
+    SceneSetupInsertTemplate {
+        layer_id: LayerId,
+        /// The scene the entry was opened on, as Import Model carries it.
+        render_scene_node_id: u32,
+        kind: manifold_foundation::scene_surface::SceneTemplateKind,
+        /// The liquid domain an Inflow, Drain or Collider goes into; `None`
+        /// for every other kind.
+        water: Option<NodeId>,
+    },
     /// Assign a selected model to an explicit fluid domain. The app resolves
     /// the domain's stable id to a scoped graph reference before queuing.
     SceneSetupAssignFluidRole {
@@ -266,14 +271,6 @@ pub enum ProjectAction {
     },
     SceneSetupRemoveFluidRole { layer_id: LayerId, source_node_id: u32 },
     SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain: NodeId },
-    /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
-    /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
-    SceneSetupAddLight(LayerId, u32, u32),
-    /// BUG-hlw8 "+ Plane" button: `(layer_id, render_scene_node_doc_id,
-    /// next_index)`. Dispatches `AddSceneLayerPlaneCommand` — the layer-plane
-    /// gesture: a plane mesh + PBR Baked Look material + transform.
-    /// The Skin row adds its source on demand.
-    SceneSetupAddLayerPlane(LayerId, u32, u32),
     /// P5 properties-header "Duplicate" button (Object selection):
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
     /// shared content-owned scene item transfer.
@@ -309,19 +306,21 @@ pub enum ProjectAction {
     /// modifier_node_id, new_position)`. Dispatches
     /// `MoveMeshModifierCommand` — `new_position` is resolved by the panel
     /// from the row's own live index in the Vm's stack order (one hop
-    /// forward or back), same "read the live count off the Vm" convention
-    /// `SceneSetupAddObject`'s `next_index` already uses.
+    /// forward or back): the live count is read off the Vm.
     SceneSetupMoveModifier(LayerId, u32, u32, u32),
     /// per-row "✕" in the Objects section: `(layer_id,
     /// render_scene_node_doc_id, object_index)`. Dispatches the new
-    /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupAddObject`.
+    /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupInsertTemplate`.
     SceneSetupRemoveObject(LayerId, u32, u32),
+    /// A placed Inflow, Drain or Collider's ✕: `(layer_id, role node)`.
+    /// Removes its group and role wire as one undo entry.
+    SceneSetupRemoveSource(LayerId, manifold_foundation::NodeId),
     /// Remove one physical child mesh inside a compound scene object:
     /// `(layer_id, render_scene_node_doc_id, physical_index)`.
     SceneSetupRemoveSubmesh(LayerId, u32, u32),
     /// per-row "✕" in the Lights section: `(layer_id,
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
-    /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
+    /// `RemoveSceneLightCommand` — the inverse of `SceneSetupInsertTemplate`.
     SceneSetupRemoveLight(LayerId, u32, u32),
     /// P4b: a project layer was selected from the Skin source dropdown.
     /// `source: None` clears the skin (the model uses its own texture).
@@ -951,13 +950,10 @@ pub enum RootAction {
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
     SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
-    /// Scene Setup's dedicated force picker affordance. The app resolves the
-    /// selected recipe from the panel's `force_picker` snapshot and applies
-    /// the existing scene modifier command.
-    SceneSetupAddForceClicked(LayerId),
-    /// The Scene tab Objects group's "+": the app opens the Objects menu
-    /// (`scene_setup_actions::add_object_menu`) at the clicked button.
-    SceneSetupAddObjectMenuClicked(LayerId),
+    /// Any Scene tab group's "+": the app opens the one Add menu
+    /// (`scene_setup_actions::add_menu`) at the clicked button, starting on
+    /// that group's entries.
+    SceneSetupAddClicked(LayerId, super::scene_setup_panel::SceneGroup),
     SceneSetupFluidRoleClicked {
         layer_id: LayerId,
         render_scene_node_id: u32,

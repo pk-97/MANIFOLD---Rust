@@ -1854,7 +1854,7 @@ mod automation_clipboard_host_tests {
             .iter()
             .find_map(|object| match object {
                 SceneObjectVm::Known(row)
-                    if row.parent_group_id == Some(parent) && row.look_mesh.is_some() =>
+                    if row.parent_group_id == Some(parent) && row.look_node().is_some() =>
                 {
                     Some(row.object_node_id)
                 }

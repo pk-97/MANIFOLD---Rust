@@ -14,6 +14,7 @@ pub mod gltf_import;
 manifold_core::testkit_visible! { mod gltf_load; }
 pub mod primitives;
 pub mod scene_modifier_authoring;
+pub mod scene_templates;
 pub mod scene_modifier_legacy_migration;
 pub mod scene_vm;
 

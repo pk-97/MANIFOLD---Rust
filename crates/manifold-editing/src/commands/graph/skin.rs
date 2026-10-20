@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn set_then_move_target_map_in_group_scope_keeps_binding() {
-        use super::super::AddSceneObjectCommand;
+        use super::super::test_support::{insert_template, test_object_template};
         use manifold_core::effect_graph_def::GROUP_TYPE_ID;
 
         let (mut project, lid) = project_with_one_generator_layer();
@@ -880,20 +880,11 @@ mod tests {
             SerializedParamValue::Float { value: 0.0 },
         );
         with_target_graph_mut(&mut project, &target, &render_graph, true, |_| Some(())).unwrap();
-        // …then a real AddSceneObjectCommand so the object sits inside a
-        // GROUP node's nested level, the topology the panel addresses.
-        let mut add = AddSceneObjectCommand::new(
-            target.clone(),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        add.execute(&mut project);
+        // …then Add Object's template so the object sits inside a GROUP
+        // node's nested level, the topology the panel addresses.
+        insert_template(&project, &target, 0, test_object_template((0.0, 0.0)))
+            .expect("object inserts")
+            .execute(&mut project);
 
         let def = |project: &Project| {
             project

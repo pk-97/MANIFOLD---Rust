@@ -1,5 +1,6 @@
 //! Outliner selection is shared by buttons, menus and keyboard gestures.
 use super::*;
+use manifold_foundation::scene_surface::SceneObjectCapabilities;
 
 #[derive(Clone, Debug)]
 pub struct SceneItemAddress {
@@ -7,18 +8,14 @@ pub struct SceneItemAddress {
     pub scene: u32,
     pub index: u32,
     pub is_light: bool,
-    /// Water-family children own only a look mesh and must not be removed or
-    /// duplicated independently of their simulation parent.
-    pub is_family_child: bool,
-    /// A Water-family parent owns the simulation; duplicating it would clone
-    /// the complete simulation. Removing it remains supported.
-    pub is_family_parent: bool,
+    /// What the selected row's commands accept (the scene object model's
+    /// capabilities): a Water look hides instead of being removed, and a
+    /// Water cannot be copied.
+    pub capabilities: SceneObjectCapabilities,
 }
 
 impl ScenePanel {
-    /// Shared guard for scene-item keyboard and context-menu editing. Water
-    /// children are material/look rows, while their parent owns the complete
-    /// simulation and may still be removed as one group.
+    /// Shared guard for scene-item keyboard and context-menu editing.
     pub fn scene_item_edit_allowed(
         &self,
         action: crate::panels::actions::CardEditAction,
@@ -27,12 +24,10 @@ impl ScenePanel {
             return true;
         };
         match action {
-            // Cut copies first, and a family cannot be copied.
+            // Cut copies first.
             crate::panels::actions::CardEditAction::Copy
             | crate::panels::actions::CardEditAction::Cut
-            | crate::panels::actions::CardEditAction::Duplicate => {
-                !item.is_family_child && !item.is_family_parent
-            }
+            | crate::panels::actions::CardEditAction::Duplicate => item.capabilities.duplicate,
             _ => true,
         }
     }
@@ -49,18 +44,13 @@ impl ScenePanel {
             .get(&vm.layer_id)
             .cloned()
             .unwrap_or_else(|| Self::default_selection(vm));
-        let (index, is_light, is_family_child, is_family_parent) = match selection {
+        let (index, is_light, capabilities) = match selection {
             SceneSelection::Object(id) => {
                 let row = vm.objects.iter().find_map(|o| match o {
                     ObjectRowVm::Known(row) if row.object_node_id == id => Some(row),
                     _ => None,
                 })?;
-                (
-                    row.index,
-                    false,
-                    row.look_mesh.is_some(),
-                    self.is_family_parent(row),
-                )
+                (row.index, false, row.capabilities)
             }
             SceneSelection::Light(id) => (
                 vm.lights.iter().find_map(|l| match l {
@@ -68,8 +58,7 @@ impl ScenePanel {
                     _ => None,
                 })?,
                 true,
-                false,
-                false,
+                SceneObjectCapabilities { rename: true, delete: true, duplicate: true, ..SceneObjectCapabilities::default() },
             ),
             _ => return None,
         };
@@ -78,8 +67,7 @@ impl ScenePanel {
             scene: vm.scene_root_node_id,
             index: index as u32,
             is_light,
-            is_family_child,
-            is_family_parent,
+            capabilities,
         })
     }
 
@@ -140,8 +128,13 @@ impl ScenePanel {
     }
 
     pub fn remove_selection_action(&self) -> Option<PanelAction> {
+        if let Some(vm) = self.state.as_live()
+            && let Some(SceneSelection::Source(node)) = self.selection.get(&vm.layer_id)
+        {
+            return Some(PanelAction::Project(ProjectAction::SceneSetupRemoveSource(vm.layer_id.clone(), node.clone())));
+        }
         let item = self.selected_scene_item()?;
-        if item.is_family_child {
+        if !item.capabilities.delete {
             return self.hide_selection_action();
         }
         Some(PanelAction::Project(if item.is_light {
@@ -157,7 +150,7 @@ impl ScenePanel {
     pub fn hide_selection_action(&self) -> Option<PanelAction> {
         let vm = self.state.as_live()?;
         let item = self.selected_scene_item()?;
-        if !item.is_family_child {
+        if !item.capabilities.hide {
             return None;
         }
         let object_node_id = match self.selection.get(&vm.layer_id)? {
@@ -166,7 +159,7 @@ impl ScenePanel {
         };
         let row = vm.objects.iter().find_map(|object| match object {
             ObjectRowVm::Known(row)
-                if row.object_node_id == object_node_id && row.look_mesh.is_some() => Some(row),
+                if row.object_node_id == object_node_id && row.capabilities.hide => Some(row),
             _ => None,
         })?;
         if row.visible.driven {

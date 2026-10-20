@@ -28,7 +28,7 @@ impl ScenePanel {
         vm.items
             .iter()
             .find(|item| item.parameter_ids.iter().any(|owned| owned == id))
-            .map(|item| item.selection.clone())
+            .map(|item| item.selection.clone().shown())
     }
 
     fn has_param(&self, param: &manifold_foundation::ParamId) -> bool {
@@ -91,15 +91,15 @@ impl ScenePanel {
     }
 
     /// A card section title's reveal (SCENE_SURFACES_DESIGN.md D10): the
-    /// section's first row owned by a light, object or force item, else its
-    /// first row. So Lighting opens a light even when a camera row leads it.
+    /// section's first row owned by Lighting, an object or a force, else
+    /// its first row. So the card's Lighting title opens Lighting.
     pub fn reveal_section(&mut self, target: &UiGraphTarget, params: &[manifold_foundation::ParamId]) -> bool {
         let item_owned = |panel: &Self, param: &manifold_foundation::ParamId| {
             panel.force_cards.iter().chain(&panel.object_modifier_cards).any(|card| card.row(param.as_ref()).is_some())
                 || panel.state.as_live().is_some_and(|vm| {
                     matches!(
                         Self::owner_selection(vm, param.as_ref()),
-                        Some(SceneSelection::Light(_) | SceneSelection::Object(_) | SceneSelection::Force(_))
+                        Some(SceneSelection::Lighting | SceneSelection::Object(_) | SceneSelection::Force(_))
                     )
                 })
         };
@@ -345,7 +345,7 @@ mod tests {
         panel.force_cards[0].set_collapsed(true);
         for (id, expected) in [
             ("camera_param", SceneSelection::Camera),
-            ("light_param", SceneSelection::Light(60)),
+            ("light_param", SceneSelection::Lighting),
             ("object_param", SceneSelection::Object(object)),
             ("world_param", SceneSelection::World),
             ("ray_tracing_param", SceneSelection::World),
@@ -361,8 +361,8 @@ mod tests {
         assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Force(force)), "a miss keeps the selection");
     }
 
-    /// D10: a section title opens the first light, object or force row's
-    /// owner; a section with none of those opens its first row's owner.
+    /// D10: a section title opens the owner of its first Lighting, object or
+    /// force row; a section with none of those opens its first row's owner.
     #[test]
     fn reveal_section_prefers_light_object_force_owner_over_first_row() {
         let (mut vm, template) = world_transform_vm();
@@ -386,7 +386,7 @@ mod tests {
 
         let lighting: Vec<manifold_foundation::ParamId> = vec!["exposure".into(), "sun_intensity".into()];
         assert!(panel.reveal_section(&target, &lighting));
-        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Light(60)), "Lighting opens the light");
+        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Lighting), "the Lighting title opens Lighting");
 
         let camera: Vec<manifold_foundation::ParamId> = vec!["exposure".into(), "orbit".into()];
         assert!(panel.reveal_section(&target, &camera));

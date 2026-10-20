@@ -33,7 +33,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Radial Force"
+          "text": "Force \u2014 Radial Force",
+          "under_name": "dropdown"
         }
       },
       "gesture": {

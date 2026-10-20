@@ -141,7 +141,7 @@
     ],
     "crates/manifold-editing/src/commands/graph/scene/fluid": [
       "scene-fluid-authoring",
-      "scene-fluid-template",
+      "scene-physics-template",
       "water-family-preset"
     ],
     "crates/manifold-core/src/scene_exposure.rs": [
@@ -157,6 +157,7 @@
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
       "scene-card-bands",
+      "scene-card-new-empty",
       "scene-card-free-camera",
       "scene-card-dof-switch",
       "scene-naming",
@@ -413,6 +414,7 @@
     "effect-browser-open": "inspector",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "scene-card-bands": "physicsscene",
+    "scene-card-new-empty": "newscene",
     "scene-card-free-camera": "oceanscene",
     "scene-card-dof-switch": "gltfscene",
     "scene-naming": "gltfscene",
@@ -445,7 +447,7 @@
     "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
-    "scene-fluid-template": "fluidauthoring",
+    "scene-physics-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-imported-physics": "gltfscene",
@@ -459,7 +461,8 @@
     "work-browser-search": "inspector",
     "work-perform-exit": "timeline",
     "trigger-lane-sibling": "envmod",
-    "card-collapse-all": "gltfscene"
+    "card-collapse-all": "gltfscene",
+    "scene-physics-shared-cards": "gltfscene"
   },
   "expected_fail": {
     "scene-forces-controls": {
