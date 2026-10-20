@@ -437,16 +437,13 @@ impl ScenePanel {
     /// Tree clicks that are not selection: the group add buttons and the
     /// empty Physics group's enable action.
     pub(super) fn outliner_click(&self, node_id: NodeId, vm: &SceneSetupVm) -> Option<PanelAction> {
+        let add = |group| Some(PanelAction::Root(RootAction::SceneSetupAddClicked(vm.layer_id.clone(), group)));
         if self.add_object_id == Some(node_id) {
-            Some(PanelAction::Root(RootAction::SceneSetupAddObjectMenuClicked(vm.layer_id.clone())))
+            add(SceneGroup::Objects)
         } else if self.add_light_id == Some(node_id) {
-            Some(PanelAction::Project(ProjectAction::SceneSetupAddLight(
-                vm.layer_id.clone(),
-                vm.scene_root_node_id,
-                vm.light_count as u32,
-            )))
+            add(SceneGroup::Lighting)
         } else if self.add_force_id == Some(node_id) {
-            Some(PanelAction::Root(RootAction::SceneSetupAddForceClicked(vm.layer_id.clone())))
+            add(SceneGroup::Forces)
         } else if let Some((_, index)) = self.physics_enable_id.filter(|(id, _)| *id == node_id) {
             Some(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
                 vm.layer_id.clone(),
@@ -458,9 +455,10 @@ impl ScenePanel {
         }
     }
 
-    /// The Objects add menu for the live scene; empty when not live.
-    pub fn add_object_menu(&self) -> Vec<(&'static str, PanelAction)> {
-        self.state.as_live().map(crate::panels::scene_setup_actions::add_object_menu).unwrap_or_default()
+    /// The one Add menu for the live scene, starting on `group`'s entries;
+    /// empty when not live.
+    pub fn add_menu(&self, group: SceneGroup) -> Vec<crate::panels::scene_setup_actions::AddMenuItem> {
+        self.state.as_live().map(|vm| crate::panels::scene_setup_actions::add_menu(vm, group)).unwrap_or_default()
     }
 
     /// The groups the tree drew last build, in order.

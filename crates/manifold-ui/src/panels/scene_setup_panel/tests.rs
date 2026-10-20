@@ -651,34 +651,56 @@
         assert!(panel.add_modifier_button_id.is_none(), "Add modifier is disabled for an unparseable chain");
     }
 
+    /// D8 (one Add menu): every group's "+" fires the same click action for
+    /// its group, and the menu it opens starts on that group's entries and
+    /// lists the same entries either way.
     #[test]
-    fn add_object_and_add_light_buttons_carry_the_vms_own_counts_as_next_index() {
+    fn every_add_button_opens_the_one_menu_starting_on_its_group() {
+        use manifold_foundation::scene_surface::SceneTemplateKind;
+        let mut vm = azalea_shaped_vm();
+        vm.force_picker = vec![ModifierPickerEntry { preset_id: "gravity".into(), label: "Gravity".into(), disabled: None }];
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(live(azalea_shaped_vm()));
+        panel.configure(live(vm));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let click = |panel: &mut ScenePanel, tree: &mut UITree, node_id| {
             panel.handle_event(&UIEvent::Click { node_id, pos: Vec2::ZERO, modifiers: Modifiers::default() }, tree)
         };
+        for (button, group) in [
+            (panel.add_object_id.unwrap(), SceneGroup::Objects),
+            (panel.add_light_id.unwrap(), SceneGroup::Lighting),
+            (panel.add_force_id.unwrap(), SceneGroup::Forces),
+        ] {
+            let (consumed, actions) = click(&mut panel, &mut tree, button);
+            assert!(consumed);
+            assert!(matches!(actions.as_slice(),
+                [PanelAction::Root(RootAction::SceneSetupAddClicked(l, g))] if *l == LayerId::new("layer-1") && *g == group));
+        }
 
-        let add_object = panel.add_object_id.unwrap();
-        let (consumed, actions) = click(&mut panel, &mut tree, add_object);
-        assert!(consumed);
-        assert!(matches!(actions.as_slice(),
-            [PanelAction::Root(RootAction::SceneSetupAddObjectMenuClicked(l))] if *l == LayerId::new("layer-1")));
-        let menu = panel.add_object_menu();
-        assert_eq!(menu.iter().map(|(label, _)| *label).collect::<Vec<_>>(), ["Object", "Plane", "Water", "Import Model\u{2026}"]);
-        assert!(matches!(&menu[0].1, PanelAction::Project(ProjectAction::SceneSetupAddObject(l, 99, 2)) if layer_1(l)));
-        assert!(matches!(&menu[1].1, PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(l, 99, 2)) if layer_1(l)));
-        assert!(matches!(&menu[2].1, PanelAction::Project(ProjectAction::SceneSetupAddFluid(l, 99)) if layer_1(l)));
-        assert!(matches!(&menu[3].1, PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99)) if layer_1(l)));
-
-        let add_light = panel.add_light_id.unwrap();
-        let (consumed, actions) = click(&mut panel, &mut tree, add_light);
-        assert!(consumed);
-        assert!(matches!(actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupAddLight(l, 99, 1))] if layer_1(l)));
+        let labels = |group| panel.add_menu(group).iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            labels(SceneGroup::Objects),
+            ["Object", "Plane", "Water", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
+        );
+        assert_eq!(
+            labels(SceneGroup::Lighting),
+            ["Light", "Object", "Plane", "Water", "Force \u{2014} Gravity", "Import Model\u{2026}"],
+        );
+        assert_eq!(
+            labels(SceneGroup::Forces),
+            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Import Model\u{2026}"],
+        );
+        let menu = panel.add_menu(SceneGroup::Objects);
+        let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
+            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { layer_id, kind })) if layer_1(layer_id) && *kind == expected);
+        assert!(insert(0, SceneTemplateKind::Object));
+        assert!(insert(1, SceneTemplateKind::Plane));
+        assert!(insert(2, SceneTemplateKind::Water));
+        assert!(matches!(&menu[3].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
+        assert!(insert(4, SceneTemplateKind::Light));
+        assert!(matches!(&menu[5].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
+        assert!(menu[3].separator_after && !menu[2].separator_after, "the clicked group's entries are set apart");
     }
 
     /// D8: Lights, Objects and Forces each own exactly one add button beside

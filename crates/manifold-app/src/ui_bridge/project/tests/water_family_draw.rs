@@ -200,7 +200,7 @@ mod gpu {
         let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
-            &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_node_id),
+            &crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,

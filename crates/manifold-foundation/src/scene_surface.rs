@@ -207,6 +207,15 @@ pub enum SceneItemKind {
     World,
 }
 
+/// What the one Add menu inserts into a scene through a template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SceneTemplateKind {
+    Object,
+    Plane,
+    Light,
+    Water,
+}
+
 /// A user's card pin on one control. `None` on the control follows its role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

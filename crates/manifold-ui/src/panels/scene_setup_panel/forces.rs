@@ -520,7 +520,7 @@ mod tests {
         );
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Root(RootAction::SceneSetupAddForceClicked(layer))]
+            [PanelAction::Root(RootAction::SceneSetupAddClicked(layer, SceneGroup::Forces))]
                 if layer == &LayerId::new("layer-a")
         ));
 

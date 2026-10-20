@@ -4,11 +4,11 @@ use super::*;
 use manifold_editing::service::EditingService;
 use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
-fn add_water(project: &mut Project, layer: &LayerId, render: u32) {
+fn add_water(project: &mut Project, layer: &LayerId, _render: u32) {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let (tx, rx) = crossbeam_channel::unbounded();
     dispatch_project(
-        &ProjectAction::SceneSetupAddFluid(layer.clone(), render),
+        &crate::ui_bridge::project::insert_template_action(layer.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
         &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx),
         &tx,
         &state,

@@ -155,35 +155,27 @@ impl Allocator {
     }
 }
 
-/// Fresh identity for `node` and everything under it. The template's own
-/// group takes its document id after its body (`group_last`), so card
-/// controls keep the ids authored flows address; inside a body a parent
-/// precedes its nested nodes.
-fn renumber(
-    node: &mut EffectGraphNode,
+/// Fresh identity for the template's group and everything under it. The
+/// group takes its document id after its body (card controls keep the ids
+/// authored flows address); inside a body a parent precedes its nested
+/// nodes. Document ids are only unique within one body, so wires are
+/// rewritten per body; `remap.docs` records the group and its own children,
+/// the only nodes the template's exposure ids name.
+fn renumber_group(
+    group: &mut EffectGraphNode,
     alloc: &mut Allocator,
     remap: &mut Remap,
     handle: &str,
-    group_last: bool,
 ) -> Result<(), SceneGraphEditError> {
-    let old = node.id;
-    let mut fresh = if group_last { None } else { Some(alloc.doc()?) };
-    let children = |node: &mut EffectGraphNode, alloc: &mut Allocator, remap: &mut Remap| -> Result<(), SceneGraphEditError> {
-        if let Some(body) = node.group.as_deref_mut() {
-            for inner in &mut body.nodes {
-                renumber(inner, alloc, remap, handle, false)?;
-            }
-        }
-        Ok(())
-    };
-    if fresh.is_none() {
-        children(node, alloc, remap)?;
-        fresh = Some(alloc.doc()?);
-    }
-    let fresh = fresh.expect("allocated above");
-    if remap.docs.insert(old, fresh).is_some() {
-        return Err(fail("Scene template reuses a document id"));
-    }
+    let old = group.id;
+    renumber_body(group, alloc, remap, handle, true)?;
+    let fresh = alloc.doc()?;
+    remap.docs.insert(old, fresh);
+    restamp(group, fresh, alloc, remap, handle);
+    Ok(())
+}
+
+fn restamp(node: &mut EffectGraphNode, fresh: u32, alloc: &mut Allocator, remap: &mut Remap, handle: &str) {
     let prefix = if node.node_id.is_empty() { node.type_id.replace('.', "_") } else { node.node_id.as_str().to_owned() };
     let stable = alloc.stable(&prefix, fresh);
     if !node.node_id.is_empty() {
@@ -192,23 +184,36 @@ fn renumber(
     node.id = fresh;
     node.node_id = stable;
     node.handle = node.handle.take().map(|text| text.replace(HANDLE_TOKEN, handle));
-    if !group_last {
-        children(node, alloc, remap)?;
-    }
-    Ok(())
 }
 
-fn rewire(node: &mut EffectGraphNode, remap: &Remap) -> Result<(), SceneGraphEditError> {
+/// Renumber every node in `node`'s body, rewrite the body's wires to match,
+/// and descend.
+fn renumber_body(
+    node: &mut EffectGraphNode,
+    alloc: &mut Allocator,
+    remap: &mut Remap,
+    handle: &str,
+    record: bool,
+) -> Result<(), SceneGraphEditError> {
     let Some(body) = node.group.as_deref_mut() else { return Ok(()) };
+    let mut local: HashMap<u32, u32> = HashMap::new();
+    for inner in &mut body.nodes {
+        let fresh = alloc.doc()?;
+        if local.insert(inner.id, fresh).is_some() {
+            return Err(fail("Scene template reuses a document id within a group"));
+        }
+        if record {
+            remap.docs.insert(inner.id, fresh);
+        }
+        restamp(inner, fresh, alloc, remap, handle);
+        renumber_body(inner, alloc, remap, handle, false)?;
+    }
     for wire in &mut body.wires {
-        let (Some(from), Some(to)) = (remap.docs.get(&wire.from_node), remap.docs.get(&wire.to_node)) else {
+        let (Some(from), Some(to)) = (local.get(&wire.from_node), local.get(&wire.to_node)) else {
             return Err(fail("Scene template wire leaves its group"));
         };
         wire.from_node = *from;
         wire.to_node = *to;
-    }
-    for inner in &mut body.nodes {
-        rewire(inner, remap)?;
     }
     Ok(())
 }
@@ -261,10 +266,9 @@ pub fn insert_scene_template(
     // Identity first: the group, then every node under it.
     let mut group = template.group.clone();
     let mut remap = Remap { docs: HashMap::new(), stable: HashMap::new() };
-    renumber(&mut group, &mut alloc, &mut remap, &handle, true)?;
-    rewire(&mut group, &remap)?;
+    renumber_group(&mut group, &mut alloc, &mut remap, &handle)?;
     let group_doc = group.id;
-    let domain = match crate::liquid_domain::liquid_domains_in(&group.group.as_deref().map_or(&[][..], |body| body.nodes.as_slice())) {
+    let domain = match crate::liquid_domain::liquid_domains_in(group.group.as_deref().map_or(&[][..], |body| body.nodes.as_slice())) {
         domains if domains.len() > 1 => return Err(fail("Scene template holds more than one liquid domain")),
         mut domains => domains.pop(),
     };

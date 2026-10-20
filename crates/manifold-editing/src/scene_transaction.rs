@@ -75,6 +75,9 @@ pub(crate) struct SceneGraphTransaction {
     expected_preset_type: PresetTypeId,
     before_resolved: EffectGraphDef,
     candidate: EffectGraphDef,
+    /// The owner's graph as execute left it: refreshing the manifest
+    /// normalizes the candidate's metadata, and undo checks against this.
+    committed: Option<EffectGraphDef>,
     removed_param_ids: Vec<String>,
     parameter_id_remaps: Vec<(String, String)>,
     previous_layer: Option<InstanceLayerSnapshot>,
@@ -127,6 +130,7 @@ impl SceneGraphTransaction {
             expected_preset_type: host.effect_type().clone(),
             before_resolved,
             candidate: result.graph,
+            committed: None,
             removed_param_ids: result.removed_param_ids,
             parameter_id_remaps: result.parameter_id_remaps,
             previous_layer: None,
@@ -180,6 +184,7 @@ impl SceneGraphTransaction {
             host.refresh_manifest_from_graph();
         }
         host.bump_graph_structure_version();
+        self.committed = host.graph.clone();
         self.last_error = None;
         self.applied = true;
     }
@@ -193,7 +198,7 @@ impl SceneGraphTransaction {
             return;
         };
         if host.effect_type() != &self.expected_preset_type
-            || host.graph.as_ref() != Some(&self.candidate)
+            || host.graph != self.committed
         {
             self.reject(SceneGraphRejection::StaleOwner);
             return;
