@@ -916,7 +916,7 @@ mod tests {
         let object = scene_vm_node_doc_id(&project, &layer, "swarm_object");
         assert_eq!(row, object, "the row is the scene object the swarm's copies feed");
 
-        let view = GizmoView { camera: camera(), width: W, height: H };
+        let view = GizmoView::new(camera(), W, H);
         let mut rig = Rig::new(&layer);
         let picked = rig.with_ctx(&mut project, |ctx| press(ctx, &layer, &scene, None, GizmoMode::Move, &view, px(swarm.origin)));
         let GizmoPress::Picked(Some(id)) = picked else { panic!("the swarm box is picked, got {picked:?}") };
