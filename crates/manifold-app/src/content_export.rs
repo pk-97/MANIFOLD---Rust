@@ -635,8 +635,12 @@ impl ContentThread {
         // the export and resumes after it. A new request sent meanwhile is
         // held and runs after this one is put back, so the newest still wins.
         let viewport = self.content_pipeline.take_scene_viewport_request();
+        // The selection outline's mask pass is editing chrome: it sits out
+        // the export the same way.
+        let (outline_output, outline_viewport) = self.content_pipeline.take_selection_outline();
         self.run_export_inner(config, cmd_rx, state_tx);
         self.content_pipeline.set_scene_viewport_request(viewport);
+        self.content_pipeline.set_selection_outline(outline_output, outline_viewport);
         // Edits sent while it ran were dropped, but a direct UI write may
         // still show one: publish the project once so the UI copy is replaced
         // by this thread's (the existing publish_pending path, no data_version bump).

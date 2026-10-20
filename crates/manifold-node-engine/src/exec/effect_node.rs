@@ -1429,8 +1429,10 @@ pub trait EffectNode: Send + AsAny {
     fn set_selection_mask(&mut self, _slots: &[u32]) {}
 
     /// The coverage mask the last render drew for [`Self::set_selection_mask`]:
-    /// `R8Unorm` at the output's size, 1 where a selected object covers the
-    /// picture. `None` when nothing is selected or the frame drew nothing.
+    /// `R8Unorm` at the scene's native render size (smaller than the output
+    /// under temporal upscale; read it by UV), 1 where a selected object
+    /// covers the picture. `None` when nothing is selected or the frame drew
+    /// nothing.
     fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
         None
     }

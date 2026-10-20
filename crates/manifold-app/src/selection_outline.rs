@@ -162,14 +162,42 @@ impl SelectionOutline {
     }
 }
 
-/// The content thread's outline state: which render slots each picture
-/// outlines, the layers that request was applied to, and the two mask
-/// bridges (the output preview's, and the scene viewport's).
+/// The render slots one picture outlines and the scene layer they were read
+/// from. They apply to that layer only, so a layer switch never outlines
+/// whatever sits in the same slot of the next scene.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OutlineSlots {
+    pub layer: manifold_core::LayerId,
+    pub slots: Vec<u32>,
+}
+
+/// Where the outline requests land: the output render's selection mask and
+/// the scene viewport pass's, per layer.
+#[cfg(target_os = "macos")]
+pub(crate) trait SelectionMasks {
+    fn set_output_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]);
+    fn set_viewport_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]);
+}
+
+#[cfg(target_os = "macos")]
+impl SelectionMasks for manifold_compositor::generator_renderer::GeneratorRenderer {
+    fn set_output_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]) {
+        self.set_selection_mask(layer, slots);
+    }
+
+    fn set_viewport_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]) {
+        self.set_scene_viewport_selection_mask(layer, slots);
+    }
+}
+
+/// The content thread's outline state: the standing requests for the output
+/// and the scene viewport, the layers they were last applied to, and the
+/// two mask bridges (the output preview's, and the scene viewport's).
 #[cfg(target_os = "macos")]
 #[derive(Default)]
 pub(crate) struct OutlineCapture {
-    output: Vec<u32>,
-    viewport: Vec<u32>,
+    output: Option<OutlineSlots>,
+    viewport: Option<OutlineSlots>,
     output_layer: Option<manifold_core::LayerId>,
     viewport_layer: Option<manifold_core::LayerId>,
     /// A request changed since it was last applied.
@@ -180,52 +208,65 @@ pub(crate) struct OutlineCapture {
 
 #[cfg(target_os = "macos")]
 impl OutlineCapture {
-    pub fn set(&mut self, output: &[u32], viewport: &[u32]) {
+    pub fn set(&mut self, output: Option<OutlineSlots>, viewport: Option<OutlineSlots>) {
         if self.output != output || self.viewport != viewport {
-            self.output.clear();
-            self.output.extend_from_slice(output);
-            self.viewport.clear();
-            self.viewport.extend_from_slice(viewport);
+            self.output = output;
+            self.viewport = viewport;
             self.dirty = true;
         }
     }
 
-    /// Before the generators render: aim the requests at `output_layer`'s
-    /// scene and `viewport_layer`'s viewport, clearing a layer a request
-    /// left. A rebuilt graph starts without a request, so a standing one is
-    /// set again every frame.
+    /// Withdraw both requests, returning them for [`Self::set`] later. The
+    /// next [`Self::apply`] clears both masks.
+    pub fn take(&mut self) -> (Option<OutlineSlots>, Option<OutlineSlots>) {
+        self.dirty = true;
+        (self.output.take(), self.viewport.take())
+    }
+
+    /// Before the generators render: aim each request at its layer when
+    /// that layer is the one shown (`output_layer`'s scene, `viewport_layer`'s
+    /// viewport), clearing a layer the picture left. A rebuilt graph starts
+    /// without a request, so a standing one is set again every frame.
     pub fn apply(
         &mut self,
-        generators: &mut manifold_compositor::generator_renderer::GeneratorRenderer,
+        masks: &mut impl SelectionMasks,
         output_layer: Option<&manifold_core::LayerId>,
         viewport_layer: Option<&manifold_core::LayerId>,
     ) {
         if self.output_layer.as_ref() != output_layer {
             if let Some(old) = self.output_layer.take() {
-                generators.set_selection_mask(&old, &[]);
+                masks.set_output_mask(&old, &[]);
             }
             self.output_layer = output_layer.cloned();
             self.dirty = true;
         }
         if self.viewport_layer.as_ref() != viewport_layer {
             if let Some(old) = self.viewport_layer.take() {
-                generators.set_scene_viewport_selection_mask(&old, &[]);
+                masks.set_viewport_mask(&old, &[]);
             }
             self.viewport_layer = viewport_layer.cloned();
             self.dirty = true;
         }
-        if let Some(layer) = self.output_layer.as_ref()
-            && (self.dirty || !self.output.is_empty())
-        {
-            generators.set_selection_mask(layer, &self.output);
+        if let Some(layer) = self.output_layer.as_ref() {
+            let slots = slots_on(self.output.as_ref(), layer);
+            if self.dirty || !slots.is_empty() {
+                masks.set_output_mask(layer, slots);
+            }
         }
-        if let Some(layer) = self.viewport_layer.as_ref()
-            && (self.dirty || !self.viewport.is_empty())
-        {
-            generators.set_scene_viewport_selection_mask(layer, &self.viewport);
+        if let Some(layer) = self.viewport_layer.as_ref() {
+            let slots = slots_on(self.viewport.as_ref(), layer);
+            if self.dirty || !slots.is_empty() {
+                masks.set_viewport_mask(layer, slots);
+            }
         }
         self.dirty = false;
     }
+}
+
+/// The slots `request` asks of `layer`: none when it was read from another.
+#[cfg(target_os = "macos")]
+fn slots_on<'a>(request: Option<&'a OutlineSlots>, layer: &manifold_core::LayerId) -> &'a [u32] {
+    request.filter(|request| &request.layer == layer).map_or(&[], |request| &request.slots)
 }
 
 /// The mask beside surface `slot` of a picture whose frame stamped mask
@@ -250,20 +291,112 @@ impl crate::app::Application {
     /// selected object while Show gizmos is on, and for the scene viewport
     /// the slots of whichever host owns it (D-99).
     pub(crate) fn sync_selection_outline(&mut self) {
-        let output: &[u32] = if self.ws.ui_root.scene_setup_panel.gizmo_layer().is_some() { self.ws.preview_gizmo.outline() } else { &[] };
-        let viewport: &[u32] = if self.ws.preview_navigation.active() {
+        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
+        let output = gizmo_layer.map(|layer| (layer, self.ws.preview_gizmo.outline()));
+        let viewport = if self.ws.preview_navigation.active() {
             output
         } else {
-            self.graph_editor.as_ref().filter(|ed| ed.viewport_session.is_some()).map_or(&[], |ed| &ed.viewport_outline)
+            let editor_layer = match self.watched_graph_target.as_ref() {
+                Some(manifold_core::GraphTarget::Generator(layer)) => Some(layer),
+                _ => None,
+            };
+            self.graph_editor
+                .as_ref()
+                .filter(|ed| ed.viewport_session.is_some())
+                .zip(editor_layer)
+                .map(|(ed, layer)| (layer, ed.viewport_outline.as_slice()))
         };
-        if self.ws.outline_sent.0 == output && self.ws.outline_sent.1 == viewport {
+        let (sent_output, sent_viewport) = &self.ws.outline_sent;
+        if same_request(sent_output.as_ref(), output) && same_request(sent_viewport.as_ref(), viewport) {
             return;
         }
-        self.ws.outline_sent = (output.to_vec(), viewport.to_vec());
+        let request = |wanted: Option<(&manifold_core::LayerId, &[u32])>| {
+            wanted.filter(|(_, slots)| !slots.is_empty()).map(|(layer, slots)| OutlineSlots { layer: layer.clone(), slots: slots.to_vec() })
+        };
+        self.ws.outline_sent = (request(output), request(viewport));
         let (output, viewport) = self.ws.outline_sent.clone();
         self.send_content_cmd(crate::content_command::ContentCommand::SetSelectionOutline { output, viewport });
     }
 }
 
+/// `sent` is the request `wanted` makes; no slots is no request.
+fn same_request(sent: Option<&OutlineSlots>, wanted: Option<(&manifold_core::LayerId, &[u32])>) -> bool {
+    match (sent, wanted.filter(|(_, slots)| !slots.is_empty())) {
+        (None, None) => true,
+        (Some(sent), Some((layer, slots))) => &sent.layer == layer && sent.slots == slots,
+        _ => false,
+    }
+}
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_proof;
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use manifold_core::LayerId;
+
+    use super::*;
+
+    /// Every mask request `apply` makes, in order: (viewport?, layer, slots).
+    #[derive(Default)]
+    struct Recorded(Vec<(bool, LayerId, Vec<u32>)>);
+
+    impl SelectionMasks for Recorded {
+        fn set_output_mask(&mut self, layer: &LayerId, slots: &[u32]) {
+            self.0.push((false, layer.clone(), slots.to_vec()));
+        }
+
+        fn set_viewport_mask(&mut self, layer: &LayerId, slots: &[u32]) {
+            self.0.push((true, layer.clone(), slots.to_vec()));
+        }
+    }
+
+    fn slots(layer: &LayerId, slots: &[u32]) -> Option<OutlineSlots> {
+        Some(OutlineSlots { layer: layer.clone(), slots: slots.to_vec() })
+    }
+
+    fn applied(capture: &mut OutlineCapture, output: Option<&LayerId>, viewport: Option<&LayerId>) -> Vec<(bool, LayerId, Vec<u32>)> {
+        let mut masks = Recorded::default();
+        capture.apply(&mut masks, output, viewport);
+        masks.0
+    }
+
+    #[test]
+    fn apply_aims_each_request_at_its_own_layer_only() {
+        let (a, b) = (LayerId::new("a"), LayerId::new("b"));
+        let mut capture = OutlineCapture::default();
+        capture.set(slots(&a, &[2]), slots(&a, &[2]));
+        assert_eq!(applied(&mut capture, Some(&a), Some(&a)), [(false, a.clone(), vec![2]), (true, a.clone(), vec![2])]);
+        assert_eq!(applied(&mut capture, Some(&a), Some(&a)).len(), 2, "a standing request is set every frame");
+
+        // The picture moves to layer b before the UI has read b's selection:
+        // a is cleared, and b's scene gets nothing from a's slots.
+        assert_eq!(
+            applied(&mut capture, Some(&b), None),
+            [(false, a.clone(), vec![]), (true, a.clone(), vec![]), (false, b.clone(), vec![])],
+        );
+        assert!(applied(&mut capture, Some(&b), None).is_empty(), "nothing standing, nothing sent");
+
+        capture.set(slots(&b, &[0, 3]), None);
+        assert_eq!(applied(&mut capture, Some(&b), None), [(false, b.clone(), vec![0, 3])]);
+        capture.set(None, None);
+        assert_eq!(applied(&mut capture, Some(&b), None), [(false, b.clone(), vec![])], "a deselect clears the mask");
+        assert!(applied(&mut capture, Some(&b), None).is_empty());
+    }
+
+    /// An export takes the requests out: its first frame clears both masks
+    /// and the next ones send nothing; putting them back resumes them.
+    #[test]
+    fn a_taken_request_clears_the_masks_until_it_is_back() {
+        let a = LayerId::new("a");
+        let mut capture = OutlineCapture::default();
+        capture.set(slots(&a, &[1]), slots(&a, &[4]));
+        applied(&mut capture, Some(&a), Some(&a));
+        let (output, viewport) = capture.take();
+        assert_eq!((output.clone(), viewport.clone()), (slots(&a, &[1]), slots(&a, &[4])));
+        assert_eq!(applied(&mut capture, Some(&a), Some(&a)), [(false, a.clone(), vec![]), (true, a.clone(), vec![])]);
+        assert!(applied(&mut capture, Some(&a), Some(&a)).is_empty());
+        capture.set(output, viewport);
+        assert_eq!(applied(&mut capture, Some(&a), Some(&a)), [(false, a.clone(), vec![1]), (true, a.clone(), vec![4])]);
+    }
+}

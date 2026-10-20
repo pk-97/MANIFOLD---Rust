@@ -885,11 +885,11 @@ impl Application {
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
                 return false;
             };
-            let view = GizmoView { camera: config.camera.to_camera(), width: config.width, height: config.height };
+            let view = GizmoView::new(config.camera.to_camera(), config.width, config.height);
             (view, ed.viewport_gizmo_mode, ed.viewport_selected.clone())
         };
         let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
-        let Some(point) = crate::viewport_input::gizmo_point(rect, (view.width, view.height), (cx, cy)) else { return false };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(rect, view, (cx, cy)) else { return false };
         let Some(pressed) = self.with_dispatch_ctx(|ctx| {
             crate::scene_gizmo::press(ctx, &layer_id, &scene, selected.as_ref(), mode, &view, point)
         }) else {
@@ -992,11 +992,11 @@ impl Application {
         let Some(mut gesture) = ed.viewport_gizmo_drag.take() else { return false };
         let point = ed.viewport_rect.zip(ed.viewport_session.as_ref().and_then(|session| session.displayed_config()))
             .and_then(|(rect, config)| {
-                let point = crate::viewport_input::gizmo_point(rect, (config.width, config.height), (x, y))?;
-                Some((config.width, config.height, config.camera.to_camera(), point))
+                let view = crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height);
+                crate::viewport_input::gizmo_pointer(rect, view, (x, y))
             });
-        if let Some((w, h, cam, point)) = point {
-            self.with_dispatch_ctx(|ctx| gesture.drag_to(ctx, &cam, w, h, point));
+        if let Some((view, point)) = point {
+            self.with_dispatch_ctx(|ctx| gesture.drag_to(ctx, &view, point));
         }
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.viewport_gizmo_drag = Some(gesture);

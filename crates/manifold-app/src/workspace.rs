@@ -138,7 +138,7 @@ pub struct Workspace {
     pub viewport_outline: Vec<u32>,
     /// The outline slots last sent to the content thread (output, viewport);
     /// main window only.
-    pub outline_sent: (Vec<u32>, Vec<u32>),
+    pub outline_sent: (Option<crate::selection_outline::OutlineSlots>, Option<crate::selection_outline::OutlineSlots>),
     /// The graph editor's frame planner state and atlas (P5c); unused by
     /// the main window.
     pub(crate) editor_frame: crate::editor_frame::EditorFrameState,
@@ -185,7 +185,7 @@ impl Workspace {
             viewport_selected: None,
             viewport_gizmo_drag: None,
             viewport_outline: Vec::new(),
-            outline_sent: (Vec::new(), Vec::new()),
+            outline_sent: (None, None),
             editor_frame: Default::default(),
         }
     }

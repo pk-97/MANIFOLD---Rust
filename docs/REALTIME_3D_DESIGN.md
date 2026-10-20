@@ -125,16 +125,23 @@ between this doc and execution.
   view height long at any distance or field of view, turned into world length
   at the origin's depth through the host's camera. The gizmo core computes it
   once, so the drawn handle and the pick use the same length on both hosts.
+  Hit tolerances are in screen points (`GizmoView::px_per_point`), so a handle
+  is as easy to grab on a 2x display or over a 4K output as at 1x. A Move or
+  Scale drag takes the closest point between the pointer ray and the handle's
+  axis, as Blender and Unity do, so the grabbed point stays under the cursor;
+  a handle pointing along the line of sight takes no press.
 
   The selected object gets a selection outline in Blender orange on both hosts.
   `render_scene` draws the selected objects' coverage into a mask through the
   camera the picture was rendered with (`render_scene/selection_mask.rs`), only
-  while something is selected. The content thread copies the mask into a mask
-  bridge on the same surface slot as the picture, so the picture's read lease
-  covers both. The UI draws a fixed-width edge around the mask over the picture
-  (`crates/manifold-app/src/selection_outline.rs`), under the handles. The
-  outline is a full silhouette: it shows through anything in front of the
-  object. It hides when handles fade.
+  while something is selected and never during an export. The content thread
+  copies the mask into a mask bridge on the same surface slot as the picture,
+  so the picture's read lease covers both. The UI draws a fixed-width edge
+  around the mask over the picture (`crates/manifold-app/src/selection_outline.rs`),
+  under the handles. Selecting Water outlines the water body and its looks.
+  The outline is a full silhouette that shows through anything in front of
+  the object, as Unity's does: selection comes from the Scene panel, and the
+  outline is how a hidden object is found. It hides when handles fade.
 
   The pipeline records each frame's entry, with the content frame number, for
   the output surface being written; a layer that did not render that frame

@@ -849,7 +849,7 @@ impl ContentThread {
             }
             #[cfg(target_os = "macos")]
             ContentCommand::SetSelectionOutline { output, viewport } => {
-                self.content_pipeline.set_selection_outline(&output, &viewport);
+                self.content_pipeline.set_selection_outline(output, viewport);
             }
             #[cfg(not(target_os = "macos"))]
             ContentCommand::SetSelectionOutline { .. } => {}

@@ -16,7 +16,6 @@ use manifold_core::{GraphTarget, LayerId, NodeId, project::Project};
 use manifold_editing::command::Command;
 use manifold_node_engine::param_binding::convert_param_value;
 use manifold_node_engine::parameters::ParamValue;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneVm, ShapeOwner, ShapeWrite};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
     GizmoDrag, GizmoMode, GizmoTarget, GizmoTargetId, GizmoTargetKind, HandleValues, HandleWrite, gizmo_target_for,
@@ -235,10 +234,10 @@ impl GizmoGesture {
         ValueRef::Param(GraphParamTarget::GeneratorOf(self.layer.clone()), id.clone())
     }
 
-    /// Move the handle with the pointer at `cur` (render pixels): a live,
-    /// non-undoable write through each knob.
-    pub(crate) fn drag_to(&mut self, ctx: &mut DispatchCtx, cam: &Camera, width: u32, height: u32, cur: (f32, f32)) {
-        let Some(values) = self.drag.update(cam, width, height, cur) else { return };
+    /// Move the handle with the pointer at `cur` (render pixels of `view`):
+    /// a live, non-undoable write through each knob.
+    pub(crate) fn drag_to(&mut self, ctx: &mut DispatchCtx, view: &GizmoView, cur: (f32, f32)) {
+        let Some(values) = self.drag.update(view, cur) else { return };
         match (values, self.knobs.as_slice()) {
             (HandleValues::One(value), [knob @ Knob::Card { id, .. }]) => {
                 if let Some(card) = knob.card_value(value) {
@@ -314,7 +313,7 @@ pub(crate) fn press(
 ) -> GizmoPress {
     if let Some(id) = selected
         && let Some(target) = gizmo_target_for(scene, id)
-        && let Some(axis) = pick_axis(mode, &target, &view.camera, view.width, view.height, point)
+        && let Some(axis) = pick_axis(mode, &target, view, point)
     {
         // D8: a locked handle draws gray and refuses the drag.
         if target.handle(mode, axis).is_none_or(|handle| handle.write.locked()) {
@@ -337,7 +336,7 @@ pub(crate) fn press(
             }
         });
     }
-    let picked = pick_target(scene, &view.camera, view.width, view.height, point);
+    let picked = pick_target(scene, view, point);
     if let Some(selection) = picked.as_ref().and_then(|id| gizmo_target_for(scene, id)).as_ref().and_then(scene_selection) {
         ctx.ui.scene_setup_panel.set_selection(layer.clone(), selection);
     }
@@ -424,6 +423,7 @@ mod tests {
     use manifold_core::effect_graph_def::{BindingDef, EffectGraphWire, ParamSpecDef};
     use manifold_core::types::LayerType;
     use manifold_editing::service::EditingService;
+    use manifold_node_engine::scene::camera::Camera;
     use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner};
     use manifold_nodes_scene::node_graph::viewport_gizmo::{
         GizmoAxis, GizmoMode, GizmoTarget, GizmoTargetKind, gizmo_targets,
@@ -485,7 +485,7 @@ mod tests {
             self.with_ctx(project, |ctx| {
                 let drag = GizmoDrag::begin(target.clone(), mode, axis, from).expect("handle is draggable");
                 let mut gesture = GizmoGesture::begin(ctx, layer.clone(), drag).expect("gesture begins");
-                gesture.drag_to(ctx, &camera(), W, H, to);
+                gesture.drag_to(ctx, &GizmoView::new(camera(), W, H), to);
                 gesture.commit(ctx);
                 assert!(ctx.scrub.active.is_none(), "release ends the scrub");
             });
@@ -762,7 +762,7 @@ mod tests {
         let force = target(&project, &layer, GizmoTargetKind::Force);
         assert!(force.handle(GizmoMode::Move, GizmoAxis::X).unwrap().write.locked(), "the locked card's handle draws locked");
         assert!(!force.handle(GizmoMode::Move, GizmoAxis::Y).unwrap().write.locked(), "an unlocked card's handle does not");
-        let view = GizmoView { camera: camera(), width: W, height: H };
+        let view = GizmoView::new(camera(), W, H);
         let scene = scene(&project, &layer);
         let grip = force.grip(GizmoMode::Move, GizmoAxis::X, &view).unwrap();
         let mut rig = Rig::new(&layer);
@@ -824,7 +824,7 @@ mod tests {
         let layer = LayerId::new("scene");
         let mut content = local.clone();
         let force = target(&local, &layer, GizmoTargetKind::Force);
-        let view = GizmoView { camera: camera(), width: W, height: H };
+        let view = GizmoView::new(camera(), W, H);
         let before = shape_value(&local, &layer, &force, "center_x");
         let mut rig = Rig::new(&layer);
         let scene = scene(&local, &layer);
@@ -840,7 +840,7 @@ mod tests {
             let GizmoPress::Handle(Some(mut gesture)) = press(ctx, &layer, &scene, Some(&id), GizmoMode::Move, &view, px(grip)) else {
                 panic!("the move handle takes the press")
             };
-            gesture.drag_to(ctx, &view.camera, W, H, px(plus(grip, [1.0, 0.0, 0.0])));
+            gesture.drag_to(ctx, &view, px(plus(grip, [1.0, 0.0, 0.0])));
             gesture.commit(ctx);
         });
         let mut service = EditingService::new();

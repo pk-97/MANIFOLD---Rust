@@ -1680,8 +1680,7 @@ impl Application {
                 && let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(
                     pane, &gpu.device, &self.content_state.scene_viewport_frames, &request, &mut bridge_leases)
             {
-                viewport_mask = crate::selection_outline::leased_mask(self.outline_viewport_pane.as_mut(), &gpu.device, slot, frame.outline)
-                    .filter(|_| !ws.viewport_outline.is_empty());
+                viewport_mask = crate::selection_outline::leased_mask(self.outline_viewport_pane.as_mut(), &gpu.device, slot, frame.outline);
                 if let Some(texture) = texture
                     && let Some(ui) = self.ui_renderer.as_mut()
                 {
@@ -1735,7 +1734,7 @@ impl Application {
             let config = session.displayed_config().unwrap_or(session.config);
             compose_lines(
                 &GizmoChrome {
-                    view: crate::scene_gizmo::GizmoView { camera: config.camera.to_camera(), width: config.width, height: config.height },
+                    view: crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height),
                     lights: &[],
                     domains,
                     physics: &[],
@@ -1956,7 +1955,8 @@ impl Application {
                         frame,
                         lines: &ws.viewport_overlay_lines,
                         #[cfg(target_os = "macos")]
-                        outline: self.selection_outline.as_ref().zip(viewport_mask.as_ref()),
+                        // Gated on this frame's selection, recomputed above.
+                        outline: self.selection_outline.as_ref().zip(viewport_mask.as_ref().filter(|_| !ws.viewport_outline.is_empty())),
                         #[cfg(not(target_os = "macos"))]
                         outline: None,
                     }),

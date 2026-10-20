@@ -153,7 +153,7 @@ impl PreviewNavigation {
     /// of the displayed frame. `None` shows the output through its camera.
     pub fn view(&self) -> Option<GizmoView> {
         let config = self.session.as_ref()?.displayed_config()?;
-        Some(GizmoView { camera: config.camera.to_camera(), width: config.width, height: config.height })
+        Some(GizmoView::new(config.camera.to_camera(), config.width, config.height))
     }
 
     /// A frame-planner input: the session and the newest frame published for

@@ -120,7 +120,7 @@ fn manifest_decl(json: &str) -> SceneShapeDecl {
 fn drag(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis, from: (f32, f32), to: (f32, f32)) -> HandleValues {
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
     let mut drag = GizmoDrag::begin(target.clone(), mode, axis, from).expect("handle is draggable");
-    drag.update(&cam, 640, 480, to).expect("drag resolves")
+    drag.update(&GizmoView::new(cam, 640, 480), to).expect("drag resolves")
 }
 
 fn written(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis) -> Vec<ShapeWrite> {
@@ -133,7 +133,7 @@ fn node_write(param: &str) -> ShapeWrite {
 
 /// The 640x480 view every helper projects through.
 fn view() -> GizmoView {
-    GizmoView { camera: cam_looking_down_neg_z([0.0, 0.0, 0.0]), width: 640, height: 480 }
+    GizmoView::new(cam_looking_down_neg_z([0.0, 0.0, 0.0]), 640, 480)
 }
 
 /// The handle length at `point` in [`view`].
@@ -150,8 +150,8 @@ fn px(point: [f32; 3]) -> (f32, f32) {
 fn pick_target_finds_the_object_under_the_click() {
     let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_target(&scene, &cam, 640, 480, px([0.0, 0.0, -5.0])), Some(object_id(1)));
-    assert_eq!(pick_target(&scene, &cam, 640, 480, (5.0, 5.0)), None);
+    assert_eq!(pick_target(&scene, &GizmoView::new(cam, 640, 480), px([0.0, 0.0, -5.0])), Some(object_id(1)));
+    assert_eq!(pick_target(&scene, &GizmoView::new(cam, 640, 480), (5.0, 5.0)), None);
 }
 
 #[test]
@@ -231,15 +231,15 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     assert!(!box_target.supports_mode(GizmoMode::Rotate), "the declaration gives the domain no rotation");
     assert!(lines_of(GizmoMode::Rotate, box_target).is_empty());
     assert_eq!(written(box_target, GizmoMode::Scale, GizmoAxis::X), vec![node_write("scale_x")]);
-    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([-50.0, 2.0, -6.0])) else {
+    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([-20.0, 2.0, -6.0])) else {
         panic!("one value")
     };
     assert_eq!(size, DOMAIN_EXTENT_METRES.0, "a domain never scales below what the solvers accept");
-    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([50.0, 2.0, -6.0])) else {
+    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([20.0, 2.0, -6.0])) else {
         panic!("one value")
     };
     assert_eq!(size, DOMAIN_EXTENT_METRES.1, "nor above it");
-    let HandleValues::One(column) = drag(&targets[1], GizmoMode::Scale, GizmoAxis::X, px([-1.0, 0.0, -6.0]), px([-50.0, 0.0, -6.0])) else {
+    let HandleValues::One(column) = drag(&targets[1], GizmoMode::Scale, GizmoAxis::X, px([-1.0, 0.0, -6.0]), px([-20.0, 0.0, -6.0])) else {
         panic!("one value")
     };
     assert_eq!(column, MIN_EXTENT, "an undeclared box stops only at the smallest extent");
@@ -284,7 +284,7 @@ fn radial_force_target_derives_from_its_point_radius_declaration() {
     };
     assert!((radius - 3.0).abs() < 1e-3, "one unit along the handle grows the radius by one, got {radius}");
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_axis(GizmoMode::Scale, &target, &cam, 640, 480, px(offset(target.origin, GizmoAxis::Uniform.unit(), len_at(target.origin)))), Some(GizmoAxis::Uniform));
+    assert_eq!(pick_axis(GizmoMode::Scale, &target, &GizmoView::new(cam, 640, 480), px(offset(target.origin, GizmoAxis::Uniform.unit(), len_at(target.origin)))), Some(GizmoAxis::Uniform));
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn uniform_force_without_origin_sits_at_its_anchor() {
     assert!(!target.supports_mode(GizmoMode::Move), "no origin, no move handle");
     assert!(target.supports_mode(GizmoMode::Rotate));
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_target(&scene, &cam, 640, 480, px([0.5, 1.0, -4.0])), Some(target.id.clone()));
+    assert_eq!(pick_target(&scene, &GizmoView::new(cam, 640, 480), px([0.5, 1.0, -4.0])), Some(target.id.clone()));
 }
 
 #[test]
@@ -350,8 +350,8 @@ fn pick_axis_returns_the_handle_under_the_click() {
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
     let tip = offset(target.origin, GizmoAxis::X.unit(), len_at(target.origin));
-    assert_eq!(pick_axis(GizmoMode::Move, &target, &cam, 640, 480, px(tip)), Some(GizmoAxis::X));
-    assert_eq!(pick_axis(GizmoMode::Move, &target, &cam, 640, 480, (0.0, 0.0)), None);
+    assert_eq!(pick_axis(GizmoMode::Move, &target, &GizmoView::new(cam, 640, 480), px(tip)), Some(GizmoAxis::X));
+    assert_eq!(pick_axis(GizmoMode::Move, &target, &GizmoView::new(cam, 640, 480), (0.0, 0.0)), None);
 }
 
 #[test]
@@ -435,8 +435,8 @@ fn each_grip_picks_its_own_handle() {
     let at = |p: [f32; 3]| cam.project_to_pixel(p, 640, 480).map(|p| (p.px, p.py)).unwrap();
     for mode in [GizmoMode::Move, GizmoMode::Scale, GizmoMode::Rotate] {
         for axis in GizmoAxis::XYZ {
-            let grip = target.grip(mode, axis, &GizmoView { camera: cam, width: 640, height: 480 }).expect("an object has every handle");
-            assert_eq!(pick_axis(mode, &target, &cam, 640, 480, at(grip)), Some(axis), "{mode:?} {axis:?}");
+            let grip = target.grip(mode, axis, &GizmoView::new(cam, 640, 480)).expect("an object has every handle");
+            assert_eq!(pick_axis(mode, &target, &GizmoView::new(cam, 640, 480), at(grip)), Some(axis), "{mode:?} {axis:?}");
         }
     }
 }
@@ -480,7 +480,7 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
         // Oblique, so no handle stands over another; the same direction at every distance.
         let eye = [3.0 * distance / 6.32, 2.5 * distance / 6.32, -distance + 5.0 * distance / 6.32];
         let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
-        let view = GizmoView { camera, width: 1280, height: 720 };
+        let view = GizmoView::new(camera, 1280, 720);
         let chrome = GizmoChrome {
             view,
             lights: &[],
@@ -496,13 +496,13 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
         for (axis, line) in GizmoAxis::XYZ.into_iter().zip(drawn) {
             assert_eq!(Some(line.b), target.grip(GizmoMode::Move, axis, &view), "the grip is the drawn tip");
             let tip = camera.project_to_pixel(line.b, view.width, view.height).unwrap();
-            assert_eq!(pick_axis(GizmoMode::Move, &target, &camera, view.width, view.height, (tip.px, tip.py)), Some(axis), "{axis:?} at {distance}");
+            assert_eq!(pick_axis(GizmoMode::Move, &target, &view, (tip.px, tip.py)), Some(axis), "{axis:?} at {distance}");
         }
     }
 }
 
 /// D-102: an object outlines its own render slot; an imported model's group
-/// row outlines every part's.
+/// row outlines every part's; Water outlines its own slot and its looks'.
 #[test]
 fn outline_slots_cover_an_object_or_every_part_of_its_group() {
     let row = |id: u32, index: usize, group: Option<u32>, is_group: bool| {
@@ -512,18 +512,103 @@ fn outline_slots_cover_an_object_or_every_part_of_its_group() {
         row.is_group = is_group;
         SceneObjectVm::Known(row)
     };
+    // An imported model's group row is a copy of its first part (scene_vm),
+    // so it shares that part's slot. Water (20) is a real slot of its own,
+    // with its looks (21, 22) as parts.
     let scene = scene_with(vec![
         row(1, 0, None, false),
         row(10, 1, None, true),
-        row(11, 2, Some(10), false),
-        row(12, 3, Some(10), false),
-        SceneObjectVm::Custom { index: 4 },
+        row(11, 1, Some(10), false),
+        row(12, 2, Some(10), false),
+        row(20, 3, None, true),
+        row(21, 4, Some(20), false),
+        row(22, 5, Some(20), false),
+        SceneObjectVm::Custom { index: 6 },
     ]);
     let mut slots = vec![99];
     outline_slots(&scene, 1, &mut slots);
     assert_eq!(slots, [0]);
     outline_slots(&scene, 10, &mut slots);
-    assert_eq!(slots, [2, 3], "the group's parts, not its own virtual slot");
+    assert_eq!(slots, [1, 2], "every part of the model, its shared slot once");
+    outline_slots(&scene, 20, &mut slots);
+    assert_eq!(slots, [3, 4, 5], "the water body and its looks");
     outline_slots(&scene, 7, &mut slots);
     assert!(slots.is_empty(), "no such object, no outline");
+}
+
+/// Hit tolerances hold in screen points on a 1x display, a 2x display and
+/// a 4K output in a small preview: the same click in points picks the same
+/// handle, and the same miss misses.
+#[test]
+fn hit_tolerances_hold_in_screen_points_at_any_display_scale() {
+    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    // (render height, the picture's height on screen in points)
+    for (height, points_high) in [(480_u32, 480.0_f32), (960, 480.0), (2160, 458.0)] {
+        let width = height * 16 / 9;
+        let view = GizmoView::new(cam_looking_down_neg_z([0.0; 3]), width, height).on_screen(points_high);
+        let s = view.px_per_point;
+        let at = |p: [f32; 3]| {
+            let p = view.camera.project_to_pixel(p, width, height).unwrap();
+            (p.px, p.py)
+        };
+        let tip = at(view_tip(&target, &view, GizmoAxis::X));
+        let below = |points: f32| (tip.0, tip.1 + points * s);
+        assert_eq!(pick_axis(GizmoMode::Move, &target, &view, below(7.0)), Some(GizmoAxis::X), "{height}p: 7 pt off the tip");
+        assert_eq!(pick_axis(GizmoMode::Move, &target, &view, below(14.0)), None, "{height}p: 14 pt off the tip");
+        let origin = at(target.origin);
+        let beside = |points: f32| (origin.0 - points * s, origin.1 + points * s);
+        assert_eq!(pick_target(&scene, &view, beside(12.0)), Some(object_id(1)), "{height}p: 17 pt from the origin");
+        assert_eq!(pick_target(&scene, &view, beside(20.0)), None, "{height}p: 28 pt from the origin");
+    }
+}
+
+fn view_tip(target: &GizmoTarget, view: &GizmoView, axis: GizmoAxis) -> [f32; 3] {
+    target.grip(GizmoMode::Move, axis, view).expect("a drawn handle")
+}
+
+/// A Move drag keeps the grabbed point under the cursor, as Blender and
+/// Unity do: grab the tip and release on the origin's pixel and the object
+/// moves back by exactly the handle's length; release three lengths out
+/// and it moves two. Oblique perspective, near and far, every axis.
+#[test]
+fn a_move_drag_keeps_the_grabbed_point_under_the_cursor() {
+    for distance in [3.0_f32, 40.0, 900.0] {
+        let scene = scene_with(vec![known_object(1, (0.0, 0.0, -distance), (false, false, false))]);
+        let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+        let eye = [0.47 * distance, 0.4 * distance, -distance + 0.79 * distance];
+        let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
+        let view = GizmoView::new(camera, 1280, 720);
+        let at = |p: [f32; 3]| {
+            let p = camera.project_to_pixel(p, 1280, 720).unwrap();
+            (p.px, p.py)
+        };
+        let len = handle_length(target.origin, &camera, 720);
+        for (i, axis) in GizmoAxis::XYZ.into_iter().enumerate() {
+            let start = target.origin[i];
+            let grabbed = view_tip(&target, &view, axis);
+            let released = |to: [f32; 3]| {
+                let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, axis, at(grabbed)).unwrap();
+                let HandleValues::One(v) = drag.update(&view, at(to)).expect("drag resolves") else { panic!("one value") };
+                v - start
+            };
+            let back = released(target.origin);
+            assert!((back + len).abs() < len * 0.01, "{axis:?} at {distance}: moved {back}, want {}", -len);
+            let out = released(offset(target.origin, GizmoAxis::XYZ[i].unit(), 3.0 * len));
+            assert!((out - 2.0 * len).abs() < len * 0.01, "{axis:?} at {distance}: moved {out}, want {}", 2.0 * len);
+        }
+    }
+}
+
+/// A handle pointing along the line of sight takes no press and has no
+/// grip; the handles across the view still do.
+#[test]
+fn an_end_on_handle_takes_no_press() {
+    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    let view = view();
+    assert!(target.grip(GizmoMode::Move, GizmoAxis::Z, &view).is_none(), "Z points at the camera");
+    assert_ne!(pick_axis(GizmoMode::Move, &target, &view, px(target.origin)), Some(GizmoAxis::Z));
+    assert!(target.grip(GizmoMode::Move, GizmoAxis::X, &view).is_some());
+    assert!(target.grip(GizmoMode::Rotate, GizmoAxis::Z, &view).is_some(), "the ring facing the camera turns");
 }

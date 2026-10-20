@@ -36,6 +36,19 @@ pub(crate) fn gizmo_point(
     (x.is_finite() && y.is_finite()).then_some((x, y))
 }
 
+/// The pointer at window `point` over a picture at `rect` showing `view`:
+/// the point in the view's render pixels, and the view carrying how many
+/// render pixels one screen point spans there, so hit tolerances hold in
+/// points on any display and at any output size.
+pub(crate) fn gizmo_pointer(
+    rect: manifold_ui::Rect,
+    view: crate::scene_gizmo::GizmoView,
+    point: (f32, f32),
+) -> Option<(crate::scene_gizmo::GizmoView, (f32, f32))> {
+    let at = gizmo_point(rect, (view.width, view.height), point)?;
+    Some((view.on_screen(rect.height), at))
+}
+
 /// Per-device-family sensitivity constants — the panel owns these (D7: "the
 /// panel owns the constant so it can tune per input device", already the
 /// convention `ViewportCamera`'s own doc comments state). Mouse and trackpad
@@ -160,6 +173,19 @@ mod tests {
         assert_eq!(gizmo_point(rect, (400, 200), (f32::NAN, 200.0)), None);
         assert_eq!(gizmo_point(manifold_ui::Rect::new(0.0, 0.0, 0.0, 100.0),
             (400, 200), (20.0, 20.0)), None);
+    }
+
+    /// The view the pointer maps into carries render pixels per point: 1 at
+    /// 1x, 2 at 2x, and a 4K output in a 458 pt preview spans 4.7.
+    #[test]
+    fn gizmo_pointer_carries_render_pixels_per_point() {
+        let camera = manifold_node_engine::scene::camera::Camera::default_perspective();
+        for ((w, h), rect_h, want) in [((640, 360), 360.0, 1.0), ((1280, 720), 360.0, 2.0), ((3840, 2160), 458.0, 2160.0 / 458.0)] {
+            let rect = manifold_ui::Rect::new(10.0, 20.0, rect_h * 16.0 / 9.0, rect_h);
+            let view = crate::scene_gizmo::GizmoView::new(camera, w, h);
+            let (view, _) = gizmo_pointer(rect, view, (30.0, 40.0)).expect("inside");
+            assert!((view.px_per_point - want).abs() < 1e-4, "{w}x{h} in {rect_h} pt: {}", view.px_per_point);
+        }
     }
 
     #[test]

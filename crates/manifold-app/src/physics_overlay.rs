@@ -143,7 +143,7 @@ impl PreviewGizmo {
 
     fn view(&self) -> Option<GizmoView> {
         let (frame, (width, height)) = self.shown.as_ref()?;
-        Some(self.navigated.unwrap_or(GizmoView { camera: frame.camera, width: *width, height: *height }))
+        Some(self.navigated.unwrap_or(GizmoView::new(frame.camera, *width, *height)))
     }
 
     /// The shown frame's chrome and the selected item's handles, through
@@ -206,7 +206,7 @@ impl PreviewGizmo {
         let inside = fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
         self.focused = inside && layer.is_some();
         let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view()) else { return false };
-        let Some(point) = crate::viewport_input::gizmo_point(fit, (view.width, view.height), (pos.x, pos.y)) else { return false };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return false };
         let graph = GraphTarget::Generator(layer.clone());
         let Some(scene) = crate::scene_gizmo::authored_def(&ctx.project, &graph).as_ref().and_then(SceneVm::from_def) else {
             return false;
@@ -244,8 +244,8 @@ impl PreviewGizmo {
             drag.view = view;
         }
         let view = drag.view;
-        if let Some(point) = fit.and_then(|fit| crate::viewport_input::gizmo_point(fit, (view.width, view.height), (pos.x, pos.y))) {
-            drag.gesture.drag_to(ctx, &view.camera, view.width, view.height, point);
+        if let Some((view, point)) = fit.and_then(|fit| crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y))) {
+            drag.gesture.drag_to(ctx, &view, point);
         }
         true
     }
