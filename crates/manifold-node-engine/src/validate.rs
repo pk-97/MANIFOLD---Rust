@@ -275,6 +275,17 @@ pub fn validate_def(
         return report;
     }
 
+    // The project and preset-file loaders refuse a graph that fails the
+    // schema (version, modifier stack, shape naming undeclared card params),
+    // so the validator refuses it too.
+    if let Err(error) = manifold_core::scene_modifier_preset::validate_scene_modifier_schema(def) {
+        report.errors.push(ValidationIssue {
+            node_id: None,
+            type_id: None,
+            port: None,
+            message: error.to_string(),
+        });
+    }
     if kind == ValidateKind::Generator {
         report.errors.extend(check_one_scene(def));
     }
