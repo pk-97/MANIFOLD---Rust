@@ -18,14 +18,19 @@ use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate};
 use manifold_core::{GraphTarget, NodeId};
 
-/// The Physics World's shared controls, as the node registry declares them;
-/// every other type declares nothing here, so a lifted control keeps its
-/// saved spec.
+/// The Physics World's shared controls and the ports the test liquid's domain
+/// takes them on, as the node registry declares them (a real liquid domain
+/// declares the same five); every other type declares nothing here, so a
+/// lifted control keeps its saved spec.
 fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
-    if type_id != "node.physics_world" {
-        return Vec::new();
+    match type_id {
+        "node.physics_world" => world_metadata(),
+        MATTER_DOMAIN_TYPE_ID => ["gravity_x", "gravity", "gravity_z", "speed", "reset"]
+            .into_iter()
+            .map(|name| scene_param_meta(name, name))
+            .collect(),
+        _ => Vec::new(),
     }
-    world_metadata()
 }
 
 inventory::submit! {
@@ -430,6 +435,21 @@ fn scene_physics_undo_redo_preserves_fluid_ids_and_original_graph() {
 
     cmd.execute(&mut project);
     assert_eq!(graph(&project, &target), &after);
+}
+
+/// A liquid whose domain declares none of the World's ports is refused, so no
+/// wire lands on a port the domain does not take.
+#[test]
+fn scene_physics_liquid_without_world_ports_is_refused() {
+    let def = render_scene_graph(1, false);
+    let (project, target) = project_with_graph(def);
+    let mut template = liquid_template();
+    let live = template.group.group.as_mut().unwrap().nodes.iter_mut().find(|node| node.id == 1).unwrap();
+    live.group.as_mut().unwrap().nodes[0].type_id = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID.into();
+    assert_eq!(
+        insert(&project, &target, graph(&project, &target), template).err().as_deref(),
+        Some("This liquid does not take the Physics World's controls")
+    );
 }
 
 #[test]
