@@ -98,44 +98,76 @@ between this doc and execution.
   preview context only; light billboards, camera frustum lines, ground grid drawn as
   editor-only overlay. Tier 2 (v1, Peter: "gizmos are important"): click-select via
   ID-buffer pick pass; move/rotate/scale gizmos.
-- **D7a — Scene gizmos on the main output preview (amends D7).** The Scene panel's
-  global "Show gizmos" switch draws the ground grid, a marker per light and every
-  accepted fluid domain box (forces, colliders, bodies, sources and drains next)
-  over the main window's output preview, for the scene the panel shows, through
-  the show camera rather than an editor camera. No camera frustum: the preview
-  already looks through that camera. It works without the graph editor and is
-  editor chrome like the rest of D7: UI-only state, read-only, drawn by the UI
-  over the preview blit, never in a render pass, and it changes no camera, graph
-  or history (D9 holds). The view comes from the content thread: `render_scene`
-  keeps the camera and light positions of the frame it drew
-  (`EffectNode::rendered_camera` and `rendered_lights`), and after the generators
-  render, the pipeline records them, with the content frame number and the
-  scene's accepted fluid domains, for the output surface being written
-  (`physics_overlay.rs`). A layer that did not render that frame (clip ended,
-  occluded, or the scene bailed early) records nothing. The UI uses the entry only
-  when its frame matches the frame the preview bridge published, and projects
-  through `Camera::project_to_pixel` at the output size into the aspect-fit
-  picture, so the lines follow looped, orbiting or automated cameras frame for
-  frame. Limits: a layer transform or a generator rendered at a different aspect
-  from the output is not accounted for, and the separate Output window gets no
-  overlay.
-- **D8 — Gizmos are param editors.** A gizmo drag writes the object's `transform_n`
-  params (or a light's pos/aim, a camera's pos) **through `EditingService` like any
-  slider** — undoable, bindable, nothing new in the mutation model. **If the param is
-  wired** (transform driven by upstream animation), the gizmo shows locked — the
-  viewport never fights the graph.
-  **[AMENDED 2026-07-06 — semantics unchanged, substrate moved: the params a gizmo
-  writes are the object's `node.transform_3d` params (found by following the
-  `transform_n` wire); a wired scalar port on that atom locks that gizmo AXIS.
-  P6 entry state: SCENE_BUILD P2 landed; unwired `transform_n` → gizmo offers to
-  create the atom (briefed in P6, not in SCENE_BUILD).]** Consequence of gizmos-as-params: anything you can
-  grab in the viewport, you can perform from a knob.
+- **D7a — The main output preview is a gizmo host (amends D7).** The main
+  window's output preview hosts the gizmo core (`viewport_gizmo.rs`) beside the
+  graph editor viewport: the same pick, drag and handle code, with no second
+  implementation. All chrome on either host (ground grid, light markers, domain
+  boxes, physics shapes, handles) comes from one composition entry in the gizmo
+  core that both hosts call. Two layers, two jobs:
+  - *What physics did* comes from the content thread's overlay frame
+    (`physics_overlay.rs`): the camera and light positions `render_scene` drew
+    with (`EffectNode::rendered_camera` and `rendered_lights`), and the shapes
+    only the solver knows, reported by each GPU liquid domain (FLIP and MPM)
+    through `PhysicsNode`: its accepted domain layout, the pool under the fill
+    height and the initial column as the seeded sites or cells, a box per
+    collider, coupled body, inflow and drain at the pose of its first tick row
+    with its mesh bounds scaled, and one shape per engine force field kind at
+    its applied, modulated values (a sphere for radial and vortex, a direction
+    arrow with its sign for uniform and the vortex axis). One colour per family.
+    A sampled grid force and a rigid-only scene's bodies draw nothing: neither
+    has a positioned runtime shape. The frame never carries declared shapes.
+  - *Handles of the selected item* come from its shape declaration
+    (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model))
+    over `SceneVm` built from the UI's project snapshot, at the authored values
+    the knob shows. No host keeps editor-side domain state.
+
+  The pipeline records each frame's entry, with the content frame number, for
+  the output surface being written; a layer that did not render that frame
+  (clip ended, occluded, or the scene bailed early) records nothing. The UI uses
+  the entry only when its frame matches the frame the preview bridge published,
+  and projects through `Camera::project_to_pixel` at the output size into the
+  aspect-fit picture (`video_fit_rect`), so lines, picks and drags follow looped,
+  orbiting or automated cameras frame for frame. Input picks against the same
+  matched frame and fit rect the eye sees. No camera frustum: the preview
+  already looks through that camera. Everything sits behind the Scene panel's
+  Show gizmos switch; session mode forces it off. When an effect follows the
+  scene layer (warp, mirror, feedback), handles fade, because the picture no
+  longer lines up with the scene. Limits: a layer transform or a generator
+  rendered at a different aspect from the output is not accounted for, and the
+  separate Output window gets no chrome.
+- **D8 — Gizmos are param editors.** Every handle writes a param through
+  `EditingService`: an object's `node.transform_3d` params (found by following
+  the `transform_n` wire), a light's pos and aim, a camera's pos, and each
+  handle its shape declaration names. A gizmo drag edits its param exactly as
+  the knob's drag of that param does: the same scrub gesture
+  (`PanelAction::Scrub` with `ValueRef::Param`, `ScrubPhase` Begin, Move,
+  Commit; `crates/manifold-ui/src/panels/scrub.rs`, handled in
+  `crates/manifold-app/src/ui_bridge/scrub.rs`), so live non-undoable writes
+  while dragging and one undo entry on release. When the param is bound to a
+  card param, the gizmo scrubs the card param, as the card's knob does. Domain
+  and object drags both follow this rule; neither keeps a private path. Today
+  they differ: the object drag sends one undoable `SetGraphNodeParamCommand`
+  per pointer move (`window_input.rs` `editor_viewport_gizmo_drag_move`), and
+  the domain drag keeps a UI-side draft (`FluidDomainDrag`,
+  `fluid_domain_edit.rs`) that changes nothing live and commits one
+  `ContentCommand::FluidDomainEdit` on release (`editor_input.rs`). The draft
+  exists because the editor positioned domains from the runtime's accepted
+  layout rather than the authored transform, so it had to revalidate against
+  content before writing. Handles now sit at the authored values (D7a), so
+  that reason is gone and both paths are replaced by the scrub. A wired param
+  shows its handle locked, axis by axis; the viewport never fights the graph.
+  An unwired `transform_n` gets its atom created on first drag. Anything you
+  can grab in the viewport, you can perform from a knob.
 - **D9 — Show state and output stay isolated from the viewport.** Editor camera,
   overlays, pick passes, render history and output storage belong to the editor
   view. The viewport may borrow the show scene's resolved inputs; it must not
   evaluate a second simulation or change the show camera, graph or history. The
   show output remains byte-identical at matching frames with the viewport open or
-  closed. The extra render pass has a GPU cost; it introduces no simulation clock.
+  closed, and with Show gizmos on or off on the main preview: chrome is drawn by
+  the UI over the preview blit, never in a render pass. Preview-only navigation
+  on the main preview (orbit, pan, dolly) renders an extra view and never moves
+  the output camera; the output keeps looking through the show camera. The extra
+  render pass has a GPU cost; it introduces no simulation clock.
 - **D10 — Ease ships as content:** a bundled **Scene starter preset** (mesh + PBR
   material + sun & rim point light + atmosphere haze + orbit camera, good at
   defaults) plus component-library entries once components land. Three clicks: drop
