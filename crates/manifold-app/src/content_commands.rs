@@ -725,6 +725,14 @@ impl ContentThread {
         report
     }
 
+    /// What the editor watches moved: its viewport request is stale. An
+    /// output-preview request names its own scene and stays.
+    fn clear_editor_scene_viewport(&mut self) {
+        if self.content_pipeline.scene_viewport_host() == Some(crate::scene_viewport::ViewportHost::GraphEditor) {
+            self.content_pipeline.set_scene_viewport_request(None);
+        }
+    }
+
     fn report_graph_edit_rejection(&mut self, message: String) {
         log::warn!("{message}");
         let sequence = self.graph_edit_diagnostic.as_ref().map_or(1, |event| event.sequence.wrapping_add(1));
@@ -799,7 +807,7 @@ impl ContentThread {
             ContentCommand::WatchEffectGraph(_)
             | ContentCommand::WatchGeneratorGraph(_)
             | ContentCommand::WatchGraphTarget(_) => {
-                self.content_pipeline.set_scene_viewport_request(None);
+                self.clear_editor_scene_viewport();
                 // One unified watched target; only one canvas active at a time.
                 self.watched_graph_target = crate::graph_snapshot::watch_command_target(&cmd).flatten();
                 // Switching what's watched invalidates any node preview.
@@ -807,7 +815,7 @@ impl ContentThread {
                 self.modifier_preview_context = None;
             }
             ContentCommand::SetModifierPreviewContext { scope, object } => {
-                self.content_pipeline.set_scene_viewport_request(None);
+                self.clear_editor_scene_viewport();
                 self.modifier_preview_context = match &self.watched_graph_target {
                     Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
                         Some(std::sync::Arc::new(manifold_node_engine::runtime::ModifierPreviewContext {
@@ -818,15 +826,20 @@ impl ContentThread {
             }
             ContentCommand::SetGraphPreviewNode(node_id) => {
                 if self.preview_graph_node != node_id {
-                    self.content_pipeline.set_scene_viewport_request(None);
+                    self.clear_editor_scene_viewport();
                 }
                 self.preview_graph_node = node_id;
             }
             ContentCommand::SetSceneViewport(request) => {
-                if request.as_ref().is_none_or(|request|
-                    Some(&request.target) == self.watched_graph_target.as_ref()
-                        && Some(&request.node) == self.preview_graph_node.as_ref()
-                        && request.modifier == self.modifier_preview_context)
+                // An editor request must still name what the editor watches; the
+                // output preview names its own scene (D7a).
+                if request.as_ref().is_none_or(|request| match request.host {
+                    crate::scene_viewport::ViewportHost::GraphEditor =>
+                        Some(&request.target) == self.watched_graph_target.as_ref()
+                            && Some(&request.node) == self.preview_graph_node.as_ref()
+                            && request.modifier == self.modifier_preview_context,
+                    crate::scene_viewport::ViewportHost::OutputPreview => true,
+                })
                 {
                     self.content_pipeline.set_scene_viewport_request(request);
                 }
@@ -834,6 +847,12 @@ impl ContentThread {
             ContentCommand::SetPhysicsOverlay(layer) => {
                 self.content_pipeline.set_physics_overlay(layer);
             }
+            #[cfg(target_os = "macos")]
+            ContentCommand::SetSelectionOutline { output, viewport } => {
+                self.content_pipeline.set_selection_outline(output, viewport);
+            }
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::SetSelectionOutline { .. } => {}
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
             }
@@ -2269,5 +2288,58 @@ mod warmup_tests {
         let report = thread.run_warmup(&cmd_rx, &state_tx);
         assert!(report.interrupted, "the held quit interrupts the warmup");
         assert!(matches!(thread.held_commands.front(), Some(ContentCommand::Shutdown)), "the quit stays queued");
+    }
+}
+
+#[cfg(test)]
+mod scene_viewport_host_tests {
+    use crate::content_command::ContentCommand::{SetGraphPreviewNode, SetSceneViewport, WatchGraphTarget};
+    use crate::content_thread::ContentThread;
+    use crate::scene_viewport::{SceneViewportNavigation, SceneViewportRequest, ViewportHost};
+    use manifold_core::{GraphTarget, NodeId};
+    use std::sync::Arc;
+
+    fn thread_with_scene() -> (ContentThread, GraphTarget) {
+        let mut project = manifold_core::project::Project::default();
+        let layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
+        let target = GraphTarget::Generator(layer.layer_id.clone());
+        project.timeline.layers.push(layer);
+        (crate::headless_harness::headless_content_thread(project, 64, 64), target)
+    }
+
+    fn request(host: ViewportHost, target: &GraphTarget) -> Option<Arc<SceneViewportRequest>> {
+        Some(SceneViewportNavigation::new(host, 64, 64).request(target, &NodeId::new("scene"), None, None))
+    }
+
+    /// One request, owned by one host at a time (D7a): the editor may ask
+    /// only for what it watches and loses its request when that moves; the
+    /// output preview names its own scene, outlives editor watch changes,
+    /// and each host's request replaces the other's in either order. None
+    /// of it edits the show (D9).
+    #[test]
+    fn each_host_keeps_the_one_request_by_its_own_rules() {
+        let (mut thread, target) = thread_with_scene();
+        let version = thread.editing_service.data_version();
+        let send = |thread: &mut ContentThread, cmd| {
+            thread.handle_command(cmd);
+            thread.content_pipeline.scene_viewport_host()
+        };
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), None,
+            "the editor cannot ask for a scene it does not watch");
+        send(&mut thread, WatchGraphTarget(Some(target.clone())));
+        send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("scene"))));
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), Some(ViewportHost::GraphEditor));
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::OutputPreview, &target))), Some(ViewportHost::OutputPreview),
+            "preview navigation takes the editor's request");
+        assert_eq!(send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))), Some(ViewportHost::OutputPreview),
+            "the preview's request does not follow what the editor watches");
+        assert_eq!(send(&mut thread, WatchGraphTarget(None)), Some(ViewportHost::OutputPreview));
+        send(&mut thread, WatchGraphTarget(Some(target.clone())));
+        send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("scene"))));
+        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), Some(ViewportHost::GraphEditor),
+            "the editor's viewport takes the preview's request");
+        assert_eq!(send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))), None,
+            "what the editor watches moved: its request is stale");
+        assert_eq!(thread.editing_service.data_version(), version, "navigation never edits the show");
     }
 }

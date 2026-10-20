@@ -61,6 +61,7 @@ impl RenderScene {
             prev_cam_state: None,
             rendered_camera: None,
             rendered_lights: Vec::new(),
+            selection: Default::default(),
             prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,

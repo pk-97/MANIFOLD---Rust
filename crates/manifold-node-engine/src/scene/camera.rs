@@ -419,6 +419,28 @@ impl Camera {
         let view_z = dot3(sub3(world, self.pos), self.fwd);
         Some(PixelProjection { px, py, ndc, depth: clip[2] / clip[3], view_z })
     }
+
+    /// The world ray under pixel (`px`, `py`) of a `width x height` render:
+    /// its origin and unit direction. The inverse of
+    /// [`Self::project_to_pixel`]: every point on the ray in front of the
+    /// camera projects back to that pixel.
+    pub fn pixel_ray(&self, px: f32, py: f32, width: u32, height: u32) -> ([f32; 3], [f32; 3]) {
+        let aspect = width as f32 / height.max(1) as f32;
+        let x = px / width.max(1) as f32 * 2.0 - 1.0;
+        let y = 1.0 - py / height.max(1) as f32 * 2.0;
+        let across = |base: [f32; 3], sx: f32, sy: f32| -> [f32; 3] {
+            std::array::from_fn(|i| base[i] + self.right[i] * sx + self.up[i] * sy)
+        };
+        match self.mode {
+            CameraMode::Perspective { fov_y } => {
+                let t = (fov_y * 0.5).tan();
+                (self.pos, normalize3(across(self.fwd, x * t * aspect, y * t)))
+            }
+            CameraMode::Orthographic { half_height } => {
+                (across(self.pos, x * half_height * aspect, y * half_height), self.fwd)
+            }
+        }
+    }
 }
 
 /// Result of [`Camera::project_to_pixel`] — the committed CPU oracle shape
@@ -525,6 +547,25 @@ fn ortho_rh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A point along any pixel's ray projects back to that pixel, rolled,
+    /// perspective or orthographic.
+    #[test]
+    fn pixel_ray_inverts_project_to_pixel() {
+        let rolled = Camera::orbit_perspective(0.7, 0.4, 9.0, 0.9, 0.5, 0.6, 0.1, 200.0);
+        let mut ortho = rolled;
+        ortho.mode = CameraMode::Orthographic { half_height: 4.0 };
+        for cam in [rolled, ortho] {
+            for (px, py) in [(0.0, 0.0), (320.0, 240.0), (611.5, 37.25), (100.0, 470.0)] {
+                let (origin, dir) = cam.pixel_ray(px, py, 640, 480);
+                for s in [0.5_f32, 6.0, 40.0] {
+                    let point = std::array::from_fn(|i| origin[i] + dir[i] * s);
+                    let p = cam.project_to_pixel(point, 640, 480).expect("in front");
+                    assert!((p.px - px).abs() < 0.02 && (p.py - py).abs() < 0.02, "{:?} at {s}: {p:?}", (px, py));
+                }
+            }
+        }
+    }
 
     #[test]
     fn orbit_perspective_matches_legacy_eye_formula() {

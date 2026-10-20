@@ -115,6 +115,91 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
     assert!(rt_dispatches > 0, "proof must actually exercise ray tracing");
 }
 
+/// The output preview's navigation (A2) on the runtime it drives: the
+/// scene reports the node and camera that rendered the show, navigation
+/// seeded from that camera reproduces the show picture, and after an orbit
+/// and a dolly the viewport looks from elsewhere while the show output
+/// stays byte-identical to a runtime with no viewport (D9). Writes the after
+/// render: show, seeded viewport, navigated viewport, side by side.
+#[test]
+fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() {
+    use manifold_gpu::GpuTextureFormat;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::headless_readback::{mean_abs_half_diff, readback_raw_halves, readback_tonemapped_rgba8};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::runtime::PresetRuntime;
+    use manifold_node_engine::scene::scene_viewport::SceneViewportConfig;
+    use manifold_node_engine::scene::viewport_camera::ViewportCamera;
+
+    const W: u32 = 320;
+    const H: u32 = 200;
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let json = scene_json();
+    let build = || PresetRuntime::from_json_str_with_device(
+        &json, &registry, std::sync::Arc::clone(&h.device), W, H, GpuTextureFormat::Rgba16Float, None,
+    ).unwrap();
+    let (mut control, mut viewed) = (build(), build());
+    let target = RenderTarget::new(&h.device, W, H, GpuTextureFormat::Rgba16Float, "preview-nav-show");
+    let mut frame_ctx = ctx(h);
+    (frame_ctx.width, frame_ctx.height, frame_ctx.output_width, frame_ctx.output_height) = (W, H, W, H);
+    frame_ctx.aspect = W as f32 / H as f32;
+    let render = |runtime: &mut PresetRuntime, frame_ctx: &PresetContext| {
+        let mut enc = h.device.create_encoder("preview-nav-frame");
+        runtime.render(&mut GpuEncoder::new(&mut enc, &h.device), &target.texture, frame_ctx, &ParamManifest::default());
+        enc.commit_and_wait_completed();
+        (readback_raw_halves(&h.device, &target.texture, W, H), readback_tonemapped_rgba8(&h.device, &target.texture, W, H))
+    };
+    let viewport = |runtime: &PresetRuntime| {
+        let texture = runtime.scene_viewport_texture().expect("the viewport renders");
+        (readback_raw_halves(&h.device, texture, W, H), readback_tonemapped_rgba8(&h.device, texture, W, H))
+    };
+
+    // Two frames settle the show; then the scene reports what rendered it.
+    let mut show = Default::default();
+    for frame in 0..2 {
+        frame_ctx.frame_count = frame;
+        render(&mut control, &frame_ctx);
+        show = render(&mut viewed, &frame_ctx);
+    }
+    let (node, show_camera) = viewed.write_rendered_view(&mut Vec::new()).expect("the scene reports its camera");
+    assert_eq!(node, NodeId::new("scene"));
+
+    let mut config = SceneViewportConfig { camera: ViewportCamera::seeded_from(&show_camera), width: W, height: H };
+    let mut frames = Vec::new();
+    for (frame, moved) in [(2, false), (3, false), (4, true), (5, true)] {
+        if moved && frame == 4 {
+            config.camera.orbit(120.0, -30.0, 0.006);
+            config.camera.dolly(2.0, 0.08);
+        }
+        viewed.set_scene_viewport_watched(&node, config).unwrap();
+        frame_ctx.frame_count = frame;
+        let (expected, _) = render(&mut control, &frame_ctx);
+        let (actual, rgba) = render(&mut viewed, &frame_ctx);
+        assert!(expected == actual, "preview navigation changed the show output on frame {frame}");
+        show = (actual, rgba);
+        frames.push(viewport(&viewed));
+    }
+    let seeded = &frames[1];
+    let navigated = &frames[3];
+    let seeded_diff = mean_abs_half_diff(&seeded.0, &show.0);
+    let navigated_diff = mean_abs_half_diff(&navigated.0, &show.0);
+    assert!(seeded_diff < 0.01, "seeded navigation starts on the show picture: mean diff {seeded_diff}");
+    assert!(navigated_diff > 4.0 * seeded_diff.max(0.005), "navigation looks from elsewhere: mean diff {navigated_diff}");
+
+    let mut strip = vec![0u8; (3 * W * H * 4) as usize];
+    for (panel, rgba) in [&show.1, &seeded.1, &navigated.1].into_iter().enumerate() {
+        for row in 0..H as usize {
+            let src = &rgba[row * W as usize * 4..(row + 1) * W as usize * 4];
+            let dst = (row * 3 + panel) * W as usize * 4;
+            strip[dst..dst + src.len()].copy_from_slice(src);
+        }
+    }
+    let path = "/tmp/preview_navigation_after.png";
+    std::fs::write(path, encode_rgba8_png(&strip, 3 * W, H)).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    eprintln!("[A2] wrote {path}: show | seeded preview | navigated preview");
+}
+
 /// Ground plane lit by one sun, wired to an `orbit_camera` (the SHOW
 /// camera) — identical scene to `scene_viewport_navigate.rs`'s proof scene,
 /// deliberately: this test is about session lifecycle/dirty-tracking, not

@@ -140,6 +140,7 @@ enum StepFlow {
 mod node_pairs;
 mod array_growth;
 mod substep_region;
+mod scene_viewport;
 #[cfg(test)]
 mod array_passthrough_tests;
 
@@ -215,6 +216,8 @@ pub struct Executor {
         Box<dyn crate::scene::scene_viewport::ViewportPass>,
     )>,
     scene_viewport_captured: bool,
+    /// Render slots the viewport outlines (D-102); a new pass takes them.
+    scene_viewport_selection: Vec<u32>,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
     /// the active quality column (realtime vs export). Default = live constants
     /// so tests and non-RT graphs run unchanged. Set per frame via
@@ -596,6 +599,7 @@ impl Executor {
             preview_target: None,
             scene_viewport: None,
             scene_viewport_captured: false,
+            scene_viewport_selection: Vec::new(),
             rt_quality: crate::exec::effect_node::RtQuality::default(),
             sim_step: crate::exec::effect_node::SimStep::default(),
             sim_metrics: Default::default(),
@@ -904,55 +908,6 @@ impl Executor {
     /// can hand it to the integration layer for downscaling.
     pub fn set_preview_target(&mut self, node: Option<NodeInstanceId>) {
         self.preview_target = node;
-    }
-
-    pub(crate) fn set_scene_viewport(
-        &mut self,
-        node: NodeInstanceId,
-        config: crate::scene::scene_viewport::SceneViewportConfig,
-        make: impl FnOnce() -> Option<Box<dyn crate::scene::scene_viewport::ViewportPass>>,
-    ) -> bool {
-        if let Some((target, current, _)) = self.scene_viewport.as_mut()
-            && *target == node
-        {
-            *current = config;
-        } else {
-            let Some(pass) = make() else { return false; };
-            self.scene_viewport = Some((node, config, pass));
-        }
-        self.scene_viewport_captured = false;
-        true
-    }
-
-    pub(crate) fn clear_scene_viewport(&mut self) {
-        self.scene_viewport = None;
-        self.scene_viewport_captured = false;
-    }
-
-    pub(crate) fn reset_scene_viewport_state(&mut self) {
-        if let Some((_, _, pass)) = self.scene_viewport.as_mut() {
-            pass.clear_state();
-        }
-        self.scene_viewport_captured = false;
-    }
-
-    pub(crate) fn scene_viewport_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
-        self.scene_viewport.as_ref()
-            .filter(|_| self.scene_viewport_captured)
-            .and_then(|(_, _, pass)| pass.texture())
-    }
-
-    pub(crate) fn scene_viewport_status(&self) -> Option<crate::runtime::frame_status::FrameRenderStatus> {
-        self.scene_viewport.as_ref().map(|(_, _, pass)| {
-            if self.scene_viewport_captured { pass.status() }
-            else { crate::runtime::frame_status::FrameRenderStatus::PendingGeometry }
-        })
-    }
-
-    pub(crate) fn scene_viewport_errors(&self) -> &[String] {
-        self.scene_viewport.as_ref()
-            .filter(|_| self.scene_viewport_captured)
-            .map(|(_, _, pass)| pass.errors()).unwrap_or(&[])
     }
 
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set the per-frame RT quality values

@@ -24,7 +24,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 /// raised on Y, RED so its own presence/absence in-frame is unmistakable).
 /// One shadow-casting sun overhead-and-to-one-side (matches
 /// `render_scene_shadows.rs`'s decisive-scene shape).
-fn scene_json(occluder_visible: f32) -> String {
+pub(crate) fn scene_json(occluder_visible: f32) -> String {
     format!(
         r#"{{"version":2,"name":"RenderSceneObjectVisibilityProof","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},

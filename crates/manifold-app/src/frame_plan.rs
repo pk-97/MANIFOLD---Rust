@@ -334,6 +334,10 @@ pub(crate) struct FrameInputs {
     /// The main preview's gizmo mode and picked shape
     /// (`PreviewGizmo::version`): the handles it draws change.
     pub gizmo_view: u64,
+    /// The preview's navigation session and its newest published frame
+    /// (`PreviewNavigation::frame_input`): a navigated frame, or the end of
+    /// navigation, redraws the preview.
+    pub preview_navigation: (u64, u64),
 }
 
 impl FrameInputs {

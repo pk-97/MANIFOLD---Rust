@@ -1,4 +1,6 @@
 mod trigger_targets;
+mod scene_viewport_capture;
+mod editing_chrome;
 #[cfg(all(test, target_os = "macos"))]
 mod trigger_lane_force_tests;
 
@@ -1005,9 +1007,13 @@ pub struct ContentPipeline {
     /// Pulled into [`ContentState`](crate::content_state::ContentState) each
     /// frame so the editor can show a value inspector for non-image nodes.
     last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
-    scene_viewport_request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>,
-    scene_viewport_observations: crate::scene_viewport::SceneViewportObservations,
+    /// The scene viewport (D7a): one request, its observations and
+    /// its own bridge, never the workspace preview bridge (D9).
+    scene_viewport: scene_viewport_capture::SceneViewportCapture,
     physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
+    /// The selection outline's requests and mask bridges (D-102).
+    #[cfg(target_os = "macos")]
+    outline: crate::selection_outline::OutlineCapture,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
@@ -1180,9 +1186,10 @@ impl ContentPipeline {
             node_preview_modifier: None,
             modifier_editor_watched: false,
             last_node_preview_info: None,
-            scene_viewport_request: None,
-            scene_viewport_observations: Default::default(),
+            scene_viewport: Default::default(),
             physics_overlay: Default::default(),
+            #[cfg(target_os = "macos")]
+            outline: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
             clip_desc_scratch: Vec::new(),
@@ -1789,6 +1796,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 .is_none_or(|b| b.is_reusable_ephemeral(slot, frame))
         };
         preview_ok && editor_ok(&self.node_preview_bridge) && editor_ok(&self.node_atlas_bridge)
+            && editor_ok(&self.scene_viewport.bridge)
     }
 
     /// Register a GPU notification for when the current surface becomes
@@ -1966,25 +1974,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// holding the watched effect preserves the selected node's output.
     pub fn set_node_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
         self.node_preview_request = request;
-    }
-
-    pub fn set_scene_viewport_request(&mut self, request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>) {
-        if request.is_none() {
-            self.scene_viewport_observations.frames.fill(None);
-        }
-        self.scene_viewport_request = request;
-    }
-
-    pub fn scene_viewport_frames(&self) -> &crate::scene_viewport::SceneViewportFrames {
-        &self.scene_viewport_observations.frames
-    }
-
-    pub fn set_physics_overlay(&mut self, layer: Option<manifold_core::LayerId>) {
-        self.physics_overlay.set_layer(layer);
-    }
-
-    pub fn physics_overlay_frames(&self) -> &crate::physics_overlay::PhysicsOverlayFrames {
-        &self.physics_overlay.frames
     }
 
     /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
@@ -2393,7 +2382,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Reset the node-preview inspector info; the active preview path below
         // repopulates it for this frame.
         self.last_node_preview_info = None;
-        self.scene_viewport_observations.frames[self.write_surface_index] = None;
+        self.scene_viewport.observations.frames[self.write_surface_index] = None;
         // Reset the editor canvas's live node-param values; the watched effect
         // or generator path below repopulates them post-render so the canvas
         // shows live (modulated) values, not the frozen authoring def. Stays
@@ -2566,7 +2555,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             None => gen_renderer.clear_preview(),
                         }
 
-                        let scene_request = self.scene_viewport_request.as_ref().and_then(|request| {
+                        let scene_request = self.scene_viewport.request.as_ref().and_then(|request| {
                             match request.target.host_target() {
                                 Some(manifold_core::GraphTarget::Generator(layer)) =>
                                     Some((layer.clone(), request.node.clone(), request.config)),
@@ -2574,7 +2563,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             }
                         });
                         gen_renderer.set_scene_viewport_request(scene_request,
-                            self.scene_viewport_request.as_ref().and_then(|request| request.modifier.clone()));
+                            self.scene_viewport.request.as_ref().and_then(|request| request.modifier.clone()));
+                        #[cfg(target_os = "macos")]
+                        self.outline.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -2600,6 +2591,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
                 generators?.write_physics_overlay(layer, domains, lights, gizmos)
             });
+            // Selection masks and a generator viewport frame, beside the pictures (D9).
+            #[cfg(target_os = "macos")]
+            if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,
+                generators, &mut self.physics_overlay, &mut self.scene_viewport)
+            {
+                self.copy_scene_viewport(&mut gen_enc, copy);
+            }
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
             // or clear to black when nothing was captured (non-texture node).
@@ -2608,25 +2606,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 let gen_ref = renderers
                     .iter()
                     .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
-                let viewport = self.scene_viewport_request.as_ref().filter(|request|
-                    matches!(request.target.host_target(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == layer_id));
-                let node_tex = gen_ref.and_then(|gr| if viewport.is_some() {
-                    gr.scene_viewport_texture(layer_id)
-                } else { gr.preview_texture(layer_id) });
-                if let Some(request) = viewport {
-                    self.scene_viewport_observations.scratch.clear();
-                    if let Some(gr) = gen_ref {
-                        gr.write_scene_viewport_fluid_domains(layer_id, &mut self.scene_viewport_observations.scratch);
-                    }
-                    let status = gen_ref.map(|gr| gr.scene_viewport_status(layer_id))
-                        .unwrap_or(Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime));
-                    self.scene_viewport_observations.record(self.write_surface_index, frame_count,
-                        self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
-                        request.clone(), status);
-                }
-                let encoding = if viewport.is_some() { Default::default() } else { gen_ref
+                let node_tex = gen_ref.and_then(|gr| gr.preview_texture(layer_id));
+                let encoding = gen_ref
                     .map(|gr| gr.preview_encoding(layer_id))
-                    .unwrap_or_default() };
+                    .unwrap_or_default();
                 // Value-inspector info for a non-image node: its live scalar I/O.
                 if let Some(node_id) = node_id_opt {
                     let (inputs, outputs) = gen_ref
@@ -2645,7 +2628,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         &mut gen_enc,
                         node_tex,
                         self.node_preview_textures[self.write_surface_index].as_ref(),
-                        self.node_preview_normalize && viewport.is_none(),
+                        self.node_preview_normalize,
                         encoding,
                         &self.preview_pipelines(),
                         self.preview_sampler.as_ref(),
@@ -2910,7 +2893,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
-            self.compositor.set_scene_viewport_request(self.scene_viewport_request.as_ref().and_then(|request| {
+            self.compositor.set_scene_viewport_request(self.scene_viewport.request.as_ref().and_then(|request| {
                 match &request.target {
                     manifold_core::GraphTarget::Effect(effect) => Some((effect.clone(), request.node.clone(), request.config)),
                     _ => None,
@@ -3428,6 +3411,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 );
             }
 
+            // An effect scene's viewport frame goes to the viewport bridge
+            // (D7a), beside the output, never into it (D9).
+            if let Some(copy) = self.scene_viewport.observe_effect(&*self.compositor, self.write_surface_index, frame_count) {
+                self.copy_scene_viewport(&mut native_enc, copy);
+            }
+
             // ── Node-output preview (downscaled IOSurface) ──────────
             // If a node is being previewed and its chain captured a texture
             // this frame, downscale it into the node-preview surface. Reuses
@@ -3438,17 +3427,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // Value-inspector info for a previewed effect node: its live scalar
             // I/O + whether it produced an image. Built whenever a node is
             // watched, image or not.
-            let viewport = self.scene_viewport_request.as_ref()
-                .filter(|request| matches!(request.target, manifold_core::GraphTarget::Effect(_)));
-            if let Some(request) = viewport {
-                self.scene_viewport_observations.scratch.clear();
-                self.compositor.write_scene_viewport_fluid_domains(&mut self.scene_viewport_observations.scratch);
-                self.scene_viewport_observations.record(self.write_surface_index, frame_count,
-                    self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
-                    request.clone(), self.compositor.scene_viewport_status());
-            }
-            let node_tex = if viewport.is_some() { self.compositor.scene_viewport_texture() }
-                else { self.compositor.preview_texture() };
+            let node_tex = self.compositor.preview_texture();
             if let Some((_, Some(node_id))) = &self.node_preview_request {
                 let (inputs, outputs) = self.compositor.preview_scalar_io();
                 self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
@@ -3467,12 +3446,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 self.last_live_node_params = self.compositor.live_node_params();
             }
             if let Some(node_tex) = node_tex {
-                let encoding = if viewport.is_some() { Default::default() } else { self.compositor.preview_encoding() };
+                let encoding = self.compositor.preview_encoding();
                 Self::update_node_preview(
                     &mut native_enc,
                     node_tex,
                     self.node_preview_textures[self.write_surface_index].as_ref(),
-                    self.node_preview_normalize && viewport.is_none(),
+                    self.node_preview_normalize,
                     encoding,
                     &self.preview_pipelines(),
                     self.preview_sampler.as_ref(),
@@ -3614,6 +3593,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 } else {
                     None
                 };
+            // The viewport bridge publishes every frame a request is live: each
+            // such frame wrote or cleared its surface above.
+            let scene_viewport = self.scene_viewport.request.as_ref().and_then(|_| self.scene_viewport.bridge.clone());
             // Publish the thumbnail atlas only on frames a capture block actually
             // wrote it — never on an enabled-but-empty frame, which would flip the
             // UI to a freshly-cleared (all-transparent) surface and strobe black.
@@ -3631,6 +3613,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     b.publish_front(write_idx, frame_count);
                 }
                 if let Some(ref b) = node_preview {
+                    b.publish_front(write_idx, frame_count);
+                }
+                if let Some(ref b) = scene_viewport {
                     b.publish_front(write_idx, frame_count);
                 }
                 if let Some(ref b) = node_atlas {

@@ -8,6 +8,7 @@ mod render_scene_lights;
 mod render_scene_object_visibility;
 mod render_scene_pcss;
 mod render_scene_punctual_fidelity;
+mod render_scene_selection_mask;
 mod render_scene_shadows;
 mod render_scene_uv1_preservation;
 mod rt_6caster_shadow;

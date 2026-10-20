@@ -16,7 +16,8 @@ pub(super) struct RunnerGizmo {
     pub(super) host: PreviewGizmo,
     /// The content thread's gizmo report for the Scene panel's scene, one
     /// entry per frame. No scene renders here, so each entry carries
-    /// [`stand_in_camera`] and no lights, domains or physics shapes.
+    /// [`stand_in_camera`], a stand-in scene node and no lights, domains or
+    /// physics shapes.
     overlay: PhysicsOverlayObservations,
     overlay_frame: u64,
     /// The preview's handle grips this frame, the `gizmo` surface.
@@ -31,7 +32,7 @@ impl RunnerGizmo {
         self.overlay.set_layer(gizmo_layer.clone());
         if gizmo_layer.is_some() {
             self.overlay_frame += 1;
-            self.overlay.record(0, self.overlay_frame, |_, _, _, _| Some(stand_in_camera()));
+            self.overlay.record(0, self.overlay_frame, |_, _, _, _| Some((manifold_core::NodeId::new("scene"), stand_in_camera())));
         }
         data.content.physics_overlay_frames = self.overlay.frames.clone();
     }
@@ -39,7 +40,7 @@ impl RunnerGizmo {
     /// The preview host's present-time read of the report: no bridge here,
     /// so the newest entry is the one shown.
     pub(super) fn present(&mut self, ui: &UIRoot, data: &SceneData, stamps: &manifold_core::change::PartStamps) {
-        self.host.show(data.content.physics_overlay_frames[0].as_ref(), preview_dims(&data.project));
+        self.host.show(data.content.physics_overlay_frames[0].as_ref(), preview_dims(&data.project), None);
         let _ = self.host.compose(&data.project, &ui.scene_setup_panel, stamps);
         self.grips = preview_fit(ui, &data.project).map_or_else(Vec::new, |fit| self.host.grips(fit));
     }

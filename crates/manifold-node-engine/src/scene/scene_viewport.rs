@@ -87,4 +87,11 @@ pub trait ViewportPass: Send {
     fn status(&self) -> FrameRenderStatus;
     fn errors(&self) -> &[String];
     fn clear_state(&mut self);
+    /// The selection mask request, as on the scene node
+    /// ([`crate::exec::effect_node::EffectNode::set_selection_mask`]),
+    /// drawn through this view's camera.
+    fn set_selection_mask(&mut self, _slots: &[u32]) {}
+    fn selection_mask(&self) -> Option<&GpuTexture> {
+        None
+    }
 }
