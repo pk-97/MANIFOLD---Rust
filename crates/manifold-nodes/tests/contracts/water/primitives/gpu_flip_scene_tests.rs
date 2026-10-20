@@ -879,6 +879,74 @@ fn moving_obstacle_pushes(steps: usize) {
     assert!(ahead_speed > 0.5 * speed, "{steps} steps: the water ahead moves at {ahead_speed} m/s against the box's {speed}");
 }
 
+/// SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids) on GPU FLIP, the
+/// twin of `matter_open_mesh_collider_holds_liquid`: the Dam Break's box
+/// becomes an open, one-sided plane in Exact Mesh mode, wall to wall across
+/// the tank at 1 m, through the column. The default 0.05 m Shell Thickness
+/// is under two cells, so the shell is a cell either side of the plane. The
+/// column above it lands and rests on it, none of it falls through to the
+/// water below, and no live particle gets half a cell into the shell.
+#[test]
+fn gpu_flip_open_mesh_collider_holds_liquid() {
+    use manifold_node_engine::parameters::ParamValue;
+    let scene = WaterScene::dam_break(64).with_obstacle();
+    let h = scene.cell_size();
+    let plane_y = 1.0;
+    let half_shell = h.max(0.025);
+    let quad = manifold_nodes::testkit::open_mesh::write_open_quad_gltf();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+    let collider = node_named(&graph, "obstacle_collider");
+    graph.set_param(collider, "geometry", ParamValue::Enum(1)).expect("geometry");
+    let path = quad.to_str().expect("utf-8 path").to_owned();
+    graph.set_param(collider, "path", ParamValue::String(std::sync::Arc::new(path))).expect("path");
+    let transform = node_named(&graph, "obstacle_transform");
+    // Wider than the 4 m tank, so no water runs round its edge.
+    for (name, value) in [("pos_x", 0.0), ("pos_y", plane_y), ("pos_z", 0.0), ("scale_x", 4.4), ("scale_y", 1.0), ("scale_z", 4.4)] {
+        graph.set_param(transform, name, ParamValue::Float(value as f32)).expect(name);
+    }
+    let mut run = Run::with_graph(scene, graph);
+    // The mesh loads on a worker; a poll count, not a wall-clock budget.
+    let mut polls = 0u32;
+    while particle_stats(&run.particles()).live == 0 {
+        polls += 1;
+        assert!(polls < 600, "the liquid never filled");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        run.frame();
+    }
+    let live_y = |particles: &[FluidParticle]| -> Vec<f64> {
+        particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| f64::from(p.position_radius[1])).collect()
+    };
+    let filled = live_y(&run.particles());
+    let above = filled.iter().filter(|&&y| y > plane_y).count();
+    let below = filled.len() - above;
+    assert!(above > 10_000 && below > 10_000, "the column straddles the plane: {above} above, {below} below");
+    let mut resting = 0;
+    for frame in 0..90 {
+        run.frame();
+        let particles = run.particles();
+        let stats = particle_stats(&particles);
+        assert_eq!(stats.bad, 0, "frame {frame}: a particle is not finite");
+        let ys = live_y(&particles);
+        let now_above = ys.iter().filter(|&&y| y > plane_y).count();
+        let deepest = ys.iter().map(|&y| half_shell - (y - plane_y).abs()).fold(f64::NEG_INFINITY, f64::max);
+        resting = ys.iter().filter(|&&y| y > plane_y && y < plane_y + half_shell + 2.0 * h).count();
+        if frame % 15 == 14 {
+            println!(
+                "GPU FLIP open plane frame {frame:2}: {now_above} of {above} above, {} below, deepest in the shell {:.3} cells, {resting} resting on it",
+                ys.len() - now_above,
+                deepest / h
+            );
+        }
+        assert!(deepest <= 0.5 * h, "frame {frame}: a live particle sits {:.3} cells inside the shell", deepest / h);
+        assert!(now_above as f64 >= 0.995 * above as f64, "frame {frame}: {now_above} of {above} particles stayed above the plane");
+        assert!(ys.len() - now_above <= below + above / 200, "frame {frame}: water fell through the plane");
+    }
+    assert!(resting > 1000, "the column never came to rest on the plane: {resting}");
+    let _ = std::fs::remove_dir_all(quad.parent().expect("temp dir"));
+}
+
 /// Small native/GPU comparisons share seed geometry and simulation time.
 #[cfg(test)]
 mod native_reference {

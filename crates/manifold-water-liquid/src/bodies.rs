@@ -6,7 +6,7 @@
 //! ([`TickSamples`]), never observed per display frame, so a collider moves
 //! the same at any frame rate.
 
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 use manifold_physics::coupled_motion::{SupportPoint, MAX_SUPPORT_POINTS};
 
@@ -16,7 +16,8 @@ use crate::clock::{ClockFrame, LiquidClock};
 use crate::tick_samples::TickSamples;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
-use crate::fluid_role::{DistanceState, FluidRole, FluidRoleKind, PreparedFluidGeometry};
+use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry, scale_steps};
+use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES};
 use manifold_water_rigid::physics::pose_from_transform;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_node_engine::scene::transform::Transform;
@@ -270,6 +271,112 @@ struct BodyRole {
     scale: [f32; 3],
 }
 
+/// How thin a role's solid is in world metres, for the thin-collider
+/// warning. A shell's wall is its thinnest part whatever the mesh's bounds;
+/// a closed solid is taken at its bounds, without the lattice's padding.
+fn thinnest(plan: &LatticePlan, scale: [f32; 3]) -> f32 {
+    if plan.open {
+        2.0 * plan.half_shell() * scale[0].min(scale[1]).min(scale[2])
+    } else {
+        (0..3).map(|axis| plan.extent[axis] * scale[axis]).fold(f32::INFINITY, f32::min)
+    }
+}
+
+type LatticeBuild = Result<Arc<DistanceLattice>, String>;
+
+/// One geometry's distance lattice in one liquid. A liquid owns its
+/// lattices because their spacing follows its cells; one build runs at a
+/// time and the newest plan wins.
+struct RoleLattice {
+    geometry: Arc<PreparedFluidGeometry>,
+    /// The cell size and scale steps (`scale_steps`) `plan` was made from; a
+    /// closed solid's plan ignores both, so they are left at zero for it.
+    asked: (f32, [i32; 2]),
+    plan: LatticePlan,
+    ready: Option<(LatticePlan, Arc<DistanceLattice>)>,
+    building: Option<(LatticePlan, mpsc::Receiver<LatticeBuild>)>,
+    failed: Option<(LatticePlan, String)>,
+}
+
+/// `geometry`'s lattice for this frame: `None` while live and nothing is
+/// built yet. Live, a lattice built to an older plan stands in until the
+/// current one is ready; `wait` blocks for the current one.
+fn resolve_lattice(
+    lattices: &mut Vec<RoleLattice>,
+    geometry: &Arc<PreparedFluidGeometry>,
+    cell_size: f32,
+    scale: [f32; 3],
+    wait: bool,
+) -> Result<Option<(Arc<DistanceLattice>, LatticePlan)>, String> {
+    let asked = if geometry.has_open_parts() { (cell_size, scale_steps(scale)) } else { (0.0, [0; 2]) };
+    let index = match lattices.iter().position(|entry| Arc::ptr_eq(&entry.geometry, geometry)) {
+        Some(index) => index,
+        None => {
+            let plan = geometry.lattice_plan(cell_size, scale)?;
+            lattices.push(RoleLattice { geometry: Arc::clone(geometry), asked, plan, ready: None, building: None, failed: None });
+            lattices.len() - 1
+        }
+    };
+    let entry = &mut lattices[index];
+    if entry.asked != asked {
+        entry.plan = geometry.lattice_plan(cell_size, scale)?;
+        entry.asked = asked;
+    }
+    let plan = entry.plan;
+    loop {
+        if let Some((built_plan, receiver)) = &entry.building {
+            let settled = if wait {
+                Some(receiver.recv().unwrap_or_else(|_| Err("Fluid role distance lattice build stopped".into())))
+            } else {
+                match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => Some(Err("Fluid role distance lattice build stopped".into())),
+                }
+            };
+            if let Some(result) = settled {
+                let built_plan = *built_plan;
+                entry.building = None;
+                match result {
+                    Ok(lattice) => entry.ready = Some((built_plan, lattice)),
+                    Err(error) => entry.failed = Some((built_plan, error)),
+                }
+            }
+        }
+        if let Some((ready_plan, lattice)) = &entry.ready
+            && *ready_plan == plan
+        {
+            return Ok(Some((Arc::clone(lattice), plan)));
+        }
+        if let Some((failed_plan, error)) = &entry.failed
+            && *failed_plan == plan
+        {
+            return Err(error.clone());
+        }
+        if entry.building.is_none() {
+            let (sender, receiver) = mpsc::channel();
+            let source = Arc::clone(&entry.geometry);
+            let spawned = std::thread::Builder::new().name("fluid-role-distance".into()).spawn(move || {
+                // Always settle, so a waiter never waits on a build that panicked.
+                let built = std::panic::catch_unwind(|| source.build_lattice(&plan))
+                    .unwrap_or_else(|_| Err("Fluid role distance lattice build panicked".into()));
+                let _ = sender.send(built);
+            });
+            match spawned {
+                Ok(_) => entry.building = Some((plan, receiver)),
+                Err(error) => {
+                    entry.failed = Some((plan, format!("Fluid role distance lattice could not start: {error}")));
+                    continue;
+                }
+            }
+        }
+        if wait {
+            continue;
+        }
+        return Ok(entry.ready.as_ref().map(|(stale, lattice)| (Arc::clone(lattice), *stale)));
+    }
+}
+
 /// Whether the bodies can run this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodiesStatus {
@@ -304,6 +411,12 @@ pub struct LiquidBodies {
     /// Inflow and Outflow rows, tick major, built beside `rows`.
     region_rows: Vec<LiquidBody>,
     warned_thin: bool,
+    /// Each geometry's distance lattice at this liquid's plan for it.
+    lattices: Vec<RoleLattice>,
+    /// This frame's lattice and plan per shape, roles then coupled bodies.
+    resolved: Vec<(Arc<DistanceLattice>, LatticePlan)>,
+    /// The lattices the shapes and atlas were last built from.
+    used: Vec<Arc<DistanceLattice>>,
     /// Whether Inflow and Outflow roles are accepted as regions; a solver
     /// without sources and drains leaves this off and refuses them.
     accepts_regions: bool,
@@ -476,11 +589,14 @@ impl LiquidBodies {
 
     /// Take this frame's roles and coupled bodies' hulls (body-local, about
     /// the centre of mass, unscaled). Collider roles are simulated; fills,
-    /// inflows and drains are refused rather than ignored. A new geometry or
-    /// scale rebuilds the shapes, and the atlas when the set of geometries
-    /// changed. Live, a distance lattice still building leaves the bodies
-    /// Pending; `wait` (offline) waits for it, so no simulated time goes by
-    /// while it builds.
+    /// inflows and drains are refused rather than ignored. A new geometry,
+    /// scale or distance lattice rebuilds the shapes and the atlas. Each
+    /// geometry's lattice is built on a worker to the plan `cell_size` and
+    /// the role's scale ask for ([`PreparedFluidGeometry::lattice_plan`]).
+    /// Live, a geometry with no lattice yet leaves the bodies Pending, and
+    /// one whose plan changed keeps its last lattice until the new one is
+    /// ready; `wait` (offline) waits for the lattice the plan asks for, so no
+    /// simulated time goes by while it builds.
     pub fn prepare(
         &mut self,
         roles: &[Option<FluidRole>],
@@ -488,9 +604,6 @@ impl LiquidBodies {
         cell_size: f32,
         wait: bool,
     ) -> Result<BodiesStatus, String> {
-        let lattice = |geometry: &Arc<PreparedFluidGeometry>| {
-            if wait { geometry.wait_distance_lattice() } else { geometry.distance_lattice() }
-        };
         let occupied = roles.iter().flatten().count();
         if occupied + coupled.len() > MAX_FLUID_ROLES {
             return Err(format!(
@@ -498,15 +611,8 @@ impl LiquidBodies {
                 coupled.len()
             ));
         }
-        for (index, geometry) in coupled.iter().enumerate() {
-            match lattice(geometry) {
-                DistanceState::Pending => return Ok(BodiesStatus::Pending),
-                DistanceState::Failed(error) => return Err(format!("Liquid: coupled body {index}: {error}")),
-                DistanceState::Ready(_) => {}
-            }
-        }
-        let mut same = self.coupled.len() == coupled.len()
-            && self.coupled.iter().zip(coupled).all(|(a, b)| Arc::ptr_eq(a, b));
+        self.resolved.clear();
+        let mut same = true;
         let mut count = 0;
         for (slot, role) in roles.iter().enumerate() {
             let Some(role) = role else { continue };
@@ -518,17 +624,29 @@ impl LiquidBodies {
             if role.transform.scale.iter().any(|s| !(s.is_finite() && *s > 0.0)) {
                 return Err(format!("Liquid: role {slot} scale must be finite and positive"));
             }
-            match lattice(&role.geometry) {
-                DistanceState::Pending => return Ok(BodiesStatus::Pending),
-                DistanceState::Failed(error) => return Err(format!("Liquid: role {slot}: {error}")),
-                DistanceState::Ready(_) => {}
+            match resolve_lattice(&mut self.lattices, &role.geometry, cell_size, role.transform.scale, wait) {
+                Ok(Some(found)) => self.resolved.push(found),
+                Ok(None) => return Ok(BodiesStatus::Pending),
+                Err(error) => return Err(format!("Liquid: role {slot}: {error}")),
             }
             same &= self.roles.get(count).is_some_and(|known| {
                 known.slot == slot && known.kind == role.kind && Arc::ptr_eq(&known.geometry, &role.geometry) && known.scale == role.transform.scale
             });
             count += 1;
         }
-        if same && count == self.roles.len() {
+        for (index, geometry) in coupled.iter().enumerate() {
+            match resolve_lattice(&mut self.lattices, geometry, cell_size, [1.0; 3], wait) {
+                Ok(Some(found)) => self.resolved.push(found),
+                Ok(None) => return Ok(BodiesStatus::Pending),
+                Err(error) => return Err(format!("Liquid: coupled body {index}: {error}")),
+            }
+        }
+        same &= count == self.roles.len()
+            && self.coupled.len() == coupled.len()
+            && self.coupled.iter().zip(coupled).all(|(a, b)| Arc::ptr_eq(a, b))
+            && self.used.len() == self.resolved.len()
+            && self.used.iter().zip(&self.resolved).all(|(a, (b, _))| Arc::ptr_eq(a, b));
+        if same {
             return Ok(BodiesStatus::Ready);
         }
         self.rebuild(roles, coupled, cell_size);
@@ -540,7 +658,8 @@ impl LiquidBodies {
         self.shapes.clear();
         self.bounds.clear();
         self.atlas.clear();
-        let mut placed: Vec<(Arc<PreparedFluidGeometry>, LiquidShape)> = Vec::new();
+        self.used.clear();
+        let mut placed: Vec<(Arc<DistanceLattice>, LiquidShape)> = Vec::new();
         let role_shapes = roles.iter().enumerate().filter_map(|(slot, role)| {
             role.as_ref().map(|role| (format!("{:?} role {slot}", role.kind), Some((slot, role.kind)), &role.geometry, role.transform.scale))
         });
@@ -548,11 +667,9 @@ impl LiquidBodies {
             .iter()
             .enumerate()
             .map(|(index, geometry)| (format!("coupled body {index}"), None, geometry, [1.0; 3]));
-        for (name, slot, geometry, scale) in role_shapes.chain(coupled_shapes).collect::<Vec<_>>() {
-            let DistanceState::Ready(lattice) = geometry.distance_lattice() else {
-                unreachable!("prepare checked every lattice");
-            };
-            let base = match placed.iter().find(|(known, _)| Arc::ptr_eq(known, geometry)) {
+        let shapes: Vec<_> = role_shapes.chain(coupled_shapes).zip(&self.resolved).collect();
+        for ((name, slot, geometry, scale), (lattice, plan)) in shapes {
+            let base = match placed.iter().find(|(known, _)| Arc::ptr_eq(known, lattice)) {
                 Some((_, shape)) => *shape,
                 None => {
                     let shape = LiquidShape {
@@ -564,34 +681,41 @@ impl LiquidBodies {
                         scale_min: [1.0; 4],
                     };
                     pack_distance_atlas(&lattice.values, &mut self.atlas);
-                    placed.push((Arc::clone(geometry), shape));
+                    placed.push((Arc::clone(lattice), shape));
                     shape
                 }
             };
             let smallest = scale[0].min(scale[1]).min(scale[2]);
+            let largest = scale[0].max(scale[1]).max(scale[2]);
             self.shapes.push(LiquidShape { scale_min: [scale[0], scale[1], scale[2], smallest], ..base });
             self.bounds.push(mesh_bounds(geometry));
-            // The geometry's extent without the lattice padding, scaled.
-            let thinnest = (0..3)
-                .map(|axis| {
-                    let nodes = [lattice.dims[0], lattice.dims[1], lattice.dims[2]][axis];
-                    ((nodes - 1) as f32 * lattice.spacing - 4.0 * lattice.spacing) * scale[axis]
-                })
-                .fold(f32::INFINITY, f32::min);
+            let thinnest = thinnest(plan, scale);
             let collides = slot.is_none_or(|(_, kind)| kind == FluidRoleKind::Collider);
-            if collides && thinnest < THIN_COLLIDER_CELLS * cell_size && !self.warned_thin {
+            if collides && (plan.capped || thinnest < THIN_COLLIDER_CELLS * cell_size) && !self.warned_thin {
                 self.warned_thin = true;
-                log::warn!(
-                    "[liquid] {name} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
-                    THIN_COLLIDER_CELLS * cell_size
-                );
+                if plan.capped {
+                    log::warn!(
+                        "[liquid] {name} needs more than {MAX_LATTICE_NODES} distance nodes at the liquid's {cell_size:.3} m cells; its lattice is {:.3} m apart, so its shell is {thinnest:.3} m thick",
+                        plan.spacing * largest
+                    );
+                } else {
+                    log::warn!(
+                        "[liquid] {name} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
+                        THIN_COLLIDER_CELLS * cell_size
+                    );
+                }
             }
             if let Some((slot, kind)) = slot {
                 self.roles.push(BodyRole { slot, kind, geometry: Arc::clone(geometry), scale });
             }
+            self.used.push(Arc::clone(lattice));
         }
         self.coupled.clear();
         self.coupled.extend(coupled.iter().cloned());
+        self.lattices.retain(|entry| {
+            roles.iter().flatten().any(|role| Arc::ptr_eq(&role.geometry, &entry.geometry))
+                || coupled.iter().any(|geometry| Arc::ptr_eq(geometry, &entry.geometry))
+        });
         self.version += 1;
     }
 
@@ -852,7 +976,7 @@ mod tests {
                 [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
                 [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
             ],
-        }]))
+        }], 0.0))
     }
 
     fn collider(geometry: &Arc<PreparedFluidGeometry>, pos: [f32; 3], yaw: f32) -> Option<FluidRole> {
@@ -1504,5 +1628,85 @@ mod tests {
         assert!(obstacles[8..16].iter().all(|v| v.position[3] == 1.0 && v.position[1].abs() > 4.0),
             "a hull enclosing the domain counts though every vertex is outside");
         assert!(obstacles[16..].iter().all(|v| v.position[3] == 0.0), "a hull falling below the domain never counts");
+    }
+
+    fn open_plane(half: f32) -> Arc<PreparedFluidGeometry> {
+        Arc::new(PreparedFluidGeometry::new(vec![manifold_physics::TriangleMesh {
+            vertices: vec![[-half, 0.0, -half], [half, 0.0, -half], [half, 0.0, half], [-half, 0.0, half]],
+            triangles: vec![[0, 2, 1], [0, 3, 2]],
+        }], 0.05))
+    }
+
+    /// The thin-collider check sees a shell's wall, not its mesh's bounds:
+    /// a 1 m box missing its lid is as thin as its shell, two cells, while a
+    /// closed box is as thin as its scaled bounds.
+    #[test]
+    fn liquid_thinnest_counts_a_shell_wall_not_its_bounds() {
+        let closed = cube_of(0.5);
+        let plan = closed.lattice_plan(0.1, [1.0; 3]).unwrap();
+        assert_eq!(thinnest(&plan, [2.0, 1.0, 3.0]), 1.0);
+        let mut meshes = closed.meshes.clone();
+        meshes[0].triangles.truncate(10);
+        let lidless = PreparedFluidGeometry::new(meshes, 0.05);
+        let plan = lidless.lattice_plan(0.1, [1.0; 3]).unwrap();
+        assert!(plan.open);
+        assert!((thinnest(&plan, [1.0; 3]) - 0.2).abs() < 1e-6, "{}", thinnest(&plan, [1.0; 3]));
+    }
+
+    /// An open collider's lattice follows the liquid's cells: a new cell
+    /// size builds a finer one, which offline waits for and live picks up
+    /// once ready. A closed collider's lattice is the same at any cells, so
+    /// a new cell size rebuilds nothing.
+    #[test]
+    fn liquid_open_collider_lattice_follows_the_cells() {
+        let plane = open_plane(1.0);
+        let roles = [collider(&plane, [0.0; 3], 0.0)];
+        let mut bodies = LiquidBodies::default();
+        let spacing = |cell: f32| plane.lattice_plan(cell, [0.4, 0.2, 0.3]).unwrap().spacing;
+        assert_eq!(bodies.prepare(&roles, &[], 0.1, true), Ok(BodiesStatus::Ready));
+        assert_eq!(bodies.shapes()[0].origin_spacing[3], 2.0 / 32.0);
+        let mut polls = 0u32;
+        while bodies.shapes()[0].origin_spacing[3] != spacing(0.01) {
+            assert_eq!(bodies.prepare(&roles, &[], 0.01, false), Ok(BodiesStatus::Ready), "live keeps the last lattice");
+            polls += 1;
+            assert!(polls < 6000, "the finer lattice never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(bodies.prepare(&roles, &[], 0.005, true), Ok(BodiesStatus::Ready));
+        assert_eq!(bodies.shapes()[0].origin_spacing[3], spacing(0.005), "offline waits for the plan's lattice");
+
+        let cube = cube_of(0.5);
+        let roles = [collider(&cube, [0.0; 3], 0.0)];
+        assert_eq!(bodies.prepare(&roles, &[], 0.1, true), Ok(BodiesStatus::Ready));
+        let version = bodies.version;
+        assert_eq!(bodies.prepare(&roles, &[], 0.01, false), Ok(BodiesStatus::Ready));
+        assert_eq!(bodies.version, version);
+    }
+
+    /// An open collider's scale animated within one eighth-octave step keeps
+    /// its lattice: no new plan, no build, only the shapes' scale moves. A
+    /// scale a step away builds a new lattice.
+    #[test]
+    fn liquid_open_collider_scale_within_a_step_keeps_its_lattice() {
+        let plane = open_plane(1.0);
+        let posed = |scale: f32| {
+            let mut role = collider(&plane, [0.0; 3], 0.0);
+            if let Some(role) = &mut role {
+                role.transform.scale = [scale; 3];
+            }
+            [role]
+        };
+        let mut bodies = LiquidBodies::default();
+        assert_eq!(bodies.prepare(&posed(1.0), &[], 0.05, true), Ok(BodiesStatus::Ready));
+        let lattice = Arc::clone(&bodies.used[0]);
+        for k in 0..40 {
+            let scale = 1.0 + 0.04 * (k as f32 * 0.3).sin();
+            assert_eq!(bodies.prepare(&posed(scale), &[], 0.05, true), Ok(BodiesStatus::Ready));
+            assert!(Arc::ptr_eq(&bodies.used[0], &lattice), "scale {scale} replanned");
+            assert!(bodies.lattices[0].building.is_none(), "scale {scale} started a build");
+            assert_eq!(bodies.shapes()[0].scale_min[3], scale);
+        }
+        assert_eq!(bodies.prepare(&posed(1.2), &[], 0.05, true), Ok(BodiesStatus::Ready));
+        assert!(!Arc::ptr_eq(&bodies.used[0], &lattice), "a step away builds a new lattice");
     }
 }

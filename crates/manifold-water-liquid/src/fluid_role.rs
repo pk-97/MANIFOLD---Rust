@@ -5,11 +5,10 @@
 //! `Arc` so graph execution can pass it through the CPU wire without cloning
 //! mesh data.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use manifold_physics::TriangleMesh;
-use manifold_physics::sdf::{DistanceLattice, signed_distance_union};
+use manifold_physics::{TriangleMesh, closed_triangles};
+use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES, signed_distance_union, union_lattice_nodes};
 
 use manifold_node_engine::scene::transform::Transform;
 
@@ -29,99 +28,126 @@ pub enum FluidRoleKind {
 /// mesh on the worker (GPU_MPM_SOLVER_DESIGN.md D16).
 pub const DISTANCE_NODES_ALONG_LONGEST: f32 = 32.0;
 
+/// Steps per octave an open mesh's plan rounds its role's scale to, so a
+/// scale moving within one step (about 9%) rebuilds nothing; the shell and
+/// the spacing are off by at most half a step.
+pub const SCALE_STEPS_PER_OCTAVE: f32 = 8.0;
+
+/// A role's smallest and largest scale in eighth-octave steps, the only part
+/// of the scale an open mesh's lattice plan reads.
+pub fn scale_steps(scale: [f32; 3]) -> [i32; 2] {
+    let step = |s: f32| (s.log2() * SCALE_STEPS_PER_OCTAVE).round() as i32;
+    [step(scale[0].min(scale[1]).min(scale[2])), step(scale[0].max(scale[1]).max(scale[2]))]
+}
+
 /// Immutable prepared local-space geometry for a fluid role.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedFluidGeometry {
     pub meshes: Vec<TriangleMesh>,
-    /// Derived, never serialized: a take or cache identity hashes the meshes
-    /// only (GPU_MPM_SOLVER_DESIGN.md D11).
+    /// World metres. How thick the distance lattice makes the meshes' open
+    /// parts; closed parts ignore it (`signed_distance_union`).
+    #[serde(default)]
+    pub shell_thickness: f32,
+    /// Derived from the meshes, never serialized.
     #[serde(skip)]
-    distance: DerivedDistance,
+    open_parts: OnceLock<bool>,
 }
 
-#[derive(Debug, Default)]
-struct DerivedDistance {
-    requested: AtomicBool,
-    lattice: OnceLock<Result<Arc<DistanceLattice>, String>>,
+/// The lattice a liquid builds for one role: body-local spacing and shell
+/// thickness, both unscaled. Equal plans give equal lattices.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LatticePlan {
+    pub spacing: f32,
+    /// Local units: the role's world Shell Thickness, never under two of
+    /// the liquid's cells, over its smallest scale.
+    pub shell_thickness: f32,
+    /// Whether any part is open, so the solid has shells.
+    pub open: bool,
+    /// Whether [`MAX_LATTICE_NODES`] forced a spacing coarser than the
+    /// liquid's cells.
+    pub capped: bool,
+    /// The meshes' joint local bounds.
+    pub extent: [f32; 3],
 }
 
-/// Where a role's signed-distance lattice stands.
-#[derive(Clone, Debug)]
-pub enum DistanceState {
-    Pending,
-    Ready(Arc<DistanceLattice>),
-    Failed(String),
+impl LatticePlan {
+    /// Half the thickness a shell has on the lattice, local units: never
+    /// under one spacing (`signed_distance_union`).
+    pub fn half_shell(&self) -> f32 {
+        (0.5 * self.shell_thickness).max(self.spacing)
+    }
 }
 
 impl PreparedFluidGeometry {
-    pub fn new(meshes: Vec<TriangleMesh>) -> Self {
-        Self { meshes, distance: DerivedDistance::default() }
+    pub fn new(meshes: Vec<TriangleMesh>, shell_thickness: f32) -> Self {
+        Self { meshes, shell_thickness, open_parts: OnceLock::new() }
     }
 
-    /// The body-local signed-distance lattice of the union of this
-    /// geometry's meshes, unscaled (D11; `signed_distance_union`). The first
-    /// call starts the build on a worker thread and returns Pending; FLIP,
-    /// which never asks, pays nothing.
-    pub fn distance_lattice(self: &Arc<Self>) -> DistanceState {
-        if let Some(result) = self.distance.lattice.get() {
-            return match result {
-                Ok(lattice) => DistanceState::Ready(Arc::clone(lattice)),
-                Err(error) => DistanceState::Failed(error.clone()),
-            };
-        }
-        if !self.distance.requested.swap(true, Ordering::AcqRel) {
-            let geometry = Arc::clone(self);
-            let spawned = std::thread::Builder::new()
-                .name("fluid-role-distance".into())
-                .spawn(move || {
-                    // Always settle the lattice, so a waiter never waits on a
-                    // build that panicked.
-                    let built = std::panic::catch_unwind(|| build_distance(&geometry.meshes))
-                        .unwrap_or_else(|_| Err("Fluid role distance lattice build panicked".into()));
-                    let _ = geometry.distance.lattice.set(built);
-                });
-            if let Err(error) = spawned {
-                let _ = self
-                    .distance
-                    .lattice
-                    .set(Err(format!("Fluid role distance lattice could not start: {error}")));
+    /// Whether any mesh has an open part. Computed once; call it where the
+    /// geometry is prepared so the content thread finds it cached.
+    pub fn has_open_parts(&self) -> bool {
+        *self.open_parts.get_or_init(|| {
+            self.meshes
+                .iter()
+                .any(|mesh| closed_triangles(mesh).is_ok_and(|closed| closed.contains(&false)))
+        })
+    }
+
+    /// The lattice a liquid with `cell_size` (world metres) builds for this
+    /// geometry at role `scale` (SCENE_SETUP_PROGRAMME.md D8 (open meshes are
+    /// solids)). A closed solid's surface is exact at any spacing, so it
+    /// keeps longest / 32 whatever samples it. A shell's faces sit at least
+    /// one spacing from its surface, so with open parts the lattice is no
+    /// coarser than the liquid's cells, and the shell is at least two cells
+    /// thick so the liquid's grid sees it: a ground plane rests the water
+    /// within a cell of where it is drawn at any size. If that needs more than
+    /// [`MAX_LATTICE_NODES`], the spacing coarsens until it fits and the plan
+    /// says so. The scale enters as [`scale_steps`], so one plan covers a
+    /// scale moving within a step.
+    pub fn lattice_plan(&self, cell_size: f32, scale: [f32; 3]) -> Result<LatticePlan, String> {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for vertex in self.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(vertex[axis]);
+                max[axis] = max[axis].max(vertex[axis]);
             }
         }
-        DistanceState::Pending
+        let extent: [f32; 3] = std::array::from_fn(|axis| max[axis] - min[axis]);
+        let longest = extent.into_iter().fold(0.0f32, f32::max);
+        if !(longest.is_finite() && longest > 0.0) {
+            return Err("Fluid role geometry has no extent for a distance lattice".into());
+        }
+        let coarse = longest / DISTANCE_NODES_ALONG_LONGEST;
+        let open = self.has_open_parts();
+        if !open {
+            return Ok(LatticePlan { spacing: coarse, shell_thickness: 0.0, open, capped: false, extent });
+        }
+        let smallest = scale[0].min(scale[1]).min(scale[2]);
+        let largest = scale[0].max(scale[1]).max(scale[2]);
+        if !(cell_size.is_finite() && cell_size > 0.0 && smallest > 0.0 && largest.is_finite()) {
+            return Err("Fluid role distance lattice needs a positive cell size and scale".into());
+        }
+        let [smallest, largest] = scale_steps(scale).map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2());
+        // A shell thinner than two of the liquid's cells is one its grid
+        // cannot see, so that is the least it is.
+        let shell_thickness = self.shell_thickness.max(2.0 * cell_size) / smallest;
+        let wanted = coarse.min(cell_size / largest);
+        let mut spacing = wanted;
+        while union_lattice_nodes(extent, spacing, 2.0 * spacing, shell_thickness, true) > MAX_LATTICE_NODES {
+            spacing *= 1.125;
+        }
+        Ok(LatticePlan { spacing, shell_thickness, open, capped: spacing > wanted, extent })
     }
 
-    /// [`Self::distance_lattice`], waiting for the build instead of returning
-    /// Pending: an offline render never spends simulated time on it.
-    pub fn wait_distance_lattice(self: &Arc<Self>) -> DistanceState {
-        match self.distance_lattice() {
-            DistanceState::Pending => match self.distance.lattice.wait() {
-                Ok(lattice) => DistanceState::Ready(Arc::clone(lattice)),
-                Err(error) => DistanceState::Failed(error.clone()),
-            },
-            settled => settled,
-        }
+    /// One lattice over every mesh to `plan`: closed parts solid, open parts
+    /// shells. Costs nodes × triangles; never call it on the content thread.
+    pub fn build_lattice(&self, plan: &LatticePlan) -> Result<Arc<DistanceLattice>, String> {
+        signed_distance_union(&self.meshes, plan.spacing, 2.0 * plan.spacing, plan.shell_thickness)
+            .map(Arc::new)
+            .map_err(|error| format!("Fluid role distance lattice: {error}"))
     }
-}
-
-/// One lattice over every mesh, the union of their signed distances.
-fn build_distance(meshes: &[TriangleMesh]) -> Result<Arc<DistanceLattice>, String> {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in meshes.iter().flat_map(|mesh| &mesh.vertices) {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex[axis]);
-            max[axis] = max[axis].max(vertex[axis]);
-        }
-    }
-    let longest = (0..3).map(|axis| max[axis] - min[axis]).fold(0.0f32, f32::max);
-    if !(longest.is_finite() && longest > 0.0) {
-        return Err("Fluid role geometry has no extent for a distance lattice".into());
-    }
-    let spacing = longest / DISTANCE_NODES_ALONG_LONGEST;
-    signed_distance_union(meshes, spacing, 2.0 * spacing)
-        .map(Arc::new)
-        .map_err(|error| format!("Fluid role distance lattice: {error}"))
 }
 
 /// CPU payload carried by a [`super::ports::PortType::FluidRole`] wire.
@@ -226,34 +252,25 @@ mod tests {
                 ],
             }
         };
-        PreparedFluidGeometry::new(vec![cuboid(-0.5, 0.0), cuboid(0.0, 0.5)])
+        PreparedFluidGeometry::new(vec![cuboid(-0.5, 0.0), cuboid(0.0, 0.5)], 0.0)
     }
 
-    fn wait_for_distance(geometry: &Arc<PreparedFluidGeometry>) -> Arc<DistanceLattice> {
-        // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
-        let mut polls = 0u32;
-        loop {
-            match geometry.distance_lattice() {
-                DistanceState::Ready(lattice) => return lattice,
-                DistanceState::Failed(error) => panic!("{error}"),
-                DistanceState::Pending => {
-                    polls += 1;
-                    assert!(polls < 6000, "the distance lattice never arrived");
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-            }
-        }
+    fn lattice_at(geometry: &PreparedFluidGeometry, cell_size: f32, scale: [f32; 3]) -> Arc<DistanceLattice> {
+        geometry.build_lattice(&geometry.lattice_plan(cell_size, scale).unwrap()).unwrap()
     }
 
     /// One lattice spans every mesh of the role, spacing = longest extent / 32
-    /// with two spacings of padding. Outside the two halves it is the cube's
-    /// exact distance; inside, each part's own distance (a bound on the
-    /// union's depth, 0 on the faces where the halves touch) with the sign of
-    /// the union.
+    /// with two spacings of padding, whatever the liquid's cells. Outside the
+    /// two halves it is the cube's exact distance; inside, each part's own
+    /// distance (a bound on the union's depth, 0 on the faces where the halves
+    /// touch) with the sign of the union.
     #[test]
     fn scene_physics_fluid_role_distance_lattice_unions_meshes() {
-        let geometry = Arc::new(two_part_cube());
-        let lattice = wait_for_distance(&geometry);
+        let geometry = two_part_cube();
+        assert!(!geometry.has_open_parts());
+        let plan = geometry.lattice_plan(0.01, [3.0, 1.0, 1.0]).unwrap();
+        assert_eq!(plan, geometry.lattice_plan(0.5, [1.0; 3]).unwrap(), "a closed solid ignores cells and scale");
+        let lattice = geometry.build_lattice(&plan).unwrap();
         assert_eq!(lattice.spacing, 1.0 / DISTANCE_NODES_ALONG_LONGEST);
         assert_eq!(lattice.dims, [37; 3]);
         // Node 10 is x = −0.25, the middle of the left half.
@@ -261,17 +278,108 @@ mod tests {
         assert!(lattice.value([18, 18, 18]).abs() < 1e-5, "on the touching faces");
         assert!((lattice.value([0, 18, 18]) - 2.0 / 32.0).abs() < 1e-5);
         assert!((lattice.value([0, 0, 18]) - (2.0f32 * (2.0 / 32.0) * (2.0 / 32.0)).sqrt()).abs() < 1e-5);
-        assert!(Arc::ptr_eq(&lattice, &wait_for_distance(&geometry)), "built once");
     }
 
-    /// The lattice is derived: serializing the geometry (what a physics take
-    /// hashes) gives the same bytes before and after it exists.
+    fn ground(half: f32) -> TriangleMesh {
+        TriangleMesh {
+            vertices: vec![[-half, 0.0, -half], [half, 0.0, -half], [half, 0.0, half], [-half, 0.0, half]],
+            triangles: vec![[0, 2, 1], [0, 3, 2]],
+        }
+    }
+
+    /// Trilinear distance at a local point, as the solvers sample it.
+    fn sample(lattice: &DistanceLattice, p: [f32; 3]) -> f32 {
+        let g: [f32; 3] = std::array::from_fn(|axis| (p[axis] - lattice.origin[axis]) / lattice.spacing);
+        let base: [u32; 3] = std::array::from_fn(|axis| g[axis].floor() as u32);
+        let t: [f32; 3] = std::array::from_fn(|axis| g[axis] - base[axis] as f32);
+        let mut value = 0.0;
+        for corner in 0..8u32 {
+            let offset: [u32; 3] = std::array::from_fn(|axis| (corner >> axis) & 1);
+            let weight: f32 = (0..3).map(|axis| if offset[axis] == 1 { t[axis] } else { 1.0 - t[axis] }).product();
+            value += weight * lattice.value(std::array::from_fn(|axis| base[axis] + offset[axis]));
+        }
+        value
+    }
+
+    /// A 20 m open ground plane in a 20 m liquid at the default resolution:
+    /// the shell's top face, where the water rests, is within one water cell
+    /// of the drawn floor. Before the lattice followed the liquid's cells its
+    /// spacing was 20 / 32 m and the face sat two of those cells up.
     #[test]
-    fn scene_physics_fluid_role_distance_lattice_is_not_serialized() {
-        let geometry = Arc::new(two_part_cube());
-        let before = serde_json::to_vec(&*geometry).unwrap();
-        wait_for_distance(&geometry);
-        assert_eq!(before, serde_json::to_vec(&*geometry).unwrap());
+    fn scene_physics_fluid_role_ground_plane_shell_follows_the_liquid_cells() {
+        let layout = manifold_core::fluid_domain::domain_layout(None, 20.0, 64).unwrap();
+        let cell = layout.cell_size as f32;
+        let geometry = PreparedFluidGeometry::new(vec![ground(10.0)], 0.05);
+        assert!(geometry.has_open_parts());
+        let plan = geometry.lattice_plan(cell, [1.0; 3]).unwrap();
+        assert!(!plan.capped);
+        assert!(plan.spacing <= cell, "{} > {cell}", plan.spacing);
+        let lattice = geometry.build_lattice(&plan).unwrap();
+        // March up from the floor to the first point outside the solid.
+        let mut y = 0.0f32;
+        while sample(&lattice, [0.3, y, -0.7]) < 0.0 {
+            y += 0.001;
+        }
+        assert!(y > 0.0 && y <= cell + 1e-3, "the water rests {y} m above the floor; a cell is {cell} m");
+        assert!(sample(&lattice, [0.3, -0.5 * y, -0.7]) < 0.0, "the shell holds below the floor too");
+    }
+
+    /// Shell Thickness is world metres: a role scaled 2× builds half the
+    /// local thickness, so the world distance (local × smallest scale, how
+    /// the solvers read it) inside the plane is half the authored thickness.
+    #[test]
+    fn scene_physics_fluid_role_shell_thickness_is_world_metres() {
+        let geometry = PreparedFluidGeometry::new(vec![ground(0.5)], 0.5);
+        for scale in [[1.0; 3], [2.0, 2.0, 2.0], [4.0, 2.0, 3.0]] {
+            let plan = geometry.lattice_plan(0.05, scale).unwrap();
+            let lattice = geometry.build_lattice(&plan).unwrap();
+            let smallest = scale[0].min(scale[1]).min(scale[2]);
+            let centre: [u32; 3] = std::array::from_fn(|axis| (-lattice.origin[axis] / lattice.spacing).round() as u32);
+            assert!(
+                (lattice.value(centre) * smallest + 0.25).abs() < 1e-5,
+                "scale {scale:?}: {} world",
+                lattice.value(centre) * smallest
+            );
+        }
+    }
+
+    /// A plane too wide for the node cap at the liquid's cells coarsens until
+    /// it fits and says so.
+    #[test]
+    fn scene_physics_fluid_role_lattice_cap_coarsens_and_says_so() {
+        let geometry = PreparedFluidGeometry::new(vec![ground(500.0)], 0.05);
+        let plan = geometry.lattice_plan(0.05, [1.0; 3]).unwrap();
+        assert!(plan.capped && plan.spacing > 0.05);
+        let nodes = manifold_physics::sdf::union_lattice_nodes(plan.extent, plan.spacing, 2.0 * plan.spacing, plan.shell_thickness, true);
+        assert!(nodes <= MAX_LATTICE_NODES);
+    }
+
+    /// An open quad is a shell of the geometry's thickness, and the thickness
+    /// survives a save.
+    #[test]
+    fn scene_physics_fluid_role_distance_lattice_open_mesh_is_a_shell() {
+        let quad = TriangleMesh {
+            vertices: vec![[-0.5, 0.0, -0.5], [0.5, 0.0, -0.5], [0.5, 0.0, 0.5], [-0.5, 0.0, 0.5]],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+        };
+        let geometry = PreparedFluidGeometry::new(vec![quad], 0.5);
+        let lattice = lattice_at(&geometry, 0.1, [1.0; 3]);
+        let centre: [u32; 3] = std::array::from_fn(|axis| (-lattice.origin[axis] / lattice.spacing).round() as u32);
+        assert!((lattice.value(centre) + 0.25).abs() < 1e-5, "{}", lattice.value(centre));
+        let restored: PreparedFluidGeometry =
+            serde_json::from_slice(&serde_json::to_vec(&geometry).unwrap()).unwrap();
+        assert_eq!(restored.shell_thickness, 0.5);
+        assert!(restored.has_open_parts());
+    }
+
+    /// What is derived from the meshes is not serialized: the bytes are the
+    /// same before and after it exists.
+    #[test]
+    fn scene_physics_fluid_role_derived_state_is_not_serialized() {
+        let geometry = two_part_cube();
+        let before = serde_json::to_vec(&geometry).unwrap();
+        geometry.has_open_parts();
+        assert_eq!(before, serde_json::to_vec(&geometry).unwrap());
         let restored: PreparedFluidGeometry = serde_json::from_slice(&before).unwrap();
         assert_eq!(restored.meshes, geometry.meshes);
     }
