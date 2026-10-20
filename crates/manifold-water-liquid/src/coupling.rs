@@ -445,7 +445,8 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle) -> Result<(Arc<Prepar
     }
     let size: [f32; 3] = std::array::from_fn(|axis| high[axis] - low[axis]);
     let face = (size[0] * size[1]).max(size[1] * size[2]).max(size[0] * size[2]);
-    Ok((Arc::new(PreparedFluidGeometry::new(meshes)), face))
+    // Cooked hulls are closed, so no shell thickness applies.
+    Ok((Arc::new(PreparedFluidGeometry::new(meshes, 0.0)), face))
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,

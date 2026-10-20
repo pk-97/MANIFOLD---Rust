@@ -247,7 +247,7 @@ fn fluid_role_source(param: &str) -> Option<SceneParamFacts> {
         "role" | "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => {
             setup(Source)
         }
-        "radius" => setup(Source).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+        "radius" | "shell_thickness" => setup(Source).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "path" | "compound_materials" | "mesh_index" | "primitive_index" | "material_index"
         | "fit" | "recenter" | "translate_x" | "translate_y" | "translate_z" | "fragment_count"
         | "fragment_index" => hidden(Source),

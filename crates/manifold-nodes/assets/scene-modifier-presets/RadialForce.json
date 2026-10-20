@@ -71,6 +71,7 @@
         "id": "strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 1, "cardLabel": "param"},
         "name": "Strength",
+        "tooltip": "Gravity is 9.8 m/s²",
         "unit": "metresPerSecondSquared",
         "min": -20.0,
         "max": 20.0,
@@ -79,7 +80,7 @@
       {
         "id": "impulse_strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 3, "cardLabel": "param"},
-        "name": "Kick Size",
+        "name": "Impulse Size",
         "unit": "metresPerSecond",
         "min": -20.0,
         "max": 20.0,
@@ -88,7 +89,7 @@
       {
         "id": "fire",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 2, "cardLabel": "param"},
-        "name": "Kick",
+        "name": "Impulse",
         "min": 0.0,
         "max": 16777216.0,
         "defaultValue": 0.0,
@@ -179,7 +180,7 @@
       },
       {
         "id": "impulse_strength",
-        "label": "Kick Size",
+        "label": "Impulse Size",
         "defaultValue": 2.0,
         "target": {
           "kind": "node",

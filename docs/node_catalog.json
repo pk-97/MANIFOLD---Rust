@@ -11503,6 +11503,11 @@
           "type": "f32"
         },
         {
+          "name": "shell_thickness",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "shape",
           "required": false,
           "type": "f32"
@@ -11652,7 +11657,7 @@
           "default": "0",
           "enum_values": [
             "Collision Proxy",
-            "Closed Mesh"
+            "Exact Mesh"
           ],
           "label": "Geometry",
           "name": "geometry",
@@ -11661,6 +11666,16 @@
             "1"
           ],
           "type": "enum"
+        },
+        {
+          "default": "0.05",
+          "label": "Shell Thickness",
+          "name": "shell_thickness",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         },
         {
           "default": "1",
@@ -11800,7 +11815,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Prepare one built-in or imported closed volume as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Closed Mesh preserves the exact indexed surface after exact-coordinate welding and validates it as a closed volume. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
+      "purpose": "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Exact Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness (world metres) thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire.",
@@ -76637,6 +76652,13 @@
           "name": "Geometry"
         },
         {
+          "default": "0.05",
+          "id": "2001_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
           "default": "1",
           "id": "2001_shape",
           "max": "4",
@@ -76712,6 +76734,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2002_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",
@@ -76852,6 +76881,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2005_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",
@@ -79136,6 +79172,13 @@
           "name": "Geometry"
         },
         {
+          "default": "0.05",
+          "id": "2015_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
           "default": "1",
           "id": "2015_shape",
           "max": "4",
@@ -79239,6 +79282,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2018_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",
@@ -79416,6 +79466,13 @@
           "name": "Geometry"
         },
         {
+          "default": "0.05",
+          "id": "2022_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
           "default": "1",
           "id": "2022_shape",
           "max": "4",
@@ -79519,6 +79576,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2025_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",
@@ -121225,6 +121289,13 @@
           "name": "Geometry"
         },
         {
+          "default": "0.05",
+          "id": "477_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
           "default": "1",
           "id": "477_shape",
           "max": "4",
@@ -131053,6 +131124,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "65_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",
@@ -145097,6 +145175,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "477_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",
@@ -171197,6 +171282,13 @@
           "max": "1",
           "min": "0",
           "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "3_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
         },
         {
           "default": "1",

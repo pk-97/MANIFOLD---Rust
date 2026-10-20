@@ -29,7 +29,7 @@ pub use interaction::{
 };
 pub use turbulence::TurbulenceField;
 mod mesh;
-pub use mesh::{cook_hull_mesh, validate_closed_mesh, TriangleMesh};
+pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 pub mod sdf;
 use std::cell::Cell;
 use std::fmt;

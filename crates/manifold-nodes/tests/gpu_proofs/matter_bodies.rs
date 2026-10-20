@@ -231,7 +231,7 @@ fn matter_grid_update_projects_colliders() {
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0).expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
@@ -492,7 +492,7 @@ fn matter_body_reaction_counts_field_velocity() {
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0).expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
@@ -625,7 +625,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let density = 1000.0f32;
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0).expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
@@ -818,6 +818,47 @@ fn matter_collider_penetration_bounded() {
     );
     assert!(touching > 1000, "the box never reached the liquid: {touching}");
     assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
+}
+
+/// SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids): a column of liquid
+/// falls onto an open, one-sided plane spanning the domain wall to wall. The
+/// plane is a shell, so the liquid lands on it and spreads; no point ever
+/// gets past the shell's far face.
+#[test]
+fn matter_open_mesh_collider_holds_liquid() {
+    let quad = manifold_nodes::testkit::open_mesh::write_open_quad_gltf();
+    let plane_y = 0.45;
+    // Wider than the domain, so the liquid cannot run round its edge.
+    let transform = Transform { pos: [0.0, plane_y, 0.0], scale: [1.2; 3], ..Transform::default() };
+    let mut scene = MatterScene::new(&SceneSettings {
+        fill_height: 0.0,
+        column: Some(Transform { pos: [0.0, 0.75, 0.0], scale: [0.5, 0.2, 0.5], ..Transform::default() }),
+        colliders: vec![transform],
+        collider_mesh: Some(quad.clone()),
+        ..SceneSettings::default()
+    });
+    let dx = scene.lattice().cell_size();
+    // The default 0.05 m thickness is under two of the liquid's cells, so
+    // the shell is two cells thick (PreparedFluidGeometry::lattice_plan).
+    let half_shell = dx.max(0.025);
+    until_ticking(&mut scene, |scene, _| scene.set_collider(0, transform));
+    let (mut lowest, mut resting) = (f32::INFINITY, 0usize);
+    for _ in 0..60 {
+        scene.tick();
+        assert_eq!(scene.stats().nonfinite, 0);
+        let points = scene.points();
+        let live = points.iter().filter(|p| p.id != 0);
+        lowest = live.clone().fold(lowest, |low, p| low.min(p.position[1]));
+        resting = live.filter(|p| p.position[1] < plane_y + half_shell + dx).count();
+    }
+    eprintln!(
+        "matter_open_mesh_collider_holds_liquid: lowest point {lowest:.4} m, shell faces at {:.4} and {:.4} m, {resting} points resting on it",
+        plane_y - half_shell,
+        plane_y + half_shell
+    );
+    assert!(resting > 100, "the liquid never reached the plane: {resting}");
+    assert!(lowest > plane_y - half_shell, "a point passed through the open mesh to {lowest} m");
+    let _ = std::fs::remove_dir_all(quad.parent().unwrap());
 }
 
 /// D11: the frame's solid lattice is the walls and the body together: at

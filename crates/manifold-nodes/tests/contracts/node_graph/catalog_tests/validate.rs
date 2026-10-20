@@ -75,3 +75,42 @@ const ASSET_SUBDIRS: &[(&str, ValidateKind)] = &[("assets/effect-presets", Valid
                 .join("\n"),
         );
     }
+
+    /// Every bundled scene modifier recipe inserts and expands on a real
+    /// imported scene through the same path `check-presets` and the Add menu
+    /// take. CPU only.
+    #[test]
+    fn every_bundled_scene_modifier_qualifies_on_a_real_scene() {
+        use manifold_nodes::scene_modifier_qualify::{mushroom_host, qualify_scene_modifier};
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/scene-modifier-presets");
+        let registry = PrimitiveRegistry::with_builtin();
+        let host = mushroom_host().unwrap();
+        let mut total = 0usize;
+        let mut failures = Vec::new();
+        for entry in std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            total += 1;
+            let bytes = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: read failed: {e}", path.display()));
+            let recipe: EffectGraphDef = serde_json::from_str(&bytes)
+                .unwrap_or_else(|e| panic!("{}: parse failed: {e}", path.display()));
+            if let Err(error) =
+                qualify_scene_modifier(&recipe, &path.display().to_string(), &registry, &host)
+            {
+                failures.push(format!("{}: {error}", path.display()));
+            }
+        }
+        assert!(total > 0, "expected bundled scene modifier JSON files");
+        assert!(
+            failures.is_empty(),
+            "{} of {total} bundled scene modifiers failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
