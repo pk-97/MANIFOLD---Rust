@@ -242,7 +242,7 @@ fn water_family_visibility_round_trip() {
 
 #[test]
 fn water_family_delete_undo() {
-    use manifold_editing::commands::graph::{AddSceneObjectCommand, AssignSceneFluidRoleCommand,
+    use manifold_editing::commands::graph::{AssignSceneFluidRoleCommand,
         RemoveSceneObjectCommand, scene_fluid_role_assignments};
     let (mut project, layer, render) = water_project();
     let target = GraphTarget::Generator(layer.clone());
@@ -252,10 +252,11 @@ fn water_family_delete_undo() {
     let family = rows(&def);
     let water = family.iter().find(|row| row.name == "Water 1").unwrap().clone();
     let source_slot = objects_param(&project, &layer, render) as u32;
-    let metadata = manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
-    editing.execute(Box::new(AddSceneObjectCommand::new(target.clone(), vec![], render,
-        source_slot, (0.0, 0.0), metadata("node.pbr_material"), metadata("node.transform_3d"),
-        metadata("node.scene_object"), def)), &mut project);
+    let add = crate::scene_insert::prepare(
+        &project, &target, &def, &[], render,
+        manifold_nodes_scene::node_graph::scene_templates::object_template(source_slot, (0.0, 0.0)),
+    ).unwrap();
+    editing.execute(Box::new(add), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let def = effective_def(&project, &layer);
     let source = rows(&def).into_iter().find(|row| row.index == source_slot as usize).unwrap();

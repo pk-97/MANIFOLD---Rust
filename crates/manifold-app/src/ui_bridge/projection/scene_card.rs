@@ -505,25 +505,10 @@ mod tests {
         let def = catalog_def("PhysicsSolids");
         let vm = SceneVm::from_def(&def).expect("scene");
         let target = manifold_core::GraphTarget::Generator(project.timeline.layers[0].layer_id.clone());
-        let light_type = vm
-            .lights
-            .iter()
-            .find_map(|light| match light {
-                manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) => {
-                    def.nodes.iter().find(|node| node.node_id == row.node).map(|node| node.type_id.clone())
-                }
-                _ => None,
-            })
-            .expect("a known light");
-        let mut add = manifold_editing::commands::graph::AddSceneLightCommand::new(
-            target,
-            Vec::new(),
-            vm.scene_root_node_id,
-            vm.lights.len() as u32,
-            (0.0, 0.0),
-            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&light_type),
-            def,
-        );
+        let mut add = crate::scene_insert::prepare(
+            &project, &target, &def, &[], vm.scene_root_node_id,
+            manifold_nodes_scene::node_graph::scene_templates::light_template((0.0, 0.0)),
+        ).unwrap();
         add.execute(&mut project);
         project.reconcile_param_manifests();
         let def = project.timeline.layers[0].gen_params().unwrap().graph.clone().expect("the edit forks the graph");
@@ -839,25 +824,11 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| catalog_def("PhysicsSolids"));
             let vm = SceneVm::from_def(&def).expect("scene");
-            let light_type = vm
-                .lights
-                .iter()
-                .find_map(|light| match light {
-                    manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) => {
-                        def.nodes.iter().find(|node| node.node_id == row.node).map(|node| node.type_id.clone())
-                    }
-                    _ => None,
-                })
-                .expect("a known light");
-            manifold_editing::commands::graph::AddSceneLightCommand::new(
-                target.clone(),
-                Vec::new(),
-                vm.scene_root_node_id,
-                vm.lights.len() as u32,
-                (0.0, 0.0),
-                manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&light_type),
-                def,
+            crate::scene_insert::prepare(
+                &project, &target, &def, &[], vm.scene_root_node_id,
+                manifold_nodes_scene::node_graph::scene_templates::light_template((0.0, 0.0)),
             )
+            .unwrap()
             .execute(&mut project);
             project.reconcile_param_manifests();
             pin_performance(&mut project, false);
