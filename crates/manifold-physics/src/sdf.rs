@@ -51,8 +51,8 @@ pub fn signed_distance_lattice(
 /// mesh ([`closed_triangles`]) is solid in one of two ways:
 ///
 /// - A closed part is the volume it bounds: the exact distance to its nearest
-///   triangle, signed by the generalized winding number, so concave shapes
-///   and several closed parts stay right.
+///   triangle, signed by the magnitude of the generalized winding number, so
+///   concave shapes, several closed parts and inside-out parts stay right.
 /// - An open part is a shell: the unsigned distance to its nearest triangle
 ///   minus half of `shell_thickness`. This is how Houdini's VDB from Polygons
 ///   treats a surface with no interior and how Blender gives non-manifold
@@ -65,8 +65,10 @@ pub fn signed_distance_lattice(
 ///
 /// A shell is never thinner than two spacings: half its thickness is at
 /// least `spacing`, so every lattice cell the surface crosses has a node
-/// inside the shell and trilinear sampling cannot step over it. When any part
-/// is open, the bounds also grow by that half thickness.
+/// inside the shell and trilinear sampling cannot step over it. The floor
+/// moves the shell's faces with the spacing, so a caller picks the spacing
+/// from what samples the solid, never from the mesh's size alone. When any
+/// part is open, the bounds also grow by that half thickness.
 pub fn signed_distance_union(
     meshes: &[TriangleMesh],
     spacing: f32,
@@ -112,10 +114,7 @@ pub fn signed_distance_union(
         padding
     };
     let origin: [f32; 3] = std::array::from_fn(|axis| min[axis] - padding);
-    let dims: [u32; 3] = std::array::from_fn(|axis| {
-        let extent = f64::from(max[axis] - min[axis]) + 2.0 * f64::from(padding);
-        (extent / f64::from(spacing)).ceil() as u32 + 1
-    });
+    let dims = lattice_dims(std::array::from_fn(|axis| max[axis] - min[axis]), spacing, padding);
     let total = dims.iter().map(|&n| u64::from(n)).product::<u64>();
     if total > MAX_LATTICE_NODES {
         return Err(PhysicsError::InvalidInput(
@@ -140,8 +139,9 @@ pub fn signed_distance_union(
                         nearest = nearest.min(distance_squared_to_triangle(p, triangle));
                         solid_angle += signed_solid_angle(p, triangle);
                     }
-                    // Winding number ΣΩ / 4π is 1 inside an outward-wound volume.
-                    let inside = solid_angle > 2.0 * std::f64::consts::PI;
+                    // Winding number ΣΩ / 4π is 1 inside an outward-wound
+                    // volume and −1 inside an inside-out one; both are solid.
+                    let inside = solid_angle.abs() > 2.0 * std::f64::consts::PI;
                     let volume = if inside { -nearest.sqrt() } else { nearest.sqrt() };
                     let mut nearest_open = f64::INFINITY;
                     for triangle in open {
@@ -155,6 +155,22 @@ pub fn signed_distance_union(
         }
     }
     Ok(lattice)
+}
+
+/// Nodes per axis over `extent` grown by `padding` on every side.
+fn lattice_dims(extent: [f32; 3], spacing: f32, padding: f32) -> [u32; 3] {
+    std::array::from_fn(|axis| {
+        let extent = f64::from(extent[axis]) + 2.0 * f64::from(padding);
+        (extent / f64::from(spacing)).ceil() as u32 + 1
+    })
+}
+
+/// How many nodes [`signed_distance_union`] builds for meshes whose joint
+/// bounds span `extent`, so a caller can pick a spacing under
+/// [`MAX_LATTICE_NODES`] before paying for the build.
+pub fn union_lattice_nodes(extent: [f32; 3], spacing: f32, padding: f32, shell_thickness: f32, any_open: bool) -> u64 {
+    let padding = if any_open { padding + (0.5 * shell_thickness).max(spacing) } else { padding };
+    lattice_dims(extent, spacing, padding).iter().map(|&n| u64::from(n)).product()
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -300,6 +316,16 @@ mod tests {
         // Shell thickness only shapes open parts: a closed box is unchanged.
         let thick = signed_distance_lattice(&cuboid([-0.5; 3], [0.5; 3]), 0.1, 0.3, 0.5).unwrap();
         assert_eq!(thick, lattice);
+        // An inside-out box is the same solid, not a thin skin.
+        let mut inward = cuboid([-0.5; 3], [0.5; 3]);
+        for triangle in &mut inward.triangles {
+            triangle.swap(1, 2);
+        }
+        assert_eq!(signed_distance_lattice(&inward, 0.1, 0.3, 0.5).unwrap(), lattice);
+        assert_eq!(
+            union_lattice_nodes([1.0; 3], 0.1, 0.3, 0.5, false),
+            lattice.values.len() as u64
+        );
     }
 
     #[test]
@@ -347,6 +373,10 @@ mod tests {
             let lattice = signed_distance_lattice(&open_quad(), 0.05, 0.1, thickness).unwrap();
             // The lattice grows by half the shell beyond the padding.
             assert!((lattice.origin[2] + 0.1 + half).abs() < 1e-6, "{:?}", lattice.origin);
+            assert_eq!(
+                union_lattice_nodes([1.0, 1.0, 0.0], 0.05, 0.1, thickness, true),
+                lattice.values.len() as u64
+            );
             let mut worst = 0.0f32;
             for k in 0..lattice.dims[2] {
                 for j in 0..lattice.dims[1] {

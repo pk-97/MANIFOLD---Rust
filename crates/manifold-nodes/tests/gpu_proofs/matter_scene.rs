@@ -35,7 +35,7 @@ pub(crate) struct SceneSettings {
     /// Collider roles: built-in unit cubes posed by these transforms (their
     /// scale is the box size), wired as node.fluid_role_source Collider roles.
     pub colliders: Vec<Transform>,
-    /// Collider roles load this mesh file in Closed Mesh mode instead of the
+    /// Collider roles load this mesh file in Exact Mesh mode instead of the
     /// built-in cube; the transforms' scale scales it.
     pub collider_mesh: Option<std::path::PathBuf>,
 }

@@ -11651,7 +11651,7 @@
           "default": "0",
           "enum_values": [
             "Collision Proxy",
-            "Closed Mesh"
+            "Exact Mesh"
           ],
           "label": "Geometry",
           "name": "geometry",
@@ -11809,7 +11809,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Closed Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
+      "purpose": "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Exact Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness (world metres) thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire.",

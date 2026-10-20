@@ -796,40 +796,13 @@ fn matter_collider_penetration_bounded() {
     assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
 }
 
-/// The unit square in the y = 0 plane as a one-sided glTF triangle list: an
-/// open mesh with no inside.
-fn write_open_quad_gltf() -> std::path::PathBuf {
-    let corners = [[-0.5f32, 0.0, -0.5], [0.5, 0.0, -0.5], [0.5, 0.0, 0.5], [-0.5, 0.0, 0.5]];
-    let bin: Vec<u8> = [0, 2, 1, 0, 3, 2]
-        .iter()
-        .flat_map(|&i: &usize| corners[i])
-        .flat_map(f32::to_le_bytes)
-        .collect();
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "scene": 0,
-        "scenes": [{ "nodes": [0] }],
-        "nodes": [{ "mesh": 0 }],
-        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
-        "buffers": [{ "uri": "quad.bin", "byteLength": bin.len() }],
-        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": bin.len() }],
-        "accessors": [{ "bufferView": 0, "componentType": 5126, "count": 6, "type": "VEC3",
-            "min": [-0.5, 0.0, -0.5], "max": [0.5, 0.0, 0.5] }]
-    });
-    let dir = std::env::temp_dir().join(format!("manifold-open-quad-{}", manifold_core::short_id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("quad.bin"), bin).unwrap();
-    std::fs::write(dir.join("quad.gltf"), serde_json::to_vec(&doc).unwrap()).unwrap();
-    dir.join("quad.gltf")
-}
-
 /// SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids): a column of liquid
 /// falls onto an open, one-sided plane spanning the domain wall to wall. The
 /// plane is a shell, so the liquid lands on it and spreads; no point ever
 /// gets past the shell's far face.
 #[test]
 fn matter_open_mesh_collider_holds_liquid() {
-    let quad = write_open_quad_gltf();
+    let quad = manifold_nodes::testkit::open_mesh::write_open_quad_gltf();
     let plane_y = 0.45;
     // Wider than the domain, so the liquid cannot run round its edge.
     let transform = Transform { pos: [0.0, plane_y, 0.0], scale: [1.2; 3], ..Transform::default() };
@@ -841,10 +814,9 @@ fn matter_open_mesh_collider_holds_liquid() {
         ..SceneSettings::default()
     });
     let dx = scene.lattice().cell_size();
-    // The quad's lattice spacing is 1/32 of its side; the default 0.05 m
-    // thickness is under two spacings, so the shell is two spacings thick,
-    // scaled with the role.
-    let half_shell = 1.2 / 32.0;
+    // The default 0.05 m thickness is under two of the liquid's cells, so
+    // the shell is two cells thick (PreparedFluidGeometry::lattice_plan).
+    let half_shell = dx.max(0.025);
     until_ticking(&mut scene, |scene, _| scene.set_collider(0, transform));
     let (mut lowest, mut resting) = (f32::INFINITY, 0usize);
     for _ in 0..60 {

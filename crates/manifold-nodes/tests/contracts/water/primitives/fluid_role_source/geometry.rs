@@ -79,7 +79,7 @@ pub(super) mod tests {
             });
         }
         let transform = Transform { pos: [0.0, 2.0, 0.0], ..Transform::default() };
-        let first = prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).unwrap();
+        let first = prepare_wired_geometry(&wired, transform, GeometryMode::ExactMesh, 32).unwrap();
         assert_eq!(first[0].vertices.len(), 8);
         assert_eq!(first[0].triangles.len(), 12);
         assert!(first[0].vertices.iter().all(|v| v[1] >= 1.5 && v[1] <= 2.5));
@@ -90,14 +90,14 @@ pub(super) mod tests {
             selection.translate[0] = 0.25;
         }
         wired.part_transforms[1].pos[0] -= 0.25;
-        let moved = prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).unwrap();
+        let moved = prepare_wired_geometry(&wired, transform, GeometryMode::ExactMesh, 32).unwrap();
         assert_eq!(first[0].vertices, moved[0].vertices);
         assert_eq!(first[0].triangles, moved[0].triangles);
 
         if let Some(MeshSource::Gltf { selection, .. }) = &mut wired.sources[1] {
             selection.material = 0;
         }
-        let doubled = prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).unwrap();
+        let doubled = prepare_wired_geometry(&wired, transform, GeometryMode::ExactMesh, 32).unwrap();
         assert!(manifold_physics::closed_triangles(&doubled[0]).unwrap().contains(&false),
             "two copies of one half are an open surface, not the original closed cube");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -123,7 +123,7 @@ pub(super) mod tests {
             1,
             1.0,
             Transform::default(),
-            GeometryMode::ClosedMesh,
+            GeometryMode::ExactMesh,
             Some(&compound),
         )
         .unwrap();

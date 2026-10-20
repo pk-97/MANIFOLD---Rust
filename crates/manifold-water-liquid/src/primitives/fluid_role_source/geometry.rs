@@ -26,7 +26,7 @@ pub(crate) enum GeometryMode {
     CollisionProxy,
     /// The exact welded surface. Closed parts become volumes and open parts
     /// shells (`manifold_physics::sdf::signed_distance_union`).
-    ClosedMesh,
+    ExactMesh,
 }
 }
 
@@ -84,7 +84,7 @@ pub(crate) fn prepare_geometry(
                     .collect::<Result<Vec<_>, _>>()?
             }
         }
-        GeometryMode::ClosedMesh => {
+        GeometryMode::ExactMesh => {
             let vertices = if path.as_os_str().is_empty() {
                 let mut vertices = platonic_mesh(shape).to_vec();
                 for vertex in &mut vertices {
@@ -112,7 +112,7 @@ pub(crate) fn prepare_geometry(
         }
     };
 
-    if mode == GeometryMode::ClosedMesh {
+    if mode == GeometryMode::ExactMesh {
         for mesh in &meshes {
             manifold_physics::closed_triangles(mesh)
                 .map_err(|error| format!("{label}: {error}"))?;
@@ -153,7 +153,7 @@ pub(crate) fn prepare_wired_geometry(
                 manifold_physics::cook_hull_mesh(points).map_err(|error| error.to_string())
             })
             .collect(),
-        GeometryMode::ClosedMesh => {
+        GeometryMode::ExactMesh => {
             let mesh = weld_triangle_list(&vertices)?;
             manifold_physics::closed_triangles(&mesh).map_err(|error| error.to_string())?;
             Ok(vec![mesh])
@@ -313,7 +313,7 @@ pub(super) mod tests {
             1,
             1.0,
             Transform::default(),
-            GeometryMode::ClosedMesh,
+            GeometryMode::ExactMesh,
             None,
         )
         .unwrap();

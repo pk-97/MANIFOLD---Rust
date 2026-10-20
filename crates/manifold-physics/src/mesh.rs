@@ -119,11 +119,10 @@ fn copy_hull_mesh(hull: usize) -> Result<TriangleMesh, PhysicsError> {
     })
 }
 
-/// Checks that a mesh bounds only closed, outward-wound volumes
-/// ([`closed_triangles`] is true for every triangle). The native FLIP solver
-/// needs it: it signs its mesh level set by ray-crossing parity.
+/// Checks that a mesh bounds only closed, outward-wound volumes. The native
+/// FLIP solver needs it: it signs its mesh level set by ray-crossing parity.
 pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
-    if closed_triangles(mesh)?.contains(&false) {
+    if part_windings(mesh)?.iter().any(|&winding| winding != Winding::Outward) {
         return Err(PhysicsError::InvalidInput(
             "mesh must be closed, manifold and outward oriented",
         ));
@@ -131,14 +130,29 @@ pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
     Ok(())
 }
 
-/// Which triangles bound a closed, outward-wound volume, one flag per
-/// triangle. Triangles sharing an edge form a part. A part is closed when
-/// every edge it touches is shared by exactly two of its triangles with
-/// opposite winding and it encloses positive volume; any other part is an
-/// open surface. Errors only on geometry no distance can use: no triangles,
+/// Which triangles bound a closed volume, one flag per triangle. Triangles
+/// sharing an edge form a part. A part is closed when every edge it touches
+/// is shared by exactly two of its triangles with opposite winding and it
+/// encloses nonzero volume of either sign: an inside-out part (a mirrored
+/// node, a flipped export) is still a sealed volume, and a distance signs it
+/// by the magnitude of its winding number. Any other part is an open
+/// surface. Errors only on geometry no distance can use: no triangles,
 /// non-finite vertices, out-of-range indices, degenerate or zero-area
 /// triangles.
 pub fn closed_triangles(mesh: &TriangleMesh) -> Result<Vec<bool>, PhysicsError> {
+    Ok(part_windings(mesh)?.into_iter().map(|winding| winding != Winding::Open).collect())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Winding {
+    Open,
+    Outward,
+    Inward,
+}
+
+/// Each triangle's part: open, or sealed with positive (outward) or negative
+/// (inward) volume.
+fn part_windings(mesh: &TriangleMesh) -> Result<Vec<Winding>, PhysicsError> {
     if mesh.triangles.is_empty() {
         return Err(PhysicsError::InvalidInput("mesh has no triangles"));
     }
@@ -216,7 +230,7 @@ pub fn closed_triangles(mesh: &TriangleMesh) -> Result<Vec<bool>, PhysicsError> 
         }
     }
     let volume_epsilon = 1.0e-12 * scale.max(1.0).powi(3);
-    let mut closed = vec![false; mesh.triangles.len()];
+    let mut closed = vec![Winding::Open; mesh.triangles.len()];
     let mut visited = vec![false; mesh.triangles.len()];
     let mut part = Vec::new();
     for start in 0..mesh.triangles.len() {
@@ -248,11 +262,18 @@ pub fn closed_triangles(mesh: &TriangleMesh) -> Result<Vec<bool>, PhysicsError> 
                 }
             }
         }
-        let part_closed = volume.is_finite()
-            && volume > volume_epsilon
-            && part.iter().all(|&triangle| sealed[triangle]);
+        let winding = if !volume.is_finite()
+            || volume.abs() <= volume_epsilon
+            || !part.iter().all(|&triangle| sealed[triangle])
+        {
+            Winding::Open
+        } else if volume > 0.0 {
+            Winding::Outward
+        } else {
+            Winding::Inward
+        };
         for &triangle in &part {
-            closed[triangle] = part_closed;
+            closed[triangle] = winding;
         }
     }
     Ok(closed)
@@ -486,8 +507,8 @@ mod tests {
         }
     }
 
-    /// Each part is classified on its own; open, inward and non-manifold
-    /// parts are surfaces, not errors.
+    /// Each part is classified on its own; open and non-manifold parts are
+    /// surfaces, not errors, and a sealed part of either winding is closed.
     #[test]
     fn scene_physics_closed_triangles_classifies_each_part() {
         let cube = cube_mesh();
@@ -503,7 +524,8 @@ mod tests {
         for triangle in &mut inward.triangles {
             triangle.swap(1, 2);
         }
-        assert_eq!(closed_triangles(&inward).unwrap(), vec![false; 12]);
+        assert_eq!(closed_triangles(&inward).unwrap(), vec![true; 12], "an inside-out cube is still sealed");
+        assert!(validate_closed_mesh(&inward).is_err(), "the native solver still needs outward winding");
 
         let mut mixed = cube.clone();
         mixed.vertices.extend([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]]);
