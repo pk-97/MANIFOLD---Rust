@@ -1003,7 +1003,7 @@ impl ScenePanel {
                 row.object_node_id as usize,
                 row.group_node_id.unwrap_or(row.object_node_id),
             );
-        } else if row.look_mesh.is_none() {
+        } else if row.capabilities.modifiers {
             tree.add_label(
                 Some(self.content_parent),
                 inner_x,

@@ -1,6 +1,6 @@
 # Physics engine boundary — concrete engines, shared authoring
 
-**Status:** IN PROGRESS · 2026-10-09 · P1 landed in b3e492e63 after Tier 1; later phases pending.
+**Status:** IN PROGRESS · 2026-10-20 · P1, P2 and P3 built; later phases pending.
 **Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 shipped.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. P1 implementation is authorized by the post-T1 cleanup campaign; later phases retain their entry conditions.
 
@@ -344,14 +344,14 @@ pub fn insert_scene_template(
 
 `group` must be a complete ordinary group, with all scene-object outputs declared. Template-local stable NodeIds, document IDs, handles, numeric bindings, string bindings, and aliases are remapped once across the entire nested body. The template metadata contains only its own exposures; its preset identity/display fields do not replace the host's. Use the existing exposure stamper/provider (`C/scene_exposure.rs:44`, `:118`, `:190`), not cloned primitive descriptors.
 
-Insertion validates the selected render scene, capacity, graph references, and all metadata before changing anything. It allocates one group identity and fresh descendant identities; routes every declared output by port type (object slots and light slots, each count bumped by the number routed); increments the render-scene object count by the actual output count; merges exposures by ID; wires existing World controls through declared boundaries; and returns one candidate. A template whose outputs are `FluidRole` ports is a fluid source: it is placed beside `water`'s domain, inside the water's group, and each role output wires to the domain's next free `role_N`; it touches no render slot, and it is refused without a water or with no free role input. A standalone Inflow, Drain or Collider group feeding a water is its own scene item under that water, not part of the water's controls (D-94). returns one candidate. No `ExposureSet`, fixed category vectors, or positional binding alignment remains. Shared World creation uses the same provider, and is part of the candidate. Domain recognition uses the core index/list.
+Insertion validates the selected render scene, capacity, graph references, and all metadata before changing anything. It allocates one group identity and fresh descendant identities; routes every declared output by port type (object slots and light slots, each count bumped by the number routed); increments the render-scene object count by the actual output count; merges exposures by ID; wires existing World controls through declared boundaries; and returns one candidate. A template whose outputs are `FluidRole` ports is a fluid source: it is placed beside `water`'s domain, inside the water's group, and each role output wires to the domain's next free `role_N`; it touches no render slot, and it is refused without a water or with no free role input. A standalone Inflow, Drain or Collider group feeding a water is its own scene item under that water, not part of the water's controls (D-94). No `ExposureSet`, fixed category vectors, or positional binding alignment remains. Shared World creation uses the same provider, and is part of the candidate. Domain recognition uses the core index/list.
 
 `E/scene_template.rs` exposes:
 
 ```rust
 impl InsertSceneTemplateCommand {
     pub fn new(
-        project: &Project, target: GraphTarget, scene: SceneNodeRef,
+        project: &Project, target: GraphTarget, scene: SceneNodeRef, water: Option<SceneNodeRef>,
         template: SceneTemplate, catalog_default: &EffectGraphDef,
     ) -> Result<Self, SceneGraphEditError>;
 }
@@ -382,6 +382,9 @@ pub struct SceneObjectModel {
     pub kind: SceneObjectRowKind,
     pub controls: Vec<SceneNodeRef>,
     pub capabilities: SceneObjectCapabilities,
+    pub slot: Option<u32>,                   // render slot; None for an import group or a placed source
+    pub liquid_domain: Option<SceneNodeRef>, // the domain this row simulates or builds its surface from
+    pub doc_path: Vec<u32>,                  // the row by document ids, root first
 }
 pub fn scene_object_models(
     graph: &EffectGraphDef, scene: &SceneNodeRef,
@@ -399,6 +402,8 @@ Water's real object is the parent row; its owner is the Water group. The three w
 Only manifest-backed exposures selected by `controls` feed ParamSurface. Water parent selects simulation/emission/Amount/World sections plus its own look. Child selection includes only its material, Size, and visibility. It excludes body, transform, skin, role, and modifier cards. Role attach/retarget/remove and Enable Physics remain shared action rows driven by capabilities. All parameter writes, including existing-body enabled/visible toggles, use the manifest-backed scene parameter write path when a binding exists. There is no private physics modulation storage.
 
 Recompute models on structural revision changes. Reuse cached rows and buffers for value-only updates. Do not scan the graph or allocate a new ownership vector every frame.
+
+**As built (P3).** The row kind and capability types live in `crates/manifold-foundation/src/scene_surface.rs` so the UI reads them without core; core re-exports them. The model is a tolerant level walk over the authored graph, like the panel it feeds: `FlatSceneIndex` refuses a handle-less group or a repeated stable id, and such a scene must still list its objects. The index is used only through `liquid_domain_of`, for water built outside a family group. An imported group's object outputs resolve through every group-output sentinel, not the first. Water is the nearest group whose body holds exactly one liquid domain feeding one of its object outputs (`water_family`); its looks are listed in the group's output order. A placed Inflow, Drain or Collider is an `Object` row under its water, with `transform` set; `remove_placed_source` deletes its group, its wire into the water and its card rows in one undo. Gizmo eligibility reads `capabilities.transform`. `SceneVm::object_models` builds the models and `SceneVm::from_def_with_models` reuses them; each gizmo host's `EditorGraphCache` keeps them on its graph key, which leaves out Values, so a value write rebuilds the scene over the kept model. Scene-modifier cards in the inspector host as scene cards, so labelled whole-number params draw as choice rows there too. Projects saved before 1.22.0 pin, once on load, the card rows their layer card showed (Performance role, owned by an item, exposed, not folded under a switched-off feature); new scenes start with none pinned.
 
 **Shape declaration.** Every scene object's extent and handles come from one declaration: data, never per-kind Rust. The type lives in `crates/manifold-foundation/src/scene_surface.rs` beside `SceneParamDesc`, so the UI reads it without core. Param ids are `Cow<'static, str>`: manifests deserialize them, the node table declares them as constants.
 

@@ -202,12 +202,15 @@ pub(crate) fn filter_family_parameter_ids(
     ids: &mut Vec<String>,
 ) {
     let Some(metadata) = def.and_then(|def| def.preset_metadata.as_ref()) else { return; };
-    if row.look_mesh.is_none() && !(row.is_group && row.liquid_domain.is_some()) { return; }
+    use manifold_core::scene_surface::SceneObjectRowKind;
+    let look = row.kind == SceneObjectRowKind::LookChild;
+    let water = row.kind == SceneObjectRowKind::PhysicsParent && row.liquid_domain.is_some();
+    if !look && !water { return; }
     ids.retain(|id| {
         let Some(binding) = metadata.bindings.iter().find(|binding| &binding.id == id) else { return false; };
         match &binding.target {
             manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if node_id == &row.object => {
-                if row.look_mesh.is_some() { param == "visible" } else { param != "visible" }
+                if look { param == "visible" } else { param != "visible" }
             }
             _ => true,
         }
@@ -1028,7 +1031,7 @@ mod ownership_tests {
                     MaterialVm::Known(material) => material.node.clone(),
                     MaterialVm::None => panic!("{preset}: {} has no material", child.name),
                 };
-                let mesh = child.look_mesh.clone().expect("look mesh");
+                let mesh = child.look_node().expect("look mesh");
                 let owned = object_nodes(def.as_ref(), child);
                 assert!(owned.contains(&child.object));
                 assert!(owned.contains(&mesh));
@@ -1447,7 +1450,6 @@ mod ownership_tests {
         for grouped in [false, true] {
             let def = fluid_role_projection_fixture(grouped, true);
             let group_id = grouped.then_some(40);
-            assert_eq!(manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&def, group_id), if grouped { ids(&["role"]) } else { Vec::new() });
             let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["role", "mesh"]));
             filter_inactive_fluid_role_parameter_ids(Some(&def), group_id, &mut parameter_ids);
             assert_eq!(parameter_ids, expected_ids);

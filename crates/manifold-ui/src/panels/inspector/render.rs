@@ -562,6 +562,11 @@ impl InspectorCompositePanel {
         let existing = std::mem::take(&mut self.modifier_cards);
         self.modifier_cards =
             Self::reconcile_cards(existing, configs, &mut self.modifier_dying, self.card_context);
+        // A scene modifier card is a shared scene card: it draws labelled
+        // params as pick lists and switches (BUG-9rai8).
+        for card in &mut self.modifier_cards {
+            card.set_host(crate::panels::param_card::CardHost::SceneCard);
+        }
         self.selected_modifier_ids.retain(|id| configs.iter().any(|config| config.modifier.as_ref().is_some_and(|modifier| modifier.instance_id == *id)));
     }
 

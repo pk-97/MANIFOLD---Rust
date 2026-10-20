@@ -114,20 +114,6 @@ fn unique_wire_producer(
     Some((wire.from_node, wire.from_port.clone()))
 }
 
-/// D12: find the `node.scene_object` bound at this level — the producer of
-/// `group_out_id`'s `object` port. Mirrors `scene_vm.rs::find_scene_object_in_group`
-/// (duplicated for the same cross-crate reason as `MESH_MODIFIER_TYPE_IDS`).
-/// `None` when the level doesn't have this shape (unparseable/hand-edited
-/// group) — callers must refuse the edit, never guess.
-fn find_scene_object_at_group_output(
-    nodes: &[EffectGraphNode],
-    wires: &[EffectGraphWire],
-    group_out_id: u32,
-) -> Option<u32> {
-    let (producer_id, _) = unique_wire_producer(wires, group_out_id, "object")?;
-    let node = nodes.iter().find(|n| n.id == producer_id)?;
-    (node.type_id == "node.scene_object").then_some(producer_id)
-}
 
 /// `walk_mesh_modifier_chain`'s result: the modifier chain in wire order,
 /// the mesh source's own `(node_id, port)`, and the scene_object id for the
@@ -156,7 +142,7 @@ type RemoveModifierSnapshot = (
 ///      group's body contains its OWN `node.scene_object`, and the group
 ///      boundary re-exports only `object` — no `vertices` port at all. Walk
 ///      from the scene_object's own `vertices` INPUT port instead (resolved
-///      via `find_scene_object_at_group_output`).
+///      via `manifold_core::scene_object_model::scene_object_at_output`).
 ///   2. **Migrated/starter shape** (`migrate_scene_object_wires`, e.g. the
 ///      bundled `SceneStarter.json`): the minted `node.scene_object` stays a
 ///      ROOT-level SIBLING of this group rather than nested inside it — the
@@ -182,7 +168,7 @@ pub(super) fn walk_mesh_modifier_chain_at(
     group_output: bool,
 ) -> Option<ModifierChainWalk> {
     let scene_object_id = if group_output {
-        find_scene_object_at_group_output(nodes, wires, terminal_id)
+        manifold_core::scene_object_model::scene_object_at_output(nodes, wires, terminal_id, "object")
     } else {
         Some(terminal_id)
     };

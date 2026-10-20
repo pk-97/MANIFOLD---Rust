@@ -144,8 +144,16 @@ pub(crate) fn share_world_controls(
             _ => return Err("A control group has more than one input sentinel"),
         });
     }
-    if !group_body_mut(&mut def.nodes, &path)?.nodes.iter().any(|node| node.id == domain.node) {
-        return Err("The liquid domain node is unavailable");
+    let domain_type = group_body_mut(&mut def.nodes, &path)?
+        .nodes
+        .iter()
+        .find(|node| node.id == domain.node)
+        .map(|node| node.type_id.clone())
+        .ok_or("The liquid domain node is unavailable")?;
+    // Every shared control lands on a port the domain declares.
+    let domain_params = crate::param_lookup::node_params(&domain_type);
+    if CONTROLS.iter().any(|(_, fluid)| !domain_params.iter().any(|m| m.name == *fluid)) {
+        return Err("This liquid does not take the Physics World's controls");
     }
 
     for (world_param, fluid_param) in CONTROLS {

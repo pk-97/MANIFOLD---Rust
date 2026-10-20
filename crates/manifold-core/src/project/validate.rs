@@ -110,6 +110,10 @@ pub struct LoadReport {
     /// migration skipping a graph it can't place safely), handed off via
     /// `manifold-io`'s migrations note sink. Empty on a clean load.
     pub migration_notes: Vec<String>,
+    /// The file predates 1.22.0, whose scene cards show only pinned rows; the
+    /// app pins the rows the card used to show, once, on this load (D-103).
+    /// Not a repair, so it stays out of `is_empty`.
+    pub card_rows_unpinned: bool,
 }
 
 impl LoadReport {

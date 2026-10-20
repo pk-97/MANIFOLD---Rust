@@ -655,6 +655,15 @@ mod tests {
         let placed = body.nodes.iter().find(|node| node.handle.as_deref() == Some("Inflow 1")).expect("inside its water");
         assert!(body.wires.iter().any(|wire| wire.from_node == placed.id && wire.from_port == "role"
             && wire.to_node == 3 && wire.to_port == "role_1"));
+
+        // A water with every role input wired refuses, naming why.
+        let mut full = host.clone();
+        let body = full.nodes[1].group.as_deref_mut().unwrap();
+        body.wires = (0..crate::fluid_domain::MAX_FLUID_ROLES)
+            .map(|k| EffectGraphWire { from_node: 4, from_port: "role".into(), to_node: 3, to_port: format!("role_{k}") })
+            .collect();
+        let refused = insert_scene_template(&full, &scene(), Some(&water), &template).unwrap_err();
+        assert_eq!(refused.message, "The water has no free role inputs");
     }
 
     #[test]

@@ -183,7 +183,8 @@ pub fn load_project_from_json_with(
     // migrate_if_needed: migrate is forward-only, would pass a too-new file
     // to deserialize, which drops fields this build doesn't know (BUG-062),
     // and has no rungs below the floor.
-    if let Some(file_version) = raw_project_version(json) {
+    let file_version = raw_project_version(json);
+    if let Some(file_version) = file_version.clone() {
         use manifold_core::project::{CURRENT_PROJECT_VERSION, OLDEST_LOADABLE_PROJECT_VERSION};
         if migrate::is_version_less_than(CURRENT_PROJECT_VERSION, &file_version) {
             return Err(LoadError::TooNew {
@@ -223,6 +224,8 @@ pub fn load_project_from_json_with(
     // upgrade summaries) into the load report so the "opened with repairs"
     // toast surfaces them (CINEMATIC_SCENE_TAIL D3's I5).
     project.load_report.migration_notes = crate::migrations::take_migration_notes();
+    project.load_report.card_rows_unpinned =
+        file_version.is_some_and(|version| migrate::is_version_less_than(&version, "1.22.0"));
 
     // CPU FLIP is retired from the product path, but projects still own their
     // authored graph topology and parameter values. Surface one explicit load

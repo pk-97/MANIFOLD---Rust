@@ -1,5 +1,6 @@
-//! The one undoable scene insertion: every Add menu entry that places a group
-//! in a render scene goes through [`InsertSceneTemplateCommand`].
+//! The undoable scene insertion and placed-source removal: every Add menu
+//! entry that places a group in a render scene goes through
+//! [`InsertSceneTemplateCommand`].
 
 use manifold_core::GraphTarget;
 use manifold_core::change::ChangeSet;
@@ -43,6 +44,58 @@ impl InsertSceneTemplateCommand {
 }
 
 impl Command for InsertSceneTemplateCommand {
+    fn touches(&self) -> ChangeSet {
+        self.transaction.touches()
+    }
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+    fn do_execute(&mut self, project: &mut Project) {
+        self.transaction.execute(project);
+    }
+    fn do_undo(&mut self, project: &mut Project) {
+        self.transaction.undo(project);
+    }
+    fn description(&self) -> &str {
+        self.transaction.description
+    }
+    fn was_applied(&self) -> bool {
+        self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        match self.transaction.error()? {
+            SceneGraphRejection::MissingOwner => Some("Scene owner is no longer present"),
+            SceneGraphRejection::PresetTypeChanged => Some("Scene type changed while preparing this edit"),
+            SceneGraphRejection::StaleOwner => Some("Scene graph changed while preparing this edit"),
+            SceneGraphRejection::Noop => None,
+        }
+    }
+}
+
+/// Remove a placed Inflow, Drain or Collider from its water: the source
+/// group, its role wire and its card rows, as one undo entry
+/// (BUG-dphvp (delete for placed sources)).
+#[derive(Debug)]
+pub struct RemoveScenePlacedSourceCommand {
+    transaction: SceneGraphTransaction,
+}
+
+impl RemoveScenePlacedSourceCommand {
+    pub fn new(
+        project: &Project,
+        target: GraphTarget,
+        source: SceneNodeRef,
+        catalog_default: &EffectGraphDef,
+    ) -> Result<Self, SceneGraphEditError> {
+        Ok(Self {
+            transaction: SceneGraphTransaction::prepare(project, target, catalog_default, "Remove Source", |graph| {
+                manifold_core::scene_object_model::remove_placed_source(graph, &source)
+            })?,
+        })
+    }
+}
+
+impl Command for RemoveScenePlacedSourceCommand {
     fn touches(&self) -> ChangeSet {
         self.transaction.touches()
     }

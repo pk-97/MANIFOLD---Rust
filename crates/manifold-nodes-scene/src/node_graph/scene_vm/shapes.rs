@@ -121,8 +121,9 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
     let rows = known_rows(objects);
     let mut out = Vec::new();
     for row in &rows {
-        // A liquid-built surface is placed by its domain, not its transform.
-        if row.liquid_domain.is_some() || (row.transform.is_none() && !row.transform_chain_parseable) {
+        // The model says which rows move by their transform: a liquid-built
+        // surface is placed by its domain, a water look by its water.
+        if !row.capabilities.transform || (row.transform.is_none() && !row.transform_chain_parseable) {
             continue;
         }
         let frame = row.parent_group_id.and_then(|id| {

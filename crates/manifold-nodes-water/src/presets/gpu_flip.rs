@@ -877,13 +877,15 @@ fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortD
         .collect()
 }
 
+/// The water family group's stable node id in the bundled presets.
+const FAMILY_NODE_ID: &str = "water_family";
+
 /// The family `body` wrapped as one group node: its interface declares every
-/// object output, so a host routes them by port type. The one place the
-/// family's node id is written.
+/// object output, so a host routes them by port type.
 fn wrap_family(body: EffectGraphDef, role_input: bool) -> EffectGraphNode {
     let local_id = body.nodes.iter().map(|node| node.id).max().map_or(1, |max| max + 1);
     let mut group: EffectGraphNode = serde_json::from_value(json!({
-        "id": local_id, "nodeId": "water_family", "typeId": "group", "handle": "{handle} Graph",
+        "id": local_id, "nodeId": FAMILY_NODE_ID, "typeId": "group", "handle": "{handle} Graph",
     }))
     .expect("family group node");
     let inputs = if role_input {
@@ -978,7 +980,7 @@ const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_me
 fn assert_preset_root(nodes: &[EffectGraphNode]) {
     for node in nodes {
         assert!(DRESSING.contains(&node.node_id.as_str()) || matches!(node.node_id.as_str(),
-            "water_family" | "obstacle_transform" | "obstacle_collider" | "obstacle_mesh" |
+            FAMILY_NODE_ID | "obstacle_transform" | "obstacle_collider" | "obstacle_mesh" |
             "obstacle_material" | "obstacle_object"),
             "unclassified top-level preset node would be discarded: {}", node.node_id.as_str());
     }
@@ -998,7 +1000,7 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     let render = b.id("scene");
     let body = scene.family_def();
     let family_metadata = body.preset_metadata.clone().expect("family metadata");
-    let family = b.node("water_family", "group", json!({}));
+    let family = b.node(FAMILY_NODE_ID, "group", json!({}));
     let node = b.nodes.last_mut().expect("family");
     node.handle = Some("Water".into());
     node.group = wrap_family(body, scene.obstacle).group;
@@ -1116,7 +1118,7 @@ const ICOSAHEDRON: usize = 3;
 #[cfg(any(test, feature = "testkit"))]
 pub fn particle_view_def() -> EffectGraphDef {
     let mut def = render_def(WaterScene::dam_break(64));
-    let family = find_node_mut(&mut def.nodes, "water_family").expect("Water family");
+    let family = find_node_mut(&mut def.nodes, FAMILY_NODE_ID).expect("Water family");
     let group = family.group.as_mut().expect("family group");
     let mut b = Builder { nodes: std::mem::take(&mut group.nodes), wires: std::mem::take(&mut group.wires) };
     // The particles are already the picture: no surface and no Physics View.

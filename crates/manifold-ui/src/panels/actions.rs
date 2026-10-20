@@ -253,6 +253,8 @@ pub enum ProjectAction {
     /// app resolves the scene and builds the template.
     SceneSetupInsertTemplate {
         layer_id: LayerId,
+        /// The scene the entry was opened on, as Import Model carries it.
+        render_scene_node_id: u32,
         kind: manifold_foundation::scene_surface::SceneTemplateKind,
         /// The liquid domain an Inflow, Drain or Collider goes into; `None`
         /// for every other kind.
@@ -310,6 +312,9 @@ pub enum ProjectAction {
     /// render_scene_node_doc_id, object_index)`. Dispatches the new
     /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupInsertTemplate`.
     SceneSetupRemoveObject(LayerId, u32, u32),
+    /// A placed Inflow, Drain or Collider's ✕: `(layer_id, role node)`.
+    /// Removes its group and role wire as one undo entry.
+    SceneSetupRemoveSource(LayerId, manifold_foundation::NodeId),
     /// Remove one physical child mesh inside a compound scene object:
     /// `(layer_id, render_scene_node_doc_id, physical_index)`.
     SceneSetupRemoveSubmesh(LayerId, u32, u32),

@@ -99,7 +99,7 @@ Paths abbreviated after first use: `R/` = `crates/manifold-nodes/src/node_graph/
 | FLIP domain node | (retired with CPU FLIP; in git history) (`node.fluid_surface`), `:38-101` (`role_0..role_63: FluidRole`), `:102` (`acceleration_field: VectorField`), `:103` (`domain`, legacy `initial_volume` Transforms), `:115-121` (outputs), `:123-145` (params: seed, resolution, grid budget, six closed faces, fill height, density, gravity XYZ, speed, reset, …) | Exists. Its scene-facing ports and params are the contract `node.matter_domain` mirrors (D17). |
 | Scene layer keyed on the FLIP type id | `rg -n '"node\.fluid_surface"' crates -g '*.rs'` → 94 hits in 46 files at `c8961489d`; 53 in 25 non-test files, about 40 of them outside inline test modules, across `manifold-core` (scene-object migration, exposure tables, file loader), `manifold-editing` (Add Fluid, role commands), `manifold-app` (domain gizmo, scene projection), `manifold-nodes` (physics sampling, sources, carry, impulses, scene exposure, scene VM, force recipients, graph loader) | Exists. Every site tests a string literal; there is no liquid-domain predicate. P3a's seam (D17). |
 | Role wire | `R/fluid_role.rs:20-25` (`FluidRoleKind`: InitialFill, Inflow, Outflow, Collider), `:36-44` (payload: `Arc<PreparedFluidGeometry { meshes: Vec<TriangleMesh> }>`, transform, enabled, velocity, inherit_motion, friction) | Exists, solver-agnostic. Consumed unchanged. |
-| Add Fluid and role authoring | `crates/manifold-editing/src/commands/graph/scene/fluid.rs:40` (`AddSceneFluidCommand`), `…/scene/fluid/roles.rs:24`; param surfaces `crates/manifold-ui/src/param_surface.rs` | Exists. P4b extends the command; role commands ride the predicate. |
+| Add Water and role authoring | `crates/manifold-editing/src/scene_template.rs` (`InsertSceneTemplateCommand`, the Water template), `…/scene/fluid/roles.rs:24`; param surfaces `crates/manifold-ui/src/param_surface.rs` | Exists. A matter template rides the same insertion; role commands ride the predicate. |
 | Force recipients | `R/scene_modifier_expand/acceleration.rs:110` (a fluid is found as the producer of a scene object's `vertices`), `:267` (`ImpulseTarget::Fluid`) | Exists. Assumes the domain node itself feeds the object's mesh — false once a surface group sits in between (for FLIP too, after surface P7). P3a fixes the walk. |
 | Domain layout oracle | (retired with CPU FLIP; in git history) (`domain_layout`) | Exists. The matter lattice uses it, so both solvers share cell size in the side-by-side. |
 | Shared physics vocabulary | `P/input.rs` (`InputHistory`, `EventQueue`), `P/interaction.rs:5` (`VectorField`), `:11` (`FieldInput`), `:21` (`TickStamp`), `:238` (`SampledField`); `P/mesh.rs:9` (`TriangleMesh`), `:53` (`hull_meshes`); `P/lib.rs:958` (`dynamics`), `:1053` (`apply_impulses`) | Exists. Reused for pose history, events, fields, geometry and reactions. |
@@ -1201,7 +1201,7 @@ quiet exemption.
 | "Is this a liquid domain" | one `is_liquid_domain` predicate replacing the literals (P3a) | a matter branch at each site |
 | Scene object → its domain | `liquid_domain_of`, walking upstream through the surface group | a matter-object registry |
 | Roles on objects | `FluidRole`, `FluidRoleKind`, the Scene Panel role commands | matter role kinds or commands |
-| Add Fluid | `AddSceneFluidCommand`, extended in P4b | an Add Matter command or panel |
+| Add Fluid | the Water scene template through `InsertSceneTemplateCommand` | an Add Matter template |
 | Inspector and controls | param surfaces (`param_surface.rs`), scene exposure tables | bespoke rows, drawers or a matter inspector |
 | Animated pose history | `manifold-physics::input::InputHistory`, `physics_sampling` | a matter pose buffer |
 | Forces | `VectorField`, `acceleration_field`, Scene Forces recipes | matter force nodes |
@@ -1765,11 +1765,11 @@ the gate was; it does not run for water.
 
 Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liquid template).
 
-- **Entry state:** a closed `decision` bead with Peter's go from P4. Anchor: `rg -n 'pub struct AddSceneFluidCommand' crates/manifold-editing/src/commands/graph/scene/fluid.rs`.
+- **Entry state:** a closed `decision` bead with Peter's go from P4. Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `crates/manifold-editing/src/scene_template.rs`; `AddSceneFluidCommand` is deleted (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.1 (Shared edit and insertion API)).
 - **Read-back:** D17, D22, D23; GROUPING_GRAPHS.md.
-- **Deliverables:** `AddSceneFluidCommand` inserts the Live Matter and Liquid Surface
+- **Deliverables:** the Water template inserts the Live Matter and Liquid Surface
   groups instead of `node.fluid_surface`, with Peter's Liveliness default; if the
-  surface design's P7 already landed, its FLIP producer is replaced in the same command.
+  surface design's P7 already landed, its FLIP producer is replaced in the same template.
   Test `scene_physics_add_fluid_matter_undo_reload`; flow
   `scripts/ui-flows/scene-fluid-matter.json` (add → play → move source → undo/redo →
   save/reload → play); every `scene-fluid-*` flow on disk passes (count them).

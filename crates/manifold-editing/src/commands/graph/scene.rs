@@ -2041,30 +2041,6 @@ fn find_scene_object_scope(
     None
 }
 
-/// Recognise the primary Water output, including Particle View's copies path.
-/// Keep aligned with manifold-nodes scene_vm::discover_water_families:
-/// four distinct object outputs (water, foam, spray, bubbles), with water
-/// reaching the group's sole liquid domain. Editing cannot depend on renderer;
-/// app's water_family_recognizers_agree test checks both through real renames.
-fn is_water_family_parent(group: &GroupDef, object: u32) -> bool {
-    let mut domains = group.nodes.iter().filter(|node|
-        manifold_core::liquid_domain::is_liquid_domain(&node.type_id));
-    let Some(domain) = domains.next() else { return false; };
-    if domains.next().is_some() || !upstream_ids_for_child(group, object).contains(&domain.id) {
-        return false;
-    }
-    let mut members = std::collections::HashSet::new();
-    ["object", "object_1", "object_2", "object_3"].iter().all(|port| {
-        let Some(wire) = group.wires.iter().find(|wire| wire.to_port == *port
-            && group.nodes.iter().any(|node| node.id == wire.to_node
-                && node.type_id == GROUP_OUTPUT_TYPE_ID)) else { return false; };
-        (*port != "object" || wire.from_node == object)
-            && group.nodes.iter().any(|node| node.id == wire.from_node
-                && node.type_id == "node.scene_object")
-            && members.insert(wire.from_node)
-    })
-}
-
 #[derive(Debug)]
 pub struct RenameSceneObjectCommand {
     target: GraphTarget,
@@ -2152,7 +2128,7 @@ impl Command for RenameSceneObjectCommand {
                     let group_id = *nested_scope.last()?;
                     let (owners, _) = descend_level(&mut def.nodes, &mut def.wires, group_scope)?;
                     let owner = owners.iter().find(|node| node.id == group_id)?;
-                    if owner.group.as_deref().is_some_and(|body| is_water_family_parent(body, producer_id)) {
+                    if owner.group.as_deref().and_then(manifold_core::scene_object_model::water_family).is_some_and(|family| family.parent == producer_id) {
                         if owners.iter().any(|node| node.id != group_id
                             && node.handle.as_deref() == Some(new_handle.as_str())) {
                             return None;

@@ -461,7 +461,8 @@
     "work-browser-search": "inspector",
     "work-perform-exit": "timeline",
     "trigger-lane-sibling": "envmod",
-    "card-collapse-all": "gltfscene"
+    "card-collapse-all": "gltfscene",
+    "scene-physics-shared-cards": "gltfscene"
   },
   "expected_fail": {
     "scene-forces-controls": {

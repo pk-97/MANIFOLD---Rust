@@ -82,8 +82,10 @@ fn water_family_inflow_inserts_inside_its_water() {
     dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state,
         &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
     assert_eq!(effective_def(&project, &layer), before, "UI only queues content edits");
-    let Ok(ContentCommand::ExecuteOnContent(command)) = rx.try_recv() else { panic!("an Inflow inserts on content") };
+    let Ok(ContentCommand::ExecuteSelecting(command, select)) = rx.try_recv() else { panic!("an Inflow inserts on content") };
+    assert!(matches!(select, crate::edit_selection::SelectAfterEdit::NewSource(_)), "the new source is selected");
     assert!(rx.is_empty());
+    let pending = select.capture(&project);
     let mut editing = EditingService::new();
     editing.execute(command, &mut project);
     assert_eq!(editing.take_rejection(), None);
@@ -98,12 +100,39 @@ fn water_family_inflow_inserts_inside_its_water() {
     let row = water_row(&added);
     let [placed] = row.placed_sources.as_slice() else { panic!("one placed source: {:?}", row.placed_sources) };
     assert_eq!(placed.name, "Inflow 1");
-    assert!(!row.fluid_controls.iter().any(|node| placed.owned.contains(node)), "the Inflow's controls are its own row's");
+    assert!(!row.control_nodes().iter().any(|node| placed.owned.contains(node)), "the Inflow's controls are its own row's");
 
+    // Placed at the top centre of the water's simulated box.
+    let box_ = row.fluid_domain.expect("the water's box");
+    let inflow_transform = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == "node.transform_3d").unwrap();
+    let at = |name: &str| match inflow_transform.params.get(name) {
+        Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => *value,
+        other => panic!("{name}: {other:?}"),
+    };
+    for (axis, name) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+        let value = at(name);
+        assert!(value > box_.min[axis] && value < box_.min[axis] + box_.size[axis], "{name} {value} inside {box_:?}");
+    }
+    assert!(at("pos_y") > box_.min[1] + box_.size[1] * 0.5, "an Inflow starts in the top half");
+
+    // The receipt selects the Inflow and unfolds its water, so its row and
+    // gizmo show.
+    let update = crate::edit_selection::EditSelectionUpdate { sequence: 1, selection: pending.resolve(&project).expect("the Inflow is found") };
+    assert!(crate::edit_selection::apply_update(&mut ui, &project, Some(&update), &mut selection, &mut active));
     sync(&mut ui, &project, &selection);
+    assert_eq!(
+        ui.scene_setup_panel.live_selection(),
+        Some(&manifold_ui::panels::scene_setup_panel::SceneSelection::Source(placed.node.clone()))
+    );
     let rows = scene_tree_rows(&mut ui);
     let at = rows.iter().position(|name| name == &water.name).expect("the water row");
-    assert_eq!(rows.get(at + 1).map(String::as_str), Some("Inflow 1"), "the Inflow lists under its water: {rows:?}");
+    let children = SceneVm::from_def(&added)
+        .unwrap()
+        .objects
+        .iter()
+        .filter(|object| matches!(object, SceneObjectVm::Known(child) if child.parent_group_id == Some(water.object_node_id)))
+        .count();
+    assert_eq!(rows.get(at + children + 1).map(String::as_str), Some("Inflow 1"), "the Inflow lists after the water's children: {rows:?}");
 
     assert!(editing.undo(&mut project));
     assert_eq!(effective_def(&project, &layer), before, "one undo takes the Inflow out");
@@ -125,4 +154,94 @@ fn water_family_inflow_inserts_inside_its_water() {
     let reloaded = manifold_io::loader::load_project_from_json(&saved).expect("real project load pipeline");
     assert_eq!(effective_def(&reloaded, &layer), moved, "the Inflow's nodes, wires and cards survive a reload");
     assert_eq!(height(&reloaded), 2.5);
+}
+
+/// BUG-dphvp: Delete on a placed source takes its group and its wire into the
+/// water out in one undo step; redo takes them out again.
+#[test]
+fn physics_boundary_delete_placed_source_one_undo() {
+    let (mut project, layer, _) = super::water_family::water_project();
+    let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+    selection.select_layer(layer.clone());
+    selection.pin_scope(manifold_ui::InspectorTab::Scene);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut editing = EditingService::new();
+    let mut run = |action: &ProjectAction, project: &mut Project, ui: &mut UIRoot, selection: &mut SelectionState| {
+        dispatch_project(action, &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx), &tx, &state,
+            ui, selection, &mut active, &mut prefs, Default::default());
+        let command = match rx.try_recv() {
+            Ok(ContentCommand::ExecuteSelecting(command, _) | ContentCommand::ExecuteOnContent(command)) => command,
+            Ok(ContentCommand::GraphEditRejected(reason)) => panic!("refused: {reason}"),
+            _ => panic!("a content edit"),
+        };
+        editing.execute(command, project);
+        assert_eq!(editing.take_rejection(), None);
+    };
+    sync(&mut ui, &project, &selection);
+    let menu = ui.scene_setup_panel.add_menu(manifold_ui::panels::scene_setup_panel::SceneGroup::Objects);
+    let Some(manifold_ui::PanelAction::Project(insert)) = menu.iter().find(|entry| entry.label == "Drain").and_then(|entry| entry.action.clone())
+    else { panic!("Drain in the Add menu") };
+    run(&insert, &mut project, &mut ui, &mut selection);
+    let added = effective_def(&project, &layer);
+    let water = water_row(&added);
+    let [placed] = water.placed_sources.as_slice() else { panic!("one placed source") };
+
+    sync(&mut ui, &project, &selection);
+    ui.scene_setup_panel.set_selection(layer.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Source(placed.node.clone()));
+    let Some(manifold_ui::PanelAction::Project(remove)) = ui.scene_setup_panel.remove_selection_action() else {
+        panic!("Delete on a source removes it")
+    };
+    assert!(matches!(&remove, ProjectAction::SceneSetupRemoveSource(_, node) if *node == placed.node));
+    run(&remove, &mut project, &mut ui, &mut selection);
+    let removed = effective_def(&project, &layer);
+    let level = domain_level(&removed, &water);
+    assert!(!level.nodes.iter().any(|node| node.type_id == GROUP_TYPE_ID && node.handle.as_deref() == Some("Drain 1")), "the Drain's group is gone");
+    let group = source_group(domain_level(&added, &water), "Drain 1").id;
+    assert!(!level.wires.iter().any(|wire| wire.from_node == group || wire.to_node == group), "no wire is left dangling");
+    assert!(water_row(&removed).placed_sources.is_empty());
+
+    assert!(editing.undo(&mut project));
+    assert_eq!(effective_def(&project, &layer), added, "one undo brings the Drain back");
+    assert!(editing.redo(&mut project));
+    assert_eq!(effective_def(&project, &layer), removed);
+}
+
+/// Inserting into an imported scene keeps every imported row: the model
+/// still lists the import's group and its parts.
+#[test]
+fn physics_boundary_insert_keeps_imported_rows() {
+    let (graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb")).expect("the azalea imports");
+    let mut imported = manifold_core::layer::Layer::new_generator("Azalea".into(), PresetTypeId::new("Scene"), 0);
+    let host = imported.gen_params_mut().unwrap();
+    host.graph = Some(graph);
+    host.refresh_manifest_from_graph();
+    let layer = imported.layer_id.clone();
+    let mut project = Project::default();
+    project.timeline.layers.push(imported);
+    let rows = |project: &Project| -> Vec<String> {
+        SceneVm::from_def(&effective_def(project, &layer)).unwrap().objects.iter().map(|object| match object {
+            SceneObjectVm::Known(row) => format!("{}:{:?}:{:?}", row.name, row.kind, row.parent_group_id),
+            SceneObjectVm::Custom { index } => format!("custom {index}"),
+        }).collect()
+    };
+    let before = rows(&project);
+    let mut editing = EditingService::new();
+    for kind in [manifold_core::scene_surface::SceneTemplateKind::Object, manifold_core::scene_surface::SceneTemplateKind::Water] {
+        let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let action = crate::ui_bridge::project::insert_template_action(&project, layer.clone(), kind);
+        dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state,
+            &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        let command = match rx.try_recv() {
+            Ok(ContentCommand::ExecuteSelecting(command, _)) => command,
+            Ok(ContentCommand::GraphEditRejected(reason)) => panic!("{kind:?} refused: {reason}"),
+            _ => panic!("{kind:?} queued nothing"),
+        };
+        editing.execute(command, &mut project);
+        assert_eq!(editing.take_rejection(), None);
+    }
+    let after = rows(&project);
+    assert!(after.iter().all(|row| !row.starts_with("custom")), "before {before:?}\nafter {after:?}");
+    assert!(before.iter().all(|row| after.contains(row)), "before {before:?}\nafter {after:?}");
 }

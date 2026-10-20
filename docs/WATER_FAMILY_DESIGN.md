@@ -112,7 +112,7 @@ shared recipe. Render builders and fixture edits resolve nodes through the group
 `LiquidTemplate` retains its fields and adds `pub object_outputs: Vec<String>`;
 single-output literals get `vec!["object".into()]`, family literals all four.
 Insertion reserves physical slots from the content-owned count atomically.
-`AddSceneFluidCommand::new` keeps its signature. `ExposureSet::Whitewater` uses
+The Water scene template keeps this recipe (`AddSceneFluidCommand` is deleted). `ExposureSet::Whitewater` uses
 `with_whitewater_metadata`; Size and Sheet Fill Rate bindings belong to the family recipe.
 
 `TemplateExposure` also needs a shared-binding form: one exposure ID and explicit

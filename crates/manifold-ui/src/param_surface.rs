@@ -377,12 +377,12 @@ impl ParamRow {
     /// the node reads it past 0.5.
     ///
     /// `scene` is the surface's fact, the card's `CardHost` set by the panel
-    /// that hosts it. The scene card and the Scene tab draw
-    /// labelled params as switches and pick lists; other cards keep them
-    /// sliders, whose driver lane is a performance tool there. A labelled row
-    /// with a modulator or mapping stored on it, armed or disarmed, stays a
-    /// slider anywhere: its D, E and A lane is the only way back to a
-    /// disarmed modulator.
+    /// that hosts it. The scene card, the inspector's scene modifier cards and
+    /// the Scene tab draw labelled params as switches and pick lists; other
+    /// cards keep them sliders, whose driver lane is a performance tool
+    /// there. A labelled row with a modulator or mapping stored on it, armed
+    /// or disarmed, stays a slider anywhere: its D, E and A lane is the only
+    /// way back to a disarmed modulator.
     ///
     /// On a scene surface the R channel of a grouped colour is the colour
     /// row, modulated or not: its fold keeps each channel's slider and lane.

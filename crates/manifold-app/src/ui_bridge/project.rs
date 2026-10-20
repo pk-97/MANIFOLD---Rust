@@ -11,13 +11,32 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
-/// The Add menu's insert action for ``, as the menu fires it.
+/// The Add menu's insert action for `kind` into the scene `render`.
+#[cfg(test)]
+pub(crate) fn insert_template_action_at(
+    layer_id: LayerId,
+    render: u32,
+    kind: manifold_core::scene_surface::SceneTemplateKind,
+) -> ProjectAction {
+    ProjectAction::SceneSetupInsertTemplate { layer_id, render_scene_node_id: render, kind, water: None }
+}
+
+/// The Add menu's insert action for `kind` into the layer's only scene.
 #[cfg(test)]
 pub(crate) fn insert_template_action(
+    project: &Project,
     layer_id: LayerId,
     kind: manifold_core::scene_surface::SceneTemplateKind,
 ) -> ProjectAction {
-    ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water: None }
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let def = crate::graph_target::resolve(project, &target).expect("a generator graph");
+    let render = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID)
+        .expect("a scene")
+        .id;
+    insert_template_action_at(layer_id, render, kind)
 }
 
 fn scene_object_source_identity(
@@ -523,7 +542,7 @@ pub(super) fn dispatch_project(
         // The one Add menu's scene entries: every kind is a template inserted
         // through `InsertSceneTemplateCommand`, prepared here against the
         // current scene so a refusal surfaces before anything is queued.
-        ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water } => {
+        ProjectAction::SceneSetupInsertTemplate { layer_id, render_scene_node_id, kind, water } => {
             use manifold_core::scene_surface::SceneTemplateKind as Kind;
             use manifold_core::effect_graph_def::SerializedParamValue;
             use manifold_nodes_scene::node_graph::scene_templates as templates;
@@ -536,9 +555,12 @@ pub(super) fn dispatch_project(
                 let render = def
                     .nodes
                     .iter()
-                    .find(|node| node.type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID)
-                    .ok_or("This layer has no scene")?;
-                let scene = manifold_core::SceneNodeRef::locate(def, &render.node_id).ok_or("The scene is no longer available")?;
+                    .find(|node| {
+                        node.id == *render_scene_node_id
+                            && node.type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID
+                    })
+                    .ok_or("The scene is no longer available")?;
+                let scene =manifold_core::SceneNodeRef::locate(def, &render.node_id).ok_or("The scene is no longer available")?;
                 let count = |name: &str| match render.params.get(name) {
                     Some(SerializedParamValue::Float { value }) => *value as u32,
                     Some(SerializedParamValue::Int { value }) => *value as u32,
@@ -546,6 +568,26 @@ pub(super) fn dispatch_project(
                 };
                 let objects = count("objects");
                 let lights = count("lights");
+                let water = match water {
+                    Some(water) => {
+                        Some(manifold_core::SceneNodeRef::locate(def, water).ok_or("The water is no longer in this scene")?)
+                    }
+                    None => None,
+                };
+                // A source is placed inside its water's simulated box.
+                let source = |kind| {
+                    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+                    let water = water.as_ref().ok_or("Select the water this goes into")?;
+                    SceneVm::from_def(def)
+                        .and_then(|vm| {
+                            vm.objects.into_iter().find_map(|row| match row {
+                                SceneObjectVm::Known(row) if row.liquid_domain.as_ref() == Some(water) => row.fluid_domain,
+                                _ => None,
+                            })
+                        })
+                        .map(|domain| templates::role_source_template(kind, &domain))
+                        .ok_or("The water has no box to place this in")
+                };
                 let template = match kind {
                     Kind::Object => templates::object_template(objects, (900.0, 200.0 + 40.0 * objects as f32)),
                     Kind::Plane => {
@@ -555,27 +597,21 @@ pub(super) fn dispatch_project(
                     }
                     Kind::Light => templates::light_template((-260.0, 50.0 + 40.0 * lights as f32)),
                     Kind::Water => manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(),
-                    Kind::Inflow => templates::role_source_template(templates::RoleSourceKind::Inflow),
-                    Kind::Drain => templates::role_source_template(templates::RoleSourceKind::Drain),
-                    Kind::Collider => templates::role_source_template(templates::RoleSourceKind::Collider),
-                };
-                let water = match water {
-                    Some(water) => {
-                        Some(manifold_core::SceneNodeRef::locate(def, water).ok_or("The water is no longer in this scene")?)
-                    }
-                    None => None,
+                    Kind::Inflow => source(templates::RoleSourceKind::Inflow)?,
+                    Kind::Drain => source(templates::RoleSourceKind::Drain)?,
+                    Kind::Collider => source(templates::RoleSourceKind::Collider)?,
                 };
                 manifold_editing::scene_template::InsertSceneTemplateCommand::new(project, target.clone(), scene, water, template, &default)
                     .map_err(|error| error.message)
             })();
             match prepared {
-                // A source lists under its water, so the selection stays.
-                Ok(command) if matches!(kind, Kind::Inflow | Kind::Drain | Kind::Collider) => {
-                    ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
-                }
                 Ok(command) => {
+                    // A new source is selected so its gizmo shows at once.
                     let select = match kind {
                         Kind::Light => crate::edit_selection::SelectAfterEdit::NewLight(layer_id.clone()),
+                        Kind::Inflow | Kind::Drain | Kind::Collider => {
+                            crate::edit_selection::SelectAfterEdit::NewSource(layer_id.clone())
+                        }
                         _ => crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                     };
                     ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(Box::new(command), select));
@@ -640,6 +676,27 @@ pub(super) fn dispatch_project(
                         "The selected fluid role or target is no longer available".into(),
                     ));
                 }
+            }
+            DispatchResult::handled()
+        }
+        // A placed Inflow, Drain or Collider: its group and its wire into the
+        // water go in one undo step (BUG-dphvp).
+        ProjectAction::SceneSetupRemoveSource(layer_id, node) => {
+            let Some(default) = generator_catalog_default(project, layer_id) else {
+                return DispatchResult::handled();
+            };
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            let prepared = project
+                .graph_for_target(&target, Some(&default))
+                .and_then(|def| manifold_core::SceneNodeRef::locate(def, node))
+                .ok_or_else(|| "The source is no longer in this scene".to_string())
+                .and_then(|source| {
+                    manifold_editing::scene_template::RemoveScenePlacedSourceCommand::new(project, target, source, &default)
+                        .map_err(|error| error.message)
+                });
+            match prepared {
+                Ok(command) => ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(command))),
+                Err(message) => ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(message)),
             }
             DispatchResult::handled()
         }
@@ -1436,6 +1493,16 @@ mod tests {
         (project, layer_id, render_scene_id)
     }
 
+    /// The role nodes the scene row of `group_id`'s object owns.
+    fn scene_row_role_nodes(def: &manifold_core::effect_graph_def::EffectGraphDef, group_id: Option<u32>) -> Vec<manifold_core::NodeId> {
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).expect("a scene");
+        vm.objects.iter().filter_map(|object| match object {
+            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) if row.group_node_id == group_id && row.parent_group_id.is_none() => Some(row),
+            _ => None,
+        }).flat_map(|row| row.controls.iter().filter(|control: &&manifold_core::SceneNodeRef| control.resolve(def).is_some_and(|node| node.type_id == "node.fluid_role_source"))
+            .map(|control| control.node.clone()).collect::<Vec<_>>()).collect()
+    }
+
     /// The layer's CURRENT effective def — the per-instance override once
     /// one exists (post-edit), falling back to the bundled catalog default
     /// beforehand (pre-edit: a fresh `Scene` layer has no override
@@ -1654,7 +1721,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
 
         dispatch_project(
-            &crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Object),
+            &crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Object),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
@@ -1955,7 +2022,7 @@ mod tests {
             dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         dispatch_project(
-            &crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
+            &crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
@@ -1990,13 +2057,13 @@ mod tests {
         }
         let mut existing = Vec::new();
         stable_ids(&original.nodes, &mut existing);
-        assert_eq!(row.fluid_controls.first(), Some(&domain.node_id), "the simulation leads the water's controls");
-        assert!(row.fluid_controls.iter().all(|id| !existing.contains(id)),
+        assert_eq!(row.control_nodes().first(), Some(&domain.node_id), "the simulation leads the water's controls");
+        assert!(row.control_nodes().iter().all(|id| !existing.contains(id)),
             "every water control is a node Add Fluid inserted");
         let layout = row.fluid_domain.unwrap();
         assert_eq!((layout.size, layout.cells), ([4.0; 3], [64; 3]));
         let sections = crate::ui_bridge::projection::scene::sections_for_nodes(
-            Some(&added), &row.fluid_controls,
+            Some(&added), &row.control_nodes(),
         );
         assert!(sections.iter().any(|section| section.contains("Simulation")));
         assert!(sections.iter().any(|section| section.contains("Initial Volume")));
@@ -2009,7 +2076,7 @@ mod tests {
         let reloaded_vm = SceneVm::from_def(&reloaded_def).unwrap();
         assert_eq!(reloaded_vm.objects, vm.objects);
         let reloaded_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
-            Some(&reloaded_def), &row.fluid_controls,
+            Some(&reloaded_def), &row.control_nodes(),
         );
         let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
         let world_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
@@ -2124,7 +2191,7 @@ mod tests {
             let domain = row.liquid_domain.as_ref().unwrap().resolve(def).expect("the domain ref resolves");
             assert_eq!(domain.type_id, manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "{step}");
             assert!(row.physics.is_none(), "{step}: water carries no rigid body");
-            let sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(def), &row.fluid_controls);
+            let sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(def), &row.control_nodes());
             assert!(sections.iter().any(|section| section.contains("Simulation")), "{step}: the water panel shows its dials");
             let camera = crate::ui_bridge::projection::scene::sections_for_nodes(
                 Some(def), crate::ui_bridge::projection::scene::owned_nodes(
@@ -2147,7 +2214,7 @@ mod tests {
         let (_, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) = dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         dispatch_project(
-            &crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Light),
+            &crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Light),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
@@ -2185,8 +2252,8 @@ mod tests {
         // Add Fluid before Add Object so the object remains an ordinary mesh
         // until the explicit Physics toggle is used.
         for action in [
-            crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
-            crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Object),
+            crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
+            crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Object),
         ] {
             dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                 &mut selection, &mut active, &mut prefs, Default::default());
@@ -2216,7 +2283,7 @@ mod tests {
         command.execute(&mut project);
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
         let after = effective_def(&project, &layer_id);
-        let role_nodes = manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&after, group_id);
+        let role_nodes = scene_row_role_nodes(&after, group_id);
         assert_eq!(role_nodes.len(), 1);
         let group = after.nodes.iter().find(|node| Some(node.id) == group_id)
             .unwrap().group.as_ref().unwrap();
@@ -2251,7 +2318,7 @@ mod tests {
         assert!(command.was_applied(), "role redo after recreating its object: {:?}", command.rejection_reason());
         assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
 
-        dispatch_project(&crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
+        dispatch_project(&crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         let ContentCommand::ExecuteSelecting(mut second_fluid, _) = rx.try_recv().unwrap()
         else { panic!("second fluid insertion executes on content"); };
@@ -2283,7 +2350,7 @@ mod tests {
         remove.execute(&mut project);
         assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
         let removed = effective_def(&project, &layer_id);
-        assert!(manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&removed, group_id).is_empty());
+        assert!(scene_row_role_nodes(&removed, group_id).is_empty());
         remove.undo(&mut project);
         assert_eq!(effective_def(&project, &layer_id), retargeted);
         retarget.undo(&mut project);
@@ -2520,7 +2587,7 @@ mod tests {
             dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
-        let add = crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Object);
+        let add = crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Object);
         dispatch_project(
             &add,
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
@@ -3059,7 +3126,7 @@ mod tests {
         let cases = [
             SceneDispatchCase {
                 name: "add object",
-                action: |l, _r, _n| crate::ui_bridge::project::insert_template_action(l, manifold_core::scene_surface::SceneTemplateKind::Object),
+                action: |l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Object),
                 count: objects_param,
                 delta: 1.0,
                 selects_object: true,
@@ -3068,7 +3135,7 @@ mod tests {
             SceneDispatchCase {
                 // BUG-hlw8: "+ Plane" takes the next object slot.
                 name: "add layer plane",
-                action: |l, _r, _n| crate::ui_bridge::project::insert_template_action(l, manifold_core::scene_surface::SceneTemplateKind::Plane),
+                action: |l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Plane),
                 count: objects_param,
                 delta: 1.0,
                 selects_object: true,
@@ -3076,7 +3143,7 @@ mod tests {
             },
             SceneDispatchCase {
                 name: "add light",
-                action: |l, _r, _n| crate::ui_bridge::project::insert_template_action(l, manifold_core::scene_surface::SceneTemplateKind::Light),
+                action: |l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Light),
                 count: lights_param,
                 delta: 1.0,
                 selects_object: false,
@@ -3247,7 +3314,7 @@ mod tests {
         let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
-            &crate::ui_bridge::project::insert_template_action(layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
+            &crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs, Default::default(),
         );
         let add = rx.try_recv().expect("Add Fluid queued a content edit");

@@ -571,7 +571,7 @@ mod tests {
         let family = def
             .nodes
             .iter_mut()
-            .find(|node| node.node_id == NodeId::new("water_family"))
+            .find(|node| node.group.as_deref().and_then(manifold_core::scene_object_model::water_family).is_some())
             .expect("GPU FLIP family");
         let group = family.group.as_mut().expect("GPU FLIP family body");
         let domain = group

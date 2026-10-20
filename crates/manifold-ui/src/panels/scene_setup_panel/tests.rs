@@ -191,7 +191,8 @@
             atmosphere: AtmosphereRowVm::None,
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
-                    look_mesh: None,
+                    kind: Default::default(),
+                    capabilities: manifold_foundation::scene_surface::SceneObjectCapabilities { rename: true, delete: true, duplicate: true, transform: true, enable_physics: true, fluid_role: true, modifiers: true, hide: false },
                     index: 0,
                     object_node_id: 40,
                     group_node_id: Some(42),
@@ -336,6 +337,38 @@
         assert!(consumed);
         assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupSelectionChanged(_))]));
         assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Object(43)));
+    }
+
+    /// A placed source folds with its water's other children and sits after
+    /// them at their indent.
+    #[test]
+    fn scene_panel_tree_source_rows_fold_with_their_water() {
+        let mut vm = compound_shaped_vm();
+        sync_items(&mut vm);
+        vm.items.push(SceneItemVm {
+            kind: manifold_foundation::scene_surface::SceneItemKind::Source(manifold_foundation::scene_surface::SourceRole::Inflow),
+            selection: SceneSelection::Source(FoundationNodeId::new("inflow")),
+            name: "Inflow".into(),
+            parent: Some(42),
+            parameter_ids: Vec::new(),
+        });
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let source_row = |panel: &ScenePanel| panel.outliner_row_ids.iter().position(|(_, sel)| matches!(sel, SceneSelection::Source(_)));
+        assert_eq!(source_row(&panel), None, "a folded water hides its sources");
+
+        let (toggle_id, _) = panel.group_toggle_ids[0];
+        panel.handle_event(&UIEvent::Click { node_id: toggle_id, pos: Vec2::ZERO, modifiers: Modifiers::default() }, &mut tree);
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let source = source_row(&panel).expect("an open water lists its sources");
+        let child = panel.outliner_row_ids.iter().position(|(_, sel)| sel == &SceneSelection::Object(43)).unwrap();
+        assert_eq!(source, child + 1, "sources follow the water's other children");
+        let x = |at: usize| tree.get_bounds(panel.outliner_row_ids[at].0).x;
+        assert_eq!(x(source), x(child), "sources share the children's indent");
     }
 
     #[test]
@@ -694,7 +727,7 @@
         );
         let menu = panel.add_menu(SceneGroup::Objects);
         let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
-            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water: None })) if layer_1(layer_id) && *kind == expected);
+            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water: None, .. })) if layer_1(layer_id) && *kind == expected);
         assert!(insert(0, SceneTemplateKind::Object));
         assert!(insert(1, SceneTemplateKind::Plane));
         assert!(insert(2, SceneTemplateKind::Water));
@@ -717,7 +750,7 @@
         let water = |node: &str, row| FluidDomainOption { node: FoundationNodeId::new(node), name: node.into(), rows: vec![row] };
         vm.fluid_domains = vec![water("lake", 40), water("pool", 50)];
         vm.items.push(SceneItemVm {
-            kind: SceneItemKind::Source,
+            kind: SceneItemKind::Source(manifold_foundation::scene_surface::SourceRole::Inflow),
             selection: SceneSelection::Source(FoundationNodeId::new("pool_inflow")),
             name: "Inflow 1".into(),
             parent: Some(50),

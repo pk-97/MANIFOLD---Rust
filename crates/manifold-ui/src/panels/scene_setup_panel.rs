@@ -373,8 +373,11 @@ pub use super::scene_setup_skin::{SkinRowVm, SkinTargetMap};
 /// `scene_vm.rs`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectKnownRow {
-    /// A family child owns only its look; this is the mesh Size targets.
-    pub look_mesh: Option<manifold_foundation::NodeId>,
+    /// Where the row sits (the scene object model's kind): a Water look owns
+    /// only its look.
+    pub kind: manifold_foundation::scene_surface::SceneObjectRowKind,
+    /// What the row's header, shortcuts and commands accept.
+    pub capabilities: manifold_foundation::scene_surface::SceneObjectCapabilities,
     pub index: usize,
     /// The `node.scene_object`'s own doc id — the address the eye toggle
     /// writes `visible` at and the selection/rename address used by the
@@ -1434,6 +1437,12 @@ impl ScenePanel {
         self.note_selection(&layer_id);
     }
 
+    /// Unfold the tree group `parent` (its row's object id), so a selected
+    /// item under it shows.
+    pub fn unfold(&mut self, layer_id: LayerId, parent: u32) {
+        self.expanded_groups.entry(layer_id).or_default().insert(parent);
+    }
+
     /// The Scene panel's selection version (UI_INVALIDATION D14): the
     /// planner re-runs the inspector projection when it moves.
     pub fn selection_version(&self) -> u64 {
@@ -1505,22 +1514,6 @@ impl ScenePanel {
 
     fn selection_exists(vm: &SceneSetupVm, sel: SceneSelection) -> bool {
         matches!(sel, SceneSelection::OutlinerFold(_)) || vm.items.iter().any(|item| item.selection == sel)
-    }
-
-    /// Water-family parents are water object rows whose children own the
-    /// platonic look meshes. Imported compounds also have group rows, so the
-    /// presence of a look-mesh child is the discriminator rather than
-    /// `is_group` alone.
-    pub(super) fn is_family_parent(&self, row: &ObjectKnownRow) -> bool {
-        row.is_group
-            && self.state.as_live().is_some_and(|vm| {
-                vm.objects.iter().any(|object| {
-                    matches!(object,
-                        ObjectRowVm::Known(child)
-                            if child.parent_group_id == Some(row.object_node_id)
-                                && child.look_mesh.is_some())
-                })
-            })
     }
 
     /// The first object, else World. A custom object row has no address, so

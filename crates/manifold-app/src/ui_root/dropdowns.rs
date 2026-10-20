@@ -1841,11 +1841,11 @@ impl UIRoot {
                         "Cut" => can_cut,
                         // A Water-family child has no graph-removal menu
                         // item; its permanent Hide action writes visible=0.
-                        "Delete" => !selected.is_family_child,
+                        "Delete" => selected.capabilities.delete,
                         "Duplicate" => can_duplicate,
                         _ => true,
                     });
-                    if selected.is_family_child {
+                    if selected.capabilities.hide {
                         let hide = match self.scene_setup_panel.hide_selection_action() {
                             Some(action) => DropdownItem::new("Hide").with_action(action),
                             None => DropdownItem::disabled("Hide"),

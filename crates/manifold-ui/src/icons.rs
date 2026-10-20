@@ -134,7 +134,7 @@ pub fn scene_item_icon(kind: manifold_foundation::scene_surface::SceneItemKind) 
         SceneItemKind::Force => Icon::SceneForce,
         SceneItemKind::Physics => Icon::ScenePhysics,
         SceneItemKind::World => Icon::SceneWorld,
-        SceneItemKind::Source => Icon::SceneWater,
+        SceneItemKind::Source(_) => Icon::SceneWater,
     }
 }
 

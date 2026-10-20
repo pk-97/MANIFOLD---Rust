@@ -45,7 +45,7 @@ impl SceneGroup {
         match kind {
             SceneItemKind::Camera => SceneGroup::Camera,
             SceneItemKind::Light => SceneGroup::Lighting,
-            SceneItemKind::Object(_) | SceneItemKind::Source => SceneGroup::Objects,
+            SceneItemKind::Object(_) | SceneItemKind::Source(_) => SceneGroup::Objects,
             SceneItemKind::Force => SceneGroup::Forces,
             SceneItemKind::Physics => SceneGroup::Physics,
             SceneItemKind::World => SceneGroup::World,
@@ -325,9 +325,23 @@ impl ScenePanel {
                 0.0
             };
             cy = self.build_tree_row(tree, (inner_x, inner_w, indent), cy, item, selected, eye);
-            // A water's Inflow, Drain and Collider rows sit under it (D-94).
-            for source in items.iter().filter(|source| matches!(source.selection, SceneSelection::Source(_)) && source.parent == Some(id)) {
-                cy = self.build_tree_row(tree, (inner_x, inner_w, indent + STEP_W), cy, source, selected, EyeSlot::Empty);
+            // A water's Inflow, Drain and Collider rows sit under it after its
+            // other children, at their indent, and fold with them (D-94).
+            let owner = item.parent.unwrap_or(id);
+            let child_of_owner =
+                |other: &SceneItemVm| matches!(other.selection, SceneSelection::Object(_)) && other.parent == Some(owner);
+            let last_of_owner = match item.parent {
+                Some(_) => !items
+                    .iter()
+                    .skip_while(|other| !std::ptr::eq(**other, *item))
+                    .skip(1)
+                    .any(|other| child_of_owner(other)),
+                None => (!row.is_group || expanded.contains(&id)) && !items.iter().any(|other| child_of_owner(other)),
+            };
+            if last_of_owner {
+                for source in items.iter().filter(|source| matches!(source.selection, SceneSelection::Source(_)) && source.parent == Some(owner)) {
+                    cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, source, selected, EyeSlot::Empty);
+                }
             }
         }
         for object in &vm.objects {

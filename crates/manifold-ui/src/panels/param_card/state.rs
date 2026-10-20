@@ -19,7 +19,7 @@ pub enum CardHost {
     /// The inspector card stack and the graph editor lane.
     #[default]
     Inspector,
-    /// The layer's scene card in the inspector.
+    /// The layer's scene card and its scene modifier cards in the inspector.
     SceneCard,
     /// A card in the Scene tab: a force or an object modifier.
     SceneTab,

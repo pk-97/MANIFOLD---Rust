@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::NodeId;
+use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::effect_graph_def::{
     EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
     InterfacePortDef, PresetMetadata, SerializedParamValue,
@@ -166,14 +167,24 @@ pub enum RoleSourceKind {
 /// Add Inflow, Drain or Collider: a box, placed by its transform, whose
 /// fluid role output the insertion wires into the target water's next free
 /// role input. The source group sits inside that water, so its row lists
-/// under it. Placed where the Dam Break tank holds water: an inflow up in
-/// the air, a drain on the floor, a collider where the preset's obstacle
-/// stands.
-pub fn role_source_template(kind: RoleSourceKind) -> SceneTemplate {
+/// under it. Placed inside the water's `domain` box: an inflow at the top
+/// centre, a drain on the floor by the +X wall so the inflow does not pour
+/// straight into it, a collider in the middle.
+pub fn role_source_template(kind: RoleSourceKind, domain: &FluidDomainLayout) -> SceneTemplate {
+    let [min_x, min_y, min_z] = domain.min;
+    let [sx, sy, sz] = domain.size;
+    let (cx, cz) = (min_x + sx * 0.5, min_z + sz * 0.5);
+    let inflow = 0.15 * sx.min(sz);
+    let drain = [0.2 * sx, 0.1 * sy, 0.2 * sz];
     let (display_name, role, pos, scale) = match kind {
-        RoleSourceKind::Inflow => ("Inflow", 1, [0.0, 1.6, 0.0], [0.3, 0.3, 0.3]),
-        RoleSourceKind::Drain => ("Drain", 2, [1.4, 0.15, 0.0], [0.4, 0.3, 0.4]),
-        RoleSourceKind::Collider => ("Collider", 3, [0.35, 0.58, -0.1], [0.6, 1.16, 0.85]),
+        RoleSourceKind::Inflow => ("Inflow", 1, [cx, min_y + sy - inflow, cz], [inflow; 3]),
+        RoleSourceKind::Drain => (
+            "Drain",
+            2,
+            [min_x + sx - drain[0], min_y + drain[1] * 0.5, cz],
+            drain,
+        ),
+        RoleSourceKind::Collider => ("Collider", 3, [cx, min_y + sy * 0.5, cz], [0.25 * sx, 0.25 * sy, 0.25 * sz]),
     };
     const TRANSFORM_NODE: u32 = 1;
     const ROLE_NODE: u32 = 2;

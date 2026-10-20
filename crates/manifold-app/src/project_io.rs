@@ -562,7 +562,61 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         });
     }
     pin_modulated_rows(project);
+    if project.load_report.card_rows_unpinned {
+        pin_rows_the_card_showed(project);
+    }
     notices
+}
+
+/// D-103: before 1.22.0 a scene card showed every Performance control a scene
+/// item owns, unless removed; it now shows only pinned rows. A show saved
+/// before then gets those rows pinned Shown, once, so its card is unchanged.
+fn pin_rows_the_card_showed(project: &mut Project) {
+    use manifold_core::scene_surface::{CardPin, Gate, SurfaceRole};
+    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
+    let mut pins: Vec<(usize, Vec<String>)> = Vec::new();
+    for (index, layer) in project.timeline.layers.iter().enumerate() {
+        let Some(host) = layer.gen_params() else { continue };
+        if !host.params.iter().any(|param| param.spec.scene.is_some()) {
+            continue;
+        }
+        let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
+        let Some(def) = crate::graph_target::resolve(project, &target) else { continue };
+        let Some(vm) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else { continue };
+        let Some(meta) = def.preset_metadata.as_ref() else { continue };
+        let items = scene_items(&def, &vm);
+        let owned = |param: &&manifold_core::params::Param| owner_of(&items, meta, param.spec.id.as_str()).is_some();
+        // A row folded under a switched-off feature did not show either.
+        let switched_on: Vec<_> = host
+            .params
+            .iter()
+            .filter(owned)
+            .filter(|param| param.base > 0.5)
+            .filter_map(|param| param.spec.scene?.switch)
+            .collect();
+        let ids = host
+            .params
+            .iter()
+            .filter(|param| param.choices.pin.is_none() && param.exposed)
+            .filter(|param| {
+                param.spec.scene.is_some_and(|scene| {
+                    scene.role == SurfaceRole::Performance
+                        && !matches!(scene.gate, Some(Gate::Fold(feature)) if !switched_on.contains(&feature))
+                })
+            })
+            .filter(owned)
+            .map(|param| param.spec.id.clone())
+            .collect();
+        pins.push((index, ids));
+    }
+    for (index, ids) in pins {
+        let Some(host) = project.timeline.layers[index].gen_params_mut() else { continue };
+        for id in ids {
+            if let Some(param) = host.params.get_mut(&id) {
+                param.choices.pin = Some(CardPin::Shown);
+            }
+        }
+    }
 }
 
 /// A project saved before attaches pinned their rows (SCENE_SURFACES D6
@@ -1312,6 +1366,55 @@ mod tests {
         assert_eq!(pins(&project), expected);
         migrate_project_scene_graphs(&mut project);
         assert_eq!(pins(&project), expected);
+    }
+
+    /// D-103: a show saved before 1.22.0 keeps the Performance rows its card
+    /// showed; a removed row stays off; a show saved now pins nothing new.
+    #[test]
+    fn load_keeps_old_show_card_rows() {
+        use manifold_core::scene_surface::{CardPin, SurfaceRole};
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator(
+            "PhysicsSolids".into(),
+            PresetTypeId::from_string("PhysicsSolids".to_string()),
+            0,
+        ));
+        project.reconcile_param_manifests();
+        let performance: Vec<String> = project.timeline.layers[0]
+            .gen_params()
+            .unwrap()
+            .params
+            .iter()
+            .filter(|param| param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance))
+            .map(|param| param.spec.id.clone())
+            .collect();
+        assert!(performance.len() > 1, "the scene has performance controls");
+        let removed = performance[0].clone();
+        project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut(&removed).unwrap().choices.pin = Some(CardPin::Removed);
+        let saved_at = |project: &Project, version: &str| {
+            let mut json: serde_json::Value = serde_json::to_value(project).unwrap();
+            json["projectVersion"] = serde_json::Value::String(version.into());
+            let mut loaded = manifold_io::loader::load_project_from_json(&json.to_string()).expect("load");
+            migrate_project_scene_graphs(&mut loaded);
+            loaded
+        };
+        let pins = |project: &Project| -> Vec<(String, Option<CardPin>)> {
+            let host = project.timeline.layers[0].gen_params().unwrap();
+            performance.iter().map(|id| (id.clone(), host.params.get(id).unwrap().choices.pin)).collect()
+        };
+
+        let old = saved_at(&project, "1.21.0");
+        let shown = pins(&old).into_iter().filter(|(_, pin)| *pin == Some(CardPin::Shown)).count();
+        assert!(shown > 0, "the old show's performance rows are pinned: {:?}", pins(&old));
+        assert_eq!(pins(&old)[0].1, Some(CardPin::Removed), "a removed row stays off");
+
+        let resaved = saved_at(&old, manifold_core::project::CURRENT_PROJECT_VERSION);
+        assert_eq!(pins(&resaved), pins(&old), "a second load changes nothing");
+        let new = saved_at(&project, manifold_core::project::CURRENT_PROJECT_VERSION);
+        assert!(
+            pins(&new).iter().all(|(_, pin)| *pin != Some(CardPin::Shown)),
+            "a show saved now keeps an empty card (D-72)"
+        );
     }
 
     #[test]

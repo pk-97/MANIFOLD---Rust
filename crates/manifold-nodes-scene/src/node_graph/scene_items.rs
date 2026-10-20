@@ -65,7 +65,7 @@ pub fn scene_items(def: &EffectGraphDef, vm: &SceneVm) -> Vec<SceneItem> {
             kind: SceneItemKind::Object(object_kind(row)),
             id: SceneItemId::Object(row.object.clone()),
             name: row.name.clone(),
-            owned_nodes: object_nodes(def, row, &vm.objects),
+            owned_nodes: object_nodes(row, &vm.objects),
         }),
         _ => None,
     }));
@@ -79,7 +79,7 @@ pub fn scene_items(def: &EffectGraphDef, vm: &SceneVm) -> Vec<SceneItem> {
             }
             listed.push(&source.node);
             items.push(SceneItem {
-                kind: SceneItemKind::Source,
+                kind: SceneItemKind::Source(source.role),
                 id: SceneItemId::Source { node: source.node.clone(), water: row.object_node_id },
                 name: source.name.clone(),
                 owned_nodes: source.owned.clone(),
@@ -165,14 +165,9 @@ fn object_kind(row: &SceneObjectKnownRow) -> ObjectKind {
 /// its enabled body, transform, material and every modifier. Shared
 /// transforms and modifiers belong to their first consuming object in scene
 /// order; a material stays with every consumer.
-fn object_nodes(def: &EffectGraphDef, row: &SceneObjectKnownRow, objects: &[SceneObjectVm]) -> Vec<NodeId> {
+fn object_nodes(row: &SceneObjectKnownRow, objects: &[SceneObjectVm]) -> Vec<NodeId> {
     let mut owned = vec![row.object.clone()];
-    owned.extend_from_slice(&row.fluid_controls);
-    owned.extend(row.look_mesh.iter().cloned());
-    if row.parent_group_id.is_none() {
-        let placed = |node: &NodeId| row.placed_sources.iter().any(|source| source.owned.contains(node));
-        owned.extend(group_fluid_role_nodes(def, row.group_node_id).into_iter().filter(|node| !placed(node)));
-    }
+    owned.extend(row.controls.iter().map(|control| control.node.clone()));
     if let Some(physics) = row.physics.as_ref().filter(|physics| physics.enabled) {
         owned.push(physics.body.clone());
     }
@@ -200,29 +195,6 @@ fn object_nodes(def: &EffectGraphDef, row: &SceneObjectKnownRow, objects: &[Scen
         }
     }
     owned
-}
-
-/// The fluid role sources anywhere inside an object's group.
-pub fn group_fluid_role_nodes(def: &EffectGraphDef, group_id: Option<u32>) -> Vec<NodeId> {
-    fn collect(nodes: &[EffectGraphNode], ids: &mut Vec<NodeId>) {
-        for node in nodes {
-            if node.type_id == "node.fluid_role_source" && !node.node_id.is_empty() {
-                ids.push(node.node_id.clone());
-            }
-            if let Some(group) = node.group.as_deref() {
-                collect(&group.nodes, ids);
-            }
-        }
-    }
-    let Some(group) = group_id
-        .and_then(|id| def.nodes.iter().find(|node| node.id == id))
-        .and_then(|node| node.group.as_deref())
-    else {
-        return Vec::new();
-    };
-    let mut ids = Vec::new();
-    collect(&group.nodes, &mut ids);
-    ids
 }
 
 fn node_by_id<'a>(nodes: &'a [EffectGraphNode], id: &NodeId) -> Option<&'a EffectGraphNode> {

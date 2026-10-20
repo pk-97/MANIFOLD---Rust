@@ -205,9 +205,52 @@ pub enum SceneItemKind {
     Force,
     Physics,
     World,
-    /// A placed fluid source (an Inflow, a Drain or a Collider), listed
-    /// under the water it feeds.
-    Source,
+    /// A placed fluid source, listed under the water it feeds.
+    Source(SourceRole),
+}
+
+/// What a placed fluid source does to its water.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceRole {
+    Inflow,
+    Drain,
+    Collider,
+}
+
+/// Where a scene object row sits (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section
+/// 5.2 (One scene-object model)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SceneObjectRowKind {
+    /// An ordinary object, a placed fluid source, or a part of an imported
+    /// model.
+    #[default]
+    Object,
+    /// The row that owns a simulation or a shared body for its children:
+    /// Water's real object, or an imported model's group.
+    PhysicsParent,
+    /// One of Water's looks (Foam, Spray, Bubbles, Physics View's dots): it
+    /// owns its material, Size and visibility only.
+    LookChild,
+}
+
+/// What a scene object row's commands accept. The tree, the header, the
+/// shortcuts and the commands read the same facts, so a shortcut cannot do
+/// what a hidden button would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SceneObjectCapabilities {
+    pub rename: bool,
+    /// The header's Hide action (a look child's own eye).
+    pub hide: bool,
+    pub delete: bool,
+    pub duplicate: bool,
+    /// The row has its own placement transform.
+    pub transform: bool,
+    pub enable_physics: bool,
+    /// The row can feed a liquid as a fluid role.
+    pub fluid_role: bool,
+    /// The row takes mesh modifiers.
+    pub modifiers: bool,
 }
 
 /// What the one Add menu inserts into a scene through a template.

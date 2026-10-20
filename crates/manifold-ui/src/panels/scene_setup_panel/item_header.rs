@@ -1,16 +1,18 @@
 //! The selected item's header (SCENE_SURFACES D8): its name once (a rename
 //! button where a rename command exists), its kind, and copy and delete
 //! where commands exist. Objects copy and delete, forces copy and delete,
-//! lights delete only; Camera, Lighting, Physics and World have neither.
+//! lights and placed sources delete only; Camera, Lighting, Physics and World
+//! have neither.
 //! Each light's header heads its sub-section inside Lighting. The Camera
 //! header also carries "Use this view" (D14).
 
 use super::*;
-use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind};
+use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind, SourceRole};
 
 const KEY_FORCE_COPY: u64 = 93_000_300;
 const KEY_FORCE_DELETE: u64 = 93_000_301;
 const KEY_USE_VIEW: u64 = 93_000_302;
+const KEY_SOURCE_DELETE: u64 = 93_000_303;
 const USE_VIEW: &str = "Use this view";
 
 /// Header buttons built this frame, cleared on every rebuild.
@@ -19,6 +21,7 @@ pub(super) struct HeaderButtons {
     force_duplicate: Vec<(NodeId, FoundationNodeId)>,
     force_remove: Vec<(NodeId, FoundationNodeId)>,
     use_view: Option<NodeId>,
+    source_remove: Option<(NodeId, FoundationNodeId)>,
 }
 
 impl HeaderButtons {
@@ -26,6 +29,7 @@ impl HeaderButtons {
         self.force_duplicate.clear();
         self.force_remove.clear();
         self.use_view = None;
+        self.source_remove = None;
     }
 }
 
@@ -41,7 +45,9 @@ pub(super) fn kind_label(kind: SceneItemKind) -> &'static str {
         SceneItemKind::Force => "Force",
         SceneItemKind::Physics => "Physics",
         SceneItemKind::World => "World",
-        SceneItemKind::Source => "Source",
+        SceneItemKind::Source(SourceRole::Inflow) => "Inflow",
+        SceneItemKind::Source(SourceRole::Drain) => "Drain",
+        SceneItemKind::Source(SourceRole::Collider) => "Collider",
     }
 }
 
@@ -107,7 +113,17 @@ impl ScenePanel {
                 cy + ROW_H + ROW_GAP
             }
             SceneSelection::Camera => self.build_camera_header(tree, (inner_x, inner_w), cy, vm, item),
-            SceneSelection::World | SceneSelection::Physics(_) | SceneSelection::Source(_) => {
+            SceneSelection::Source(node) => {
+                let name_w = inner_w - STEP_W - 4.0;
+                self.build_name_and_kind(tree, Rect::new(inner_x, cy, name_w, ROW_H), &item.name, item.kind, None);
+                let button = tree.add_button_keyed(
+                    Some(self.content_parent), inner_x + name_w + 4.0, cy, STEP_W, ROW_H, btn_style(), "\u{2715}", KEY_SOURCE_DELETE,
+                );
+                tree.set_name(button, "scene_setup.properties.remove");
+                self.header_buttons.source_remove = Some((button, node.clone()));
+                cy + ROW_H + ROW_GAP
+            }
+            SceneSelection::World | SceneSelection::Physics(_) => {
                 self.build_name_and_kind(tree, Rect::new(inner_x, cy, inner_w, ROW_H), &item.name, item.kind, None);
                 cy + ROW_H + ROW_GAP
             }
@@ -193,10 +209,9 @@ impl ScenePanel {
     ) -> f32 {
         // Frame and Hide need two icon-cell widths for their labels.
         let frame_w = STEP_W * 2.0;
-        let family_parent = self.is_family_parent(row);
-        let show_hide = row.look_mesh.is_some();
-        let show_duplicate = row.look_mesh.is_none() && !family_parent;
-        let show_remove = row.look_mesh.is_none();
+        let show_hide = row.capabilities.hide;
+        let show_duplicate = row.capabilities.duplicate;
+        let show_remove = row.capabilities.delete;
         let btn_w = frame_w
             + frame_w * (show_hide as u8) as f32
             + STEP_W * (show_duplicate as u8 + show_remove as u8) as f32;
@@ -323,6 +338,9 @@ impl ScenePanel {
     pub(super) fn item_header_click(&self, node_id: NodeId, vm: &SceneSetupVm) -> Option<PanelAction> {
         if self.header_buttons.use_view == Some(node_id) {
             return Some(PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(vm.layer_id.clone())));
+        }
+        if let Some((_, source)) = self.header_buttons.source_remove.as_ref().filter(|(button, _)| *button == node_id) {
+            return Some(PanelAction::Project(ProjectAction::SceneSetupRemoveSource(vm.layer_id.clone(), source.clone())));
         }
         if let Some((_, id)) = self.header_buttons.force_duplicate.iter().find(|(button, _)| *button == node_id) {
             return Some(PanelAction::Project(ProjectAction::SceneModifiersDuplicate(vm.layer_id.clone(), vec![id.clone()])));

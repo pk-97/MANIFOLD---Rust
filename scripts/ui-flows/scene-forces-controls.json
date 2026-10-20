@@ -31,7 +31,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Uniform Force"
+          "text": "Force \u2014 Uniform Force",
+          "under_name": "dropdown"
         }
       },
       "gesture": {

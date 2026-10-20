@@ -29,7 +29,12 @@ type Entry = (SceneGroup, String, Option<PanelAction>, Option<String>);
 /// water `selected` is or sits under, else the scene's only water.
 pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSelection>) -> Vec<AddMenuItem> {
     let layer = || vm.layer_id.clone();
-    let insert = |kind, water| PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { layer_id: layer(), kind, water });
+    let insert = |kind, water| PanelAction::Project(ProjectAction::SceneSetupInsertTemplate {
+        layer_id: layer(),
+        render_scene_node_id: vm.scene_root_node_id,
+        kind,
+        water,
+    });
     let entry = |group: SceneGroup, label: &str, action: PanelAction| -> Entry { (group, label.to_owned(), Some(action), None) };
     let mut entries: Vec<Entry> = vec![
         entry(SceneGroup::Objects, "Object", insert(SceneTemplateKind::Object, None)),

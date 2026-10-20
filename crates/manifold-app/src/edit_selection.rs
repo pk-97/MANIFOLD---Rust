@@ -17,6 +17,13 @@ pub(crate) enum EditSelection {
         layer_id: LayerId,
         object_id: u32,
     },
+    /// A placed fluid source, by its role node.
+    Source {
+        layer_id: LayerId,
+        /// The water row it lists under, unfolded so the row shows.
+        water: u32,
+        node: manifold_core::NodeId,
+    },
 }
 
 #[derive(Debug)]
@@ -28,6 +35,7 @@ pub(crate) enum SelectAfterEdit {
     NewLayer,
     NewObject(LayerId),
     NewLight(LayerId),
+    NewSource(LayerId),
 }
 
 pub(crate) enum PendingSelection {
@@ -43,6 +51,10 @@ pub(crate) enum PendingSelection {
     Object {
         layer_id: LayerId,
         previous: Vec<u32>,
+    },
+    Source {
+        layer_id: LayerId,
+        previous: Vec<(u32, manifold_core::NodeId)>,
     },
 }
 
@@ -61,6 +73,27 @@ fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
                     }
                     _ => None,
                 })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Each placed source, by its role node, with the object id of the water it lists under.
+fn source_nodes(project: &Project, layer: &LayerId) -> Vec<(u32, manifold_core::NodeId)> {
+    let target = manifold_core::GraphTarget::Generator(layer.clone());
+    crate::graph_target::resolve(project, &target)
+        .and_then(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def))
+        .map(|vm| {
+            vm.objects
+                .into_iter()
+                .filter_map(|object| match object {
+                    manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) => {
+                        let water = row.object_node_id;
+                        Some(row.placed_sources.into_iter().map(move |source| (water, source.node)))
+                    }
+                    _ => None,
+                })
+                .flatten()
                 .collect()
         })
         .unwrap_or_default()
@@ -104,6 +137,10 @@ impl SelectAfterEdit {
                 let previous = object_ids(project, &layer_id);
                 PendingSelection::Object { layer_id, previous }
             }
+            Self::NewSource(layer_id) => {
+                let previous = source_nodes(project, &layer_id);
+                PendingSelection::Source { layer_id, previous }
+            }
         }
     }
 }
@@ -137,6 +174,10 @@ impl PendingSelection {
                     layer_id,
                     object_id,
                 }),
+            Self::Source { layer_id, previous } => source_nodes(project, &layer_id)
+                .into_iter()
+                .find(|source| !previous.iter().any(|(_, node)| *node == source.1))
+                .map(|(water, node)| EditSelection::Source { layer_id, water, node }),
         }
     }
 }
@@ -220,6 +261,17 @@ pub(crate) fn apply_update(
                 layer_id.clone(),
                 manifold_ui::panels::scene_setup_panel::SceneSelection::Object(*object_id),
             );
+        }
+        EditSelection::Source { layer_id, water, node } => {
+            if !source_nodes(project, layer_id).iter().any(|(_, source)| source == node) {
+                return false;
+            }
+            focus_scene_tab(selection, active_layer, layer_id);
+            ui.scene_setup_panel.set_selection(
+                layer_id.clone(),
+                manifold_ui::panels::scene_setup_panel::SceneSelection::Source(node.clone()),
+            );
+            ui.scene_setup_panel.unfold(layer_id.clone(), *water);
         }
     }
     true
