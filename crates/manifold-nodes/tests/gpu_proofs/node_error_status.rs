@@ -1,10 +1,13 @@
 //! A node that reports `ctx.error` fails the frame (BUG-hc5h).
 //! Invalid Simulation Speed reaches the domain's runtime validation; unlike
 //! Resolution, it cannot describe a valid dynamically sized solver lattice.
+//!
+//! The graph is the smallest that keeps the GPU FLIP domain live: the domain
+//! with the Dam Break's own params, its tick count read by a noise source that
+//! reaches the final output (a node no root consumes never runs).
 
 use std::sync::Arc;
 
-use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
@@ -14,30 +17,37 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-
-const DAM_BREAK_JSON: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpuFlip.json");
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 90;
 
-#[test]
-fn node_error_fails_the_frame() {
+/// The domain node as WaterDamBreakGpuFlip ships it, at `speed`.
+fn domain_graph(speed: f32) -> String {
+    serde_json::json!({
+        "version": 1,
+        "name": "NodeErrorDomain",
+        "nodes": [
+            { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+            { "id": 1, "typeId": "node.gpu_flip_domain", "handle": "domain", "nodeId": "domain", "params": {
+                "domain_size": { "type": "Float", "value": 4.0 },
+                "fill_height": { "type": "Float", "value": 0.16 },
+                "resolution": { "type": "Int", "value": 64 },
+                "speed": { "type": "Float", "value": speed }
+            } },
+            { "id": 2, "typeId": "node.noise", "handle": "noise", "nodeId": "noise" },
+            { "id": 3, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+        ],
+        "wires": [
+            { "fromNode": 1, "fromPort": "ticks", "toNode": 2, "toPort": "scale" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    })
+    .to_string()
+}
+
+fn first_frame_status(json: &str) -> FrameRenderStatus {
     let harness = manifold_node_engine::testkit::gpu_harness::shared();
-    let grouped: EffectGraphDef = serde_json::from_str(DAM_BREAK_JSON).unwrap();
-    let mut def: serde_json::Value = serde_json::to_value(
-        manifold_core::flatten::flatten_groups(&grouped).unwrap(),
-    )
-    .unwrap();
-    let domain = def["nodes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|node| node["nodeId"] == "domain")
-        .unwrap();
-    // Geometry remains valid, so loading succeeds. The domain's compute path
-    // rejects speed outside 0..=4 and reports ctx.error during the frame.
-    domain["params"]["speed"] = serde_json::json!({"type": "Float", "value": 5.0});
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &def.to_string(),
+        json,
         &PrimitiveRegistry::with_builtin(),
         Arc::clone(&harness.device),
         WIDTH,
@@ -69,5 +79,13 @@ fn node_error_fails_the_frame() {
         gpu.frame_status()
     };
     encoder.commit_and_wait_completed();
+    status
+}
+
+#[test]
+fn node_error_fails_the_frame() {
+    // Geometry remains valid, so loading succeeds. The domain's compute path
+    // rejects speed outside 0..=4 and reports ctx.error during the frame.
+    let status = first_frame_status(&domain_graph(5.0));
     assert_eq!(status, FrameRenderStatus::Failed(FrameRenderFailure::NodeError));
 }

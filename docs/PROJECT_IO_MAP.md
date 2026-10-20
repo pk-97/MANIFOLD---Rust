@@ -150,15 +150,17 @@ other path-bearing fields are NOT visited (section 9 E7).
 
 ## 8. Test coverage (what's proven vs. dark)
 
-Proven: real-fixture loads (burn V4/V5, graphtestsv4
-identity-reconcile), driver/envelope/mapping counts surviving migration +
-roundtrip, history journal push/dedup/prune/unknown-hash, autosave state
-machine (7 unit tests, time injected), snapshot-on-save capture/prune/
-never-shadow-Saved, Liveschool size gate.
+Proven: per-type serde round trips and legacy-index resolution on synthetic
+data (drivers, envelopes, Ableton and macro mappings, params maps), generator
+identity reconcile, history journal push/dedup/prune/unknown-hash, autosave
+state machine (7 unit tests, time injected), snapshot-on-save capture/prune/
+never-shadow-Saved, and one real-show re-save: Liveschool keeps every old
+8-char id and writes no empty session field
+(`liveschool_resave_keeps_old_ids_and_omits_empty_session`).
 
-Dark: the Liveschool fixture is gitignored — `load_liveschool_live_show_v6`
-and the size gate **silently pass when the fixture is absent**, so only
-Peter's machine actually runs the real-scale proof (section 9 E9). No test constructs
+Dark: the Liveschool fixture is gitignored and that test fails when it is
+absent, so only a checkout with the fixture runs the real-scale proof
+(section 9 E9). No test constructs
 a future-version file, a corrupted ZIP, a truncated write, or a hash
 collision. `save_project_v1` and preset/venue files have no roundtrip tests in
 this crate.
@@ -219,11 +221,11 @@ this crate.
   `venue_file.rs` serialize current structs with no migration chain; any
   future shape change strands exported libraries. (Graph presets embedded in
   projects ride the project chain; standalone exports don't.)
-- **E9 — The real-scale migration proof is machine-local.** Liveschool
-  fixture tests skip-if-absent and the fixture is gitignored: CI and agent
-  sessions prove migrations against small fixtures only. The
-  `canonical-fixture-liveschool` memory calls it load-bearing; the test
-  suite can't see it.
+- **E9 — The real-scale re-save proof is machine-local.** The one
+  Liveschool test fails if the fixture is absent, and the fixture is
+  gitignored (the repo is public), so only a checkout holding it runs that
+  test. Migrations are proven on synthetic data; the converted fixtures no
+  longer carry legacy shapes, so they could not prove a migration anyway.
 - **E10 — Manual-save history is unbounded.** Every manual save adds a gzip
   blob forever (only autos are pruned). A long-lived show file saved
   manually hundreds of times carries hundreds of snapshots; nothing surfaces

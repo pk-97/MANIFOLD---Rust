@@ -297,8 +297,6 @@ struct PresetOutcome {
     arrays: Vec<(String, Vec<u8>)>,
     stats: GpuReplayStats,
     stats_by_frame: Vec<GpuReplayStats>,
-    cpu_ms: Vec<f64>,
-    gpu_ms: Vec<f64>,
 }
 
 const DAM_BREAK: &str = "WaterDamBreakMatter";
@@ -340,8 +338,6 @@ fn run_preset(
         arrays: Vec::new(),
         stats: GpuReplayStats::default(),
         stats_by_frame: Vec::new(),
-        cpu_ms: Vec::new(),
-        gpu_ms: Vec::new(),
     };
     for frame in 0..frames {
         change(frame, &mut manifest);
@@ -363,15 +359,12 @@ fn run_preset(
             trigger_count: 0,
         };
         let mut enc = h.device.create_encoder("encode-replay-preset");
-        let start = std::time::Instant::now();
         {
             let mut gpu = GpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
-        outcome.cpu_ms.push(start.elapsed().as_secs_f64() * 1e3);
         let profile = enc.commit_and_wait_profiled(&h.device);
         assert_eq!(profile.failed_command_buffers, 0, "{id} frame {frame} failed on the GPU");
-        outcome.gpu_ms.push(profile.total_ms);
         outcome.stats_by_frame.push(runtime.replay_stats());
         if !read {
             continue;
@@ -389,41 +382,4 @@ fn run_preset(
     runtime.set_dump_all(false);
     outcome.stats = runtime.replay_stats();
     outcome
-}
-
-fn mean(values: &[f64]) -> f64 {
-    values.iter().sum::<f64>() / values.len() as f64
-}
-
-/// Frame CPU and GPU ms for the bundled Dam Break, replay off against on,
-/// alternating runs so drift hits both sides; and the first visit's cost.
-#[test]
-fn encode_replay_probe() {
-    const WARM: usize = 8;
-    const MEASURED: u32 = 48;
-    let mut rows: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
-    // The frame whose region recorded first, and its CPU on each side.
-    let mut first_visit = (0usize, [0.0; 2]);
-    warm_dam_break();
-    for round in 0..3 {
-        let runs = [false, true].map(|replay| run_preset(DAM_BREAK, replay, WARM as u32 + MEASURED, false, |_, _| {}));
-        if round == 0 {
-            let k = runs[1].stats_by_frame.iter().position(|s| s.recorded > 0).expect("the region recorded");
-            first_visit = (k, [runs[0].cpu_ms[k], runs[1].cpu_ms[k]]);
-        }
-        for (side, run) in runs.iter().enumerate() {
-            rows[side].push((mean(&run.cpu_ms[WARM..]), mean(&run.gpu_ms[WARM..])));
-        }
-    }
-    for (side, name) in ["replay off", "replay on"].into_iter().enumerate() {
-        let cpu: Vec<String> = rows[side].iter().map(|r| format!("{:.3}", r.0)).collect();
-        let gpu: Vec<String> = rows[side].iter().map(|r| format!("{:.3}", r.1)).collect();
-        eprintln!(
-            "ENCODE REPLAY PROBE {DAM_BREAK} {name}: frame CPU ms [{}], GPU ms [{}], recording frame {} CPU {:.2} ms",
-            cpu.join(", "),
-            gpu.join(", "),
-            first_visit.0,
-            first_visit.1[side],
-        );
-    }
 }

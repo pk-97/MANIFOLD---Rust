@@ -454,29 +454,3 @@ fn embedded_assets_are_the_shipped_sets() {
         assert_eq!(Container::parse(bytes).unwrap().text("family").unwrap(), kind.name());
     }
 }
-
-/// CPU per second of the first clip of every set, in a release build:
-/// `cargo test --release -p manifold-audio detector_cost -- --nocapture`. Not a gate (shared machines).
-#[test]
-fn detector_cost() {
-    for set in SETS {
-        let m = model(set);
-        let name = &clips(set)[0];
-        let pcm = golden::audio_f32(&golden::load(&dir(set), name));
-        let mut run = Run::new(&m);
-        let mut fires = Vec::with_capacity(4096);
-        let t0 = std::time::Instant::now();
-        for chunk in pcm.chunks(800) {
-            run.push_traced(chunk, |_, f| fires.extend(f));
-        }
-        let det = run.det();
-        let secs = pcm.len() as f64 / 48_000.0;
-        println!(
-            "{set}: {:.2} ms CPU per second of audio ({:.1} candidates/s, {} nets{}) on {name}",
-            t0.elapsed().as_secs_f64() / secs * 1e3,
-            det.decided() as f64 / secs,
-            det.spec().net.as_ref().map_or(0, |n| n.count),
-            if det.wants_kick().is_some() { ", the kick it reads included" } else { "" }
-        );
-    }
-}

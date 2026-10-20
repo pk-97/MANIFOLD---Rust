@@ -128,6 +128,14 @@ workspace = true
 name = "fluid_capture"
 required-features = ["gpu-proofs"]
 
+[[example]]
+name = "encode_replay_probe"
+required-features = ["gpu-proofs"]
+
+[[example]]
+name = "cinematic_tail_cost"
+required-features = ["gpu-proofs"]
+
 [[bin]]
 name = "gen_node_catalog"
 path = "src/bin/gen_node_catalog.rs"
