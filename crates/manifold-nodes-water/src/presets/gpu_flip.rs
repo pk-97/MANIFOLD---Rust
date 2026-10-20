@@ -867,6 +867,104 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     body
 }
 
+/// The five scene objects the Water family declares: water, foam, spray,
+/// bubbles, then Physics View's dots.
+fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortDef> {
+    FAMILY_OUTPUTS
+        .iter()
+        .chain([&DOTS_OUTPUT])
+        .map(|name| manifold_core::effect_graph_def::InterfacePortDef { name: (*name).into(), port_type: "SceneObject".into() })
+        .collect()
+}
+
+/// The family `body` wrapped as one group node: its interface declares every
+/// object output, so a host routes them by port type. The one place the
+/// family's node id is written.
+fn wrap_family(body: EffectGraphDef, role_input: bool) -> EffectGraphNode {
+    let local_id = body.nodes.iter().map(|node| node.id).max().map_or(1, |max| max + 1);
+    let mut group: EffectGraphNode = serde_json::from_value(json!({
+        "id": local_id, "nodeId": "water_family", "typeId": "group", "handle": "{handle} Graph",
+    }))
+    .expect("family group node");
+    let inputs = if role_input {
+        vec![manifold_core::effect_graph_def::InterfacePortDef { name: "role_0".into(), port_type: "FluidRole".into() }]
+    } else {
+        Vec::new()
+    };
+    group.group = Some(Box::new(manifold_core::effect_graph_def::GroupDef {
+        interface: manifold_core::effect_graph_def::GroupInterface {
+            inputs,
+            outputs: family_group_outputs(),
+            params: Vec::new(),
+        },
+        nodes: body.nodes,
+        wires: body.wires,
+        tint: None,
+    }));
+    group
+}
+
+/// What Add Water inserts: the GPU FLIP family as one group plus the card
+/// rows of its own nodes. Handles carry the template's name token: a node
+/// handled `""` takes the bare numbered name ("Water 1"), any other suffix
+/// follows it.
+pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplate {
+    use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
+    use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate};
+    const SHARED_WORLD_CONTROLS: [&str; 5] = ["gravity_x", "gravity", "gravity_z", "speed", "reset"];
+    let mut body = gpu_flip_liquid_body();
+    let mut metadata = body.preset_metadata.take().expect("family recipe metadata");
+    for node in &mut body.nodes {
+        node.handle = node.handle.take().map(|suffix| {
+            if suffix.is_empty() { HANDLE_TOKEN.to_owned() } else { format!("{HANDLE_TOKEN} {suffix}") }
+        });
+    }
+    let stable = |name: &str| {
+        body.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("the family has no {name}")).clone()
+    };
+    for spec in &mut metadata.params {
+        spec.section = Some(match spec.section.as_deref() {
+            None | Some("Water") => HANDLE_TOKEN.to_owned(),
+            Some(section) => format!("{HANDLE_TOKEN} - {section}"),
+        });
+    }
+    let stamped = |type_id: &str, keep: &dyn Fn(&str) -> bool| -> Vec<_> {
+        manifold_core::param_lookup::stamped_node_params(type_id).into_iter().filter(|meta| keep(&meta.name)).collect()
+    };
+    let domain = stable("domain");
+    let mut rows: Vec<(EffectGraphNode, Option<&str>, Vec<_>)> = vec![
+        (
+            domain.clone(),
+            Some("Simulation"),
+            stamped(&domain.type_id, &|name| {
+                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "domain_size" | "emission" | "inflow_speed")
+            }),
+        ),
+        (
+            stable("initial_column"),
+            Some("Initial Volume"),
+            stamped("node.transform_3d", &|name| {
+                matches!(name, "pos_x" | "pos_y" | "pos_z" | "rot_x" | "rot_y" | "rot_z" | "scale_x" | "scale_y" | "scale_z")
+            }),
+        ),
+        (stable("water_material"), Some("Material"), stamped("node.pbr_material", &|_| true)),
+        (stable("water_object"), None, stamped("node.scene_object", &|_| true)),
+        (stable("whitewater"), Some("Whitewater"), stamped("node.whitewater_step", &|_| true)),
+    ];
+    for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
+        rows.push((stable(&format!("{kind}_material")), Some(section), stamped("node.pbr_material", &|_| true)));
+    }
+    for (node, section, descriptors) in rows {
+        let label = match section {
+            Some(section) => format!("{HANDLE_TOKEN} - {section}"),
+            None => HANDLE_TOKEN.to_owned(),
+        };
+        stamp_scene_node_exposures_into(&mut metadata.params, &mut metadata.bindings, node.id, &node.node_id, &label, &descriptors, &node.params);
+    }
+    metadata.display_name = "Water".into();
+    SceneTemplate { group: wrap_family(body, false), metadata }
+}
+
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const SURFACE_DETAIL_OFFSET: usize = 1;
 
@@ -901,15 +999,9 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     let body = scene.family_def();
     let family_metadata = body.preset_metadata.clone().expect("family metadata");
     let family = b.node("water_family", "group", json!({}));
-    let inputs = if scene.obstacle { vec![json!({"name": "role_0", "portType": "FluidRole"})] } else { vec![] };
-    let outputs: Vec<_> = FAMILY_OUTPUTS.iter().chain([&DOTS_OUTPUT])
-        .map(|name| json!({"name": name, "portType": "SceneObject"})).collect();
     let node = b.nodes.last_mut().expect("family");
     node.handle = Some("Water".into());
-    node.group = Some(serde_json::from_value(json!({
-        "interface": {"inputs": inputs, "outputs": outputs},
-        "nodes": body.nodes, "wires": body.wires,
-    })).expect("family group"));
+    node.group = wrap_family(body, scene.obstacle).group;
     // Preserve the existing physical render order: water, foam, spray, bubbles.
     for (output, slot) in FAMILY_OUTPUTS.into_iter().zip(["object_0", "object_7", "object_9", "object_8"]) {
         b.wire((family, output), render, slot);
