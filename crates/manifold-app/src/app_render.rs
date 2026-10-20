@@ -413,15 +413,7 @@ impl Application {
         // 1. Take the newest state from the content thread.
         self.intake_content_state();
         self.tick_sync_calibration();
-        // "Show gizmos" follows whichever scene the Scene panel shows; the
-        // content thread reports that layer's rendered view (D7a).
-        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
-        if gizmo_layer != self.ws.gizmo_layer_sent.as_ref()
-            && let Some(tx) = self.content_tx.as_ref()
-        {
-            self.ws.gizmo_layer_sent = gizmo_layer.cloned();
-            ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
-        }
+        self.sync_gizmo_layer();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(
@@ -2358,20 +2350,23 @@ impl Application {
         crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
         crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state);
         let automation_draw_mode = self.selection.automation_draw_mode;
-        let inputs = crate::ui_frame::gather_frame_inputs(
-            &mut self.frame_planner,
-            &self.ws.ui_root,
-            &mut self.selection,
-            &self.active_layer_id,
-            &self.ui_edits,
-            &self.content_state,
-            crate::frame_plan::ChromeSource {
-                project: &self.local_project,
-                is_dirty: self.content_state.editing_is_dirty,
-                project_path: self.current_project_path.as_deref(),
-                automation_draw_mode,
-            },
-        );
+        let inputs = crate::frame_plan::FrameInputs {
+            gizmo_view: self.ws.preview_gizmo.version(),
+            ..crate::ui_frame::gather_frame_inputs(
+                &mut self.frame_planner,
+                &self.ws.ui_root,
+                &mut self.selection,
+                &self.active_layer_id,
+                &self.ui_edits,
+                &self.content_state,
+                crate::frame_plan::ChromeSource {
+                    project: &self.local_project,
+                    is_dirty: self.content_state.editing_is_dirty,
+                    project_path: self.current_project_path.as_deref(),
+                    automation_draw_mode,
+                },
+            )
+        };
         let plan = self.frame_planner.plan(inputs);
         let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
 

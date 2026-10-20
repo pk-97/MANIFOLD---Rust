@@ -723,10 +723,8 @@ pub(crate) fn composite_main_ui_frame(
     {
         ui_renderer.begin_frame();
         ui_renderer.push_immediate_clip(fit.x, fit.y, fit.width, fit.height);
-        let (w, h) = gizmos.output;
-        gizmos.frame.for_each_gizmo(gizmos.grid, |lines| {
-            crate::scene_viewport::draw_world_lines(ui_renderer, fit, &gizmos.frame.camera, w, h, lines);
-        });
+        let view = gizmos.view;
+        crate::scene_viewport::draw_world_lines(ui_renderer, fit, &view.camera, view.width, view.height, gizmos.lines);
         ui_renderer.pop_immediate_clip();
         let (logical_w, logical_h) = (
             (offscreen.width as f64 / scale_factor) as u32,
@@ -740,12 +738,11 @@ pub(crate) fn composite_main_ui_frame(
     encoder.commit();
 }
 
-/// The Scene panel's gizmo overlay for one main-window frame.
+/// The Scene panel's gizmo overlay for one main-window frame: the preview
+/// host's composed lines and the camera and output size of the frame shown.
 pub(crate) struct MainGizmos<'a> {
-    pub frame: &'a crate::physics_overlay::PhysicsOverlayFrame,
-    pub grid: &'a [manifold_nodes_scene::node_graph::viewport_overlay::WorldLine],
-    /// The show's output size, the render the preview shows.
-    pub output: (u32, u32),
+    pub lines: &'a [manifold_nodes_scene::node_graph::viewport_overlay::WorldLine],
+    pub view: crate::scene_gizmo::GizmoView,
 }
 
 /// Where the show picture sits inside `area`: aspect-fit and centred, in

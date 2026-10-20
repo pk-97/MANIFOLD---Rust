@@ -328,7 +328,6 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-app/src/ui_bridge/project.rs:697,1478,1743,1802,1870`
 * `crates/manifold-app/src/ui_bridge/projection/cards.rs:1073`
 * `crates/manifold-app/src/ui_snapshot/mod.rs:715`
-* `crates/manifold-app/src/viewport_p6_demo.rs:136,162,188`
 * `crates/manifold-app/src/window_input.rs:1009,1110`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/gltf_card_precedence.rs:75`
 * `crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs:64,385,447,746,988,1001,1581,2181,2246,2807,2903,3212,3270,3543,3598,3832`

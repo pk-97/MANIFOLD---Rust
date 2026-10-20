@@ -113,11 +113,11 @@ pub struct Workspace {
     /// (editor state per `docs/REALTIME_3D_DESIGN.md` section 5's "Forbidden"
     /// list: "viewport/gizmo state in `manifold-core`").
     pub viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode,
-    /// Persistent ground grid reused by each editor redraw.
-    pub viewport_grid_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
-    /// Reusable world-space editor lines appended to the viewport's gizmo
-    /// lines for selected scene overlays (currently fluid domain bounds).
+    /// The editor viewport's chrome this frame (`viewport_gizmo::compose_lines`),
+    /// reused so a steady frame allocates nothing.
     pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
+    /// The main output preview's gizmo host (main window only).
+    pub preview_gizmo: crate::physics_overlay::PreviewGizmo,
     /// The gizmo layer last sent to the content thread (`SetPhysicsOverlay`).
     pub gizmo_layer_sent: Option<manifold_core::LayerId>,
     /// The shape the gizmo is attached to this session, set by a viewport
@@ -136,8 +136,6 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(kind: WorkspaceKind) -> Self {
         let mut ui_root = UIRoot::new();
-        let viewport_grid_lines = manifold_nodes_scene::node_graph::viewport_overlay::grid_lines(10.0, 1.0);
-        let viewport_overlay_capacity = viewport_grid_lines.len() + 84;
         if kind == WorkspaceKind::GraphEditor {
             // BUG-121 root fix: the editor window's inspector column is the
             // authoring surface (right-lane cards + mapping drawer), never
@@ -167,10 +165,10 @@ impl Workspace {
             viewport_rect: None,
             viewport_drag: None,
             viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::default(),
-            viewport_grid_lines,
-            // Largest gizmo geometry plus the persistent grid and fluid bounds
-            // fit without a display-frame reallocation.
-            viewport_overlay_lines: Vec::with_capacity(viewport_overlay_capacity),
+            // The grid, a domain box and the largest handle set fit without
+            // a display-frame reallocation.
+            viewport_overlay_lines: Vec::with_capacity(crate::physics_overlay::CHROME_LINES),
+            preview_gizmo: Default::default(),
             gizmo_layer_sent: None,
             viewport_selected: None,
             viewport_gizmo_drag: None,

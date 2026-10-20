@@ -1710,47 +1710,32 @@ impl Application {
                 info.has_image = show_image;
                 info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
             }
-            // P6: handle geometry for the selected shape, built against THIS
-            // frame's def and editor camera; mid-drag it follows the live
-            // knob values the drag writes.
-            let scene = viewport_def
-                .authored
+            // The selected shape's handles over THIS frame's scene, through
+            // the one composition entry the main preview also calls; mid-drag
+            // they follow the live knob values the drag writes. Domain boxes
+            // are the ones the solver accepted for the displayed frame.
+            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, compose_lines, gizmo_target_for};
+            let target = viewport_def
+                .scene
                 .as_deref()
-                .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def);
-            let target = scene
-                .as_ref()
                 .zip(ws.viewport_selected.as_ref())
-                .and_then(|(scene, id)| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(scene, id));
-            let gizmo_lines = target
-                .as_ref()
-                .map(|target| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_lines(ws.viewport_gizmo_mode, target))
-                .unwrap_or_default();
-            // A selected liquid domain shows the box its solver accepted for
-            // the rendered frame; an unaccepted domain has none.
-            let fluid_domain = session
+                .and_then(|(scene, id)| gizmo_target_for(scene, id));
+            let domains = session
                 .displayed
                 .as_ref()
                 .filter(|frame| frame.has_image())
-                .zip(ws.viewport_selected.as_ref())
-                .and_then(|(frame, id)| match &id.owner {
-                    manifold_nodes_scene::node_graph::scene_vm::ShapeOwner::LiquidDomain(node) => frame
-                        .domains
-                        .iter()
-                        .find(|(domain, _)| domain == node)
-                        .filter(|(_, snapshot)| snapshot.state == manifold_core::fluid_domain::FluidDomainState::Ready)
-                        .and_then(|(_, snapshot)| snapshot.accepted_layout),
-                    manifold_nodes_scene::node_graph::scene_vm::ShapeOwner::Object(_)
-                    | manifold_nodes_scene::node_graph::scene_vm::ShapeOwner::RoleSource { .. }
-                    | manifold_nodes_scene::node_graph::scene_vm::ShapeOwner::Force(_) => None,
-                });
-            ws.viewport_overlay_lines.clear();
-            ws.viewport_overlay_lines.extend_from_slice(&ws.viewport_grid_lines);
-            if let Some(domain) = fluid_domain {
-                ws.viewport_overlay_lines.extend(
-                    manifold_nodes_scene::node_graph::viewport_overlay::fluid_domain_lines(domain),
-                );
-            }
-            ws.viewport_overlay_lines.extend(gizmo_lines);
+                .map_or(&[][..], |frame| &frame.domains[..]);
+            compose_lines(
+                &GizmoChrome {
+                    lights: &[],
+                    domains,
+                    physics: &[],
+                    selected: target.as_ref(),
+                    mode: ws.viewport_gizmo_mode,
+                    fade_handles: false,
+                },
+                &mut ws.viewport_overlay_lines,
+            );
         }
 
         // The graph-editor panel is now just the node-output inspector + the

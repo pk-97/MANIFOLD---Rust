@@ -34,7 +34,6 @@ use manifold_ui::node::Vec2;
 
 use crate::app::Application;
 use crate::content_command::ContentCommand;
-use manifold_editing::command::Command;
 use crate::window_registry::WindowRole;
 
 /// One mouse-wheel notch in logical pixels. A `LineDelta` notch is this many
@@ -295,6 +294,12 @@ impl Application {
             return;
         }
 
+        // A gizmo drag on the preview holds the pointer until release.
+        if self.ws.preview_gizmo.dragging() {
+            self.preview_gizmo_drag_to();
+            return;
+        }
+
         // Split handle drag takes highest priority
         // From Unity PanelResizeHandle.OnDrag
         if self.split_dragging {
@@ -496,7 +501,7 @@ impl Application {
                                         );
                                     }
                                 }
-                            } else {
+                            } else if !self.preview_gizmo_press() {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,
                                     PointerAction::Down,
@@ -519,7 +524,9 @@ impl Application {
                                     self.cursor_pos.x, self.cursor_pos.y
                                 );
                             }
-                            if self.split_dragging {
+                            if self.preview_gizmo_release() {
+                                // The preview's gizmo drag held the pointer.
+                            } else if self.split_dragging {
                                 // End video/timeline split drag.
                                 // From Unity PanelResizeHandle.OnPointerUp.
                                 self.split_dragging = false;
@@ -841,16 +848,15 @@ impl Application {
 
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
     /// open 3D viewport, tried BEFORE the orbit-drag arm below — a handle
-    /// grab on the selected shape first, then a pick. Returns `true` if the
-    /// press was consumed (a drag armed, a locked handle refused, or a pick
-    /// happened) — the caller must not also arm an orbit drag. A miss on
-    /// empty space returns `false` so the orbit arm still fires
-    /// (drag-on-nothing orbits, drag-on-an-object doesn't — the usual DCC
-    /// convention).
+    /// grab on the selected shape first, then a pick (`scene_gizmo::press`,
+    /// shared with the main preview). Returns `true` if the press was
+    /// consumed (a drag armed, a locked handle refused, or a pick happened) —
+    /// the caller must not also arm an orbit drag. A miss on empty space
+    /// returns `false` so the orbit arm still fires (drag-on-nothing orbits,
+    /// drag-on-an-object doesn't — the usual DCC convention).
     fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
-        use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner};
-        use manifold_nodes_scene::node_graph::viewport_gizmo as gizmo;
-        use manifold_ui::panels::scene_setup_panel::SceneSelection;
+        use crate::scene_gizmo::{GizmoPress, GizmoView};
+        use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
         };
@@ -861,97 +867,35 @@ impl Application {
             return false;
         }
         let Some(scene) = self.viewport_def_cloned().as_ref().and_then(SceneVm::from_def) else { return false };
-        let (w, h, cam, mode, selected) = {
+        let (view, mode, selected) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
                 return false;
             };
-            (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected.clone())
+            let view = GizmoView { camera: config.camera.to_camera(), width: config.width, height: config.height };
+            (view, ed.viewport_gizmo_mode, ed.viewport_selected.clone())
         };
         let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
-        let Some((cx, cy)) = crate::viewport_input::gizmo_point(rect, (w, h), (cx, cy)) else { return false };
-
-        // Try the selected shape's handles first.
-        if let Some(id) = selected
-            && let Some(target) = gizmo::gizmo_target_for(&scene, &id)
-            && let Some(axis) = gizmo::pick_axis(mode, &target, &cam, w, h, (cx, cy))
-        {
-            // D8: "the viewport never fights the graph" — a locked handle
-            // draws gray and refuses the drag; the press is still consumed
-            // so it doesn't fall through to orbit.
-            if target.handle(mode, axis).is_none_or(|handle| handle.write.locked()) {
-                return true;
-            }
-            let target = if target.unplaced {
-                let ShapeOwner::Object(obj_id) = target.id.owner else { return true };
-                if !self.add_object_transform(&layer_id, obj_id) {
-                    return true;
-                }
-                let Some(target) = self
-                    .viewport_def_cloned()
-                    .as_ref()
-                    .and_then(SceneVm::from_def)
-                    .and_then(|scene| gizmo::gizmo_target_for(&scene, &id))
-                else {
-                    return true;
-                };
-                target
-            } else {
-                target
-            };
-            let Some(drag) = gizmo::GizmoDrag::begin(target, mode, axis, (cx, cy)) else { return true };
-            match self.with_dispatch_ctx(|ctx| crate::scene_gizmo::GizmoGesture::begin(ctx, layer_id, drag)) {
-                Some(Ok(gesture)) => {
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.viewport_gizmo_drag = Some(gesture);
-                    }
-                }
-                Some(Err(message)) => self.send_content_cmd(ContentCommand::GraphEditRejected(message)),
-                None => {}
-            }
-            return true;
-        }
-
-        // No handle hit (or nothing selected yet) — try a pick. The gizmo,
-        // its drags and the selection draw over the viewport's rendered
-        // image, a live surface the editor composites every frame it shows.
-        let picked = gizmo::pick_target(&scene, &cam, w, h, (cx, cy));
-        let selection = picked.as_ref().and_then(|id| match &id.owner {
-            ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
-            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } => {
-                gizmo::gizmo_target_for(&scene, id).and_then(|target| target.row).map(SceneSelection::Object)
-            }
-        });
-        if let Some(selection) = selection {
-            self.ws.ui_root.scene_setup_panel.set_selection(layer_id, selection);
-        }
-        let hit = picked.is_some();
-        if let Some(ed) = self.graph_editor.as_mut() {
-            ed.viewport_selected = picked;
-        }
-        hit
-    }
-
-    /// D8 entry state: an object's `transform` port is unwired, so the
-    /// first drag creates the atom (one undo unit). False when it could not.
-    fn add_object_transform(&mut self, layer_id: &manifold_core::LayerId, obj_id: u32) -> bool {
-        let Some(catalog) = crate::ui_bridge::generator_catalog_default(&self.local_project, layer_id) else {
+        let Some(point) = crate::viewport_input::gizmo_point(rect, (view.width, view.height), (cx, cy)) else { return false };
+        let Some(pressed) = self.with_dispatch_ctx(|ctx| {
+            crate::scene_gizmo::press(ctx, &layer_id, &scene, selected.as_ref(), mode, &view, point)
+        }) else {
             return false;
         };
-        let mut cmd = manifold_editing::commands::graph::AddObjectTransformCommand::new(
-            manifold_core::GraphTarget::Generator(layer_id.clone()),
-            Vec::new(),
-            obj_id,
-            (0.0, 0.0),
-            catalog,
-        );
-        self.content_tx.as_ref().is_some_and(|tx| {
-            self.local_project.edit(&mut self.ui_edits, tx).executed_by(|project| {
-                cmd.execute(project);
-                cmd.created_node_id()?;
-                Some((Box::new(cmd) as Box<dyn manifold_editing::command::Command>, ()))
-            }).is_some()
-        })
+        let Some(ed) = self.graph_editor.as_mut() else { return false };
+        match pressed {
+            GizmoPress::Handle(gesture) => {
+                if gesture.is_some() {
+                    ed.viewport_gizmo_drag = gesture;
+                }
+                true
+            }
+            GizmoPress::Picked(picked) => {
+                let hit = picked.is_some();
+                ed.viewport_selected = picked;
+                hit
+            }
+        }
     }
 
     /// Run `f` in the context a card scrub dispatches in, with the editor's
@@ -971,6 +915,59 @@ impl Application {
             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
         };
         Some(f(&mut dctx))
+    }
+
+    /// Run `f` with the main preview's gizmo host and a dispatch context.
+    fn with_preview_gizmo<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::physics_overlay::PreviewGizmo, &mut crate::ui_bridge::DispatchCtx) -> R,
+    ) -> Option<R> {
+        let mut host = std::mem::take(&mut self.ws.preview_gizmo);
+        let out = self.with_dispatch_ctx(|ctx| f(&mut host, ctx));
+        self.ws.preview_gizmo = host;
+        out
+    }
+
+    /// Where the show picture sits in the main window: the same fit of the
+    /// same render size the draw path blits (`ui_frame::composite_main_ui_frame`).
+    fn preview_fit(&self) -> Option<manifold_ui::Rect> {
+        crate::ui_frame::video_fit_rect(self.ws.ui_root.layout.video_area(), self.video_source_dims())
+    }
+
+    /// D7a: a left press on the main output preview, through the gizmo
+    /// core's pick and the knob scrub path the editor viewport uses. True
+    /// when the preview took it; a miss falls through to the UI below.
+    fn preview_gizmo_press(&mut self) -> bool {
+        let (fit, pos) = (self.preview_fit(), self.cursor_pos);
+        self.with_preview_gizmo(|host, ctx| host.press(ctx, fit, pos)).unwrap_or(false)
+    }
+
+    /// Pointer motion while a preview drag holds the pointer.
+    fn preview_gizmo_drag_to(&mut self) {
+        let (fit, pos) = (self.preview_fit(), self.cursor_pos);
+        self.with_preview_gizmo(|host, ctx| host.drag_to(ctx, fit, pos));
+    }
+
+    /// End a preview drag (release, Escape, focus loss, perform mode, or
+    /// Show gizmos switched off): one undo entry. True when one ended.
+    pub(crate) fn preview_gizmo_release(&mut self) -> bool {
+        self.ws.preview_gizmo.dragging() && self.with_preview_gizmo(|host, ctx| host.release(ctx)).unwrap_or(false)
+    }
+
+    /// "Show gizmos" follows whichever scene the Scene panel shows; the
+    /// content thread reports that layer's rendered view (D7a). Switching it
+    /// off ends a preview drag.
+    pub(crate) fn sync_gizmo_layer(&mut self) {
+        if self.ws.ui_root.scene_setup_panel.gizmo_layer().is_none() {
+            self.preview_gizmo_release();
+        }
+        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
+        if gizmo_layer != self.ws.gizmo_layer_sent.as_ref()
+            && let Some(tx) = self.content_tx.as_ref()
+        {
+            self.ws.gizmo_layer_sent = gizmo_layer.cloned();
+            ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
+        }
     }
 
     /// P6: move the armed gizmo drag (if any) to the pointer. The gesture
@@ -1682,6 +1679,18 @@ impl Application {
                     self.handle_text_input_commit(field, &text);
                     return;
                 }
+            }
+            // The preview's gizmo: Escape ends a drag; with the preview
+            // focused, W, E and R pick the mode, as in the editor viewport.
+            if matches!(logical_key, Key::Named(NamedKey::Escape)) && self.preview_gizmo_release() {
+                return;
+            }
+            if self.modifiers.is_none()
+                && self.ws.ui_root.scene_setup_panel.gizmo_layer().is_some()
+                && let Key::Character(c) = &logical_key
+                && self.ws.preview_gizmo.mode_key(c.as_str())
+            {
+                return;
             }
             // ── Shortcut dispatch via InputHandler ──
             // Port of Unity InputHandler.HandleKeyboardInput().

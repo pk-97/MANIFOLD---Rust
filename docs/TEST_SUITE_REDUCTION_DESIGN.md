@@ -72,8 +72,8 @@ for the crate's binaries (CPU reruns included).
 ### 2.3 Where the time goes
 
 - **Nightly default suite (614.5 s wall).** Two chains decide it. The serial `gpu` group runs 600 s back to back, and
-  14 of its 132 tests take 454 s: the four viewport demos in the app (`viewport_p5c_demo`, `viewport_p6_demo`,
-  234 s), the nine loop wrap parity tests (201 s) and `scene_loop_probe` (19 s). The other chain is one test:
+  14 of its 132 tests took 454 s: four graph-editor viewport demos (234 s, since deleted; their pick and drag
+  maths is CPU-tested in `viewport_gizmo`), the nine loop wrap parity tests (201 s) and `scene_loop_probe` (19 s). The other chain is one test:
   `manifold-fluids` `production_coupling_neutral_body_uses_queued_gravity_prediction` (484 s), part of 1,507 s of
   CPU coupling tests in that crate.
 - **Nightly GPU leg, test wall 1,618 s, estimated split:** water about 800 s (BUG-hkbdp.6.11 territory, including
@@ -154,7 +154,7 @@ shared), RECORDS (timing tables). Savings are nightly seconds unless marked.
 | C7 | MERGE | `crates/manifold-nodes/tests/gpu_proofs/smoke.rs` : `every_registered_generator_runs_without_panicking_or_nans` into `crates/manifold-nodes/src/bundled_generator_presets.rs` : `every_bundled_preset_executes_one_frame` | the same generator catalog, the same `PresetRuntime::render` of one default frame; smoke adds a finite-pixel readback, the sweep adds panic collection. The sweep gains the readback and keeps 256 px and its failure list | 22 s GPU |
 | C8 | SHRINK | `crates/manifold-nodes/tests/gpu_proofs/node_error_status.rs` : `node_error_fails_the_frame` | proves a node error fails the frame by building and running all of WaterDamBreakGpuFlip for one frame (52–56 s, nearly all pipeline build). The smallest graph holding the domain node with Simulation Speed 5 asserts the same `FrameRenderStatus::Failed(NodeError)` | about 50 s GPU |
 | C9 | SHRINK | `crates/manifold-nodes/tests/scene_loop_wrap_parity.rs` : all 9 tests | `render_frame` opens a new GPU device and registry for every frame: 23 frames, 201 s, in the serial group. One device per test keeps all nine purity and continuity assertions and the 64 px frames | about 100 s default wall, estimate; needs one run |
-| C10 | SHRINK | `crates/manifold-app/src/viewport_p5c_demo.rs`, `crates/manifold-app/src/viewport_p6_demo.rs` : 4 tests | phase acceptance demos (REALTIME_3D P5c, P6) that assert rendered pixels change; 234 s in the serial group, and they write six PNGs to /tmp on every run. Keep the pixel asserts; share the device; write PNGs only when an artifact directory is set (the `MANIFOLD_FOG_ARTIFACT_DIR` precedent in the BUG-hkbdp.1 notes) | unknown, needs an isolated run of those modules |
+| C10 | DELETED | the app's two graph-editor viewport demo modules (REALTIME_3D P5c, P6) : 4 tests | phase acceptance demos that asserted rendered pixels change, 234 s in the serial group. Their pick and drag maths is CPU-tested in `viewport_gizmo` and `viewport_input`; the main preview gizmo host has its own UI flow | 234 s serial GPU |
 | C11 | MERGE (decision 5) | `crates/manifold-app/tests/legacy_param_id_resolution.rs` : the seven `liveschool_*` tests into one | each loads the canonical Liveschool fixture again (about 10 s a load, 70 s); one load serves all seven checks, every failed check is collected and reported. Costs the per-check names in the test list | about 58 s default |
 | C12 | RECORDS | `scripts/gpu_test_times.json` and the learned cache | 634 of the committed 3,420 rows name tests that did not run tonight (moved water tests still keyed `manifold-nodes-water/lib`, dead targets such as `manifold-nodes/led_preset_value_tests`). The learned cache holds 4,825 unqualified and 1,868 stale rows of 10,567. Prune both to live keys; this changes only hang-watchdog allowances | none; stops wrong allowances |
 
@@ -179,7 +179,7 @@ engine through it); the compositor presentation GPU tests (they run the tonemap 
 | Every bundled generator builds its chain at 1080p | `every_bundled_preset_chain_builds` | unchanged |
 | A node error fails the frame | one frame of the full dam break preset | one frame of the smallest graph with the failing domain node; same assertion |
 | Loop wrap purity and continuity (SCENE_LOOP INV-3, corridor D8) | 9 pixel tests, a device per frame; buffer-level gate in `crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs` | the same 9 tests, one device per test; buffer gate unchanged |
-| Viewport orbit drag, pick highlight, gizmo modes, gizmo drag render | 4 demos, a device per test, PNGs always | the same 4 asserts, shared device, PNGs on request; home per decision 4 |
+| Viewport orbit drag, pick highlight, gizmo modes, gizmo drag render | 4 demos, a device per test, PNGs always | the CPU pick, handle and drag tests in `viewport_gizmo` and `viewport_input`, and the `scene-preview-gizmo-drag` flow |
 | Canonical fixtures resolve every driver, envelope, Ableton and macro mapping to a stable param id | 7 Liveschool tests, 7 loads (plus 2 other tests) | per decision 5: 1 test, 1 load, 7 checks (the 2 others unchanged) |
 | Fused output matches unfused; kernels match CPU references | the freeze oracle proofs, codegen and kernel proofs | unchanged |
 
@@ -191,20 +191,19 @@ engine through it); the compositor presentation GPU tests (they run the tonemap 
 | GPU-only tests | 1,373 | 1,369 |
 | All tests | 7,899 | 7,884 / 7,890 |
 | Default summed seconds, firm rows (C1, C4, C5, C11) | 5,488 | about 5,280 / 5,340 |
-| Serial `gpu` group (sets the nightly wall) | 600 s | about 500 s from C9 alone; C10 unknown, needs one run |
+| Serial `gpu` group (sets the nightly wall) | 600 s | about 270 s: about 100 s from C9, 234 s from C10 |
 | Nightly default wall | 614.5 s | bounded below by the 484 s fluids test until decision 7; the serial group stops being the longer chain once C9 and C10 land |
 | Nightly GPU leg | 2,090 s | about 1,990 s (C2, C3, C7, C8: about 98 s, 5 percent) |
 | Landing GPU leg | median 159 s | the always-run smoke set is unchanged; C7 and C8 save 22 s and about 50 s on landings that select them |
 
-Unknown without a build: the exact saving of C9 and C10 (needs
-`cargo nextest run -p manifold-nodes --test main -E 'test(/scene_loop_wrap_parity/)'` and the same for the two app
-demo modules, before and after); whether C8's minimal graph reaches the same validation (needs the red-first run of
+Unknown without a build: the exact saving of C9 (needs
+`cargo nextest run -p manifold-nodes --test main -E 'test(/scene_loop_wrap_parity/)'`, before and after); whether C8's minimal graph reaches the same validation (needs the red-first run of
 D7); the cause of the section 2.4 rows.
 
 ## 8. The plausible-wrong turns, by name
 
-- **"Shrink the fixture to make it fast."** No. C8 changes the graph, not a resolution; C9 and C10 share setup and
-  keep sizes and frame counts. A resolution or duration cut is a decision for Peter, never a lane's.
+- **"Shrink the fixture to make it fast."** No. C8 changes the graph, not a resolution; C9 shares setup and keeps
+  sizes and frame counts. A resolution or duration cut is a decision for Peter, never a lane's.
 - **"Mark the slow ones `#[ignore]` or put them behind a feature."** No (D6). Ignores are hook-banned and the census
   names tests behind features no gate runs as a pattern to remove.
 - **"Collapse the GPU sweeps into one."** No. The 1080p chain build and the 256 px first frame are kept by the bead's
@@ -220,7 +219,7 @@ D7); the cause of the section 2.4 rows.
   latest nightly, which relearns. Gate: scoped nextest for the touched modules; `gpu_proofs_gate.py` with filters
   `bundled_generator_presets::`, `encode_replay::`, `cinematic_scene_tail::`; `cargo build -p manifold-audio -p manifold-nodes --examples`;
   `rg` for each removed test name returns only the examples and docs.
-- **P2, one lane: C8–C10, and C11 if approved.** Each shrink shown red-first (D7), then green, with before and
+- **P2, one lane: C8 and C9, and C11 if approved.** Each shrink shown red-first (D7), then green, with before and
   after times from one gate run. Gate: the named tests, one GPU run each through `scripts/gpu_queue.py`.
 
 ## 10. Decisions for Peter
@@ -228,7 +227,7 @@ D7); the cause of the section 2.4 rows.
 1. Approve the cut list C1–C10 and C12 as written (recommended).
 2. C1–C3: measurements become examples (recommended), or are deleted outright.
 3. C7: fold the finite-pixel check into the 256 px first-frame sweep and delete the smoke sweep (recommended).
-4. C10: move the four viewport demos from the app to manifold-nodes-scene, where their subject lives (recommended), or shrink them in place.
+4. C10: decided, the demos are deleted (SCENE_SETUP_PROGRAMME section 6 (Cleanup owed by each landing)).
 5. C11: merge the seven Liveschool fixture checks into one load (saves about a minute, loses per-check names), or keep seven tests.
 6. Trimming the long golden clips in `kick_fed_pair_ignores_push_size` and the parity tests to an excerpt is not proposed; say if you want it.
 7. Water residue BUG-hkbdp.6.11 did not census: the CPU coupling tests in `crates/manifold-fluids/src/coupling/tests/gravity.rs` (three tests, 1,296 s, the longest single chain of the nightly) go to a water bead, not this cut.

@@ -1,24 +1,37 @@
-//! The Scene panel's "Show gizmos" overlay on the main window's output
-//! preview (`docs/REALTIME_3D_DESIGN.md` D7a). Editor chrome only: the
-//! content thread reports, per output surface, the camera the panel's scene
-//! rendered through, its light positions and its accepted fluid domains; the
-//! UI projects the ground grid, light markers and domain boxes onto the
-//! preview. Nothing here feeds the render.
+//! The Scene panel's "Show gizmos" host on the main window's output preview
+//! (`docs/REALTIME_3D_DESIGN.md` D7a). Editor chrome only: the content
+//! thread reports, per output surface, the camera the panel's scene rendered
+//! through, its light positions, its accepted fluid domains and the physics
+//! shapes it simulated ([`PhysicsOverlayFrame`]); [`PreviewGizmo`] draws
+//! them with the selected item's handles through the gizmo core's one
+//! composition entry, and picks and drags through the same core and scrub
+//! path as the graph editor's viewport. Nothing here feeds the render.
 
 use std::sync::Arc;
 
-use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot, FluidDomainState};
+use manifold_core::change::{ChangeSet, Part, PartStamps};
+use manifold_core::fluid_domain::FluidDomainSnapshot;
 use manifold_core::physics_gizmo::PhysicsGizmo;
-use manifold_core::{LayerId, NodeId};
+use manifold_core::project::Project;
+use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
-use manifold_nodes_scene::node_graph::viewport_overlay::{
-    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, light_billboard_lines,
-    physics_gizmo_lines,
+use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+use manifold_nodes_scene::node_graph::viewport_gizmo::{
+    GizmoChrome, GizmoMode, GizmoTarget, GizmoTargetId, compose_lines,
 };
+use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+use manifold_ui::{Rect, Vec2};
+
+use crate::scene_gizmo::{GizmoGesture, GizmoPress, GizmoView};
+use crate::ui_bridge::DispatchCtx;
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
 type Lights = [[f32; 3]];
 type Gizmos = [PhysicsGizmo];
+
+/// Lines a host frame draws without reallocating: the grid, a domain box
+/// and the largest handle set.
+pub(crate) const CHROME_LINES: usize = 128;
 
 /// What one output surface's scene was rendered with.
 #[derive(Clone)]
@@ -39,33 +52,255 @@ impl PhysicsOverlayFrame {
     pub fn matches(&self, layer: Option<&LayerId>, frame: u64) -> bool {
         self.frame == frame && Some(&self.layer) == layer
     }
+}
 
-    /// Every domain the simulation accepted this frame, as its box.
-    pub fn accepted_domains(&self) -> impl Iterator<Item = FluidDomainLayout> + '_ {
-        self.domains.iter()
-            .filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready)
-            .filter_map(|(_, snapshot)| snapshot.accepted_layout)
+/// The main output preview as a gizmo host (D7a): the second host of the
+/// gizmo core beside the graph editor's viewport, with the camera of the
+/// overlay frame on screen and targets from the Scene panel's selection
+/// over `SceneVm`. Lives behind the Show gizmos switch; every drag is the
+/// knob's scrub (`scene_gizmo.rs`).
+#[derive(Default)]
+pub(crate) struct PreviewGizmo {
+    mode: GizmoMode,
+    /// The shape last picked on the preview. Its handles show while it
+    /// belongs to the Scene panel's selection; otherwise the selection's
+    /// first shape shows.
+    picked: Option<GizmoTargetId>,
+    drag: Option<PreviewDrag>,
+    /// The preview took the last left press, so W, E and R pick the mode.
+    focused: bool,
+    /// Moves with the mode and the picked shape: a frame-planner input.
+    version: u64,
+    /// The overlay frame the last present showed, and the output size it
+    /// was rendered at.
+    shown: Option<(PhysicsOverlayFrame, (u32, u32))>,
+    scene: crate::editor_graph_cache::EditorGraphCache,
+    target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
+    lines: Vec<WorldLine>,
+}
+
+/// What the shown handles read: the scene, the panel selection, this host's
+/// version and the parts an effect chain lives in.
+type TargetKey = (Arc<SceneVm>, u64, u64, u64);
+
+/// Parts that decide whether an effect follows the scene layer.
+const CHAIN_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Settings]);
+
+#[derive(Debug)]
+struct PreviewDrag {
+    gesture: GizmoGesture,
+    /// The picture at the press, used while no matched frame shows.
+    view: GizmoView,
+}
+
+impl PreviewGizmo {
+    /// Moves when the mode or the picked shape changes.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
-    /// Hand every gizmo to `draw`, a batch at a time: the ground grid, a
-    /// marker per light, a box per accepted fluid domain, then one wireframe
-    /// per physics setup shape. No camera frustum: the preview already looks
-    /// through that camera.
-    pub fn for_each_gizmo(&self, grid: &[WorldLine], mut draw: impl FnMut(&[WorldLine])) {
-        draw(grid);
-        let size = ViewportOverlayConfig::default().light_billboard_size;
-        for &pos in self.lights.iter() {
-            draw(&light_billboard_lines(pos, size));
-        }
-        for layout in self.accepted_domains() {
-            draw(&fluid_domain_lines(layout));
-        }
-        let mut lines = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
-        for gizmo in self.gizmos.iter() {
-            let count = physics_gizmo_lines(gizmo, &mut lines);
-            draw(&lines[..count]);
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    pub fn set_mode(&mut self, mode: GizmoMode) {
+        if mode != self.mode {
+            self.mode = mode;
+            self.version += 1;
         }
     }
+
+    /// The overlay frame the present is about to draw, or `None` when no
+    /// frame matches the picture on screen. Input picks against it.
+    pub fn show(&mut self, frame: Option<&PhysicsOverlayFrame>, output: (u32, u32)) {
+        self.shown = frame.map(|frame| (frame.clone(), output));
+    }
+
+    fn view(&self) -> Option<GizmoView> {
+        self.shown.as_ref().map(|(frame, (width, height))| GizmoView { camera: frame.camera, width: *width, height: *height })
+    }
+
+    /// The shown frame's chrome and the selected item's handles, through
+    /// the gizmo core's composition entry, with the camera to project them
+    /// through. Rebuilds the handles only when what they read moved.
+    pub fn compose(
+        &mut self,
+        project: &Project,
+        panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
+        parts: &PartStamps,
+    ) -> Option<(&[WorldLine], GizmoView)> {
+        let view = self.view()?;
+        let (frame, _) = self.shown.as_ref()?;
+        let layer = frame.layer.clone();
+        let target = GraphTarget::Generator(layer.clone());
+        let scene = self.scene.viewport_def(project, Some(&target), parts).scene;
+        let key = scene.map(|scene| (scene, panel.selection_version(), self.version, parts.key(CHAIN_PARTS)));
+        let fresh = match (&self.target, &key) {
+            (Some((cached, ..)), Some(key)) => Arc::ptr_eq(&cached.0, &key.0) && cached.1 == key.1 && cached.2 == key.2 && cached.3 == key.3,
+            _ => false,
+        };
+        if !fresh {
+            self.target = key.map(|key| {
+                let selected = panel
+                    .live_selection()
+                    .and_then(|selection| crate::scene_gizmo::selected_target(&key.0, selection, self.picked.as_ref()));
+                (key, selected, effect_follows(project, &layer))
+            });
+        }
+        let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
+        let (frame, _) = self.shown.as_ref()?;
+        let chrome = GizmoChrome {
+            lights: &frame.lights,
+            domains: &frame.domains,
+            physics: &frame.gizmos,
+            selected,
+            mode: self.mode,
+            fade_handles,
+        };
+        compose_lines(&chrome, &mut self.lines);
+        Some((&self.lines, view))
+    }
+
+    /// A left press at `pos` in the window. `fit` is where the show picture
+    /// sits (`ui_frame::video_fit_rect`). True when the preview took it: a
+    /// handle grabbed or refused, or a shape picked. Every press inside the
+    /// picture focuses the preview; one outside unfocuses it.
+    pub fn press(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) -> bool {
+        let layer = ctx.ui.scene_setup_panel.gizmo_layer().cloned();
+        // An open overlay over the picture takes its own presses.
+        let inside = fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
+        self.focused = inside && layer.is_some();
+        let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view()) else { return false };
+        let Some(point) = crate::viewport_input::gizmo_point(fit, (view.width, view.height), (pos.x, pos.y)) else { return false };
+        let graph = GraphTarget::Generator(layer.clone());
+        let Some(scene) = crate::scene_gizmo::authored_def(&ctx.project, &graph).as_ref().and_then(SceneVm::from_def) else {
+            return false;
+        };
+        let selected = ctx
+            .ui
+            .scene_setup_panel
+            .live_selection()
+            .and_then(|selection| crate::scene_gizmo::selected_target(&scene, selection, self.picked.as_ref()))
+            .map(|target| target.id);
+        match crate::scene_gizmo::press(ctx, &layer, &scene, selected.as_ref(), self.mode, &view, point) {
+            GizmoPress::Handle(gesture) => {
+                self.drag = gesture.map(|gesture| PreviewDrag { gesture, view });
+                true
+            }
+            GizmoPress::Picked(Some(id)) => {
+                if self.picked.as_ref() != Some(&id) {
+                    self.picked = Some(id);
+                    self.version += 1;
+                }
+                true
+            }
+            GizmoPress::Picked(None) => false,
+        }
+    }
+
+    /// Pointer motion during a drag: the knob scrub moves live. True when a
+    /// drag took it.
+    pub fn drag_to(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) -> bool {
+        let view = self.view();
+        let Some(drag) = self.drag.as_mut() else { return false };
+        // Follow the camera frame for frame; hold the press's while no
+        // matched frame shows.
+        if let Some(view) = view {
+            drag.view = view;
+        }
+        let view = drag.view;
+        if let Some(point) = fit.and_then(|fit| crate::viewport_input::gizmo_point(fit, (view.width, view.height), (pos.x, pos.y))) {
+            drag.gesture.drag_to(ctx, &view.camera, view.width, view.height, point);
+        }
+        true
+    }
+
+    /// Release, or the drag is cut short (Escape, perform mode): one undo
+    /// entry for the whole drag. True when a drag ended.
+    pub fn release(&mut self, ctx: &mut DispatchCtx) -> bool {
+        let Some(drag) = self.drag.take() else { return false };
+        drag.gesture.commit(ctx);
+        true
+    }
+
+    /// W, E or R with the preview focused picks the gizmo mode, as in the
+    /// graph editor's viewport. True when the key was taken.
+    pub fn mode_key(&mut self, key: &str) -> bool {
+        let mode = if key.eq_ignore_ascii_case("w") {
+            GizmoMode::Move
+        } else if key.eq_ignore_ascii_case("e") {
+            GizmoMode::Rotate
+        } else if key.eq_ignore_ascii_case("r") {
+            GizmoMode::Scale
+        } else {
+            return false;
+        };
+        if !self.focused {
+            return false;
+        }
+        self.set_mode(mode);
+        true
+    }
+
+    /// The shown handles as screen points in the window, for the ui-snap
+    /// runner's `gizmo` surface: each grip, labelled `"<Mode> <Axis>"`, and
+    /// the shape's origin. Call after [`Self::compose`].
+    #[cfg(feature = "ui-snapshot")]
+    pub fn grips(&self, fit: Rect) -> Vec<(String, Vec2)> {
+        let (Some(view), Some((_, Some(target), _))) = (self.view(), self.target.as_ref()) else { return Vec::new() };
+        let at = |point: [f32; 3]| {
+            let p = view.camera.project_to_pixel(point, view.width, view.height)?;
+            Some(Vec2::new(fit.x + p.px * fit.width / view.width as f32, fit.y + p.py * fit.height / view.height as f32))
+        };
+        let mut out: Vec<_> = at(target.origin).map(|p| ("Origin".to_string(), p)).into_iter().collect();
+        use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis;
+        for axis in [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z, GizmoAxis::Uniform] {
+            if let Some(p) = target.grip(self.mode, axis).and_then(at) {
+                out.push((format!("{:?} {:?}", self.mode, axis), p));
+            }
+        }
+        out
+    }
+}
+
+/// The preview's handle grips as a hit-test surface the automation dump
+/// can address (`UI_AUTOMATION_DESIGN.md` D5): they are drawn immediate-mode,
+/// outside any tree. The ui-snap runner is its one reader.
+#[cfg(feature = "ui-snapshot")]
+pub(crate) struct GizmoHitTargets<'a>(pub &'a [(String, Vec2)]);
+
+#[cfg(feature = "ui-snapshot")]
+impl manifold_ui::hit_targets::HitTargets for GizmoHitTargets<'_> {
+    fn surface_id(&self) -> &'static str {
+        "gizmo"
+    }
+
+    fn enumerate(&self, out: &mut Vec<manifold_ui::hit_targets::HitTargetEntry>) {
+        for (label, at) in self.0 {
+            out.push(manifold_ui::hit_targets::HitTargetEntry {
+                kind: "handle",
+                label: label.clone(),
+                rect: Rect::new(at.x - 3.0, at.y - 3.0, 6.0, 6.0),
+                payload: label.clone(),
+            });
+        }
+    }
+}
+
+/// D-69: an enabled effect on the scene layer, a group it sits in, or the
+/// master chain moves the picture off the scene.
+fn effect_follows(project: &Project, layer: &LayerId) -> bool {
+    let enabled = |effects: &[manifold_core::effects::PresetInstance]| effects.iter().any(|fx| fx.enabled);
+    let mut next = Some(layer.clone());
+    // A parent chain is at most every layer long.
+    for _ in 0..=project.timeline.layers.len() {
+        let Some((_, found)) = next.as_ref().and_then(|id| project.timeline.find_layer_by_id(id)) else { break };
+        if found.effects.as_deref().is_some_and(enabled) {
+            return true;
+        }
+        next = found.parent_layer_id.clone();
+    }
+    enabled(&project.settings.master_effects)
 }
 
 /// One entry per output surface, indexed like the preview bridge.
@@ -208,51 +443,34 @@ mod tests {
     }
 
     #[test]
-    fn show_gizmos_draws_grid_lights_and_accepted_domains() {
-        let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
-        let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
-        let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready };
-        let mut observations = PhysicsOverlayObservations::default();
-        observations.set_layer(Some(LayerId::new("scene")));
-        observations.record(1, 3, |_, domains, lights, _| {
-            domains.extend([(NodeId::new("a"), ready), (NodeId::new("b"), pending)]);
-            lights.extend([[0.0, 4.0, 0.0], [2.0, 1.0, -1.0]]);
-            Some(Camera::default_perspective())
-        });
-        let frame = observations.frames[1].as_ref().unwrap();
-        let grid = manifold_nodes_scene::node_graph::viewport_overlay::grid_lines(2.0, 1.0);
-        let mut batches = Vec::new();
-        frame.for_each_gizmo(&grid, |lines| batches.push(lines.len()));
-        // The grid, two 3-line light crosses, one 12-edge box (the pending
-        // domain draws nothing).
-        assert_eq!(batches, [grid.len(), 3, 3, 12]);
-    }
-
-    #[test]
-    fn show_gizmos_draws_each_physics_shape_after_the_domains() {
+    fn an_unchanged_physics_setup_publishes_no_new_snapshot() {
         use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
         let collider = PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]);
-        let force = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Sphere { center: [0.0; 3], radius: 1.0 } };
         let wind = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [1.0, 0.0, 0.0] } };
         let mut observations = PhysicsOverlayObservations::default();
         observations.set_layer(Some(LayerId::new("water")));
         let observe = |gizmos: &mut Vec<PhysicsGizmo>| {
-            gizmos.extend([collider, force, wind]);
+            gizmos.extend([collider, wind]);
             Some(Camera::default_perspective())
         };
         observations.record(0, 1, |_, _, _, gizmos| observe(gizmos));
         let first = observations.frames[0].as_ref().unwrap().gizmos.clone();
-        let mut batches = Vec::new();
-        observations.frames[0].as_ref().unwrap().for_each_gizmo(&[], |lines| if let Some(line) = lines.first() { batches.push((lines.len(), line.color)) });
-        let color = manifold_nodes_scene::node_graph::viewport_overlay::physics_gizmo_color;
-        assert_eq!(batches, [
-            (12, color(PhysicsGizmoFamily::Collider)),
-            (PHYSICS_GIZMO_LINES, color(PhysicsGizmoFamily::Force)),
-            (5, color(PhysicsGizmoFamily::Force)),
-        ]);
-        // An unchanged setup publishes no new snapshot.
+        assert_eq!(first.as_ref(), [collider, wind]);
         observations.record(1, 2, |_, _, _, gizmos| observe(gizmos));
         assert!(Arc::ptr_eq(&first, &observations.frames[1].as_ref().unwrap().gizmos));
+    }
+
+    #[test]
+    fn an_effect_after_the_scene_fades_its_handles() {
+        let mut project = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
+        let layer = LayerId::new("scene");
+        assert!(!effect_follows(&project, &layer));
+        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::from_string("Mirror".to_string()));
+        fx.enabled = true;
+        project.settings.master_effects.push(fx);
+        assert!(effect_follows(&project, &layer), "the master chain follows every layer");
+        project.settings.master_effects[0].enabled = false;
+        assert!(!effect_follows(&project, &layer), "a bypassed effect leaves the picture on the scene");
     }
 
     #[test]

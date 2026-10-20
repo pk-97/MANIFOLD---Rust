@@ -21,12 +21,25 @@
 //! A handle whose param is wired reports locked: the host refuses the drag
 //! and the handle draws in [`LOCKED_COLOR`]. The viewport never fights the
 //! graph.
+//!
+//! **One composition entry draws every host's chrome** ([`compose_lines`]):
+//! the ground grid, then what physics did (light markers, accepted domain
+//! boxes, solver-reported shapes, all from the host's frame report), then
+//! the selected shape's handles from its declaration.
 
+use std::sync::LazyLock;
+
+use manifold_core::NodeId;
+use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
+use manifold_core::physics_gizmo::PhysicsGizmo;
 use manifold_foundation::scene_surface::{ParamTriple, SceneShape};
 use manifold_node_engine::scene::camera::Camera;
 
 use crate::node_graph::scene_vm::{FluidRole, SceneShapeVm, SceneVm, ShapeOwner, ShapeParamVm, ShapeWrite};
-use crate::node_graph::viewport_overlay::WorldLine;
+use crate::node_graph::viewport_overlay::{
+    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, grid_lines, light_billboard_lines,
+    physics_gizmo_lines,
+};
 
 /// Click/handle hit-test radius, screen pixels.
 pub const PICK_RADIUS_PX: f32 = 22.0;
@@ -43,6 +56,12 @@ const Z_COLOR: [u8; 4] = [90, 140, 235, 255];
 const UNIFORM_COLOR: [u8; 4] = [235, 235, 235, 255];
 const DIRECTION_COLOR: [u8; 4] = [240, 200, 80, 255];
 const LOCKED_COLOR: [u8; 4] = [130, 130, 130, 255];
+/// Handle alpha while an effect after the scene layer moves the picture
+/// off the scene (D-69).
+pub const FADED_HANDLE_ALPHA: u8 = 80;
+
+/// The ground grid every host draws: ten units each way, one-unit steps.
+static GROUND_GRID: LazyLock<Vec<WorldLine>> = LazyLock::new(|| grid_lines(10.0, 1.0));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GizmoMode {
@@ -294,6 +313,18 @@ impl GizmoTarget {
     pub fn projected_drag_delta(&self, axis: GizmoAxis, cam: &Camera, width: u32, height: u32, delta: (f32, f32)) -> Option<f32> {
         direction_drag_delta(self.origin, self.axis_direction(axis), cam, width, height, delta)
     }
+
+    /// The world point a pointer grabs `mode`'s handle on `axis` by: a
+    /// linear handle's tip, or a ring an eighth of a turn round, where no
+    /// other ring passes. [`pick_axis`] returns that handle there unless
+    /// another ring stands edge-on over it.
+    pub fn grip(&self, mode: GizmoMode, axis: GizmoAxis) -> Option<[f32; 3]> {
+        self.handle(mode, axis)?;
+        match mode {
+            GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.axis_direction(axis), GIZMO_HANDLE_LEN)),
+            GizmoMode::Rotate => ring_lines(self.origin, axis, GIZMO_HANDLE_LEN, [0; 4]).nth(3).map(|line| self.world_point(line.a)),
+        }
+    }
 }
 
 /// Every declared shape in `scene` as a gizmo target.
@@ -331,12 +362,61 @@ fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
     dx * dx + dy * dy
 }
 
+/// What one host frame shows (REALTIME_3D_DESIGN.md D7a). What physics did
+/// comes from the host's frame report; handles come from the selected
+/// shape's declaration.
+#[derive(Clone, Copy)]
+pub struct GizmoChrome<'a> {
+    pub lights: &'a [[f32; 3]],
+    pub domains: &'a [(NodeId, FluidDomainSnapshot)],
+    pub physics: &'a [PhysicsGizmo],
+    pub selected: Option<&'a GizmoTarget>,
+    pub mode: GizmoMode,
+    /// An effect after the scene layer moves the picture off the scene, so
+    /// the handles fade (D-69).
+    pub fade_handles: bool,
+}
+
+/// Every line a host draws for one frame, into `out` (cleared first): the
+/// ground grid, a marker per light, a box per accepted liquid domain, each
+/// solver-reported physics shape, then the selected shape's handles. The
+/// one composition entry every host calls.
+pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
+    out.clear();
+    out.extend_from_slice(&GROUND_GRID);
+    let size = ViewportOverlayConfig::default().light_billboard_size;
+    for &pos in chrome.lights {
+        out.extend(light_billboard_lines(pos, size));
+    }
+    let accepted = chrome
+        .domains
+        .iter()
+        .filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready)
+        .filter_map(|(_, snapshot)| snapshot.accepted_layout);
+    for layout in accepted {
+        out.extend(fluid_domain_lines(layout));
+    }
+    let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
+    for gizmo in chrome.physics {
+        let count = physics_gizmo_lines(gizmo, &mut shape);
+        out.extend_from_slice(&shape[..count]);
+    }
+    if let Some(target) = chrome.selected {
+        let start = out.len();
+        gizmo_lines(chrome.mode, target, out);
+        if chrome.fade_handles {
+            for line in &mut out[start..] {
+                line.color[3] = line.color[3].min(FADED_HANDLE_ALPHA);
+            }
+        }
+    }
+}
+
 /// World-space handle geometry for `mode` at `target`, plus the declared
-/// direction when the shape has one. Locked handles draw in
-/// [`LOCKED_COLOR`].
-pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
+/// direction when the shape has one, appended to `lines`. Locked handles
+/// draw in [`LOCKED_COLOR`].
+pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, lines: &mut Vec<WorldLine>) {
     let origin = target.origin;
-    let mut lines = Vec::new();
     if let Some(direction) = target.direction.and_then(normalized) {
         lines.push(WorldLine { a: origin, b: offset(origin, direction, GIZMO_HANDLE_LEN * 1.4), color: DIRECTION_COLOR });
     }
@@ -357,7 +437,7 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
                 lines.push(WorldLine { a: offset(tip, perp, tick), b: offset(tip, perp, -tick), color });
             }
             GizmoMode::Rotate => {
-                lines.extend(ring_lines(origin, handle.axis, GIZMO_HANDLE_LEN, color).into_iter().map(|line| WorldLine {
+                lines.extend(ring_lines(origin, handle.axis, GIZMO_HANDLE_LEN, color).map(|line| WorldLine {
                     a: target.world_point(line.a),
                     b: target.world_point(line.b),
                     color: line.color,
@@ -365,7 +445,6 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
             }
         }
     }
-    lines
 }
 
 fn offset(p: [f32; 3], dir: [f32; 3], len: f32) -> [f32; 3] {
@@ -383,25 +462,24 @@ fn perpendicular(u: [f32; 3]) -> [f32; 3] {
 }
 
 /// A ring of segments in the plane perpendicular to `axis` around `origin`.
-fn ring_lines(origin: [f32; 3], axis: GizmoAxis, r: f32, color: [u8; 4]) -> Vec<WorldLine> {
+/// `Uniform` has no ring.
+fn ring_lines(origin: [f32; 3], axis: GizmoAxis, r: f32, color: [u8; 4]) -> impl Iterator<Item = WorldLine> {
     const SEGMENTS: usize = 24;
-    let (a, b) = match axis {
-        GizmoAxis::X => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
-        GizmoAxis::Y => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-        GizmoAxis::Z => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
-        GizmoAxis::Uniform => return Vec::new(),
+    let ((a, b), segments) = match axis {
+        GizmoAxis::X => (([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), SEGMENTS),
+        GizmoAxis::Y => (([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]), SEGMENTS),
+        GizmoAxis::Z => (([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), SEGMENTS),
+        GizmoAxis::Uniform => (([0.0; 3], [0.0; 3]), 0),
     };
-    let point = |t: f32| -> [f32; 3] {
+    let point = move |t: f32| -> [f32; 3] {
         let (s, c) = t.sin_cos();
         std::array::from_fn(|i| origin[i] + r * (c * a[i] + s * b[i]))
     };
-    (0..SEGMENTS)
-        .map(|i| {
-            let t0 = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-            let t1 = ((i + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-            WorldLine { a: point(t0), b: point(t1), color }
-        })
-        .collect()
+    (0..segments).map(move |i| {
+        let t0 = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let t1 = ((i + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        WorldLine { a: point(t0), b: point(t1), color }
+    })
 }
 
 /// Screen-space point-to-segment distance, for handle hit-testing.
@@ -431,7 +509,6 @@ pub fn pick_axis(mode: GizmoMode, target: &GizmoTarget, cam: &Camera, width: u32
                 point_segment_dist(click, (origin_px.px, origin_px.py), (tip_px.px, tip_px.py))
             }
             GizmoMode::Rotate => ring_lines(origin, handle.axis, GIZMO_HANDLE_LEN, [0; 4])
-                .iter()
                 .filter_map(|seg| {
                     let a = cam.project_to_pixel(target.world_point(seg.a), width, height)?;
                     let b = cam.project_to_pixel(target.world_point(seg.b), width, height)?;

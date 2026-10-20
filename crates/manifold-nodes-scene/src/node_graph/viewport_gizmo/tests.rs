@@ -181,7 +181,7 @@ fn child_gizmo_composes_parent_origin_axes_and_drag_units() {
 fn wired_param_shows_locked_and_refuses_the_drag() {
     let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (true, false, false))]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
-    let lines = gizmo_lines(GizmoMode::Move, &target);
+    let lines = lines_of(GizmoMode::Move, &target);
     assert_eq!(lines.len(), 3);
     let x_line = lines.iter().find(|l| (l.b[0] - l.a[0]).abs() > 0.5).unwrap();
     assert_eq!(x_line.color, LOCKED_COLOR, "wired pos_x draws locked");
@@ -201,7 +201,7 @@ fn unwired_transform_target_is_unplaced_at_the_origin() {
     assert_eq!(target.origin, [0.0, 0.0, 0.0]);
     assert!(target.unplaced);
     assert_eq!(written(&target, GizmoMode::Scale, GizmoAxis::Y), vec![ShapeWrite::Unplaced]);
-    assert_eq!(gizmo_lines(GizmoMode::Move, &target).len(), 3, "the declared handles still draw to grab");
+    assert_eq!(lines_of(GizmoMode::Move, &target).len(), 3, "the declared handles still draw to grab");
     assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::X, (0.0, 0.0)).is_none(), "the host places it first");
 }
 
@@ -218,7 +218,7 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     assert_eq!(box_target.kind, GizmoTargetKind::FluidDomain);
     assert_eq!(box_target.origin, [0.0, 2.0, -6.0]);
     assert!(!box_target.supports_mode(GizmoMode::Rotate), "the declaration gives the domain no rotation");
-    assert!(gizmo_lines(GizmoMode::Rotate, box_target).is_empty());
+    assert!(lines_of(GizmoMode::Rotate, box_target).is_empty());
     assert_eq!(written(box_target, GizmoMode::Scale, GizmoAxis::X), vec![node_write("scale_x")]);
     let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([-50.0, 2.0, -6.0])) else {
         panic!("one value")
@@ -291,7 +291,7 @@ fn vortex_force_rotate_turns_its_axis_and_keeps_its_length() {
     let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
     assert!((length - 2.0).abs() < 1e-4, "length kept, got {axis:?}");
     assert!(axis[0].abs() < 0.1 && (axis[1].abs() - 2.0).abs() < 0.1, "turned a quarter, got {axis:?}");
-    assert!(gizmo_lines(GizmoMode::Rotate, &target).iter().any(|line| line.color == DIRECTION_COLOR));
+    assert!(lines_of(GizmoMode::Rotate, &target).iter().any(|line| line.color == DIRECTION_COLOR));
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn rotate_drag_delta_quarter_turn_is_roughly_half_pi() {
 
 #[test]
 fn ring_lines_are_closed_loop_of_24_segments() {
-    let lines = ring_lines([0.0, 0.0, 0.0], GizmoAxis::Y, 1.0, Y_COLOR);
+    let lines: Vec<_> = ring_lines([0.0, 0.0, 0.0], GizmoAxis::Y, 1.0, Y_COLOR).collect();
     assert_eq!(lines.len(), 24);
     for i in 0..3 {
         assert!((lines[0].a[i] - lines[23].b[i]).abs() < 1e-4);
@@ -356,6 +356,66 @@ fn ring_lines_are_closed_loop_of_24_segments() {
 fn scale_gizmo_lines_have_tick_marks() {
     let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (false, false, false))]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
-    assert_eq!(gizmo_lines(GizmoMode::Move, &target).len(), 3);
-    assert_eq!(gizmo_lines(GizmoMode::Scale, &target).len(), 6);
+    assert_eq!(lines_of(GizmoMode::Move, &target).len(), 3);
+    assert_eq!(lines_of(GizmoMode::Scale, &target).len(), 6);
+}
+
+fn lines_of(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
+    let mut lines = Vec::new();
+    gizmo_lines(mode, target, &mut lines);
+    lines
+}
+
+/// Grid, light markers, the accepted domain's box (a pending one draws
+/// nothing), each physics shape, then the selected handles, faded when an
+/// effect follows the scene.
+#[test]
+fn composition_draws_what_physics_did_then_the_selected_handles() {
+    use manifold_core::fluid_domain::FluidDomainLayout;
+    use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
+    let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
+    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
+    let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready };
+    let domains = [(NodeId::new("a"), ready), (NodeId::new("b"), pending)];
+    let physics = [
+        PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]),
+        PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [1.0, 0.0, 0.0] } },
+    ];
+    let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (false, false, false))]);
+    let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    let mut chrome = GizmoChrome {
+        lights: &[[0.0, 4.0, 0.0], [2.0, 1.0, -1.0]],
+        domains: &domains,
+        physics: &physics,
+        selected: Some(&target),
+        mode: GizmoMode::Move,
+        fade_handles: false,
+    };
+    let mut lines = Vec::new();
+    compose_lines(&chrome, &mut lines);
+    let grid = GROUND_GRID.len();
+    assert_eq!(lines.len(), grid + 2 * 3 + 12 + 12 + 5 + 3);
+    let collider = crate::node_graph::viewport_overlay::physics_gizmo_color(PhysicsGizmoFamily::Collider);
+    assert_eq!(lines[grid + 6 + 12].color, collider, "physics shapes follow the domain box");
+    assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == 255));
+
+    chrome.fade_handles = true;
+    compose_lines(&chrome, &mut lines);
+    assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == FADED_HANDLE_ALPHA), "handles fade");
+    assert!(lines[..lines.len() - 3].iter().all(|line| line.color[3] == 255), "what physics did never fades");
+}
+
+#[test]
+fn each_grip_picks_its_own_handle() {
+    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    // Oblique, so no ring stands edge-on over another's grip.
+    let cam = Camera::look_at([3.0, 2.5, 0.0], [0.0, 0.0, -5.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+    let at = |p: [f32; 3]| cam.project_to_pixel(p, 640, 480).map(|p| (p.px, p.py)).unwrap();
+    for mode in [GizmoMode::Move, GizmoMode::Scale, GizmoMode::Rotate] {
+        for axis in GizmoAxis::XYZ {
+            let grip = target.grip(mode, axis).expect("an object has every handle");
+            assert_eq!(pick_axis(mode, &target, &cam, 640, 480, at(grip)), Some(axis), "{mode:?} {axis:?}");
+        }
+    }
 }

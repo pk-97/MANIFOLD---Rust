@@ -14,6 +14,12 @@
     "crates/manifold-app/src/ui_bridge/scrub.rs": [
       "rack-wet-dry"
     ],
+    "crates/manifold-app/src/physics_overlay.rs": [
+      "scene-preview-gizmo-drag"
+    ],
+    "crates/manifold-app/src/scene_gizmo.rs": [
+      "scene-preview-gizmo-drag"
+    ],
     "crates/manifold-ui/src/chrome/diff.rs": [
       "rack-bypass",
       "rack-wet-dry"
@@ -393,6 +399,7 @@
     "scene-submesh-controls": "gltfscene",
     "scene-setup-modifier": "gltfscene",
     "scene-setup-modifier-trigger": "gltfscene",
+    "scene-preview-gizmo-drag": "gltfscene",
     "scene-skin": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",
