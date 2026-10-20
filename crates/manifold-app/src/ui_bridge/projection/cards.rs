@@ -1284,6 +1284,29 @@ mod modifier_audio_projection_tests {
         assert!(reloaded[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap().audio.active);
     }
 
+    /// Force rows carry their manifest unit all the way to the readout text.
+    #[test]
+    fn radial_force_rows_format_with_their_units() {
+        use manifold_ui::panels::param_slider_shared::format_param_value;
+        let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let modifier = prepare_new_scene_modifier(&graph, recipe.as_ref(), "force".into(),
+            SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
+        graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
+        let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        host.graph = Some(graph.clone());
+        host.refresh_manifest_from_graph();
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        let readout = |name: &str| {
+            let row = surfaces[0].rows.iter().find(|row| row.spec.name == name).unwrap_or_else(|| panic!("row {name}"));
+            let spec = &row.spec;
+            format_param_value(row.value.effective, spec.min, spec.whole_numbers, spec.is_angle, spec.value_labels.as_deref(), spec.unit)
+        };
+        assert!(readout("Strength").ends_with(" m/s²"));
+        assert!(readout("Impulse Size").ends_with(" m/s"));
+    }
+
     /// A force card's audio-mod meter shows the level the content thread
     /// captured for that mod. The mod lives on the generator under the host
     /// binding id, so the card keys its meter on the generator instance, never
