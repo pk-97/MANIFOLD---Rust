@@ -355,6 +355,7 @@
     "work-fold-toggle": "inspector",
     "water-family-controls": "scene-setup",
     "scene-fluid-dam-break-controls": "waterdambreak",
+    "scene-liquid-forces": "waterdambreakmatter",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",

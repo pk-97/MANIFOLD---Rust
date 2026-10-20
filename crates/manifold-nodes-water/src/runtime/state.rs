@@ -47,7 +47,7 @@ impl RuntimeExtension for WaterRuntimeState {
         param: &str,
         source: FrameTime,
         next_sequence: &mut u64,
-    ) -> Result<bool, String> {
+    ) -> Result<manifold_core::scene_impulse::ImpulseFire, String> {
         super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(param, source, next_sequence)
     }
 

@@ -600,3 +600,124 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
         "trigger mixed timing max ms: content={max_content_ms:.3}, audio={max_audio_ms:.3}, engine={max_engine_ms:.3}, render={max_render_ms:.3}"
     );
 }
+
+/// One scene played without its trigger lanes, for direct Fires
+/// (BUG-mo4oa (scene force trigger skipped)).
+struct DirectFire {
+    device: Arc<GpuDevice>,
+    engine: PlaybackEngine,
+    parent: LayerId,
+    fire: String,
+    frame: u64,
+}
+
+impl DirectFire {
+    fn new() -> Self {
+        let (project, parent, _, _, fire, _) = project_fixture();
+        let device = Arc::new(GpuDevice::new_queued("scene impulse fire proof"));
+        let mut engine = PlaybackEngine::new(vec![Box::new(GeneratorRenderer::new_unwarmed(
+            device.clone(),
+            WIDTH,
+            HEIGHT,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        ))]);
+        engine.initialize(project);
+        engine.set_state(PlaybackState::Playing);
+        Self { device, engine, parent, fire, frame: 0 }
+    }
+
+    fn fire(&mut self) -> Result<bool, String> {
+        let source = manifold_node_engine::exec::effect_node::FrameTime {
+            seconds: Seconds(self.engine.current_time_double()),
+            beats: Beats(self.engine.current_beat_f64()),
+            delta: Seconds::ZERO,
+            frame_count: 0,
+        };
+        let (renderers, project) = self.engine.split_renderer_project();
+        let project = project.expect("project installed");
+        let layer = project.timeline.layers.iter().find(|layer| layer.layer_id == self.parent).expect("scene layer");
+        let tempo = ProjectTempo::new(&project.tempo_map, project.settings.bpm);
+        renderers
+            .iter_mut()
+            .find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>())
+            .expect("real GeneratorRenderer")
+            .fire_scene_impulse(layer, &self.fire, source, Some(&tempo))
+    }
+
+    /// Tick and render one frame; `skip` leaves the scene unrendered.
+    fn render(&mut self, skip: bool) {
+        let result = self.engine.tick(TickContext {
+            frames: 1,
+            realtime_now: Seconds(self.frame as f64 * DT),
+            frame_count: self.frame,
+        });
+        self.frame += 1;
+        let (layers, tempo) = {
+            let project = self.engine.project().expect("project installed");
+            (project.timeline.layers.clone(), ProjectTempo::new(&project.tempo_map, project.settings.bpm))
+        };
+        let mut command_buffer = self.device.create_encoder("scene impulse fire proof");
+        let mut gpu = GpuEncoder::new(&mut command_buffer, &self.device);
+        let (time, beat) = (self.engine.current_time_double(), self.engine.current_beat_f64());
+        let skipped: &[i32] = if skip { &[0] } else { &[] };
+        generator(&mut self.engine).render_all(&mut gpu, time, beat, DT as f32, &layers, DATA_VERSION, skipped, Some(&tempo));
+        command_buffer.commit_and_wait_completed();
+        self.engine.reclaim_tick_result(result);
+    }
+
+    fn diagnostics(&mut self) -> manifold_core::scene_impulse::SceneImpulseDiagnostics {
+        generator(&mut self.engine).scene_impulse_diagnostics().clone()
+    }
+}
+
+/// A Fire before its scene has rendered its setup waits, then lands once
+/// after the render; it is never refused for arriving early.
+#[test]
+fn scene_impulse_fired_before_its_scene_renders_lands_once_after() {
+    let mut scene = DirectFire::new();
+    assert_eq!(scene.fire(), Ok(true));
+    for _ in 0..4 {
+        scene.render(false);
+    }
+    let diagnostics = scene.diagnostics();
+    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
+}
+
+/// One refused Fire holds nothing back: a full history refuses the newest
+/// hit, every admitted hit lands once, and the next Fire after the receipts
+/// drain lands too.
+#[test]
+fn scene_impulse_refusal_never_blocks_the_next_fire() {
+    let mut scene = DirectFire::new();
+    scene.render(false);
+    for _ in 0..256 {
+        assert_eq!(scene.fire(), Ok(true));
+    }
+    let refusal = scene.fire().unwrap_err();
+    assert!(refusal.contains("refused"), "{refusal}");
+    scene.render(false);
+    scene.render(false);
+    assert_eq!(scene.diagnostics().started, 256);
+    assert_eq!(scene.fire(), Ok(true));
+    scene.render(false);
+    scene.render(false);
+    let diagnostics = scene.diagnostics();
+    assert_eq!((diagnostics.started, diagnostics.refused), (257, 1), "{diagnostics:?}");
+    assert_eq!(diagnostics.last_refusal.as_deref(), Some(refusal.as_str()));
+}
+
+/// A Fire waiting for a scene that then does not render is refused once,
+/// visibly, and never lands later as a stale burst.
+#[test]
+fn scene_impulse_waiting_for_an_unrendered_scene_is_refused_once() {
+    let mut scene = DirectFire::new();
+    assert_eq!(scene.fire(), Ok(true));
+    scene.render(true);
+    for _ in 0..3 {
+        scene.render(false);
+    }
+    let diagnostics = scene.diagnostics();
+    assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{diagnostics:?}");
+    assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("stopped rendering")));
+}

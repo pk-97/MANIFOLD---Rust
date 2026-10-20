@@ -60,6 +60,7 @@ const WARMUP_FRAMES: usize = 45;
 pub struct GeneratorRenderer {
     next_physics_event: u64,
     scene_impulse_diagnostics: manifold_core::scene_impulse::SceneImpulseDiagnostics,
+    waiting_fires: Vec<physics_events::WaitingFire>,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -182,6 +183,7 @@ impl GeneratorRenderer {
         Self {
             next_physics_event: 0,
             scene_impulse_diagnostics: Default::default(),
+            waiting_fires: Vec::with_capacity(physics_events::WAITING_FIRE_CAPACITY),
             device,
             width,
             height,
@@ -1019,6 +1021,14 @@ impl GeneratorRenderer {
                     &mut self.scene_impulse_diagnostics,
                 );
             }
+            if !self.waiting_fires.is_empty()
+                && let Some(layer) = layers.get(layer_index as usize)
+            {
+                self.land_waiting_fires(layer, project_tempo);
+            }
+        }
+        if !self.waiting_fires.is_empty() {
+            self.refuse_unrendered_waiting_fires();
         }
 
         // Flush uniform arena (recreates buffer if capacity grew).

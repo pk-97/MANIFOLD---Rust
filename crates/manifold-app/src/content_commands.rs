@@ -1160,20 +1160,29 @@ impl ContentThread {
                 });
                 if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
                     let (renderers, project) = self.engine.split_renderer_project();
-                    let result = if let Some(layer) = project.and_then(|project|
-                        project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)) {
-                        if GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref()) {
-                            let project_tempo = project
-                                .map(|project| manifold_node_engine::runtime::preset_context::ProjectTempo::new(
-                                    &project.tempo_map,
-                                    project.settings.bpm,
-                                ));
-                            renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>())
-                                .ok_or_else(|| "Impulse: scene renderer is unavailable".to_string())
-                                .and_then(|renderer| renderer.fire_scene_impulse(layer, param_id.as_ref(), source, project_tempo.as_ref()))
-                        } else { Ok(false) }
-                    } else { Ok(false) };
-                    if let Err(message) = result { self.report_graph_edit_rejection(message); }
+                    // The renderer counts its own refusals into the scene
+                    // impulse diagnostics the stage shows; only a missing
+                    // renderer is reported here.
+                    let mut unavailable = false;
+                    if let Some(layer) = project.and_then(|project|
+                        project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id))
+                        && GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref())
+                    {
+                        let project_tempo = project
+                            .map(|project| manifold_node_engine::runtime::preset_context::ProjectTempo::new(
+                                &project.tempo_map,
+                                project.settings.bpm,
+                            ));
+                        match renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()) {
+                            Some(renderer) => {
+                                if let Err(message) = renderer.fire_scene_impulse(layer, param_id.as_ref(), source, project_tempo.as_ref()) {
+                                    log::warn!("{message}");
+                                }
+                            }
+                            None => unavailable = true,
+                        }
+                    }
+                    if unavailable { self.report_graph_edit_rejection("Impulse: scene renderer is unavailable".into()); }
                 }
             }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {

@@ -46,6 +46,30 @@ fn trigger_delivery_diagnostic_toast(
     Some(failure.to_string())
 }
 
+/// What a toast says about scene impulse counts that grew since the UI last
+/// saw them: refusals first (red), with the newest reason, else discards.
+/// The counts only grow, so a lower snapshot (a bare notice) changes nothing.
+fn scene_impulse_toast(
+    seen: &mut (u64, u64),
+    current: &manifold_core::scene_impulse::SceneImpulseDiagnostics,
+) -> Option<(String, bool)> {
+    let refused = current.refused.saturating_sub(seen.0);
+    let discarded = current.discarded.saturating_sub(seen.1);
+    seen.0 = seen.0.max(current.refused);
+    seen.1 = seen.1.max(current.discarded);
+    if refused > 0 {
+        let reason = current.last_refusal.as_deref().unwrap_or("Impulse: a hit was refused");
+        return Some((
+            if refused == 1 { reason.to_owned() } else { format!("{reason} ({refused} hits refused)") },
+            true,
+        ));
+    }
+    (discarded > 0).then(|| {
+        let what = if discarded == 1 { "Impulse discarded".to_owned() } else { format!("{discarded} impulses discarded") };
+        (format!("{what}: the simulation is paused or at Speed 0"), false)
+    })
+}
+
 /// Push engine state into UI panels (called once per frame, AFTER build):
 /// the event drain, the chrome push, the selection push and the live push
 /// in that order (UI_INVALIDATION_DESIGN.md D15). The frame seam calls the
@@ -108,6 +132,16 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         content_state.trigger_delivery_failure,
     ) {
         ui.toast.show_with_accent(message, color::RED_BASE);
+    }
+
+    if let Some((message, refused)) =
+        scene_impulse_toast(&mut ui.seen_scene_impulses, &content_state.scene_impulses)
+    {
+        if refused {
+            ui.toast.show_with_accent(message, color::RED_BASE);
+        } else {
+            ui.toast.show(message);
+        }
     }
 
     if let Some(update) = &content_state.modifier_selection_update {
@@ -825,6 +859,27 @@ fn push_live_values(
 mod tests {
     use super::graph_edit_diagnostic_toast;
     use crate::content_state::GraphEditDiagnostic;
+
+    /// Every refused or discarded scene hit reaches the stage as a toast,
+    /// once per increase; a lower snapshot never repeats one
+    /// (BUG-mo4oa (scene force trigger skipped)).
+    #[test]
+    fn scene_impulse_toast_shows_each_refusal_and_discard_once() {
+        use manifold_core::scene_impulse::SceneImpulseDiagnostics;
+        let mut seen = (0, 0);
+        let mut counts = SceneImpulseDiagnostics::default();
+        assert_eq!(super::scene_impulse_toast(&mut seen, &counts), None);
+        counts.discarded = 1;
+        let (message, refused) = super::scene_impulse_toast(&mut seen, &counts).unwrap();
+        assert!(!refused && message.starts_with("Impulse discarded"), "{message}");
+        assert_eq!(super::scene_impulse_toast(&mut seen, &counts), None, "shown once");
+        counts.refuse("Physics: 256 hits are already in flight; this hit is refused");
+        counts.refuse("Physics: 256 hits are already in flight; this hit is refused");
+        let (message, refused) = super::scene_impulse_toast(&mut seen, &counts).unwrap();
+        assert!(refused && message.ends_with("(2 hits refused)"), "{message}");
+        assert_eq!(super::scene_impulse_toast(&mut seen, &SceneImpulseDiagnostics::default()), None);
+        assert_eq!(super::scene_impulse_toast(&mut seen, &counts), None, "a bare notice never re-shows");
+    }
 
     #[test]
     fn graph_edit_diagnostic_toast_is_sequence_gated() {

@@ -346,7 +346,7 @@ fn liquid_impulse_failed_frame_discards() {
     // The domain never reaches commit_frame; draining is the backstop.
     assert!(receipts(&mut impulses).is_empty());
     let mut discarded = Vec::new();
-    impulses.drain_discarded(&mut |stamp| discarded.push(stamp));
+    impulses.drain_discarded(&mut |stamp| discarded.push(stamp), None);
     assert_eq!(discarded, vec![stamp]);
     // A later good frame neither applies nor replays it.
     frame(&mut clock, &mut impulses, 3.0 * TICK, TICK, 1.0);
@@ -533,7 +533,7 @@ fn liquid_impulse_held_clock_discards() {
             .enqueue(stamp, fluid(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()), None)
             .unwrap();
         let mut discarded = Vec::new();
-        impulses.drain_discarded(&mut |stamp| discarded.push(stamp));
+        impulses.drain_discarded(&mut |stamp| discarded.push(stamp), None);
         assert_eq!(discarded, vec![stamp]);
         for i in 1..4 {
             frame(&mut clock, &mut impulses, transport + i as f64 * TICK, TICK, 1.0);
@@ -582,19 +582,60 @@ fn liquid_impulse_refusals_are_named() {
         target: ImpulseTarget::Rigid(RigidImpulseTargets { bodies: 1, copies: false }),
     };
     assert!(impulses.enqueue(stamp, rigid, None).unwrap_err().contains("coupled rigid world"));
-    // The history is bounded and the overflow latches until a restart.
+}
+
+/// A full history refuses the newest hit on its own and latches nothing:
+/// once the queued hits land and their receipts drain, the next hit is
+/// admitted and lands once (BUG-mo4oa (scene force trigger skipped)).
+#[test]
+fn liquid_impulse_full_history_refuses_one_hit_then_frees() {
+    let mut clock = LiquidClock::default();
+    let mut impulses = LiquidImpulses::default();
+    frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     for sequence in 0..IMPULSE_CAPACITY as u64 {
         hit(&mut impulses, 0.0, sequence, 1.0);
     }
-    let stamp = impulses.stamp(0.0, 1000);
+    let stamp = impulses.stamp(0.0, 1000).unwrap();
     let error = impulses
-        .enqueue(stamp.unwrap(), fluid(FieldValue::uniform([1.0; 3]).unwrap()), None)
+        .enqueue(stamp, fluid(FieldValue::uniform([1.0; 3]).unwrap()), None)
         .unwrap_err();
-    assert!(error.contains("full"), "{error}");
-    assert!(impulses.stamp(0.0, 1001).unwrap_err().contains("full"));
-    let restart = clock.advance(TICK, TICK, 1.0, 1.0, false, false);
-    impulses.observe_frame(TICK, &restart).unwrap();
-    assert!(impulses.stamp(TICK, 0).is_ok());
+    assert!(error.contains("refused"), "{error}");
+    assert_eq!(impulses.failure(), None);
+    frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
+    impulses.commit_frame();
+    assert_eq!(receipts(&mut impulses).len(), IMPULSE_CAPACITY);
+    hit(&mut impulses, TICK, 1001, 1.0);
+    frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
+    impulses.commit_frame();
+    let landed: Vec<_> = receipts(&mut impulses).iter().map(|event| event.source.sequence).collect();
+    assert_eq!(landed, [1001]);
+}
+
+/// Hits fired while held leave a discard receipt each and hold no slot, so a
+/// long pause never fills the history; resume lands only what is fired after
+/// it (BUG-mo4oa (scene force trigger skipped)).
+#[test]
+fn liquid_impulse_held_hits_never_fill_the_history() {
+    let mut clock = LiquidClock::default();
+    let mut impulses = LiquidImpulses::default();
+    frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
+    frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
+    assert!(frame(&mut clock, &mut impulses, TICK, TICK, 1.0).held);
+    let held = IMPULSE_CAPACITY as u64 + 10;
+    for sequence in 0..held {
+        hit(&mut impulses, TICK, sequence, 1.0);
+    }
+    let mut discarded = Vec::new();
+    impulses.drain_discarded(&mut |stamp| discarded.push(stamp.sequence), None);
+    assert_eq!(discarded, (0..held).collect::<Vec<_>>());
+    frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
+    hit(&mut impulses, 2.0 * TICK, held, 1.0);
+    for step in 3..6 {
+        frame(&mut clock, &mut impulses, step as f64 * TICK, TICK, 1.0);
+        impulses.commit_frame();
+    }
+    let landed: Vec<_> = receipts(&mut impulses).iter().map(|event| event.source.sequence).collect();
+    assert_eq!(landed, [held], "only the hit fired after resume lands");
 }
 
 /// An audio hit is captured after the engine ticked to the next frame's time

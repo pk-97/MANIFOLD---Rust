@@ -5,7 +5,7 @@ use manifold_physics::stepping::{
 };
 use manifold_physics::{
     input::{
-        input_span, input_span_before, AppliedEvent, EventQueue, HistoryWrite, InputHistory,
+        input_span, input_span_before, AppliedEvent, EventQueue, EventStamp, HistoryWrite, InputHistory,
         Timestamped,
     },
     BodyConfig, BodyHandle, BodyKind, FieldInput, FieldValue, PhysicsWorld, VectorField,
@@ -422,7 +422,8 @@ pub struct RigidSimulation {
     impulse_tick_events: Vec<AppliedEvent<ResolvedRigidImpulse>>,
     impulse_epoch: Option<u64>,
     impulse_failure: Option<String>,
-    impulse_overflow_latched: bool,
+    /// Stamps of hits a held clock discarded, undrained. They hold no slot.
+    impulse_discarded: Vec<EventStamp>,
     accepted_observation: Option<(f64, f64)>,
     held: HeldClock,
     dropped_time: super::physics_metrics::DroppedTimeTracker,
@@ -475,7 +476,7 @@ impl Default for RigidSimulation {
             impulse_tick_events: Vec::with_capacity(IMPULSE_CAPACITY),
             impulse_epoch: None,
             impulse_failure: None,
-            impulse_overflow_latched: false,
+            impulse_discarded: Vec::new(),
             accepted_observation: None,
             clock: Default::default(),
             held: HeldClock::default(),
@@ -850,16 +851,8 @@ impl RigidSimulation {
             != self.copy_description.as_ref().map(|body| body.enabled);
         let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
             || (accepted_interval.is_none() && self.clock.rate_changed(self.step.interval.0));
-        if !rebuild {
-            if let Some(error) = &self.impulse_failure {
-                return Err(error.clone());
-            }
-            if self.impulse_overflow_latched {
-                return Err(
-                    "Physics: impulse history is full; restart the simulation or bake the scene"
-                        .into(),
-                );
-            }
+        if !rebuild && let Some(error) = &self.impulse_failure {
+            return Err(error.clone());
         }
         if self.step.authored_sample_only && !self.advancement_policy.is_worker() {
             // A topology edit or seek rebuilds at the next full graph frame;

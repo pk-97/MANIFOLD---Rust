@@ -66,16 +66,6 @@ impl PreparedSceneImpulse {
 }
 
 impl CapturedSceneImpulse {
-    pub(super) fn has_stale_epoch(&self, graph: &manifold_node_engine::graph::Graph) -> bool {
-        self.source.is_some() && self.recipients.iter().zip(&self.stamps).any(|(recipient, stamp)| {
-            graph
-                .get_node(recipient.instance)
-                .and_then(|node| node::get(node.node.as_ref()))
-                .and_then(|native| native.physics_impulse_epoch())
-                .is_some_and(|epoch| epoch != stamp.epoch)
-        })
-    }
-
     /// Explicit acknowledgement/cancellation by the producer. Never implicit
     /// in a failed capture or delivery. Retains all allocated storage.
     pub fn clear(&mut self) {
@@ -129,6 +119,19 @@ impl WaterRuntime<'_> {
                 native.physics_impulse_stamp(transport, sequence, step)
             },
         )
+    }
+
+    /// `Ok(false)` while any recipient is still preparing; `Err` when one
+    /// failed and refuses hits.
+    pub(super) fn impulse_recipients_ready(&self, binding: &PreparedSceneImpulse) -> Result<bool, String> {
+        let mut ready = true;
+        for recipient in binding.recipients.iter() {
+            let node = self.graph.get_node(recipient.instance).expect("prepared recipient belongs to this graph");
+            if let Some(native) = node::get(node.node.as_ref()) {
+                ready &= native.physics_impulse_readiness()?;
+            }
+        }
+        Ok(ready)
     }
 
     fn validate_impulse_capture(
