@@ -6,7 +6,7 @@
 use super::*;
 use super::automation::{prune_automation_by_ids, take_automation_by_ids};
 use super::instance_serde::{
-    build_param_manifest, normalize_meta_params, template_known_for, GraphWithDerivedParams, ManifestSer,
+    build_param_manifest, normalize_meta_params, template_known_for, ManifestPass, GraphWithDerivedParams, ManifestSer,
     ParamEntryWire,
 };
 
@@ -331,7 +331,7 @@ impl PresetInstance {
             return;
         };
         let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), true);
+            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Reconcile);
         normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
@@ -372,7 +372,7 @@ impl PresetInstance {
             .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked, false)))
             .collect();
         let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), false);
+            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Refresh);
         normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;

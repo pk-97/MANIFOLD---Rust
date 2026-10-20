@@ -141,7 +141,7 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .iter()
             .find(|binding| binding.id == "impulse_strength")
             .expect("impulse strength binding");
-        assert_eq!(impulse_binding.label, "Kick Size");
+        assert_eq!(impulse_binding.label, "Impulse Size");
         assert!(matches!(
             &impulse_binding.target,
             manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
