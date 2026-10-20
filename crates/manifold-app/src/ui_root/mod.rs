@@ -133,6 +133,10 @@ pub struct UIRoot {
     pub tree: UITree,
     /// Read-only content-clock BPM for the frame-aligned driver readout.
     pub driver_bpm: Option<manifold_core::Bpm>,
+    /// The domains each output surface's solver last reported, so the cards'
+    /// setup check sees what the fit did to driven values
+    /// (`setup_check::runtime_domains`).
+    pub setup_runtime: Vec<(manifold_core::LayerId, crate::physics_overlay::SharedDomains)>,
     /// Failed effect-chain builds from the content thread, for the inspector.
     pub chain_failures: crate::content_state::ChainFailures,
     pub input: UIInputSystem,
@@ -513,6 +517,7 @@ impl UIRoot {
                 tree
             },
             driver_bpm: None,
+            setup_runtime: Vec::new(),
             chain_failures: std::sync::Arc::from([]),
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),

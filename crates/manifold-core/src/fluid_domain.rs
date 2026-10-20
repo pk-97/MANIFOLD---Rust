@@ -113,11 +113,15 @@ pub enum FluidDomainState {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FluidDomainSnapshot {
     pub epoch: u64,
     pub state: FluidDomainState,
     pub accepted_layout: Option<FluidDomainLayout>,
+    /// What the solver capped or clipped in the fill it ran this frame.
+    pub fit: crate::liquid_setup::SetupFit,
+    /// Why the solver refused the setup it was handed, when it did.
+    pub refusal: Option<std::sync::Arc<str>>,
 }
 
 /// Maximum number of fluid-role ports supported by a graph boundary.

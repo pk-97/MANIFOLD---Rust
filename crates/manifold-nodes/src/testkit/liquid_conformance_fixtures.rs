@@ -67,21 +67,9 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["resolution", "points_per_cell"],
             },
             RefusalCase {
-                what: "Initial Fill Height at the top of Dam Break Matter's domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, MATTER_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
-                names: &["fill_height"],
-            },
-            RefusalCase {
                 what: "Dam Break Matter's initial volume turned 0.3 rad",
                 fixture: Fixture::DamBreak,
                 edit: |def| set_source_param(def, MATTER_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
-            },
-            RefusalCase {
-                what: "Dam Break Matter's initial volume moved out of the domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, MATTER_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
                 names: &["initial_volume"],
             },
         ],
@@ -135,21 +123,9 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["resolution", "fill_height"],
             },
             RefusalCase {
-                what: "Initial Fill Height at the top of Dam Break GPU FLIP's domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
-                names: &["fill_height"],
-            },
-            RefusalCase {
                 what: "Dam Break GPU FLIP's initial volume turned 0.3 rad",
                 fixture: Fixture::DamBreak,
                 edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
-            },
-            RefusalCase {
-                what: "Dam Break GPU FLIP's initial volume moved out of the domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
                 names: &["initial_volume"],
             },
         ],
@@ -466,6 +442,25 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
                     report.checked,
                     report.scene_bytes as f64 / 1e6
                 );
+            }
+        }
+    }
+
+    /// A fill that does not fit its domain has a defined result, not a
+    /// refusal (`manifold_core::liquid_setup`): Fill Height at the top fills
+    /// to the top, and an initial volume wholly outside fills nothing. Both
+    /// solvers walk the edited scene.
+    #[test]
+    fn liquid_fit_results_are_defined_not_refused() {
+        for row in LIQUID_SOLVERS {
+            let at_top = |def: &mut EffectGraphDef| set_type_param(def, row.type_id, "fill_height", SerializedParamValue::Float { value: 4.0 });
+            let outside = |def: &mut EffectGraphDef| set_source_param(def, row.type_id, "initial_volume", "pos_x", 10.0);
+            for (what, edit) in [("fill at the top", &at_top as &dyn Fn(&mut EffectGraphDef)), ("a column wholly outside", &outside)] {
+                let mut def = (row.fixture)(Fixture::DamBreak).unwrap_or_else(|| panic!("{}: no Dam Break scene", row.type_id));
+                edit(&mut def);
+                build(row, Fixture::DamBreak, &def)
+                    .check_authored()
+                    .unwrap_or_else(|error| panic!("{}: {what} is fitted, not refused: {error:?}", row.type_id));
             }
         }
     }

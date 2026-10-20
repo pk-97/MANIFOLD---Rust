@@ -79,6 +79,7 @@ fn scene_of(objects: Vec<SceneObjectVm>, shapes: Vec<SceneShapeVm>) -> SceneVm {
         scene_bounds: None,
         shapes,
         problems: Vec::new(),
+        setup_anchors: Vec::new(),
     }
 }
 
@@ -399,8 +400,8 @@ fn composition_draws_what_physics_did_then_the_selected_handles() {
     use manifold_core::fluid_domain::FluidDomainLayout;
     use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
     let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
-    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
-    let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready };
+    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), refusal: None };
+    let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready.clone() };
     let domains = [(NodeId::new("a"), ready), (NodeId::new("b"), pending)];
     let physics = [
         PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]),
@@ -786,7 +787,7 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
     let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let scene = scene_of(Vec::new(), vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
-    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) })];
+    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), refusal: None })];
     let chrome = GizmoChrome {
         view,
         lights: &[],

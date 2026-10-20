@@ -1733,13 +1733,23 @@ impl Application {
                 .filter(|frame| frame.has_image())
                 .map_or(&[][..], |frame| &frame.domains[..]);
             let config = session.displayed_config().unwrap_or(session.config);
+            if let Some(scene) = viewport_def.scene.as_deref() {
+                manifold_nodes_scene::node_graph::scene_vm::problems_with_runtime(
+                    &scene.setup_anchors,
+                    &scene.problems,
+                    domains,
+                    &mut ws.viewport_problems,
+                );
+            } else {
+                ws.viewport_problems.clear();
+            }
             compose_lines(
                 &GizmoChrome {
                     view: crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height),
                     lights: &[],
                     domains,
                     physics: &[],
-                    problems: viewport_def.scene.as_deref().map_or(&[][..], |scene| &scene.problems[..]),
+                    problems: &ws.viewport_problems,
                     selected: target.as_ref(),
                     mode: ws.viewport_gizmo_mode,
                     fade_handles: false,

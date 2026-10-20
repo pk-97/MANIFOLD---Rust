@@ -388,6 +388,8 @@ mod tests {
                 epoch: 1,
                 state: FluidDomainState::Initializing,
                 accepted_layout: None,
+                fit: Default::default(),
+                refusal: None,
             },
         ));
         observations.record(

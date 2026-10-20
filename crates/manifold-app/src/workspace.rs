@@ -118,6 +118,9 @@ pub struct Workspace {
     /// The editor viewport's chrome this frame (`viewport_gizmo::compose_lines`),
     /// reused so a steady frame allocates nothing.
     pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
+    /// The editor viewport's setup problems this frame: the scene's authored
+    /// ones plus what the solver reported, reused like the lines.
+    pub viewport_problems: Vec<manifold_nodes_scene::node_graph::scene_vm::SetupProblem>,
     /// The main output preview's gizmo host (main window only).
     pub preview_gizmo: crate::physics_overlay::PreviewGizmo,
     /// The main output preview's preview-only navigation (main window
@@ -179,6 +182,7 @@ impl Workspace {
             // The grid, a domain box and the largest handle set fit without
             // a display-frame reallocation.
             viewport_overlay_lines: Vec::with_capacity(crate::physics_overlay::CHROME_LINES),
+            viewport_problems: Vec::new(),
             preview_gizmo: Default::default(),
             preview_navigation: Default::default(),
             gizmo_layer_sent: None,

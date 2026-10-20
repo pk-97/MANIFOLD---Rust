@@ -5,6 +5,8 @@ use super::water_family::{add_water, binding, rows, water_project};
 use super::*;
 use crate::ui_bridge::projection::cards::{SurfaceVisibility, gen_params_to_surface};
 use manifold_core::NodeId;
+use manifold_core::fluid_domain::FluidDomainSnapshot;
+use manifold_core::liquid_setup::SetupFit;
 use manifold_editing::service::EditingService;
 use manifold_nodes_scene::node_graph::scene_vm::SetupProblemKind;
 
@@ -42,18 +44,27 @@ impl Rig {
     }
 
     fn problems(&self) -> Vec<SetupProblemKind> {
+        self.problems_with(&[])
+    }
+
+    fn problems_with(&self, domains: &[(NodeId, FluidDomainSnapshot)]) -> Vec<SetupProblemKind> {
+        let def = effective_def(&self.project, &self.layer);
         let (_, layer) = self.project.timeline.find_layer_by_id(&self.layer).unwrap();
-        crate::setup_check::layer_problems(layer).into_iter().map(|problem| problem.kind).collect()
+        crate::setup_check::problems_of(&def, layer.gen_params().unwrap(), domains).into_iter().map(|problem| problem.kind).collect()
     }
 
     /// The warning line the card row bound to `node`'s `param` shows.
     fn warning(&self, node: &NodeId, param: &str) -> Option<String> {
+        self.warning_with(node, param, &[])
+    }
+
+    fn warning_with(&self, node: &NodeId, param: &str, domains: &[(NodeId, FluidDomainSnapshot)]) -> Option<String> {
         let def = effective_def(&self.project, &self.layer);
         let id = binding(&def, node, param);
         let (_, layer) = self.project.timeline.find_layer_by_id(&self.layer).unwrap();
         let inst = layer.gen_params().unwrap();
         let mut surface = gen_params_to_surface(inst, self.layer.as_str(), None, &[], SurfaceVisibility::All, (manifold_core::Bpm(120.0), 4.0));
-        let problems = crate::setup_check::problems_of(&def, inst);
+        let problems = crate::setup_check::problems_of(&def, inst, domains);
         crate::setup_check::mark_rows(&mut surface.rows, &problems, &def);
         surface.rows.iter().find(|row| row.id.as_ref() == id.as_str()).and_then(|row| row.spec.setup_warning.clone())
     }
@@ -94,22 +105,85 @@ fn a_column_past_a_wall_is_clipped_and_wholly_outside_is_ignored() {
     assert_eq!(rig.problems(), vec![SetupProblemKind::ColumnOutside]);
 }
 
-/// The planner's input moves with the list and is not recomputed while
-/// nothing it reads moved.
+/// A ready domain whose solver reported `fit` on a 4-unit box.
+fn snapshot(fit: SetupFit) -> FluidDomainSnapshot {
+    use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainState};
+    FluidDomainSnapshot {
+        epoch: 1,
+        state: FluidDomainState::Ready,
+        accepted_layout: Some(FluidDomainLayout { min: [-2.0; 3], size: [4.0; 3], cells: [40; 3], cell_size: 0.1 }),
+        fit,
+        refusal: None,
+    }
+}
+
+/// A fill driven by a wire or modulator is capped by the solver at run time;
+/// the check never sees its value, so the solver's report carries the warning.
 #[test]
-fn the_planner_key_follows_the_problem_list() {
-    use manifold_core::change::{ChangeSet, PartStamps};
+fn a_driven_fill_capped_live_still_warns() {
     let mut rig = Rig::new();
-    let mut planner = crate::frame_plan::FramePlanner::default();
+    let domain = rig.domain.clone();
+    // The authored value fits; only the live (driven) value overshoots.
+    rig.set(&domain, "fill_height", 0.5);
+    assert_eq!(rig.warning(&domain, "fill_height"), None);
+    let domains = [(domain.clone(), snapshot(SetupFit { fill_capped: true, ..Default::default() }))];
+    assert_eq!(rig.problems_with(&domains), vec![SetupProblemKind::FillCapped]);
+    assert_eq!(rig.warning_with(&domain, "fill_height", &domains).as_deref(), Some("Fill is above the top; capped at the top"));
+}
+
+/// A fill pinned to the layer card (the inspector's Layer tab) carries the
+/// same warning, so deleting the inspector's marking fails this.
+#[test]
+fn the_layer_card_shows_the_warning() {
+    let mut rig = Rig::new();
+    let domain = rig.domain.clone();
+    rig.set(&domain, "fill_height", 15.0);
+    let def = effective_def(&rig.project, &rig.layer);
+    let id = binding(&def, &domain, "fill_height");
+    let (index, _) = rig.project.timeline.find_layer_by_id(&rig.layer).unwrap();
+    // The curated card keeps only pinned rows from the Scene tab's set.
+    rig.project.timeline.layers[index]
+        .gen_params_mut()
+        .unwrap()
+        .params
+        .get_mut(id.as_str())
+        .expect("the fill param")
+        .choices
+        .pin = Some(manifold_core::scene_surface::CardPin::Shown);
+    let mut ui = crate::ui_root::UIRoot::new();
+    let mut selection = crate::ui_bridge::SelectionState::default();
+    selection.select_layer(rig.layer.clone());
+    crate::ui_bridge::projection::inspector::sync_inspector_data(&mut ui, &rig.project, Some(index), &selection, &[], None);
+    let card = ui.inspector.gen_params().expect("the layer card");
+    let row = card.row(id.as_str()).expect("the pinned fill row on the card");
+    assert_eq!(row.spec.setup_warning.as_deref(), Some("Fill is above the top; capped at the top"));
+}
+
+/// The planner's input moves with what the check reads and with the solver's
+/// report, and with nothing else.
+#[test]
+fn the_planner_key_follows_the_check_inputs() {
+    use manifold_core::change::{ChangeSet, PartStamps};
+    let rig = Rig::new();
     let mut parts = PartStamps::default();
-    let mut key = |rig: &Rig, parts: PartStamps| planner.setup_check_key(&rig.project, [Some(&rig.layer), None], parts);
-    let fitting = key(&rig, parts);
-    rig.set(&rig.domain.clone(), "fill_height", 15.0);
-    assert_eq!(key(&rig, parts), fitting, "the same stamps answer from the last check");
+    let frames = |fit: SetupFit| {
+        let mut out: crate::physics_overlay::PhysicsOverlayFrames = Default::default();
+        out[0] = Some(crate::physics_overlay::PhysicsOverlayFrame {
+            layer: rig.layer.clone(),
+            frame: 1,
+            scene_node: rig.domain.clone(),
+            camera: manifold_node_engine::scene::camera::Camera::default_perspective(),
+            domains: vec![(rig.domain.clone(), snapshot(fit))].into(),
+            lights: Vec::new().into(),
+            gizmos: Vec::new().into(),
+            outline: None,
+        });
+        out
+    };
+    let key = |parts: PartStamps, fit| crate::setup_check::input_key(parts, [Some(&rig.layer), None], &frames(fit));
+    let fitting = key(parts, SetupFit::default());
+    assert_eq!(key(parts, SetupFit::default()), fitting);
+    assert_ne!(key(parts, SetupFit { fill_capped: true, ..Default::default() }), fitting, "a live cap moves the key");
     parts.bump(ChangeSet::ALL);
-    let capped = key(&rig, parts);
-    assert_ne!(capped, fitting);
-    rig.set(&rig.domain.clone(), "fill_height", 0.5);
-    parts.bump(ChangeSet::ALL);
-    assert_eq!(key(&rig, parts), fitting, "back inside the domain, back to the first key");
+    assert_ne!(key(parts, SetupFit::default()), fitting, "an edit moves the key");
 }

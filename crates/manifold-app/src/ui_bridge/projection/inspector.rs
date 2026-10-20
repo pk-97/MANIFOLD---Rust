@@ -791,7 +791,16 @@ pub fn sync_inspector_data(
                                 );
                                 attach_project_sources(std::slice::from_mut(&mut surface), project);
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
-                                if let Some(d) = authored.as_ref() { crate::setup_check::mark_rows(&mut surface.rows, &vm.problems, d); }
+                                if let Some(d) = authored.as_ref() {
+                                    let mut problems = Vec::new();
+                                    manifold_nodes_scene::node_graph::scene_vm::problems_with_runtime(
+                                        &vm.setup_anchors,
+                                        &vm.problems,
+                                        crate::setup_check::runtime_domains(&ui.setup_runtime, &layer_id),
+                                        &mut problems,
+                                    );
+                                    crate::setup_check::mark_rows(&mut surface.rows, &problems, d);
+                                }
                                 surface
                             });
                             let tree_items =
@@ -949,6 +958,7 @@ pub fn sync_inspector_data(
                     mark_selected_automation_row(c, &layer.layer_id, target, param_id);
                 }
                 attach_project_sources(std::slice::from_mut(c), project);
+                crate::setup_check::mark_layer_card(c, layer, crate::setup_check::runtime_domains(&ui.setup_runtime, &layer.layer_id));
             }
             let layer_id = layer.layer_id.clone();
             let scene_folds = gen_config.as_ref().zip(layer.gen_params()).and_then(|(card, gp)| scene_card_folds(gp, card));

@@ -27,6 +27,7 @@ use crate::scene_gizmo::{GizmoGesture, GizmoPress, GizmoView};
 use crate::ui_bridge::DispatchCtx;
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
+pub(crate) type SharedDomains = Arc<Domains>;
 type Lights = [[f32; 3]];
 type Gizmos = [PhysicsGizmo];
 
@@ -86,6 +87,9 @@ pub(crate) struct PreviewGizmo {
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
     lines: Vec<WorldLine>,
+    /// The shown scene's authored setup problems plus what the solver
+    /// reported for the shown frame, reused.
+    problems: Vec<manifold_nodes_scene::node_graph::scene_vm::SetupProblem>,
     /// Render slots of the selected object, for its outline (D-102); empty
     /// while an effect moves the picture off the scene.
     outline: Vec<u32>,
@@ -183,14 +187,22 @@ impl PreviewGizmo {
             }
         }
         let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
-        let problems = self.target.as_ref().map_or(&[][..], |(key, ..)| &key.0.problems[..]);
         let (frame, _) = self.shown.as_ref()?;
+        match self.target.as_ref() {
+            Some((key, ..)) => manifold_nodes_scene::node_graph::scene_vm::problems_with_runtime(
+                &key.0.setup_anchors,
+                &key.0.problems,
+                &frame.domains,
+                &mut self.problems,
+            ),
+            None => self.problems.clear(),
+        }
         let chrome = GizmoChrome {
             view,
             lights: &frame.lights,
             domains: &frame.domains,
             physics: &frame.gizmos,
-            problems,
+            problems: &self.problems,
             selected,
             mode: self.mode,
             fade_handles,

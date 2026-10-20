@@ -19,7 +19,7 @@ use manifold_physics::FieldValue;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
-use manifold_core::liquid_setup::{BoxFit, fit_box, fit_fill_height};
+use manifold_core::liquid_setup::{ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height};
 use manifold_physics::clock::TICK;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
@@ -62,6 +62,8 @@ pub struct MatterSetup {
 pub(crate) struct MatterGeometry {
     pub(crate) layout: FluidDomainLayout,
     pub(crate) setup: MatterSetup,
+    /// What the fill changed to fit the domain, on the values this frame ran.
+    pub(crate) fit: SetupFit,
 }
 
 impl MatterGeometry {
@@ -111,34 +113,29 @@ pub(crate) fn fill_region(
     layout: &FluidDomainLayout,
     fill_height: f32,
     initial_volume: Option<Transform>,
-) -> Result<(u32, [[u32; 2]; 3]), String> {
+) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
     // The lattice's f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
-    let fill_height = fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?.height();
+    let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?;
+    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits };
+    let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
     let mut column = [[0u32; 2]; 3];
     if let Some(volume) = initial_volume {
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
             return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
-        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite()) || volume.scale.iter().any(|v| *v <= 0.0) {
-            return Err("Matter: the initial volume must be a finite box".into());
-        }
-        let lo = std::array::from_fn(|d| volume.pos[d] - volume.scale[d] * 0.5);
-        let hi = std::array::from_fn(|d| volume.pos[d] + volume.scale[d] * 0.5);
-        let fitted = match fit_box(layout, lo, hi) {
-            BoxFit::Outside => None,
-            BoxFit::Inside => Some((lo, hi)),
-            BoxFit::Clipped { min, max } => Some((min, max)),
-        };
-        if let Some((lo, hi)) = fitted {
+        let (edges, outcome) = fit_column(layout, volume.pos, volume.scale).map_err(|reason| format!("Matter: {reason}"))?;
+        fit.column = outcome;
+        if let Some((lo, hi)) = edges {
             for (d, range) in column.iter_mut().enumerate() {
-                let cell = |x: f32| {(((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
+                // The lattice's f32 edges, as every matter atom reads them.
+                let cell = |x: f64| {(((f64::from(x as f32) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
                 *range = [cell(lo[d]), cell(hi[d])];
             }
         }
     }
-    Ok((pool_cells, column))
+    Ok((pool_cells, column, fit))
 }
 
 /// The domain box, lattice, walls and fill from the domain's params and
@@ -158,7 +155,7 @@ pub(crate) fn matter_geometry(
         _ => 8.0,
     };
     admit_lattice(&lattice, budget)?;
-    let (pool_cells, column) = fill_region(&layout, read("fill_height", 0.4), initial_volume)?;
+    let (pool_cells, column, fit) = fill_region(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_volume)?;
     let points_per_cell = match params.get("points_per_cell") {
         Some(ParamValue::Enum(1)) => 27,
         _ => 8,
@@ -175,7 +172,7 @@ pub(crate) fn matter_geometry(
         points_per_cell,
         seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
     };
-    Ok(MatterGeometry { layout, setup })
+    Ok(MatterGeometry { layout, setup, fit })
 }
 
 manifold_node_engine::primitive! {
@@ -335,6 +332,10 @@ manifold_node_engine::primitive! {
         clock: LiquidClock = LiquidClock::default(),
         schedule: Vec<MatterInterval> = Vec::new(),
         setup: Option<MatterSetup> = None,
+        // What the accepted setup capped or clipped, and the reason the
+        // last refused one was; both ride the domain snapshot.
+        fit: SetupFit = SetupFit::default(),
+        refusal: Option<std::sync::Arc<str>> = None,
         // The domain box of the accepted setup.
         layout: Option<FluidDomainLayout> = None,
         limited: bool = false,
@@ -675,7 +676,7 @@ impl Primitive for MatterDomain {
 impl PhysicsNode for MatterDomain {
     fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
-        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch))
+        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch, self.fit, self.refusal.clone()))
     }
 
     /// The pool and the initial column as the fill seeds them (whole
@@ -829,8 +830,11 @@ impl MatterDomain {
             ctx.params,
             ctx.inputs.transform("domain"),
             ctx.inputs.transform("initial_volume"),
-        )?;
-        let MatterGeometry { layout, setup } = geometry;
+        );
+        self.refusal = geometry.as_ref().err().map(|reason| reason.as_str().into());
+        let geometry = geometry?;
+        let MatterGeometry { layout, setup, fit } = geometry;
+        self.fit = fit;
         let lattice = setup.lattice;
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = ["gravity_x", "gravity", "gravity_z", "stiffness", "cohesion", "liveliness"]

@@ -54,7 +54,7 @@ use liquid::locate_node;
 use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
 mod setup_check;
-pub use setup_check::{SetupProblem, SetupProblemKind};
+pub use setup_check::{SetupAnchor, SetupProblem, SetupProblemKind, problems_with_runtime};
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;
@@ -153,6 +153,9 @@ pub struct SceneVm {
     /// Every setup shape that does not fit its liquid's domain: the one
     /// check the card's warning line and the viewport's red outline read.
     pub problems: Vec<SetupProblem>,
+    /// Where each liquid's fill and column params sit, driven or not: what
+    /// the solver's run-time report ([`problems_with_runtime`]) attaches to.
+    pub setup_anchors: Vec<SetupAnchor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -676,7 +679,7 @@ impl SceneVm {
         let atmosphere = trace_atmosphere(&root, scene_node);
         let world_nodes = world_nodes(&root, scene_node, &environment, &atmosphere);
         let physics_nodes = physics_nodes(&root);
-        let (shapes, problems) = shapes::trace_shapes(&root, def, &objects);
+        let (shapes, problems, setup_anchors) = shapes::trace_shapes(&root, def, &objects);
         let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
@@ -741,6 +744,7 @@ impl SceneVm {
             scene_bounds,
             shapes,
             problems,
+            setup_anchors,
         })
     }
 }
