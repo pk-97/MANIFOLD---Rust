@@ -1332,14 +1332,16 @@ mod modifier_audio_projection_tests {
 
     /// Saves the project, writes `old` names into every saved copy of the
     /// matching controls (host entry, host binding label, the recipe copy
-    /// inside the modifier) and drops their tooltips, as a project saved
-    /// before a relabel holds them; then loads it.
+    /// inside the modifier; an empty local id leaves that copy alone) and
+    /// drops their tooltips, as a project saved before a relabel holds them;
+    /// then loads it.
     fn reload_with_old_labels(project: &manifold_core::project::Project, old: &[(&str, &str, &str)]) -> manifold_core::project::Project {
         fn walk(value: &mut serde_json::Value, old: &[(&str, &str, &str)]) {
             match value {
                 serde_json::Value::Object(map) => {
                     let id = map.get("id").and_then(|id| id.as_str()).map(str::to_string);
-                    if let Some((_, _, name)) = id.and_then(|id| old.iter().find(|(host, local, _)| id == *host || id == *local)) {
+                    let matches = |id: &String, host: &str, local: &str| id == host || (!local.is_empty() && id == local);
+                    if let Some((_, _, name)) = id.and_then(|id| old.iter().find(|(host, local, _)| matches(&id, host, local))) {
                         map.remove("tooltip");
                         if map.contains_key("target") {
                             map.insert("label".into(), (*name).into());
@@ -1404,6 +1406,34 @@ mod modifier_audio_projection_tests {
         assert_eq!(host.params.get(&fire).unwrap().spec.name, "Impulse");
         let resaved = reload_with_old_labels(&loaded, &[]);
         assert_eq!(resaved.timeline.layers[0].gen_params().unwrap().params.get(&impulse).unwrap().spec.name, "Push");
+    }
+
+    /// Before the drawer wrote rename choices, a rename went straight into
+    /// the host's saved name. On load that name becomes a rename choice when
+    /// the recipe never shipped it; a shipped old label does not. Only the
+    /// file read converts: an in-memory rebuild never revives a rename the
+    /// user has since taken back.
+    #[test]
+    fn force_renamed_into_its_saved_name_keeps_the_rename() {
+        let (project, [fire, impulse, _]) = radial_force_project();
+        let mut loaded = reload_with_old_labels(&project, &[(&impulse, "", "Push"), (&fire, "fire", "Kick")]);
+        let host = loaded.timeline.layers[0].gen_params_mut().unwrap();
+        assert_eq!(host.params.get(&impulse).unwrap().spec.name, "Push");
+        assert_eq!(host.params.get(&impulse).unwrap().choices.rename.as_deref(), Some("Push"));
+        assert_eq!(host.params.get(&fire).unwrap().spec.name, "Impulse");
+        assert_eq!(host.params.get(&fire).unwrap().choices.rename, None);
+        host.refresh_manifest_from_graph();
+        assert_eq!(host.params.get(&impulse).unwrap().spec.name, "Push");
+        let resaved = reload_with_old_labels(&loaded, &[]);
+        assert_eq!(resaved.timeline.layers[0].gen_params().unwrap().params.get(&impulse).unwrap().spec.name, "Push");
+
+        let host = loaded.timeline.layers[0].gen_params_mut().unwrap();
+        let taken_back = host.params.get_mut(&impulse).unwrap();
+        taken_back.choices.rename = None;
+        taken_back.spec.name = "Impulse Size".into();
+        host.refresh_manifest_from_graph();
+        assert_eq!(host.params.get(&impulse).unwrap().spec.name, "Impulse Size");
+        assert_eq!(host.params.get(&impulse).unwrap().choices.rename, None);
     }
 
     /// A force card's audio-mod meter shows the level the content thread
