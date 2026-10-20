@@ -8,7 +8,7 @@ use manifold_core::percussion_analysis::{
     BeatTimeConverter, PercussionAnalysisData, PercussionClipPlacement, PercussionImportOptions,
     PercussionPlacementPlan, PercussionTriggerType,
 };
-use manifold_core::percussion_binding::PercussionBindingResolver;
+use manifold_core::percussion_binding::{PercussionBindingResolver, ResolvedBinding};
 use manifold_core::units::{Beats, Seconds};
 
 /// Port of Unity PercussionTimelinePlanner.
@@ -68,7 +68,10 @@ impl<'a> PercussionTimelinePlanner<'a> {
                 continue;
             }
 
-            let binding = match self.binding_resolver.try_resolve(percussion_event) {
+            let ResolvedBinding {
+                binding,
+                video_clip_id,
+            } = match self.binding_resolver.try_resolve(percussion_event) {
                 Some(b) => b,
                 None => {
                     plan.skipped_unmapped += 1;
@@ -142,7 +145,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
             let placement = PercussionClipPlacement::new(
                 binding.trigger_type,
                 binding.layer_index,
-                binding.video_clip_id.clone(),
+                video_clip_id,
                 binding.generator_type,
                 placement_beat,
                 duration_beats,
@@ -200,15 +203,17 @@ mod tests {
 
     struct KickResolver;
     impl PercussionBindingResolver for KickResolver {
-        fn try_resolve(&self, event: &PercussionEvent) -> Option<PercussionClipBinding> {
-            Some(PercussionClipBinding::new(
-                event.trigger_type,
-                0,
-                None,
-                PresetTypeId::from_string("Gen".to_string()),
-                Beats(0.25),
-                0.0,
-            ))
+        fn try_resolve(&self, event: &PercussionEvent) -> Option<ResolvedBinding> {
+            Some(ResolvedBinding {
+                binding: PercussionClipBinding::new(
+                    event.trigger_type,
+                    0,
+                    PresetTypeId::from_string("Gen".to_string()),
+                    Beats(0.25),
+                    0.0,
+                ),
+                video_clip_id: None,
+            })
         }
     }
 
@@ -231,7 +236,6 @@ mod tests {
             bindings: vec![PercussionClipBinding::new(
                 PercussionTriggerType::Kick,
                 0,
-                None,
                 PresetTypeId::from_string("Gen".to_string()),
                 Beats(0.25),
                 0.0,

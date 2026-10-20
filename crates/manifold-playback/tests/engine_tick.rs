@@ -3,38 +3,6 @@ use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 
-fn fixture_path(name: &str) -> std::path::PathBuf {
-    // The `.manifold` fixtures are gitignored (large personal projects), so a
-    // `git worktree` checkout doesn't contain them. Resolve to the MAIN working
-    // tree: `--git-common-dir` points at the primary repo's `.git`, whose parent
-    // is the main checkout where the fixtures live — so these tests RUN from a
-    // worktree instead of panicking with a confusing file-not-found. Falls back
-    // to the crate-relative path (the main checkout, or if git isn't reachable).
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .output()
-        && out.status.success()
-        && let Ok(common) =
-            std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).canonicalize()
-        && let Some(main_root) = common.parent()
-    {
-        let candidate = main_root.join("tests/fixtures").join(name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../tests/fixtures");
-    p.push(name);
-    p
-}
-
-fn load_project(name: &str) -> manifold_core::project::Project {
-    let path = fixture_path(name);
-    manifold_io::loader::load_project(&path)
-        .unwrap_or_else(|e| panic!("Failed to load {name}: {e}"))
-}
-
 fn create_engine() -> PlaybackEngine {
     let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
         Box::new(StubRenderer::new_generator()),
@@ -284,7 +252,7 @@ fn stopped_tick_pushes_the_level_and_fires_no_clip() {
 
     let mut engine = create_engine();
     engine.initialize(project);
-    // Engine starts Stopped (see engine_initializes_with_project below).
+    // Engine starts Stopped.
     *engine.audio_snapshot_mut() = hot_snapshot();
 
     let ctx = TickContext {
@@ -308,21 +276,6 @@ fn stopped_tick_pushes_the_level_and_fires_no_clip() {
         0,
         "a stopped tick must never start a clip"
     );
-}
-
-#[test]
-fn engine_initializes_with_project() {
-    let project = load_project("Burn V5 1.21.manifold");
-    let mut engine = create_engine();
-
-    engine.initialize(project);
-
-    assert_eq!(engine.current_state(), PlaybackState::Stopped);
-    assert_eq!(engine.current_time(), Seconds(0.0));
-    assert_eq!(engine.transport_frame(), 0);
-    // Frame 0's beat is taken a ten-millionth of a frame after its time (D14).
-    assert!((0.0..1e-6).contains(&engine.current_beat().0), "{}", engine.current_beat());
-    assert!((engine.get_timeline_fallback_bpm() - 138.0).abs() < 0.01);
 }
 
 #[test]
@@ -415,140 +368,6 @@ fn trigger_child_is_excluded_from_renderer_admission_for_every_owner_kind() {
             "trigger child under {owner_kind:?} must never stop a video renderer"
         );
     }
-}
-
-#[test]
-fn engine_advances_time_when_playing() {
-    let project = load_project("Burn V5 1.21.manifold");
-    let mut engine = create_engine();
-    engine.initialize(project);
-    engine.set_state(PlaybackState::Playing);
-
-    let dt = 1.0 / 60.0;
-    let mut realtime = 0.0;
-
-    // Tick 60 frames (1 second)
-    for i in 0..60 {
-        let ctx = TickContext {
-            frames: 1,
-            realtime_now: Seconds(realtime),
-            frame_count: i as u64,
-        };
-        let _ = engine.tick(ctx);
-        realtime += dt;
-    }
-
-    // After 1 second at 138 BPM, should be at ~2.3 beats (138/60 = 2.3)
-    let expected_beat = 138.0 / 60.0;
-    assert!(
-        (engine.current_beat().0 - expected_beat).abs() < 0.1,
-        "After 1s at 138 BPM, expected ~{expected_beat} beats, got {}",
-        engine.current_beat()
-    );
-    assert!(
-        (engine.current_time().0 - 1.0).abs() < 0.02,
-        "After 60 frames at 1/60, expected ~1.0s, got {}",
-        engine.current_time()
-    );
-}
-
-#[test]
-fn engine_schedules_clips_at_correct_beats() {
-    let project = load_project("Burn V5 1.21.manifold");
-    let mut engine = create_engine();
-    engine.initialize(project);
-    engine.set_state(PlaybackState::Playing);
-
-    let dt = 1.0 / 60.0;
-    let mut realtime = 0.0;
-    let mut ever_had_ready_clips = false;
-
-    // Tick through timeline — the first clip starts around beat 162
-    // At 138 BPM, beat 162 ≈ 70.4 seconds = ~4226 frames
-    // Let's tick to beat 163 to ensure we're in range
-    let target_seconds = 163.0 * 60.0 / 138.0; // ~70.87s
-    let num_frames = (target_seconds / dt) as i32;
-
-    for i in 0..num_frames {
-        let ctx = TickContext {
-            frames: 1,
-            realtime_now: Seconds(realtime),
-            frame_count: i as u64,
-        };
-        let result = engine.tick(ctx);
-        if !result.ready_clips.is_empty() {
-            ever_had_ready_clips = true;
-        }
-        realtime += dt;
-    }
-
-    assert!(
-        ever_had_ready_clips,
-        "Engine should have scheduled clips during the timeline (ticked to beat ~163)"
-    );
-    assert!(
-        engine.active_clip_count() > 0,
-        "Should have active clips at beat ~163"
-    );
-}
-
-#[test]
-fn engine_tick_1000_frames_no_panic() {
-    let project = load_project("Burn V5 1.21.manifold");
-    let mut engine = create_engine();
-    engine.initialize(project);
-    engine.set_state(PlaybackState::Playing);
-
-    let dt = 1.0 / 60.0;
-    let mut realtime = 0.0;
-
-    for i in 0..1000 {
-        let ctx = TickContext {
-            frames: 1,
-            realtime_now: Seconds(realtime),
-            frame_count: i as u64,
-        };
-        let _result = engine.tick(ctx);
-        realtime += dt;
-    }
-
-    // Just verify it doesn't panic and time advanced
-    assert!(engine.current_time() > Seconds(0.0));
-    assert!(engine.current_beat() > Beats(0.0));
-}
-
-#[test]
-fn engine_seek_updates_beat() {
-    let project = load_project("Burn V5 1.21.manifold");
-    let mut engine = create_engine();
-    engine.initialize(project);
-
-    // Seek to a specific time
-    engine.seek_to(Seconds(30.0));
-    // At 138 BPM, 30s = 69 beats
-    let expected_beat = 30.0 * 138.0 / 60.0;
-    assert!(
-        (engine.current_beat().0 - expected_beat).abs() < 0.1,
-        "After seek to 30s at 138 BPM, expected ~{expected_beat} beats, got {}",
-        engine.current_beat()
-    );
-}
-
-#[test]
-fn engine_beat_time_conversion_roundtrip() {
-    let project = load_project("Burn V5 1.21.manifold");
-    let mut engine = create_engine();
-    engine.initialize(project);
-
-    // Test beat → seconds → beat roundtrip
-    let original_beat = 100.0_f32;
-    let seconds = engine.beat_to_timeline_time(Beats::from_f32(original_beat));
-    let roundtrip_beat = engine.time_to_timeline_beat(seconds);
-
-    assert!(
-        (roundtrip_beat.0 as f32 - original_beat).abs() < 0.01,
-        "Beat→seconds→beat roundtrip failed: {original_beat} → {seconds}s → {roundtrip_beat}"
-    );
 }
 
 /// P2 helper: two video layers, each with a generator clip spanning beats 0..4.

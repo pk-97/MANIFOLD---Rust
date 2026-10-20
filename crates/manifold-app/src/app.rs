@@ -532,8 +532,12 @@ pub struct Application {
 
     // State
     pub(crate) initialized: bool,
-    /// Set on CloseRequested — prevents about_to_wait from rendering after shutdown.
+    /// Set once a quit shut the content thread down — prevents about_to_wait
+    /// from rendering after shutdown.
     pub(crate) shutting_down: bool,
+    /// A quit with unsaved edits cancelled the running export; it asks once
+    /// the export has unwound (`quit.rs`).
+    pub(crate) quit_after_export: bool,
     pub(crate) pending_toggle_output: bool,
     pub(crate) pending_close_output: bool,
     pub(crate) pending_export: bool,
@@ -750,6 +754,7 @@ impl Application {
             display_resolutions: Vec::new(),
             initialized: false,
             shutting_down: false,
+            quit_after_export: false,
             pending_toggle_output: false,
             pending_export: false,
             pending_close_output: false,
@@ -1076,8 +1081,9 @@ impl Application {
 
 impl ApplicationHandler for Application {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        // Native macOS Quit terminates through this callback without returning
-        // from run_app, so clean-session bookkeeping must happen here too.
+        // A macOS terminate: (answered yes by `quit.rs`, or not intercepted)
+        // ends the process through this callback without returning from
+        // run_app, so clean-session bookkeeping must happen here too.
         crate::clear_session_sentinel();
     }
 
@@ -1797,26 +1803,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     return;
                 }
                 if is_primary {
-                    self.shutting_down = true;
-
-                    // Stop display links FIRST — their callbacks may call
-                    // nextDrawable() or request_redraw(). CVDisplayLinkStop
-                    // blocks until the in-flight callback finishes, so this
-                    // must happen before we destroy windows or block on joins.
-                    #[cfg(target_os = "macos")]
-                    {
-                        self.ws.ui_display_link = None;
-                    }
-
-                    // Shut down content thread
-                    if let Some(tx) = self.content_tx.take() {
-                        let _ = tx.send(ContentCommand::Shutdown);
-                    }
-                    if let Some(handle) = self.content_thread_handle.take() {
-                        let _ = handle.join();
-                        log::info!("[ContentThread] joined");
-                    }
-                    event_loop.exit();
+                    self.quit(event_loop);
                 } else {
                     #[cfg(target_os = "macos")]
                     {
@@ -2133,6 +2120,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // An OS quit (⌘Q, the menu, the Dock, logout) or a quit that waited
+        // on a cancelled export asks here, in editor and perform mode alike.
+        // Ahead of the guard below: AppKit waits for the reply, so a quit
+        // before init or after shutdown still answers it.
+        if crate::quit::take_os_quit_request() || self.quit_after_export_ready() {
+            self.quit(event_loop);
+        }
         if !self.initialized || self.shutting_down {
             return;
         }

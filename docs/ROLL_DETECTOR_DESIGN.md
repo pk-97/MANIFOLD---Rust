@@ -479,7 +479,7 @@ section 0 (trained detectors) requires of any new feature family.
 | Kick and snare labels unchanged | `sha256sum` of `kick_labels*.json`, `snare_labels*.json` before and after | identical |
 | Shipped models byte-identical | `trained::tests::embedded_assets_are_the_shipped_sets`; `git diff --stat -- crates/manifold-audio/assets/kick_model.mkick crates/manifold-audio/assets/snare_model.mkick` | pass; empty |
 | Kick and snare fires unchanged beside the roll detectors | new `detectors::tests::roll_detectors_leave_hit_fires_unchanged`: `send_detectors` with and without the roll slots on every kick and snare golden clip → kick and snare events equal | pass |
-| Cost under the ceiling | `trained::tests::detector_cost` in release: each roll set ≤ 10 ms/s; all detectors ≤ 100 | numbers in the landing commit |
+| Cost under the ceiling | the `detector_cost` example in manifold-audio, in release: each roll set ≤ 10 ms/s; all detectors ≤ 100 | numbers in the landing commit |
 
 The one non-structural claim is the ceiling; everything else is an equality a diff can check.
 
@@ -599,7 +599,7 @@ CPU: D10. Memory: the `RollBank` ring holds 4.7 s of 16 envelopes and 2 onset st
 | A roll cell reads 0 when no roll is on, holds its level while on | `analysis::tests::roll_level_holds_until_the_next_event_and_drops_at_end` |
 | Chips and kinds agree across core, UI and app | `param_slider_shared::state::tests` chip list test extended; `ui_translate` round-trip test over `AudioFeatureKind::ALL` |
 | The exam is real or says it is not | `lab/score.py` prints `exam: provisional (N starts in M songs; bar 60 in 8)` in the `roll` block whenever D9's bar is unmet; `compare.py` carries the line |
-| Cost under budget | `detector_cost`, numbers recorded at P4 and P6. Enforcement: none automatic — timing tests are not gates on shared machines (the runtime design's honest-cost line) |
+| Cost under budget | the `detector_cost` example, numbers recorded at P4 and P6. Enforcement: none automatic — timing tests are not gates on shared machines (the runtime design's honest-cost line) |
 
 ## 11. The plausible-wrong turns, by name
 
@@ -662,7 +662,7 @@ open decision 4. P1 and P2 do not wait for it.
 - **Entry state:** P3 committed; the two cover sets on disk; `rg "Roll24|Tick" crates/manifold-audio/src/trained/spec.rs` → 0 hits.
 - **Read-back:** sections 4, 6.1, 6.2, 10; `trained/spec.rs`, `trained/finder/mod.rs`, `trained/measure/{mod.rs, lowbank.rs, dsp.rs}`, `trained/detector.rs`, `trained/tests.rs`. Restate D8, D10, D13 and the tolerances below.
 - **Seam brief (Rust):** `Spec` gains `decision` and `tick_hops`; `FireRule` → `Rule` enum (`Fires(FireRule)`, `State(StateRule)`), the detector's `rule` field typed `Rule`; `Decision<'a>` gains `state`; `Finder::Tick`; `Measure::Roll24`; `EventDetector for TrainedDetector` emits levels for state models. Compiler-driven: add the variants first, fix every non-exhaustive match.
-- **Deliverables:** `trained/finder/tick.rs`, `trained/measure/roll.rs`, `StateRule`, the spec cases, `parity_cover_kick_roll`, `parity_cover_snare_roll`, `every_golden_set_runs` list extended (a count match), `refuses_each_bad_entry` cases, `registry_matches_runtime_parts` green, `detector_cost` printing the cover sets.
+- **Deliverables:** `trained/finder/tick.rs`, `trained/measure/roll.rs`, `StateRule`, the spec cases, `parity_cover_kick_roll`, `parity_cover_snare_roll`, `every_golden_set_runs` list extended (a count match), `refuses_each_bad_entry` cases, `registry_matches_runtime_parts` green, the `detector_cost` example printing the cover sets.
 - **Gate:** `cargo nextest run -p manifold-audio trained`; `cargo clippy -p manifold-audio -- -D warnings`; tolerances: `m.roll24` abs 1e-6; `p.trees` as the existing rule; `state.on`, `starts`, `ends` exact except at most one tick per clip whose `p.final` is within 1e-3 of the cutoff or the off cutoff (the v1 rule, both edges); `state.rate_hz` exact except ticks where the two best lags' `r` are within 1e-6; cost per cover set ≤ 10 ms/s in release (D10's trigger).
 - **Demo:** none — L1.
 - **Forbidden:** widening a tolerance; a part not in `runtime_parts.json`; any edit to `detectors.rs` slots, `analysis.rs`, `manifold-core`, `manifold-app` (P5); `Box<dyn>` dispatch.

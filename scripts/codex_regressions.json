@@ -3,9 +3,9 @@
     "triggers": ["crates/manifold-editing/"],
     "kind": "cpu",
     "package": "manifold-editing",
-    "target": "undo_roundtrip",
-    "source": "crates/manifold-editing/tests/undo_roundtrip.rs",
-    "tests": ["undo_manager_multi_command_roundtrip"]
+    "target": "service_integration",
+    "source": "crates/manifold-editing/tests/service_integration.rs",
+    "tests": ["undo_manager_multi_command_roundtrip", "multi_step_undo_redo", "move_command_missing_target_preserves_source_and_valid_move_undoes_redoes"]
   },
   "clip-non-overlap": {
     "triggers": ["crates/manifold-editing/", "crates/manifold-core/src/layer"],

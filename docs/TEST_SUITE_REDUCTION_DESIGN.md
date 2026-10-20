@@ -1,6 +1,6 @@
 # Test Suite Reduction — the cut list after the crate split
 
-**Status:** PROPOSED · awaiting Peter's review of the cut list (section 10, decisions for Peter) · 2026-10-20 · Opus lane · no test deleted or changed yet.
+**Status:** BUILT · C1–C12 approved with the recommended choices and carried out in one lane, with C11 widened to every old-show fixture test (section 11, as built) · 2026-10-20.
 
 <!-- index: Design pass for BUG-hkbdp.1 (test suite review after the crate split): inventory of every test binary by crate from the 2026-10-20 nightly, the cut list (measurements out, duplicate sweeps merged, setup shared), the before and after contract map, and the stated reduction. Water is out of scope. -->
 
@@ -151,7 +151,7 @@ shared), RECORDS (timing tables). Savings are nightly seconds unless marked.
 | C4 | DELETE | `crates/manifold-nodes/src/catalog_gen.rs` : `block_is_deterministic` | `regenerates_in_sync` compares a fresh generation with the committed `docs/node_catalog.json` and `docs/NODE_CATALOG.md`, written by an earlier process: determinism across processes, the stronger check | 22 s default |
 | C5 | MERGE | same file : `block_carries_markers_and_every_registered_node` into `regenerates_in_sync` | the completeness loop moves into the in-sync test, so one generation serves both; the marker check is already the `inject` expect there | 13 s default |
 | C6 | DELETE | `crates/manifold-nodes-image/src/node_graph/primitives/clip_trigger_cycle.rs` : `sequential_trigger_counts_pass_through_unchanged`, `would_be_repeat_advances_by_one` | they call the engine's `ClipTriggerCycle::step` through the field ("mirror the legacy ones"); the same two cases are tested on the type in `crates/manifold-node-engine/src/clip_trigger.rs`. The primitive's own contract, `clear_state_releases_the_cycle_idempotence_cache`, stays | under 1 s |
-| C7 | MERGE | `crates/manifold-nodes/tests/gpu_proofs/smoke.rs` : `every_registered_generator_runs_without_panicking_or_nans` into `crates/manifold-nodes/src/bundled_generator_presets.rs` : `every_bundled_preset_executes_one_frame` | the same generator catalog, the same `PresetRuntime::render` of one default frame; smoke adds a finite-pixel readback, the sweep adds panic collection. The sweep gains the readback and keeps 256 px and its failure list | 22 s GPU |
+| C7 | MERGE | the gpu_proofs smoke sweep (`smoke.rs`, now deleted) : `every_registered_generator_runs_without_panicking_or_nans` into `crates/manifold-nodes/src/bundled_generator_presets.rs` : `every_bundled_preset_executes_one_frame` | the same generator catalog, the same `PresetRuntime::render` of one default frame; smoke adds a finite-pixel readback, the sweep adds panic collection. The sweep gains the readback and keeps 256 px and its failure list | 22 s GPU |
 | C8 | SHRINK | `crates/manifold-nodes/tests/gpu_proofs/node_error_status.rs` : `node_error_fails_the_frame` | proves a node error fails the frame by building and running all of WaterDamBreakGpuFlip for one frame (52–56 s, nearly all pipeline build). The smallest graph holding the domain node with Simulation Speed 5 asserts the same `FrameRenderStatus::Failed(NodeError)` | about 50 s GPU |
 | C9 | SHRINK | `crates/manifold-nodes/tests/scene_loop_wrap_parity.rs` : all 9 tests | `render_frame` opens a new GPU device and registry for every frame: 23 frames, 201 s, in the serial group. One device per test keeps all nine purity and continuity assertions and the 64 px frames | about 100 s default wall, estimate; needs one run |
 | C10 | DELETED | the app's two graph-editor viewport demo modules (REALTIME_3D P5c, P6) : 4 tests | phase acceptance demos that asserted rendered pixels change, 234 s in the serial group. Their pick and drag maths is CPU-tested in `viewport_gizmo` and `viewport_input`; the main preview gizmo host has its own UI flow | 234 s serial GPU |
@@ -231,3 +231,61 @@ D7); the cause of the section 2.4 rows.
 5. C11: merge the seven Liveschool fixture checks into one load (saves about a minute, loses per-check names), or keep seven tests.
 6. Trimming the long golden clips in `kick_fed_pair_ignores_push_size` and the parity tests to an excerpt is not proposed; say if you want it.
 7. Water residue BUG-hkbdp.6.11 did not census: the CPU coupling tests in `crates/manifold-fluids/src/coupling/tests/gravity.rs` (three tests, 1,296 s, the longest single chain of the nightly) go to a water bead, not this cut.
+
+## 11. As built
+
+Peter approved decisions 1–5 with the recommended choices; 6 and 7 were not taken. Where this section and
+sections 5–7 differ, this section is the current state. Times marked "same machine" are one before and after run
+in the same conditions; nightly times ran under full-core contention and are only a ranking.
+
+| # | As built | Time |
+|---|---|---|
+| C1 | `crates/manifold-audio/examples/detector_cost.rs`; the test is gone | 115 s nightly default, gone |
+| C2 | `crates/manifold-nodes/examples/encode_replay_probe.rs` (needs `--features gpu-proofs`) | 15–20 s GPU, gone |
+| C3 | `crates/manifold-nodes/examples/cinematic_tail_cost.rs` (needs `--features gpu-proofs`): 1080p and 4K | 16 s GPU, gone |
+| C4, C5 | `regenerates_in_sync` generates the block once and checks markers, completeness and both committed files | two of three generations gone (35 s nightly) |
+| C6 | as listed | under 1 s |
+| C7 | the sweep reads back every frame and fails on a non-finite channel; each preset also renders a fresh runtime's first frame at time 1.234, beat 2.5, as the smoke did | about 5 s, not 22: merged 48.3 s against 31.7 + 21.4 s nightly. The smoke's cost was building runtimes, which a faithful fold pays too. One runtime for both frames is wrong: the water presets then step through the 1.234 s gap (39 s measured) |
+| C8 | a four-node graph (input, the Dam Break FLIP domain at speed 5, noise fed by its tick count, output); a valid speed on the same graph renders, checked once before landing | 52.5 s nightly, now under 0.1 s |
+| C9 | one device and registry per test process (`OnceLock`) | same machine: 92.8 s to 33.6 s in the serial group |
+| C10 | deleted (decision 4; SCENE_SETUP_PROGRAMME section 6 (Cleanup owed by each landing)): both viewport demos and their module lines and test filters are gone; their pick and drag maths is CPU-tested in `viewport_gizmo` and `viewport_input` | 234 s nightly serial group, gone |
+| C11, C11b | below | about 85 s nightly default |
+| C12 | committed table 3,420 to 2,785 rows, learned cache 10,609 to 3,914: kept are keys the 2026-10-20 nightly GPU leg ran, plus learned rows measured since | none |
+
+### 11.1 Old show fixtures (C11 widened)
+
+The converted 1.21 fixtures are obsolete as test inputs: they already store every resolved param id, macro effect
+id and new Mirror mode, so a resolution test on them only re-reads stored values. One test still loads a show:
+`liveschool_resave_keeps_old_ids_and_omits_empty_session` in `crates/manifold-io/tests/load_project.rs`, one load of
+Liveschool V6 LEDS 1.21. It checks that old 8-character ids survive a save, new ids are 16 characters, and an empty
+session is not written and reloads empty. With the fixture missing it fails on its first line, naming the path.
+`macro_drives_the_exact_effect_among_two_of_the_same_type` in `crates/manifold-app/tests/legacy_param_id_resolution.rs`
+builds its project in code.
+
+Deleted, with the test that covers each:
+
+| Deleted | Covered by |
+|---|---|
+| Burn V4, Burn V5 and GraphTestsV4 load-and-count tests | nothing needed: they pinned the counts of one old file |
+| `driver_beat_divisions_survive_load` and `_roundtrip` | the serde tests in `crates/manifold-core/src/effects/driver.rs` (`driver_round_trips_through_canonical_shape`, the `driver_deserialize_*` set) |
+| `pitch_presence_mods_survive_roundtrip_and_drive` | `legacy_flat_feature_migrates_to_matrix` (the saved serde names) and `extract_reads_pitch_and_presence` in `crates/manifold-core/src/audio_mod.rs` |
+| `liveschool_v6_leds_clip_trigger_migration_round_trips_cleanly` | `legacy_clip_trigger_migration_tests` in `crates/manifold-io/src/loader.rs` |
+| `liveschool_roundtrip_preserves_addressing_sites` | the per-type serde shape tests (driver, envelope, Ableton mapping, instance serde) |
+| `commands_work_on_loaded_project` | `project_commands_undo_and_redo_restore_the_whole_project` |
+| the four Burn V5 undo round trips in `undo_roundtrip.rs` | `undo_manager_multi_command_roundtrip` (moved to `service_integration.rs` on a built project, assertions unchanged), `multi_step_undo_redo` and the move undo tests |
+| the seven Liveschool and Burn V5 param-id resolution tests | nothing needed: the converted fixtures store the resolved ids |
+
+The WAYPOINTS and EFFECT_GEN_UNIFIED fixtures had no code users. Tools that load shows (perf soak, the fusion
+census, freeze profile) are untouched.
+
+Not covered by any test now:
+
+- No test ticks a saved show through `PlaybackEngine` any more (the six Burn V5 `engine_tick.rs` deletions). The
+  transport maths is covered by `crates/manifold-playback/tests/frame_exact_transport.rs`. Whether to keep one
+  real-show tick smoke test is BUG-el7da (keep one real-show engine tick smoke test?).
+- `liveschool_snapshot_on_save_size_delta_stays_bounded` was a size measurement on a real show and has no
+  replacement.
+- The real-show OSC sweep in `project_io.rs` is gone; only `osc_full_sweep_covers_user_slider_range` remains, on a
+  built project.
+- `migrate_legacy_param_values` in `crates/manifold-core/src/project/load_migration.rs` (Mirror 0, 1, 2 to 6, 7, 8)
+  and its macro mapping resolve step. The converted fixtures could not reach either.

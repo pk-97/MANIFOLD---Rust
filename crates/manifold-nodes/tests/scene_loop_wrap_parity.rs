@@ -451,10 +451,22 @@ fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
     def
 }
 
+/// One device and registry per process: nextest runs each test in its own
+/// process, so every test pays device start once, not once per frame.
+fn renderer() -> &'static (std::sync::Arc<manifold_gpu::GpuDevice>, PrimitiveRegistry) {
+    static SHARED: std::sync::OnceLock<(std::sync::Arc<manifold_gpu::GpuDevice>, PrimitiveRegistry)> =
+        std::sync::OnceLock::new();
+    SHARED.get_or_init(|| {
+        (
+            std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued("scene_loop_wrap_parity")),
+            PrimitiveRegistry::with_builtin(),
+        )
+    })
+}
+
 /// Render one frame at the given beat value.
 fn render_frame(def: &EffectGraphDef, beat: f64) -> Vec<u8> {
-    let device = manifold_gpu::GpuDevice::new_queued("scene_loop_wrap_parity");
-    let registry = PrimitiveRegistry::with_builtin();
+    let (device, registry) = renderer();
     let width = 64u32;
     let height = 64u32;
     let ctx = PresetContext {
@@ -474,8 +486,8 @@ fn render_frame(def: &EffectGraphDef, beat: f64) -> Vec<u8> {
     };
     let (rgba, _, _) = render_viewport_frame(
         def.clone(),
-        &registry,
-        std::sync::Arc::new(device),
+        registry,
+        std::sync::Arc::clone(device),
         width,
         height,
         &ctx,

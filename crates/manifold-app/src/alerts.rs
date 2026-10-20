@@ -1,11 +1,13 @@
-//! Native alert dialogs for project-file failures and crash notices.
+//! Native alert dialogs for project-file failures, crash notices and the
+//! quit prompt.
 //!
 //! GIG_RESILIENCE_DESIGN section 6 (G4): save and load failures were log-only — the
 //! worst failure mode is believing you saved when you didn't. These are
 //! blocking native dialogs on the UI thread, following the existing pattern
 //! (`app_render.rs` `confirm_remove_node_orphans`): fine for authoring-time
 //! events, never reached during performance — perform mode parks autosave and
-//! has no dialogs on any path.
+//! has no dialogs on any path but one: quitting with unsaved edits asks there
+//! too ([`save_changes`]), because losing the set is worse than a dialog.
 //!
 //! When the perform-surface chrome work lands (PERFORM_SURFACE_DESIGN), the
 //! non-blocking variants of these (autosave failure strip, crash banner)
@@ -33,6 +35,42 @@ pub(crate) fn info(title: &str, body: &str) {
         .set_buttons(rfd::MessageButtons::Ok)
         .set_level(rfd::MessageLevel::Info)
         .show();
+}
+
+/// The answer to the unsaved-changes prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SaveChoice {
+    Save,
+    DontSave,
+    Cancel,
+}
+
+/// Blocking Save / Don't Save / Cancel prompt before quitting with unsaved
+/// edits. Escape, or closing the dialog any other way, is Cancel.
+pub(crate) fn save_changes(project_name: &str) -> SaveChoice {
+    const SAVE: &str = "Save";
+    const DONT_SAVE: &str = "Don't Save";
+    const CANCEL: &str = "Cancel";
+    let answer = rfd::MessageDialog::new()
+        .set_title(format!("Do you want to save the changes to \u{201c}{project_name}\u{201d}?"))
+        .set_description("Your changes will be lost if you don't save them.")
+        .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+            SAVE.into(),
+            DONT_SAVE.into(),
+            CANCEL.into(),
+        ))
+        .set_level(rfd::MessageLevel::Warning)
+        .show();
+    let choice = match answer {
+        rfd::MessageDialogResult::Custom(label) if label == SAVE => SaveChoice::Save,
+        rfd::MessageDialogResult::Custom(label) if label == DONT_SAVE => SaveChoice::DontSave,
+        // Backends without custom labels answer with the stock buttons.
+        rfd::MessageDialogResult::Yes => SaveChoice::Save,
+        rfd::MessageDialogResult::No => SaveChoice::DontSave,
+        _ => SaveChoice::Cancel,
+    };
+    log::info!("[Alert] quit with unsaved changes: {choice:?}");
+    choice
 }
 
 /// Blocking Yes/No confirmation. Returns true only on Yes.

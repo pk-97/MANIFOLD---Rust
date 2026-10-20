@@ -60,7 +60,7 @@ Outcome: grab any scene object, domain, inflow, drain, collider or force on the 
 Outcome: every scene thing is added from one menu, carries one card, one gizmo and one out-of-domain check, from one manifest declaration.
 
 - **B1 Shape declaration.** The `shape` declaration of PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model): on scene-modifier manifests and in the node scene table (D3); `GizmoTargetKind` derives targets from it, with `Force`, `Inflow`, `Drain`, `Collider` beside `Object` and `FluidDomain` and every match exhaustive. Domain and object drags follow their knobs (REALTIME_3D D8). Seat: Opus lane, high. Files: scene-modifier manifests, `crates/manifold-foundation/src/scene_surface.rs`, `crates/manifold-core/src/effect_graph_def.rs`, `crates/manifold-nodes-scene/src/node_graph/scene_surface.rs`, `viewport_gizmo.rs`, `scene_vm.rs`, and the editor host's drag path (`window_input.rs`, `editor_input.rs`, `fluid_domain_edit.rs`).
-- **B2 Add menu and cards.** Boundary P2 and P3 executed: general template insertion, shared cards, the Add Fluid special case deleted. Inflow and drain become placed objects. Carries BUG-4lfm (GPU-surface water object not recognised as water) and BUG-9rai8 (modifier-card choices drawn as sliders) under P3 (D-75). Seat: Sonnet, medium, under the P2 and P3 briefs in the boundary design.
+- **B2 Add menu and cards.** Boundary P2 and P3 executed: general template insertion, shared cards, the Add Fluid special case deleted. Inflow and drain become placed objects. Carries BUG-4lfm (GPU-surface water object not recognised as water) and BUG-9rai8 (modifier-card choices drawn as sliders) under P3 (D-75). First merges lane/scene-lighting-one-place (D-72): a new scene's card starts empty and shows only rows the user chose, and one Lighting row holds environment, exposure and every light (SCENE_SURFACES_DESIGN.md D4, D6, D8, D10, D11); closes BUG-1enr5 (land or drop the lighting branch). Seat: Sonnet, medium, under the P2 and P3 briefs in the boundary design.
 - **B3 Setup check.** The water-setup epic's part 1: one check reading every shape against the domain each edit, surfaced on the card and the gizmo. Seat: Sonnet, medium.
 
 ### C. Physics on imports
@@ -115,7 +115,7 @@ Rules: lanes commit once and stop; the lead reviews with Opus agents and lands t
 
 Every lane deletes what it replaces in the same commit. Named now so no wave ends with two paths:
 
-- A1: the overlay's bespoke drawing (`PhysicsOverlayFrame::for_each_gizmo` and its test); lane/physics-overlay-shapes' `physics_gizmo_lines`, the grid, light and domain composition folded into one core composition entry both hosts call, keeping the branch's force shapes as the display layer. The demo files `crates/manifold-app/src/viewport_p5c_demo.rs` and `crates/manifold-app/src/viewport_p6_demo.rs` (D-73) and their references: `crates/manifold-app/src/main.rs:174-177`, `.config/nextest.toml:61,76`, `scripts/gate_policy.py:32`, `docs/TEST_SUITE_REDUCTION_DESIGN.md:75,157` (row C10), `docs/SCENE_MODIFIER_RT_INVENTORY.md:331`.
+- A1: the overlay's bespoke drawing (`PhysicsOverlayFrame::for_each_gizmo` and its test); lane/physics-overlay-shapes' `physics_gizmo_lines`, the grid, light and domain composition folded into one core composition entry both hosts call, keeping the branch's force shapes as the display layer. The two graph-editor viewport demos (D-73), P5c in the app and P6 in the nodes-scene GPU proofs, and every reference to them: module lines, the nextest and gate policy filters, TEST_SUITE_REDUCTION_DESIGN row C10, and the SCENE_MODIFIER_RT_INVENTORY file list.
 - B1: `viewport_fluid_domains` and `apply_runtime_domains` (the FluidDomain target derives from the declaration); the domain drag's private path (`FluidDomainDrag`, `ContentCommand::FluidDomainEdit`) and the object drag's per-move command, both replaced by the knob's scrub. Force card drag stays: it is the knob (D-70).
 - B2: the Add Fluid special-case insertion and its family literals; the wiring-based water recognition (BUG-4lfm (GPU-surface water object not recognised as water)).
 - C1: the open-mesh rejection and any caller that worked around it.
@@ -134,7 +134,7 @@ The run is unattended. Each call carries the default the lead applies when Peter
 
 ## 8. Report
 
-The run ends with `docs/evidence/scene_setup_<date>/REPORT.md` in the style of the overnight reports: before and after renders for every visible change, every bead closed, every default applied under the calls above, everything parked and why. Everything lands on main, so no launch command is owed; anything left on a branch names its ref and the exact binary path to run.
+The run ends with `docs/evidence/scene_setup_<date>/REPORT.md` in the style of the overnight reports: an after render for every visible change, every bead closed, every default applied under the calls above, everything parked and why. Everything lands on main, so no launch command is owed; anything left on a branch names its ref and the exact binary path to run.
 
 ## 9. Decided — do not reopen
 

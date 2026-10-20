@@ -161,6 +161,12 @@ mod tests {
     /// card before any user drag. Wraps the encoder dispatch +
     /// commit_and_wait in `catch_unwind` so one bad preset doesn't tear
     /// down the run; all failures are collected and reported at once.
+    ///
+    /// Every frame's pixels must also be finite: a NaN or Inf names a
+    /// shader that divides by zero or takes `log(0)` on default params.
+    /// Each preset also renders a first frame at a fixed non-zero time and
+    /// beat (1.234, 2.5), checked the same way, so time-driven generators
+    /// are read past t = 0.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
         use manifold_node_engine::runtime::PresetRuntime;
@@ -179,25 +185,13 @@ mod tests {
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut failures: Vec<String> = Vec::new();
+        let mut count = 0_usize;
 
         for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
-            let mut g = match PresetRuntime::from_json_str_with_device(
-                &json, &registry, device.arc(), w, h, format, None,
-            ) {
-                Ok(g) => g,
-                Err(e) => {
-                    // Already caught by `every_bundled_preset_chain_builds`
-                    // but report here too so the failure list is complete
-                    // when only this test gets run in isolation.
-                    failures.push(format!("{preset_id}: load failed: {e}"));
-                    continue;
-                }
-            };
-
-            let target = RenderTarget::new(&device, w, h, format, "first-frame-test");
-            let ctx = PresetContext {
-                time: 0.0,
-                beat: 0.0,
+            count += 1;
+            let ctx = |time: f64, beat: f64| PresetContext {
+                time,
+                beat,
                 dt: 1.0 / 60.0,
                 width: w,
                 height: h,
@@ -211,32 +205,82 @@ mod tests {
                 trigger_count: 0,
             };
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut native_enc = device.create_encoder("first-frame-test");
-                {
-                    let mut gpu =
-                        manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
-                    g.render(
-                        &mut gpu,
-                        &target.texture,
-                        &ctx,
-                        &manifold_core::params::ParamManifest::default(),
-                    );
-                }
-                native_enc.commit_and_wait_completed();
-            }));
+            for (frame, time, beat) in [("first-frame", 0.0, 0.0), ("t=1.234 frame", 1.234, 2.5)] {
+                // A fresh runtime per frame: the t=1.234 frame is a first frame
+                // too. On one runtime it would follow t=0, and every simulation
+                // would step through the 1.234 s gap first.
+                let mut g = match PresetRuntime::from_json_str_with_device(
+                    &json, &registry, device.arc(), w, h, format, None,
+                ) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        // Already caught by `every_bundled_preset_chain_builds`
+                        // but report here too so the failure list is complete
+                        // when only this test gets run in isolation.
+                        failures.push(format!("{preset_id}: load failed: {e}"));
+                        break;
+                    }
+                };
+                let target = RenderTarget::new(&device, w, h, format, "first-frame-test");
+                let ctx = ctx(time, beat);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut native_enc = device.create_encoder("first-frame-test");
+                    {
+                        let mut gpu =
+                            manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                        g.render(
+                            &mut gpu,
+                            &target.texture,
+                            &ctx,
+                            &manifold_core::params::ParamManifest::default(),
+                        );
+                    }
+                    native_enc.commit_and_wait_completed();
+                }));
 
-            if let Err(panic) = result {
-                let msg = panic_msg(&panic);
-                failures.push(format!("{preset_id}: first-frame panic: {msg}"));
+                if let Err(panic) = result {
+                    let msg = panic_msg(&panic);
+                    failures.push(format!("{preset_id}: {frame} panic: {msg}"));
+                    break;
+                }
+                let bytes = manifold_node_engine::gpu::headless_readback::readback_raw_halves(&device, &target.texture, w, h);
+                if let Some(bad) = non_finite_rgba16f(&bytes) {
+                    failures.push(format!("{preset_id}: {frame} {bad}"));
+                }
             }
         }
 
+        assert!(count > 0, "expected ≥1 bundled generator preset");
         assert!(
             failures.is_empty(),
-            "Bundled generator presets panicked on first-frame execute:\n  - {}",
+            "Bundled generator presets panicked or rendered non-finite pixels on first-frame execute:\n  - {}",
             failures.join("\n  - "),
         );
+    }
+
+    /// Reinterpret an Rgba16Float byte stream as f32 channels; describe the
+    /// non-finite ones, or `None` when every channel is finite.
+    #[cfg(feature = "gpu-proofs")]
+    fn non_finite_rgba16f(bytes: &[u8]) -> Option<String> {
+        assert_eq!(bytes.len() % 2, 0, "odd byte length, expected RGBA16Float");
+        let mut nans = 0_usize;
+        let mut infs = 0_usize;
+        let mut first_bad: Option<(usize, f32)> = None;
+        for (i, chunk) in bytes.chunks_exact(2).enumerate() {
+            let v = half::f16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])).to_f32();
+            if v.is_nan() {
+                nans += 1;
+                first_bad.get_or_insert((i, v));
+            } else if v.is_infinite() {
+                infs += 1;
+                first_bad.get_or_insert((i, v));
+            }
+        }
+        let (idx, val) = first_bad?;
+        Some(format!(
+            "non-finite output — {nans} NaN(s) + {infs} Inf(s) of {} channels. First at channel {idx} = {val}.",
+            bytes.len() / 2,
+        ))
     }
 
     /// Extract a printable message from a `catch_unwind` payload —

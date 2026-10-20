@@ -231,46 +231,47 @@ impl Application {
         }
     }
 
-    pub(crate) fn save_project(&mut self) {
-        if self.current_project_path.is_none() { self.save_project_as(); return; }
-        let Some(save_version) = self.prepare_recording_save() else { return; };
+    /// Save to the open project's file; an untitled project goes to Save As.
+    /// True once the project is on disk. False when the save failed (its
+    /// error is already shown) or the Save As dialog was cancelled.
+    pub(crate) fn save_project(&mut self) -> bool {
+        let Some(path) = self.current_project_path.clone() else { return self.save_project_as(); };
+        let Some(save_version) = self.prepare_recording_save() else { return false; };
         let current_time = self.content_state.current_time;
-        let current_path = self.current_project_path.clone();
         // Stamp UI layout onto the authoritative snapshot.
         self.local_project.intake().saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
         crate::project_io::snapshot_and_prune_embedded_presets(self.local_project.intake());
-        if let Some(path) = current_path.as_deref() {
-            match manifold_io::saver::save_project(self.local_project.intake(), path, None, false) {
-                Ok(()) => {
-                    self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
-                    log::info!("[ProjectIO] Saved to {}", path.display());
-                    // The save pushed the previous state into history/ —
-                    // keep the Revert to Snapshot menu current.
-                    self.refresh_history_menu();
-                }
-                Err(e) => {
-                    // G4: a silent save failure means believing work is on
-                    // disk when it isn't. Log AND surface it.
-                    log::error!("[ProjectIO] Save failed: {e}");
-                    crate::alerts::error(
-                        "Save Failed",
-                        &format!(
-                            "MANIFOLD couldn't save to\n{}\n\n{e}\n\n\
-                             Your work is NOT on disk — check free space and try again.",
-                            path.display()
-                        ),
-                    );
-                }
+        match manifold_io::saver::save_project(self.local_project.intake(), &path, None, false) {
+            Ok(()) => {
+                self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
+                log::info!("[ProjectIO] Saved to {}", path.display());
+                // The save pushed the previous state into history/ —
+                // keep the Revert to Snapshot menu current.
+                self.refresh_history_menu();
+                true
             }
-        } else {
-            self.save_project_as();
+            Err(e) => {
+                // G4: a silent save failure means believing work is on
+                // disk when it isn't. Log AND surface it.
+                log::error!("[ProjectIO] Save failed: {e}");
+                crate::alerts::error(
+                    "Save Failed",
+                    &format!(
+                        "MANIFOLD couldn't save to\n{}\n\n{e}\n\n\
+                         Your work is NOT on disk — check free space and try again.",
+                        path.display()
+                    ),
+                );
+                false
+            }
         }
     }
 
-    /// Save As. Delegates to ProjectIOService.save_project_as.
-    pub(crate) fn save_project_as(&mut self) {
-        let Some(save_version) = self.prepare_recording_save() else { return; };
+    /// Save As. Delegates to ProjectIOService.save_project_as. True once the
+    /// project is on disk; false when it failed or the dialog was cancelled.
+    pub(crate) fn save_project_as(&mut self) -> bool {
+        let Some(save_version) = self.prepare_recording_save() else { return false; };
         let current_time = self.content_state.current_time;
         self.local_project.intake().saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
@@ -287,11 +288,13 @@ impl Application {
             host,
             &mut self.user_prefs,
         );
-        if action.mark_clean {
+        let saved = action.mark_clean;
+        if saved {
             self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
             action.mark_clean = false;
         }
         self.apply_project_io_action(action);
+        saved
     }
 
     /// Collect All and Save (PROJECT_FOLDERS_DESIGN D6): copy every external
