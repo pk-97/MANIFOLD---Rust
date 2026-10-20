@@ -1200,6 +1200,14 @@ impl ParamCardPanel {
         self.scene_sections
     }
 
+    /// The surface fact `ParamRow::kind` reads: a scene card, or a card in
+    /// the Scene tab (an object modifier, or a card under a Scene tab item
+    /// header such as a force), draws a labelled param as a pick list or
+    /// switch. Every other card keeps the slider.
+    pub(crate) fn draws_by_kind(&self) -> bool {
+        self.scene_sections || self.item_hosted || self.object_modifier.is_some()
+    }
+
     pub fn row(&self, param_id: &str) -> Option<&ParamRow> {
         self.rows.iter().find(|row| row.id == param_id)
     }
@@ -3648,6 +3656,43 @@ pub(super) mod tests {
             [PanelAction::Params(ParamsAction::ParamToggle(_, param_id))] => assert_eq!(param_id.as_ref(), "scale"),
             other => panic!("expected ParamToggle, got {other:?}"),
         }
+    }
+
+    /// Every Scene tab card draws by kind, not only the scene card: an
+    /// object modifier card (Bend's Axis) and an item-hosted card (a force)
+    /// show the pick list and the switch. An inspector modifier card keeps
+    /// its sliders.
+    #[test]
+    fn scene_tab_cards_draw_choices_as_pick_lists() {
+        use crate::param_surface::RowKind;
+        let config = gen_config_with_choice_and_float_switch();
+        let rect = Rect::new(0.0, 0.0, 340.0, 300.0);
+        let kinds = |card: &mut ParamCardPanel| {
+            let mut tree = UITree::new();
+            card.build(&mut tree, rect);
+            [0, 2].map(|row| card.row_host.toggle_ids[row].as_ref().map(|ids| ids.kind))
+        };
+
+        let mut object_modifier = ParamCardPanel::new();
+        object_modifier.configure_object_modifier(
+            &config,
+            crate::param_surface::ObjectModifierCardInfo {
+                layer_id: LayerId::new("layer-1"),
+                object_id: 7,
+                group_node_id: Some(42),
+                node_doc_id: 70,
+            },
+        );
+        assert_eq!(kinds(&mut object_modifier), [Some(RowKind::Choice), Some(RowKind::Switch)]);
+
+        let mut force = ParamCardPanel::new();
+        force.configure(&config);
+        force.set_item_hosted(true);
+        assert_eq!(kinds(&mut force), [Some(RowKind::Choice), Some(RowKind::Switch)]);
+
+        let mut inspector = ParamCardPanel::new();
+        inspector.configure(&config);
+        assert_eq!(kinds(&mut inspector), [None, None], "an inspector card keeps its sliders");
     }
 
     /// A switch row and a pick-list row keep the right-click mapping menu

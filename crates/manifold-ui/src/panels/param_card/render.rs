@@ -274,7 +274,7 @@ impl ParamCardPanel {
                 // height, unconditionally. Sliders, fire rows and trigger
                 // gates go through the general `active_mod_tabs`-driven
                 // height (`animated_drawer_height` is 0 with no active config).
-                if self.rows[i].grows_drawer(self.scene_sections) {
+                if self.rows[i].grows_drawer(self.draws_by_kind()) {
                     h += self.animated_drawer_height(i);
                 }
             }
@@ -325,15 +325,15 @@ impl ParamCardPanel {
         let slider = |i: usize| {
             let mut h = ROW_HEIGHT + ROW_SPACING + self.inactive_reason_height(i);
             // Same rule as `effect_body_natural_height`.
-            if self.rows[i].grows_drawer(self.scene_sections) {
+            if self.rows[i].grows_drawer(self.draws_by_kind()) {
                 h += self.animated_drawer_height(i);
             }
             h
         };
-        if self.row_host.is_colour_tail(&self.rows, i, self.scene_sections) {
+        if self.row_host.is_colour_tail(&self.rows, i, self.draws_by_kind()) {
             return 0.0;
         }
-        if self.rows[i].kind(self.scene_sections) != RowKind::Colour {
+        if self.rows[i].kind(self.draws_by_kind()) != RowKind::Colour {
             return slider(i);
         }
         let mut h = ROW_HEIGHT + ROW_SPACING;
@@ -1317,7 +1317,7 @@ impl ParamCardPanel {
                 continue;
             }
             let info = self.rows[i].clone();
-            let kind = info.kind(self.scene_sections);
+            let kind = info.kind(self.draws_by_kind());
 
             if kind != RowKind::Number {
                 // Button row — the shared builder the generator card and the
@@ -1666,11 +1666,11 @@ impl ParamCardPanel {
 
             for i in start..start + len {
                 // A G or B channel draws inside its colour row's fold.
-                if self.row_host.is_colour_tail(&self.rows, i, self.scene_sections) {
+                if self.row_host.is_colour_tail(&self.rows, i, self.draws_by_kind()) {
                     continue;
                 }
                 let info = self.rows[i].clone();
-                let kind = info.kind(self.scene_sections);
+                let kind = info.kind(self.draws_by_kind());
 
                 if kind == RowKind::Colour {
                     cy = self.build_generator_colour_row(tree, (cx, cy, content_w), slider_w, label_width, author, i);
@@ -2066,7 +2066,7 @@ impl ParamCardPanel {
             return;
         }
 
-        let kind = info.kind(self.scene_sections);
+        let kind = info.kind(self.draws_by_kind());
         // Label dirty-check (slider rows only — button rows have their
         // label baked into the row at build time).
         if kind == RowKind::Number && self.label_cache[i].as_deref() != Some(&*info.spec.name) {
