@@ -2,7 +2,7 @@ use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, MAX_BODIES};
+use crate::physics::{ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, IMPULSE_CAPACITY, MAX_BODIES};
 use manifold_node_engine::scene::transform::Transform;
 
 const DT: f64 = 1.0 / 60.0;
@@ -596,6 +596,17 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
     );
     let discarded: Vec<_> = simulation.drain_discarded_impulses().map(|stamp| stamp.sequence).collect();
     assert_eq!(discarded, [0, 1], "each held hit leaves one discard receipt");
+    // Receipts are pre-sized and bounded: a held hit never allocates, and
+    // one past the bound is counted without a stamp.
+    let capacity = simulation.impulse_discarded.capacity();
+    assert!(capacity >= IMPULSE_CAPACITY);
+    for sequence in 2..IMPULSE_CAPACITY as u64 + 7 {
+        strike(&mut simulation, 2.0 * DT, sequence);
+    }
+    assert_eq!(simulation.impulse_discarded.capacity(), capacity, "a held hit never allocates");
+    assert_eq!(simulation.drain_discarded_impulses().count(), IMPULSE_CAPACITY);
+    assert_eq!(simulation.take_discarded_beyond(), 5, "a discard past the bound is still counted");
+    assert_eq!(simulation.take_discarded_beyond(), 0, "counted once");
 
     for frame in 3..8 {
         simulation

@@ -111,11 +111,14 @@ pub trait PhysicsNode: Send {
     }
 
     /// Drain the stamps of impulses discarded because the simulation's clock
-    /// was held (pause, Speed 0); they are never applied.
+    /// was held (pause, Speed 0); they are never applied. Returns the count
+    /// of further discards past the bounded receipt list, which carry no
+    /// stamp but are discarded hits all the same.
     fn drain_discarded_impulses(
         &mut self,
         _consume: &mut dyn FnMut(manifold_physics::input::EventStamp),
-    ) {
+    ) -> u64 {
+        0
     }
 }
 

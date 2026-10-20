@@ -265,6 +265,14 @@ impl Transient {
         self.active = true;
     }
 
+    /// Move an active one-shot back to `elapsed_ms` if it is past it, so it
+    /// runs on from there; never forward, and a no-op while idle.
+    pub fn rewind_to(&mut self, elapsed_ms: f32) {
+        if self.active {
+            self.elapsed_ms = self.elapsed_ms.min(elapsed_ms);
+        }
+    }
+
     /// `Some(progress)` (0..1) while active; `None` once idle or finished.
     pub fn progress(&self) -> Option<f32> {
         if !self.active {

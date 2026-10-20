@@ -109,6 +109,9 @@ pub struct GeneratorRenderer {
     last_structure_key: u64,
     /// Counts `render_all` calls; a layer stamps it when it actually renders.
     render_pass: u64,
+    /// Sum of every `render_all` step: the content clock a waiting Fire's
+    /// age is measured on, the same at any frame rate and in export.
+    content_clock: Seconds,
     /// The layer whose generator is currently open in the graph editor (watched),
     /// or `None`. Set each frame by [`Self::set_preview_node`] / cleared by
     /// [`Self::clear_preview`]. A watched generator renders *unfused* so the
@@ -199,6 +202,7 @@ impl GeneratorRenderer {
             uniform_arena,
             last_structure_key: u64::MAX, // force scan on first frame
             render_pass: 0,
+            content_clock: Seconds::ZERO,
             preview_layer: None,
             profiling_enabled: false,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
@@ -730,6 +734,7 @@ impl GeneratorRenderer {
         project_tempo: Option<&ProjectTempo>,
     ) {
         self.render_pass += 1;
+        self.content_clock.0 += f64::from(dt);
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
         gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
@@ -1028,7 +1033,7 @@ impl GeneratorRenderer {
             }
         }
         if !self.waiting_fires.is_empty() {
-            self.refuse_unrendered_waiting_fires();
+            self.settle_waiting_fires(render_skip);
         }
 
         // Flush uniform arena (recreates buffer if capacity grew).
@@ -1091,6 +1096,7 @@ impl GeneratorRenderer {
     /// Reset all generator simulation state to initial conditions.
     /// Called after export warmup re-seek.
     pub fn reset_all_generator_state(&mut self) {
+        self.refuse_all_waiting_fires();
         let device = Arc::clone(&self.device);
         let device = &*device;
         for layer_state in self.layer_generators.values_mut() {
@@ -1113,6 +1119,7 @@ impl GeneratorRenderer {
     /// `manifold_playback::modulation::clear_all_trigger_edges` already
     /// fires (transport stop, project load).
     pub fn clear_all_trigger_state(&mut self) {
+        self.refuse_all_waiting_fires();
         for layer_state in self.layer_generators.values_mut() {
             layer_state.generator.clear_trigger_state();
         }
@@ -1728,6 +1735,8 @@ impl ClipRenderer for GeneratorRenderer {
     }
 
     fn release_all(&mut self) {
+        // Waiting hits are keyed by `LayerId`, which collides across projects.
+        self.refuse_all_waiting_fires();
         for (_, active) in self.active_clips.drain() {
             self.available_rts.push(active.render_target);
         }

@@ -46,28 +46,80 @@ fn trigger_delivery_diagnostic_toast(
     Some(failure.to_string())
 }
 
-/// What a toast says about scene impulse counts that grew since the UI last
-/// saw them: refusals first (red), with the newest reason, else discards.
-/// The counts only grow, so a lower snapshot (a bare notice) changes nothing.
-fn scene_impulse_toast(
-    seen: &mut (u64, u64),
-    current: &manifold_core::scene_impulse::SceneImpulseDiagnostics,
-) -> Option<(String, bool)> {
-    let refused = current.refused.saturating_sub(seen.0);
-    let discarded = current.discarded.saturating_sub(seen.1);
-    seen.0 = seen.0.max(current.refused);
-    seen.1 = seen.1.max(current.discarded);
-    if refused > 0 {
-        let reason = current.last_refusal.as_deref().unwrap_or("Impulse: a hit was refused");
-        return Some((
-            if refused == 1 { reason.to_owned() } else { format!("{reason} ({refused} hits refused)") },
-            true,
-        ));
+/// Who holds the one toast slot this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToastSlot {
+    Free,
+    /// The scene impulse toast is in flight.
+    Ours,
+    /// Another toast (undo, export, a graph edit) is in flight.
+    Other,
+}
+
+/// Scene impulse refusals and discards the stage has shown
+/// (BUG-mo4oa (scene force trigger skipped)). The counts only grow, so a
+/// lower snapshot (a bare notice) changes nothing. Increases coalesce into
+/// the impulse toast in flight; while another toast holds the slot they wait,
+/// so an audio-rate stream never flickers or buries that toast.
+#[derive(Debug, Default)]
+pub(crate) struct SceneImpulseToast {
+    /// Highest (refused, discarded) counts seen.
+    seen: (u64, u64),
+    /// Increases waiting for the slot.
+    pending: (u64, u64),
+    /// Counts the impulse toast in flight shows.
+    shown: (u64, u64),
+    /// The impulse toast's text, to tell it from another toast.
+    message: String,
+}
+
+impl SceneImpulseToast {
+    fn slot(&self, toast: &manifold_ui::panels::toast::ToastPanel) -> ToastSlot {
+        match toast.pending() {
+            None => ToastSlot::Free,
+            Some((message, _)) if message == self.message => ToastSlot::Ours,
+            Some(_) => ToastSlot::Other,
+        }
     }
-    (discarded > 0).then(|| {
-        let what = if discarded == 1 { "Impulse discarded".to_owned() } else { format!("{discarded} impulses discarded") };
-        (format!("{what}: the simulation is paused or at Speed 0"), false)
-    })
+
+    /// Fold one snapshot in. Returns the text to show and whether it is a
+    /// refusal (red): refusals first, with the newest reason, else discards.
+    fn update(
+        &mut self,
+        current: &manifold_core::scene_impulse::SceneImpulseDiagnostics,
+        slot: ToastSlot,
+    ) -> Option<(&str, bool)> {
+        self.pending.0 += current.refused.saturating_sub(self.seen.0);
+        self.pending.1 += current.discarded.saturating_sub(self.seen.1);
+        self.seen.0 = self.seen.0.max(current.refused);
+        self.seen.1 = self.seen.1.max(current.discarded);
+        if self.pending == (0, 0) {
+            return None;
+        }
+        match slot {
+            ToastSlot::Other => return None,
+            ToastSlot::Ours => {
+                self.shown.0 += self.pending.0;
+                self.shown.1 += self.pending.1;
+            }
+            ToastSlot::Free => self.shown = self.pending,
+        }
+        self.pending = (0, 0);
+        let (refused, discarded) = self.shown;
+        self.message.clear();
+        if refused > 0 {
+            let reason = current.last_refusal.as_deref().unwrap_or("Impulse: a hit was refused");
+            self.message.push_str(reason);
+            if refused > 1 {
+                let _ = write!(self.message, " ({refused} hits refused)");
+            }
+        } else if discarded == 1 {
+            self.message.push_str("Impulse discarded: the simulation is paused or at Speed 0");
+        } else {
+            let _ = write!(self.message, "{discarded} impulses discarded: the simulation is paused or at Speed 0");
+        }
+        Some((&self.message, refused > 0))
+    }
 }
 
 /// Push engine state into UI panels (called once per frame, AFTER build):
@@ -99,8 +151,6 @@ pub fn push_state(
 /// selections. Runs every frame, after the build, since the selections find
 /// cards this frame's projection made.
 pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
-    let tree = &mut ui.tree;
-
     // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
     // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
     // handlers used to show directly (`app_render.rs`). Keyed on
@@ -134,16 +184,16 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         ui.toast.show_with_accent(message, color::RED_BASE);
     }
 
-    if let Some((message, refused)) =
-        scene_impulse_toast(&mut ui.seen_scene_impulses, &content_state.scene_impulses)
-    {
-        if refused {
-            ui.toast.show_with_accent(message, color::RED_BASE);
-        } else {
-            ui.toast.show(message);
+    let slot = ui.scene_impulse_toast.slot(&ui.toast);
+    if let Some((message, refused)) = ui.scene_impulse_toast.update(&content_state.scene_impulses, slot) {
+        ui.toast.refresh(message.to_owned(), refused.then_some(color::RED_BASE));
+        if slot == ToastSlot::Ours {
+            // New text in an open toast: the overlays rebuild it.
+            ui.mark_overlay_dirty();
         }
     }
 
+    let tree = &mut ui.tree;
     if let Some(update) = &content_state.modifier_selection_update {
         if ui.last_modifier_selection_sequence != Some(update.sequence) {
             if let Some(id) = update.ids.iter().rev().find(|id| {
@@ -865,20 +915,53 @@ mod tests {
     /// (BUG-mo4oa (scene force trigger skipped)).
     #[test]
     fn scene_impulse_toast_shows_each_refusal_and_discard_once() {
+        use super::ToastSlot::Free;
         use manifold_core::scene_impulse::SceneImpulseDiagnostics;
-        let mut seen = (0, 0);
+        let mut toast = super::SceneImpulseToast::default();
         let mut counts = SceneImpulseDiagnostics::default();
-        assert_eq!(super::scene_impulse_toast(&mut seen, &counts), None);
+        assert_eq!(toast.update(&counts, Free), None);
         counts.discarded = 1;
-        let (message, refused) = super::scene_impulse_toast(&mut seen, &counts).unwrap();
+        let (message, refused) = toast.update(&counts, Free).unwrap();
         assert!(!refused && message.starts_with("Impulse discarded"), "{message}");
-        assert_eq!(super::scene_impulse_toast(&mut seen, &counts), None, "shown once");
+        assert_eq!(toast.update(&counts, Free), None, "shown once");
         counts.refuse("Physics: 256 hits are already in flight; this hit is refused");
         counts.refuse("Physics: 256 hits are already in flight; this hit is refused");
-        let (message, refused) = super::scene_impulse_toast(&mut seen, &counts).unwrap();
+        let (message, refused) = toast.update(&counts, Free).unwrap();
         assert!(refused && message.ends_with("(2 hits refused)"), "{message}");
-        assert_eq!(super::scene_impulse_toast(&mut seen, &SceneImpulseDiagnostics::default()), None);
-        assert_eq!(super::scene_impulse_toast(&mut seen, &counts), None, "a bare notice never re-shows");
+        assert_eq!(toast.update(&SceneImpulseDiagnostics::default(), Free), None);
+        assert_eq!(toast.update(&counts, Free), None, "a bare notice never re-shows");
+    }
+
+    /// Audio-rate refusals coalesce into the impulse toast in flight (its
+    /// count grows, in place) and wait while another toast holds the slot,
+    /// so they never flicker or bury it.
+    #[test]
+    fn scene_impulse_toast_coalesces_and_never_buries_another_toast() {
+        use super::ToastSlot::{Free, Other, Ours};
+        use manifold_core::scene_impulse::SceneImpulseDiagnostics;
+        use manifold_ui::panels::toast::ToastPanel;
+        let reason = "Impulse: the hit waited more than 100 ms for its scene; this hit is refused";
+        let mut toast = super::SceneImpulseToast::default();
+        let mut panel = ToastPanel::new();
+        let mut counts = SceneImpulseDiagnostics::default();
+        counts.refuse(reason);
+        assert_eq!(toast.slot(&panel), Free);
+        let (message, _) = toast.update(&counts, Free).unwrap();
+        panel.refresh(message.to_owned(), None);
+        assert_eq!(toast.slot(&panel), Ours, "the toast in flight is the impulse toast");
+        counts.refuse(reason);
+        counts.refuse(reason);
+        let (message, _) = toast.update(&counts, Ours).unwrap();
+        assert!(message.ends_with("(3 hits refused)"), "the count grows in place: {message}");
+        panel.refresh(message.to_owned(), None);
+
+        panel.show("Export complete");
+        assert_eq!(toast.slot(&panel), Other);
+        counts.refuse(reason);
+        assert_eq!(toast.update(&counts, Other), None, "another toast is never buried");
+        assert_eq!(panel.pending().map(|(message, _)| message), Some("Export complete"));
+        let (message, refused) = toast.update(&counts, Free).unwrap();
+        assert_eq!((message, refused), (reason, true), "the waiting refusal shows once the slot is free");
     }
 
     #[test]

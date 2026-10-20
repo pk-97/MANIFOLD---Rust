@@ -621,13 +621,17 @@ fn liquid_impulse_held_hits_never_fill_the_history() {
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
     assert!(frame(&mut clock, &mut impulses, TICK, TICK, 1.0).held);
+    let capacity = impulses.discarded.capacity();
+    assert!(capacity >= IMPULSE_CAPACITY, "receipts are sized when the clock starts");
     let held = IMPULSE_CAPACITY as u64 + 10;
     for sequence in 0..held {
         hit(&mut impulses, TICK, sequence, 1.0);
     }
+    assert_eq!(impulses.discarded.capacity(), capacity, "a held hit never allocates");
     let mut discarded = Vec::new();
-    impulses.drain_discarded(&mut |stamp| discarded.push(stamp.sequence), None);
-    assert_eq!(discarded, (0..held).collect::<Vec<_>>());
+    let beyond = impulses.drain_discarded(&mut |stamp| discarded.push(stamp.sequence), None);
+    assert_eq!(discarded, (0..IMPULSE_CAPACITY as u64).collect::<Vec<_>>());
+    assert_eq!(beyond, 10, "a discard past the receipt bound is still counted");
     frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
     hit(&mut impulses, 2.0 * TICK, held, 1.0);
     for step in 3..6 {

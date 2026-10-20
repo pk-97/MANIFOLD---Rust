@@ -743,8 +743,8 @@ impl PhysicsNode for GpuFlipDomain {
         self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
     }
 
-    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
-        self.impulses.drain_discarded(consume, self.coupled.owner.as_mut());
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) -> u64 {
+        self.impulses.drain_discarded(consume, self.coupled.owner.as_mut())
     }
 }
 

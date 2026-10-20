@@ -123,7 +123,11 @@ impl RigidSimulation {
         // water speed zero"). Admission succeeds so the producer rearms; the
         // discard receipt is the only record, never an applied one.
         if self.held.is_held() {
-            self.impulse_discarded.push(stamp);
+            if self.impulse_discarded.len() < IMPULSE_CAPACITY {
+                self.impulse_discarded.push(stamp);
+            } else {
+                self.impulse_discarded_beyond += 1;
+            }
             return Ok(self
                 .impulse_queue
                 .as_ref()
@@ -163,6 +167,12 @@ impl RigidSimulation {
     /// Drain the stamps of hits a held clock discarded; they never apply.
     pub fn drain_discarded_impulses(&mut self) -> std::vec::Drain<'_, EventStamp> {
         self.impulse_discarded.drain(..)
+    }
+
+    /// Take the count of held discards past the receipt bound; each is one
+    /// discarded hit with no stamp.
+    pub fn take_discarded_beyond(&mut self) -> u64 {
+        std::mem::take(&mut self.impulse_discarded_beyond)
     }
 
     /// Whether a hit fired now can be admitted: `Ok(false)` until the world
@@ -209,6 +219,7 @@ impl RigidSimulation {
         self.impulse_receipts.clear();
         self.impulse_tick_events.clear();
         self.impulse_discarded.clear();
+        self.impulse_discarded_beyond = 0;
         self.impulse_epoch = Some(epoch);
         self.impulse_failure = None;
         Ok(())

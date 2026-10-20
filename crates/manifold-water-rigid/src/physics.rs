@@ -422,8 +422,11 @@ pub struct RigidSimulation {
     impulse_tick_events: Vec<AppliedEvent<ResolvedRigidImpulse>>,
     impulse_epoch: Option<u64>,
     impulse_failure: Option<String>,
-    /// Stamps of hits a held clock discarded, undrained. They hold no slot.
+    /// Stamps of hits a held clock discarded, undrained, at most
+    /// `IMPULSE_CAPACITY` so a held fire never allocates. They hold no slot.
     impulse_discarded: Vec<EventStamp>,
+    /// Held discards past that bound, counted without a stamp.
+    impulse_discarded_beyond: u64,
     accepted_observation: Option<(f64, f64)>,
     held: HeldClock,
     dropped_time: super::physics_metrics::DroppedTimeTracker,
@@ -476,7 +479,8 @@ impl Default for RigidSimulation {
             impulse_tick_events: Vec::with_capacity(IMPULSE_CAPACITY),
             impulse_epoch: None,
             impulse_failure: None,
-            impulse_discarded: Vec::new(),
+            impulse_discarded: Vec::with_capacity(IMPULSE_CAPACITY),
+            impulse_discarded_beyond: 0,
             accepted_observation: None,
             clock: Default::default(),
             held: HeldClock::default(),

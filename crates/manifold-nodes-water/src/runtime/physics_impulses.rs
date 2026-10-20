@@ -451,14 +451,17 @@ impl WaterRuntime<'_> {
     }
 
     /// Drain the stamps of impulses a held simulation discarded (pause,
-    /// Speed 0); resume never replays them.
-    pub fn drain_discarded_scene_impulses(&mut self, mut consume: impl FnMut(&NodeId, EventStamp)) {
+    /// Speed 0); resume never replays them. Returns the count of further
+    /// discards past the bounded receipt lists, which carry no stamp.
+    pub fn drain_discarded_scene_impulses(&mut self, mut consume: impl FnMut(&NodeId, EventStamp)) -> u64 {
+        let mut beyond = 0;
         for node in self.graph.nodes_mut() {
             let id = &node.node_id;
             if let Some(native) = node::get_mut(node.node.as_mut()) {
-                native.drain_discarded_impulses(&mut |stamp| consume(id, stamp));
+                beyond += native.drain_discarded_impulses(&mut |stamp| consume(id, stamp));
             }
         }
+        beyond
     }
 }
 

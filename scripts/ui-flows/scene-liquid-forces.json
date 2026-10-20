@@ -62,7 +62,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Kick Size"
+          "text": "Impulse Size"
         }
       },
       "check": "Exists"
@@ -196,7 +196,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Water — Dam Break (Live GPU) / Radial Force / Kick",
+          "text": "Water — Dam Break (Live GPU) / Radial Force / Impulse",
           "type": "Button"
         }
       },
@@ -276,7 +276,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Water — Dam Break (Live GPU) / Radial Force / Kick",
+          "text": "Water — Dam Break (Live GPU) / Radial Force / Impulse",
           "type": "Button"
         }
       },

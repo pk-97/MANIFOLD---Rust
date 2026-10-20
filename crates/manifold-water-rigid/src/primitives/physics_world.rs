@@ -717,10 +717,11 @@ impl PhysicsNode for PhysicsWorldNode {
     fn drain_discarded_impulses(
         &mut self,
         consume: &mut dyn FnMut(manifold_physics::input::EventStamp),
-    ) {
+    ) -> u64 {
         for stamp in self.simulation.drain_discarded_impulses() {
             consume(stamp);
         }
+        self.simulation.take_discarded_beyond()
     }
 
     fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {

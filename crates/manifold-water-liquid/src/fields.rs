@@ -228,13 +228,26 @@ pub struct LiquidImpulses {
     /// Receipts of committed frames, undrained.
     applied: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     impulse_tick: Option<u64>,
+    /// Discard receipts, undrained, at most `IMPULSE_CAPACITY`; sized when
+    /// the clock starts so a held fire never allocates.
     discarded: Vec<EventStamp>,
+    /// Discards past that bound, counted without a stamp.
+    discarded_beyond: u64,
     /// Sequences sent to both queues: the liquid receipt names them, so the
     /// rigid receipt is dropped.
     combined: Vec<u64>,
     /// The clock broke (a tick out of order): every hit is refused until a
     /// restart. A full history is never this; it refuses one hit at a time.
     failure: Option<String>,
+}
+
+/// Keep one discard receipt within the bound, else count it without a stamp.
+fn record_discard(discarded: &mut Vec<EventStamp>, beyond: &mut u64, stamp: EventStamp) {
+    if discarded.len() < IMPULSE_CAPACITY {
+        discarded.push(stamp);
+    } else {
+        *beyond += 1;
+    }
 }
 
 impl LiquidImpulses {
@@ -254,11 +267,13 @@ impl LiquidImpulses {
                         EventQueue::new(self.epoch, Seconds::ZERO, Seconds(TICK), IMPULSE_CAPACITY)
                             .map_err(|error| format!("Liquid impulses: {error}"))?,
                     );
+                    self.discarded.reserve_exact(IMPULSE_CAPACITY);
                 }
             }
             self.pending.clear();
             self.applied.clear();
             self.discarded.clear();
+            self.discarded_beyond = 0;
             self.combined.clear();
             self.last_sequence = None;
             self.failure = None;
@@ -307,7 +322,10 @@ impl LiquidImpulses {
 
     /// This frame's ticks will not run: its hits are discarded, with a receipt.
     pub fn abandon_frame(&mut self) {
-        self.discarded.extend(self.pending.drain(..).map(|event| event.source));
+        let Self { pending, discarded, discarded_beyond, .. } = self;
+        for event in pending.drain(..) {
+            record_discard(discarded, discarded_beyond, event.source);
+        }
     }
 
     /// The epoch stamps must carry, once the clock has started.
@@ -370,7 +388,7 @@ impl LiquidImpulses {
         let next = queue.next_tick();
         if self.held {
             self.last_sequence = Some(stamp.sequence);
-            self.discarded.push(stamp);
+            record_discard(&mut self.discarded, &mut self.discarded_beyond, stamp);
             return Ok(next);
         }
         let outstanding = queue.len() + self.pending.len() + self.applied.len() + self.combined.len();
@@ -425,14 +443,18 @@ impl LiquidImpulses {
 
     /// Stamps of hits discarded while the clock was held or by a failed frame,
     /// then the rigid owner's. A hit both halves discarded reads once.
-    pub fn drain_discarded(&mut self, consume: &mut dyn FnMut(EventStamp), rigid: Option<&mut LiquidRigidOwner>) {
+    /// Returns the count of further discards past either bounded receipt
+    /// list: discarded hits with no stamp.
+    pub fn drain_discarded(&mut self, consume: &mut dyn FnMut(EventStamp), rigid: Option<&mut LiquidRigidOwner>) -> u64 {
         self.abandon_frame();
-        let Self { discarded, combined, .. } = self;
+        let Self { discarded, discarded_beyond, combined, .. } = self;
+        let beyond = std::mem::take(discarded_beyond);
         let Some(owner) = rigid else {
             discarded.drain(..).for_each(&mut *consume);
-            return;
+            return beyond;
         };
-        for stamp in owner.rigid_mut().drain_discarded_impulses() {
+        let rigid = owner.rigid_mut();
+        for stamp in rigid.drain_discarded_impulses() {
             if let Some(index) = combined.iter().position(|&sequence| sequence == stamp.sequence) {
                 combined.swap_remove(index);
             }
@@ -441,6 +463,7 @@ impl LiquidImpulses {
             }
         }
         discarded.drain(..).for_each(&mut *consume);
+        beyond + rigid.take_discarded_beyond()
     }
 
     /// The tick this frame's hits land on, if any.

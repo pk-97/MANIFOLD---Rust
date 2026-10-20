@@ -16,7 +16,8 @@
 //!
 //! One slot, "latest wins" (the doc's explicit anti-queueing rule): calling
 //! [`ToastPanel::show`] while a toast is already showing cuts it short and
-//! replaces it — it is never queued behind the first.
+//! replaces it — it is never queued behind the first. [`ToastPanel::refresh`]
+//! rewrites the toast in flight in place, for a running count.
 
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use crate::anim::Transient;
@@ -106,6 +107,27 @@ impl ToastPanel {
         self.transient.fire(TOTAL_MS);
         self.last_tick = None;
         // See `show()` — same stale-id reset.
+        self.bg_id = None;
+        self.text_ids.clear();
+    }
+
+    /// Rewrite the toast in flight in place, for a running count: the text
+    /// and accent change, a toast still easing in keeps easing, and one past
+    /// that holds at full opacity for a whole hold again. Never restarts the
+    /// ease-in, so a fast stream of updates never flickers. Idle → `show`.
+    /// The caller marks the overlays changed so the new text is built.
+    pub fn refresh(&mut self, message: impl Into<String>, accent: Option<Color32>) {
+        if self.transient.progress().is_none() {
+            match accent {
+                Some(accent) => self.show_with_accent(message, accent),
+                None => self.show(message),
+            }
+            return;
+        }
+        self.message = message.into();
+        self.accent = accent;
+        self.transient.rewind_to(ENTER_MS);
+        // See `show()`: the rebuild re-mints the nodes for the new text.
         self.bg_id = None;
         self.text_ids.clear();
     }
@@ -404,6 +426,28 @@ mod tests {
         // overlay driver rebuilds the toast's nodes into the new tree.
         toast.show("Redo: Move Clip");
         toast.update(&mut tree); // must not panic
+    }
+
+    /// A running count rewrites the toast in flight without a flicker: a
+    /// refresh mid-hold stays fully opaque and holds again from the start;
+    /// mid ease-in it keeps easing; idle it shows.
+    #[test]
+    fn refresh_extends_the_hold_and_never_restarts_the_ease_in() {
+        let mut toast = ToastPanel::new();
+        toast.refresh("1 hit refused", Some(color::RED_BASE));
+        assert!(toast.is_open(), "idle refresh shows");
+        toast.tick(ENTER_MS * 0.5);
+        toast.refresh("2 hits refused", Some(color::RED_BASE));
+        let easing = toast.alpha();
+        assert!(easing > 0.0 && easing < 1.0, "mid ease-in keeps easing: {easing}");
+        toast.tick(ENTER_MS * 0.5 + HOLD_MS * 0.9);
+        toast.refresh("3 hits refused", Some(color::RED_BASE));
+        assert_eq!(toast.message, "3 hits refused");
+        assert_eq!(toast.alpha(), 1.0, "mid hold stays fully opaque");
+        toast.tick(HOLD_MS * 0.9);
+        assert_eq!(toast.alpha(), 1.0, "the hold restarted");
+        toast.tick(HOLD_MS + FADE_MS);
+        assert!(!toast.is_open());
     }
 
     #[test]

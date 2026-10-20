@@ -63,9 +63,10 @@ impl RuntimeExtension for WaterRuntimeState {
                 diagnostics.late = diagnostics.late.saturating_add(1);
             }
         });
-        water.drain_discarded_scene_impulses(|_, _| {
+        let beyond = water.drain_discarded_scene_impulses(|_, _| {
             diagnostics.discarded = diagnostics.discarded.saturating_add(1);
         });
+        diagnostics.discarded = diagnostics.discarded.saturating_add(beyond);
     }
 
     fn before_frame(&mut self, runtime: &mut RuntimeContext<'_>, time: FrameTime) {

@@ -645,8 +645,14 @@ impl DirectFire {
             .fire_scene_impulse(layer, &self.fire, source, Some(&tempo))
     }
 
-    /// Tick and render one frame; `skip` leaves the scene unrendered.
+    /// Tick and render one frame; `skip` hides the scene behind an opaque
+    /// layer (still playing, not rendered).
     fn render(&mut self, skip: bool) {
+        self.render_step(skip, DT);
+    }
+
+    /// [`Self::render`] with a render step of `dt` seconds.
+    fn render_step(&mut self, skip: bool, dt: f64) {
         let result = self.engine.tick(TickContext {
             frames: 1,
             realtime_now: Seconds(self.frame as f64 * DT),
@@ -661,7 +667,7 @@ impl DirectFire {
         let mut gpu = GpuEncoder::new(&mut command_buffer, &self.device);
         let (time, beat) = (self.engine.current_time_double(), self.engine.current_beat_f64());
         let skipped: &[i32] = if skip { &[0] } else { &[] };
-        generator(&mut self.engine).render_all(&mut gpu, time, beat, DT as f32, &layers, DATA_VERSION, skipped, Some(&tempo));
+        generator(&mut self.engine).render_all(&mut gpu, time, beat, dt as f32, &layers, DATA_VERSION, skipped, Some(&tempo));
         command_buffer.commit_and_wait_completed();
         self.engine.reclaim_tick_result(result);
     }
@@ -707,17 +713,88 @@ fn scene_impulse_refusal_never_blocks_the_next_fire() {
     assert_eq!(diagnostics.last_refusal.as_deref(), Some(refusal.as_str()));
 }
 
-/// A Fire waiting for a scene that then does not render is refused once,
-/// visibly, and never lands later as a stale burst.
+/// A Fire waiting for a scene that then stops playing (the playhead left its
+/// clip) is refused once, visibly, and never lands later as a stale burst.
 #[test]
 fn scene_impulse_waiting_for_an_unrendered_scene_is_refused_once() {
     let mut scene = DirectFire::new();
     assert_eq!(scene.fire(), Ok(true));
-    scene.render(true);
+    // The scene's clip is 16 beats at 240 BPM: 4 s.
+    scene.engine.seek_to(Seconds(8.0));
+    scene.render(false);
+    scene.engine.seek_to(Seconds::ZERO);
     for _ in 0..3 {
         scene.render(false);
     }
     let diagnostics = scene.diagnostics();
     assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{diagnostics:?}");
     assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("stopped rendering")));
+}
+
+/// A scene hidden behind an opaque layer is still playing: its waiting Fire
+/// keeps waiting and lands once the scene renders again.
+#[test]
+fn scene_impulse_waiting_for_an_occluded_scene_lands_once() {
+    let mut scene = DirectFire::new();
+    assert_eq!(scene.fire(), Ok(true));
+    scene.render(true);
+    scene.render(true);
+    assert_eq!(scene.diagnostics().refused, 0, "an occluded scene is not a stopped one");
+    for _ in 0..3 {
+        scene.render(false);
+    }
+    let diagnostics = scene.diagnostics();
+    assert_eq!((diagnostics.started, diagnostics.refused), (1, 0), "{diagnostics:?}");
+}
+
+/// A waiting Fire is refused once it has waited more than 100 ms on the
+/// content clock, at any frame rate: 6 frames at 60 fps, 3 at 30.
+#[test]
+fn scene_impulse_waiting_more_than_100_ms_is_refused_at_any_frame_rate() {
+    for (fps, frames_within) in [(60.0, 6), (30.0, 3)] {
+        let mut scene = DirectFire::new();
+        assert_eq!(scene.fire(), Ok(true));
+        for _ in 0..frames_within {
+            scene.render_step(true, 1.0 / fps);
+        }
+        let diagnostics = scene.diagnostics();
+        assert_eq!(diagnostics.refused, 0, "{fps} fps: still within 100 ms: {diagnostics:?}");
+        scene.render_step(true, 1.0 / fps);
+        let diagnostics = scene.diagnostics();
+        assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{fps} fps: {diagnostics:?}");
+        assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("100 ms")));
+        for _ in 0..3 {
+            scene.render(false);
+        }
+        assert_eq!(scene.diagnostics().started, 0, "{fps} fps: a refused hit never lands late");
+    }
+}
+
+/// Export warmup restart, Stop and project switch each refuse every waiting
+/// Fire, visibly; none lands in exported frame 0, after Stop, or in the next
+/// project's layer of the same id.
+#[test]
+fn scene_impulse_waiting_through_a_reset_is_refused_never_landed() {
+    type Reset = fn(&mut DirectFire);
+    let resets: [(&str, Reset); 3] = [
+        ("export restart", |scene| generator(&mut scene.engine).reset_all_generator_state()),
+        ("stop", |scene| generator(&mut scene.engine).clear_all_trigger_state()),
+        ("project switch", |scene| {
+            let project = scene.engine.project().expect("project installed").clone();
+            scene.engine.initialize(project);
+        }),
+    ];
+    for (path, reset) in resets {
+        let mut scene = DirectFire::new();
+        assert_eq!(scene.fire(), Ok(true));
+        reset(&mut scene);
+        let diagnostics = scene.diagnostics();
+        assert_eq!(diagnostics.refused, 1, "{path}: {diagnostics:?}");
+        assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("reset")), "{path}");
+        for _ in 0..3 {
+            scene.render(false);
+        }
+        let diagnostics = scene.diagnostics();
+        assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{path}: {diagnostics:?}");
+    }
 }
