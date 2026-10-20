@@ -239,7 +239,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Kick Size"
+          "text": "Impulse Size"
         }
       },
       "check": "Exists"

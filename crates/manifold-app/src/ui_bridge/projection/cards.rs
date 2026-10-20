@@ -1284,6 +1284,158 @@ mod modifier_audio_projection_tests {
         assert!(reloaded[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap().audio.active);
     }
 
+    /// Force rows carry their manifest unit all the way to the readout text.
+    #[test]
+    fn radial_force_rows_format_with_their_units() {
+        use manifold_ui::panels::param_slider_shared::format_param_value;
+        let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let modifier = prepare_new_scene_modifier(&graph, recipe.as_ref(), "force".into(),
+            SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
+        graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
+        let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        host.graph = Some(graph.clone());
+        host.refresh_manifest_from_graph();
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        let readout = |name: &str| {
+            let row = surfaces[0].rows.iter().find(|row| row.spec.name == name).unwrap_or_else(|| panic!("row {name}"));
+            let spec = &row.spec;
+            format_param_value(row.value.effective, spec.min, spec.whole_numbers, spec.is_angle, spec.value_labels.as_deref(), spec.unit)
+        };
+        assert!(readout("Strength").ends_with(" m/s²"));
+        assert!(readout("Impulse Size").ends_with(" m/s"));
+    }
+
+    /// A project with one Radial force on layer "layer", and the force's host
+    /// control ids for `fire`, `impulse_strength` and `strength`.
+    fn radial_force_project() -> (manifold_core::project::Project, [String; 3]) {
+        let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let modifier = prepare_new_scene_modifier(&graph, recipe.as_ref(), "force".into(),
+            SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
+        graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
+        let host_id = |param: &str| graph.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding| matches!(
+            &binding.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } if param_id == param
+        )).unwrap().id.clone();
+        let ids = [host_id("fire"), host_id("impulse_strength"), host_id("strength")];
+        let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        host.graph = Some(graph);
+        host.refresh_manifest_from_graph();
+        let mut project = manifold_core::project::Project::default();
+        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), host.generator_type().clone(), 0);
+        layer.layer_id = manifold_core::LayerId::new("layer");
+        *layer.gen_params_mut().unwrap() = host;
+        project.timeline.layers.push(layer);
+        (project, ids)
+    }
+
+    /// Saves the project, writes `old` names into every saved copy of the
+    /// matching controls (host entry, host binding label, the recipe copy
+    /// inside the modifier; an empty local id leaves that copy alone) and
+    /// drops their tooltips, as a project saved before a relabel holds them;
+    /// then loads it.
+    fn reload_with_old_labels(project: &manifold_core::project::Project, old: &[(&str, &str, &str)]) -> manifold_core::project::Project {
+        fn walk(value: &mut serde_json::Value, old: &[(&str, &str, &str)]) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    let id = map.get("id").and_then(|id| id.as_str()).map(str::to_string);
+                    let matches = |id: &String, host: &str, local: &str| id == host || (!local.is_empty() && id == local);
+                    if let Some((_, _, name)) = id.and_then(|id| old.iter().find(|(host, local, _)| matches(&id, host, local))) {
+                        map.remove("tooltip");
+                        if map.contains_key("target") {
+                            map.insert("label".into(), (*name).into());
+                        } else if map.contains_key("defaultValue") {
+                            map.insert("name".into(), (*name).into());
+                        }
+                    }
+                    map.values_mut().for_each(|v| walk(v, old));
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(|v| walk(v, old)),
+                _ => {}
+            }
+        }
+        let mut saved = serde_json::to_value(project).unwrap();
+        walk(&mut saved, old);
+        let mut loaded: manifold_core::project::Project = serde_json::from_value(saved).unwrap();
+        loaded.reconcile_param_manifests();
+        loaded
+    }
+
+    /// D9 (one word list, on the declarations): a recipe relabel reaches a
+    /// force saved under the old words on its next load, with no migration
+    /// rung, and the stale words are not taken for a user rename.
+    #[test]
+    fn force_saved_with_old_labels_loads_with_the_recipe_labels() {
+        let (project, [fire, impulse, strength]) = radial_force_project();
+        let loaded = reload_with_old_labels(&project, &[
+            (&fire, "fire", "Kick"),
+            (&impulse, "impulse_strength", "Kick Size"),
+            (&strength, "strength", "Strength"),
+        ]);
+        let host = loaded.timeline.layers[0].gen_params().unwrap();
+        let param = |id: &str| host.params.get(id).unwrap();
+        assert_eq!(param(&fire).spec.name, "Impulse");
+        assert_eq!(param(&impulse).spec.name, "Impulse Size");
+        assert_eq!(param(&strength).spec.tooltip.as_deref(), Some("Gravity is 9.8 m/s²"));
+        for id in [&fire, &impulse, &strength] {
+            assert_eq!(param(id).choices.rename, None, "{id}: a stale label is not a rename");
+        }
+        let graph = host.graph.as_ref().unwrap();
+        let vm = SceneVm::from_def(graph).unwrap();
+        let surfaces = modifier_surfaces(host, graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        let names: Vec<&str> = surfaces[0].rows.iter().map(|row| row.spec.name.as_str()).collect();
+        assert!(names.contains(&"Impulse") && names.contains(&"Impulse Size"), "{names:?}");
+        assert!(!names.iter().any(|name| name.starts_with("Kick")), "{names:?}");
+    }
+
+    /// A force row the user renamed keeps that name across save and load,
+    /// while a stale label on its sibling still gives way to the recipe's.
+    #[test]
+    fn renamed_force_row_keeps_its_name_across_save_and_load() {
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
+        let (mut project, [fire, impulse, _]) = radial_force_project();
+        EditParamMappingCommand::new(manifold_core::GraphTarget::Generator("layer".into()), impulse.clone(),
+            BindingMappingEdit { label: Some("Push".into()), ..Default::default() }, None).execute(&mut project);
+        let loaded = reload_with_old_labels(&project, &[(&fire, "fire", "Kick")]);
+        let host = loaded.timeline.layers[0].gen_params().unwrap();
+        let renamed = host.params.get(&impulse).unwrap();
+        assert_eq!(renamed.spec.name, "Push");
+        assert_eq!(renamed.choices.rename.as_deref(), Some("Push"));
+        assert_eq!(host.params.get(&fire).unwrap().spec.name, "Impulse");
+        let resaved = reload_with_old_labels(&loaded, &[]);
+        assert_eq!(resaved.timeline.layers[0].gen_params().unwrap().params.get(&impulse).unwrap().spec.name, "Push");
+    }
+
+    /// Before the drawer wrote rename choices, a rename went straight into
+    /// the host's saved name. On load that name becomes a rename choice when
+    /// the recipe never shipped it; a shipped old label does not. Only the
+    /// file read converts: an in-memory rebuild never revives a rename the
+    /// user has since taken back.
+    #[test]
+    fn force_renamed_into_its_saved_name_keeps_the_rename() {
+        let (project, [fire, impulse, _]) = radial_force_project();
+        let mut loaded = reload_with_old_labels(&project, &[(&impulse, "", "Push"), (&fire, "fire", "Kick")]);
+        let host = loaded.timeline.layers[0].gen_params_mut().unwrap();
+        assert_eq!(host.params.get(&impulse).unwrap().spec.name, "Push");
+        assert_eq!(host.params.get(&impulse).unwrap().choices.rename.as_deref(), Some("Push"));
+        assert_eq!(host.params.get(&fire).unwrap().spec.name, "Impulse");
+        assert_eq!(host.params.get(&fire).unwrap().choices.rename, None);
+        host.refresh_manifest_from_graph();
+        assert_eq!(host.params.get(&impulse).unwrap().spec.name, "Push");
+        let resaved = reload_with_old_labels(&loaded, &[]);
+        assert_eq!(resaved.timeline.layers[0].gen_params().unwrap().params.get(&impulse).unwrap().spec.name, "Push");
+
+        let host = loaded.timeline.layers[0].gen_params_mut().unwrap();
+        let taken_back = host.params.get_mut(&impulse).unwrap();
+        taken_back.choices.rename = None;
+        taken_back.spec.name = "Impulse Size".into();
+        host.refresh_manifest_from_graph();
+        assert_eq!(host.params.get(&impulse).unwrap().spec.name, "Impulse Size");
+        assert_eq!(host.params.get(&impulse).unwrap().choices.rename, None);
+    }
+
     /// A force card's audio-mod meter shows the level the content thread
     /// captured for that mod. The mod lives on the generator under the host
     /// binding id, so the card keys its meter on the generator instance, never
