@@ -264,14 +264,16 @@ impl TickForces {
         Ok(())
     }
 
-    /// Each not-yet-run tick's start under `clock` in `(from, until]`.
+    /// Each boundary a not-yet-run tick may start at under `clock` in
+    /// `(from, until]`.
     pub fn request_samples(&mut self, clock: &SimulationClock, from: f64, until: f64, out: &mut Vec<f64>) {
         self.samples.request(clock, from, until, out);
     }
 
-    /// A history replay sample of the field at transport `now`.
-    pub fn observe_sample(&mut self, now: f64, field: Option<&FieldValue>) {
-        self.samples.observe(now, field);
+    /// A history replay sample of the field at transport `now`, after
+    /// `clock` observed this sample's Speed.
+    pub fn observe_sample(&mut self, clock: &SimulationClock, now: f64, field: Option<&FieldValue>) {
+        self.samples.observe(clock, now, field);
     }
 
     /// Lattices laid this frame: 0 without a field, 1 while it holds still

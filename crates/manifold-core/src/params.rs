@@ -152,6 +152,13 @@ pub struct Param {
     /// evaluator can detect "a hand touched this since I last looked". Never
     /// serialized.
     pub touched: bool,
+    /// Runtime-only: this param's automation lane wrote its base on the
+    /// last automation pass (not latched, recorded or held by a hand), so
+    /// the lane is its authored value at any time. The physics replay reads
+    /// the lane at its own sample times instead of holding the frame's
+    /// value (LIVE_SIM_CLOCK_DESIGN.md D4 (preserve control semantics)).
+    /// Never serialized.
+    pub automated: bool,
 }
 
 impl Param {
@@ -192,6 +199,7 @@ impl Param {
             clip_trigger_source: ClipTriggerSource::OwnLayer,
             clip_control_digest: None,
             touched: false,
+            automated: false,
         }
     }
 

@@ -13,6 +13,16 @@ pub const MAX_LIVE_INTERVALS: u64 = 2;
 /// Transport time going back by more than this is a seek or loop: the clock
 /// restarts, and so does anything integrating over the same transport.
 pub const BACKWARD_SEEK: f64 = 1e-9;
+/// The physics history replay evaluates authored inputs at every multiple of
+/// 1 / REPLAY_RATE seconds of transport, whatever the display rate. Every
+/// Sim Rate divides it.
+pub const REPLAY_RATE: f64 = 240.0;
+
+/// The first replay grid point at or after `transport`, by the replay's own
+/// formula (`k / REPLAY_RATE`), so the two agree bit for bit.
+pub fn next_replay_point(transport: f64) -> f64 {
+    (transport * REPLAY_RATE - 1e-9).ceil() / REPLAY_RATE
+}
 
 /// The previous live frame's measured load (render work plus GPU surface wait)
 /// against the display frame budget. A live frame takes a second interval only
@@ -250,7 +260,7 @@ impl SimulationClock {
         if !self.started || tick < self.ticks_done {
             return None;
         }
-        let at = |index: u64| self.transport_origin + index as f64 * self.simulation_interval;
+        let at = |index: u64| self.boundary(index);
         let mut remaining = tick - self.ticks_done;
         let mut index = self.transport_done;
         let mut next = self.speed_history.partition_point(|anchor| anchor.transport <= at(index));
@@ -285,23 +295,65 @@ impl SimulationClock {
         self.ticks_done
     }
 
-    /// Every tick not yet run whose start lies in `(from, until]` of
-    /// transport time, ascending, with its transport time. Live samples only
-    /// the accepted steps and their closing endpoint, never discarded time.
-    pub fn tick_starts(&self, from: f64, until: f64, mut visit: impl FnMut(f64, u64)) {
-        let mut tick = self.ticks_done;
-        while let Some(transport) = self
-            .tick_start(tick)
-            .filter(|&transport| transport <= until)
-        {
-            if transport > from {
-                visit(transport, tick);
-            }
-            if !self.offline && tick - self.ticks_done == self.live_cap() {
-                break;
-            }
-            tick += 1;
+    /// Every not-yet-run Sim Rate boundary in `(from, until]` of transport
+    /// time, ascending: each place a tick may start. Speed does not narrow
+    /// it, since a Speed the replay is still to observe can start or stop a
+    /// tick at any of them; [`Self::tick_at`] names the tick once the
+    /// boundary's own Speed is known. Live visits only the accepted
+    /// intervals and their closing endpoint, never discarded time.
+    pub fn tick_starts(&self, from: f64, until: f64, mut visit: impl FnMut(f64)) {
+        if !self.started {
+            return;
         }
+        let mut index = self.transport_done;
+        loop {
+            let transport = self.boundary(index);
+            if transport > until {
+                return;
+            }
+            if transport > from {
+                visit(transport);
+            }
+            if !self.offline && index - self.transport_done == self.live_cap() {
+                return;
+            }
+            index += 1;
+        }
+    }
+
+    /// The tick starting at boundary `transport` (one [`Self::tick_starts`]
+    /// visited), under the speeds observed so far. Call it once Speed at that
+    /// boundary has been observed: every anchor at or before it is then
+    /// final. None when that interval runs at Speed 0, the boundary has
+    /// already run, or `transport` is not a boundary of this epoch.
+    pub fn tick_at(&self, transport: f64) -> Option<u64> {
+        if !self.started {
+            return None;
+        }
+        let index = ((transport - self.transport_origin) / self.simulation_interval).round();
+        if index.is_nan() || index < 0.0 || self.boundary(index as u64) != transport {
+            return None;
+        }
+        let index = index as u64;
+        if index < self.transport_done || !self.interval_runs(index) {
+            return None;
+        }
+        let earlier = (self.transport_done..index).filter(|&i| self.interval_runs(i)).count();
+        Some(self.ticks_done + earlier as u64)
+    }
+
+    /// Transport time of Sim Rate boundary `index` of this epoch's grid, by
+    /// the one formula every boundary comparison uses.
+    fn boundary(&self, index: u64) -> f64 {
+        self.transport_origin + index as f64 * self.simulation_interval
+    }
+
+    /// Whether transport interval `index` runs a tick: its start's Speed is
+    /// above 0.
+    fn interval_runs(&self, index: u64) -> bool {
+        let start = self.boundary(index);
+        let anchors = self.speed_history.partition_point(|anchor| anchor.transport <= start);
+        anchors.checked_sub(1).is_some_and(|last| self.speed_history[last].speed > 0.0)
     }
 
     /// Make the next frame a restart in a new epoch. The domain's
@@ -699,7 +751,7 @@ mod tests {
         for frame in 1..=fps {
             let now = f64::from(frame) / f64::from(fps);
             samples.clear();
-            clock.tick_starts(previous, now, |transport, _| samples.push(transport));
+            clock.tick_starts(previous, now, |transport| samples.push(transport));
             let mut grid = (previous * 240.0).floor() + 1.0;
             while grid / 240.0 < now {
                 samples.push(grid / 240.0);
@@ -778,8 +830,8 @@ mod tests {
         let start = clock.tick_start(2).expect("the next tick is known once Speed is back");
         assert!((start - 6.0 * TICK).abs() < 1e-12, "{start}");
         let mut starts = Vec::new();
-        clock.tick_starts(5.5 * TICK, 7.0 * TICK, |transport, tick| starts.push((transport, tick)));
-        assert_eq!(starts.iter().map(|&(_, tick)| tick).collect::<Vec<_>>(), [2, 3]);
+        clock.tick_starts(5.5 * TICK, 7.0 * TICK, |transport| starts.push(clock.tick_at(transport)));
+        assert_eq!(starts, [Some(2), Some(3)]);
         let frame = clock.advance(7.0 * TICK, TICK, 1.0, 0.0, false, false);
         assert_eq!((frame.first_sequence, frame.ticks), (2, 1));
         assert!((frame.interval(0).unwrap().duration().0 - TICK).abs() < 1e-12);
@@ -951,7 +1003,7 @@ mod tests {
             let mut cfl_steps = 0;
             for display in 1..=60 {
                 let now = f64::from(display) / 60.0;
-                clock.tick_starts(f64::from(display - 1) / 60.0, now, |time, tick| samples.push((time, tick)));
+                clock.tick_starts(f64::from(display - 1) / 60.0, now, |time| samples.push((time, clock.tick_at(time).unwrap())));
                 let frame = clock.advance(now, rate.interval(), 2.0, 0.0, false, false);
                 intervals += frame.ticks;
                 for ordinal in 0..u64::from(frame.ticks) {
@@ -1043,7 +1095,7 @@ mod tests {
         {
             clock.set_live_load(Some(late));
             let mut starts = Vec::new();
-            clock.tick_starts(-1.0, 2.5 * TICK, |_, tick| starts.push(tick));
+            clock.tick_starts(-1.0, 2.5 * TICK, |transport| starts.push(clock.tick_at(transport).unwrap()));
             assert_eq!(starts, [0, 1]);
             assert_eq!(clock.simulation_at(2.5 * TICK, Some(late)), TICK);
             let frame = clock.advance(2.5 * TICK, TICK, 1.0, 0.0, false, false);

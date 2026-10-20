@@ -720,16 +720,16 @@ impl LiquidBodies {
     }
 
     /// The transport times the history replay must sample before the next
-    /// frame: each tick's start under `clock`, in `(from, until]`.
+    /// frame: each boundary a tick may start at under `clock`, in `(from, until]`.
     pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
         self.samples.request(clock, from, until, out);
     }
 
-    /// A history replay sample of the roles at transport `now`; `None` while
-    /// a role is still pending.
-    pub fn observe_sample(&mut self, now: f64, roles: Option<&[Option<FluidRole>]>) {
+    /// A history replay sample of the roles at transport `now`, after `clock`
+    /// observed this sample's Speed; `None` while a role is still pending.
+    pub fn observe_sample(&mut self, clock: &LiquidClock, now: f64, roles: Option<&[Option<FluidRole>]>) {
         let controls = roles.map(controls_of);
-        self.samples.observe(now, controls.as_ref());
+        self.samples.observe(clock, now, controls.as_ref());
     }
 
     /// This frame's roles, right after `clock` advanced to `frame`: they
@@ -1062,9 +1062,9 @@ mod tests {
                 self.times.clear();
                 bodies.request_samples(&self.clock, last, transport, &mut self.times);
                 for &time in self.times.iter().filter(|&&time| time < transport) {
-                    bodies.observe_sample(time, Some(&roles_at(time)));
+                    bodies.observe_sample(&self.clock, time, Some(&roles_at(time)));
                 }
-                bodies.observe_sample(transport, Some(&roles_at(transport)));
+                bodies.observe_sample(&self.clock, transport, Some(&roles_at(transport)));
             }
             self.last = Some(transport);
             let frame = self.clock.advance(transport, interval, 1.0, 0.0, false, false);

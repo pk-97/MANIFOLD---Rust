@@ -22,9 +22,9 @@ pub struct TickSamples<T> {
     /// A closing endpoint before discarded transport reanchored the next
     /// tick's start under the same ordinal.
     previous_endpoint: Option<(u64, T)>,
-    /// Transport times the replay must sample before the next frame, with
-    /// their ticks, ascending.
-    requests: Vec<(f64, u64)>,
+    /// Transport times the replay must sample before the next frame: every
+    /// boundary a coming tick may start at, ascending.
+    requests: Vec<f64>,
 }
 
 impl<T> Default for TickSamples<T> {
@@ -34,30 +34,35 @@ impl<T> Default for TickSamples<T> {
 }
 
 impl<T: Clone> TickSamples<T> {
-    /// Each not-yet-run tick's start under `clock` in `(from, until]`, into
-    /// `out`. Replaces any earlier requests.
+    /// Each boundary a not-yet-run tick may start at under `clock` in
+    /// `(from, until]`, into `out`, whatever the Speed: Speed observed during
+    /// the replay can start or stop ticks there. Replaces earlier requests.
     pub fn request(&mut self, clock: &SimulationClock, from: f64, until: f64, out: &mut Vec<f64>) {
         self.requests.clear();
         let requests = &mut self.requests;
-        clock.tick_starts(from, until, |transport, tick| {
-            requests.push((transport, tick));
+        clock.tick_starts(from, until, |transport| {
+            requests.push(transport);
             out.push(transport);
         });
     }
 
-    /// A replay sample at transport `now`: `value` belongs to every requested
-    /// tick whose start has been reached. The replay samples each request
+    /// A replay sample at transport `now`, after `clock` observed this
+    /// sample's Speed: `value` belongs to the tick starting at each requested
+    /// boundary reached, named by the clock now that Speed there is known (a
+    /// boundary at Speed 0 starts no tick). The replay samples each request
     /// exactly; the closing sample takes one rounding past the frame. `None`
     /// (an input still pending) records nothing, so those ticks stay unsampled.
-    pub fn observe(&mut self, now: f64, value: Option<&T>) {
-        let reached = self.requests.partition_point(|&(transport, _)| transport <= now);
+    pub fn observe(&mut self, clock: &SimulationClock, now: f64, value: Option<&T>) {
+        let reached = self.requests.partition_point(|&transport| transport <= now);
         if reached == 0 {
             return;
         }
         let mut requests = std::mem::take(&mut self.requests);
         if let Some(value) = value {
-            for &(_, tick) in &requests[..reached] {
-                self.record(tick, value);
+            for &transport in &requests[..reached] {
+                if let Some(tick) = clock.tick_at(transport) {
+                    self.record(tick, value);
+                }
             }
         }
         requests.drain(..reached);
@@ -173,7 +178,7 @@ mod tests {
         samples.request(&clock, 0.0, 0.7, &mut times);
         assert_eq!(times, [TICK, 2.0 * TICK]);
         for &time in &times {
-            samples.observe(time, Some(&time));
+            samples.observe(&clock, time, Some(&time));
         }
         let frame = clock.advance(0.7, TICK, 1.0, 0.0, false, false);
         assert!(frame.reanchored);
@@ -188,7 +193,7 @@ mod tests {
         times.clear();
         samples.request(&clock, 0.7, next, &mut times);
         for &time in &times {
-            samples.observe(time, Some(&time));
+            samples.observe(&clock, time, Some(&time));
         }
         let frame = clock.advance(next, TICK, 1.0, 0.0, false, false);
         samples.settle(&clock, &frame, Some(&next));
@@ -214,7 +219,7 @@ mod tests {
         let mut times = Vec::new();
         samples.request(&clock, 0.0, 0.7, &mut times);
         for &time in &times {
-            samples.observe(time, Some(&time));
+            samples.observe(&clock, time, Some(&time));
         }
         let frame = clock.advance(0.7, TICK, 1.0, 0.0, false, true);
         samples.settle(&clock, &frame, Some(&0.7));
@@ -223,6 +228,71 @@ mod tests {
         for tick in 1..=u64::from(frame.ticks) {
             assert_eq!(samples.endpoint(tick), samples.get(tick));
             assert!((samples.endpoint(tick).unwrap() - tick as f64 * TICK).abs() < NOW);
+        }
+    }
+
+    /// Two seconds at `fps`, driven as the host drives them: the replay
+    /// samples the requested boundaries and its 240 Hz grid, observing Speed
+    /// before each sample, then closes at the frame's time and the frame
+    /// advances. Every tick run must have its start sampled. Returns each
+    /// tick run with the transport its sample was taken at (the closing sample
+    /// stands in for a boundary on the frame itself) and its interval.
+    fn run_with_speed(fps: u32, offline: bool, speed: impl Fn(f64) -> f32) -> Vec<(u64, u64, u64, u64)> {
+        let mut clock = SimulationClock::default();
+        let mut samples = TickSamples::default();
+        let frame = clock.advance(0.0, TICK, speed(0.0), 0.0, false, offline);
+        samples.settle(&clock, &frame, Some(&0.0));
+        let (mut times, mut ran, mut previous) = (Vec::new(), Vec::new(), 0.0);
+        for index in 1..=2 * fps {
+            let now = f64::from(index) / f64::from(fps);
+            times.clear();
+            samples.request(&clock, previous, now, &mut times);
+            let mut grid = (previous * 240.0).floor() + 1.0;
+            while grid / 240.0 < now {
+                times.push(grid / 240.0);
+                grid += 1.0;
+            }
+            times.retain(|&time| time < now);
+            times.sort_by(f64::total_cmp);
+            times.push(now);
+            for &time in &times {
+                clock.observe_speed(time, speed(time));
+                samples.observe(&clock, time, Some(&time));
+            }
+            let frame = clock.advance(now, TICK, speed(now), 0.0, false, offline);
+            samples.settle(&clock, &frame, Some(&now));
+            let span = samples.span(frame.first_sequence, frame.ticks as usize)
+                .unwrap_or_else(|tick| panic!("{fps} fps, offline {offline}: tick {tick} ran unsampled at {now}"));
+            for (ordinal, &(tick, sampled)) in span.enumerate() {
+                let interval = frame.interval(ordinal as u64).unwrap();
+                ran.push((tick, sampled.to_bits(), interval.start.0.to_bits(), interval.end.0.to_bits()));
+            }
+            samples.prune_before(frame.first_sequence + u64::from(frame.ticks));
+            previous = now;
+        }
+        ran
+    }
+
+    /// An in-graph Speed crossing 0 and coming back between two frames: the
+    /// stop and the resume land on tick starts whatever the frame rate, each
+    /// tick runs from a sample at its own start, and the ticks match bit for
+    /// bit at 30, 60, 120 and 144 fps, live and exported.
+    #[test]
+    fn speed_crossing_zero_between_frames_samples_every_tick_it_runs() {
+        let speed = |t: f64| (2.0 * (std::f64::consts::TAU * 1.3 * t).cos()).max(0.0) as f32;
+        let reference = run_with_speed(60, true, speed);
+        assert!(reference.len() > 40 && reference.len() < 100, "Speed 0 stretches run no tick: {} ran", reference.len());
+        for &(tick, sampled, start, end) in &reference {
+            let at = f64::from_bits(sampled);
+            assert!(((at / TICK).round() * TICK - at).abs() < 1e-12, "tick {tick} sampled off a boundary at {at}");
+            assert!(speed(at) > 0.0, "tick {tick} starts where Speed is 0");
+            assert!(f64::from_bits(end) > f64::from_bits(start));
+        }
+        for fps in [30, 60, 120, 144] {
+            for offline in [false, true] {
+                let intervals = |ran: &[(u64, u64, u64, u64)]| ran.iter().map(|&(tick, _, start, end)| (tick, start, end)).collect::<Vec<_>>();
+                assert!(intervals(&run_with_speed(fps, offline, speed)) == intervals(&reference), "{fps} fps, offline {offline}");
+            }
         }
     }
 }

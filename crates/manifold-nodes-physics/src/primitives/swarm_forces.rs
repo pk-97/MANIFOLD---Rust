@@ -278,7 +278,7 @@ impl Primitive for SwarmForces {
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Swarm Forces") {
-                Ok(field) => self.forces.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.forces.observe_sample(&self.clock, ctx.time.seconds.0, field.as_ref()),
                 Err(error) => ctx.error(error),
             }
             return;

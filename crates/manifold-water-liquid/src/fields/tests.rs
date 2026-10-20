@@ -66,7 +66,7 @@ impl Rig {
         if let Some(speed) = self.speed {
             self.clock.observe_speed(time, speed(time));
         }
-        self.fields.observe_sample(time, Some(&field(time)));
+        self.fields.observe_sample(&self.clock, time, Some(&field(time)));
     }
 
     fn frame(

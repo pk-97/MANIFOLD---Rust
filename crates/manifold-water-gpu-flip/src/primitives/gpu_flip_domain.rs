@@ -574,11 +574,11 @@ impl Primitive for GpuFlipDomain {
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Liquid") {
-                Ok(field) => self.fields.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.fields.observe_sample(&self.clock, ctx.time.seconds.0, field.as_ref()),
                 Err(error) => ctx.error(error),
             }
-            self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
-            self.coupled.scenes.observe(ctx.time.seconds.0, None);
+            self.bodies.observe_sample(&self.clock, ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
+            self.coupled.scenes.observe(&self.clock, ctx.time.seconds.0, None);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -709,7 +709,7 @@ impl PhysicsNode for GpuFlipDomain {
         // records nothing, and `run` closes the sample.
         if authored_sample_only {
             if let Some(observation) = observation.filter(|_| error.is_none()) {
-                self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
+                self.coupled.scenes.observe(&self.clock, observation.transport.0, Some(&observation.inputs));
             }
             return;
         }

@@ -15,7 +15,8 @@ use manifold_water_rigid::physics::SimStep;
 use manifold_water_rigid::node;
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use manifold_core::audio_mod::HopValue;
-use manifold_core::effects::PresetInstance;
+use manifold_core::effects::{automated_base, AutomationLane, PresetInstance};
+use manifold_core::params::Param;
 use manifold_foundation::ParamId;
 use manifold_node_engine::exec::effect_node::EffectNode;
 use manifold_nodes_physics::tick_sampled::{self, is_tick_sampled};
@@ -109,6 +110,14 @@ pub(crate) struct PhysicsInputSnapshot {
     hop_len: usize,
     /// `(binding, step, hop entry)` for bindings into the sampled ancestry.
     hop_routes: Vec<(usize, usize, usize)>,
+    /// Host params an automation lane drives this frame, with that lane,
+    /// `automation[..automation_len]`: the replay reads the lane at each
+    /// sample's own beat instead of holding the frame's value. Storage is
+    /// reused; a param or lane is copied again only when it changed.
+    automation: Vec<(Param, AutomationLane)>,
+    automation_len: usize,
+    /// `(binding, step, automation entry)` for bindings into the ancestry.
+    automation_routes: Vec<(usize, usize, usize)>,
 }
 
 impl PhysicsInputSnapshot {
@@ -121,6 +130,8 @@ impl PhysicsInputSnapshot {
         self.project_tempo.clone_from(&prior.project_tempo);
         self.hops.clone_from(&prior.hops);
         self.hop_len = prior.hop_len;
+        self.automation.clone_from(&prior.automation);
+        self.automation_len = prior.automation_len;
     }
 
     /// Copy the host instance's per-hop values for this frame.
@@ -176,6 +187,92 @@ impl PhysicsInputSnapshot {
         }
     }
 
+    /// Copy the host instance's automation lanes that drive a param this
+    /// frame. A param that drivers or envelopes also write is left held: its
+    /// value composes on the host, at frame time only.
+    pub(super) fn set_automation(&mut self, instance: Option<&PresetInstance>) {
+        self.automation_len = 0;
+        let Some(instance) = instance.filter(|instance| instance.enabled) else { return };
+        let drivers = instance.drivers.as_deref().unwrap_or_default();
+        let envelopes = instance.envelopes.as_deref().unwrap_or_default();
+        for lane in instance.automation_lanes.iter().flatten().filter(|lane| lane.enabled) {
+            let Some(param) = instance.params.get(lane.param_id.as_ref()).filter(|param| param.automated) else {
+                continue;
+            };
+            let id = lane.param_id.as_ref();
+            if drivers.iter().any(|driver| driver.enabled && driver.param_id.as_ref() == id)
+                || envelopes.iter().any(|envelope| envelope.enabled && envelope.param_id.as_ref() == id)
+            {
+                continue;
+            }
+            if self.automation_len == self.automation.len() {
+                self.automation.push((param.clone(), lane.clone()));
+            } else {
+                let (held, held_lane) = &mut self.automation[self.automation_len];
+                if held.spec != param.spec || held.choices != param.choices {
+                    *held = param.clone();
+                }
+                held.automated = param.automated;
+                if held_lane.param_id != lane.param_id || held_lane.points != lane.points {
+                    *held_lane = lane.clone();
+                }
+                held_lane.enabled = lane.enabled;
+            }
+            self.automation_len += 1;
+        }
+    }
+
+    /// Route bindings whose source an automation lane drives into sampled
+    /// node params.
+    fn route_automation(&mut self, bindings: &[ResolvedBinding], plan: &ExecutionPlan) {
+        self.automation_routes.clear();
+        for (b, binding) in bindings.iter().enumerate() {
+            let ResolvedTarget::Node { node, param } = &binding.target else { continue };
+            let Some(a) = self.automation[..self.automation_len]
+                .iter()
+                .position(|(held, _)| held.id() == binding.source_id.as_ref())
+            else {
+                continue;
+            };
+            let Some(s) = plan.steps().iter().position(|step| step.node == *node) else {
+                continue;
+            };
+            if self.values[s].as_ref().is_some_and(|v| v.get(param.as_ref()).is_some()) {
+                self.automation_routes.push((b, s, a));
+            }
+        }
+    }
+
+    /// The routed binding `route`'s value at `beat`, from its lane.
+    fn automated_value(&self, bindings: &[ResolvedBinding], route: (usize, usize, usize), beat: Beats) -> Option<ParamValue> {
+        let (param, lane) = &self.automation[route.2];
+        automated_base(param, std::slice::from_ref(lane), beat).map(|value| bindings[route.0].write_value(value))
+    }
+
+    /// Write each routed param's lane value at `beat`.
+    fn apply_automation(&mut self, bindings: &[ResolvedBinding], beat: Beats) {
+        for index in 0..self.automation_routes.len() {
+            let route = self.automation_routes[index];
+            let Some(value) = self.automated_value(bindings, route, beat) else { continue };
+            let ResolvedTarget::Node { param, .. } = &bindings[route.0].target else { continue };
+            if let Some(slot) = self.values[route.1].as_mut().and_then(|v| v.get_mut(param.as_ref())) {
+                *slot = value;
+            }
+        }
+    }
+
+    /// Write each routed param's lane value at the frame's `beat` into the
+    /// graph, so the frame reads the lane exactly as the replay's samples do.
+    fn write_frame_automation(&self, graph: &mut Graph, plan: &ExecutionPlan, bindings: &[ResolvedBinding], beat: Beats) {
+        for &route in &self.automation_routes {
+            let Some(value) = self.automated_value(bindings, route, beat) else { continue };
+            let ResolvedTarget::Node { param, .. } = &bindings[route.0].target else { continue };
+            if let Some(slot) = graph.get_node_mut(plan.steps()[route.1].node).and_then(|node| node.params.get_mut(param.as_ref())) {
+                *slot = value;
+            }
+        }
+    }
+
     pub(crate) fn prepare(graph: &Graph, plan: &ExecutionPlan, steps: &[bool]) -> Self {
         assert_eq!(steps.len(), plan.steps().len());
         let mut clock_steps = Vec::new();
@@ -205,6 +302,9 @@ impl PhysicsInputSnapshot {
             hops: Vec::new(),
             hop_len: 0,
             hop_routes: Vec::new(),
+            automation: Vec::new(),
+            automation_len: 0,
+            automation_routes: Vec::new(),
         }
     }
 
@@ -421,9 +521,10 @@ impl super::WaterRuntime<'_> {
 }
 
 impl super::WaterRuntimeState {
-    /// Sample stateless authored motion on the existing 240 Hz grid, holding
-    /// external parameters at their last observed values. Today's parameters
-    /// must not be substituted into an earlier tick. The final left-limit
+    /// Sample stateless authored motion on the replay grid (`REPLAY_RATE`),
+    /// holding external parameters at their last observed values, except
+    /// hop values and automation lanes, read at each sample's own time.
+    /// Today's parameters must not be substituted into an earlier tick. The final left-limit
     /// sample closes the old interval before the full frame applies edits at
     /// the same timestamp; InputHistory preserves that discontinuity. Offline
     /// catch-up drains native ticks in bounded input batches without publishing
@@ -443,6 +544,10 @@ impl super::WaterRuntimeState {
         ) else {
             return;
         };
+        // Automation reaches the frame at its exact beat, as it reaches every
+        // sample, so a frame on a tick start agrees with the replay there.
+        inputs.route_automation(bindings, plan);
+        inputs.write_frame_automation(graph, plan, bindings, exact_beat(self.project_tempo.as_ref(), current));
         let Some(previous) = self.last_frame_time else {
             inputs.capture(graph, plan, &self.project_tempo);
             return;
@@ -473,7 +578,7 @@ impl super::WaterRuntimeState {
                 step.draining_history(),
             );
         }
-        const SAMPLE_RATE: f64 = 240.0;
+        const SAMPLE_RATE: f64 = manifold_physics::clock::REPLAY_RATE;
         // Leave room for the retained tick endpoints and edit discontinuities.
         // This bounds input storage, not the amount of requested offline time.
         const DRAIN_INTERVAL: usize = manifold_water_rigid::physics::AUTHORED_HISTORY_CAPACITY / 4;
@@ -558,6 +663,7 @@ impl super::WaterRuntimeState {
                 frame_count: current.frame_count,
             };
             inputs.set_sample_time(sample);
+            inputs.apply_automation(bindings, sample.beats);
             inputs.apply_hops(bindings, time);
             samples_since_drain += 1;
             let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
@@ -602,6 +708,7 @@ impl super::WaterRuntimeState {
             ..current
         };
         inputs.set_sample_time(closing);
+        inputs.apply_automation(bindings, exact_beat(self.project_tempo.as_ref(), current));
         inputs.apply_hops(bindings, current.seconds.0);
         execute_physics_sample_frame(
             executor,
@@ -614,4 +721,11 @@ impl super::WaterRuntimeState {
         );
         inputs.capture(graph, plan, &self.project_tempo);
     }
+}
+
+/// The beat at `time`'s seconds on the project tempo map, without the frame
+/// beat's sampling offset, so it depends on the time alone. Without a map the
+/// frame's own beat stands.
+fn exact_beat(tempo: Option<&ProjectTempo>, time: FrameTime) -> Beats {
+    tempo.map_or(time.beats, |tempo| TempoMapConverter::seconds_to_beat_immut(tempo.map(), time.seconds, tempo.fallback_bpm()))
 }

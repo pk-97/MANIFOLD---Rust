@@ -649,6 +649,7 @@ fn evaluate_instance_automation_inspection(
             let param_id = lane.param_id.clone();
             if let Some(param) = fx.params.get_mut(param_id.as_ref()) {
                 param.touched = false;
+                param.automated = false;
             }
             latches.insert((fx_id.clone(), param_id), ());
             continue;
@@ -656,6 +657,9 @@ fn evaluate_instance_automation_inspection(
         if !export && (contains_automation_key(latches, fx_id, &lane.param_id)
             || contains_automation_key(gestures, fx_id, &lane.param_id))
         {
+            if let Some(param) = fx.params.get_mut(lane.param_id.as_ref()) {
+                param.automated = false;
+            }
             continue;
         }
 
@@ -667,6 +671,7 @@ fn evaluate_instance_automation_inspection(
         any_wrote |= param.base != value || param.value != value;
         param.base = value;
         param.value = value;
+        param.automated = true;
     }
 
     any_wrote
@@ -783,6 +788,13 @@ fn evaluate_instance_automation(
         }
         latches.insert((fx_id.clone(), param_id), ());
     }
+    // Only a lane that writes this pass marks its param automated; a latch,
+    // a take or a held hand leaves the frame's value authoritative.
+    for lane in fx.automation_lanes.iter().flatten() {
+        if let Some(p) = fx.params.get_mut(lane.param_id.as_ref()) {
+            p.automated = false;
+        }
+    }
     let mut any_wrote = false;
     for (param_id, value) in to_write {
         let changed = fx
@@ -790,6 +802,9 @@ fn evaluate_instance_automation(
             .get(param_id.as_ref())
             .is_some_and(|p| p.base != value || p.value != value);
         fx.set_base_param_from_automation(param_id.as_ref(), value);
+        if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
+            p.automated = true;
+        }
         any_wrote |= changed;
     }
     for (param_id, applied_base) in to_record {

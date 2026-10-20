@@ -539,8 +539,12 @@ fn record_hop_values(
                     active_elapsed: controls.elapsed(&param.clip_trigger_source, owner, beat),
                     ..sample
                 };
-                let value = compose_param(param, timeline.prepared, &sources, hop_sample, &state)
-                    .unwrap_or(timeline.prepared);
+                // An automation lane driving the param gives the base at the hop's
+                // own beat, not the frame's.
+                let lanes = instance.automation_lanes.as_deref().unwrap_or_default();
+                let prepared = manifold_core::effects::automated_base(param, lanes, beat).unwrap_or(timeline.prepared);
+                let value = compose_param(param, prepared, &sources, hop_sample, &state)
+                    .unwrap_or(prepared);
                 timeline.values.push(HopValue { time, value });
             }
         }

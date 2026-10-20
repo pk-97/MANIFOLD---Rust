@@ -58,6 +58,7 @@ mod physics_sampling;
 mod gpu_flip_surface;
 
 
+mod physics_host_automation;
 mod physics_host_modulation;
 
 mod wind_gust_replay;

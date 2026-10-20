@@ -863,9 +863,9 @@ mod tests {
                     times.clear();
                     scenes.request(&clock, last, transport, &mut times);
                     for &time in times.iter().filter(|&&time| time < transport) {
-                        scenes.observe(time, Some(&scene_at(time)));
+                        scenes.observe(&clock, time, Some(&scene_at(time)));
                     }
-                    scenes.observe(transport, Some(&scene_at(transport)));
+                    scenes.observe(&clock, transport, Some(&scene_at(transport)));
                 }
                 last = Some(transport);
                 // The previous display frame leaves its accepted interval

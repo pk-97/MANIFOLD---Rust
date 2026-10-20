@@ -255,14 +255,15 @@ impl LiquidFields {
     }
 
     /// The transport times the history replay must sample before the next
-    /// frame: each tick's start under `clock`, in `(from, until]`.
+    /// frame: each boundary a tick may start at under `clock`, in `(from, until]`.
     pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
         self.forces.request_samples(clock, from, until, out);
     }
 
-    /// A history replay sample of the field at transport `now`.
-    pub fn observe_sample(&mut self, now: f64, field: Option<&FieldValue>) {
-        self.forces.observe_sample(now, field);
+    /// A history replay sample of the field at transport `now`, after `clock`
+    /// observed this sample's Speed.
+    pub fn observe_sample(&mut self, clock: &LiquidClock, now: f64, field: Option<&FieldValue>) {
+        self.forces.observe_sample(clock, now, field);
     }
 
     fn finish(&mut self, lattice: ForceLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
