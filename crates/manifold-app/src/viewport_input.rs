@@ -12,15 +12,9 @@
 //! actual design decision — "what does a left-drag mean here") separate from
 //! the event-plumbing that calls it (`window_input.rs`).
 //!
-//! **Wiring status (2026-07-17, P5c):** wired into `window_input.rs` — a
-//! press inside the docked viewport rect (`editor_mouse_input`) arms a drag
-//! that `editor_cursor_moved` feeds through [`classify_mouse_drag`]/[`apply`]
-//! each move, and `editor_mouse_wheel` feeds scroll deltas over the rect
-//! through [`classify_scroll`]/[`classify_trackpad_pan`]/
-//! [`classify_trackpad_pinch_dolly`] (a `LineDelta` is a physical wheel
-//! notch → dolly; a Ctrl-held `PixelDelta` is a trackpad pinch, translated by
-//! the OS into a Ctrl-modified scroll absent a native magnify-gesture
-//! handler; a bare `PixelDelta` is a two-finger trackpad pan).
+//! A press inside a viewport rect arms a drag fed through
+//! [`classify_mouse_drag`]/[`apply`] on each move; a wheel over the rect goes
+//! through [`classify_wheel`], the one wheel mapping every host shares.
 
 use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 use winit::event::MouseButton;
@@ -104,11 +98,23 @@ pub fn classify_mouse_drag(button: MouseButton, shift_held: bool, dx: f32, dy: f
     }
 }
 
-/// Classify a scroll-wheel delta (already normalized to the app's line-delta
-/// convention, same units `window_input.rs::normalize_scroll_delta` already
-/// produces for the canvas-zoom path) into a dolly gesture.
-pub fn classify_scroll(dy: f32) -> ViewportGesture {
-    ViewportGesture::Dolly { delta: dy }
+/// Classify a scroll-wheel delta, in wheel notches, into a dolly gesture.
+/// `dolly` sensitivity is per notch, so pixel-normalized deltas must not
+/// reach here.
+pub fn classify_scroll(notches: f32) -> ViewportGesture {
+    ViewportGesture::Dolly { delta: notches }
+}
+
+/// The one wheel mapping every viewport host uses: a `LineDelta` is wheel
+/// notches and dollies; a Ctrl-held `PixelDelta` (Ctrl + two-finger scroll)
+/// dollies; a bare `PixelDelta` is a two-finger pan. A trackpad pinch is a
+/// separate `PinchGesture` event and never arrives here.
+pub fn classify_wheel(delta: winit::event::MouseScrollDelta, ctrl_held: bool) -> ViewportGesture {
+    match delta {
+        winit::event::MouseScrollDelta::LineDelta(_, y) => classify_scroll(y),
+        winit::event::MouseScrollDelta::PixelDelta(p) if ctrl_held => classify_trackpad_pinch_dolly(p.y as f32),
+        winit::event::MouseScrollDelta::PixelDelta(p) => classify_trackpad_pan(p.x as f32, p.y as f32),
+    }
 }
 
 /// Two-finger trackpad pan gesture (distinct from a mouse middle-drag: same
@@ -197,6 +203,25 @@ mod tests {
             classify_trackpad_pinch_dolly(0.5),
             ViewportGesture::TrackpadPinchDolly { delta: 0.5 }
         );
+    }
+
+    #[test]
+    fn wheel_notches_dolly_a_bounded_proportional_amount() {
+        use winit::event::MouseScrollDelta;
+        let sens = ViewportInputSensitivity::default();
+        let d0 = ViewportCamera::default().distance;
+        let after = |notches: f32| {
+            let mut camera = ViewportCamera::default();
+            apply(&mut camera, classify_wheel(MouseScrollDelta::LineDelta(0.0, notches), false), &sens);
+            camera.distance / d0
+        };
+        let one = after(1.0);
+        assert!(one > 0.9 && one < 0.95, "one notch in moves about 8%, got {one}");
+        let out = after(-1.0);
+        assert!(out > 1.05 && out < 1.1, "one notch out moves about 8%, got {out}");
+        for n in [2.0_f32, 3.0, 10.0] {
+            assert!((after(n) - one.powf(n)).abs() < 1e-4, "{n} notches is one notch applied {n} times");
+        }
     }
 
     #[test]
