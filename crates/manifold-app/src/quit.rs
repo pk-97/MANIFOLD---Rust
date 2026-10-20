@@ -241,6 +241,8 @@ mod macos {
     /// mode. winit's observers sit in the common modes, so `about_to_wait`
     /// keeps running and takes the request.
     const NS_TERMINATE_LATER: usize = 2;
+    /// `NSTerminateCancel`: AppKit keeps running and asks nothing more.
+    const NS_TERMINATE_CANCEL: usize = 0;
 
     type ShouldTerminateFn = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize;
     type ReplyFn = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
@@ -250,6 +252,18 @@ mod macos {
         _sel: Sel,
         _sender: *mut AnyObject,
     ) -> usize {
+        // A terminate: during one of our dialogs, or while an earlier one
+        // still waits for its reply, would start a nested wait inside our
+        // handler that nothing answers. Refuse it; the user quits again
+        // once the dialog closes.
+        let modal: *mut AnyObject = unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            msg_send![app, modalWindow]
+        };
+        if !modal.is_null() || REPLY_PENDING.with(|c| c.get()) {
+            log::info!("[quit] terminate: refused while a dialog is up or a reply is owed");
+            return NS_TERMINATE_CANCEL;
+        }
         REQUESTED.with(|c| c.set(true));
         REPLY_PENDING.with(|c| c.set(true));
         NS_TERMINATE_LATER
@@ -278,7 +292,8 @@ mod macos {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let delegate: *mut AnyObject = msg_send![app, delegate];
             if delegate.is_null() {
-                let _: () = msg_send![app, replyToApplicationShouldTerminate: Bool::new(yes)];
+                // Replying from here would re-enter winit's handler.
+                log::error!("[quit] the app delegate is gone; terminate: left unanswered");
                 return;
             }
             let flag: *mut AnyObject = if yes { app } else { std::ptr::null_mut() };
