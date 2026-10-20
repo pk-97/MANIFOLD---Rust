@@ -203,26 +203,8 @@ pub(super) fn prepare(
             wire(def, release.clone(), parent.id, "release_count");
             let authored_pose = input(def, parent.id, "transform")
                 .ok_or_else(|| invalid("shatter", "parent authored transform is missing"))?;
-            let used: BTreeSet<usize> = def
-                .wires
-                .iter()
-                .filter_map(|w| {
-                    if w.to_node == world {
-                        w.to_port
-                            .strip_prefix("body_acceleration_")
-                            .or_else(|| w.to_port.strip_prefix("body_"))
-                            .and_then(|slot| slot.parse().ok())
-                    } else if w.from_node == world {
-                        w.from_port
-                            .strip_prefix("pose_")
-                            .and_then(|slot| slot.parse().ok())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let slots: Vec<_> = (0..manifold_core::scene_impulse::RigidImpulseTargets::BODY_CAPACITY)
-                .filter(|slot| !used.contains(slot))
+            let slots: Vec<u32> = manifold_core::physics_body_slots::BodySlots::of(&def.wires, world)
+                .free_slots()
                 .take(count)
                 .collect();
             if slots.len() != count {

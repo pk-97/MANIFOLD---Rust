@@ -63,15 +63,15 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     );
     let target = GraphTarget::Generator(project.timeline.layers[layer_index].layer_id.clone());
     let mut enable = EnableSceneObjectPhysicsCommand::new(
+        &project,
         target.clone(),
         render.id,
         0,
-        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
-        imported.clone(),
+        &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+        &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
+        &imported,
     )
-    .with_world_metadata(
-        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
-    );
+    .expect("the import takes physics");
     enable.execute(&mut project);
     assert!(
         enable.was_applied(),
@@ -512,13 +512,15 @@ fn imported_flower_physics_off_renders_authored_transform() {
         ));
     let target = GraphTarget::Generator(layer.layer_id.clone());
     let mut enable = EnableSceneObjectPhysicsCommand::new(
+        &project,
         target.clone(),
         render_id,
         0,
-        metadata_for_node_type("node.rigid_body"),
-        imported.clone(),
+        &metadata_for_node_type("node.rigid_body"),
+        &metadata_for_node_type("node.physics_world"),
+        &imported,
     )
-    .with_world_metadata(metadata_for_node_type("node.physics_world"));
+    .expect("the import takes physics");
     enable.execute(&mut project);
     assert!(
         enable.was_applied(),

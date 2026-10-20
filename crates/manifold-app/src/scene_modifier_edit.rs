@@ -962,10 +962,11 @@ mod prepared_toggle_tests {
         project.timeline.layers.push(layer);
         let target = GraphTarget::Generator(layer_id.clone());
         let physics = manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
-            target.clone(), scene_id, 0,
-            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
-            graph,
-        ).with_world_metadata(manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"));
+            &project, target.clone(), scene_id, 0,
+            &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+            &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
+            &graph,
+        ).expect("the photoscan takes physics");
         let mut editing = EditingService::new();
         editing.execute(with_admission(Box::new(physics)), &mut project);
         assert!(editing.take_rejection().is_none());

@@ -271,10 +271,9 @@ pub enum ProjectAction {
     },
     SceneSetupRemoveFluidRole { layer_id: LayerId, source_node_id: u32 },
     SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain: NodeId },
-    /// P5 properties-header "Duplicate" button (Object selection):
-    /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
-    /// shared content-owned scene item transfer.
-    SceneSetupDuplicateObject(LayerId, u32, u32),
+    /// Copy an object N times in one undo step (the header copy button sends
+    /// one): `(layer_id, render_scene_node_doc_id, source_index, copies)`.
+    SceneSetupDuplicateObject(LayerId, u32, u32, u32),
     /// Duplicate one physical child mesh inside a compound scene object:
     /// `(layer_id, render_scene_node_doc_id, physical_index)`.
     SceneSetupDuplicateSubmesh(LayerId, u32, u32),

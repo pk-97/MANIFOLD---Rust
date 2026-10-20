@@ -222,6 +222,7 @@
                     physics_enabled: false,
                     physics_available: false,
                     physics_unavailable_reason: None,
+                    physics_free_body_slots: None,
                     physics_imported: false,
                     fluid_role_available: false,
                     fluid_roles: Ok(Vec::new()),
@@ -1759,7 +1760,7 @@
                     id
                 },
                 expect: |_, _, a| matches!(a,
-                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0))] if layer_1(l)),
+                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0, 1))] if layer_1(l)),
             },
             ButtonCase {
                 name: "remove light",

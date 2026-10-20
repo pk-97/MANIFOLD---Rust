@@ -42,7 +42,7 @@ use manifold_gpu::{
 
 use crate::exec::backend::Backend;
 use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID};
-use crate::exec::effect_node::{NodeInstanceId, ParamValues};
+use crate::exec::effect_node::{EffectNode, NodeInstanceId, ParamValues};
 use crate::exec::execution_plan::{ExecutionPlan, ResourceId};
 use crate::graph::Graph;
 use crate::exec::metal_backend::MetalBackend;
@@ -300,6 +300,29 @@ fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> O
     let mut owned = def.clone();
     migrate_nodes(&mut owned.nodes, registry, &mut changed);
     changed.then_some(owned)
+}
+
+/// Give a freshly built node its document's shape: install its WGSL source,
+/// seed its declared defaults, apply the doc's values for the params it
+/// declares, then `reconfigure` so a dynamic-surface node rebuilds its ports
+/// and params (render_scene's `pos_x_2`.. exist only when `objects >= 3`;
+/// `num_inputs` for mux and multi-blend). The loader, the editor snapshot and
+/// the scene panel's declared-param check all read a node's surface through
+/// this, so what they see is what the loader accepts. Returns the params the
+/// node was reconfigured with.
+pub fn configure_from_doc(node: &mut dyn EffectNode, doc: &EffectGraphNode) -> ParamValues {
+    if let Some(source) = doc.wgsl_source.as_deref() {
+        node.set_wgsl_source(source);
+    }
+    let mut params: ParamValues =
+        node.parameters().iter().map(|param| (param.name.clone(), param.default.clone())).collect();
+    for (key, value) in &doc.params {
+        if let Some(param) = node.parameters().iter().find(|param| param.name == key.as_str()) {
+            params.insert(param.name.clone(), value.clone().into());
+        }
+    }
+    node.reconfigure(&params);
+    params
 }
 
 manifold_core::testkit_visible! {
@@ -598,44 +621,9 @@ pub fn instantiate_def(
                 type_id: node_doc.type_id.clone(),
             })?;
 
-        // (1) WGSL source — install on the box BEFORE `add_node` so the
-        // node's reparse runs while we still own it. Static-shape
-        // primitives' `set_wgsl_source` is a no-op, so this is free for
-        // the common case.
-        if let Some(source) = node_doc.wgsl_source.as_deref() {
-            boxed.set_wgsl_source(source);
-        }
-
-        // Reconfigure dynamic-surface nodes from the doc's params BEFORE the
-        // snapshot below. `node.reconfigure` (a no-op for static-shape
-        // primitives) rebuilds a node's port/param surface from its
-        // reconfigure params — `objects`/`lights` for `node.render_scene`,
-        // `num_inputs` for `node.mux_texture`/`node.multi_blend`. The runtime
-        // already calls it after every node build (graph.rs, snapshot.rs,
-        // freeze/region.rs); the loader was the one path that didn't, so a
-        // node whose PARAM set grows with a reconfigure param (render_scene:
-        // `pos_x_2`.. exist only when `objects >= 3`) had those params
-        // validated against the default-count surface and rejected as unknown
-        // — the "unknown parameter 'pos_x_2'" glTF-import load failure. Seed
-        // the declared defaults, override with the doc's values, reconfigure;
-        // then the snapshot reflects the true surface. Mirrors snapshot.rs.
-        {
-            let seed: Vec<(std::borrow::Cow<'static, str>, ParamValue)> = boxed
-                .parameters()
-                .iter()
-                .map(|p| (p.name.clone(), p.default.clone()))
-                .collect();
-            let mut reconfig_params: ParamValues = ahash::AHashMap::default();
-            for (name, default) in &seed {
-                reconfig_params.insert(name.clone(), default.clone());
-            }
-            for (key, value) in &node_doc.params {
-                if let Some((name, _)) = seed.iter().find(|(n, _)| *n == key.as_str()) {
-                    reconfig_params.insert(name.clone(), value.clone().into());
-                }
-            }
-            boxed.reconfigure(&reconfig_params);
-        }
+        // (1) WGSL source and reconfigure params BEFORE `add_node` and the
+        // param snapshot below, so the declared surface is the doc's.
+        configure_from_doc(boxed.as_mut(), node_doc);
 
         // Snapshot the declared param surface BEFORE moving `boxed` into
         // the graph — we need this for type-checked param overrides
