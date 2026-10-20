@@ -4,10 +4,9 @@ use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
-use manifold_water_liquid::clock::FIELD_RESERVE_INTERVALS;
+use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
 use manifold_water_liquid::fields::FieldFrame;
-use manifold_water_liquid::fields::FieldLattice;
-use manifold_water_liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
+use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::matter::REACTION_WORDS;
 use crate::primitives::matter_domain::matter_geometry;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
@@ -26,11 +25,11 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame {
-        lattice: FieldLattice::of(&geometry.setup.lattice),
-        force_lattices: FIELD_RESERVE_INTERVALS,
+        lattice: geometry.setup.lattice.force_lattice(),
+        force_lattices: FORCE_LATTICE_RESERVE,
         impulse_tick: Some(0),
     };
-    let forces = u64::from(FIELD_RESERVE_INTERVALS) * field.lattice.bytes();
+    let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.force_bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }
@@ -44,13 +43,13 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("atlas", 4),
         ("reaction", reaction),
         ("forces", forces),
-        ("impulses", field.lattice.bytes()),
+        ("impulses", field.lattice.impulse_bytes()),
     ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
     // The staging ring: the impulse lattice and the force lattices per slot.
-    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces));
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.impulse_bytes() + forces));
     Ok(())
 }
 inventory::submit! {

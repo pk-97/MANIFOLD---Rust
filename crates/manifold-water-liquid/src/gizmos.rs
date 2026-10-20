@@ -105,7 +105,8 @@ pub fn write_liquid_gizmos(
                 out.push(force(PhysicsGizmoShape::Arrow { from: center, to }));
             }
         }
-        FieldLeaf::Sampled(_) => {}
+        // Grids and turbulence fill the domain: no shape of their own.
+        FieldLeaf::Sampled(_) | FieldLeaf::Turbulence(_) => {}
     });
 }
 

@@ -288,6 +288,8 @@ pub struct SceneObjectKnownRow {
     /// (`manifold_core::liquid_domain::liquid_domain_of`, the walk forces and
     /// pairing use).
     pub liquid_domain: Option<SceneNodeRef>,
+    /// The swarm whose copies this object places (the scene object model's).
+    pub swarm: Option<SceneNodeRef>,
     /// Static domain bounds when the fluid domain is fully authored by
     /// unwired scalar/transform parameters.
     pub fluid_domain: Option<FluidDomainLayout>,
@@ -1493,6 +1495,7 @@ fn trace_scene_object(
         physics,
         physics_imported,
         liquid_domain,
+        swarm: model.swarm.clone(),
         fluid_domain,
         fluid_domain_error,
         fluid_domain_transform,

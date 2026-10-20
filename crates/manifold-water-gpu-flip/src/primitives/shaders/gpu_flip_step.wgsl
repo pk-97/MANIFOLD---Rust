@@ -1,7 +1,7 @@
 // GPU FLIP's water step (gpu_flip_step.rs, docs/GPU_FLIP_PRESSURE_SOLVE.md
 // section 1 (the step)): every pass of one step but the sort, the solid
 // distance and the pressure solve, each a separate entry point. Included
-// after liquid_pose.wgsl, liquid_collider.wgsl and liquid_field.wgsl.
+// after liquid_pose.wgsl, liquid_collider.wgsl and force_lattice.wgsl.
 // Narrow-band transport, sharp coupling and lifecycle integration follow
 // Ferstl et al., Narrow Band FLIP for Liquid Simulations, CGF 35(2), 2016,
 // doi:10.1111/cgf.12825. FLIP Fluids attribution below covers only the
@@ -416,11 +416,13 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[idx] = out;
 }
 
-fn gravity_force(x: vec3<f32>, origin: vec3<f32>, base: u32, axis: u32) -> f32 {
-    var sum = 0.0;
+// The force lattice at x along one axis: (push, drag rate, drag rate × wind).
+fn gravity_force(x: vec3<f32>, origin: vec3<f32>, base: u32, axis: u32) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, u.field_spacing, u.field_nodes, k);
-        sum = fma(forces[base + c.index * 4u + axis], c.weight, sum);
+        let c = force_lattice_corner(x, origin, u.field_spacing, u.field_nodes, k);
+        let w = base + c.index * FORCE_NODE_WORDS;
+        sum = fma(vec3<f32>(forces[w + axis], forces[w + 3u], forces[w + 4u + axis]), vec3<f32>(c.weight), sum);
     }
     return sum;
 }
@@ -431,7 +433,7 @@ fn gravity_impulse(x: vec3<f32>, origin: vec3<f32>, axis: u32) -> f32 {
     let live = (event & 0x80000000u) != 0u && u.live_impulse_stride > 0u;
     let base = select(0u, (event & 0x7fffffffu) * u.live_impulse_stride, live);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, u.field_spacing, u.field_nodes, k);
+        let c = force_lattice_corner(x, origin, u.field_spacing, u.field_nodes, k);
         let value = impulses[base + c.index * 4u + axis];
         sum = fma(value, c.weight, sum);
     }
@@ -491,7 +493,9 @@ fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
 }
 
 // One thread per face record, `faces_in` to `faces_out`: each face gains
-// step_dt · (g + forces(x)) along its normal a, x its centre, plus the
+// step_dt · (g + forces(x)) along its normal a, x its centre, relaxing toward
+// the wind at the air's drag rate where the field carries air (exactly
+// integrated, force_lattice_drag_step), plus the
 // impulses on step 0 of impulse_tick, read from the domain's coarse field
 // lattices (origin the box minimum). A box wall face stays 0. Weights pass
 // through.
@@ -510,7 +514,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let origin = u.box_min;
     var force_base = 0u;
     if u.force_lattices > 0 {
-        force_base = liquid_field_force_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
+        force_base = force_lattice_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
     }
     let live_event = (clock_plan[0].event & 0x80000000u) != 0u;
     let impulse = select(u.tick_index == u.impulse_tick && u.step_in_tick == 0,
@@ -524,8 +528,11 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         centre[a] = f32(p[a]);
         let x = fma(centre, vec3<f32>(u.cell_size), origin);
         var accel = u.gravity[a];
+        var air = vec2<f32>(0.0);
         if u.force_lattices > 0 {
-            accel = accel + gravity_force(x, origin, force_base, u32(a));
+            let f = gravity_force(x, origin, force_base, u32(a));
+            accel = accel + f.x;
+            air = f.yz;
         }
         // A valid face inside an inflow takes no body force
         // (_getInflowConstrainedVelocityComponents 6112-6175, before the body
@@ -534,8 +541,12 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         // _constrainVelocityFields is solids only.
         if u.region_count > 0 && here.face_weight[a] > 0.0 && region_holding(x, 2.0, false) >= 0 {
             accel = 0.0;
+            air = vec2<f32>(0.0);
         }
         var v = fma(accel, adaptive_step_dt(), here.face_velocity[a]);
+        if air.x > 0.0 {
+            v = force_lattice_drag_step(here.face_velocity[a], accel, air.x, air.y, adaptive_step_dt());
+        }
         if impulse {
             v = v + gravity_impulse(x, origin, u32(a));
         }

@@ -970,6 +970,21 @@ pub trait EffectNode: Send + AsAny {
         &[]
     }
 
+    /// The input that takes the scene's forces when a scene object's
+    /// physical chain reaches this node: the scene force list expands into
+    /// it, and the forces' hits go to the node as a whole
+    /// (`ImpulseTarget::Swarm`). `None`: the node passes forces by.
+    fn acceleration_input(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The inputs whose producers own what `output` carries physically, for
+    /// the scene force trace from an object back to its simulation. `None`:
+    /// every input of the output's own type.
+    fn physical_sources(&self, _output: &str) -> Option<&'static [&'static str]> {
+        None
+    }
+
     /// Whether this node is a **liveness root** — must run every frame
     /// regardless of whether any per-frame wire consumes its output.
     ///
@@ -1572,6 +1587,15 @@ pub trait EffectNode: Send + AsAny {
     /// consumers. Default `false` — opt in via the `primitive!` macro's
     /// `pure:` field only after verifying the contract against `run()`.
     fn is_pure(&self) -> bool {
+        false
+    }
+
+    /// TIME-INTEGRATING node: accumulates its inputs over frame time,
+    /// advancing by the elapsed time at non-decreasing evaluation times and
+    /// starting again when time goes back. A host that replays past ticks in
+    /// time order may evaluate it. Default `false`; the `primitive!` macro's
+    /// `integrates_time:` field opts in.
+    fn integrates_time(&self) -> bool {
         false
     }
 

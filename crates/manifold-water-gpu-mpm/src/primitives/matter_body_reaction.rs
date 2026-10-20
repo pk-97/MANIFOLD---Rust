@@ -9,7 +9,7 @@ use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::fields::{FieldBinding, LIQUID_FIELD};
+use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
 use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterGridNode, REACTION_WORDS, momentum_unit_fits};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -122,7 +122,7 @@ manifold_node_engine::primitive! {
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/matter_body_reaction_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, LIQUID_FIELD],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, FORCE_LATTICE],
     atomic_outputs: ["reaction_out"],
 }
 
@@ -163,7 +163,7 @@ impl Primitive for MatterBodyReaction {
         let grid = ctx.inputs.array("grid");
         let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
         let reaction = ctx.outputs.array("reaction_out");
-        let field = FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Body Reaction");
+        let field = ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Body Reaction");
         // The GPU is touched on every path so the aliased reaction array keeps
         // its place in the frame's hazard order.
         let gpu = ctx.gpu_encoder();

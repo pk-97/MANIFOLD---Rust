@@ -7,6 +7,7 @@ use manifold_node_engine::load::preset_loader;
 use manifold_nodes_image as _;
 use manifold_nodes_scene as _;
 use manifold_nodes_water as _;
+use manifold_nodes_physics as _;
 
 inventory::submit!(preset_loader::PresetAssetsRoot {
     dir: concat!(env!("CARGO_MANIFEST_DIR"), "/assets"),

@@ -10,7 +10,7 @@ use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::fields::{FieldBinding, LIQUID_FIELD};
+use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
 use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterGridNode, momentum_unit_fits};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -114,7 +114,7 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
     input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, LIQUID_FIELD],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, FORCE_LATTICE],
 }
 
 impl Primitive for MatterGridUpdate {
@@ -152,7 +152,7 @@ impl Primitive for MatterGridUpdate {
         let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let substep_in_tick = ctx.scalar_or_param("substep_in_tick", 0.0).round().max(0.0) as i32;
-        let field = FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Grid Update");
+        let field = ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Grid Update");
         let gpu = ctx.gpu_encoder();
         let (Some(accum), Some(grid)) = (accum, grid) else {
             return;

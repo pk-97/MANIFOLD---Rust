@@ -125,6 +125,7 @@ pub enum GizmoTargetKind {
     Inflow,
     Drain,
     Collider,
+    Swarm,
 }
 
 impl GizmoTargetKind {
@@ -138,6 +139,7 @@ impl GizmoTargetKind {
                 FluidRole::Collider => Self::Collider,
             },
             ShapeOwner::Force(_) => Self::Force,
+            ShapeOwner::Swarm(_) => Self::Swarm,
         }
     }
 }

@@ -1,14 +1,16 @@
 use super::*;
 use crate::clock::LiquidClock;
 use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_core::Seconds;
+use manifold_physics::clock::TICK;
 use manifold_physics::input::EventStamp;
 
 fn fluid(field: FieldValue) -> ResolvedNodeImpulse {
     ResolvedNodeImpulse { field, target: ImpulseTarget::Fluid }
 }
 
-fn lattice() -> FieldLattice {
-    FieldLattice::covering([-1.0, -0.5, -2.0], 0.125, [19, 11, 23])
+fn lattice() -> ForceLattice {
+    ForceLattice::covering([-1.0, -0.5, -2.0], 0.125, [19, 11, 23])
 }
 
 /// One display frame at `transport`: advance the clock, then the impulses.
@@ -80,7 +82,7 @@ impl Rig {
 
     /// This frame's force lattice for each tick it ran.
     fn tick_lattices(&self, frame: &ClockFrame, laid: &FieldFrame) -> Vec<Vec<[f32; 4]>> {
-        let count = lattice().node_count();
+        let count = 2 * lattice().node_count();
         let forces = self.fields.forces();
         (0..frame.ticks as usize)
             .map(|tick| {
@@ -100,8 +102,8 @@ fn modulated(time: f64) -> FieldValue {
 }
 
 fn expected(time: f64) -> Vec<[f32; 4]> {
-    let mut values = vec![[0.0; 4]; lattice().node_count()];
-    fill(&lattice(), &mut values, |x| modulated(time).sample(x)).unwrap();
+    let mut values = vec![[0.0; 4]; 2 * lattice().node_count()];
+    lattice().fill_forces(&mut values, |x| modulated(time).sample_force(x)).unwrap();
     values
 }
 
@@ -236,7 +238,7 @@ fn liquid_fields_split_live_hits_by_timestamp_and_end_boundary() {
     fields.split_live_hits();
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     let epoch = impulses.epoch().unwrap();
-    let queue = impulses.queue.as_mut().unwrap();
+    let queue = impulses.hits.queue_mut().unwrap();
     for (time, sequence, x) in [(0.005, 1, 1.0), (0.005, 2, 2.0), (0.02, 3, 4.0), (2.0 * TICK, 4, 8.0)] {
         queue
             .enqueue(
@@ -291,7 +293,7 @@ fn export_hits_match_live_project_interval_times_and_lattices() {
         impulses.observe_frame(0.0, &first).unwrap();
         let epoch = impulses.epoch().unwrap();
         for (sequence, time) in [0.0, 0.02, 0.06, 0.1, 0.4, 0.5, 0.99].into_iter().enumerate() {
-            impulses.queue.as_mut().unwrap().enqueue(
+            impulses.hits.queue_mut().unwrap().enqueue(
                 EventStamp { epoch, time: Seconds(time), sequence: sequence as u64 },
                 fluid(FieldValue::uniform([sequence as f32 + 1.0, 0.0, 0.0]).unwrap()),
             ).unwrap();
@@ -355,21 +357,7 @@ fn liquid_impulse_failed_frame_discards() {
     assert!(receipts(&mut impulses).is_empty());
 }
 
-#[test]
-fn liquid_field_lattice_covers_the_solver_lattice() {
-    let lattice = lattice();
-    assert_eq!(lattice.nodes(), [6, 4, 7]);
-    assert_eq!(lattice.spacing(), 0.5);
-    assert_eq!(lattice.bytes(), 6 * 4 * 7 * 16);
-    // The field lattice reaches past the solver lattice's last node.
-    let solver_extent = [18.0 * 0.125, 10.0 * 0.125, 22.0 * 0.125];
-    for (nodes, extent) in lattice.nodes().into_iter().zip(solver_extent) {
-        assert!((nodes - 1) as f32 * lattice.spacing() >= extent);
-    }
-}
-
-/// The force lattice holds the field's value at each node, and the shader's
-/// CPU twin interpolates between them.
+/// The force lattice holds the field's value at each node.
 #[test]
 fn liquid_force_lattice_matches_field() {
     let field = FieldValue::radial([0.2, 0.1, -0.4], 1.5, 1.0)
@@ -393,32 +381,15 @@ fn liquid_force_lattice_matches_field() {
                 let index = x + nx * (y + ny * z);
                 let position = [-1.0 + x as f32 * 0.5, -0.5 + y as f32 * 0.5, -2.0 + z as f32 * 0.5];
                 let expected = field.sample(position);
-                assert_eq!(fields.forces()[index], [expected[0], expected[1], expected[2], 0.0]);
-                // At a node the trilinear read returns the node.
-                let read = lattice.sample(fields.forces(), position);
-                for axis in 0..3 {
-                    assert!((read[axis] - expected[axis]).abs() <= 1e-5 * (1.0 + expected[axis].abs()));
-                }
+                assert_eq!(fields.forces()[2 * index], [expected[0], expected[1], expected[2], 0.0]);
+                assert_eq!(fields.forces()[2 * index + 1], [0.0; 4], "a field without air lays still air");
             }
         }
     }
-    // Midway between two nodes the read is their mean; past the last node it
-    // holds the last node.
-    let a = fields.forces()[1 + nx];
-    let b = fields.forces()[2 + nx];
-    let mid = lattice.sample(fields.forces(), [-1.0 + 0.75, 0.0, -2.0]);
-    for axis in 0..3 {
-        assert!((mid[axis] - 0.5 * (a[axis] + b[axis])).abs() < 1e-5);
-    }
-    let last = fields.forces()[nx * ny * nz - 1];
-    let beyond = lattice.sample(fields.forces(), [10.0, 10.0, 10.0]);
-    for axis in 0..3 {
-        assert!((beyond[axis] - last[axis]).abs() < 1e-5);
-    }
     // An unchanged field is not resampled; no field turns forces off.
-    rig.fields.forces_dirty = false;
+    rig.fields.forces.mark_uploaded();
     let (still, _) = rig.frame(2.0 * TICK, TICK, 1.0, false, &held).unwrap();
-    assert!(!rig.fields.forces_dirty);
+    assert!(!rig.fields.forces.is_dirty());
     let off = rig.fields.prepare(lattice, None, &rig.clock, &still, &rig.impulses).unwrap();
     assert_eq!(off.force_lattices, 0);
     assert!(rig.fields.forces().is_empty());
@@ -503,8 +474,8 @@ fn liquid_impulse_delivers_inside_the_next_live_interval() {
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     let epoch = impulses.epoch().unwrap();
     impulses
-        .queue
-        .as_mut()
+        .hits
+        .queue_mut()
         .unwrap()
         .enqueue(
             EventStamp { epoch, time: Seconds(0.5 * TICK), sequence: 1 },
@@ -621,13 +592,13 @@ fn liquid_impulse_held_hits_never_fill_the_history() {
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
     assert!(frame(&mut clock, &mut impulses, TICK, TICK, 1.0).held);
-    let capacity = impulses.discarded.capacity();
+    let capacity = impulses.hits.discarded_capacity();
     assert!(capacity >= IMPULSE_CAPACITY, "receipts are sized when the clock starts");
     let held = IMPULSE_CAPACITY as u64 + 10;
     for sequence in 0..held {
         hit(&mut impulses, TICK, sequence, 1.0);
     }
-    assert_eq!(impulses.discarded.capacity(), capacity, "a held hit never allocates");
+    assert_eq!(impulses.hits.discarded_capacity(), capacity, "a held hit never allocates");
     let mut discarded = Vec::new();
     let beyond = impulses.drain_discarded(&mut |stamp| discarded.push(stamp.sequence), None);
     assert_eq!(discarded, (0..IMPULSE_CAPACITY as u64).collect::<Vec<_>>());

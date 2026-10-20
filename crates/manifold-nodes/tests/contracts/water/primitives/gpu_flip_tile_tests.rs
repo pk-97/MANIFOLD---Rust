@@ -15,7 +15,7 @@ use manifold_node_engine::testkit::array_harness::read;
 use manifold_node_engine::particles::{FluidParticle};
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
-use manifold_water_liquid::fields::LIQUID_FIELD;
+use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 
 fn gather_sources() -> [String; 2] {
     let source = manifold_water_gpu_flip::primitives::gpu_flip_step::STEP_SHADER;
@@ -73,7 +73,7 @@ fn gather_sources() -> [String; 2] {
     let original = source.replace(unrolled, inner).replace(&centres, "");
     [original.as_str(), source].map(|shader| {
         with_stats_layout(&format!(
-            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{shader}"
+            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{shader}"
         ))
     })
 }

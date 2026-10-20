@@ -6,7 +6,7 @@ use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::exec::backend::Backend;
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+use crate::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues, SimStep};
 use crate::exec::execution_plan::ResourceId;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, KnownItem};
@@ -74,14 +74,36 @@ impl Harness {
         slot
     }
 
-    /// One frame of `prim.run()`, committed and waited. Returns the scalar
-    /// writes and the node's errors.
+    /// A wired CPU value input (a vector field, say) holding `value`; replace
+    /// it between runs through `backend.cpu_values_mut()`.
+    pub fn cpu_input<T: Clone + Send + 'static>(&mut self, ty: PortType, value: T) -> Slot {
+        let slot = self.backend.acquire(ResourceId(self.next), ty, None, (0, 0));
+        self.next += 1;
+        Backend::cpu_values_mut(&mut self.backend).set(slot, value);
+        slot
+    }
+
+    /// One frame of `prim.run()` at transport 0 under the default step,
+    /// committed and waited. Returns the scalar writes and the node's errors.
     pub fn run<P: Primitive>(
         &mut self,
         prim: &mut P,
         inputs: &[(&'static str, Slot)],
         outputs: &[(&'static str, Slot)],
         params: &ParamValues,
+    ) -> (Vec<(Slot, ParamValue)>, Vec<String>) {
+        self.run_at(prim, inputs, outputs, params, 0.0, SimStep::default())
+    }
+
+    /// One frame of `prim.run()` at transport `seconds` under `step`.
+    pub fn run_at<P: Primitive>(
+        &mut self,
+        prim: &mut P,
+        inputs: &[(&'static str, Slot)],
+        outputs: &[(&'static str, Slot)],
+        params: &ParamValues,
+        seconds: f64,
+        step: SimStep,
     ) -> (Vec<(Slot, ParamValue)>, Vec<String>) {
         let generations = vec![0_u64; self.next as usize + 1];
         let layouts: Vec<(&'static str, ArrayType)> = inputs
@@ -117,11 +139,12 @@ impl Harness {
                 let mut gpu = RendererGpuEncoder::new(&mut native, &self.device);
                 let time = FrameTime {
                     beats: Beats(0.0),
-                    seconds: Seconds(0.0),
+                    seconds: Seconds(seconds),
                     delta: Seconds(1.0 / 60.0),
                     frame_count: 0,
                 };
                 let mut ctx = EffectNodeContext::new(time, params, node_inputs, node_outputs, Some(&mut gpu))
+                    .with_sim_step(step)
                     .with_errors(&mut errors);
                 Primitive::run(prim, &mut ctx);
             }

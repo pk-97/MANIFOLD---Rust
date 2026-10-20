@@ -8,6 +8,7 @@ autotests = false
 [dependencies]
 manifold-nodes-scene = { path = "../manifold-nodes-scene" }
 manifold-nodes-water = { path = "../manifold-nodes-water" }
+manifold-nodes-physics = { path = "../manifold-nodes-physics" }
 # Seam, Matter and whitewater constants for the liquid conformance fixtures (src/testkit), testkit only.
 manifold-water-liquid = { path = "../manifold-water-liquid", optional = true }
 manifold-water-gpu-mpm = { path = "../manifold-water-gpu-mpm", optional = true }

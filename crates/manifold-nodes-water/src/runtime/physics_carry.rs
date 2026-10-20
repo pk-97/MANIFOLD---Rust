@@ -63,12 +63,15 @@ impl super::WaterRuntime<'_> {
             // These native owners retain CPU snapshots and republish them to
             // fresh destinations. Their upload caches include buffer identity.
             // Do not move arbitrary GPU primitives or copy backend slot IDs.
+            // A time-integrating control (turbulence drift) moves with the
+            // worlds it feeds, so a rebuild never jumps it back to zero.
             if matches!(
                 new.node.type_id().as_str(),
                 "node.physics_world"
                     | "node.rigid_body"
                     | "node.fluid_role_source"
-            ) {
+            ) || new.node.integrates_time()
+            {
                 let old = prior.graph.get_node_mut(old_id).expect("compiled node");
                 std::mem::swap(&mut new.node, &mut old.node);
             }

@@ -51,6 +51,7 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
         physics: None,
         physics_imported: false,
         liquid_domain: None,
+        swarm: None,
         fluid_domain: None,
         fluid_domain_error: None,
         fluid_domain_transform: None,

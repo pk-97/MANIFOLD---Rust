@@ -367,8 +367,8 @@ fn place(ctx: &mut DispatchCtx, layer: &LayerId, target: &GizmoTarget) -> Option
 
 /// The Scene panel item a target belongs to, by its kind: a force selects
 /// itself; a placed Inflow, Drain or Collider selects its own row; an
-/// object, a liquid domain and a water's own fluid source select their
-/// object row.
+/// object, a liquid domain, a water's own fluid source and a swarm box select
+/// their object row.
 pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<SceneSelection> {
     if let ShapeOwner::RoleSource { node, .. } = &target.id.owner
         && scene.objects.iter().any(|object| {
@@ -380,13 +380,14 @@ pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<S
     match target.kind {
         GizmoTargetKind::Force => match &target.id.owner {
             ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
-            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } => None,
+            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } | ShapeOwner::Swarm(_) => None,
         },
         GizmoTargetKind::Object
         | GizmoTargetKind::FluidDomain
         | GizmoTargetKind::Inflow
         | GizmoTargetKind::Drain
-        | GizmoTargetKind::Collider => target.row.map(SceneSelection::Object),
+        | GizmoTargetKind::Collider
+        | GizmoTargetKind::Swarm => target.row.map(SceneSelection::Object),
     }
 }
 
@@ -891,5 +892,61 @@ mod tests {
             "a picked shape of the selected item keeps its handles"
         );
         assert_eq!(selected_target(&scene, &SceneSelection::Object(row), None).map(|t| t.id), gizmo_targets(&scene).find(|t| t.row == Some(row)).map(|t| t.id));
+    }
+
+    /// The Swarm template on a generator layer, its box moved off the scene
+    /// origin so no other shape shares its pick point.
+    fn swarm_project() -> (Project, LayerId) {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("Swarm", LayerType::Generator, PresetTypeId::from_string("Swarm".to_string()));
+        let layer_id = project.timeline.layers[index].layer_id.clone();
+        let mut def: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_SWARM_JSON).unwrap();
+        let bounds = def.nodes.iter_mut().find(|node| node.node_id == NodeId::new("swarm_bounds")).expect("the swarm's box");
+        bounds.params.insert("pos_x".into(), SerializedParamValue::Float { value: 3.0 });
+        bounds.params.insert("pos_y".into(), SerializedParamValue::Float { value: 2.0 });
+        let generator = project.timeline.layers[index].gen_params_mut().unwrap();
+        generator.graph = Some(def);
+        generator.refresh_manifest_from_graph();
+        (project, layer_id)
+    }
+
+    /// A swarm in the scene shows its forces box as a gizmo target placed by
+    /// its bounds transform; a click on it picks the box and selects the
+    /// swarm's object row, whose handles stay on the box.
+    #[test]
+    fn a_swarm_box_is_a_target_and_picking_it_selects_the_swarm_row() {
+        let (mut project, layer) = swarm_project();
+        let swarm = target(&project, &layer, GizmoTargetKind::Swarm);
+        assert_eq!(swarm.id.owner, ShapeOwner::Swarm(NodeId::new("swarm_forces")));
+        let scene = scene(&project, &layer);
+        let shape = scene.shapes.iter().find(|shape| shape.owner == swarm.id.owner).expect("the swarm's box shape");
+        let place = |id: &str| shape.params.iter().find(|p| p.id == id).map(|p| (p.value, p.write.clone())).unwrap();
+        let bounds = scene_vm_node_doc_id(&project, &layer, "swarm_bounds");
+        assert_eq!(place("pos_x"), (3.0, ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id: bounds, param_id: "pos_x".into() })));
+        assert_eq!(place("pos_y").0, 2.0);
+        assert_eq!(place("scale_x").0, 4.0);
+        let row = swarm.row.expect("the swarm box belongs to the swarm's object row");
+        let object = scene_vm_node_doc_id(&project, &layer, "swarm_object");
+        assert_eq!(row, object, "the row is the scene object the swarm's copies feed");
+        let modelled = scene.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(known) if known.object_node_id == row => known.swarm.as_ref().map(|swarm| swarm.node.clone()),
+            _ => None,
+        });
+        assert_eq!(modelled, Some(NodeId::new("swarm_forces")), "the scene object model gives the row its swarm");
+
+        let view = GizmoView::new(camera(), W, H);
+        let mut rig = Rig::new(&layer);
+        let picked = rig.with_ctx(&mut project, |ctx| press(ctx, &layer, &scene, None, GizmoMode::Move, &view, px(swarm.origin)));
+        let GizmoPress::Picked(Some(id)) = picked else { panic!("the swarm box is picked, got {picked:?}") };
+        assert_eq!(id, swarm.id);
+        let picked = gizmo_target_for(&scene, &id).expect("the picked target");
+        assert_eq!(scene_selection(&scene, &picked), Some(SceneSelection::Object(row)));
+        assert_eq!(selected_target(&scene, &SceneSelection::Object(row), Some(&id)).map(|t| t.id), Some(id));
+    }
+
+    /// The authored doc id of the root node named `node_id`.
+    fn scene_vm_node_doc_id(project: &Project, layer: &LayerId, node_id: &str) -> u32 {
+        let def = authored_def(project, &GraphTarget::Generator(layer.clone())).unwrap();
+        def.nodes.iter().find(|node| node.node_id == NodeId::new(node_id)).map(|node| node.id).unwrap()
     }
 }

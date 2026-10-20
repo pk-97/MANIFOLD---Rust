@@ -60,7 +60,8 @@ pub fn prepare_coupled_scenes(
         let mut rigids = BTreeMap::<String, RigidImpulseTargets>::new();
         for (node, target) in recipients {
             match target {
-                ImpulseTarget::Fluid => {}
+                // A swarm feels the liquid through no coupling: it pairs with nothing.
+                ImpulseTarget::Fluid | ImpulseTarget::Swarm => {}
                 ImpulseTarget::Rigid(targets) => {
                     rigids
                         .entry(node.as_str().to_owned())

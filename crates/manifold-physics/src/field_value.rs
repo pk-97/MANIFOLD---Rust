@@ -4,7 +4,11 @@
 //! snapshots without borrowing a renderer graph or allocating while sampling.
 use std::sync::Arc;
 
-use crate::{PhysicsError, RadialField, SampledField, UniformField, VectorField, VortexField};
+use crate::interaction::ForceSample;
+use crate::{
+    FalloffCurve, PhysicsError, RadialField, SampledField, TurbulenceField, UniformField, VectorField,
+    VortexField,
+};
 
 mod serialization;
 
@@ -17,9 +21,18 @@ enum Operation {
     Radial(RadialField),
     Vortex(VortexField),
     Sampled(Arc<SampledField>),
+    Turbulence(TurbulenceField),
     Add,
     Multiply,
     Scale(f32),
+    /// The entry's push becomes wind velocity felt at this drag rate (1/s).
+    Air(f32),
+    /// A consumer's Air Drag: scales the entry's drag rate, the wind kept.
+    AirDrag(f32),
+    /// Nothing, where a field was scaled to zero or its air felt at zero.
+    /// `air` remembers the field carried air, so a rule about air (multiply
+    /// refuses it) holds whether a force is switched on or not.
+    Zero { air: bool },
 }
 
 /// A dimensionless spatial vector expression. Strength belongs to the
@@ -30,6 +43,9 @@ enum Operation {
 /// The 32-operation bound is explicit: overly complex graphs fail preparation
 /// rather than silently omitting forces. Native worlds never retain borrowed
 /// graph nodes through this value.
+///
+/// Besides its push a field can carry air ([`Self::air`]): a wind velocity and
+/// a drag rate, read through [`VectorField::sample_force`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldValue {
     operations: [Operation; MAX_OPERATIONS],
@@ -48,7 +64,17 @@ impl FieldValue {
     }
 
     pub fn radial(center: [f32; 3], radius: f32, falloff: f32) -> Result<Self, PhysicsError> {
-        RadialField::new(center, radius, falloff).map(|field| Self::leaf(Operation::Radial(field)))
+        Self::radial_curve(center, radius, falloff, FalloffCurve::Edge)
+    }
+
+    pub fn radial_curve(
+        center: [f32; 3],
+        radius: f32,
+        falloff: f32,
+        curve: FalloffCurve,
+    ) -> Result<Self, PhysicsError> {
+        RadialField::new(center, radius, falloff)
+            .map(|field| Self::leaf(Operation::Radial(field.with_curve(curve))))
     }
 
     pub fn vortex(
@@ -57,12 +83,26 @@ impl FieldValue {
         radius: f32,
         falloff: f32,
     ) -> Result<Self, PhysicsError> {
+        Self::vortex_curve(center, axis, radius, falloff, FalloffCurve::Edge)
+    }
+
+    pub fn vortex_curve(
+        center: [f32; 3],
+        axis: [f32; 3],
+        radius: f32,
+        falloff: f32,
+        curve: FalloffCurve,
+    ) -> Result<Self, PhysicsError> {
         VortexField::new(center, axis, radius, falloff)
-            .map(|field| Self::leaf(Operation::Vortex(field)))
+            .map(|field| Self::leaf(Operation::Vortex(field.with_curve(curve))))
     }
 
     pub fn sampled(grid: Arc<SampledField>) -> Self {
         Self::leaf(Operation::Sampled(grid))
+    }
+
+    pub fn turbulence(size: f32, offset: [f32; 3], seed: u32) -> Result<Self, PhysicsError> {
+        TurbulenceField::new(size, offset, seed).map(|field| Self::leaf(Operation::Turbulence(field)))
     }
 
     pub fn sum(&self, other: &Self) -> Result<Self, PhysicsError> {
@@ -70,8 +110,15 @@ impl FieldValue {
     }
 
     /// Component-wise product. A grid with equal XYZ components acts as a
-    /// scalar spatial mask; arbitrary vector inputs remain composable.
+    /// scalar spatial mask; arbitrary vector inputs remain composable. A mask
+    /// shapes a push: a field already carrying air is refused, so mask the
+    /// wind's velocity before it becomes air.
     pub fn multiply(&self, other: &Self) -> Result<Self, PhysicsError> {
+        if self.carries_air() || other.carries_air() {
+            return Err(PhysicsError::InvalidInput(
+                "a field carrying air cannot be multiplied; multiply the wind before it becomes air",
+            ));
+        }
         self.combine(other, Operation::Multiply)
     }
 
@@ -89,21 +136,106 @@ impl FieldValue {
         Ok(result)
     }
 
-    pub fn scaled(&self, strength: f32) -> Result<Self, PhysicsError> {
-        if !strength.is_finite() {
-            return Err(PhysicsError::InvalidInput(
-                "vector field scale must be finite",
-            ));
-        }
+    fn push_unary(&self, operation: Operation) -> Result<Self, PhysicsError> {
         if self.len == MAX_OPERATIONS {
             return Err(PhysicsError::InvalidInput(
                 "vector field exceeds 32 operations",
             ));
         }
         let mut result = self.clone();
-        result.operations[self.len] = Operation::Scale(strength);
+        result.operations[self.len] = operation;
         result.len += 1;
         Ok(result)
+    }
+
+    /// Scale the push; the drag rate scales by the strength's size and the
+    /// wind keeps its speed (see [`ForceSample::scaled`]). A zero strength
+    /// drops the field for a zero leaf: it samples the same, and a field that
+    /// moves over time (drifting gusts) held at zero, or a disabled force, no
+    /// longer changes from tick to tick, so its lattice is laid once.
+    pub fn scaled(&self, strength: f32) -> Result<Self, PhysicsError> {
+        if !strength.is_finite() {
+            return Err(PhysicsError::InvalidInput(
+                "vector field scale must be finite",
+            ));
+        }
+        if strength == 0.0 {
+            return Ok(Self::leaf(Operation::Zero { air: self.carries_air() }));
+        }
+        self.push_unary(Operation::Scale(strength))
+    }
+
+    /// Turn this field's push, read as air velocity in m/s, into wind felt at
+    /// `drag_rate` (1/s): a body moving at v is pushed by drag_rate · (wind − v)
+    /// (Houdini's POP Wind air resistance). Air the field already carries is
+    /// kept.
+    pub fn air(&self, drag_rate: f32) -> Result<Self, PhysicsError> {
+        if !drag_rate.is_finite() || drag_rate < 0.0 {
+            return Err(PhysicsError::InvalidInput(
+                "air drag rate must be finite and non-negative",
+            ));
+        }
+        self.push_unary(Operation::Air(drag_rate))
+    }
+
+    /// The field as one consumer feels it: its drag rate times `air_drag`
+    /// (Blender's per-object field weights). 0 ignores the air. A field with
+    /// no air is returned as is.
+    /// At Air Drag 0 the air drops out as a zero scale does: only the push
+    /// is left, so drifting gusts the consumer ignores never refill its
+    /// lattice.
+    pub fn with_air_drag(&self, air_drag: f32) -> Result<Self, PhysicsError> {
+        if !air_drag.is_finite() || air_drag < 0.0 {
+            return Err(PhysicsError::InvalidInput("air drag must be finite and non-negative"));
+        }
+        if !self.carries_air() {
+            return Ok(self.clone());
+        }
+        if air_drag == 0.0 {
+            return Ok(self.without_air());
+        }
+        self.push_unary(Operation::AirDrag(air_drag))
+    }
+
+    /// The field with every entry that became air replaced by nothing. Air
+    /// zeroes its entry's push, and nothing after it turns drag back into
+    /// push, so what is left samples as this field felt at Air Drag 0.
+    fn without_air(&self) -> Self {
+        let mut result = Self { operations: std::array::from_fn(|_| Operation::Unused), len: 0 };
+        // Where each stack entry starts in `result`.
+        let mut starts = [0usize; MAX_OPERATIONS];
+        let mut depth = 0;
+        for operation in &self.operations[..self.len] {
+            match operation {
+                Operation::Air(_) => {
+                    result.len = starts[depth - 1];
+                    result.operations[result.len] = Operation::Zero { air: true };
+                    result.len += 1;
+                    continue;
+                }
+                Operation::Add | Operation::Multiply => depth -= 1,
+                Operation::Scale(_) | Operation::AirDrag(_) => {}
+                Operation::Unused => unreachable!("field program is privately constructed"),
+                _ => {
+                    starts[depth] = result.len;
+                    depth += 1;
+                }
+            }
+            result.operations[result.len] = operation.clone();
+            result.len += 1;
+        }
+        // Equality reads the whole program array: clear what was cut.
+        for operation in &mut result.operations[result.len..] {
+            *operation = Operation::Unused;
+        }
+        result
+    }
+
+    /// Whether any part of this field is air, switched on or not.
+    pub fn carries_air(&self) -> bool {
+        self.operations[..self.len]
+            .iter()
+            .any(|operation| matches!(operation, Operation::Air(_) | Operation::Zero { air: true }))
     }
 }
 
@@ -114,12 +246,14 @@ pub enum FieldLeaf<'a> {
     Radial(&'a RadialField),
     Vortex(&'a VortexField),
     Sampled(&'a SampledField),
+    Turbulence(&'a TurbulenceField),
 }
 
 impl FieldValue {
     /// Visit every leaf with the product of the scale operations applied
     /// to it, so a negative strength reads as a reversed leaf. A product with
-    /// another field is not folded into either side's scale.
+    /// another field is not folded into either side's scale; air operations
+    /// leave the scale as it is.
     pub fn for_each_leaf(&self, mut visit: impl FnMut(FieldLeaf<'_>, f32)) {
         let operations = &self.operations[..self.len];
         // Each leaf's operation index and scale, and the first leaf of each
@@ -129,7 +263,12 @@ impl FieldValue {
         let (mut count, mut depth) = (0, 0);
         for (index, operation) in operations.iter().enumerate() {
             match operation {
-                Operation::Uniform(_) | Operation::Radial(_) | Operation::Vortex(_) | Operation::Sampled(_) => {
+                Operation::Uniform(_)
+                | Operation::Radial(_)
+                | Operation::Vortex(_)
+                | Operation::Sampled(_)
+                | Operation::Turbulence(_)
+                | Operation::Zero { .. } => {
                     starts[depth] = count;
                     depth += 1;
                     leaves[count] = (index, 1.0);
@@ -141,6 +280,7 @@ impl FieldValue {
                         leaf.1 *= strength;
                     }
                 }
+                Operation::Air(_) | Operation::AirDrag(_) => {}
                 Operation::Unused => unreachable!("field program is privately constructed"),
             }
         }
@@ -150,6 +290,9 @@ impl FieldValue {
                 Operation::Radial(field) => FieldLeaf::Radial(field),
                 Operation::Vortex(field) => FieldLeaf::Vortex(field),
                 Operation::Sampled(field) => FieldLeaf::Sampled(field),
+                Operation::Turbulence(field) => FieldLeaf::Turbulence(field),
+                // Nothing acts there, so nothing is drawn.
+                Operation::Zero { .. } => continue,
                 _ => unreachable!("only leaves are recorded"),
             };
             visit(leaf, scale);
@@ -159,7 +302,11 @@ impl FieldValue {
 
 impl VectorField for FieldValue {
     fn sample(&self, position: [f32; 3]) -> [f32; 3] {
-        let mut stack = [[0.0; 3]; MAX_OPERATIONS];
+        self.sample_force(position).push
+    }
+
+    fn sample_force(&self, position: [f32; 3]) -> ForceSample {
+        let mut stack = [ForceSample::default(); MAX_OPERATIONS];
         let mut depth = 0;
         for operation in &self.operations[..self.len] {
             let leaf = match operation {
@@ -167,28 +314,46 @@ impl VectorField for FieldValue {
                 Operation::Radial(field) => Some(field.sample(position)),
                 Operation::Vortex(field) => Some(field.sample(position)),
                 Operation::Sampled(field) => Some(field.sample(position)),
-                Operation::Add | Operation::Multiply => {
-                    let rhs = stack[depth - 1];
+                Operation::Turbulence(field) => Some(field.sample(position)),
+                Operation::Zero { .. } => Some([0.0; 3]),
+                Operation::Add => {
                     depth -= 1;
-                    let lhs = &mut stack[depth - 1];
+                    stack[depth - 1] = stack[depth - 1] + stack[depth];
+                    None
+                }
+                Operation::Multiply => {
+                    // Construction refuses air on either side.
+                    depth -= 1;
+                    let rhs = stack[depth].push;
+                    let lhs = &mut stack[depth - 1].push;
                     for axis in 0..3 {
-                        lhs[axis] = match operation {
-                            Operation::Add => lhs[axis] + rhs[axis],
-                            _ => lhs[axis] * rhs[axis],
-                        };
+                        lhs[axis] *= rhs[axis];
                     }
                     None
                 }
                 Operation::Scale(strength) => {
-                    for component in &mut stack[depth - 1] {
-                        *component *= strength;
+                    stack[depth - 1] = stack[depth - 1].scaled(*strength);
+                    None
+                }
+                Operation::Air(rate) => {
+                    let top = &mut stack[depth - 1];
+                    top.drag += rate;
+                    for axis in 0..3 {
+                        top.drag_wind[axis] += rate * top.push[axis];
                     }
+                    top.push = [0.0; 3];
+                    None
+                }
+                Operation::AirDrag(weight) => {
+                    let top = &mut stack[depth - 1];
+                    top.drag *= weight;
+                    top.drag_wind = top.drag_wind.map(|c| c * weight);
                     None
                 }
                 Operation::Unused => unreachable!("field program is privately constructed"),
             };
             if let Some(value) = leaf {
-                stack[depth] = value;
+                stack[depth] = ForceSample::push(value);
                 depth += 1;
             }
         }
@@ -196,6 +361,9 @@ impl VectorField for FieldValue {
         stack[0]
     }
 }
+
+#[cfg(test)]
+mod force_set_tests;
 
 #[cfg(test)]
 mod tests {

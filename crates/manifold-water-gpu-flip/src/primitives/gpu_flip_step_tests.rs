@@ -21,7 +21,8 @@ use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
 use manifold_water_liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports, unpack_supports};
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_physics::coupled_motion::{Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at};
-use manifold_water_liquid::fields::{FieldLattice, LIQUID_FIELD};
+mod face_gravity;
+use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_node_engine::parameters::ParamValue;
 
@@ -502,90 +503,6 @@ fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize
 }
 
 #[test]
-fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
-    let faces = random_faces(0x96a7, false);
-    let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
-    let step = StepParams { gravity: g, step_dt: dt, ..lattice() };
-    let got: Vec<FaceSample> = Pass::new()
-        .bind(3, &faces)
-        .bind(12, &[0.0f32; 4])
-        .bind(13, &[0.0f32; 4])
-        .run("face_gravity", &step, 4, face_len(), face_len());
-    for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
-        let p = pad_coords(i);
-        for a in 0..3 {
-            let pushed = f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt);
-            let (velocity, weight) = if !face_exists(p, a) {
-                (0.0, 0.0)
-            } else if p[a] == 0 || p[a] == N[a] {
-                (0.0, f64::from(before.weight[a]))
-            } else {
-                (pushed, f64::from(before.weight[a]))
-            };
-            close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
-            close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
-        }
-    }
-}
-
-/// The scene's forces read the tick's lattice at each face's centre; the
-/// impulses land on step 0 of the impulse tick only.
-#[test]
-fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
-    let faces = random_faces(0x5ce7, false);
-    let field = FieldLattice::covering(MIN, H, padded().map(|n| n as u32));
-    let nodes = field.nodes();
-    let mut rng = Stream::new(0xf0c3);
-    let mut lattice_values = |count: usize| -> Vec<[f32; 4]> {
-        (0..count).map(|_| [rng.signed(4.0), rng.signed(4.0), rng.signed(4.0), 0.0]).collect()
-    };
-    // Two force lattices from tick 10; the step runs tick 11, so it reads the second.
-    let forces = lattice_values(2 * field.node_count());
-    let impulses = lattice_values(field.node_count());
-    let flat = |values: &[[f32; 4]]| values.iter().flatten().copied().collect::<Vec<f32>>();
-    let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
-    for step in [0u32, 1] {
-        let params = StepParams {
-            gravity: g,
-            step_dt: dt,
-            tick_index: 11,
-            step_in_tick: step as i32,
-            field_nodes: nodes,
-            field_spacing: field.spacing(),
-            force_lattices: 2,
-            first_tick: 10,
-            impulse_tick: 11,
-            ..lattice()
-        };
-        let got: Vec<FaceSample> = Pass::new()
-            .bind(3, &faces)
-            .bind(12, &flat(&forces))
-            .bind(13, &flat(&impulses))
-            .run("face_gravity", &params, 4, face_len(), face_len());
-        for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
-            let p = pad_coords(i);
-            for a in 0..3 {
-                if !face_exists(p, a) {
-                    close(face.velocity[a], 0.0, 1.0, &format!("velocity {p:?}/{a}"));
-                    continue;
-                }
-                let x: [f32; 3] = std::array::from_fn(|d| {
-                    MIN[d] + H * if d == a { p[d] as f32 } else { p[d] as f32 + 0.5 }
-                });
-                let force = field.sample(&forces[field.node_count()..], x)[a];
-                let impulse = if step == 0 { field.sample(&impulses, x)[a] } else { 0.0 };
-                let pushed = f64::from(before.velocity[a])
-                    + (f64::from(g[a]) + f64::from(force)) * f64::from(dt)
-                    + f64::from(impulse);
-                let velocity = if p[a] == 0 || p[a] == N[a] { 0.0 } else { pushed };
-                close(face.velocity[a], velocity, 1.0, &format!("step {step} velocity {p:?}/{a}"));
-                close(face.weight[a], f64::from(before.weight[a]), 1.0, &format!("weight {p:?}/{a}"));
-            }
-        }
-    }
-}
-
-#[test]
 fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
     let faces = random_faces(0xd1f, false);
     let water = random_water(0x3a7e);
@@ -1021,7 +938,7 @@ fn density_support_sources() -> [String; 2] {
     assert_eq!(source.matches(CULL).count(), 1, "density support predicate occurs once");
     let original = source.replacen(CULL, "", 1);
     [original.as_str(), source].map(|shader| {
-        with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{shader}"))
+        with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{shader}"))
     })
 }
 

@@ -101,6 +101,11 @@ impl LiquidLattice {
         }
     }
 
+    /// The force lattice over this lattice.
+    pub fn force_lattice(&self) -> manifold_physics::force_lattice::ForceLattice {
+        manifold_physics::force_lattice::ForceLattice::covering(self.min, self.cell_size, self.nodes)
+    }
+
     /// Native FLIP meshing grid: authored cells + 3, with one more node.
     /// ParticleMesher::_initialize and Polygonizer3d::_getVertexPosition use
     /// integer node positions; the native origin supplies the half-cell phase.

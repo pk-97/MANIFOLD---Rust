@@ -77,7 +77,7 @@ const SAMPLE_FACE_COMMON: &str =
 /// Shaders whose pipeline prepends a shared helper file at creation time.
 /// Each validates in that composed form, the way production builds it.
 fn composed_shaders() -> Vec<(&'static str, String)> {
-    use manifold_water_liquid::{bodies, fields, grid, whitewater};
+    use manifold_water_liquid::{bodies, grid, whitewater};
     let mut composed: Vec<(&'static str, String)> = [
         ("render_mesh_diagram.wgsl", SAMPLE_FACE_COMMON),
         ("aces_tonemap_compute.wgsl", TONEMAP_COMMON),
@@ -95,11 +95,11 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
     // `node.gpu_flip_step`'s prelude, in its `step_source` order.
     composed.push((
         "gpu_flip_step.wgsl",
-        [bodies::LIQUID_POSE, bodies::LIQUID_COLLIDER, fields::LIQUID_FIELD].join("\n"),
+        [bodies::LIQUID_POSE, bodies::LIQUID_COLLIDER, manifold_nodes_physics::force_lattice::FORCE_LATTICE].join("\n"),
     ));
     composed.push((
         "whitewater_fused.wgsl",
-        [whitewater::WHITEWATER_COMMON, grid::LIQUID_FACES, fields::LIQUID_FIELD].join("\n"),
+        [whitewater::WHITEWATER_COMMON, grid::LIQUID_FACES, manifold_nodes_physics::force_lattice::FORCE_LATTICE].join("\n"),
     ));
     composed
 }

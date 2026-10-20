@@ -1,9 +1,6 @@
 //! Liquid adapters share the physics-layer transport clock.
 pub use manifold_physics::clock::{ClockFrame, SimulationClock as LiquidClock};
 
-/// Initial field-buffer reserve, not a time or quality cap.
-pub const FIELD_RESERVE_INTERVALS: u32 = 3;
-
 /// GPU_FLUID_SURFACE_DESIGN.md D10: the blend presenting display time `s`
 /// between frames at `t_a` and `t_b`, and their span. Display time never
 /// passes the newest frame; one frame (`t_a == t_b`) presents it fully.

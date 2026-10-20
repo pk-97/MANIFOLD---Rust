@@ -39,3 +39,16 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         .unwrap();
         assert_eq!(recipients, vec![(NodeId::new("matter_domain"), ImpulseTarget::Fluid)]);
     }
+
+    /// A swarm's object is found through its copies and its step, and takes
+    /// scene forces on its forces node's port, as water and bodies do.
+    #[test]
+    fn swarm_object_resolves_to_its_forces_node() {
+        let def = preset(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Swarm.json")));
+        let registry = PrimitiveRegistry::with_builtin();
+        let index = FlatSceneIndex::build(&def).unwrap();
+        assert_eq!(
+            recipient_key(&index, &top("swarm_object"), &registry).unwrap(),
+            Some((top("swarm_forces"), "acceleration_field".to_string()))
+        );
+    }

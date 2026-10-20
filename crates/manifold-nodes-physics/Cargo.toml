@@ -1,0 +1,25 @@
+[package]
+name = "manifold-nodes-physics"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-physics = { path = "../manifold-physics" }
+ahash = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+inventory = "0.3"
+
+[features]
+testkit = ["manifold-node-engine/testkit"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }

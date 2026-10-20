@@ -2,7 +2,22 @@
 
 use std::borrow::Cow;
 
-use manifold_physics::{FieldValue, PhysicsError};
+use manifold_physics::{FalloffCurve, FieldValue, PhysicsError, TurbulenceDrift, TurbulenceField};
+
+/// The radial and vortex fields' Falloff Curve choices, by index.
+const FALLOFF_CURVES: &[&str] = &["Edge", "Inverse"];
+
+fn falloff_curve(ctx: &EffectNodeContext<'_, '_>) -> FalloffCurve {
+    let index = match ctx.inputs.scalar("curve") {
+        Some(ParamValue::Float(index)) => index,
+        _ => match ctx.params.get("curve") {
+            Some(ParamValue::Enum(index)) => *index as f32,
+            Some(ParamValue::Float(index)) => *index,
+            _ => 0.0,
+        },
+    };
+    FalloffCurve::from_index(index)
+}
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -52,9 +67,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("x"), label: "X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("y"), label: "Y", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("z"), label: "Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("normalize"), label: "Normalize", ty: ParamType::Bool, default: ParamValue::Bool(false), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use as a constant world-space source. Wire x, y, or z to scalar controls when the vector should change over time; unwired components use their parameters.",
+    composition_notes: "Use as a constant world-space source. Wire x, y, or z to scalar controls when the vector should change over time; unwired components use their parameters. Normalize keeps only the direction (length 1, zero stays zero), so a scale after it sets the strength exactly: a wind's speed in m/s whatever direction is dialled.",
     examples: [],
     picker: { label: "Uniform Vector Field", category: Atom },
     summary: "Outputs the same vector at every world-space sample.",
@@ -67,11 +83,15 @@ manifold_node_engine::primitive! {
 
 impl Primitive for UniformVectorField {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let vector = [
+        let mut vector = [
             ctx.scalar_or_param("x", 0.0),
             ctx.scalar_or_param("y", 1.0),
             ctx.scalar_or_param("z", 0.0),
         ];
+        let length = vector.iter().map(|c| c * c).sum::<f32>().sqrt();
+        if matches!(ctx.params.get("normalize"), Some(ParamValue::Bool(true))) && length > 0.0 {
+            vector = vector.map(|c| c / length);
+        }
         write_result(ctx, FieldValue::uniform(vector), "uniform vector field");
     }
 }
@@ -86,6 +106,7 @@ manifold_node_engine::primitive! {
         center_z: ScalarF32 optional,
         radius: ScalarF32 optional,
         falloff: ScalarF32 optional,
+        curve: ScalarF32 optional,
     },
     outputs: {
         out: VectorField,
@@ -96,9 +117,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("center_z"), label: "Center Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100.0, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.01, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("falloff"), label: "Falloff", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("curve"), label: "Falloff Curve", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: FALLOFF_CURVES },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use as a radial source centered in world coordinates. Wire any center, radius, or falloff scalar to modulate the source; invalid values are reported and leave the output pending.",
+    composition_notes: "Use as a radial source centered in world coordinates; at negative strength it is an attractor. Falloff Curve picks how strength falls with distance d for radius R and power p: Edge (1 − d/R)^p, nothing past the radius; Inverse full inside the radius and (R/d)^p beyond it, unbounded (power 2 is inverse square). Wire any center, radius, falloff or curve scalar to modulate the source; invalid values are reported and leave the output pending.",
     examples: [],
     picker: { label: "Radial Vector Field", category: Atom },
     summary: "Outputs vectors pointing away from a world-space center within a radius.",
@@ -120,7 +142,7 @@ impl Primitive for RadialVectorField {
         let falloff = ctx.scalar_or_param("falloff", 1.0);
         write_result(
             ctx,
-            FieldValue::radial(center, radius, falloff),
+            FieldValue::radial_curve(center, radius, falloff, falloff_curve(ctx)),
             "radial vector field",
         );
     }
@@ -139,6 +161,7 @@ manifold_node_engine::primitive! {
         axis_z: ScalarF32 optional,
         radius: ScalarF32 optional,
         falloff: ScalarF32 optional,
+        curve: ScalarF32 optional,
     },
     outputs: {
         out: VectorField,
@@ -152,9 +175,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("axis_z"), label: "Axis Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.01, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("falloff"), label: "Falloff", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("curve"), label: "Falloff Curve", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: FALLOFF_CURVES },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use as a tangential source around a world-space axis. Wire the center, axis, radius, or falloff components to scalar controls; the shared evaluator validates finite values and a non-zero axis.",
+    composition_notes: "Use as a tangential source around a world-space axis. Falloff Curve is as on the radial field, by distance from the axis. Wire the center, axis, radius, falloff or curve components to scalar controls; the shared evaluator validates finite values and a non-zero axis.",
     examples: [],
     picker: { label: "Vortex Vector Field", category: Atom },
     summary: "Outputs tangential vectors circling a world-space axis within a radius.",
@@ -181,7 +205,7 @@ impl Primitive for VortexVectorField {
         let falloff = ctx.scalar_or_param("falloff", 1.0);
         write_result(
             ctx,
-            FieldValue::vortex(center, axis, radius, falloff),
+            FieldValue::vortex_curve(center, axis, radius, falloff, falloff_curve(ctx)),
             "vortex vector field",
         );
     }
@@ -286,6 +310,101 @@ impl Primitive for ScaleVectorField {
         };
         let strength = ctx.scalar_or_param("strength", 1.0);
         write_result(ctx, field.scaled(strength), "scale vector field");
+    }
+}
+
+manifold_node_engine::primitive! {
+    name: TurbulenceVectorField,
+    type_id: "node.turbulence_vector_field",
+    purpose: "Emit a smooth swirling dimensionless vector field (curl noise, divergence free) whose swirls are about Size metres across and drift through space along the drift direction, travelling Drift Speed integrated over transport time (an automated speed bends the drift, never jumps it). A backward seek or loop starts the drift again.",
+    inputs: {
+        size: ScalarF32 optional,
+        drift_x: ScalarF32 optional,
+        drift_y: ScalarF32 optional,
+        drift_z: ScalarF32 optional,
+        drift_speed: ScalarF32 optional,
+        seed: ScalarF32 optional,
+    },
+    outputs: {
+        out: VectorField,
+    },
+    params: [
+        ParamDef { name: Cow::Borrowed("size"), label: "Size", ty: ParamType::Float, default: ParamValue::Float(2.0), range: Some((0.05, 100.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("drift_x"), label: "Drift X", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-1.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("drift_y"), label: "Drift Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("drift_z"), label: "Drift Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("drift_speed"), label: "Drift Speed", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-50.0, 50.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 1000.0)), enum_values: &[] },
+    ],
+    depth_rule: Terminal,
+    composition_notes: "Gusts and stirring for a wind or a force. Its vectors are about 1 long, so scale it to the strength you want (m/s before node.wind_field, m/s² as a push). Drift moves the swirls through space at Drift Speed m/s along the drift direction (normalized; zero holds them still); give a wind's turbulence the wind's direction and speed so the gusts travel with the air. Swirls smaller than the force lattice's spacing (a quarter of the solver grid, or Force Detail on a swarm) smooth out.",
+    examples: [],
+    picker: { label: "Turbulence Vector Field", category: Atom },
+    summary: "Outputs smooth swirling vectors that drift through space over time.",
+    category: FieldsAndCoordinates,
+    role: Source,
+    aliases: ["turbulence", "noise field", "curl noise", "gusts"],
+    integrates_time: true,
+    boundary_reason: NonGpu,
+    extra_fields: {
+        drift: TurbulenceDrift = TurbulenceDrift::default(),
+    },
+}
+
+impl Primitive for TurbulenceVectorField {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let size = ctx.scalar_or_param("size", 2.0);
+        let drift = [ctx.scalar_or_param("drift_x", 1.0), ctx.scalar_or_param("drift_y", 0.0), ctx.scalar_or_param("drift_z", 0.0)];
+        let speed = ctx.scalar_or_param("drift_speed", 0.0);
+        let seed = ctx.scalar_or_param("seed", 0.0).round().max(0.0) as u32;
+        let length = drift.iter().map(|c| c * c).sum::<f32>().sqrt();
+        // The drift travelled so far, in f64 and wrapped to the noise period,
+        // so the gusts keep their precision through a long set.
+        let velocity = if length > 0.0 { drift.map(|c| f64::from(c / length) * f64::from(speed)) } else { [0.0; 3] };
+        let offset = self.drift.advance(ctx.time.seconds.0, velocity);
+        // A size that is not positive is refused before the offset is read.
+        let field = FieldValue::turbulence(size, TurbulenceField::wrap_offset(size, offset), seed);
+        write_result(ctx, field, "turbulence vector field");
+    }
+
+    fn clear_state(&mut self) {
+        self.drift.restart();
+    }
+}
+
+manifold_node_engine::primitive! {
+    name: WindField,
+    type_id: "node.wind_field",
+    purpose: "Turn a vector field read as air velocity in m/s into wind: anything moving through it at velocity v is pushed by Drag Rate · (wind − v), so it relaxes toward the wind at Drag Rate per second (Houdini POP Wind air resistance). Air already on the input is kept.",
+    inputs: {
+        velocity: VectorField required,
+        drag_rate: ScalarF32 optional,
+    },
+    outputs: {
+        out: VectorField,
+    },
+    params: [
+        ParamDef { name: Cow::Borrowed("drag_rate"), label: "Drag Rate", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 20.0)), enum_values: &[] },
+    ],
+    depth_rule: Terminal,
+    composition_notes: "Wire a velocity field (node.uniform_vector_field scaled to m/s, plus node.turbulence_vector_field for gusts) and add the result to any force list. A still velocity (zero) is plain air resistance. Each consumer (water, swarm, physics world) scales the drag rate by its own Air Drag. Mask the velocity before it becomes wind: node.multiply_vector_fields refuses a field carrying air.",
+    examples: [],
+    picker: { label: "Wind Field", category: Atom },
+    summary: "Makes a velocity field into wind that drags things toward its velocity.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["wind", "drag", "air", "air resistance"],
+    pure: true,
+    boundary_reason: NonGpu,
+}
+
+impl Primitive for WindField {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(velocity) = required_field(ctx, "velocity") else {
+            return;
+        };
+        let drag_rate = ctx.scalar_or_param("drag_rate", 1.0);
+        write_result(ctx, velocity.air(drag_rate), "wind field");
     }
 }
 
@@ -436,5 +555,43 @@ mod tests {
         assert!(field.is_none());
         assert!(pending);
         assert_eq!(errors.len(), 1);
+    }
+
+    /// The card's curve choice reaches the field: Inverse keeps pulling past
+    /// the radius, Edge does not.
+    #[test]
+    fn radial_field_takes_the_falloff_curve_choice() {
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("radius"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("curve"), ParamValue::Enum(1));
+        let (inverse, _, errors) = run_node(&mut RadialVectorField::new(), params.clone(), &[], &[]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(inverse.unwrap().sample([2.0, 0.0, 0.0]), [0.5, 0.0, 0.0]);
+        let (edge, _, _) = run_node(&mut RadialVectorField::new(), params, &[], &[("curve", 0.0)]);
+        assert_eq!(edge.unwrap().sample([2.0, 0.0, 0.0]), [0.0; 3]);
+    }
+
+    /// A wind node turns a velocity into air at its drag rate; a negative
+    /// rate is refused.
+    #[test]
+    fn wind_field_carries_air_at_its_drag_rate() {
+        let velocity = FieldValue::uniform([3.0, 0.0, 0.0]).unwrap();
+        let (wind, pending, errors) =
+            run_node(&mut WindField::new(), ParamValues::default(), &[("velocity", velocity.clone())], &[("drag_rate", 2.0)]);
+        assert!(!pending, "{errors:?}");
+        let sample = wind.unwrap().sample_force([0.0; 3]);
+        assert_eq!((sample.push, sample.drag, sample.drag_wind), ([0.0; 3], 2.0, [6.0, 0.0, 0.0]));
+        let (_, pending, errors) =
+            run_node(&mut WindField::new(), ParamValues::default(), &[("velocity", velocity)], &[("drag_rate", -1.0)]);
+        assert!(pending && errors.len() == 1);
+    }
+
+    #[test]
+    fn turbulence_field_is_a_unit_scale_swirl() {
+        let (field, pending, errors) =
+            run_node(&mut TurbulenceVectorField::new(), ParamValues::default(), &[], &[("size", 3.0), ("seed", 2.0)]);
+        assert!(!pending, "{errors:?}");
+        let expected = manifold_physics::TurbulenceField::new(3.0, [0.0; 3], 2).unwrap();
+        assert_eq!(field.unwrap().sample([0.4, 1.1, -0.7]), expected.sample([0.4, 1.1, -0.7]));
     }
 }

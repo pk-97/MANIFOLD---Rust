@@ -18,7 +18,7 @@ use manifold_core::liquid_setup::DEFAULT_FILL_HEIGHT;
 
 use super::setup_check::{SetupAnchor, SetupProblem, SetupSite, SiteLayout};
 use super::{Level, ParamAddr, SceneObjectVm, TRANSFORM_3D_TYPE_ID, TransformVm, locate_node, param_f32, resolve_producer_through_group, trace_transform};
-use crate::node_graph::scene_surface::scene_shape;
+use crate::node_graph::scene_surface::{SWARM_FORCES_TYPE_ID, scene_shape};
 
 const FLUID_ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 
@@ -43,6 +43,8 @@ pub enum ShapeOwner {
     RoleSource { node: NodeId, role: FluidRole },
     /// A force scene modifier instance.
     Force(NodeId),
+    /// A swarm's forces node, whose box its forces are laid over.
+    Swarm(NodeId),
 }
 
 /// Where a shape param is written.
@@ -107,7 +109,9 @@ pub(super) fn trace_shapes(
     let mut problems = Vec::new();
     let mut anchors = Vec::new();
     let mut sites = Vec::new();
+    // Setup sites index into `out`: shapes appended after these keep them valid.
     liquid_shapes(root, &rows, &mut out, &mut problems, &mut anchors, &mut sites);
+    swarm_shapes(root, &rows, &mut out);
     for instance in &def.scene_modifiers {
         if let Some(shape) = force_shape(def, instance, &rows, root) {
             out.push(shape);
@@ -251,6 +255,31 @@ fn liquid_shapes(
         }
         site.check(out, &|_| None, problems, anchors);
         sites.push(site);
+    }
+}
+
+/// Each swarm's forces box, at any group depth. It selects the object row
+/// the scene object model gives the swarm, if any.
+fn swarm_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &mut Vec<SceneShapeVm>) {
+    let mut levels = vec![(Level { nodes: root.nodes, wires: root.wires }, Vec::new(), None)];
+    while let Some((level, scope, parent)) = levels.pop() {
+        for node in level.nodes {
+            if let Some(body) = node.group.as_deref() {
+                let mut inner = scope.clone();
+                inner.push(node.id);
+                let outer = Level { nodes: level.nodes, wires: level.wires };
+                levels.push((Level { nodes: &body.nodes, wires: &body.wires }, inner, Some((outer, node.id))));
+            }
+        }
+        for node in level.nodes.iter().filter(|node| node.type_id == SWARM_FORCES_TYPE_ID) {
+            let row = rows.iter().find(|row| {
+                row.swarm.as_ref().and_then(|swarm| locate_node(root, swarm)).is_some_and(|at| at.node.id == node.id && at.scope == scope)
+            });
+            let pickable = row.is_none_or(|row| row.visible_value && row.parent_group_id.is_none());
+            let parent = parent.as_ref().map(|(outer, group): &(Level<'_>, u32)| (Level { nodes: outer.nodes, wires: outer.wires }, *group));
+            let at = NodeAt { level: Level { nodes: level.nodes, wires: level.wires }, scope: scope.clone(), node, parent };
+            node_shapes(&at, ShapeOwner::Swarm(node.node_id.clone()), row.map(|row| row.object_node_id), pickable, out);
+        }
     }
 }
 

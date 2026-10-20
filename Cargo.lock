@@ -2517,6 +2517,7 @@ dependencies = [
  "manifold-node-engine",
  "manifold-nodes",
  "manifold-nodes-image",
+ "manifold-nodes-physics",
  "manifold-nodes-scene",
  "manifold-nodes-water",
  "manifold-physics",
@@ -2561,6 +2562,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-nodes-physics"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "inventory",
+ "manifold-foundation",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-physics",
+ "naga",
+]
+
+[[package]]
 name = "manifold-nodes-scene"
 version = "0.1.0"
 dependencies = [
@@ -2602,6 +2617,7 @@ dependencies = [
  "manifold-foundation",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-physics",
  "manifold-physics",
  "manifold-playback",
  "manifold-water-gpu-flip",
@@ -2721,6 +2737,7 @@ dependencies = [
  "manifold-fluids",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-physics",
  "manifold-physics",
  "manifold-water-gpu-flip",
  "manifold-water-liquid",
@@ -2741,6 +2758,7 @@ dependencies = [
  "manifold-core",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-physics",
  "manifold-physics",
  "manifold-water-gpu-mpm",
  "manifold-water-liquid",
@@ -2761,6 +2779,7 @@ dependencies = [
  "manifold-fluids",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-physics",
  "manifold-physics",
  "manifold-water-liquid",
  "manifold-water-rigid",
@@ -2815,6 +2834,7 @@ dependencies = [
  "manifold-fluids",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-physics",
  "manifold-physics",
  "manifold-water-liquid",
  "manifold-water-whitewater",
