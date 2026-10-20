@@ -34,7 +34,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_water_liquid::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
-use manifold_water_liquid::fields::FieldBinding;
+use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
@@ -68,8 +68,9 @@ impl Fused {
 
 fn fused_source() -> String {
     use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
-    use manifold_water_liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
-    format!("{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
+    use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
+    use manifold_water_liquid::grid::LIQUID_FACES;
+    format!("{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{FORCE_LATTICE}\n{WHITEWATER_FUSED_SHADER}")
 }
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -635,7 +636,7 @@ pub(crate) struct MotionInputs<'a> {
     pub schedule: &'a GpuBuffer,
     pub faces: [&'a GpuBuffer; 3],
     pub count: u32,
-    pub fields: FieldBinding<'a>,
+    pub fields: ForceLatticeBinding<'a>,
     pub tick_index: f32,
     pub regions: Option<&'a GpuBuffer>,
     pub shapes: Option<&'a GpuBuffer>,
@@ -1898,7 +1899,7 @@ impl Primitive for WhitewaterStep {
             let [Some(u), Some(v), Some(w)] = ["substep_u", "substep_v", "substep_w"].map(|n| ctx.inputs.array(n)) else {
                 ctx.error("Whitewater Step: an accepted schedule requires all three substep face histories"); return;
             };
-            let fields = match FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Whitewater Step") {
+            let fields = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Whitewater Step") {
                 Ok(fields) => fields, Err(error) => { ctx.error(error); return; }
             };
             Some(MotionInputs { schedule, faces: [u,v,w], count: ctx.scalar_or_param("substep_count",0.0) as u32,

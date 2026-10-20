@@ -9,7 +9,8 @@ use manifold_physics::sdf::signed_distance_lattice;
 use manifold_core::fluid_domain::{domain_layout};
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_water_liquid::fields::FieldLattice;
+use manifold_physics::force_lattice::ForceLattice;
+use manifold_physics::ForceSample;
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
@@ -330,7 +331,7 @@ fn matter_grid_update_projects_colliders() {
 }
 
 /// A force or impulse lattice over `lat` holding `f` at each field node.
-fn field_values(lat: &LiquidLattice, field: &FieldLattice, f: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
+fn field_values(lat: &LiquidLattice, field: &ForceLattice, f: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
     let [nx, ny, _] = field.nodes().map(|n| n as usize);
     (0..field.node_count())
         .map(|i| {
@@ -341,7 +342,24 @@ fn field_values(lat: &LiquidLattice, field: &FieldLattice, f: impl Fn([f32; 3]) 
         .collect()
 }
 
-fn set_field(bench: &mut Bench, field: &FieldLattice) {
+/// A force lattice (two `[f32; 4]` per node, the `ForceSample` layout) of
+/// `pushes`, each node carrying the air `air` gives it: (drag rate, wind).
+fn force_records(pushes: &[[f32; 4]], air: impl Fn(usize) -> (f32, [f32; 3])) -> Vec<[f32; 4]> {
+    pushes
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            let (k, wind) = air(i);
+            [[p[0], p[1], p[2], k], [k * wind[0], k * wind[1], k * wind[2], 0.0]]
+        })
+        .collect()
+}
+
+fn still_air(_: usize) -> (f32, [f32; 3]) {
+    (0.0, [0.0; 3])
+}
+
+fn set_field(bench: &mut Bench, field: &ForceLattice) {
     for (name, value) in [
         ("field_nodes_x", field.nodes()[0] as f32), ("field_nodes_y", field.nodes()[1] as f32),
         ("field_nodes_z", field.nodes()[2] as f32), ("field_spacing", field.spacing()),
@@ -353,7 +371,9 @@ fn set_field(bench: &mut Bench, field: &FieldLattice) {
 /// Seam P8 (Forces and impulses for GPU liquids): the grid update adds
 /// dt·(g + forces(x)) every substep and impulses(x) once, on the impulse
 /// tick's first substep, each read from the domain's coarse lattices exactly
-/// as `FieldLattice::sample` reads them on the CPU.
+/// as `ForceLattice::sample_forces` and `sample` read them on the CPU. Where
+/// the lattice carries air the node relaxes toward the wind exactly as
+/// `ForceSample::step_velocity`.
 #[test]
 fn matter_grid_update_applies_field_lattices() {
     let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
@@ -366,12 +386,14 @@ fn matter_grid_update_applies_field_lattices() {
     let to_raw = |v: f32| (v * m_raw as f32 / scale).round() as i32;
     let nodes = lat.node_count() as usize;
     let accum: Vec<i32> = (0..nodes).flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw]).collect();
-    let field = FieldLattice::of(&lat);
+    let field = lat.force_lattice();
     // Not linear, so the trilinear weights matter. Two lattices, one per tick
-    // from tick 7, so each tick must read its own.
+    // from tick 7, so each tick must read its own; the second carries air.
     let tick_forces = [
-        field_values(&lat, &field, |p| [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]),
-        field_values(&lat, &field, |p| [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]),
+        force_records(&field_values(&lat, &field, |p| [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]), still_air),
+        force_records(&field_values(&lat, &field, |p| [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]), |i| {
+            (0.5 + (i % 5) as f32 * 0.6, [2.0, -1.0 + (i % 3) as f32, 0.5])
+        }),
     ];
     let forces: Vec<[f32; 4]> = tick_forces.concat();
     let impulses = field_values(&lat, &field, |p| [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]);
@@ -380,7 +402,7 @@ fn matter_grid_update_applies_field_lattices() {
         vec![
             ("accum", HostArray::new::<i32>(accum.len() as u32)),
             ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
-            ("forces", HostArray::new::<f32>(8 * field.node_count() as u32)),
+            ("forces", HostArray::new::<f32>(16 * field.node_count() as u32)),
             ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
         ],
         &["grid_out"],
@@ -417,13 +439,14 @@ fn matter_grid_update_applies_field_lattices() {
             let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
             let v_before: [f32; 3] = std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * scale);
             let force = match lattices {
-                0 => [0.0; 3],
-                1 => field.sample(&tick_forces[0], x),
-                _ => field.sample(&tick_forces[(tick - 7) as usize], x),
+                0 => ForceSample::default(),
+                1 => field.sample_forces(&tick_forces[0], x),
+                _ => field.sample_forces(&tick_forces[(tick - 7) as usize], x),
             };
+            let stepped = ForceSample { push: std::array::from_fn(|a| gravity[a] + force.push[a]), ..force }.step_velocity(v_before, dt);
             let kick = if impulse { field.sample(&impulses, x) } else { [0.0; 3] };
             for a in 0..3 {
-                let want = v_before[a] + dt * (gravity[a] + force[a]) + kick[a];
+                let want = stepped[a] + kick[a];
                 worst = worst.max((grid[idx].velocity_mass[a] - want).abs());
             }
         }
@@ -490,11 +513,12 @@ fn matter_body_reaction_counts_field_velocity() {
     let mass = 0.01f32;
     let nodes = lat.node_count();
     let grid = vec![MatterGridNode { velocity_mass: [0.0, 0.0, 0.0, mass], velocity_before: [0.0; 4] }; nodes as usize];
-    let field = FieldLattice::of(&lat);
+    let field = lat.force_lattice();
     let inward = |k: f32| move |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3]) };
     let forces = field_values(&lat, &field, inward(1000.0));
     // Tick 3 of a frame from tick 2 reads the second lattice; the first is a decoy.
-    let tick_forces: Vec<[f32; 4]> = [field_values(&lat, &field, inward(-700.0)), forces.clone()].concat();
+    let tick_forces: Vec<[f32; 4]> =
+        [force_records(&field_values(&lat, &field, inward(-700.0)), still_air), force_records(&forces, still_air)].concat();
     let impulses = field_values(&lat, &field, inward(2.0));
     let substeps = 4.0f32;
     let mut bench = Bench::new(
@@ -505,7 +529,7 @@ fn matter_body_reaction_counts_field_velocity() {
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
-            ("forces", HostArray::new::<f32>(8 * field.node_count() as u32)),
+            ("forces", HostArray::new::<f32>(16 * field.node_count() as u32)),
             ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
         ],
         &["reaction_out"],

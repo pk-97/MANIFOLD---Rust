@@ -14,6 +14,7 @@ pub const PRIMITIVE_SOURCE_ROOTS: &[&str] = &[
     "../manifold-water-gpu-mpm/src/primitives",
     "../manifold-water-whitewater/src/primitives",
     "../manifold-water-surface/src/primitives",
+    "../manifold-nodes-physics/src/primitives",
 ];
 
 /// Every crate `src` root that currently owns WGSL. A new WGSL-owning crate
@@ -28,6 +29,7 @@ pub const WGSL_SRC_ROOTS: &[&str] = &[
     "../manifold-water-gpu-mpm/src",
     "../manifold-water-whitewater/src",
     "../manifold-water-surface/src",
+    "../manifold-nodes-physics/src",
     "../manifold-led/src",
     "../manifold-node-engine/src",
     "../manifold-recording/src",

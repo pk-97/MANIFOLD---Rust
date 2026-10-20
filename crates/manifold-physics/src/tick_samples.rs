@@ -1,5 +1,5 @@
-//! Authored values at each tick's start, never per display frame: a GPU
-//! liquid's forces and its colliders' poses read the same values at any
+//! Authored values at each tick's start, never per display frame: a
+//! simulation's forces and its colliders' poses read the same values at any
 //! frame rate. Before each frame the host's physics history replay asks
 //! [`TickSamples::request`] for the transport times the coming ticks start
 //! at, runs the authored ancestry at exactly those times, and hands each
@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 
-use crate::clock::{ClockFrame, LiquidClock};
+use crate::clock::{ClockFrame, SimulationClock};
 
 /// A tick start this close to the frame's transport (seconds) starts now:
 /// the frame's own value belongs to it.
@@ -36,7 +36,7 @@ impl<T> Default for TickSamples<T> {
 impl<T: Clone> TickSamples<T> {
     /// Each not-yet-run tick's start under `clock` in `(from, until]`, into
     /// `out`. Replaces any earlier requests.
-    pub fn request(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
+    pub fn request(&mut self, clock: &SimulationClock, from: f64, until: f64, out: &mut Vec<f64>) {
         self.requests.clear();
         let requests = &mut self.requests;
         clock.tick_starts(from, until, |transport, tick| {
@@ -68,7 +68,7 @@ impl<T: Clone> TickSamples<T> {
     /// A restart forgets every sample. The value belongs to any tick starting
     /// now; every other start was or will be sampled by the replay.
     /// `None` (nothing wired) forgets every sample.
-    pub fn settle(&mut self, clock: &LiquidClock, frame: &ClockFrame, value: Option<&T>) {
+    pub fn settle(&mut self, clock: &SimulationClock, frame: &ClockFrame, value: Option<&T>) {
         let Some(value) = value.filter(|_| !frame.restarted) else {
             self.clear();
             if let (true, Some(value)) = (frame.restarted, value) {
@@ -94,7 +94,7 @@ impl<T: Clone> TickSamples<T> {
         self.settle_now(clock, value);
     }
 
-    fn settle_now(&mut self, clock: &LiquidClock, value: &T) {
+    fn settle_now(&mut self, clock: &SimulationClock, value: &T) {
         let now = clock.transport();
         let mut tick = clock.ticks_done();
         while let Some(start) = clock.tick_start(tick).filter(|&start| start <= now + NOW) {
@@ -161,11 +161,11 @@ impl<T: Clone> TickSamples<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_physics::clock::TICK;
+    use crate::clock::TICK;
 
     #[test]
     fn tick_samples_keep_accepted_endpoint_before_reanchored_start() {
-        let mut clock = LiquidClock::default();
+        let mut clock = SimulationClock::default();
         let mut samples = TickSamples::default();
         let frame = clock.advance(0.0, TICK, 1.0, 0.0, false, false);
         samples.settle(&clock, &frame, Some(&0.0));
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn tick_samples_offline_endpoints_remain_tick_starts() {
-        let mut clock = LiquidClock::default();
+        let mut clock = SimulationClock::default();
         let mut samples = TickSamples::default();
         let frame = clock.advance(0.0, TICK, 1.0, 0.0, false, true);
         samples.settle(&clock, &frame, Some(&0.0));

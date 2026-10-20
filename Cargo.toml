@@ -16,6 +16,7 @@ members = [
     "crates/manifold-nodes-scene",
     "crates/manifold-nodes-image",
     "crates/manifold-nodes-water",
+    "crates/manifold-nodes-physics",
     "crates/manifold-water-rigid",
     "crates/manifold-water-liquid",
     "crates/manifold-water-gpu-flip",

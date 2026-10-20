@@ -199,8 +199,9 @@ fn dispatch_tail_census_is_stable() {
     // projected_grid, ocean_displace and cut_out_box (buffer atoms), over
     // (texture, manual), and camera_sky and sea_horizon_env (texture,
     // canonical). Deleting UI soft shadows removes heightfield_shadow, a
-    // canonical texture atom.
-    assert_eq!(total, 245, "standalone atom census drifted");
+    // canonical texture atom. Swarms (manifold-nodes-physics) add move_swarm
+    // and swarm_to_copies, buffer atoms.
+    assert_eq!(total, 247, "standalone atom census drifted");
     assert_eq!(
         qualifying, 94,
         "canonical texture-path population drifted"

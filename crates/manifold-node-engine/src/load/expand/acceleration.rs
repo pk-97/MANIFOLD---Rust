@@ -138,6 +138,12 @@ fn trace(
                 "physical source chain contains an unregistered producer",
             )
         })?;
+        // A node that declares where scene forces enter (a swarm's forces
+        // node) ends the trace there.
+        if let Some(input) = primitive.acceleration_input() {
+            candidates.push(Candidate { node, port: input.into() });
+            continue;
+        }
         let Some(output) = primitive
             .outputs()
             .iter()
@@ -151,11 +157,15 @@ fn trace(
         // Inspect connected provenance, not the number of declared inputs. A
         // render-only combine stays inactive; a combine/mux with two physical
         // sources is rejected by resolve rather than silently picking one.
-        for input in primitive
-            .inputs()
-            .iter()
-            .filter(|input| input.ty == output.ty)
-        {
+        // A node may name the inputs its output comes from (copies from
+        // particles); otherwise they are the inputs of the output's type. A
+        // state capture is last frame's loop, never a new source.
+        let sources = primitive.physical_sources(port.as_str());
+        let captures = primitive.state_capture_input_ports();
+        for input in primitive.inputs().iter().filter(|input| {
+            let name = input.name.as_ref();
+            sources.map_or(input.ty == output.ty, |sources| sources.contains(&name)) && !captures.contains(&name)
+        }) {
             let Some(wire) = index.input(&node, input.name.as_ref())? else {
                 continue;
             };
@@ -281,8 +291,16 @@ pub fn impulse_recipients_with_index(
             continue;
         };
         let node = index.node(&recipient.node)?;
+        // A node that declares where scene forces enter (a swarm's forces
+        // node) takes hits there too, on everything it moves.
+        let whole = registry
+            .construct(&node.type_id)
+            .and_then(|primitive| primitive.acceleration_input())
+            .is_some_and(|input| input == recipient.port);
         let target = if is_liquid_domain(&node.type_id) {
             ImpulseTarget::Fluid
+        } else if whole {
+            ImpulseTarget::Swarm
         } else {
             let mut targets = RigidImpulseTargets::default();
             if recipient.port == "copies_acceleration" {

@@ -3,7 +3,7 @@
 //! The wire stores [`manifold_physics::FieldValue`] so native physics
 //! adapters can receive an owned evaluator without borrowing graph nodes.
 
-use manifold_physics::{FieldValue, VectorField};
+use manifold_physics::{FieldValue, ForceSample, VectorField};
 
 /// Interpolate two retained field evaluations at one physics time. This blends
 /// the sampled vectors, without rebuilding a program or allocating per sample.
@@ -23,16 +23,25 @@ impl ContinuousField<'_> {
 
 impl VectorField for ContinuousField<'_> {
     fn sample(&self, position: [f32; 3]) -> [f32; 3] {
+        self.sample_force(position).push
+    }
+
+    fn sample_force(&self, position: [f32; 3]) -> ForceSample {
         let position = std::array::from_fn(|axis| position[axis] + self.origin[axis]);
-        let before = self.before.map_or([0.0; 3], |field| field.sample(position));
-        let after = self.after.map_or([0.0; 3], |field| field.sample(position));
+        let before = self.before.map_or_else(ForceSample::default, |field| field.sample_force(position));
+        let after = self.after.map_or_else(ForceSample::default, |field| field.sample_force(position));
         // Avoid an unused endpoint contaminating the exact boundary with NaN.
         if self.alpha <= 0.0 {
             before
         } else if self.alpha >= 1.0 {
             after
         } else {
-            std::array::from_fn(|axis| before[axis] + (after[axis] - before[axis]) * self.alpha)
+            let lerp = |a: f32, b: f32| a + (b - a) * self.alpha;
+            ForceSample {
+                push: std::array::from_fn(|axis| lerp(before.push[axis], after.push[axis])),
+                drag: lerp(before.drag, after.drag),
+                drag_wind: std::array::from_fn(|axis| lerp(before.drag_wind[axis], after.drag_wind[axis])),
+            }
         }
     }
 }

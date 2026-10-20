@@ -58,6 +58,16 @@
         "defaultValue": 1.0
       },
       {
+        "id": "curve",
+        "scene": {"role": "setup", "group": "force", "cardOrder": 0, "cardLabel": "param"},
+        "name": "Falloff Curve",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "valueLabels": ["Edge", "Inverse"]
+      },
+      {
         "id": "strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 1, "cardLabel": "param"},
         "name": "Strength",
@@ -146,6 +156,17 @@
           "nodeId": "force_field",
           "param": "falloff"
         }
+      },
+      {
+        "id": "curve",
+        "label": "Falloff Curve",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_field",
+          "param": "curve"
+        },
+        "convert": {"type": "EnumRound"}
       },
       {
         "id": "strength",
@@ -265,6 +286,10 @@
               "falloff": {
                 "type": "Float",
                 "value": 1.0
+              },
+              "curve": {
+                "type": "Enum",
+                "value": 0
               }
             }
           },

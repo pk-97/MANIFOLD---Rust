@@ -625,3 +625,37 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
     );
     assert_eq!(simulation.poses[0].pos[0], 0.0, "{:?}", simulation.poses[0]);
 }
+
+/// An Explosion fire is one radial delta velocity, Impulse Size times the
+/// Edge falloff at the body: it lands on the tick it was stamped for and
+/// never again, however many ticks run after it.
+#[test]
+fn explosion_impulse_lands_once_per_fire() {
+    let bodies = one_body([1.5, 4.0, 0.0]);
+    let mut simulation = RigidSimulation::default();
+    initialize(&mut simulation, &bodies);
+    let epoch = simulation.impulse_epoch().unwrap();
+    let explosion = manifold_physics::FieldValue::radial([0.0, 4.0, 0.0], 3.0, 1.0)
+        .and_then(|field| field.scaled(8.0))
+        .unwrap();
+    let targets = RigidImpulseTargets { bodies: 1, copies: false };
+    simulation
+        .enqueue_impulse(stamp(epoch, 0.0, 0), ResolvedRigidImpulse { field: explosion, targets })
+        .unwrap();
+    let speed = |simulation: &RigidSimulation| {
+        simulation.world.as_ref().unwrap().linear_velocity(simulation.handles[0].unwrap()).unwrap()
+    };
+    let mut landed = Vec::new();
+    for frame in 1..=6 {
+        simulation
+            .advance(bodies.clone(), [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
+            .unwrap();
+        landed.extend(receipts(&mut simulation));
+        // 8 × (1 − 1.5 / 3): outward along +x, no matter how many ticks follow.
+        let velocity = speed(&simulation);
+        assert!((velocity[0] - 4.0).abs() < 1e-3, "frame {frame}: velocity={velocity:?}");
+        assert!(velocity[1].abs() < 1e-4 && velocity[2].abs() < 1e-4, "frame {frame}: velocity={velocity:?}");
+    }
+    assert_eq!(landed.len(), 1, "one fire, one landing");
+    assert_eq!(landed[0].applied.tick, 0);
+}

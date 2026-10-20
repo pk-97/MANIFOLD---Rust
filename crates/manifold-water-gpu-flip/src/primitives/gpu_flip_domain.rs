@@ -18,6 +18,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
+use manifold_nodes_physics::force_lattice::felt_field;
 
 use super::gpu_flip_pressure::{MAX_ITERATIONS, lattice_refusal};
 use super::gpu_flip_step::{read_max_iterations, read_sheet_fill_rate, read_solve_level};
@@ -33,9 +34,9 @@ use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, Liqu
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
-use {manifold_water_liquid::fields, manifold_water_liquid::fields::FieldLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use {manifold_water_liquid::fields, manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
-use manifold_water_liquid::tick_samples::TickSamples;
+use manifold_physics::tick_samples::TickSamples;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::{ROLE_PORTS, WATER_DENSITY};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -43,6 +44,7 @@ use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
+use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
 
@@ -196,9 +198,9 @@ pub fn gpu_flip_geometry(
 impl GpuFlipGeometry {
     /// The field lattice over the face grid's box: from its minimum corner
     /// to its far wall faces.
-    pub(crate) fn field_lattice(&self) -> FieldLattice {
+    pub(crate) fn field_lattice(&self) -> ForceLattice {
         let solver = FlipSolverGrid::from_lattice(self.setup.lattice);
-        FieldLattice::covering(solver.min(), self.layout.cell_size as f32, solver.nodes())
+        ForceLattice::covering(solver.min(), self.layout.cell_size as f32, solver.nodes())
     }
 }
 
@@ -299,6 +301,7 @@ manifold_node_engine::primitive! {
         fill_height: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
+        air_drag: ScalarF32 optional,
         reset: ScalarF32 optional,
         role_0: FluidRole optional,
         role_1: FluidRole optional,
@@ -420,6 +423,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Left Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Right Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -569,14 +573,22 @@ impl Primitive for GpuFlipDomain {
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
-            let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
-            self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
+            match felt_field(ctx, "Liquid") {
+                Ok(field) => self.fields.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Err(error) => ctx.error(error),
+            }
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
             self.coupled.scenes.observe(ctx.time.seconds.0, None);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
-        self.acceleration = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
+        self.acceleration = match felt_field(ctx, "Liquid") {
+            Ok(field) => field,
+            Err(error) => {
+                ctx.error(error);
+                None
+            }
+        };
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= self.acceleration.is_none();
         }
@@ -679,14 +691,6 @@ impl PhysicsNode for GpuFlipDomain {
         manifold_water_liquid::gizmos::write_liquid_gizmos(&layout, &self.bodies, self.acceleration.as_ref(), out);
     }
 
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
-        self.fields.request_samples(&self.clock, from, until, out);
-        self.bodies.request_samples(&self.clock, from, until, out);
-        if self.coupled.mode {
-            self.coupled.scenes.request(&self.clock, from, until, out);
-        }
-    }
-
     fn set_coupled_physics(&mut self, enabled: bool) {
         if self.coupled.mode != enabled {
             self.coupled.mode = enabled;
@@ -776,6 +780,18 @@ impl PhysicsNode for GpuFlipDomain {
 }
 
 inventory::submit! { PhysicsNodeRegistration::new::<GpuFlipDomain>() }
+
+impl TickSampled for GpuFlipDomain {
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.fields.request_samples(&self.clock, from, until, out);
+        self.bodies.request_samples(&self.clock, from, until, out);
+        if self.coupled.mode {
+            self.coupled.scenes.request(&self.clock, from, until, out);
+        }
+    }
+}
+
+inventory::submit! { TickSampledRegistration::new::<GpuFlipDomain>() }
 
 impl GpuFlipDomain {
     /// This frame's outputs, or None while a collider's distance lattice is
@@ -1141,7 +1157,7 @@ mod tests {
         let geometry = geometry(64.0, 0.16, None).unwrap();
         let grid = FlipSolverGrid::from_lattice(geometry.setup.lattice);
         let field = geometry.field_lattice();
-        let expected = FieldLattice::covering(grid.min(), geometry.setup.lattice.cell_size(), grid.nodes());
+        let expected = ForceLattice::covering(grid.min(), geometry.setup.lattice.cell_size(), grid.nodes());
         assert_eq!(field, expected);
         assert!(geometry.outputs().iter().any(|(name, value)| *name == "mesh_wall_inset" && *value == grid.wall_inset()));
     }

@@ -132,7 +132,7 @@ Section 2.5 audit: `redistance_lattice` finds nearest marching-cubes triangles;
 is the new registered, pure stencil atom on the freeze path; the stage owns only
 valid-band construction and convergence reduction. `advect_whitewater` and
 `keep_whitewater` are extended; face capture reuses `face_sample_component` and
-force/collider sampling reuses `LIQUID_FIELD`, `LIQUID_POSE`, `LIQUID_COLLIDER`.
+force/collider sampling reuses `FORCE_LATTICE`, `LIQUID_POSE`, `LIQUID_COLLIDER`.
 
 The solver publishes accepted durations/endpoints/event indices and each accepted
 substep's MAC velocities through `substep_schedule`, `substep_u/v/w` and
@@ -144,7 +144,7 @@ projected velocities or hit responses. At 64³, six slots use 19,169,376 bytes;
 each additional event slot costs 3,194,896 bytes. Buffers retain their high-water
 capacity and grow only when the grid or required slot capacity changes.
 
-The same domain wires that feed GPU FLIP feed whitewater's `FieldBinding`.
+The same domain wires that feed GPU FLIP feed whitewater's `ForceLatticeBinding`.
 Gravity plus field acceleration follows the reference's per-type dynamics; hits
 use the schedule's one-shot event index. Foam receives both through the already
 forced liquid velocity. Outflow removal uses the same domain region rows, shape

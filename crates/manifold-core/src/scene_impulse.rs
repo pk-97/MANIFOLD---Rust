@@ -64,6 +64,9 @@ pub enum ImpulseTarget {
     /// One captured field delivered to both participants of a shared worker.
     /// The source sequence is admitted once, even when both materials respond.
     FluidAndRigid(RigidImpulseTargets),
+    /// Every live particle of a swarm feels the hit at its position, once, on
+    /// the fire tick.
+    Swarm,
 }
 
 impl ImpulseTarget {
@@ -74,12 +77,21 @@ impl ImpulseTarget {
     pub fn rigid_targets(self) -> Option<RigidImpulseTargets> {
         match self {
             Self::Rigid(targets) | Self::FluidAndRigid(targets) => Some(targets),
-            Self::Fluid => None,
+            Self::Fluid | Self::Swarm => None,
         }
     }
 
     /// Merge authored selections which resolve to one shared native owner.
-    pub fn union(self, other: Self) -> Self {
+    /// A swarm owns its hits alone: only another selection of it merges in,
+    /// and a swarm sharing an owner with water or bodies is refused.
+    pub fn union(self, other: Self) -> Result<Self, String> {
+        if self == Self::Swarm || other == Self::Swarm {
+            return if self == other {
+                Ok(Self::Swarm)
+            } else {
+                Err("Impulse: a swarm shares its owner with no other recipient".into())
+            };
+        }
         let fluid = self.affects_fluid() || other.affects_fluid();
         let rigid = match (self.rigid_targets(), other.rigid_targets()) {
             (Some(left), Some(right)) => Some(RigidImpulseTargets {
@@ -88,12 +100,12 @@ impl ImpulseTarget {
             }),
             (left, right) => left.or(right),
         };
-        match (fluid, rigid) {
+        Ok(match (fluid, rigid) {
             (true, Some(targets)) => Self::FluidAndRigid(targets),
             (true, None) => Self::Fluid,
             (false, Some(targets)) => Self::Rigid(targets),
             (false, None) => unreachable!("each input has at least one recipient"),
-        }
+        })
     }
 }
 
@@ -131,6 +143,7 @@ mod tests {
 
         let cases = [
             (ImpulseTarget::Fluid, r#""fluid""#),
+            (ImpulseTarget::Swarm, r#""swarm""#),
             (
                 ImpulseTarget::Rigid(RigidImpulseTargets {
                     bodies: 1,
@@ -164,7 +177,7 @@ mod tests {
             ImpulseTarget::Rigid(rigid).union(ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
                 bodies: 1u64 << 4,
                 copies: true,
-            }));
+            })).unwrap();
         assert_eq!(
             combined,
             ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
@@ -174,11 +187,14 @@ mod tests {
         );
         assert_eq!(
             ImpulseTarget::Fluid.union(ImpulseTarget::Fluid),
-            ImpulseTarget::Fluid
+            Ok(ImpulseTarget::Fluid)
         );
         assert_eq!(
             ImpulseTarget::Rigid(rigid).union(ImpulseTarget::Rigid(rigid)),
-            ImpulseTarget::Rigid(rigid)
+            Ok(ImpulseTarget::Rigid(rigid))
         );
+        assert_eq!(ImpulseTarget::Swarm.union(ImpulseTarget::Swarm), Ok(ImpulseTarget::Swarm));
+        assert!(ImpulseTarget::Swarm.union(ImpulseTarget::Fluid).is_err());
+        assert!(ImpulseTarget::Rigid(rigid).union(ImpulseTarget::Swarm).is_err());
     }
 }

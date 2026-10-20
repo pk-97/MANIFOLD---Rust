@@ -17,7 +17,8 @@ use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use manifold_core::audio_mod::HopValue;
 use manifold_core::effects::PresetInstance;
 use manifold_foundation::ParamId;
-use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+use manifold_node_engine::exec::effect_node::EffectNode;
+use manifold_nodes_physics::tick_sampled::{self, is_tick_sampled};
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
@@ -46,16 +47,12 @@ pub(crate) fn execute_physics_sample_frame(
 }
 }
 
-/// GPU liquids whose force field is evaluated at each tick's start.
-fn gpu_liquid(kind: &str) -> bool {
-    matches!(kind, GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID)
-}
-
-fn setup_input(kind: &str, port: &str) -> bool {
-    if gpu_liquid(kind) {
-        return port != "acceleration_field" && port != "speed" && !port.starts_with("role_");
+fn setup_input(node: &dyn EffectNode, port: &str) -> bool {
+    // GPU liquids and swarms evaluate their force field at each tick's start.
+    if is_tick_sampled(node) {
+        return !tick_sampled::replays_input(port);
     }
-    match kind {
+    match node.type_id().as_str() {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
         "node.fluid_role_source" => !matches!(
             port,
@@ -79,11 +76,12 @@ pub(crate) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
     let outputs: Vec<_> = graph
         .nodes()
         .flat_map(|node| {
-            let kind = node.node.type_id().as_str();
+            let effect = node.node.as_ref();
+            let ticked = is_tick_sampled(effect);
             graph
                 .wires_into(node.id)
                 // A GPU liquid's sample run reads only its force field and roles.
-                .filter(move |wire| !gpu_liquid(kind) && setup_input(kind, wire.to.1))
+                .filter(move |wire| !ticked && setup_input(effect, wire.to.1))
                 .map(|wire| wire.from)
         })
         .collect();
@@ -246,8 +244,9 @@ impl PhysicsInputSnapshot {
 }
 
 /// The retained CPU ancestry of every physics world. Historical sampling
-/// evaluates this closure only; GPU nodes and stateful upstream nodes cannot
-/// be replayed safely at a past transport time.
+/// evaluates this closure only; GPU nodes and stateful upstream nodes other
+/// than time-integrating ones cannot be replayed safely at a past transport
+/// time.
 pub(crate) fn physics_sample_steps(
     graph: &Graph,
     plan: &ExecutionPlan,
@@ -255,14 +254,14 @@ pub(crate) fn physics_sample_steps(
     node::initialize();
     use std::collections::HashSet;
 
-    let replays_history = |type_id: &str| {
-        type_id == "node.physics_world" || gpu_liquid(type_id)
+    let replays_history = |node: &dyn EffectNode| {
+        node.type_id().as_str() == "node.physics_world" || is_tick_sampled(node)
     };
     // A GPU liquid replays its force field, roles and paired world at each
     // tick's start; its paired world's scene is captured for it there.
     let mut pending: Vec<_> = graph
         .nodes()
-        .filter(|node| replays_history(node.node.type_id().as_str()))
+        .filter(|node| replays_history(node.node.as_ref()))
         .map(|node| node.id)
         .collect();
     if pending.is_empty() {
@@ -273,18 +272,18 @@ pub(crate) fn physics_sample_steps(
         if !ancestry.insert(node_id) {
             continue;
         }
-        let kind = graph
+        let effect = graph
             .get_node(node_id)
             .expect("physics ancestor exists")
             .node
-            .type_id();
+            .as_ref();
         // A mesh description is setup state: its prepared geometry stays
         // fixed during historical live-control sampling. Do not replay GPU
         // sources or local topology transforms at historical timestamps.
         pending.extend(
             graph
                 .wires_into(node_id)
-                .filter(|wire| !setup_input(kind.as_str(), wire.to.1))
+                .filter(|wire| !setup_input(effect, wire.to.1))
                 .map(|wire| wire.from.0),
         );
     }
@@ -292,7 +291,13 @@ pub(crate) fn physics_sample_steps(
         let node = graph.get_node(*node_id).expect("ancestry node exists");
         let kind = node.node.type_id();
         let type_id = kind.as_str();
-        let stateless_cpu = matches!(
+        // The replay evaluates the ancestry once per sample time, in time
+        // order, so a node may join it when its answer at a time does not
+        // depend on which other times were evaluated (pure nodes and these
+        // functions of time), or when it integrates over the replay's own
+        // non-decreasing times and restarts when time goes back, as the
+        // solver clocks do.
+        let replayable = matches!(
             type_id,
             "node.physics_world"
                 | "node.fluid_role_source"
@@ -304,15 +309,16 @@ pub(crate) fn physics_sample_steps(
                 | "node.value"
                 | "node.math"
                 | "node.affine_scalar"
-        ) || node.node.is_pure();
+        ) || node.node.is_pure()
+            || node.node.integrates_time();
         // A GPU liquid's sample run only records its field; it never encodes.
-        if gpu_liquid(type_id) {
+        if is_tick_sampled(node.node.as_ref()) {
             continue;
         }
         let requires = node.node.requires();
-        if !stateless_cpu || requires.gpu_encoder || requires.state_store {
+        if !replayable || requires.gpu_encoder || requires.state_store {
             return Err(format!(
-                "Physics cannot sample historical motion through `{type_id}`; use stateless CPU controls before the simulation"
+                "Physics cannot sample historical motion through `{type_id}`; use CPU controls that replay past ticks before the simulation"
             ));
         }
     }
@@ -509,16 +515,13 @@ impl super::WaterRuntimeState {
                 })
                 .peekable()
         });
-        // GPU liquids sample exactly at their ticks' starts: each tick's force
-        // comes from its own simulated time, whatever the display rate.
+        // GPU liquids and swarms sample exactly at their ticks' starts: each
+        // tick's force comes from its own simulated time, whatever the
+        // display rate.
         inputs.tick_times.clear();
         for instance in graph.nodes_mut() {
-            if let Some(native) = node::get_mut(instance.node.as_mut()) {
-                native.request_physics_samples(
-                    previous.seconds.0,
-                    current.seconds.0,
-                    &mut inputs.tick_times,
-                );
+            if let Some(ticked) = tick_sampled::get_mut(instance.node.as_mut()) {
+                ticked.request_physics_samples(previous.seconds.0, current.seconds.0, &mut inputs.tick_times);
             }
         }
         inputs.tick_times.sort_by(f64::total_cmp);

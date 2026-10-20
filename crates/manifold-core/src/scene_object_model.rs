@@ -38,6 +38,8 @@ const SWITCH_MESH_TYPE_ID: &str = "node.switch_mesh";
 const SWITCH_INDICES_TYPE_ID: &str = "node.switch_indices";
 const SWITCH_TYPE_IDS: [&str; 4] = ["node.switch_value", SWITCH_MESH_TYPE_ID, SWITCH_INDICES_TYPE_ID, "node.switch_instances"];
 const LOOK_MESH_TYPE_ID: &str = "node.platonic_solid_mesh";
+/// A swarm's forces node: its clock and the box its forces are laid over.
+pub const SWARM_FORCES_TYPE_ID: &str = "node.swarm_forces";
 
 /// One object row of a scene.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +64,9 @@ pub struct SceneObjectModel {
     /// The liquid domain this row simulates: Water's real object, or an
     /// object whose surface a domain builds.
     pub liquid_domain: Option<SceneNodeRef>,
+    /// The swarm whose copies this row places: the forces node behind its
+    /// `instances`.
+    pub swarm: Option<SceneNodeRef>,
     /// The same row addressed by document ids, root first, ending with the
     /// object's own id: the form panel rows and editing commands use.
     pub doc_path: Vec<u32>,
@@ -257,6 +262,7 @@ pub fn scene_object_models_in(
                 },
                 slot: None,
                 liquid_domain: None,
+                swarm: None,
                 doc_path: parent_at.doc_path(),
             });
             for child in rows.iter().filter(|other| other.compound.as_ref().is_some_and(|at| at.node.id == group_at.node.id
@@ -311,6 +317,7 @@ pub fn scene_object_models_in(
                 },
                 slot: None,
                 liquid_domain: None,
+                swarm: None,
                 doc_path: source.role.doc_path(),
             });
         }
@@ -662,8 +669,14 @@ impl<'a> Row<'a> {
             capabilities,
             slot: Some(self.slot),
             liquid_domain: self.liquid.as_ref().map(|(domain, _)| domain.reference()),
+            swarm: self.swarm().map(|swarm| swarm.reference()),
             doc_path: self.at.doc_path(),
         }
+    }
+
+    /// The swarm an ordinary object places copies of.
+    fn swarm(&self) -> Option<At<'a>> {
+        (self.kind == SceneObjectRowKind::Object && self.liquid.is_none()).then(|| swarm_of(&self.at)).flatten()
     }
 
     fn controls(&self, placed: &[Placed<'_>]) -> Vec<SceneNodeRef> {
@@ -685,6 +698,9 @@ impl<'a> Row<'a> {
                     push_unique(&mut controls, self.at.path.reference(node));
                 }
             }
+            if let Some(swarm) = self.swarm() {
+                swarm_controls(&swarm, &mut controls);
+            }
             if liquid {
                 for switch in chain_switches(&self.at) {
                     push_unique(&mut controls, switch);
@@ -701,6 +717,28 @@ impl<'a> Row<'a> {
             }
         }
         controls
+    }
+}
+
+/// The swarm forces node upstream of the object's `instances`, on the
+/// level that places them.
+fn swarm_of<'a>(object: &At<'a>) -> Option<At<'a>> {
+    let start = object.path.producer_inward(object.node.id, "instances")?;
+    let level = start.path.level();
+    let node = std::iter::once(start.node.id)
+        .chain(upstream(&level, &[start.node.id]))
+        .filter_map(|id| level.node(id))
+        .find(|node| node.type_id == SWARM_FORCES_TYPE_ID)?;
+    Some(At { path: start.path, node })
+}
+
+/// A swarm's forces node and the transform placing its box.
+fn swarm_controls(swarm: &At<'_>, controls: &mut Vec<SceneNodeRef>) {
+    push_unique(controls, swarm.reference());
+    if let Some(bounds) = swarm.path.producer_either(swarm.node.id, "bounds")
+        && bounds.node.type_id == TRANSFORM_3D_TYPE_ID
+    {
+        push_unique(controls, bounds.reference());
     }
 }
 

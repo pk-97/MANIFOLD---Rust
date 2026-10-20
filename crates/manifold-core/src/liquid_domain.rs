@@ -64,7 +64,7 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
         MATTER_DOMAIN_TYPE_ID,
         &[
             "seed", "domain_size", "fill_height",
-            "gravity_x", "gravity", "gravity_z",
+            "gravity_x", "gravity", "gravity_z", "air_drag",
             "speed", "reset",
             "resolution", "grid_budget_mcells",
             "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
@@ -76,7 +76,7 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
         GPU_FLIP_DOMAIN_TYPE_ID,
         &[
             "domain_size", "fill_height",
-            "gravity_x", "gravity", "gravity_z",
+            "gravity_x", "gravity", "gravity_z", "air_drag",
             "speed", "reset",
             "resolution",
             "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
