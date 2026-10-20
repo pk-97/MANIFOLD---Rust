@@ -313,20 +313,29 @@ impl GizmoTarget {
         }
     }
 
-    fn world_point(&self, point: [f32; 3]) -> [f32; 3] {
-        let d = [point[0] - self.origin[0], point[1] - self.origin[1], point[2] - self.origin[2]];
-        std::array::from_fn(|i| self.origin[i] + (0..3).map(|j| self.world_axes[j][i] * d[j]).sum::<f32>())
+    /// The unit world direction a Move or Scale handle on `axis` draws
+    /// along: handles keep their fixed length whatever the parent's scale.
+    fn handle_direction(&self, axis: GizmoAxis) -> [f32; 3] {
+        let u = self.axis_direction(axis);
+        normalized(u).unwrap_or(u)
     }
 
-    /// How far along `axis` a drag from `from` to `to` (render pixels) moves
-    /// the grabbed point, in the axis's own units: the closest point between
-    /// each pointer ray and the axis line, as Blender and Unity drag a
-    /// handle, so the grabbed point stays under the cursor. `None` while the
-    /// axis lies along the line of sight.
-    fn axis_drag(&self, axis: GizmoAxis, view: &GizmoView, from: (f32, f32), to: (f32, f32)) -> Option<f32> {
-        let u = self.axis_direction(axis);
-        let along = |p: (f32, f32)| ray_axis_param(self.origin, u, view, p);
-        Some(along(to)? - along(from)?)
+    /// `point`, an offset from the origin in handle space, in world space:
+    /// along the parent's axes turned to unit length, so rings keep the
+    /// fixed size too.
+    fn world_point(&self, point: [f32; 3]) -> [f32; 3] {
+        let d = [point[0] - self.origin[0], point[1] - self.origin[1], point[2] - self.origin[2]];
+        let axes = self.world_axes.map(|axis| normalized(axis).unwrap_or(axis));
+        std::array::from_fn(|i| self.origin[i] + (0..3).map(|j| axes[j][i] * d[j]).sum::<f32>())
+    }
+
+    /// Where along `axis` the pointer at render pixel `p` of `view` holds
+    /// the handle, in the axis's param units: the closest point between the
+    /// pointer ray and the axis line, as Blender and Unity drag a handle, so
+    /// the grabbed point stays under the cursor. `None` while the axis lies
+    /// along the line of sight or that point is not in front of the camera.
+    fn axis_param(&self, axis: GizmoAxis, view: &GizmoView, p: (f32, f32)) -> Option<f32> {
+        ray_axis_param(self.origin, self.axis_direction(axis), view, p)
     }
 
     /// A Move or Scale handle on `axis` points along the line of sight.
@@ -356,7 +365,7 @@ impl GizmoTarget {
         }
         let len = handle_length(self.origin, &view.camera, view.height);
         match mode {
-            GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.axis_direction(axis), len)),
+            GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.handle_direction(axis), len)),
             GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4]).nth(3).map(|line| self.world_point(line.a)),
         }
     }
@@ -389,7 +398,9 @@ impl GizmoView {
 
 /// The parameter `t` of the point `origin + t * u` nearest the pointer ray
 /// through render pixel `p`. `None` when the axis and the ray are within
-/// the end-on angle of parallel.
+/// the end-on angle of parallel, or when that point is not in front of the
+/// camera: past a receding axis's vanishing point the lines meet behind the
+/// eye.
 fn ray_axis_param(origin: [f32; 3], u: [f32; 3], view: &GizmoView, p: (f32, f32)) -> Option<f32> {
     let (a, d) = view.camera.pixel_ray(p.0, p.1, view.width, view.height);
     let w0 = sub3(origin, a);
@@ -399,7 +410,13 @@ fn ray_axis_param(origin: [f32; 3], u: [f32; 3], view: &GizmoView, p: (f32, f32)
     if denom <= uu * dd * (1.0 - END_ON_COS * END_ON_COS) {
         return None;
     }
-    let t = (ud * dot3(d, w0) - dd * dot3(u, w0)) / denom;
+    let (uw, dw) = (dot3(u, w0), dot3(d, w0));
+    // How far along the ray the nearest point sits.
+    let s = (uu * dw - ud * uw) / denom;
+    if s.is_nan() || s <= view.camera.near {
+        return None;
+    }
+    let t = (ud * dw - dd * uw) / denom;
     t.is_finite().then_some(t)
 }
 
@@ -526,11 +543,11 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, len: f32, lines: &mut 
         let color = if handle.write.locked() { LOCKED_COLOR } else { handle.axis.color() };
         match mode {
             GizmoMode::Move => {
-                let tip = offset(origin, target.axis_direction(handle.axis), len);
+                let tip = offset(origin, target.handle_direction(handle.axis), len);
                 lines.push(WorldLine { a: origin, b: tip, color });
             }
             GizmoMode::Scale => {
-                let u = target.axis_direction(handle.axis);
+                let u = target.handle_direction(handle.axis);
                 let tip = offset(origin, u, len);
                 // A short tick at the tip tells scale from move.
                 let perp = perpendicular(u);
@@ -610,7 +627,7 @@ pub fn pick_axis(mode: GizmoMode, target: &GizmoTarget, view: &GizmoView, click:
     for handle in target.handles.iter().filter(|handle| handle.mode == mode && !target.end_on(mode, handle.axis, cam)) {
         let d = match mode {
             GizmoMode::Move | GizmoMode::Scale => {
-                let tip = offset(origin, target.axis_direction(handle.axis), len);
+                let tip = offset(origin, target.handle_direction(handle.axis), len);
                 let Some(tip_px) = cam.project_to_pixel(tip, width, height) else { continue };
                 point_segment_dist(click, (origin_px.px, origin_px.py), (tip_px.px, tip_px.py))
             }
@@ -644,20 +661,36 @@ pub struct GizmoDrag {
     pub target: GizmoTarget,
     pub mode: GizmoMode,
     pub axis: GizmoAxis,
-    start: (f32, f32),
+    /// Where along the axis the press held a Move or Scale handle, in param
+    /// units. Fixed for the drag: a camera that moves mid-drag never shifts
+    /// the grab, and each update finds the cursor through the camera on
+    /// screen, so the grabbed point stays under it.
+    grab: Option<f32>,
     last: (f32, f32),
     angle: f32,
 }
 
 impl GizmoDrag {
-    /// `None` when the target has no such handle, the handle is locked, or
-    /// the target is not placed yet.
-    pub fn begin(target: GizmoTarget, mode: GizmoMode, axis: GizmoAxis, at: (f32, f32)) -> Option<Self> {
+    /// A press at render pixel `at` of `view`. `None` when the target has
+    /// no such handle, the handle is locked, the target is not placed yet,
+    /// or a linear handle cannot be held there (end-on, behind the camera,
+    /// or a Scale press on the origin itself).
+    pub fn begin(target: GizmoTarget, mode: GizmoMode, axis: GizmoAxis, view: &GizmoView, at: (f32, f32)) -> Option<Self> {
         let handle = target.handle(mode, axis)?;
         if handle.write.locked() || target.unplaced {
             return None;
         }
-        Some(Self { target, mode, axis, start: at, last: at, angle: 0.0 })
+        let grab = match handle.write {
+            HandleWrite::Linear { .. } => {
+                let grab = target.axis_param(axis, view, at)?;
+                if mode == GizmoMode::Scale && grab.abs() < 1e-6 {
+                    return None;
+                }
+                Some(grab)
+            }
+            HandleWrite::Angle(_) | HandleWrite::Direction { .. } => None,
+        };
+        Some(Self { target, mode, axis, grab, last: at, angle: 0.0 })
     }
 
     pub fn handle(&self) -> &GizmoHandle {
@@ -673,9 +706,16 @@ impl GizmoDrag {
         let write = self.handle().write.clone();
         let values = match &write {
             HandleWrite::Linear { param, limit } => {
-                let delta = self.target.axis_drag(self.axis, view, self.start, cur)?;
+                let (grab, held) = (self.grab?, self.target.axis_param(self.axis, view, cur)?);
+                // Move adds the distance dragged; Scale multiplies by the
+                // ratio of the axis distances, as Blender and Unity scale, so
+                // the same on-screen drag scales alike near and far.
+                let value = match self.mode {
+                    GizmoMode::Scale => param.value * held / grab,
+                    GizmoMode::Move | GizmoMode::Rotate => param.value + (held - grab),
+                };
                 // A handle has no slider range: only the declared limit stops it.
-                HandleValues::One(limit.clamp_input(param.value + delta, (f32::NEG_INFINITY, f32::INFINITY)))
+                HandleValues::One(limit.clamp_input(value, (f32::NEG_INFINITY, f32::INFINITY)))
             }
             HandleWrite::Angle(param) => {
                 self.angle += turned?;

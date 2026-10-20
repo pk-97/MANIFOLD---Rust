@@ -238,8 +238,10 @@ impl PreviewGizmo {
     pub fn drag_to(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) -> bool {
         let view = self.view();
         let Some(drag) = self.drag.as_mut() else { return false };
-        // Follow the camera frame for frame; hold the press's while no
-        // matched frame shows.
+        // Follow the camera frame for frame, so the grabbed point stays
+        // under the cursor in the picture on screen; the grab itself was
+        // fixed at the press (`GizmoDrag::begin`). Hold the last camera
+        // while no matched frame shows.
         if let Some(view) = view {
             drag.view = view;
         }

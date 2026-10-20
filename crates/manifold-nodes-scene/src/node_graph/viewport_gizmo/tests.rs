@@ -119,8 +119,9 @@ fn manifest_decl(json: &str) -> SceneShapeDecl {
 /// Drag `axis` of `mode` from the origin's pixel by `delta` pixels.
 fn drag(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis, from: (f32, f32), to: (f32, f32)) -> HandleValues {
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    let mut drag = GizmoDrag::begin(target.clone(), mode, axis, from).expect("handle is draggable");
-    drag.update(&GizmoView::new(cam, 640, 480), to).expect("drag resolves")
+    let view = GizmoView::new(cam, 640, 480);
+    let mut drag = GizmoDrag::begin(target.clone(), mode, axis, &view, from).expect("handle is draggable");
+    drag.update(&view, to).expect("drag resolves")
 }
 
 fn written(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis) -> Vec<ShapeWrite> {
@@ -198,8 +199,8 @@ fn wired_param_shows_locked_and_refuses_the_drag() {
     assert_eq!(x_line.color, LOCKED_COLOR, "wired pos_x draws locked");
     let y_line = lines.iter().find(|l| (l.b[1] - l.a[1]).abs() > 0.1).unwrap();
     assert_eq!(y_line.color, Y_COLOR);
-    assert!(GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, (0.0, 0.0)).is_none());
-    assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::Y, (0.0, 0.0)).is_some());
+    assert!(GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &view(), (0.0, 0.0)).is_none());
+    assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::Y, &view(), (0.0, 0.0)).is_some());
 }
 
 #[test]
@@ -213,7 +214,7 @@ fn unwired_transform_target_is_unplaced_at_the_origin() {
     assert!(target.unplaced);
     assert_eq!(written(&target, GizmoMode::Scale, GizmoAxis::Y), vec![ShapeWrite::Unplaced]);
     assert_eq!(lines_of(GizmoMode::Move, &target).len(), 3, "the declared handles still draw to grab");
-    assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::X, (0.0, 0.0)).is_none(), "the host places it first");
+    assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::X, &view(), (0.0, 0.0)).is_none(), "the host places it first");
 }
 
 #[test]
@@ -231,15 +232,15 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     assert!(!box_target.supports_mode(GizmoMode::Rotate), "the declaration gives the domain no rotation");
     assert!(lines_of(GizmoMode::Rotate, box_target).is_empty());
     assert_eq!(written(box_target, GizmoMode::Scale, GizmoAxis::X), vec![node_write("scale_x")]);
-    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([-20.0, 2.0, -6.0])) else {
+    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([1.0, 2.0, -6.0]), px([-20.0, 2.0, -6.0])) else {
         panic!("one value")
     };
     assert_eq!(size, DOMAIN_EXTENT_METRES.0, "a domain never scales below what the solvers accept");
-    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([20.0, 2.0, -6.0])) else {
+    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([1.0, 2.0, -6.0]), px([20.0, 2.0, -6.0])) else {
         panic!("one value")
     };
     assert_eq!(size, DOMAIN_EXTENT_METRES.1, "nor above it");
-    let HandleValues::One(column) = drag(&targets[1], GizmoMode::Scale, GizmoAxis::X, px([-1.0, 0.0, -6.0]), px([-20.0, 0.0, -6.0])) else {
+    let HandleValues::One(column) = drag(&targets[1], GizmoMode::Scale, GizmoAxis::X, px([0.0, 0.0, -6.0]), px([-20.0, 0.0, -6.0])) else {
         panic!("one value")
     };
     assert_eq!(column, MIN_EXTENT, "an undeclared box stops only at the smallest extent");
@@ -278,11 +279,11 @@ fn radial_force_target_derives_from_its_point_radius_declaration() {
     let scale = &target.handles.iter().filter(|h| h.mode == GizmoMode::Scale).collect::<Vec<_>>();
     assert_eq!(scale.len(), 1, "one uniform radius handle");
     assert_eq!(written(&target, GizmoMode::Scale, GizmoAxis::Uniform), vec![ShapeWrite::Card { id: "host_radius".into(), scale: 1.0, offset: 0.0 }]);
-    let tip = offset(target.origin, GizmoAxis::Uniform.unit(), 1.0);
-    let HandleValues::One(radius) = drag(&target, GizmoMode::Scale, GizmoAxis::Uniform, px(target.origin), px(tip)) else {
+    let along = |d: f32| px(offset(target.origin, GizmoAxis::Uniform.unit(), d));
+    let HandleValues::One(radius) = drag(&target, GizmoMode::Scale, GizmoAxis::Uniform, along(1.0), along(2.0)) else {
         panic!("one value")
     };
-    assert!((radius - 3.0).abs() < 1e-3, "one unit along the handle grows the radius by one, got {radius}");
+    assert!((radius - 4.0).abs() < 1e-3, "twice as far from the centre doubles the radius, got {radius}");
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
     assert_eq!(pick_axis(GizmoMode::Scale, &target, &GizmoView::new(cam, 640, 480), px(offset(target.origin, GizmoAxis::Uniform.unit(), len_at(target.origin)))), Some(GizmoAxis::Uniform));
 }
@@ -588,7 +589,7 @@ fn a_move_drag_keeps_the_grabbed_point_under_the_cursor() {
             let start = target.origin[i];
             let grabbed = view_tip(&target, &view, axis);
             let released = |to: [f32; 3]| {
-                let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, axis, at(grabbed)).unwrap();
+                let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, axis, &view, at(grabbed)).unwrap();
                 let HandleValues::One(v) = drag.update(&view, at(to)).expect("drag resolves") else { panic!("one value") };
                 v - start
             };
@@ -611,4 +612,125 @@ fn an_end_on_handle_takes_no_press() {
     assert_ne!(pick_axis(GizmoMode::Move, &target, &view, px(target.origin)), Some(GizmoAxis::Z));
     assert!(target.grip(GizmoMode::Move, GizmoAxis::X, &view).is_some());
     assert!(target.grip(GizmoMode::Rotate, GizmoAxis::Z, &view).is_some(), "the ring facing the camera turns");
+}
+
+/// Dragging toward a receding axis's vanishing point pushes the object out
+/// along the axis; at it and past it the drag holds, and the object never
+/// lands behind the camera.
+#[test]
+fn a_drag_past_the_vanishing_point_holds_in_front_of_the_camera() {
+    // The X axis recedes 25 degrees off the line of sight.
+    let tilt = 25.0_f32.to_radians();
+    let fwd = [tilt.cos(), 0.0, -tilt.sin()];
+    let origin = fwd.map(|c| c * 5.0);
+    let scene = scene_with(vec![known_object(1, (origin[0], origin[1], origin[2]), (false, false, false))]);
+    let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    let camera = Camera::look_at([0.0; 3], origin, [0.0, 1.0, 0.0], 0.9, 0.1, 1000.0);
+    let view = GizmoView::new(camera, 640, 480);
+    // A pointer ray `degrees` off the line of sight, turned toward +X: the
+    // part of +X across the line of sight.
+    let side = normalized([1.0 - fwd[0] * fwd[0], 0.0, -fwd[0] * fwd[2]]).unwrap();
+    let pointer = |degrees: f32| {
+        let a = degrees.to_radians();
+        let dir: [f32; 3] = std::array::from_fn(|i| fwd[i] * a.cos() + side[i] * a.sin());
+        let p = camera.project_to_pixel(dir.map(|c| c * 10.0), 640, 480).unwrap();
+        (p.px, p.py)
+    };
+    let grip = target.grip(GizmoMode::Move, GizmoAxis::X, &view).expect("the receding handle is drawn");
+    let tip = camera.project_to_pixel(grip, 640, 480).unwrap();
+    for degrees in [15.0_f32, 30.0, 40.0] {
+        let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &view, (tip.px, tip.py)).unwrap();
+        match drag.update(&view, pointer(degrees)) {
+            Some(HandleValues::One(x)) => {
+                let moved = [x, origin[1], origin[2]];
+                assert!(dot3(sub3(moved, camera.pos), camera.fwd) > camera.near, "{degrees} deg: the object lands behind the eye at {moved:?}");
+                assert!(degrees < 25.0, "{degrees} deg is at or past the vanishing point and must hold, got x {x}");
+                assert!(x > origin[0], "short of the vanishing point the object recedes along +X");
+            }
+            None => assert!(degrees >= 25.0, "{degrees} deg is short of the vanishing point and must move"),
+            Some(values) => panic!("one value, got {values:?}"),
+        }
+    }
+}
+
+/// Scale multiplies by the ratio of axis distances, as Blender and Unity
+/// scale: dragging the tip out to twice the handle's on-screen length
+/// doubles the size, near or far.
+#[test]
+fn the_same_on_screen_scale_drag_scales_alike_near_and_far() {
+    for distance in [3.0_f32, 40.0, 600.0] {
+        let scene = scene_with(vec![known_object(1, (0.0, 0.0, -distance), (false, false, false))]);
+        let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+        let eye = [0.47 * distance, 0.4 * distance, -distance + 0.79 * distance];
+        let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
+        let view = GizmoView::new(camera, 1280, 720);
+        let at = |p: [f32; 3]| {
+            let p = camera.project_to_pixel(p, 1280, 720).unwrap();
+            (p.px, p.py)
+        };
+        let len = handle_length(target.origin, &camera, 720);
+        let tip = view_tip(&target, &view, GizmoAxis::Y);
+        let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Scale, GizmoAxis::Y, &view, at(tip)).unwrap();
+        let HandleValues::One(size) = drag.update(&view, at(offset(target.origin, [0.0, 1.0, 0.0], 2.0 * len))).unwrap() else {
+            panic!("one value")
+        };
+        assert!((size - 2.0).abs() < 0.01, "at {distance}: twice out doubles the size, got {size}");
+    }
+}
+
+/// Under a scaled parent, handles still draw at the fixed on-screen length,
+/// and a drag still moves the child in its own param units: a 3x parent
+/// moves it a third as far per metre, a 0.2x parent five times as far.
+#[test]
+fn handles_under_a_scaled_parent_keep_their_size_and_param_units() {
+    for parent_scale in [3.0_f32, 0.2] {
+        let mut parent = known_object(7, (0.0, 0.0, -8.0), (false, false, false));
+        let SceneObjectVm::Known(p) = &mut parent else { unreachable!() };
+        p.is_group = true;
+        p.transform.as_mut().unwrap().scale_value = (parent_scale, parent_scale, parent_scale);
+        let mut child = known_object(8, (0.5, 0.0, 0.0), (false, false, false));
+        let SceneObjectVm::Known(c) = &mut child else { unreachable!() };
+        c.parent_group_id = Some(7);
+        let scene = scene_with(vec![parent, child]);
+        let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
+        let camera = Camera::look_at([2.0, 1.5, 0.0], target.origin, [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+        let view = GizmoView::new(camera, 640, 480);
+        let at = |p: [f32; 3]| {
+            let p = camera.project_to_pixel(p, 640, 480).unwrap();
+            (p.px, p.py)
+        };
+        let len = handle_length(target.origin, &camera, 480);
+        let mut lines = Vec::new();
+        gizmo_lines(GizmoMode::Move, &target, len, &mut lines);
+        let x_line = lines.iter().find(|line| line.color == X_COLOR).expect("the X handle");
+        let d = sub3(x_line.b, x_line.a);
+        let world_len = dot3(d, d).sqrt();
+        assert!((world_len - len).abs() < len * 1e-3, "parent {parent_scale}x: the handle is the fixed length, got {world_len} of {len}");
+        let tip = view_tip(&target, &view, GizmoAxis::X);
+        assert_eq!(pick_axis(GizmoMode::Move, &target, &view, at(tip)), Some(GizmoAxis::X));
+        let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &view, at(tip)).unwrap();
+        let HandleValues::One(x) = drag.update(&view, at(target.origin)).unwrap() else { panic!("one value") };
+        let want = 0.5 - len / parent_scale;
+        assert!((x - want).abs() < len * 0.01 / parent_scale, "parent {parent_scale}x: pos_x {x}, want {want}");
+    }
+}
+
+/// The grab is fixed at the press: if the camera moves mid-drag (an
+/// animated show camera), releasing on the origin as the picture now shows
+/// it still moves the object back by the handle length it was grabbed at.
+#[test]
+fn a_camera_moving_mid_drag_never_shifts_the_grab() {
+    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -10.0), (false, false, false))]);
+    let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    let pressed = GizmoView::new(Camera::look_at([3.0, 2.0, -2.0], [0.0, 0.0, -10.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0), 640, 480);
+    let moved = GizmoView::new(Camera::look_at([-4.0, 3.0, -1.0], [0.0, 0.0, -10.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0), 640, 480);
+    let at = |view: &GizmoView, p: [f32; 3]| {
+        let p = view.camera.project_to_pixel(p, 640, 480).unwrap();
+        (p.px, p.py)
+    };
+    let len = handle_length(target.origin, &pressed.camera, 480);
+    let tip = view_tip(&target, &pressed, GizmoAxis::X);
+    let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &pressed, at(&pressed, tip)).unwrap();
+    let HandleValues::One(x) = drag.update(&moved, at(&moved, target.origin)).unwrap() else { panic!("one value") };
+    assert!((x + len).abs() < len * 0.01, "moved back by the grabbed length {len}, got {x}");
 }

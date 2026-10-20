@@ -327,7 +327,7 @@ pub(crate) fn press(
         } else {
             target
         };
-        let Some(drag) = GizmoDrag::begin(target, mode, axis, point) else { return GizmoPress::Handle(None) };
+        let Some(drag) = GizmoDrag::begin(target, mode, axis, view, point) else { return GizmoPress::Handle(None) };
         return GizmoPress::Handle(match GizmoGesture::begin(ctx, layer.clone(), drag) {
             Ok(gesture) => Some(gesture),
             Err(message) => {
@@ -483,9 +483,10 @@ mod tests {
         /// `to`, release.
         fn drag(&mut self, project: &mut Project, layer: &LayerId, target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis, from: (f32, f32), to: (f32, f32)) {
             self.with_ctx(project, |ctx| {
-                let drag = GizmoDrag::begin(target.clone(), mode, axis, from).expect("handle is draggable");
+                let view = GizmoView::new(camera(), W, H);
+                let drag = GizmoDrag::begin(target.clone(), mode, axis, &view, from).expect("handle is draggable");
                 let mut gesture = GizmoGesture::begin(ctx, layer.clone(), drag).expect("gesture begins");
-                gesture.drag_to(ctx, &GizmoView::new(camera(), W, H), to);
+                gesture.drag_to(ctx, &view, to);
                 gesture.commit(ctx);
                 assert!(ctx.scrub.active.is_none(), "release ends the scrub");
             });
@@ -668,7 +669,7 @@ mod tests {
             panic!("an unbound node write")
         };
         let mut rig = Rig::new(&layer);
-        rig.drag(&mut local, &layer, &domain, GizmoMode::Scale, GizmoAxis::Y, px(domain.origin), px(plus(domain.origin, [0.0, 1.0, 0.0])));
+        rig.drag(&mut local, &layer, &domain, GizmoMode::Scale, GizmoAxis::Y, px(plus(domain.origin, [0.0, 1.0, 0.0])), px(plus(domain.origin, [0.0, 1.25, 0.0])));
         let mut service = EditingService::new();
         assert_eq!(rig.apply(&mut service, &mut content), 1, "one undo entry for the drag");
         let value = |project: &Project| {
@@ -677,7 +678,8 @@ mod tests {
             crate::editor_bridge::node_param_value(&def, &addr.scope_path, addr.node_doc_id, &addr.param_id)
         };
         for project in [&local, &content] {
-            assert_eq!(value(project), Some(SerializedParamValue::Float { value: 5.0 }), "scale_y grew by one");
+            let Some(SerializedParamValue::Float { value: v }) = value(project) else { panic!("scale_y is a float") };
+            assert!((v - 5.0).abs() < 1e-3, "a quarter farther from the centre scales a quarter up, got {v}");
         }
         assert!(service.undo(&mut content));
         assert_eq!(value(&content), Some(SerializedParamValue::Float { value: 4.0 }));
@@ -694,7 +696,7 @@ mod tests {
                 let domain = target(&project, &layer, GizmoTargetKind::FluidDomain);
                 let mut rig = Rig::new(&layer);
                 let to = px(plus(domain.origin, [reach, 0.0, 0.0]));
-                rig.drag(&mut project, &layer, &domain, GizmoMode::Scale, GizmoAxis::X, px(domain.origin), to);
+                rig.drag(&mut project, &layer, &domain, GizmoMode::Scale, GizmoAxis::X, px(plus(domain.origin, [1.0, 0.0, 0.0])), to);
                 let size = shape_value(&project, &layer, &domain, "scale_x");
                 assert!((size - stop).abs() < 1e-4, "bound {bound}: a drag by {reach} stops at {stop}, got {size}");
                 if bound {

@@ -129,7 +129,13 @@ between this doc and execution.
   is as easy to grab on a 2x display or over a 4K output as at 1x. A Move or
   Scale drag takes the closest point between the pointer ray and the handle's
   axis, as Blender and Unity do, so the grabbed point stays under the cursor;
-  a handle pointing along the line of sight takes no press.
+  the grab is fixed at the press, so a camera that moves mid-drag never shifts
+  it. Move adds the distance dragged; Scale multiplies by the ratio of axis
+  distances, so the same on-screen drag scales alike near and far. A handle
+  pointing along the line of sight takes no press, and a drag past a receding
+  axis's vanishing point holds rather than putting the object behind the
+  camera. Handles under a scaled parent keep the fixed size; drags still
+  write the child's own units.
 
   The selected object gets a selection outline in Blender orange on both hosts.
   `render_scene` draws the selected objects' coverage into a mask through the
