@@ -254,21 +254,7 @@ impl Application {
         let (Some(target), Some(default)) = (self.watched_graph_target.as_ref(), self.watched_catalog_default.as_ref()) else {
             return;
         };
-        let reference = self.local_project.graph_for_target(target, Some(default)).and_then(|def| {
-            let mut nodes = &def.nodes;
-            let mut ids = Vec::new();
-            for doc in scope {
-                let group = nodes.iter().find(|node| node.id == *doc)?;
-                ids.push(group.node_id.clone());
-                nodes = &group.group.as_deref()?.nodes;
-            }
-            let node = nodes.iter().find(|node| node.id == render)?.node_id.clone();
-            Some(manifold_core::SceneNodeRef { scope: ids, node })
-        });
-        let prepared = reference.ok_or_else(|| "The scene is no longer available".to_string()).and_then(|scene| {
-            manifold_editing::scene_template::InsertSceneTemplateCommand::new(&self.local_project, target.clone(), scene, template, default)
-                .map_err(|error| error.message)
-        });
+        let prepared = crate::scene_insert::prepare(&self.local_project, target, default, scope, render, template);
         match prepared {
             Ok(command) => self.send_content_cmd(ContentCommand::Execute(Box::new(command))),
             Err(message) => self.send_content_cmd(ContentCommand::GraphEditRejected(message)),

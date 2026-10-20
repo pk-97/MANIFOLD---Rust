@@ -235,8 +235,8 @@ fn remap_section(section: &str, handle: &str) -> String {
 }
 
 /// The first unused "<prefix> N".
-fn numbered_handle(prefix: &str, taken: &HashSet<String>) -> String {
-    (1u32..).map(|n| format!("{prefix} {n}")).find(|candidate| !taken.contains(candidate)).expect("unbounded range")
+fn numbered_handle(prefix: &str, from: u32, taken: &HashSet<String>) -> String {
+    (from..).map(|n| format!("{prefix} {n}")).find(|candidate| !taken.contains(candidate)).expect("unbounded range")
 }
 
 /// Insert `template` into the render scene `scene` names and route every
@@ -261,7 +261,25 @@ pub fn insert_scene_template(
     let mut alloc = Allocator { next_doc: max_doc_id(&candidate.nodes).checked_add(1), taken_stable };
 
     let numbering = if template.metadata.display_name.is_empty() { "Group" } else { template.metadata.display_name.as_str() };
-    let handle = numbered_handle(numbering, &handles);
+    // A template with one routed output is named for the slot it takes
+    // (object slot 2 is "Object 3"); a family starts at 1.
+    let first_number = {
+        let outputs = match &bare_outputs {
+            Some(outputs) => outputs.clone(),
+            None => template.group.group.as_deref().map(|body| body.interface.outputs.clone()).unwrap_or_default(),
+        };
+        let routed: Vec<_> = outputs.iter().filter_map(|output| SlotKind::of(&output.port_type)).collect();
+        let current = match (routed.as_slice(), level_mut(&mut candidate.nodes, &mut candidate.wires, &scene.scope)) {
+            ([kind], Some((nodes, _))) => nodes
+                .iter()
+                .find(|node| node.node_id == scene.node)
+                .and_then(|render| render.params.get(match kind { SlotKind::Object => "objects", SlotKind::Light => "lights" }))
+                .and_then(whole_number),
+            _ => None,
+        };
+        current.map_or(1, |slot| slot + 1)
+    };
+    let handle = numbered_handle(numbering, first_number, &handles);
 
     // Identity first: the group, then every node under it.
     let mut group = template.group.clone();

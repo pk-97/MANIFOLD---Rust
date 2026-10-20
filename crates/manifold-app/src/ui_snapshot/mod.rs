@@ -645,7 +645,6 @@ fn run_gltf_editor(want_dump: bool) {
 /// object slot) and `1` for the light gesture (the second light slot).
 fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
     use manifold_editing::command::Command;
-    use manifold_editing::commands::graph::{AddSceneLightCommand, AddSceneObjectCommand};
 
     let data = fixtures::gltf_scene();
     let layer = data.project.timeline.layers.first().expect("gltf_scene inserts one layer");
@@ -653,7 +652,6 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
     let pid = layer.generator_type().clone();
     const RENDER_SCENE_NODE_ID: u32 = 4;
     const OBJECTS_BEFORE: u32 = 2;
-    const LIGHTS_BEFORE: u32 = 1;
 
     let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
         eprintln!("ui-snap gltfeditor-add*: no graph view for the imported preset id '{pid:?}'");
@@ -694,31 +692,14 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
     // ── Execute the real command against the real Project — the identical
     // mutation the "+ Object" / "+ Light" canvas button emits.
     let mut project = data.project.clone();
-    if add_object {
-        let mut cmd = AddSceneObjectCommand::new(
-            target.clone(),
-            Vec::new(),
-            RENDER_SCENE_NODE_ID,
-            OBJECTS_BEFORE,
-            (900.0, 200.0),
-            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
-            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
-            (*view.canonical_def).clone(),
-        );
-        cmd.execute(&mut project);
+    let template = if add_object {
+        manifold_nodes_scene::node_graph::scene_templates::object_template(OBJECTS_BEFORE, (900.0, 200.0))
     } else {
-        let mut cmd = AddSceneLightCommand::new(
-            target.clone(),
-            Vec::new(),
-            RENDER_SCENE_NODE_ID,
-            LIGHTS_BEFORE,
-            (-260.0, 50.0),
-            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.light"),
-            (*view.canonical_def).clone(),
-        );
-        cmd.execute(&mut project);
-    }
+        manifold_nodes_scene::node_graph::scene_templates::light_template((-260.0, 50.0))
+    };
+    let mut cmd = crate::scene_insert::prepare(&project, &target, &view.canonical_def, &[], RENDER_SCENE_NODE_ID, template)
+        .expect("the add-scene gesture prepares");
+    cmd.execute(&mut project);
 
     // ── AFTER: the mutation lives on the LAYER's own per-instance override
     // now (`layer.generator_graph()` went `None` → `Some`), so the display
@@ -734,7 +715,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         .expect("layer still present after the command");
     let override_def = layer_after
         .generator_graph()
-        .expect("AddSceneObjectCommand/AddSceneLightCommand lifts the graph on first edit");
+        .expect("the insert lifts the graph on first edit");
     let mut d = override_def.clone();
     manifold_nodes::registry::graft_preset_metadata_from_bundle(&mut d, &pid);
     let rg_snap_after = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)
