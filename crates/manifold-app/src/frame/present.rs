@@ -180,8 +180,27 @@ impl Application {
         let preview_slot = preview_lease.map_or(front_index, |l| l.slot());
         #[cfg(not(target_os = "macos"))]
         let preview_slot = front_index;
+        // Every lease this present samples under: the output's, and the
+        // navigated view's while the preview navigates (A2). The navigated
+        // view replaces the output on the preview only; the output is
+        // untouched (D9).
         #[cfg(target_os = "macos")]
-        let compositor_tex = self.ui_preview_textures[preview_slot].as_ref();
+        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch =
+            preview_lease.zip(self.preview_texture_bridge.clone()).map(|(lease, bridge)| (bridge, lease)).into_iter().collect();
+        #[cfg(target_os = "macos")]
+        let navigated_tex = crate::preview_navigation::lease_navigated_frame(
+            &mut self.ws.preview_navigation,
+            self.scene_viewport_pane.as_mut(),
+            &gpu.device,
+            &self.content_state.scene_viewport_frames,
+            &mut bridge_leases,
+        );
+        #[cfg(target_os = "macos")]
+        let navigated_view = navigated_tex.as_ref().and_then(|_| self.ws.preview_navigation.view());
+        #[cfg(not(target_os = "macos"))]
+        let navigated_view = None;
+        #[cfg(target_os = "macos")]
+        let compositor_tex = navigated_tex.as_ref().or(self.ui_preview_textures[preview_slot].as_ref());
         #[cfg(not(target_os = "macos"))]
         let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
         let video_source_dims = self.video_source_dims();
@@ -199,7 +218,7 @@ impl Application {
             });
         #[cfg(not(target_os = "macos"))]
         let gizmo_frame: Option<&crate::physics_overlay::PhysicsOverlayFrame> = None;
-        self.ws.preview_gizmo.show(gizmo_frame, (video_source_dims.0 as u32, video_source_dims.1 as u32));
+        self.ws.preview_gizmo.show(gizmo_frame, (video_source_dims.0 as u32, video_source_dims.1 as u32), navigated_view);
         let gizmos = self
             .ws
             .preview_gizmo
@@ -690,18 +709,7 @@ impl Application {
             // sampling encoder IS in flight — retire the bridge lease on a
             // marker buffer committed after it (same queue, so ordered).
             #[cfg(target_os = "macos")]
-            crate::shared_texture::retire_leases_via_marker(
-                &gpu.device,
-                self.content_tx.clone(),
-                preview_lease
-                    .and_then(|lease| {
-                        self.preview_texture_bridge
-                            .as_ref()
-                            .map(|b| (b.clone(), lease))
-                    })
-                    .into_iter()
-                    .collect(),
-            );
+            crate::shared_texture::retire_leases_via_marker(&gpu.device, self.content_tx.clone(), bridge_leases);
             return;
         }
         let drawable = {
@@ -759,18 +767,7 @@ impl Application {
         // implies the sample has retired. The SurfaceReady wake is what the
         // content thread's surface wait sleeps on.
         #[cfg(target_os = "macos")]
-        crate::shared_texture::attach_lease_retire(
-            &present_enc,
-            self.content_tx.clone(),
-            preview_lease
-                .and_then(|lease| {
-                    self.preview_texture_bridge
-                        .as_ref()
-                        .map(|b| (b.clone(), lease))
-                })
-                .into_iter()
-                .collect(),
-        );
+        crate::shared_texture::attach_lease_retire(&present_enc, self.content_tx.clone(), bridge_leases);
         present_enc.commit();
         self.ui_profile.add("present.blit_present", pseg.elapsed());
     }

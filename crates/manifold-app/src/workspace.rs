@@ -86,8 +86,10 @@ pub struct Workspace {
     /// while set seeks the content thread.
     pub timeline_scrubbing: bool,
 
-    /// Editor-owned navigation camera and the last successfully displayed
-    /// scene frame. Content owns simulation and rendering.
+    /// The graph editor viewport's navigation camera and the last
+    /// successfully displayed scene frame. It and the output preview's
+    /// navigation (`preview_navigation`) own the one content request in
+    /// turn (D7a). Content owns simulation and rendering.
     pub viewport_session: Option<crate::scene_viewport::SceneViewportNavigation>,
     /// Owner and render node of the cached scene; identical graphs on two
     /// owners must still have separate simulation and parameter histories.
@@ -118,6 +120,9 @@ pub struct Workspace {
     pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
     /// The main output preview's gizmo host (main window only).
     pub preview_gizmo: crate::physics_overlay::PreviewGizmo,
+    /// The main output preview's preview-only navigation (main window
+    /// only).
+    pub preview_navigation: crate::preview_navigation::PreviewNavigation,
     /// The gizmo layer last sent to the content thread (`SetPhysicsOverlay`).
     pub gizmo_layer_sent: Option<manifold_core::LayerId>,
     /// The shape the gizmo is attached to this session, set by a viewport
@@ -169,10 +174,21 @@ impl Workspace {
             // a display-frame reallocation.
             viewport_overlay_lines: Vec::with_capacity(crate::physics_overlay::CHROME_LINES),
             preview_gizmo: Default::default(),
+            preview_navigation: Default::default(),
             gizmo_layer_sent: None,
             viewport_selected: None,
             viewport_gizmo_drag: None,
             editor_frame: Default::default(),
         }
+    }
+
+    /// End the editor viewport's navigation (D7a): the session, its drag
+    /// and its record of the request sent. True when it owned the content
+    /// request.
+    pub fn end_viewport_navigation(&mut self) -> bool {
+        self.viewport_session = None;
+        self.viewport_target = None;
+        self.viewport_drag = None;
+        self.viewport_request_sent.take().is_some()
     }
 }

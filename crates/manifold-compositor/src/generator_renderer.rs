@@ -395,16 +395,16 @@ impl GeneratorRenderer {
 
     /// What the Scene panel's gizmo overlay needs from `layer_id`'s scene:
     /// its accepted fluid domains, light positions and physics setup shapes
-    /// (appended) and the camera it rendered through. `None` unless the layer
-    /// rendered in the last `render_all` (a finished clip or an occluded layer
-    /// reports nothing).
+    /// (appended) and the scene node and camera it rendered through. `None`
+    /// unless the layer rendered in the last `render_all` (a finished clip or
+    /// an occluded layer reports nothing).
     pub fn write_physics_overlay(
         &self,
         layer_id: &LayerId,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         lights: &mut Vec<[f32; 3]>,
         gizmos: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
-    ) -> Option<manifold_node_engine::scene::camera::Camera> {
+    ) -> Option<(NodeId, manifold_node_engine::scene::camera::Camera)> {
         let state = self.layer_generators.get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?;
         state.generator.write_fluid_domains_watched(domains);

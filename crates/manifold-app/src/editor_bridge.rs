@@ -1650,7 +1650,15 @@ impl Application {
             if !ws.viewport_target.as_ref().is_some_and(|(owner, render)| owner == target && render == node)
                 || ws.viewport_session.is_none()
             {
-                ws.viewport_session = Some(crate::scene_viewport::SceneViewportNavigation::new(viewport_tex_w, viewport_tex_h));
+                // Opening the editor's viewport ends the output preview's
+                // navigation (D7a).
+                if self.ws.preview_navigation.end()
+                    && let Some(tx) = self.content_tx.as_ref()
+                {
+                    ContentCommand::send(tx, ContentCommand::SetSceneViewport(None));
+                }
+                ws.viewport_session = Some(crate::scene_viewport::SceneViewportNavigation::new(
+                    crate::scene_viewport::ViewportHost::GraphEditor, viewport_tex_w, viewport_tex_h));
                 ws.viewport_target = Some((target.clone(), node.clone()));
             }
             let session = ws.viewport_session.as_mut().expect("navigation was created above");
@@ -1665,28 +1673,16 @@ impl Application {
             }
             session.displayed = None;
             #[cfg(target_os = "macos")]
-            if let Some(bridge) = self.node_preview_texture_bridge.as_ref() {
-                let lease = bridge.acquire_read();
-                let matched = bridge.leased_frame(lease).and_then(|frame| {
-                    self.content_state.scene_viewport_frames[lease.slot()].as_ref()
-                        .filter(|observation| observation.matches(&request, frame, bridge.generation()))
-                });
-                let mut used = false;
-                if let Some(frame) = matched {
-                    if !frame.has_image() {
-                        session.displayed = Some(frame.clone());
-                    }
-                    if frame.has_image()
-                        && let Some(texture) = self.ui_node_preview_textures.get(lease.slot()).and_then(Option::as_ref)
-                        && let Some(ui) = self.ui_renderer.as_mut()
-                    {
-                        ui.register_external_texture(crate::scene_viewport::texture_handle(), texture.clone());
-                        session.displayed = Some(frame.clone());
-                        bridge_leases.push((bridge.clone(), lease));
-                        used = true;
-                    }
+            if let Some(pane) = self.scene_viewport_pane.as_mut()
+                && let Some((frame, texture)) = crate::scene_viewport::lease_frame(
+                    pane, &gpu.device, &self.content_state.scene_viewport_frames, &request, &mut bridge_leases)
+            {
+                if let Some(texture) = texture
+                    && let Some(ui) = self.ui_renderer.as_mut()
+                {
+                    ui.register_external_texture(crate::scene_viewport::texture_handle(), texture);
                 }
-                if !used { bridge.retire_read(lease); }
+                session.displayed = Some(frame);
             }
         } else {
             ws.viewport_session = None;

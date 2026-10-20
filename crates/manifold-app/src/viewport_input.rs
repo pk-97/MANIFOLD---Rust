@@ -61,8 +61,7 @@ impl Default for ViewportInputSensitivity {
             // already scales by distance, so this stays resolution/zoom
             // invariant).
             pan: 0.0025,
-            // Per wheel "notch" (matches `window_input.rs`'s existing
-            // `LINE_DELTA_PX`-normalized convention for line-delta scroll).
+            // Per wheel notch: `classify_wheel` passes notches, never pixels.
             dolly: 0.08,
             trackpad_pan: 0.0015,
             trackpad_pinch_dolly: 0.05,

@@ -40,6 +40,8 @@ pub(crate) struct PhysicsOverlayFrame {
     /// The content frame that wrote the surface; matched against the frame
     /// the preview bridge published so lines never sit on another frame.
     pub frame: u64,
+    /// The scene node that rendered the picture: what the preview navigates.
+    pub scene_node: NodeId,
     pub camera: Camera,
     pub domains: Arc<Domains>,
     pub lights: Arc<Lights>,
@@ -74,6 +76,8 @@ pub(crate) struct PreviewGizmo {
     /// The overlay frame the last present showed, and the output size it
     /// was rendered at.
     shown: Option<(PhysicsOverlayFrame, (u32, u32))>,
+    /// The navigated picture shown instead of the output, if any.
+    navigated: Option<GizmoView>,
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
     lines: Vec<WorldLine>,
@@ -112,12 +116,22 @@ impl PreviewGizmo {
 
     /// The overlay frame the present is about to draw, or `None` when no
     /// frame matches the picture on screen. Input picks against it.
-    pub fn show(&mut self, frame: Option<&PhysicsOverlayFrame>, output: (u32, u32)) {
+    /// `navigated` is the preview's navigated picture when it shows instead
+    /// of the output (`preview_navigation.rs`): the lines and picks follow
+    /// its camera, the output camera stays as reported.
+    pub fn show(&mut self, frame: Option<&PhysicsOverlayFrame>, output: (u32, u32), navigated: Option<GizmoView>) {
         self.shown = frame.map(|frame| (frame.clone(), output));
+        self.navigated = navigated;
+    }
+
+    /// The output frame on screen: what navigation seeds from.
+    pub fn shown(&self) -> Option<&PhysicsOverlayFrame> {
+        self.shown.as_ref().map(|(frame, _)| frame)
     }
 
     fn view(&self) -> Option<GizmoView> {
-        self.shown.as_ref().map(|(frame, (width, height))| GizmoView { camera: frame.camera, width: *width, height: *height })
+        let (frame, (width, height)) = self.shown.as_ref()?;
+        Some(self.navigated.unwrap_or(GizmoView { camera: frame.camera, width: *width, height: *height }))
     }
 
     /// The shown frame's chrome and the selected item's handles, through
@@ -355,21 +369,21 @@ impl PhysicsOverlayObservations {
 
     /// Record what surface `slot` was rendered with on content frame `frame`.
     /// `observe` appends the layer's domains, light positions and physics
-    /// setup shapes and returns
-    /// the camera, or `None` when the layer did not render this frame, which
-    /// clears the slot.
+    /// setup shapes and returns the scene node and camera that rendered it,
+    /// or `None` when the layer did not render this frame, which clears the
+    /// slot.
     pub fn record(
         &mut self,
         slot: usize,
         frame: u64,
-        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>, &mut Vec<PhysicsGizmo>) -> Option<Camera>,
+        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>, &mut Vec<PhysicsGizmo>) -> Option<(NodeId, Camera)>,
     ) {
         self.frames[slot] = None;
         let Some(layer) = self.layer.as_ref() else { return };
         self.domain_scratch.clear();
         self.light_scratch.clear();
         self.gizmo_scratch.clear();
-        let Some(camera) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
+        let Some((scene_node, camera)) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
         if self.domain_scratch.as_slice() != self.domains.as_ref() {
             self.domains = Arc::from(self.domain_scratch.as_slice());
         }
@@ -382,6 +396,7 @@ impl PhysicsOverlayObservations {
         self.frames[slot] = Some(PhysicsOverlayFrame {
             layer: layer.clone(),
             frame,
+            scene_node,
             camera,
             domains: self.domains.clone(),
             lights: self.lights.clone(),
@@ -451,7 +466,7 @@ mod tests {
         observations.set_layer(Some(LayerId::new("water")));
         let observe = |gizmos: &mut Vec<PhysicsGizmo>| {
             gizmos.extend([collider, wind]);
-            Some(Camera::default_perspective())
+            Some((NodeId::new("scene"), Camera::default_perspective()))
         };
         observations.record(0, 1, |_, _, _, gizmos| observe(gizmos));
         let first = observations.frames[0].as_ref().unwrap().gizmos.clone();
@@ -484,7 +499,7 @@ mod tests {
         };
         // The surface was published and drawn before its entry arrived.
         let shown = inputs(&observations.frames);
-        observations.record(2, 41, |_, _, _, _| Some(Camera::default_perspective()));
+        observations.record(2, 41, |_, _, _, _| Some((NodeId::new("scene"), Camera::default_perspective())));
         let arrived = inputs(&observations.frames);
         assert!(crate::frame_plan::plan_frame(&shown, &arrived).redraw);
         assert!(!crate::frame_plan::plan_frame(&arrived, &arrived).redraw);
@@ -499,7 +514,7 @@ mod tests {
         observations.set_layer(Some(layer.clone()));
         observations.record(0, 7, |_, _, lights, _| {
             lights.push([0.0; 3]);
-            Some(Camera::default_perspective())
+            Some((NodeId::new("scene"), Camera::default_perspective()))
         });
         let frame = observations.frames[0].as_ref().expect("a rendered layer reports");
         assert!(frame.matches(Some(&layer), 7) && !frame.matches(Some(&layer), 8));

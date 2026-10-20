@@ -37,11 +37,9 @@ pub enum PaneSource {
     Local(GpuTexture),
     /// A cross-device IOSurface bridge. Holds the per-surface imported textures
     /// plus the last-seen generation; [`TexturePane::current`] re-imports every
-    /// surface on a generation change (resize) and returns the published front.
-    ///
-    /// Unused today — the spectrogram is `Local`. This is the ready path for a
-    /// future cross-device consumer (e.g. migrating node-preview / master-out).
-    #[allow(dead_code)]
+    /// surface on a generation change (resize) and returns the published front;
+    /// [`TexturePane::leased`] does the same for a read lease's slot. The
+    /// scene viewport's frames are the first bridged consumer.
     Bridged {
         bridge: Arc<SharedTextureBridge>,
         /// One imported texture per IOSurface (`len == SURFACE_COUNT`). `None`
@@ -64,9 +62,7 @@ impl TexturePane {
         Self { source: PaneSource::Local(texture) }
     }
 
-    /// A pane backed by a cross-device IOSurface bridge. Ready for a future
-    /// cross-device consumer; the spectrogram uses [`Self::local`].
-    #[allow(dead_code)]
+    /// A pane backed by a cross-device IOSurface bridge.
     pub fn bridged(bridge: Arc<SharedTextureBridge>) -> Self {
         Self {
             source: PaneSource::Bridged {
@@ -88,21 +84,46 @@ impl TexturePane {
     /// a texture across a resize — invalidation lives here, not in a per-consumer
     /// generation check.
     pub fn current(&mut self, ui_device: &GpuDevice) -> Option<&GpuTexture> {
+        let front = match &self.source {
+            PaneSource::Local(_) => 0,
+            PaneSource::Bridged { bridge, .. } => bridge.front_index() as usize,
+        };
+        self.surface(ui_device, front)
+    }
+
+    /// The bridged surface a read lease pinned (`lease.slot()`), re-imported
+    /// on a generation change like [`Self::current`]. The caller holds the
+    /// lease until the sampling GPU work retires. `None` for a local pane.
+    pub fn leased(&mut self, ui_device: &GpuDevice, slot: usize) -> Option<&GpuTexture> {
+        match self.source {
+            PaneSource::Local(_) => None,
+            PaneSource::Bridged { .. } => self.surface(ui_device, slot),
+        }
+    }
+
+    /// The bridge behind a bridged pane, for its read leases.
+    pub fn bridge(&self) -> Option<&Arc<SharedTextureBridge>> {
+        match &self.source {
+            PaneSource::Local(_) => None,
+            PaneSource::Bridged { bridge, .. } => Some(bridge),
+        }
+    }
+
+    fn surface(&mut self, ui_device: &GpuDevice, slot: usize) -> Option<&GpuTexture> {
         match &mut self.source {
             PaneSource::Local(tex) => Some(tex),
             PaneSource::Bridged { bridge, imported, last_generation } => {
                 let generation = bridge.generation();
                 if *last_generation != Some(generation) {
-                    for (i, slot) in imported.iter_mut().enumerate() {
+                    for (i, surface) in imported.iter_mut().enumerate() {
                         // SAFETY: the bridge outlives this pane (held by `Arc`),
                         // so the IOSurface backing each imported texture stays
                         // alive at least as long as the texture.
-                        *slot = Some(unsafe { bridge.import_texture_native(ui_device, i) });
+                        *surface = Some(unsafe { bridge.import_texture_native(ui_device, i) });
                     }
                     *last_generation = Some(generation);
                 }
-                let front = bridge.front_index() as usize;
-                imported.get(front).and_then(|t| t.as_ref())
+                imported.get(slot).and_then(|t| t.as_ref())
             }
         }
     }

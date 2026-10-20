@@ -2278,6 +2278,7 @@ impl Application {
         let automation_draw_mode = self.selection.automation_draw_mode;
         let inputs = crate::frame_plan::FrameInputs {
             gizmo_view: self.ws.preview_gizmo.version(),
+            preview_navigation: self.ws.preview_navigation.frame_input(&self.content_state.scene_viewport_frames),
             ..crate::ui_frame::gather_frame_inputs(
                 &mut self.frame_planner,
                 &self.ws.ui_root,

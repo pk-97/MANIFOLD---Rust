@@ -27,17 +27,18 @@ impl PresetRuntime {
         }
     }
 
-    /// The camera the scene last rendered through, from the first node in
-    /// authored order that reports one; that node's light positions are
-    /// appended to `lights`. Read-only, for editor overlays.
-    pub fn write_rendered_view(&self, lights: &mut Vec<[f32; 3]>) -> Option<crate::scene::camera::Camera> {
-        let node = self.extension_slots().first()?.node_map.iter().find_map(|(_, instance)| {
+    /// The camera the scene last rendered through and the authored id of the
+    /// node that rendered it, from the first node in authored order that
+    /// reports one; that node's light positions are appended to `lights`.
+    /// Read-only, for editor overlays and the preview's navigation view.
+    pub fn write_rendered_view(&self, lights: &mut Vec<[f32; 3]>) -> Option<(NodeId, crate::scene::camera::Camera)> {
+        let node = self.extension_slots().first()?.node_map.iter().find_map(|(id, instance)| {
             let node = &self.graph.get_node(*instance)?.node;
-            node.rendered_camera().map(|camera| (node, camera))
+            node.rendered_camera().map(|camera| (id, node, camera))
         });
-        let (node, camera) = node?;
+        let (id, node, camera) = node?;
         lights.extend_from_slice(node.rendered_lights());
-        Some(camera)
+        Some((id.clone(), camera))
     }
 
     pub fn write_fluid_domains_watched(&self, output: &mut Vec<(NodeId, FluidDomainSnapshot)>) {
