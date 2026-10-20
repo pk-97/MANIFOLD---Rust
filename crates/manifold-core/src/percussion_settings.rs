@@ -414,7 +414,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Kick,
             self.kick.layer_index,
-            None,
             self.kick.generator.clone(),
             self.kick.clip_duration_beats,
             self.kick.min_confidence,
@@ -423,7 +422,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Snare,
             self.snare.layer_index,
-            None,
             self.snare.generator.clone(),
             self.snare.clip_duration_beats,
             self.snare.min_confidence,
@@ -432,7 +430,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Perc,
             self.perc.layer_index,
-            None,
             self.perc.generator.clone(),
             self.perc.clip_duration_beats,
             self.perc.min_confidence,
@@ -441,7 +438,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Hat,
             self.hat.layer_index,
-            None,
             self.hat.generator.clone(),
             self.hat.clip_duration_beats,
             self.hat.min_confidence,
@@ -450,7 +446,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Vocal,
             self.vocal.layer_index,
-            None,
             self.vocal.generator.clone(),
             self.vocal.clip_duration_beats,
             self.vocal.min_confidence,
@@ -459,7 +454,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Synth,
             self.synth.layer_index,
-            None,
             self.synth.generator.clone(),
             Beats::ZERO,
             self.synth.min_confidence,
@@ -468,7 +462,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Pad,
             self.pad.layer_index,
-            None,
             self.pad.generator.clone(),
             Beats::ZERO,
             self.pad.min_confidence,
@@ -477,7 +470,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Bass,
             self.bass.layer_index,
-            None,
             self.bass.generator.clone(),
             Beats::ZERO,
             self.bass.min_confidence,
@@ -486,7 +478,6 @@ impl PercussionPipelineSettings {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::BassSustained,
             self.bass_sustained.layer_index,
-            None,
             self.bass_sustained.generator.clone(),
             Beats::ZERO,
             self.bass_sustained.min_confidence,
@@ -682,7 +673,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Kick,
             0,
-            None,
             PresetTypeId::WIREFRAME_ZOO,
             Beats(0.5),
             0.0,
@@ -691,7 +681,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Snare,
             1,
-            None,
             PresetTypeId::BASIC_SHAPES,
             Beats(0.75),
             0.0,
@@ -700,7 +689,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Perc,
             3,
-            None,
             PresetTypeId::PLASMA,
             Beats(0.50),
             0.0,
@@ -709,7 +697,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Hat,
             4,
-            None,
             PresetTypeId::LISSAJOUS,
             Beats(0.50),
             0.0,
@@ -718,7 +705,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Vocal,
             5,
-            None,
             PresetTypeId::LISSAJOUS,
             Beats(0.50),
             0.0,
@@ -727,7 +713,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Synth,
             6,
-            None,
             PresetTypeId::PLASMA,
             Beats::ZERO,
             0.0,
@@ -736,7 +721,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Pad,
             7,
-            None,
             PresetTypeId::DUOCYLINDER,
             Beats::ZERO,
             0.0,
@@ -745,7 +729,6 @@ impl PercussionImportOptionsFactory {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Bass,
             8,
-            None,
             PresetTypeId::PLASMA,
             Beats::ZERO,
             0.0,
