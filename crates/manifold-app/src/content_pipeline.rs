@@ -1,5 +1,6 @@
 mod trigger_targets;
 mod scene_viewport_capture;
+mod editing_chrome;
 #[cfg(all(test, target_os = "macos"))]
 mod trigger_lane_force_tests;
 
@@ -1794,9 +1795,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             b.as_ref()
                 .is_none_or(|b| b.is_reusable_ephemeral(slot, frame))
         };
-        preview_ok
-            && editor_ok(&self.node_preview_bridge)
-            && editor_ok(&self.node_atlas_bridge)
+        preview_ok && editor_ok(&self.node_preview_bridge) && editor_ok(&self.node_atlas_bridge)
             && editor_ok(&self.scene_viewport.bridge)
     }
 
@@ -1975,14 +1974,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// holding the watched effect preserves the selected node's output.
     pub fn set_node_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
         self.node_preview_request = request;
-    }
-
-    pub fn set_physics_overlay(&mut self, layer: Option<manifold_core::LayerId>) {
-        self.physics_overlay.set_layer(layer);
-    }
-
-    pub fn physics_overlay_frames(&self) -> &crate::physics_overlay::PhysicsOverlayFrames {
-        &self.physics_overlay.frames
     }
 
     /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
@@ -2600,25 +2591,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
                 generators?.write_physics_overlay(layer, domains, lights, gizmos)
             });
-            // The selection mask beside the output surface (D-102), never in it (D9).
+            // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
-            {
-                let mask = generators.zip(self.physics_overlay.layer()).and_then(|(g, layer)| g.selection_mask(layer));
-                let outline = self.outline.output_masks.write(native_device, &mut gen_enc, self.write_surface_index, mask);
-                self.physics_overlay.set_outline(self.write_surface_index, outline);
-            }
-            // The scene viewport's frame for a generator scene, whichever host
-            // asked for it, into the viewport bridge; the output is untouched
-            // (D9).
-            #[cfg(target_os = "macos")]
-            if let Some(copy) = self.scene_viewport.observe_generator(
-                renderers.iter().find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>()),
-                self.write_surface_index, frame_count)
+            if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,
+                generators, &mut self.physics_overlay, &mut self.scene_viewport)
             {
                 self.copy_scene_viewport(&mut gen_enc, copy);
-                let mask = self.scene_viewport.generator_mask(generators);
-                let outline = self.outline.viewport_masks.write(native_device, &mut gen_enc, self.write_surface_index, mask);
-                self.scene_viewport.observations.set_outline(self.write_surface_index, outline);
             }
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
@@ -3617,11 +3595,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 };
             // The viewport bridge publishes every frame a request is live: each
             // such frame wrote or cleared its surface above.
-            let scene_viewport = if self.scene_viewport.request.is_some() {
-                self.scene_viewport.bridge.clone()
-            } else {
-                None
-            };
+            let scene_viewport = self.scene_viewport.request.as_ref().and_then(|_| self.scene_viewport.bridge.clone());
             // Publish the thumbnail atlas only on frames a capture block actually
             // wrote it — never on an enabled-but-empty frame, which would flip the
             // UI to a freshly-cleared (all-transparent) surface and strobe black.

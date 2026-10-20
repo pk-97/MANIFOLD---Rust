@@ -5,9 +5,37 @@
 
 use super::*;
 
+/// The mask's state on one renderer.
+#[derive(Default)]
+pub(super) struct SelectionMask {
+    /// Render slots the mask draws, kept so a steady selection allocates
+    /// nothing. Empty draws no mask.
+    slots: Vec<u32>,
+    /// The target, at the scene's native render size; kept while slots are set.
+    texture: Option<manifold_gpu::GpuTexture>,
+    pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// This frame drew the mask; cleared at the start of every evaluate.
+    pub(super) drawn: bool,
+}
+
+impl SelectionMask {
+    pub(super) fn set(&mut self, slots: &[u32]) {
+        self.slots.clear();
+        self.slots.extend_from_slice(slots);
+        if slots.is_empty() {
+            self.texture = None;
+        }
+    }
+
+    /// The mask this frame drew, if it drew one.
+    pub(super) fn texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.texture.as_ref().filter(|_| self.drawn)
+    }
+}
+
 impl RenderScene {
     /// Draw every draw whose render slot is selected into the mask, sized
-    /// to the output. Runs after the main draw; one pass per selected draw,
+    /// to the native render. Runs after the main draw; one pass per selected draw,
     /// the first clearing, so a group's parts union.
     pub(super) fn selection_mask_pass<'ctx, 'gpu>(
         &mut self,
@@ -15,13 +43,13 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         draws: &[ObjectDraw<'ctx>],
     ) {
-        if self.selection_slots.is_empty() {
+        if self.selection.slots.is_empty() {
             return;
         }
         let (width, height) = (pre.native_width.max(1), pre.native_height.max(1));
         let gpu = ctx.gpu_encoder();
-        if self.selection_mask.as_ref().is_none_or(|mask| mask.width != width || mask.height != height) {
-            self.selection_mask = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+        if self.selection.texture.as_ref().is_none_or(|mask| mask.width != width || mask.height != height) {
+            self.selection.texture = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width,
                 height,
                 depth: 1,
@@ -33,7 +61,8 @@ impl RenderScene {
             }));
         }
         let pipeline = self
-            .selection_mask_pipeline
+            .selection
+            .pipeline
             .get_or_insert_with(|| {
                 gpu.device.create_render_pipeline(
                     include_str!("../shaders/shadow_depth.wgsl"),
@@ -45,13 +74,13 @@ impl RenderScene {
                 )
             })
             .clone();
-        let mask = self.selection_mask.as_ref().expect("ensured above");
+        let mask = self.selection.texture.as_ref().expect("ensured above");
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         let dummy = self.dummy_texture.as_ref().expect("ensured");
         // Unjittered: the editor projects through the same camera.
         let view_proj = pre.cam.view_proj(pre.aspect);
         let mut load = manifold_gpu::GpuLoadAction::Clear;
-        for d in draws.iter().filter(|d| d.instance_count > 0 && self.selection_slots.contains(&d.slot)) {
+        for d in draws.iter().filter(|d| d.instance_count > 0 && self.selection.slots.contains(&d.slot)) {
             let uniforms = ShadowUniforms::for_draw(view_proj, d);
             let bindings = [
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
@@ -68,6 +97,6 @@ impl RenderScene {
             // Nothing selected drew this frame: an empty mask, not last frame's.
             gpu.native_enc.clear_texture(mask, 0.0, 0.0, 0.0, 0.0);
         }
-        self.selection_mask_drawn = true;
+        self.selection.drawn = true;
     }
 }

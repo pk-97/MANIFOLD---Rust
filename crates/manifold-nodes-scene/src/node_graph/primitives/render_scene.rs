@@ -77,6 +77,7 @@ mod pass2_draw;
 mod rt_trace;
 mod rt_frame;
 mod prepasses;
+use prepasses::ShadowUniforms;
 mod pipelines;
 mod resources;
 #[cfg(feature = "gpu-proofs")]
@@ -891,36 +892,6 @@ fn material_map_uniforms(material: &Material) -> [MaterialMapUniform; 19] {
     })
 }
 
-/// Per-(caster, object) uniform for the shadow depth pass
-/// (`shaders/shadow_depth.wgsl`). The vertex shader composes
-/// `light_view_proj · model · position` and writes only depth. 128 bytes.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShadowUniforms {
-    light_view_proj: [[f32; 4]; 4],
-    model: [[f32; 4]; 4],
-    /// `(gain, weights_wired, 0, 0)` for the depth visibility discard.
-    appearance: [f32; 4],
-    alpha: [f32; 4],
-    uv_m: [f32; 4],
-    uv_t: [f32; 4],
-}
-const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 192);
-
-impl ShadowUniforms {
-    fn for_draw(view_proj: [[f32; 4]; 4], draw: &ObjectDraw<'_>) -> Self {
-        Self {
-            light_view_proj: view_proj,
-            model: draw.uniforms.model,
-            appearance: draw.uniforms.appearance,
-            alpha: [draw.uniforms.alpha_params[0], draw.uniforms.alpha_params[1],
-                draw.uniforms.base_color[3], draw.uniforms.texture_flags[2]],
-            uv_m: draw.uniforms.base_color_uv_m,
-            uv_t: draw.map_uniforms[0].offset_set,
-        }
-    }
-}
-
 pub struct RenderScene {
     inputs: Vec<NodeInput>,
     params: Vec<ParamDef>,
@@ -1123,14 +1094,8 @@ pub struct RenderScene {
     /// This frame's light positions, for the same overlays. Retained so a
     /// steady frame allocates nothing.
     rendered_lights: Vec<[f32; 3]>,
-    /// Render slots the selection mask draws (D-102), kept so a steady
-    /// selection allocates nothing. Empty draws no mask.
-    selection_slots: Vec<u32>,
-    /// The selection mask target, sized to the output; kept while slots are set.
-    selection_mask: Option<manifold_gpu::GpuTexture>,
-    selection_mask_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    /// This frame drew the mask.
-    selection_mask_drawn: bool,
+    /// The selection mask the editor outlines (D-102).
+    selection: selection_mask::SelectionMask,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -2502,17 +2467,8 @@ impl EffectNode for RenderScene {
         &self.rendered_lights
     }
 
-    fn set_selection_mask(&mut self, slots: &[u32]) {
-        self.selection_slots.clear();
-        self.selection_slots.extend_from_slice(slots);
-        if slots.is_empty() {
-            self.selection_mask = None;
-        }
-    }
-
-    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
-        self.selection_mask.as_ref().filter(|_| self.selection_mask_drawn)
-    }
+    fn set_selection_mask(&mut self, slots: &[u32]) { self.selection.set(slots); }
+    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> { self.selection.texture() }
 
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
@@ -2681,7 +2637,7 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
-        self.selection_mask_drawn = false;
+        self.selection.drawn = false;
         self.rendered_camera = None;
         self.render_objects(ctx, None);
     }

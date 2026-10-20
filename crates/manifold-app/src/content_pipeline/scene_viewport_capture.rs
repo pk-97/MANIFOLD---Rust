@@ -151,35 +151,6 @@ impl ContentPipeline {
         self.scene_viewport.request.as_ref().map(|request| request.host)
     }
 
-    /// The selection outline's render slots for the output and the scene
-    /// viewport (D-102).
-    #[cfg(target_os = "macos")]
-    pub fn set_selection_outline(
-        &mut self,
-        output: Option<crate::selection_outline::OutlineSlots>,
-        viewport: Option<crate::selection_outline::OutlineSlots>,
-    ) {
-        self.outline.set(output, viewport);
-    }
-
-    /// Withdraw the outline requests, returning them for
-    /// [`Self::set_selection_outline`] later: no mask renders meanwhile.
-    #[cfg(target_os = "macos")]
-    pub fn take_selection_outline(
-        &mut self,
-    ) -> (Option<crate::selection_outline::OutlineSlots>, Option<crate::selection_outline::OutlineSlots>) {
-        self.outline.take()
-    }
-
-    /// Install the outline mask bridges: the output preview's and the scene
-    /// viewport's.
-    #[cfg(target_os = "macos")]
-    pub fn set_outline_bridges(&mut self, output: Arc<crate::shared_texture::SharedTextureBridge>, viewport: Arc<crate::shared_texture::SharedTextureBridge>) {
-        let Some(device) = self.native_device.clone() else { return };
-        self.outline.output_masks.install(&device, output);
-        self.outline.viewport_masks.install(&device, viewport);
-    }
-
     pub fn scene_viewport_frames(&self) -> &SceneViewportFrames {
         &self.scene_viewport.observations.frames
     }
