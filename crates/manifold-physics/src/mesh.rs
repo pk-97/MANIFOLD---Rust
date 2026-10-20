@@ -119,13 +119,42 @@ fn copy_hull_mesh(hull: usize) -> Result<TriangleMesh, PhysicsError> {
     })
 }
 
-/// Checks that a mesh bounds closed, outward-wound volumes: finite vertices,
-/// no degenerate or zero-area triangles, every edge shared by exactly two
-/// triangles with opposite winding, and positive volume per connected part.
-/// FLIP roles and the signed-distance lattices both use it.
+/// Checks that a mesh bounds only closed, outward-wound volumes. The native
+/// FLIP solver needs it: it signs its mesh level set by ray-crossing parity.
 pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
-    if mesh.vertices.len() < 4 || mesh.triangles.len() < 4 {
-        return Err(PhysicsError::InvalidInput("mesh must contain a closed volume"));
+    if part_windings(mesh)?.iter().any(|&winding| winding != Winding::Outward) {
+        return Err(PhysicsError::InvalidInput(
+            "mesh must be closed, manifold and outward oriented",
+        ));
+    }
+    Ok(())
+}
+
+/// Which triangles bound a closed volume, one flag per triangle. Triangles
+/// sharing an edge form a part. A part is closed when every edge it touches
+/// is shared by exactly two of its triangles with opposite winding and it
+/// encloses nonzero volume of either sign: an inside-out part (a mirrored
+/// node, a flipped export) is still a sealed volume, and a distance signs it
+/// by the magnitude of its winding number. Any other part is an open
+/// surface. Errors only on geometry no distance can use: no triangles,
+/// non-finite vertices, out-of-range indices, degenerate or zero-area
+/// triangles.
+pub fn closed_triangles(mesh: &TriangleMesh) -> Result<Vec<bool>, PhysicsError> {
+    Ok(part_windings(mesh)?.into_iter().map(|winding| winding != Winding::Open).collect())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Winding {
+    Open,
+    Outward,
+    Inward,
+}
+
+/// Each triangle's part: open, or sealed with positive (outward) or negative
+/// (inward) volume.
+fn part_windings(mesh: &TriangleMesh) -> Result<Vec<Winding>, PhysicsError> {
+    if mesh.triangles.is_empty() {
+        return Err(PhysicsError::InvalidInput("mesh has no triangles"));
     }
     if mesh
         .vertices
@@ -135,7 +164,6 @@ pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
         return Err(PhysicsError::InvalidInput("mesh vertices must be finite"));
     }
     let mut edges: HashMap<(u32, u32), Vec<(usize, bool)>> = HashMap::new();
-    let mut neighbours = vec![Vec::new(); mesh.triangles.len()];
     let mut minimum = [f64::INFINITY; 3];
     let mut maximum = [f64::NEG_INFINITY; 3];
     for vertex in &mesh.vertices {
@@ -182,43 +210,41 @@ pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
             return Err(PhysicsError::InvalidInput("mesh contains a zero-area triangle"));
         }
         for (from, to) in [(a, b), (b, c), (c, a)] {
-            let key = (from.min(to), from.max(to));
-            let forward = from < to;
-            let edge = edges.entry(key).or_default();
-            if edge
-                .iter()
-                .any(|&(_, other_forward)| other_forward == forward)
-            {
-                return Err(PhysicsError::InvalidInput(
-                    "mesh edge winding is inconsistent or non-manifold",
-                ));
-            }
-            if edge.len() >= 2 {
-                return Err(PhysicsError::InvalidInput("mesh edge is non-manifold"));
-            }
-            edge.push((triangle_index, forward));
-            if edge.len() == 2 {
-                let other = edge[0].0;
-                neighbours[triangle_index].push(other);
-                neighbours[other].push(triangle_index);
-            }
+            edges
+                .entry((from.min(to), from.max(to)))
+                .or_default()
+                .push((triangle_index, from < to));
         }
     }
-    if edges.values().any(|edge| edge.len() != 2) {
-        return Err(PhysicsError::InvalidInput("mesh is open or has non-manifold edges"));
+    let mut neighbours = vec![Vec::new(); mesh.triangles.len()];
+    let mut sealed = vec![true; mesh.triangles.len()];
+    for uses in edges.values() {
+        let paired = uses.len() == 2 && uses[0].1 != uses[1].1;
+        for &(triangle, _) in uses {
+            sealed[triangle] &= paired;
+        }
+        let first = uses[0].0;
+        for &(other, _) in &uses[1..] {
+            neighbours[first].push(other);
+            neighbours[other].push(first);
+        }
     }
     let volume_epsilon = 1.0e-12 * scale.max(1.0).powi(3);
+    let mut closed = vec![Winding::Open; mesh.triangles.len()];
     let mut visited = vec![false; mesh.triangles.len()];
+    let mut part = Vec::new();
     for start in 0..mesh.triangles.len() {
         if visited[start] {
             continue;
         }
+        part.clear();
         let mut stack = vec![start];
         visited[start] = true;
         let mut volume = 0.0_f64;
         let [origin_a, _, _] = mesh.triangles[start];
         let origin = mesh.vertices[origin_a as usize].map(f64::from);
         while let Some(index) = stack.pop() {
+            part.push(index);
             let [a, b, c] = mesh.triangles[index];
             let va = mesh.vertices[a as usize].map(f64::from);
             let vb = mesh.vertices[b as usize].map(f64::from);
@@ -236,13 +262,21 @@ pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
                 }
             }
         }
-        if !volume.is_finite() || volume <= volume_epsilon {
-            return Err(PhysicsError::InvalidInput(
-                "mesh volume must be finite, nonzero, and outward oriented",
-            ));
+        let winding = if !volume.is_finite()
+            || volume.abs() <= volume_epsilon
+            || !part.iter().all(|&triangle| sealed[triangle])
+        {
+            Winding::Open
+        } else if volume > 0.0 {
+            Winding::Outward
+        } else {
+            Winding::Inward
+        };
+        for &triangle in &part {
+            closed[triangle] = winding;
         }
     }
-    Ok(())
+    Ok(closed)
 }
 
 #[cfg(test)]
@@ -460,5 +494,53 @@ mod tests {
             local.hull_meshes(terrain),
             Err(PhysicsError::InvalidInput("body does not use convex hulls"))
         );
+    }
+
+    fn cube_mesh() -> TriangleMesh {
+        TriangleMesh {
+            vertices: cube(),
+            triangles: vec![
+                [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+                [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
+                [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
+            ],
+        }
+    }
+
+    /// Each part is classified on its own; open and non-manifold parts are
+    /// surfaces, not errors, and a sealed part of either winding is closed.
+    #[test]
+    fn scene_physics_closed_triangles_classifies_each_part() {
+        let cube = cube_mesh();
+        assert_eq!(closed_triangles(&cube).unwrap(), vec![true; 12]);
+        validate_closed_mesh(&cube).unwrap();
+
+        let mut open = cube.clone();
+        open.triangles.pop();
+        assert_eq!(closed_triangles(&open).unwrap(), vec![false; 11]);
+        assert!(validate_closed_mesh(&open).is_err());
+
+        let mut inward = cube.clone();
+        for triangle in &mut inward.triangles {
+            triangle.swap(1, 2);
+        }
+        assert_eq!(closed_triangles(&inward).unwrap(), vec![true; 12], "an inside-out cube is still sealed");
+        assert!(validate_closed_mesh(&inward).is_err(), "the native solver still needs outward winding");
+
+        let mut mixed = cube.clone();
+        mixed.vertices.extend([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]]);
+        mixed.triangles.push([8, 9, 10]);
+        let flags = closed_triangles(&mixed).unwrap();
+        assert!(flags[..12].iter().all(|&closed| closed));
+        assert!(!flags[12]);
+
+        let mut fin = cube;
+        fin.vertices.push([0.0, 0.0, 2.0]);
+        fin.triangles.push([6, 7, 8]);
+        assert_eq!(closed_triangles(&fin).unwrap(), vec![false; 13], "a fin on an edge opens its part");
+
+        let unusable = TriangleMesh { vertices: vec![[0.0; 3], [1.0, 0.0, 0.0], [f32::NAN, 0.0, 0.0]], triangles: vec![[0, 1, 2]] };
+        assert!(closed_triangles(&unusable).is_err());
+        assert!(closed_triangles(&TriangleMesh { vertices: self::cube(), triangles: Vec::new() }).is_err());
     }
 }

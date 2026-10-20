@@ -22,8 +22,11 @@ manifold_core::testkit_visible! {
 /// The two preparation modes exposed by the source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GeometryMode {
+    /// Convex hulls cooked by Box3D, the ones rigid colliders use.
     CollisionProxy,
-    ClosedMesh,
+    /// The exact welded surface. Closed parts become volumes and open parts
+    /// shells (`manifold_physics::sdf::signed_distance_union`).
+    ExactMesh,
 }
 }
 
@@ -81,7 +84,7 @@ pub(crate) fn prepare_geometry(
                     .collect::<Result<Vec<_>, _>>()?
             }
         }
-        GeometryMode::ClosedMesh => {
+        GeometryMode::ExactMesh => {
             let vertices = if path.as_os_str().is_empty() {
                 let mut vertices = platonic_mesh(shape).to_vec();
                 for vertex in &mut vertices {
@@ -109,11 +112,10 @@ pub(crate) fn prepare_geometry(
         }
     };
 
-    if mode == GeometryMode::ClosedMesh {
+    if mode == GeometryMode::ExactMesh {
         for mesh in &meshes {
-            manifold_fluids::validate_mesh(mesh).map_err(|error| {
-                format!("{label}: {error}; select Collision Proxy for an approximate closed hull")
-            })?;
+            manifold_physics::closed_triangles(mesh)
+                .map_err(|error| format!("{label}: {error}"))?;
         }
     }
     if meshes.is_empty() {
@@ -151,11 +153,9 @@ pub(crate) fn prepare_wired_geometry(
                 manifold_physics::cook_hull_mesh(points).map_err(|error| error.to_string())
             })
             .collect(),
-        GeometryMode::ClosedMesh => {
+        GeometryMode::ExactMesh => {
             let mesh = weld_triangle_list(&vertices)?;
-            manifold_fluids::validate_mesh(&mesh).map_err(|error| {
-                format!("{error}; select Collision Proxy for an approximate closed hull")
-            })?;
+            manifold_physics::closed_triangles(&mesh).map_err(|error| error.to_string())?;
             Ok(vec![mesh])
         }
     }
@@ -180,7 +180,7 @@ fn transform_points(points: &[[f32; 3]], transform: Transform) -> Result<Vec<[f3
 /// same geometric coordinate; no tolerance-based simplification is performed.
 pub(crate) fn weld_triangle_list(vertices: &[MeshVertex]) -> Result<TriangleMesh, String> {
     if vertices.is_empty() || !vertices.len().is_multiple_of(3) {
-        return Err("closed mesh source must contain a nonempty triangle list".into());
+        return Err("mesh source must contain a nonempty triangle list".into());
     }
     let mut indices = AHashMap::<[u32; 3], u32>::new();
     let mut positions = Vec::new();
@@ -193,7 +193,7 @@ pub(crate) fn weld_triangle_list(vertices: &[MeshVertex]) -> Result<TriangleMesh
                 Some(&index) => index,
                 None => {
                     let index = u32::try_from(positions.len())
-                        .map_err(|_| "closed mesh has too many unique vertices".to_string())?;
+                        .map_err(|_| "mesh has too many unique vertices".to_string())?;
                     indices.insert(key, index);
                     positions.push(vertex.position);
                     index
@@ -313,7 +313,7 @@ pub(super) mod tests {
             1,
             1.0,
             Transform::default(),
-            GeometryMode::ClosedMesh,
+            GeometryMode::ExactMesh,
             None,
         )
         .unwrap();

@@ -362,9 +362,18 @@ sampled per substep through each body's pose. Grid nodes inside a collider take 
 velocity in the normal direction and keep friction-limited tangential velocity. Box3D
 bodies that are fixed or animated act as prescribed colliders; dynamic ones couple two
 ways (D12). Rejected: a GPU mesh-to-SDF atom (a second upload path for geometry that is
-CPU `TriangleMesh`). Rejected for v1: the paper's colored-distance-field compatibility
-test (CPIC proper), which exists for thin shells and cutting; every role and hull here is
-a closed volume (Deferred, with a thinness warning).
+CPU `TriangleMesh`). A closed part of a mesh is the volume it bounds, signed by winding
+number, inside-out parts included; an open part (a ground plane, a scanned wall) is a
+shell: unsigned distance minus half the role's Shell Thickness in world metres, never
+thinner than two of the liquid's cells so its grid sees it, and never under two lattice
+spacings so trilinear sampling cannot step over it (SCENE_SETUP_PROGRAMME.md D8 (open
+meshes are solids)). With open parts the lattice is no coarser than the liquid's cells
+(D27), so a shell's faces sit within a cell of the drawn surface at any mesh size. Open
+parts build as a narrow band: exact within the padding of the shell, a lower bound beyond,
+so their cost follows the triangles, not nodes × triangles.
+Cooked hulls are always closed. Rejected for v1: the paper's colored-distance-field
+compatibility test (CPIC proper), which exists for zero-thickness shells and cutting;
+every shell here has a thickness (Deferred, with a thinness warning).
 
 **D12 — Two-way coupling: Box3D in lockstep per tick; each body advanced every substep on
 the GPU; the reaction crosses back through a fenced readback.** Section 5 is the
@@ -486,13 +495,16 @@ through the existing cache writer. P8 ships one demo scene per capability.
 
 **D25 — Distance lattices build lazily on a worker thread; the domain holds until they
 are ready (amends D16).** D16's VERIFY fired: role geometry is prepared on the content
-thread, so a lattice built there would stall the frame. `PreparedFluidGeometry` keeps
-the lattice in a `OnceLock` filled by a short-lived worker thread on first request
-(`fluid_role.rs`, `distance_lattice`); the lattice is derived and not serialized, so
-take and cache identity are unchanged. While any collider's lattice is pending,
-`node.matter_domain` holds its last outputs (`warmup_pending`) and the clock does not
-advance; the simulation starts on the frame every lattice is ready. The worker holds
-only the `Arc` of the prepared geometry; no channel, mutex or long-lived thread.
+thread, so a lattice built there would stall the frame. Each liquid's `LiquidBodies`
+keeps one lattice per geometry, built to the plan its cell size and the role's scale ask
+for (`PreparedFluidGeometry::lattice_plan`) by a short-lived worker thread that hands it
+back over a channel (`bodies.rs`, `resolve_lattice`); the lattice is derived and not
+serialized, so take and cache identity are unchanged. While a collider has no lattice
+yet, `node.matter_domain` holds its last outputs (`warmup_pending`) and the clock does
+not advance; the simulation starts on the frame every lattice is ready. A new plan (a new
+cell size, or a new scale on an open mesh) keeps the last lattice live until the new one
+is ready; offline waits for it. One build runs per geometry at a time; no mutex or
+long-lived thread.
 
 **D26 — A role's scale applies at use.** A lattice is built once in the geometry's own
 unscaled frame. Samplers map a world point through the pose and divide by the per-axis
@@ -503,7 +515,13 @@ tests need no scale. `LiquidShape` is 48 bytes: origin and spacing, dims, atlas 
 and the scale with its minimum in w.
 
 **D27 — One lattice per geometry: the longest extent over 32, two spacings of padding.**
-Roles sharing geometry share one atlas block. World spacing is the local spacing times
+A closed solid's surface is exact at any spacing, so it keeps this. A mesh with open
+parts takes the finer of this and the liquid's cell over the role's largest scale,
+because a shell's faces move with the spacing; past `MAX_LATTICE_NODES` the spacing
+coarsens until it fits and the thin-collider warning says so. Shell Thickness is world
+metres, so an open mesh's lattice depends on its role's scale (an exception to D26), read
+in eighth-octave steps (`scale_steps`): a scale animated within a step rebuilds nothing.
+Roles sharing a lattice share one atlas block. World spacing is the local spacing times
 the role scale per axis. At 64³ (dx = 0.0625 m on the 4 m Dam Break domain): the Dam
 Break's moving box (a unit cube scaled 0.6 × 1.16 × 0.85) samples at 0.019–0.036 m,
 0.3–0.58 dx; a 0.25 m prop at 0.008 m, 0.13 dx; a domain-sized 4 m collider at

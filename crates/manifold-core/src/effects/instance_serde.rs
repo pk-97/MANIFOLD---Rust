@@ -243,6 +243,7 @@ impl Serialize for GraphWithDerivedParams<'_> {
                             let mut stub = p.spec.lookup_stub();
                             if lookup_names(&spec.id) {
                                 stub.name.clear();
+                                stub.tooltip = None;
                             }
                             *spec = stub
                         }
@@ -349,6 +350,7 @@ fn gather_known_params(
     is_generator: bool,
     effect_type: &PresetTypeId,
     graph: &Option<EffectGraphDef>,
+    from_file: bool,
 ) -> Vec<(
     crate::effect_graph_def::ParamSpecDef,
     crate::params::ParamOrigin,
@@ -369,6 +371,9 @@ fn gather_known_params(
         && !meta.params.is_empty()
     {
         let mut join = crate::param_lookup::Join::new(effect_type, graph_def);
+        if from_file {
+            join = join.reading_file();
+        }
         return meta
             .params
             .iter()
@@ -429,27 +434,36 @@ pub(super) fn template_known_for(
         || crate::preset_definition_registry::try_get(effect_type).is_some()
 }
 
+/// Which build of a manifest this is. `Deserialize` and `Reconcile` read a
+/// saved file; `Refresh` rebuilds from the in-memory instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ManifestPass {
+    Deserialize,
+    Reconcile,
+    Refresh,
+}
+
 /// Build a `PresetInstance`'s manifest from its V1.4 `params` wire map (section 4 load
 /// reconcile): seed known descriptors, overlay each file entry's state +
 /// calibration by id (alias-aware), append self-describing inline-`spec`
 /// entries that match nothing, and drop unknown entries with a warning
 /// (today's unknown-id policy). Returns the manifest + the `base_tracked` bit.
 ///
-/// `is_reconcile_pass` distinguishes the deserialize-time call (false) from the
-/// `reconcile_manifest` call (true). The deserialize pass runs before the
-/// project's embedded presets are registered, so template resolution failures
-/// are expected and silent; the reconcile pass runs after registration,
-/// so placeholders there indicate a genuine BUG-079 unresolved preset and are
-/// logged with a warning.
+/// The deserialize pass runs before the project's embedded presets are
+/// registered, so template resolution failures are expected and silent; the
+/// reconcile pass runs after registration, so placeholders there indicate a
+/// genuine BUG-079 (unresolved project-local preset) and are logged with a
+/// warning.
 pub(super) fn build_param_manifest(
     is_generator: bool,
     effect_type: &PresetTypeId,
     graph: &Option<EffectGraphDef>,
     wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
-    is_reconcile_pass: bool,
+    pass: ManifestPass,
 ) -> (crate::params::ParamManifest, bool) {
     use crate::params::{Param, ParamOrigin};
-    let mut entries: Vec<Param> = gather_known_params(is_generator, effect_type, graph)
+    let is_reconcile_pass = pass == ManifestPass::Reconcile;
+    let mut entries: Vec<Param> = gather_known_params(is_generator, effect_type, graph, pass != ManifestPass::Refresh)
         .into_iter()
         .map(|(spec, origin, source, choices)| {
             let mut p = match origin {
@@ -768,7 +782,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // presets have been installed.
         let pending_wire = raw.params.clone();
         let (params, base_tracked) =
-            build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params, false);
+            build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params, ManifestPass::Deserialize);
 
         let mut audio_mods = raw.audio_mods;
         if let Some(legacy) = raw.legacy_audio_trigger {
@@ -846,7 +860,7 @@ impl GeneratorInstanceRaw {
         // the effect-kind `Deserialize` impl above for the same pattern.
         let pending_wire = self.params.clone();
         let (params, base_tracked) =
-            build_param_manifest(true, &self.generator_type, &self.graph, self.params, false);
+            build_param_manifest(true, &self.generator_type, &self.graph, self.params, ManifestPass::Deserialize);
         normalize_meta_params(&mut self.graph, &params);
         let mut audio_mods = self.audio_mods;
         if let Some(legacy) = self.legacy_audio_trigger {

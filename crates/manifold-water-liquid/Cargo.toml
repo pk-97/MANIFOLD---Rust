@@ -10,7 +10,7 @@ manifold-gpu = { path = "../manifold-gpu" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-water-rigid = { path = "../manifold-water-rigid" }
-# Closed-mesh validation for fluid role geometry (primitives/fluid_role_source/geometry.rs).
+# Native particle record layouts the particle-frame seam asserts against (fluid_particles.rs).
 manifold-fluids = { path = "../manifold-fluids" }
 ahash = { workspace = true }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }

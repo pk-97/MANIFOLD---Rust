@@ -22,29 +22,18 @@
 //! rebuild needed. This is the same set the runtime preset loader scans
 //! as its dev stock root.
 
-use manifold_nodes as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_core::scene_modifier_preset::{
-    SceneNodeRef, SceneTargetSelection, validate_scene_modifier_schema,
-};
-use manifold_core::NodeId;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuDevice;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
-use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{persistence::PrimitiveRegistry, validate::ValidateKind, validate::ValidationReport, validate::validate_def};
+use manifold_nodes::scene_modifier_qualify::{mushroom_host, qualify_scene_modifier};
 
 const EFFECT_SUBDIR: &str = "assets/effect-presets";
 const GENERATOR_SUBDIR: &str = "assets/generator-presets";
 const SCENE_MODIFIER_SUBDIR: &str = "assets/scene-modifier-presets";
-const MUSHROOM_FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/fixtures/gltf/cc0___mushroom.glb"
-);
 
 #[derive(Clone, Copy)]
 enum RequestedKind {
@@ -87,12 +76,10 @@ fn main() {
         .any(|kind| matches!(kind, RequestedKind::SceneModifier))
     {
         Some(
-            assemble_import_graph(Path::new(MUSHROOM_FIXTURE))
-                .map(|(def, _)| def)
-                .unwrap_or_else(|error| {
-                    eprintln!("error: mushroom validation fixture failed: {error}");
-                    std::process::exit(2);
-                }),
+            mushroom_host().unwrap_or_else(|error| {
+                eprintln!("error: {error}");
+                std::process::exit(2);
+            }),
         )
     } else {
         None
@@ -232,100 +219,6 @@ fn parse_and_validate_scene_modifier(
 ) -> Result<ValidationReport, String> {
     let bytes = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     let recipe: EffectGraphDef = serde_json::from_str(&bytes).map_err(|e| format!("parse: {e}"))?;
-    validate_scene_modifier_schema(&recipe).map_err(|error| error.to_string())?;
-    let is_shatter = recipe
-        .preset_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.scene_modifier.as_ref())
-        .is_some_and(|modifier| modifier.shatter.is_some());
-    let shatter_host;
-    let (host, targets) = if is_shatter {
-        shatter_host = prepare_shatter_host(mushroom_host)?;
-        (
-            &shatter_host,
-            SceneTargetSelection::Explicit {
-                objects: vec![SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("physics_demo_114"),
-                }],
-            },
-        )
-    } else {
-        (mushroom_host, SceneTargetSelection::AllObjects)
-    };
-    let scene_node = host
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.render_scene")
-        .ok_or_else(|| "mushroom fixture has no node.render_scene host".to_string())?;
-    let instance = prepare_new_scene_modifier(
-        host,
-        &recipe,
-        format!("check:{}", path.display()).into(),
-        SceneNodeRef {
-            scope: Vec::new(),
-            node: scene_node.node_id.clone(),
-        },
-        targets,
-    )
-    .map_err(|error| error.to_string())?;
-    let candidate = manifold_core::scene_modifier_edit::insert_scene_modifier(host, host.scene_modifiers.len(), instance)
-        .map_err(|error| error.to_string())?;
-    prepare_scene_modifiers(&candidate.graph, registry).map_err(|error| error.to_string())?;
+    qualify_scene_modifier(&recipe, &path.display().to_string(), registry, mushroom_host)?;
     Ok(ValidationReport::default())
-}
-
-fn nested_gltf_mesh_source(nodes: &[EffectGraphNode]) -> Option<&EffectGraphNode> {
-    nodes.iter().find_map(|node| {
-        if node.type_id == "node.gltf_mesh_source" {
-            Some(node)
-        } else {
-            node.group
-                .as_deref()
-                .and_then(|group| nested_gltf_mesh_source(&group.nodes))
-        }
-    })
-}
-
-// Shatter requires an imported mesh driven by Physics. Reuse the same body and
-// target as the expansion contract fixture, with real mushroom mesh metadata.
-fn prepare_shatter_host(mushroom_host: &EffectGraphDef) -> Result<EffectGraphDef, String> {
-    let source = nested_gltf_mesh_source(&mushroom_host.nodes)
-        .ok_or_else(|| "mushroom fixture has no nested node.gltf_mesh_source".to_string())?;
-    let mut host: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/PhysicsSolids.json"
-    )))
-    .map_err(|error| format!("PhysicsSolids fixture failed to parse: {error}"))?;
-    let mesh = host
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == 112 && node.type_id == "node.platonic_solid_mesh")
-        .ok_or("PhysicsSolids fixture is missing mesh node 112")?;
-    mesh.type_id = "node.gltf_mesh_source".into();
-    mesh.params = source.params.clone();
-    mesh.params.insert(
-        "path".into(),
-        SerializedParamValue::String {
-            value: MUSHROOM_FIXTURE.into(),
-        },
-    );
-    host.wires.retain(|wire| {
-        !(wire.from_node == 111
-            && wire.from_port == "shape"
-            && wire.to_node == 112
-            && wire.to_port == "shape")
-    });
-    let body = host
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == 111 && node.type_id == "node.rigid_body")
-        .ok_or("PhysicsSolids fixture is missing body node 111")?;
-    body.params.insert(
-        "path".into(),
-        SerializedParamValue::String {
-            value: MUSHROOM_FIXTURE.into(),
-        },
-    );
-    Ok(host)
 }
