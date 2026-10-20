@@ -11,6 +11,20 @@ pub enum ParamCardKind {
     Generator,
 }
 
+/// The panel that hosts the card, set by that panel. It decides how rows
+/// draw: on a scene host a labelled param is a pick list or switch, in the
+/// inspector it keeps its slider (`ParamRow::kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CardHost {
+    /// The inspector card stack and the graph editor lane.
+    #[default]
+    Inspector,
+    /// The layer's scene card in the inspector.
+    SceneCard,
+    /// A card in the Scene tab: a force or an object modifier.
+    SceneTab,
+}
+
 /// Where the card is being shown — which decides its chrome, not its data.
 ///
 /// `Perform` is the inspector / live surface: the full performing card with its
@@ -187,6 +201,11 @@ impl ParamCardPanel {
     /// Hand the card's name and delete to the Scene tab item header above it.
     pub fn set_item_hosted(&mut self, hosted: bool) {
         self.item_hosted = hosted;
+    }
+
+    /// The hosting panel declares itself on every configure pass.
+    pub fn set_host(&mut self, host: CardHost) {
+        self.card_host = host;
     }
 
     /// Force the collapsed flag directly, snapping `collapse_anim` (no ease).

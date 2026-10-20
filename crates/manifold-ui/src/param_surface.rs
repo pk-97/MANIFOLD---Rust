@@ -376,7 +376,8 @@ impl ParamRow {
     /// Shadows: Off, On) are a switch kept a float so a modulator can move it;
     /// the node reads it past 0.5.
     ///
-    /// `scene` is the surface's fact. The scene card and the Scene tab draw
+    /// `scene` is the surface's fact, the card's `CardHost` set by the panel
+    /// that hosts it. The scene card and the Scene tab draw
     /// labelled params as switches and pick lists; other cards keep them
     /// sliders, whose driver lane is a performance tool there. A labelled row
     /// with a modulator or mapping stored on it, armed or disarmed, stays a

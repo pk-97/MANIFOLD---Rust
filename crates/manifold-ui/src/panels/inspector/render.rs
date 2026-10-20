@@ -455,6 +455,11 @@ impl InspectorCompositePanel {
     pub fn set_gen_scene_sections(&mut self, folded: Option<&[String]>) {
         if let Some(card) = self.gen_params.as_mut() {
             card.set_scene_sections(folded);
+            card.set_host(if folded.is_some() {
+                crate::panels::param_card::CardHost::SceneCard
+            } else {
+                crate::panels::param_card::CardHost::Inspector
+            });
         }
     }
 
