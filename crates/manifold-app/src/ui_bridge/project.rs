@@ -11,13 +11,13 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
-/// The Add menu's insert action for `kind`, as the menu fires it.
+/// The Add menu's insert action for ``, as the menu fires it.
 #[cfg(test)]
 pub(crate) fn insert_template_action(
     layer_id: LayerId,
     kind: manifold_core::scene_surface::SceneTemplateKind,
 ) -> ProjectAction {
-    ProjectAction::SceneSetupInsertTemplate { layer_id, kind }
+    ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water: None }
 }
 
 fn scene_object_source_identity(
@@ -523,7 +523,7 @@ pub(super) fn dispatch_project(
         // The one Add menu's scene entries: every kind is a template inserted
         // through `InsertSceneTemplateCommand`, prepared here against the
         // current scene so a refusal surfaces before anything is queued.
-        ProjectAction::SceneSetupInsertTemplate { layer_id, kind } => {
+        ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water } => {
             use manifold_core::scene_surface::SceneTemplateKind as Kind;
             use manifold_core::effect_graph_def::SerializedParamValue;
             use manifold_nodes_scene::node_graph::scene_templates as templates;
@@ -555,11 +555,24 @@ pub(super) fn dispatch_project(
                     }
                     Kind::Light => templates::light_template((-260.0, 50.0 + 40.0 * lights as f32)),
                     Kind::Water => manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(),
+                    Kind::Inflow => templates::role_source_template(templates::RoleSourceKind::Inflow),
+                    Kind::Drain => templates::role_source_template(templates::RoleSourceKind::Drain),
+                    Kind::Collider => templates::role_source_template(templates::RoleSourceKind::Collider),
                 };
-                manifold_editing::scene_template::InsertSceneTemplateCommand::new(project, target.clone(), scene, template, &default)
+                let water = match water {
+                    Some(water) => {
+                        Some(manifold_core::SceneNodeRef::locate(def, water).ok_or("The water is no longer in this scene")?)
+                    }
+                    None => None,
+                };
+                manifold_editing::scene_template::InsertSceneTemplateCommand::new(project, target.clone(), scene, water, template, &default)
                     .map_err(|error| error.message)
             })();
             match prepared {
+                // A source lists under its water, so the selection stays.
+                Ok(command) if matches!(kind, Kind::Inflow | Kind::Drain | Kind::Collider) => {
+                    ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+                }
                 Ok(command) => {
                     let select = match kind {
                         Kind::Light => crate::edit_selection::SelectAfterEdit::NewLight(layer_id.clone()),
@@ -1366,12 +1379,10 @@ fn dispatch_material_batch(
 
 #[cfg(test)]
 mod tests {
-    //! SCENE_SETUP_PANEL_DESIGN.md P2 gate: "add-object button emits
-    //! AddSceneObjectCommand" — proven end to end through the SAME
-    //! `dispatch_project` entry point the panel's "+ Object"/"+ Light"
-    //! clicks reach (`ui_bridge::dispatch` routes `SceneSetupAddObject`/
-    //! `SceneSetupAddLight` here, per `mod.rs`'s routing list), not just the
-    //! command's own already-covered unit test in `manifold-editing`.
+    //! The Add menu's entries proven end to end through the same
+    //! `dispatch_project` entry point the panel's clicks reach
+    //! (`ui_bridge::dispatch` routes `SceneSetupInsertTemplate` here), not
+    //! just the insertion's own unit tests.
     use super::*;
     use crate::content_command::ContentCommand;
     use manifold_core::effect_graph_def::SerializedParamValue;
@@ -1381,6 +1392,7 @@ mod tests {
     mod water_family_actions;
     mod water_family_draw;
     mod water_family_expansion;
+    mod water_family_sources;
 
     fn scene_layer_project() -> (Project, LayerId, u32) {
         let mut project = Project::default();
@@ -1427,7 +1439,7 @@ mod tests {
     /// The layer's CURRENT effective def — the per-instance override once
     /// one exists (post-edit), falling back to the bundled catalog default
     /// beforehand (pre-edit: a fresh `Scene` layer has no override
-    /// yet, exactly why `AddSceneObjectCommand` needs a `catalog_default` to
+    /// yet, which is why an insertion takes a `catalog_default` to
     /// lift one — same resolution `state_sync.rs`'s panel-Vm builder uses).
     fn effective_def(
         project: &Project,
@@ -2086,7 +2098,7 @@ mod tests {
         let render = def.nodes.iter().find(|node| node.id == render_scene_id).unwrap().node_id.clone();
         let scene = manifold_core::SceneNodeRef::locate(&def, &render).unwrap();
         let refused = manifold_editing::scene_template::InsertSceneTemplateCommand::new(
-            &project, target, scene, manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(), &def,
+            &project, target, scene, None, manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(), &def,
         )
         .unwrap_err();
         assert_eq!(refused.message, "Scene document id space is exhausted");

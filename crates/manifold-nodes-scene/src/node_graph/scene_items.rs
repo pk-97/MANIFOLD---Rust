@@ -35,11 +35,15 @@ pub enum SceneItemId {
     Force(NodeId),
     /// A physics world, by its node.
     Physics(NodeId),
+    /// A placed fluid source, by its role node, under the water row
+    /// (`object_node_id`) it feeds.
+    Source { node: NodeId, water: u32 },
 }
 
 /// Every item of the scene, in display order: Camera, lights, objects,
-/// forces, physics worlds, World. Pure function of the def; built on the UI
-/// thread at structural sync, at the same cadence as [`SceneVm`].
+/// placed fluid sources, forces, physics worlds, World. Pure function of the
+/// def; built on the UI thread at structural sync, at the same cadence as
+/// [`SceneVm`].
 pub fn scene_items(def: &EffectGraphDef, vm: &SceneVm) -> Vec<SceneItem> {
     let mut items = vec![SceneItem {
         kind: SceneItemKind::Camera,
@@ -65,6 +69,23 @@ pub fn scene_items(def: &EffectGraphDef, vm: &SceneVm) -> Vec<SceneItem> {
         }),
         _ => None,
     }));
+    // Two rows drawing one water list its sources once, under the first.
+    let mut listed: Vec<&NodeId> = Vec::new();
+    for object in &vm.objects {
+        let SceneObjectVm::Known(row) = object else { continue };
+        for source in &row.placed_sources {
+            if listed.contains(&&source.node) {
+                continue;
+            }
+            listed.push(&source.node);
+            items.push(SceneItem {
+                kind: SceneItemKind::Source,
+                id: SceneItemId::Source { node: source.node.clone(), water: row.object_node_id },
+                name: source.name.clone(),
+                owned_nodes: source.owned.clone(),
+            });
+        }
+    }
     items.extend(def.scene_modifiers.iter().filter(|instance| is_force_recipe(&instance.graph)).map(|instance| {
         SceneItem {
             kind: SceneItemKind::Force,
@@ -149,7 +170,8 @@ fn object_nodes(def: &EffectGraphDef, row: &SceneObjectKnownRow, objects: &[Scen
     owned.extend_from_slice(&row.fluid_controls);
     owned.extend(row.look_mesh.iter().cloned());
     if row.parent_group_id.is_none() {
-        owned.extend(group_fluid_role_nodes(def, row.group_node_id));
+        let placed = |node: &NodeId| row.placed_sources.iter().any(|source| source.owned.contains(node));
+        owned.extend(group_fluid_role_nodes(def, row.group_node_id).into_iter().filter(|node| !placed(node)));
     }
     if let Some(physics) = row.physics.as_ref().filter(|physics| physics.enabled) {
         owned.push(physics.body.clone());

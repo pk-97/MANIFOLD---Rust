@@ -205,6 +205,9 @@ pub enum SceneItemKind {
     Force,
     Physics,
     World,
+    /// A placed fluid source (an Inflow, a Drain or a Collider), listed
+    /// under the water it feeds.
+    Source,
 }
 
 /// What the one Add menu inserts into a scene through a template.
@@ -214,6 +217,10 @@ pub enum SceneTemplateKind {
     Plane,
     Light,
     Water,
+    /// The placed fluid sources, inserted inside their water.
+    Inflow,
+    Drain,
+    Collider,
 }
 
 /// A user's card pin on one control. `None` on the control follows its role.

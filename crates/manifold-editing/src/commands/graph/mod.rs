@@ -45,8 +45,6 @@ mod instance_snapshot;
 pub(crate) use instance_snapshot::{InstanceLayerSnapshot, prune_instance_params};
 mod modifier_stack;
 pub use modifier_stack::*;
-mod layer_plane;
-pub use layer_plane::*;
 mod modifiers;
 pub use modifiers::*;
 mod skin;

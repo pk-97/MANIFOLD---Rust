@@ -45,7 +45,7 @@ impl SceneGroup {
         match kind {
             SceneItemKind::Camera => SceneGroup::Camera,
             SceneItemKind::Light => SceneGroup::Lighting,
-            SceneItemKind::Object(_) => SceneGroup::Objects,
+            SceneItemKind::Object(_) | SceneItemKind::Source => SceneGroup::Objects,
             SceneItemKind::Force => SceneGroup::Forces,
             SceneItemKind::Physics => SceneGroup::Physics,
             SceneItemKind::World => SceneGroup::World,
@@ -122,6 +122,7 @@ fn outliner_row_key(sel: &SceneSelection) -> u64 {
         SceneSelection::Object(id) => OUTLINER_KEY_BASE + 5 + (*id as u64) * 2,
         SceneSelection::Force(id) => crate::param_surface::stable_key(&format!("scene.force.{id}")),
         SceneSelection::Physics(id) => crate::param_surface::stable_key(&format!("scene.physics.{id}")),
+        SceneSelection::Source(id) => crate::param_surface::stable_key(&format!("scene.source.{id}")),
     }
 }
 
@@ -300,7 +301,7 @@ impl ScenePanel {
                 continue;
             };
             let eye = EyeSlot::Live(row.visible.clone());
-            if row.is_group {
+            let indent = if row.is_group {
                 let open = expanded.contains(&id);
                 let toggle = tree.add_button_keyed(
                     Some(self.content_parent),
@@ -314,13 +315,19 @@ impl ScenePanel {
                 );
                 tree.set_name(toggle, "scene_setup.objects.group_toggle");
                 self.group_toggle_ids.push((toggle, id));
-                cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, item, selected, eye);
+                STEP_W
             } else if let Some(parent) = item.parent {
-                if expanded.contains(&parent) {
-                    cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, item, selected, eye);
+                if !expanded.contains(&parent) {
+                    continue;
                 }
+                STEP_W
             } else {
-                cy = self.build_tree_row(tree, (inner_x, inner_w, 0.0), cy, item, selected, eye);
+                0.0
+            };
+            cy = self.build_tree_row(tree, (inner_x, inner_w, indent), cy, item, selected, eye);
+            // A water's Inflow, Drain and Collider rows sit under it (D-94).
+            for source in items.iter().filter(|source| matches!(source.selection, SceneSelection::Source(_)) && source.parent == Some(id)) {
+                cy = self.build_tree_row(tree, (inner_x, inner_w, indent + STEP_W), cy, source, selected, EyeSlot::Empty);
             }
         }
         for object in &vm.objects {
@@ -458,7 +465,8 @@ impl ScenePanel {
     /// The one Add menu for the live scene, starting on `group`'s entries;
     /// empty when not live.
     pub fn add_menu(&self, group: SceneGroup) -> Vec<crate::panels::scene_setup_actions::AddMenuItem> {
-        self.state.as_live().map(|vm| crate::panels::scene_setup_actions::add_menu(vm, group)).unwrap_or_default()
+        let selected = self.live_selection();
+        self.state.as_live().map(|vm| crate::panels::scene_setup_actions::add_menu(vm, group, selected)).unwrap_or_default()
     }
 
     /// The groups the tree drew last build, in order.

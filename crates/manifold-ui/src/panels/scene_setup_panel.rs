@@ -380,7 +380,7 @@ pub struct ObjectKnownRow {
     /// writes `visible` at and the selection/rename address used by the
     /// scene-object command (D12).
     pub object_node_id: u32,
-    /// `Some` when wrapped in a group (the importer/`AddSceneObjectCommand`
+    /// `Some` when wrapped in a group (the importer/Add Object's template
     /// shape) — the rename sweep's group target. `None` for a bare
     /// ungrouped scene_object (D1's first-class "hand-built graph, no
     /// group" case).
@@ -489,6 +489,9 @@ pub struct FluidDomainOption {
     /// The domain's stable id: document ids repeat across group levels.
     pub node: FoundationNodeId,
     pub name: String,
+    /// The tree rows drawing this water and their parent rows: selecting
+    /// any of them makes it the Add menu's target for a fluid source.
+    pub rows: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -600,6 +603,8 @@ pub enum SceneSelection {
     World,
     /// A physics world, by its node.
     Physics(FoundationNodeId),
+    /// A placed fluid source (Inflow, Drain or Collider), by its role node.
+    Source(FoundationNodeId),
     /// A tree group's fold toggle; selecting it changes no selection.
     OutlinerFold(SceneGroup),
 }

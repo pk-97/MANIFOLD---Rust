@@ -52,6 +52,7 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
         fluid_controls: Vec::new(),
         fluid_domain: None,
         fluid_domain_transform: None,
+        placed_sources: Vec::new(),
     }))
 }
 

@@ -155,6 +155,80 @@ pub fn plane_template(slot: u32, centroid: (f32, f32), width: f32, height: f32) 
     )
 }
 
+/// The placed fluid sources the Add menu offers inside a water.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleSourceKind {
+    Inflow,
+    Drain,
+    Collider,
+}
+
+/// Add Inflow, Drain or Collider: a box, placed by its transform, whose
+/// fluid role output the insertion wires into the target water's next free
+/// role input. The source group sits inside that water, so its row lists
+/// under it. Placed where the Dam Break tank holds water: an inflow up in
+/// the air, a drain on the floor, a collider where the preset's obstacle
+/// stands.
+pub fn role_source_template(kind: RoleSourceKind) -> SceneTemplate {
+    let (display_name, role, pos, scale) = match kind {
+        RoleSourceKind::Inflow => ("Inflow", 1, [0.0, 1.6, 0.0], [0.3, 0.3, 0.3]),
+        RoleSourceKind::Drain => ("Drain", 2, [1.4, 0.15, 0.0], [0.4, 0.3, 0.4]),
+        RoleSourceKind::Collider => ("Collider", 3, [0.35, 0.58, -0.1], [0.6, 1.16, 0.85]),
+    };
+    const TRANSFORM_NODE: u32 = 1;
+    const ROLE_NODE: u32 = 2;
+    const OUTPUT_NODE: u32 = 3;
+    const GROUP_NODE: u32 = 4;
+    let transform = node(
+        TRANSFORM_NODE,
+        "node.transform_3d",
+        Some(&format!("{HANDLE_TOKEN} Transform")),
+        BTreeMap::from([
+            ("pos_x".to_owned(), float(pos[0])),
+            ("pos_y".to_owned(), float(pos[1])),
+            ("pos_z".to_owned(), float(pos[2])),
+            ("scale_x".to_owned(), float(scale[0])),
+            ("scale_y".to_owned(), float(scale[1])),
+            ("scale_z".to_owned(), float(scale[2])),
+        ]),
+    );
+    // A unit cube's circumradius, so the transform's scale is the box.
+    let role_node = node(
+        ROLE_NODE,
+        "node.fluid_role_source",
+        Some(HANDLE_TOKEN),
+        BTreeMap::from([
+            ("role".to_owned(), SerializedParamValue::Enum { value: role }),
+            ("shape".to_owned(), SerializedParamValue::Enum { value: 1 }),
+            ("radius".to_owned(), float(0.866_025_4)),
+        ]),
+    );
+    let mut metadata = empty_metadata(display_name);
+    for (found, label) in [(&role_node, HANDLE_TOKEN.to_owned()), (&transform, format!("{HANDLE_TOKEN} — Transform"))] {
+        stamp_scene_node_exposures_into(
+            &mut metadata.params,
+            &mut metadata.bindings,
+            found.id,
+            &found.node_id,
+            &label,
+            &metadata_for_node_type(&found.type_id),
+            &found.params,
+        );
+    }
+    let mut group = node(GROUP_NODE, GROUP_TYPE_ID, Some(HANDLE_TOKEN), BTreeMap::new());
+    group.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: Vec::new(),
+            outputs: vec![InterfacePortDef { name: "role".into(), port_type: "FluidRole".into() }],
+            params: Vec::new(),
+        },
+        nodes: vec![transform, role_node, node(OUTPUT_NODE, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new())],
+        wires: vec![wire(TRANSFORM_NODE, "transform", ROLE_NODE, "transform"), wire(ROLE_NODE, "role", OUTPUT_NODE, "role")],
+        tint: None,
+    }));
+    SceneTemplate { group, metadata }
+}
+
 /// Add Light: a bare Sun light about 45 degrees up, white, casting shadows.
 /// It stays a plain node on the scene, named "Light N", `position` its
 /// graph editor spot.

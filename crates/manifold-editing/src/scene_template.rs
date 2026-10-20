@@ -12,9 +12,10 @@ use manifold_core::scene_template::{SceneTemplate, insert_scene_template};
 use crate::command::Command;
 use crate::scene_transaction::{SceneGraphRejection, SceneGraphTransaction};
 
-/// Insert one prepared template into a render scene. The candidate graph is
-/// built when the command is made, so a refusal surfaces before submission
-/// and redo reuses the same ids.
+/// Insert one prepared template into a render scene, or a fluid role source
+/// into its `water` (the liquid domain). The candidate graph is built when
+/// the command is made, so a refusal surfaces before submission and redo
+/// reuses the same ids.
 #[derive(Debug)]
 pub struct InsertSceneTemplateCommand {
     transaction: SceneGraphTransaction,
@@ -25,12 +26,13 @@ impl InsertSceneTemplateCommand {
         project: &Project,
         target: GraphTarget,
         scene: SceneNodeRef,
+        water: Option<SceneNodeRef>,
         template: SceneTemplate,
         catalog_default: &EffectGraphDef,
     ) -> Result<Self, SceneGraphEditError> {
         Ok(Self {
             transaction: SceneGraphTransaction::prepare(project, target, catalog_default, "Add to Scene", |graph| {
-                insert_scene_template(graph, &scene, &template)
+                insert_scene_template(graph, &scene, water.as_ref(), &template)
             })?,
         })
     }

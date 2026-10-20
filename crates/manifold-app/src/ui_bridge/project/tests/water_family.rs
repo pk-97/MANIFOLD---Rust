@@ -441,7 +441,7 @@ fn insert_water(project: &Project, layer: &LayerId, render: u32) -> Result<manif
     let render_node = def.nodes.iter().find(|node| node.id == render).unwrap().node_id.clone();
     let scene = manifold_core::SceneNodeRef::locate(&def, &render_node).unwrap();
     manifold_editing::scene_template::InsertSceneTemplateCommand::new(
-        project, target, scene, manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(), &default,
+        project, target, scene, None, manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(), &default,
     )
     .map_err(|error| error.message)
 }

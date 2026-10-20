@@ -13,7 +13,7 @@ use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
-    GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
+    GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     InterfacePortDef, ParamSpecDef, PresetMetadata, SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
@@ -105,539 +105,6 @@ use super::{
     scene_build_wire, with_existing_target_graph_mut, with_target_graph_mut,
 };
 
-/// The add-object gesture (D7): one undoable composite edit that (1) bumps
-/// `render_scene`'s `objects` count by one, (2) builds a new group named
-/// "Object N" containing a placeholder `node.cube_mesh` + a tinted
-/// `node.pbr_material` + a `node.transform_3d`, wired to a
-/// `system.group_output` boundary exposing `vertices`/`material`/`transform`,
-/// (3) wires the group's three outputs to the new `mesh_k`/`material_k`/
-/// `transform_k` ports on `render_scene`. Mirrors `GroupNodesCommand`'s
-/// whole-level snapshot/restore shape — this is a structural composite edit
-/// exactly like a group-creation, so undo restores the pre-edit `(nodes,
-/// wires)` verbatim rather than reversing each sub-step by hand.
-///
-/// `next_index` remains in the constructor for the scene-setup action ABI, but
-/// is only a stale UI hint. The content-owned `render_scene.objects` count is
-/// validated and resolved at execution time so logical parent rows cannot
-/// overwrite a compound object's later physical parts.
-#[derive(Debug)]
-pub struct AddSceneObjectCommand {
-    target: GraphTarget,
-    scope_path: Vec<u32>,
-    render_scene_node_id: u32,
-    centroid: (f32, f32),
-    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new material/
-    /// transform/scene_object nodes' full param manifests, computed by the
-    /// app-side caller via `manifold_nodes::node_graph::scene_exposure::
-    /// metadata_for_node_type` (this crate has no renderer dep) — `execute`
-    /// stamps them into the def's top-level `preset_metadata` after minting
-    /// the new nodes' ids.
-    material_metadata: Vec<NodeParamMetadata>,
-    transform_metadata: Vec<NodeParamMetadata>,
-    scene_object_metadata: Vec<NodeParamMetadata>,
-    /// When present, Add Object also creates a loose physics object in the
-    /// one Physics World in the current scope. The renderer metadata is kept
-    /// caller supplied because editing has no renderer dependency.
-    physics_body_metadata: Option<Vec<NodeParamMetadata>>,
-    physics_material_metadata: Option<Vec<NodeParamMetadata>>,
-    catalog_default: EffectGraphDef,
-    /// The level's `(nodes, wires)` before this edit, plus the pre-edit
-    /// whole-def `preset_metadata` (P1 exposure stamping lands there, outside
-    /// the scoped level). Set on execute.
-    prev: Option<(
-        Vec<EffectGraphNode>,
-        Vec<EffectGraphWire>,
-        Option<PresetMetadata>,
-    )>,
-    // Reuse the accepted graph identities when redo restores this insertion.
-    after: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
-    rejection: Option<&'static str>,
-}
-
-impl AddSceneObjectCommand {
-    pub fn new(
-        target: GraphTarget,
-        scope_path: Vec<u32>,
-        render_scene_node_id: u32,
-        _next_index: u32,
-        centroid: (f32, f32),
-        material_metadata: Vec<NodeParamMetadata>,
-        transform_metadata: Vec<NodeParamMetadata>,
-        scene_object_metadata: Vec<NodeParamMetadata>,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
-        Self {
-            target,
-            scope_path,
-            render_scene_node_id,
-            centroid,
-            material_metadata,
-            transform_metadata,
-            scene_object_metadata,
-            physics_body_metadata: None,
-            physics_material_metadata: None,
-            catalog_default,
-            prev: None,
-            after: None,
-            rejection: None,
-        }
-    }
-
-    fn capture_after(&mut self, project: &Project) {
-        if self.prev.is_none() { return; }
-        self.after = project.graph_for_target(&self.target, Some(&self.catalog_default))
-            .and_then(|def| graph_level(def, &self.scope_path)
-                .map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec(), def.preset_metadata.clone())));
-    }
-
-    /// Request the physics-aware Add Object shape. If this is used in a
-    /// scope with no Physics World, the existing visual-only shape is kept.
-    /// A scope with more than one world is rejected rather than guessing.
-    pub fn with_physics_world(
-        mut self,
-        rigid_body_metadata: Vec<NodeParamMetadata>,
-        pbr_material_metadata: Vec<NodeParamMetadata>,
-    ) -> Self {
-        self.physics_body_metadata = Some(rigid_body_metadata);
-        self.physics_material_metadata = Some(pbr_material_metadata);
-        self
-    }
-
-    fn physics_world_for_scope(
-        &self,
-        project: &Project,
-    ) -> Result<Option<(u32, u32)>, &'static str> {
-        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
-            return Ok(None);
-        };
-        let Some((nodes, wires)) = graph_level(def, &self.scope_path) else {
-            return Ok(None);
-        };
-        let worlds: Vec<u32> = nodes
-            .iter()
-            .filter(|node| node.type_id == "node.physics_world")
-            .map(|node| node.id)
-            .collect();
-        let Some(world_id) = worlds.first().copied() else {
-            return Ok(None);
-        };
-        if !self.scope_path.is_empty() {
-            return Err("Physics objects currently require a root-level scene");
-        }
-        if worlds.len() != 1 {
-            return Err("Add Object requires exactly one Physics World in the current scope");
-        }
-        let Some(body_slot) = first_free_physics_body_slot(wires, world_id) else {
-            return Err("Physics World has no free body slots");
-        };
-        Ok(Some((world_id, body_slot)))
-    }
-
-    fn execute_physics(
-        &mut self,
-        project: &mut Project,
-        world_id: u32,
-        body_slot: u32,
-        k: u32,
-    ) {
-        let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let centroid = self.centroid;
-        let Some(body_metadata) = self.physics_body_metadata.as_ref() else {
-            return;
-        };
-        let Some(material_metadata) = self.physics_material_metadata.as_ref() else {
-            return;
-        };
-        let result =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                let last_id = max_node_id_over(&def.nodes).checked_add(5)?;
-                let mut taken = std::collections::HashSet::new();
-                collect_all_handles(&def.nodes, &mut taken);
-                let prev_metadata = def.preset_metadata.clone();
-                let (added, prev) = {
-                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                    let prev = (nodes.clone(), wires.clone());
-                    if !nodes.iter().any(|node| node.id == render_id) {
-                        return None;
-                    }
-                    let added = append_physics_scene_object(
-                        nodes, wires, render_id, k, world_id, body_slot, last_id, centroid,
-                        &mut taken,
-                    );
-                    nodes
-                        .iter_mut()
-                        .find(|node| node.id == render_id)?
-                        .params
-                        .insert(
-                            "objects".to_string(),
-                            SerializedParamValue::Float {
-                                value: (k + 1) as f32,
-                            },
-                        );
-                    (added, prev)
-                };
-                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    added.material_id,
-                    &added.material_node_id,
-                    &format!("{} — Material", added.handle),
-                    material_metadata,
-                    &added.material_params,
-                );
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    added.transform_id,
-                    &added.transform_node_id,
-                    &format!("{} — Transform", added.handle),
-                    &self.transform_metadata,
-                    &added.transform_params,
-                );
-                if let Some((body_id, body_node_id, body_params)) = added.physics_body {
-                    stamp_scene_node_exposures_into(
-                        &mut meta.params,
-                        &mut meta.bindings,
-                        body_id,
-                        &body_node_id,
-                        &format!("{} — Rigid Body", added.handle),
-                        body_metadata,
-                        &body_params,
-                    );
-                }
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    added.scene_object_id,
-                    &added.scene_object_node_id,
-                    &added.handle,
-                    &self.scene_object_metadata,
-                    &BTreeMap::new(),
-                );
-                Some((prev, prev_metadata))
-            });
-        if let Some((pnw, pmeta)) = result.flatten() {
-            self.prev = Some((pnw.0, pnw.1, pmeta));
-        }
-        refresh_target_manifest(project, &self.target);
-        self.capture_after(project);
-    }
-}
-
-struct AddedSceneObject {
-    material_id: u32,
-    material_node_id: NodeId,
-    material_params: BTreeMap<String, SerializedParamValue>,
-    transform_id: u32,
-    transform_node_id: NodeId,
-    transform_params: BTreeMap<String, SerializedParamValue>,
-    scene_object_id: u32,
-    scene_object_node_id: NodeId,
-    handle: String,
-    physics_body: Option<(u32, NodeId, BTreeMap<String, SerializedParamValue>)>,
-}
-
-/// A distinct RGBA tint for object slot `k`, spread around the hue wheel by
-/// the golden ratio at high saturation — the SAME formula
-/// `gltf_import.rs::group_tint` uses for imported objects (that fn is private
-/// to `manifold-nodes`, unreachable from here, so this is a same-formula
-/// re-derivation, not a shared call — keep the two in sync if either changes).
-/// So an added cube reads as one more colour-coded box beside imported ones,
-/// never a jarring one-off.
-fn scene_object_tint(k: u32) -> manifold_core::Color {
-    let hue = (k as f32 * 0.618_034) % 1.0;
-    manifold_core::Color::hsv_to_rgb(hue, 0.7, 0.85)
-}
-
-impl Command for AddSceneObjectCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
-    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
-        targets.push(self.target.clone());
-    }
-
-    fn do_execute(&mut self, project: &mut Project) {
-        if let Some((nodes, wires, metadata)) = self.after.as_ref() {
-            self.rejection = None;
-            let unchanged = project.graph_for_target(&self.target, Some(&self.catalog_default))
-                .and_then(|def| graph_level(def, &self.scope_path).map(|(nodes, wires)| (def, nodes, wires)))
-                .zip(self.prev.as_ref())
-                .is_some_and(|((def, nodes, wires), (before_nodes, before_wires, before_metadata))|
-                    nodes == before_nodes && wires == before_wires && &def.preset_metadata == before_metadata);
-            if !unchanged {
-                self.rejection = Some("Add Object redo rejected: graph changed since undo");
-                return;
-            }
-            let restored = with_existing_target_graph_mut(project, &self.target, true, |def| {
-                let (target_nodes, target_wires) = descend_level(&mut def.nodes, &mut def.wires, &self.scope_path)?;
-                target_nodes.clone_from(nodes);
-                target_wires.clone_from(wires);
-                def.preset_metadata.clone_from(metadata);
-                Some(())
-            }).flatten().is_some();
-            if !restored {
-                self.rejection = Some("Add Object redo target is unavailable");
-                return;
-            }
-            refresh_target_manifest(project, &self.target);
-            return;
-        }
-        self.prev = None;
-        self.rejection = None;
-        let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let k = match scene_object_append_slot_for_target(
-            project,
-            &self.target,
-            &self.catalog_default,
-            &scope,
-            render_id,
-        ) {
-            Ok(k) => k,
-            Err(reason) => {
-                self.rejection = Some(reason);
-                return;
-            }
-        };
-        if self.physics_body_metadata.is_some() {
-            match self.physics_world_for_scope(project) {
-                Ok(Some((world_id, body_slot))) => {
-                    self.execute_physics(project, world_id, body_slot, k);
-                    return;
-                }
-                Err(reason) => {
-                    self.rejection = Some(reason);
-                    return;
-                }
-                Ok(None) => {}
-            }
-        }
-        let centroid = self.centroid;
-        let result =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                let prev_metadata = def.preset_metadata.clone();
-
-                // Document ids are global even when the edit targets a nested
-                // level. Allocate the complete six-id block before borrowing
-                // that level so a full document or id exhaustion leaves the
-                // graph untouched.
-                let mut next_id = max_node_id_over(&def.nodes).checked_add(1);
-                let mut fresh = || -> Option<u32> {
-                    let id = next_id?;
-                    next_id = id.checked_add(1);
-                    Some(id)
-                };
-                let mesh_id = fresh()?;
-                let mat_id = fresh()?;
-                let transform_id = fresh()?;
-                let scene_object_id = fresh()?;
-                let out_id = fresh()?;
-                let group_id = fresh()?;
-
-                // Build the group + wire it in, entirely within a nested block so
-                // the `nodes`/`wires` borrows (from `descend_level`) end before
-                // the P1 exposure stamping below touches `def.preset_metadata` —
-                // same "metadata vs. nodes/wires never overlap" discipline
-                // `ImportModelIntoSceneCommand` documents.
-                let (
-                    mat_id,
-                    mat_node_id,
-                    mat_node_params,
-                    transform_id,
-                    transform_node_id,
-                    scene_object_id,
-                    scene_object_node_id,
-                    handle,
-                    prev,
-                ) = {
-                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                    let prev = (nodes.clone(), wires.clone());
-
-                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                        "objects".to_string(),
-                        SerializedParamValue::Float {
-                            value: (k + 1) as f32,
-                        },
-                    );
-
-                    let tint = scene_object_tint(k);
-                    let mut mat_params = BTreeMap::new();
-                    mat_params.insert(
-                        "color_r".to_string(),
-                        SerializedParamValue::Float { value: tint.r },
-                    );
-                    mat_params.insert(
-                        "color_g".to_string(),
-                        SerializedParamValue::Float { value: tint.g },
-                    );
-                    mat_params.insert(
-                        "color_b".to_string(),
-                        SerializedParamValue::Float { value: tint.b },
-                    );
-
-                    let mesh_node = scene_build_node(
-                        mesh_id,
-                        "node.cube_mesh",
-                        Some(format!("mesh_{k}")),
-                        BTreeMap::new(),
-                    );
-                    let mat_node = scene_build_node(
-                        mat_id,
-                        "node.pbr_material",
-                        Some(format!("mat_{k}")),
-                        mat_params,
-                    );
-                    let mat_node_id = mat_node.node_id.clone();
-                    let mat_node_params = mat_node.params.clone();
-                    let transform_node = scene_build_node(
-                        transform_id,
-                        "node.transform_3d",
-                        Some(format!("transform_{k}")),
-                        BTreeMap::new(),
-                    );
-                    let transform_node_id = transform_node.node_id.clone();
-                    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: binds the mesh/
-                    // material/transform triple into a single Object wire —
-                    // handle-stamped so the outliner shows this object's own name,
-                    // not a producer's. render_scene v2 (D4) has no mesh_k/
-                    // material_k/transform_k ports any more; it takes object_k only.
-                    let handle = format!("Object {}", k + 1);
-                    let scene_object_node = scene_build_node(
-                        scene_object_id,
-                        "node.scene_object",
-                        Some(handle.clone()),
-                        BTreeMap::new(),
-                    );
-                    let scene_object_node_id = scene_object_node.node_id.clone();
-                    let out_node =
-                        scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
-
-                    let group_wires = vec![
-                        scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"),
-                        scene_build_wire(mat_id, "out", scene_object_id, "material"),
-                        scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
-                        scene_build_wire(scene_object_id, "object", out_id, "object"),
-                    ];
-
-                    let mut group_node = scene_build_node(
-                        group_id,
-                        GROUP_TYPE_ID,
-                        Some(handle.clone()),
-                        BTreeMap::new(),
-                    );
-                    group_node.editor_pos = Some(centroid);
-                    group_node.group = Some(Box::new(GroupDef {
-                        interface: GroupInterface {
-                            inputs: Vec::new(),
-                            outputs: vec![InterfacePortDef {
-                                name: "object".to_string(),
-                                port_type: "Object".to_string(),
-                            }],
-                            params: Vec::new(),
-                        },
-                        nodes: vec![
-                            mesh_node,
-                            mat_node,
-                            transform_node,
-                            scene_object_node,
-                            out_node,
-                        ],
-                        wires: group_wires,
-                        tint: Some([tint.r, tint.g, tint.b, 1.0]),
-                    }));
-
-                    nodes.push(group_node);
-                    wires.push(scene_build_wire(
-                        group_id,
-                        "object",
-                        render_id,
-                        &format!("object_{k}"),
-                    ));
-
-                    (
-                        mat_id,
-                        mat_node_id,
-                        mat_node_params,
-                        transform_id,
-                        transform_node_id,
-                        scene_object_id,
-                        scene_object_node_id,
-                        handle,
-                        prev,
-                    )
-                };
-
-                // P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
-                // param of the freshly minted material/transform/scene_object
-                // nodes, into the def's TOP-LEVEL preset_metadata, targeting each
-                // node's bare NodeId — same convention the glTF importer uses.
-                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    mat_id,
-                    &mat_node_id,
-                    &format!("{handle} — Material"),
-                    &self.material_metadata,
-                    &mat_node_params,
-                );
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    transform_id,
-                    &transform_node_id,
-                    &format!("{handle} — Transform"),
-                    &self.transform_metadata,
-                    &BTreeMap::new(),
-                );
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    scene_object_id,
-                    &scene_object_node_id,
-                    &handle,
-                    &self.scene_object_metadata,
-                    &BTreeMap::new(),
-                );
-
-                Some((prev, prev_metadata))
-            });
-        if let Some((pnw, pmeta)) = result.flatten() {
-            self.prev = Some((pnw.0, pnw.1, pmeta));
-        }
-        refresh_target_manifest(project, &self.target);
-        self.capture_after(project);
-    }
-
-    fn do_undo(&mut self, project: &mut Project) {
-        let Some((pn, pw, pmeta)) = self.prev.clone() else {
-            return;
-        };
-        let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            def.preset_metadata = pmeta;
-            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
-                *nodes = pn;
-                *wires = pw;
-            }
-        });
-        refresh_target_manifest(project, &self.target);
-    }
-
-    fn description(&self) -> &str {
-        "Add Object"
-    }
-
-    fn was_applied(&self) -> bool {
-        self.prev.is_some() && self.rejection.is_none()
-    }
-
-    fn rejection_reason(&self) -> Option<&str> {
-        self.rejection
-    }
-}
-
 const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
 /// Resolve the next physical render-scene object slot from content-owned
@@ -684,221 +151,6 @@ pub(super) fn scene_object_append_slot(
     Ok(count)
 }
 
-fn scene_object_append_slot_for_target(
-    project: &Project,
-    target: &GraphTarget,
-    catalog_default: &EffectGraphDef,
-    scope: &[u32],
-    render_id: u32,
-) -> Result<u32, &'static str> {
-    let Some(def) = project.graph_for_target(target, Some(catalog_default)) else {
-        return Err("Add scene object target is unavailable");
-    };
-    scene_object_append_slot_for_scope(def, scope, render_id)
-}
-
-pub(super) fn scene_object_append_slot_for_scope(
-    def: &EffectGraphDef,
-    scope: &[u32],
-    render_id: u32,
-) -> Result<u32, &'static str> {
-    let Some((nodes, wires)) = graph_level(def, scope) else {
-        return Err("Add scene object scope is unavailable");
-    };
-    scene_object_append_slot(nodes, wires, render_id)
-}
-
-/// The add-light gesture (D7a): one undoable composite edit that (1) bumps
-/// `render_scene`'s `lights` count by one, (2) spawns a BARE `node.light`
-/// (no group — a one-node group taxes every future edit for zero legibility,
-/// D7a's explicit ruling) named "Light N", (3) auto-wires its `out` into the
-/// new `light_k` port. Defaults transcribed from D7a: Sun, white, intensity
-/// 1.0, ~45° elevation, `cast_shadows` ON. Same whole-level snapshot/restore
-/// shape as `AddSceneObjectCommand` / `GroupNodesCommand`.
-#[derive(Debug)]
-pub struct AddSceneLightCommand {
-    target: GraphTarget,
-    scope_path: Vec<u32>,
-    render_scene_node_id: u32,
-    next_index: u32,
-    pos: (f32, f32),
-    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new light's full
-    /// param manifest, computed by the app-side caller via
-    /// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type("node.light")`
-    /// (this crate has no renderer dep).
-    light_metadata: Vec<NodeParamMetadata>,
-    catalog_default: EffectGraphDef,
-    /// The level's `(nodes, wires)` before this edit, plus the pre-edit
-    /// whole-def `preset_metadata`. Set on execute.
-    prev: Option<(
-        Vec<EffectGraphNode>,
-        Vec<EffectGraphWire>,
-        Option<PresetMetadata>,
-    )>,
-}
-
-impl AddSceneLightCommand {
-    pub fn new(
-        target: GraphTarget,
-        scope_path: Vec<u32>,
-        render_scene_node_id: u32,
-        next_index: u32,
-        pos: (f32, f32),
-        light_metadata: Vec<NodeParamMetadata>,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
-        Self {
-            target,
-            scope_path,
-            render_scene_node_id,
-            next_index,
-            pos,
-            light_metadata,
-            catalog_default,
-            prev: None,
-        }
-    }
-}
-
-impl Command for AddSceneLightCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
-    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
-        targets.push(self.target.clone());
-    }
-
-    fn do_execute(&mut self, project: &mut Project) {
-        let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let k = self.next_index;
-        let pos = self.pos;
-        let result =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                let light_id = max_node_id_over(&def.nodes).checked_add(1)?;
-                let prev_metadata = def.preset_metadata.clone();
-
-                let (light_id, light_node_id, light_node_params, prev) = {
-                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                    let prev = (nodes.clone(), wires.clone());
-
-                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                        "lights".to_string(),
-                        SerializedParamValue::Float {
-                            value: (k + 1) as f32,
-                        },
-                    );
-
-                    // D7a defaults, transcribed from `node.light`'s own param defs
-                    // (`crates/manifold-nodes/src/node_graph/primitives/light.rs`):
-                    // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
-                    // match the primitive's own defaults — set explicitly anyway so
-                    // the gesture's contract doesn't silently drift if those defaults
-                    // ever change. pos is overridden for ~45° elevation (the
-                    // primitive's own default is pos_y=30 with pos_x=pos_z=0, i.e.
-                    // straight overhead, which flattens the scene); aim stays at the
-                    // primitive's (0,0,0) default.
-                    let mut params = BTreeMap::new();
-                    params.insert("mode".to_string(), SerializedParamValue::Enum { value: 0 }); // Sun
-                    params.insert(
-                        "pos_x".to_string(),
-                        SerializedParamValue::Float { value: 0.0 },
-                    );
-                    params.insert(
-                        "pos_y".to_string(),
-                        SerializedParamValue::Float { value: 7.0 },
-                    );
-                    params.insert(
-                        "pos_z".to_string(),
-                        SerializedParamValue::Float { value: 7.0 },
-                    );
-                    params.insert(
-                        "color_r".to_string(),
-                        SerializedParamValue::Float { value: 1.0 },
-                    );
-                    params.insert(
-                        "color_g".to_string(),
-                        SerializedParamValue::Float { value: 1.0 },
-                    );
-                    params.insert(
-                        "color_b".to_string(),
-                        SerializedParamValue::Float { value: 1.0 },
-                    );
-                    params.insert(
-                        "intensity".to_string(),
-                        SerializedParamValue::Float { value: 1.0 },
-                    );
-                    params.insert(
-                        "cast_shadows".to_string(),
-                        SerializedParamValue::Float { value: 1.0 },
-                    );
-
-                    let mut light_node = scene_build_node(
-                        light_id,
-                        "node.light",
-                        Some(format!("light_{k}")),
-                        params,
-                    );
-                    light_node.editor_pos = Some(pos);
-                    let light_node_id = light_node.node_id.clone();
-                    let light_node_params = light_node.params.clone();
-                    nodes.push(light_node);
-                    wires.push(scene_build_wire(
-                        light_id,
-                        "out",
-                        render_id,
-                        &format!("light_{k}"),
-                    ));
-                    // A scene that had no Sun light gets its sky's sun from
-                    // this one.
-                    manifold_core::sky_sun::wire_sky_sun(nodes, wires);
-
-                    (light_id, light_node_id, light_node_params, prev)
-                };
-
-                // P1: expose every param of the freshly minted light node, into
-                // the def's TOP-LEVEL preset_metadata, targeting its bare NodeId.
-                // Section mirrors the D7a display convention ("Light N", 1-based)
-                // — independent of the node's own internal `handle` (`light_{k}`,
-                // 0-based, used only for wire/lookup bookkeeping).
-                let section = format!("Light {}", k + 1);
-                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
-                stamp_scene_node_exposures_into(
-                    &mut meta.params,
-                    &mut meta.bindings,
-                    light_id,
-                    &light_node_id,
-                    &section,
-                    &self.light_metadata,
-                    &light_node_params,
-                );
-
-                Some((prev, prev_metadata))
-            });
-        if let Some((pnw, pmeta)) = result.flatten() {
-            self.prev = Some((pnw.0, pnw.1, pmeta));
-        }
-        refresh_target_manifest(project, &self.target);
-    }
-
-    fn do_undo(&mut self, project: &mut Project) {
-        let Some((pn, pw, pmeta)) = self.prev.clone() else {
-            return;
-        };
-        let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            def.preset_metadata = pmeta;
-            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
-                *nodes = pn;
-                *wires = pw;
-            }
-        });
-        refresh_target_manifest(project, &self.target);
-    }
-
-    fn description(&self) -> &str {
-        "Add Light"
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Remove Scene Object / Remove Scene Light (BUG-193)
 // ---------------------------------------------------------------------------
@@ -931,13 +183,13 @@ fn shift_indexed_ports_down(
 /// `Object` wire model — the object's mesh/transform/material/maps no longer
 /// reach `render_scene` as a parallel-port triplet, they arrive as one
 /// `object_k` wire out of a `node.scene_object` node, D1/D4): the inverse of
-/// [`AddSceneObjectCommand`] — one undoable composite edit that (1) deletes
+/// Add Object's template — one undoable composite edit that (1) deletes
 /// the object's producer node (the `scene_object`'s enclosing group when one
 /// exists — the importer/grouped shape, D5 — else the `scene_object` node
 /// itself) and its `object_k` wire into `render_scene`, (2) decrements
 /// `objects`, (3) renumbers every `object_j` wire (`j > k`) down by one so
 /// the slots stay dense. Same whole-level snapshot/restore undo shape as
-/// `AddSceneObjectCommand` — a structural composite edit, not a hand-reversed
+/// Add Object's template — a structural composite edit, not a hand-reversed
 /// sequence of sub-steps. Ungrouped hand-built objects (a loose
 /// `scene_object` whose mesh/transform/material producers are not wrapped in
 /// a group) use the same exclusive upstream ownership walk as duplication,
@@ -1812,7 +1064,7 @@ fn deletion_breaks_explicit_modifier_target(
 }
 
 /// The remove-light gesture (BUG-193): the inverse of
-/// [`AddSceneLightCommand`] — one undoable composite edit that (1) deletes
+/// Add Light's template — one undoable composite edit that (1) deletes
 /// the bare light node and its single `light_k` wire, (2) decrements
 /// `lights`, (3) renumbers every `light_j` (`j > k`) wire down by one. Same
 /// whole-level snapshot/restore undo shape as `RemoveSceneObjectCommand`, but
@@ -2151,11 +1403,11 @@ pub(super) fn prune_scene_object_metadata(
 // ---------------------------------------------------------------------------
 // Add Scene Environment / Add Scene Fog
 // (SCENE_SETUP_PANEL_DESIGN.md D3/D4, P1) — shaped exactly like
-// AddSceneLightCommand above: spawn one new node at the scene's graph level
+// Add Light's template above: spawn one new node at the scene's graph level
 // and wire it straight into the render_scene port the Vm found unwired.
 // The panel only ever offers these actions when `EnvironmentVm::None` /
 // `AtmosphereVm::None` (D3), so neither command needs to guard against an
-// already-wired port — same non-guarding posture AddSceneLightCommand takes
+// already-wired port — same non-guarding posture Add Light's template takes
 // for `lights`.
 // ---------------------------------------------------------------------------
 
@@ -2172,7 +1424,7 @@ pub struct AddSceneEnvironmentCommand {
     /// environment node's full param manifest, computed by the app-side
     /// caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type("node.bake_environment")` (this crate has no
-    /// renderer dep) — same convention `AddSceneLightCommand` uses.
+    /// renderer dep) — same convention Add Light's template uses.
     env_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
@@ -2257,7 +1509,7 @@ impl Command for AddSceneEnvironmentCommand {
 
                 // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
                 // param of the freshly minted environment node — same P1 stamp
-                // AddSceneLightCommand performs for its own node, into the def's
+                // Add Light's template performs for its own node, into the def's
                 // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
                 // this the panel's `world_sections` lookup (`state_sync.rs`'s
                 // `sections_for_doc_ids`) comes back empty and
@@ -2314,7 +1566,7 @@ pub struct AddSceneFogCommand {
     /// (atmosphere) node's full param manifest, computed by the app-side
     /// caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type("node.atmosphere")` (this crate has no
-    /// renderer dep) — same convention `AddSceneLightCommand` uses.
+    /// renderer dep) — same convention Add Light's template uses.
     fog_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
@@ -2393,7 +1645,7 @@ impl Command for AddSceneFogCommand {
 
                 // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
                 // param of the freshly minted fog node — same P1 stamp
-                // AddSceneLightCommand performs for its own node, into the def's
+                // Add Light's template performs for its own node, into the def's
                 // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
                 // this the panel's `world_sections` lookup (`state_sync.rs`'s
                 // `sections_for_doc_ids`) comes back empty and
@@ -2597,15 +1849,14 @@ impl Command for AddObjectTransformCommand {
 // (SCENE_SETUP_PANEL_DESIGN.md D5/P4) — "Import Model…" splices a SECOND
 // glTF's object groups into an EXISTING scene's `render_scene`, without
 // touching that scene's own chrome (camera/envmap/lights/lens). One undo
-// unit, shaped exactly like `AddSceneObjectCommand`/`GroupNodesCommand`:
+// unit, shaped exactly like Add Object's template/`GroupNodesCommand`:
 // undo restores the pre-edit `(nodes, wires, preset_metadata)` verbatim.
 // ---------------------------------------------------------------------------
 
 /// The plan's data (`new_nodes`/`new_wires`/`new_card_params`/…) is built by
 /// `manifold_nodes::node_graph::gltf_import::assemble_merge_plan` /
 /// `MergePlan`, which `manifold-editing` cannot depend on (dependency
-/// direction — the same constraint `AddSceneObjectCommand`'s own doc
-/// comment names for `OBJECT_SAFETY_MAX`). The caller (`manifold-app`,
+/// direction). The caller (`manifold-app`,
 /// which depends on both crates) builds the plan there and hands its
 /// plain `manifold_core` fields to [`ImportModelIntoSceneCommand::new`].
 #[derive(Debug)]

@@ -209,7 +209,7 @@ pub fn run(args: &[String]) {
 
     // P5 demo (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a): the
     // SAME real azalea import as `gltfeditor`, before/after one real
-    // `AddSceneObjectCommand`/`AddSceneLightCommand` execution against the
+    // Add Object's template/Add Light's template execution against the
     // fixture's actual `Project` (the same mutation the canvas button's
     // click emits — `GraphEditCommand::AddSceneObject`/`AddSceneLight` →
     // `app_render.rs` → this exact command). Proves the gesture's structural
@@ -636,7 +636,7 @@ fn run_gltf_editor(want_dump: bool) {
 }
 
 /// P5 demo: render the real azalea import's editor canvas, execute ONE real
-/// `AddSceneObjectCommand` (`add_object == true`) or `AddSceneLightCommand`
+/// Add Object's template (`add_object == true`) or Add Light's template
 /// (`false`) against the fixture's actual `Project`, then re-render. The
 /// azalea import's `node.render_scene` is a stable fixture fact (verified via
 /// `GLTFEDITOR_DEBUG=1`): runtime id `4`, `objects == 2` (two group boxes),

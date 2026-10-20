@@ -251,7 +251,13 @@ pub enum ProjectAction {
     SceneSetupPrepareCamera(LayerId),
     /// An Add menu entry: insert one template into the layer's scene. The
     /// app resolves the scene and builds the template.
-    SceneSetupInsertTemplate { layer_id: LayerId, kind: manifold_foundation::scene_surface::SceneTemplateKind },
+    SceneSetupInsertTemplate {
+        layer_id: LayerId,
+        kind: manifold_foundation::scene_surface::SceneTemplateKind,
+        /// The liquid domain an Inflow, Drain or Collider goes into; `None`
+        /// for every other kind.
+        water: Option<NodeId>,
+    },
     /// Assign a selected model to an explicit fluid domain. The app resolves
     /// the domain's stable id to a scoped graph reference before queuing.
     SceneSetupAssignFluidRole {
@@ -298,19 +304,18 @@ pub enum ProjectAction {
     /// modifier_node_id, new_position)`. Dispatches
     /// `MoveMeshModifierCommand` — `new_position` is resolved by the panel
     /// from the row's own live index in the Vm's stack order (one hop
-    /// forward or back), same "read the live count off the Vm" convention
-    /// `SceneSetupAddObject`'s `next_index` already uses.
+    /// forward or back): the live count is read off the Vm.
     SceneSetupMoveModifier(LayerId, u32, u32, u32),
     /// per-row "✕" in the Objects section: `(layer_id,
     /// render_scene_node_doc_id, object_index)`. Dispatches the new
-    /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupAddObject`.
+    /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupInsertTemplate`.
     SceneSetupRemoveObject(LayerId, u32, u32),
     /// Remove one physical child mesh inside a compound scene object:
     /// `(layer_id, render_scene_node_doc_id, physical_index)`.
     SceneSetupRemoveSubmesh(LayerId, u32, u32),
     /// per-row "✕" in the Lights section: `(layer_id,
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
-    /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
+    /// `RemoveSceneLightCommand` — the inverse of `SceneSetupInsertTemplate`.
     SceneSetupRemoveLight(LayerId, u32, u32),
     /// P4b: a project layer was selected from the Skin source dropdown.
     /// `source: None` clears the skin (the model uses its own texture).

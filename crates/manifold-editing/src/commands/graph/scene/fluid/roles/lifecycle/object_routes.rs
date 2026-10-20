@@ -165,7 +165,7 @@ fn restore_scene_object_fluid_roles_in_place(
                 rename_export_port(def, cloned_group, route.role_id, &old_port, &source_port)?;
             }
             let target_port = first_free_role_port(def, &scope, fluid_id)?;
-            let mut next_id = super::super::super::max_node_id_over(&def.nodes)
+            let mut next_id = super::super::super::super::max_node_id_over(&def.nodes)
                 .checked_add(1)
                 .ok_or_else(|| "Fluid role document id space is exhausted".to_string())?;
             let mut fresh_id = || {

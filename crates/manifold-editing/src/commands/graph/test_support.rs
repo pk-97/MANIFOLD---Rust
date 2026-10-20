@@ -11,7 +11,9 @@ use super::*;
 use manifold_core::EffectId;
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
+use manifold_core::effect_graph_def::{
+    EFFECT_GRAPH_VERSION, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, PresetMetadata,
+};
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
@@ -272,6 +274,141 @@ pub(super) fn mirror_catalog_default() -> EffectGraphDef {
         }
     }
     def
+}
+
+fn template_node(id: u32, type_id: &str, handle: Option<&str>) -> EffectGraphNode {
+    EffectGraphNode {
+        id,
+        node_id: manifold_core::NodeId::new(type_id.rsplit('.').next().unwrap_or(type_id)),
+        type_id: type_id.to_string(),
+        handle: handle.map(str::to_string),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    }
+}
+
+fn template_metadata(display_name: &str) -> PresetMetadata {
+    PresetMetadata {
+        shape: None,
+        id: PresetTypeId::from_string(format!("__template_{display_name}")),
+        display_name: display_name.to_string(),
+        category: "Geometry".to_string(),
+        osc_prefix: "scene".to_string(),
+        legacy_discriminant: None,
+        available: true,
+        is_line_based: false,
+        layer_types: None,
+        params: Vec::new(),
+        bindings: Vec::new(),
+        param_aliases: Vec::new(),
+        value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
+        scene_modifier: None,
+        scene_bounds: None,
+    }
+}
+
+/// Add Object's shape, without card rows: a cube, a material and a
+/// transform bound by one scene object, grouped behind one Object output.
+/// `manifold-nodes-scene` builds the shipped one; this crate cannot see it.
+pub(super) fn test_object_template(centroid: (f32, f32)) -> manifold_core::scene_template::SceneTemplate {
+    use manifold_core::scene_template::HANDLE_TOKEN;
+    let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
+        from_node,
+        from_port: from_port.to_string(),
+        to_node,
+        to_port: to_port.to_string(),
+    };
+    let mut group = template_node(6, GROUP_TYPE_ID, Some(HANDLE_TOKEN));
+    group.editor_pos = Some(centroid);
+    group.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: Vec::new(),
+            outputs: vec![InterfacePortDef { name: "object".to_string(), port_type: "Object".to_string() }],
+            params: Vec::new(),
+        },
+        nodes: vec![
+            template_node(1, "node.cube_mesh", Some("mesh")),
+            template_node(2, "node.pbr_material", Some("material")),
+            template_node(3, "node.transform_3d", Some("transform")),
+            template_node(4, "node.scene_object", Some(HANDLE_TOKEN)),
+            template_node(5, GROUP_OUTPUT_TYPE_ID, None),
+        ],
+        wires: vec![
+            wire(1, "vertices", 4, "vertices"),
+            wire(2, "out", 4, "material"),
+            wire(3, "transform", 4, "transform"),
+            wire(4, "object", 5, "object"),
+        ],
+        tint: None,
+    }));
+    manifold_core::scene_template::SceneTemplate { group, metadata: template_metadata("Object") }
+}
+
+/// Add Light's shape, without card rows: a bare white Sun light casting
+/// shadows.
+pub(super) fn test_light_template(position: (f32, f32)) -> manifold_core::scene_template::SceneTemplate {
+    let mut light = template_node(1, "node.light", Some(manifold_core::scene_template::HANDLE_TOKEN));
+    light.editor_pos = Some(position);
+    light.params = BTreeMap::from([
+        ("mode".to_string(), SerializedParamValue::Enum { value: 0 }),
+        ("color_r".to_string(), SerializedParamValue::Float { value: 1.0 }),
+        ("color_g".to_string(), SerializedParamValue::Float { value: 1.0 }),
+        ("color_b".to_string(), SerializedParamValue::Float { value: 1.0 }),
+        ("intensity".to_string(), SerializedParamValue::Float { value: 1.0 }),
+        ("cast_shadows".to_string(), SerializedParamValue::Float { value: 1.0 }),
+    ]);
+    manifold_core::scene_template::SceneTemplate { group: light, metadata: template_metadata("Light") }
+}
+
+/// Stamp `rows` as card rows of the template node with template-local id
+/// `node` (the template's own node or one of its group's children), under
+/// `section` (which may carry the handle token).
+pub(super) fn stamp_template_rows(
+    template: &mut manifold_core::scene_template::SceneTemplate,
+    node: u32,
+    section: &str,
+    rows: &[manifold_core::scene_exposure::NodeParamMetadata],
+) {
+    let found = std::iter::once(&template.group)
+        .chain(template.group.group.as_deref().into_iter().flat_map(|body| body.nodes.iter()))
+        .find(|candidate| candidate.id == node)
+        .expect("template node");
+    manifold_core::scene_exposure::stamp_scene_node_exposures_into(
+        &mut template.metadata.params,
+        &mut template.metadata.bindings,
+        found.id,
+        &found.node_id,
+        section,
+        rows,
+        &found.params,
+    );
+}
+
+/// Insert `template` into the root-level render scene with document id
+/// `render`, prepared against `target`'s current graph.
+pub(super) fn insert_template(
+    project: &Project,
+    target: &GraphTarget,
+    render: u32,
+    template: manifold_core::scene_template::SceneTemplate,
+) -> Result<crate::scene_template::InsertSceneTemplateCommand, String> {
+    let default = mirror_catalog_default();
+    let node = project
+        .graph_for_target(target, Some(&default))
+        .and_then(|def| def.nodes.iter().find(|node| node.id == render))
+        .map(|node| node.node_id.clone())
+        .ok_or("no render scene")?;
+    let scene = manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node };
+    crate::scene_template::InsertSceneTemplateCommand::new(project, target.clone(), scene, None, template, &default)
+        .map_err(|error| error.message)
 }
 
 /// Project with one timeline layer, no generator override.

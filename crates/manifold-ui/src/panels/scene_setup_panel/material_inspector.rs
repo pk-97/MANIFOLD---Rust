@@ -874,6 +874,9 @@ impl ScenePanel {
             SceneSelection::Physics(_) => {
                 self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::PhysicsWorld))
             }
+            SceneSelection::Source(_) => {
+                self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Source))
+            }
             SceneSelection::Camera => self.build_camera_section(tree, (inner_x, inner_w), cy, vm, owned),
             SceneSelection::Lighting => self.build_lighting_properties(tree, (inner_x, inner_w), cy, vm, owned),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm, owned),

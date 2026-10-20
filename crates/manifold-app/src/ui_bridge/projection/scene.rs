@@ -44,10 +44,12 @@ pub(crate) fn fluid_domains(
     for object in &scene.objects {
         let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
         let Some(domain) = &row.liquid_domain else { continue; };
-        if !result.iter().any(|option| option.node == domain.node) {
-            result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
-                node: domain.node.clone(), name: row.name.clone(),
-            });
+        let rows = std::iter::once(row.object_node_id).chain(row.parent_group_id);
+        match result.iter_mut().find(|option| option.node == domain.node) {
+            Some(option) => option.rows.extend(rows),
+            None => result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
+                node: domain.node.clone(), name: row.name.clone(), rows: rows.collect(),
+            }),
         }
     }
     result
@@ -152,6 +154,7 @@ pub(crate) fn scene_item_vms(
                 }
                 SceneItemId::Force(id) => (SceneSelection::Force(id.clone()), None, Vec::new()),
                 SceneItemId::Physics(id) => (SceneSelection::Physics(id.clone()), None, owned()),
+                SceneItemId::Source { node, water } => (SceneSelection::Source(node.clone()), Some(*water), owned()),
             };
             Some(SceneItemVm { kind: item.kind, selection, name: item.name.clone(), parent, parameter_ids })
         })

@@ -423,7 +423,7 @@ fn retarget_role(
         &source_port,
         &route.export_ports,
     )?;
-    let mut next_id = super::super::max_node_id_over(&def.nodes)
+    let mut next_id = super::super::super::max_node_id_over(&def.nodes)
         .checked_add(1)
         .ok_or_else(|| "Fluid role document id space is exhausted".to_string())?;
     let mut fresh_id = || {

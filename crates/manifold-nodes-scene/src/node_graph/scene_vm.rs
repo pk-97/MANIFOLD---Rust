@@ -26,7 +26,7 @@
 //! invariant) — found either directly wired to `render_scene`'s `object_k`
 //! port (a hand-built, ungrouped object) or through one `GROUP_TYPE_ID`
 //! wrapper whose body contains the `node.scene_object` feeding a
-//! `system.group_output`'s `object` port (the importer/`AddSceneObjectCommand`
+//! `system.group_output`'s `object` port (the importer/Add Object's template
 //! shape). The old "whatever named group happens to wrap `mesh_k`" trace is
 //! gone — `render_scene` v2 has no `mesh_k`/`transform_k`/… port families
 //! left to look at.
@@ -228,7 +228,7 @@ pub struct SceneObjectKnownRow {
     /// it empty because its geometry comes from the liquid surface.
     pub look_mesh: Option<NodeId>,
     /// `Some(group_id)` when the scene_object is wrapped in a
-    /// `GROUP_TYPE_ID` node (the importer/`AddSceneObjectCommand` shape) —
+    /// `GROUP_TYPE_ID` node (the importer/Add Object's template shape) —
     /// the rename sweep's group target. `None` for a bare scene_object
     /// wired directly to `object_k` (D1's first-class "hand-built graph, no
     /// group" case).
@@ -284,6 +284,21 @@ pub struct SceneObjectKnownRow {
     /// The domain transform's addresses and current values, independent of
     /// the visible mesh object's ordinary transform.
     pub fluid_domain_transform: Option<TransformVm>,
+    /// The Inflow, Drain and Collider groups feeding this water: each is its
+    /// own row under the water (D-94), so the water does not own them.
+    pub placed_sources: Vec<PlacedSourceVm>,
+}
+
+/// A standalone fluid source group wired into a water: a group holding a
+/// `node.fluid_role_source` and no scene object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedSourceVm {
+    /// The role node: the row's identity and its gizmo's owner.
+    pub node: NodeId,
+    /// The group's handle, else its title.
+    pub name: String,
+    /// Every node in the group whose controls the row owns.
+    pub owned: Vec<NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -314,7 +329,7 @@ pub struct ModifierVm {
 
 /// One `node.transform_3d`'s write addresses + current values — D4's "3
 /// compact triplets" (Position/Rotation/Scale), each X/Y/Z. Traced
-/// independently of the object's group (the importer/`AddSceneObjectCommand`
+/// independently of the object's group (the importer/Add Object's template
 /// shape places it in the same group by convention, but the trace never
 /// assumes that — a hand-wired `transform` input still resolves here as long
 /// as the producer IS a `node.transform_3d`).
@@ -1303,6 +1318,7 @@ fn trace_scene_object(
         .collect();
     let mut fluid_domain = None;
     let mut fluid_domain_transform = None;
+    let mut placed_sources: Vec<PlacedSourceVm> = Vec::new();
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
@@ -1406,9 +1422,28 @@ fn trace_scene_object(
             if role.type_id != "node.fluid_role_source" {
                 continue;
             }
-            // A visible source object owns its role controls. Only
-            // standalone source groups belong in the liquid's panel.
+            // A visible source object owns its role controls.
             if role_group.is_some() && role_level.nodes.iter().any(|node| node.type_id == "node.scene_object") {
+                continue;
+            }
+            // A standalone Inflow, Drain or Collider group is its own row
+            // under this water (D-94). Initial Fill stays the water's.
+            if let Some(group) = role_group.and_then(|id| domain_level.node(id))
+                && matches!(param_f32(role, "role", 1.0).round() as i32, 1..=3)
+            {
+                if !role.node_id.is_empty() && !placed_sources.iter().any(|source| source.node == role.node_id) {
+                    let name = group.handle.clone().or_else(|| group.title.clone()).filter(|name| !name.is_empty());
+                    placed_sources.push(PlacedSourceVm {
+                        node: role.node_id.clone(),
+                        name: name.unwrap_or_else(|| "Source".into()),
+                        owned: role_level
+                            .nodes
+                            .iter()
+                            .filter(|node| !node.node_id.is_empty() && node.type_id != GROUP_OUTPUT_TYPE_ID)
+                            .map(|node| node.node_id.clone())
+                            .collect(),
+                    });
+                }
                 continue;
             }
             own(role);
@@ -1485,6 +1520,7 @@ fn trace_scene_object(
         fluid_controls,
         fluid_domain,
         fluid_domain_transform,
+        placed_sources,
     }));
     (row, source_vertex_count)
 }
@@ -1943,7 +1979,12 @@ mod tests {
         let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
         let vm = SceneVm::from_def(&restored).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
-        assert_eq!(row.fluid_controls, ["n4", "n11", "n12"].map(NodeId::new));
+        assert_eq!(row.fluid_controls, ["n4"].map(NodeId::new), "a placed source is its own row, not the water's");
+        assert_eq!(row.placed_sources, [PlacedSourceVm {
+            node: NodeId::new("n11"),
+            name: "Source".into(),
+            owned: ["n11", "n12"].map(NodeId::new).to_vec(),
+        }], "a role wired twice is one row");
         assert!(row.transform.is_none());
         let role = vm.shapes.iter().find(|shape| matches!(shape.owner, ShapeOwner::RoleSource { .. })).expect("role shape");
         assert_eq!(role.owner, ShapeOwner::RoleSource { node: NodeId::new("n11"), role: FluidRole::Inflow });
@@ -2196,7 +2237,7 @@ mod tests {
         }
     }
 
-    /// The importer/`AddSceneObjectCommand` shape: mesh/material/transform +
+    /// The importer/Add Object's template shape: mesh/material/transform +
     /// `node.scene_object` all live INSIDE a group; the group's own `object`
     /// interface output re-exports the scene_object's `object` port to the
     /// root `object_k` wire.

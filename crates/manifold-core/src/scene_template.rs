@@ -240,11 +240,15 @@ fn numbered_handle(prefix: &str, from: u32, taken: &HashSet<String>) -> String {
 }
 
 /// Insert `template` into the render scene `scene` names and route every
-/// declared output to that scene's next free slot of its port type. Returns
+/// declared output to that scene's next free slot of its port type. A
+/// template whose outputs are fluid roles (an Inflow, a Drain, a Collider)
+/// goes inside its water instead: beside the liquid domain `water` names,
+/// each role output wired into that domain's next free role input. Returns
 /// one candidate graph, or the reason nothing could be built.
 pub fn insert_scene_template(
     graph: &EffectGraphDef,
     scene: &SceneNodeRef,
+    water: Option<&SceneNodeRef>,
     template: &SceneTemplate,
 ) -> Result<SceneGraphEdit, SceneGraphEditError> {
     let at = |message: &str| SceneGraphEditError { at: Some(scene.clone()), message: message.into() };
@@ -299,6 +303,65 @@ pub fn insert_scene_template(
         Some(outputs) => outputs,
         None => group.group.as_deref().map(|body| body.interface.outputs.clone()).unwrap_or_default(),
     };
+    if outputs.iter().any(|output| output.port_type == ROLE_PORT_TYPE) {
+        if outputs.iter().any(|output| SlotKind::of(&output.port_type).is_some()) {
+            return Err(fail("A fluid role source routes only into its water"));
+        }
+        let water = water.ok_or_else(|| at("Choose the water this goes into"))?;
+        route_roles_into_water(&mut candidate, water, group, &outputs)?;
+    } else {
+        route_to_render_slots(&mut candidate, scene, group, &outputs)?;
+    }
+    merge_exposures(&mut candidate, template, &remap, group_doc, &handle)?;
+    if let Some(domain) = domain {
+        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &domain).map_err(fail)?;
+    }
+    Ok(SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() })
+}
+
+/// The output port type a placed fluid source declares.
+const ROLE_PORT_TYPE: &str = "FluidRole";
+
+/// Place `group` beside the liquid domain `water` names, inside its water,
+/// and wire each role output into the domain's next free role input.
+fn route_roles_into_water(
+    candidate: &mut EffectGraphDef,
+    water: &SceneNodeRef,
+    group: EffectGraphNode,
+    outputs: &[crate::effect_graph_def::InterfacePortDef],
+) -> Result<(), SceneGraphEditError> {
+    let at = |message: &str| SceneGraphEditError { at: Some(water.clone()), message: message.into() };
+    let (nodes, wires) =
+        level_mut(&mut candidate.nodes, &mut candidate.wires, &water.scope).ok_or_else(|| at("The water is unavailable"))?;
+    let domain = nodes
+        .iter()
+        .find(|node| node.node_id == water.node && crate::liquid_domain::is_liquid_domain(&node.type_id))
+        .map(|node| node.id)
+        .ok_or_else(|| at("The water is unavailable"))?;
+    let group_doc = group.id;
+    let mut free = (0..crate::fluid_domain::MAX_FLUID_ROLES)
+        .map(|slot| format!("role_{slot}"))
+        .filter(|port| !wires.iter().any(|wire| wire.to_node == domain && wire.to_port == *port))
+        .collect::<Vec<_>>()
+        .into_iter();
+    for output in outputs.iter().filter(|output| output.port_type == ROLE_PORT_TYPE) {
+        let port = free.next().ok_or_else(|| at("The water has no free role inputs"))?;
+        wires.push(EffectGraphWire { from_node: group_doc, from_port: output.name.clone(), to_node: domain, to_port: port });
+    }
+    nodes.push(group);
+    Ok(())
+}
+
+/// Wire each object and light output to the render scene's next free slot of
+/// its kind, bumping each count by the number routed.
+fn route_to_render_slots(
+    candidate: &mut EffectGraphDef,
+    scene: &SceneNodeRef,
+    group: EffectGraphNode,
+    outputs: &[crate::effect_graph_def::InterfacePortDef],
+) -> Result<(), SceneGraphEditError> {
+    let at = |message: &str| SceneGraphEditError { at: Some(scene.clone()), message: message.into() };
+    let group_doc = group.id;
     let (nodes, wires) =
         level_mut(&mut candidate.nodes, &mut candidate.wires, &scene.scope).ok_or_else(|| at("Scene scope is unavailable"))?;
     let render = nodes
@@ -317,7 +380,11 @@ pub fn insert_scene_template(
             continue;
         }
         let current = render.params.get(param).and_then(whole_number).ok_or_else(|| at("Render scene has an invalid slot count"))?;
-        let total = current.checked_add(routed).ok_or_else(|| at("Render scene slot count is exhausted"))?;
+        // Counts are saved as f32: refuse a total that would not survive it.
+        let total = current
+            .checked_add(routed)
+            .filter(|total| *total as f32 as u32 == *total)
+            .ok_or_else(|| at("Render scene slot count is exhausted"))?;
         if let Some(limit) = crate::param_lookup::node_params(RENDER_SCENE_TYPE_ID)
             .iter()
             .find(|meta| meta.name == param)
@@ -329,7 +396,7 @@ pub fn insert_scene_template(
         slots.push((prefix, param, current));
         render.params.insert(param.to_owned(), SerializedParamValue::Float { value: total as f32 });
     }
-    for output in &outputs {
+    for output in outputs {
         let Some(kind) = SlotKind::of(&output.port_type) else { continue };
         let (prefix, _, next) = slots.iter_mut().find(|(prefix, ..)| *prefix == kind.prefix()).expect("counted above");
         let port = format!("{prefix}_{next}");
@@ -344,29 +411,37 @@ pub fn insert_scene_template(
     if slots.iter().any(|(prefix, ..)| *prefix == SlotKind::Light.prefix()) {
         crate::sky_sun::wire_sky_sun(nodes, wires);
     }
+    Ok(())
+}
 
-    // Exposures, merged by id.
-    let host_meta = candidate.preset_metadata.as_mut();
-    let Some(host_meta) = host_meta else {
-        if template.metadata.params.is_empty() {
-            return Ok(SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() });
-        }
-        return Err(at("Scene graph has no card to expose controls on"));
-    };
-    let mut id_map: HashMap<&str, String> = HashMap::new();
-    for spec in &template.metadata.params {
-        id_map.insert(spec.id.as_str(), remap_exposure_id(&spec.id, &remap, group_doc));
+/// Merge the template's exposures into the host card by id, remapped to
+/// the inserted identity. A host with no card gets the empty scene card.
+fn merge_exposures(
+    candidate: &mut EffectGraphDef,
+    template: &SceneTemplate,
+    remap: &Remap,
+    group_doc: u32,
+    handle: &str,
+) -> Result<(), SceneGraphEditError> {
+    let meta = &template.metadata;
+    if candidate.preset_metadata.is_none() && meta.params.is_empty() && meta.string_bindings.is_empty() {
+        return Ok(());
     }
-    for spec in &template.metadata.params {
+    let host_meta = candidate.preset_metadata.get_or_insert_with(crate::scene_exposure::empty_scene_preset_metadata);
+    let mut id_map: HashMap<&str, String> = HashMap::new();
+    for spec in &meta.params {
+        id_map.insert(spec.id.as_str(), remap_exposure_id(&spec.id, remap, group_doc));
+    }
+    for spec in &meta.params {
         let mut spec = spec.clone();
         spec.id = id_map[spec.id.as_str()].clone();
-        spec.section = spec.section.map(|section| remap_section(&section, &handle));
+        spec.section = spec.section.map(|section| remap_section(&section, handle));
         if host_meta.params.iter().any(|existing| existing.id == spec.id) {
             return Err(fail(format!("Exposure {} already exists", spec.id)));
         }
         host_meta.params.push(spec);
     }
-    for binding in &template.metadata.bindings {
+    for binding in &meta.bindings {
         let mut binding = binding.clone();
         binding.id = id_map
             .get(binding.id.as_str())
@@ -381,7 +456,7 @@ pub fn insert_scene_template(
         }
         host_meta.bindings.push(binding);
     }
-    for alias in &template.metadata.param_aliases {
+    for alias in &meta.param_aliases {
         let mut alias = alias.clone();
         if let Some(fresh) = id_map.get(alias.old.as_str()) {
             alias.old = fresh.clone();
@@ -393,24 +468,21 @@ pub fn insert_scene_template(
         }
         host_meta.param_aliases.push(alias);
     }
-    for alias in &template.metadata.value_aliases {
+    for alias in &meta.value_aliases {
         let mut alias = alias.clone();
         if let Some(fresh) = id_map.get(alias.param_id.as_str()) {
             alias.param_id = fresh.clone();
         }
         host_meta.value_aliases.push(alias);
     }
-    for binding in &template.metadata.string_bindings {
+    for binding in &meta.string_bindings {
         let mut binding = binding.clone();
         if let BindingTarget::Node { node_id, .. } = &mut binding.target {
             *node_id = remap.stable.get(node_id).cloned().ok_or_else(|| fail("String binding targets outside the template"))?;
         }
         host_meta.string_bindings.push(binding);
     }
-    if let Some(domain) = domain {
-        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &domain).map_err(fail)?;
-    }
-    Ok(SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() })
+    Ok(())
 }
 
 #[cfg(test)]
@@ -488,7 +560,7 @@ mod tests {
 
     #[test]
     fn physics_boundary_insert_fan_out() {
-        let edit = insert_scene_template(&host(), &scene(), &template(3)).unwrap();
+        let edit = insert_scene_template(&host(), &scene(), None, &template(3)).unwrap();
         let scene_node = &edit.graph.nodes[0];
         assert_eq!(scene_node.params.get("objects"), Some(&SerializedParamValue::Float { value: 3.0 }));
         let group = edit.graph.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
@@ -499,8 +571,8 @@ mod tests {
 
     #[test]
     fn physics_boundary_nested_remap() {
-        let first = insert_scene_template(&host(), &scene(), &template(1)).unwrap();
-        let second = insert_scene_template(&first.graph, &scene(), &template(1)).unwrap();
+        let first = insert_scene_template(&host(), &scene(), None, &template(1)).unwrap();
+        let second = insert_scene_template(&first.graph, &scene(), None, &template(1)).unwrap();
         let mut docs = Vec::new();
         all_doc_ids(&second.graph.nodes, &mut docs);
         let unique: HashSet<_> = docs.iter().collect();
@@ -533,13 +605,56 @@ mod tests {
         let before = graph.clone();
         let mut occupied = graph.clone();
         occupied.wires.push(EffectGraphWire { from_node: 1, from_port: "x".into(), to_node: 1, to_port: "object_0".into() });
-        assert!(insert_scene_template(&occupied, &scene(), &template(1)).is_err());
+        assert!(insert_scene_template(&occupied, &scene(), None, &template(1)).is_err());
         let missing = SceneNodeRef { scope: vec![], node: NodeId::new("nowhere") };
-        assert!(insert_scene_template(&graph, &missing, &template(1)).is_err());
+        assert!(insert_scene_template(&graph, &missing, None, &template(1)).is_err());
         let mut bad = template(1);
         bad.metadata.bindings[0].target = BindingTarget::Node { node_id: NodeId::new("outside"), param: "x".into() };
-        assert!(insert_scene_template(&graph, &scene(), &bad).is_err());
+        assert!(insert_scene_template(&graph, &scene(), None, &bad).is_err());
         assert_eq!(graph, before, "a refused insert leaves the host untouched");
+    }
+
+    /// An Inflow goes inside its water: placed beside the domain, its role
+    /// output wired into the domain's next free role input, the render
+    /// scene untouched.
+    #[test]
+    fn physics_boundary_insert_role_source_into_its_water() {
+        let mut host = host();
+        let mut domain = node(3, "domain", crate::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, None);
+        domain.group = None;
+        let mut family = node(2, "family", GROUP_TYPE_ID, Some("Water 1"));
+        family.group = Some(Box::new(crate::effect_graph_def::GroupDef {
+            interface: crate::effect_graph_def::GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![domain, node(4, "taken", "node.fluid_role_source", None)],
+            wires: vec![EffectGraphWire { from_node: 4, from_port: "role".into(), to_node: 3, to_port: "role_0".into() }],
+            tint: None,
+        }));
+        host.nodes.push(family);
+        let mut source = node(10, "inflow", GROUP_TYPE_ID, Some("{handle}"));
+        source.group = Some(Box::new(crate::effect_graph_def::GroupDef {
+            interface: crate::effect_graph_def::GroupInterface {
+                inputs: vec![],
+                outputs: vec![crate::effect_graph_def::InterfacePortDef { name: "role".into(), port_type: "FluidRole".into() }],
+                params: vec![],
+            },
+            nodes: vec![
+                node(11, "role", "node.fluid_role_source", None),
+                node(12, "out", crate::effect_graph_def::GROUP_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![EffectGraphWire { from_node: 11, from_port: "role".into(), to_node: 12, to_port: "role".into() }],
+            tint: None,
+        }));
+        let mut metadata = host.preset_metadata.clone().unwrap();
+        metadata.display_name = "Inflow".into();
+        let template = SceneTemplate { group: source, metadata };
+        assert!(insert_scene_template(&host, &scene(), None, &template).is_err(), "a role source needs its water");
+        let water = SceneNodeRef { scope: vec![NodeId::new("family")], node: NodeId::new("domain") };
+        let edit = insert_scene_template(&host, &scene(), Some(&water), &template).unwrap();
+        assert_eq!(edit.graph.nodes[0], host.nodes[0], "the render scene is untouched");
+        let body = edit.graph.nodes[1].group.as_deref().unwrap();
+        let placed = body.nodes.iter().find(|node| node.handle.as_deref() == Some("Inflow 1")).expect("inside its water");
+        assert!(body.wires.iter().any(|wire| wire.from_node == placed.id && wire.from_port == "role"
+            && wire.to_node == 3 && wire.to_port == "role_1"));
     }
 
     #[test]
@@ -549,7 +664,7 @@ mod tests {
         let mut template = template(0);
         let body = template.group.group.as_deref_mut().unwrap();
         body.interface.outputs.push(crate::effect_graph_def::InterfacePortDef { name: "out".into(), port_type: "Light".into() });
-        let edit = insert_scene_template(&host, &scene(), &template).unwrap();
+        let edit = insert_scene_template(&host, &scene(), None, &template).unwrap();
         let render = &edit.graph.nodes[0];
         assert_eq!(render.params.get("lights"), Some(&SerializedParamValue::Float { value: 3.0 }));
         assert_eq!(render.params.get("objects"), Some(&SerializedParamValue::Float { value: 0.0 }));

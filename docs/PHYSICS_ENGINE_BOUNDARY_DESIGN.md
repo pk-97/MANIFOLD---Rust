@@ -337,13 +337,14 @@ pub struct SceneTemplate {
 pub fn insert_scene_template(
     graph: &EffectGraphDef,
     scene: &SceneNodeRef,
+    water: Option<&SceneNodeRef>,
     template: &SceneTemplate,
 ) -> Result<SceneGraphEdit, SceneGraphEditError>;
 ```
 
 `group` must be a complete ordinary group, with all scene-object outputs declared. Template-local stable NodeIds, document IDs, handles, numeric bindings, string bindings, and aliases are remapped once across the entire nested body. The template metadata contains only its own exposures; its preset identity/display fields do not replace the host's. Use the existing exposure stamper/provider (`C/scene_exposure.rs:44`, `:118`, `:190`), not cloned primitive descriptors.
 
-Insertion validates the selected render scene, capacity, graph references, and all metadata before changing anything. It allocates one group identity and fresh descendant identities; routes every declared output by port type (object slots and light slots, each count bumped by the number routed); increments the render-scene object count by the actual output count; merges exposures by ID; wires existing World controls through declared boundaries; and returns one candidate. No `ExposureSet`, fixed category vectors, or positional binding alignment remains. Shared World creation uses the same provider, and is part of the candidate. Domain recognition uses the core index/list.
+Insertion validates the selected render scene, capacity, graph references, and all metadata before changing anything. It allocates one group identity and fresh descendant identities; routes every declared output by port type (object slots and light slots, each count bumped by the number routed); increments the render-scene object count by the actual output count; merges exposures by ID; wires existing World controls through declared boundaries; and returns one candidate. A template whose outputs are `FluidRole` ports is a fluid source: it is placed beside `water`'s domain, inside the water's group, and each role output wires to the domain's next free `role_N`; it touches no render slot, and it is refused without a water or with no free role input. A standalone Inflow, Drain or Collider group feeding a water is its own scene item under that water, not part of the water's controls (D-94). returns one candidate. No `ExposureSet`, fixed category vectors, or positional binding alignment remains. Shared World creation uses the same provider, and is part of the candidate. Domain recognition uses the core index/list.
 
 `E/scene_template.rs` exposes:
 

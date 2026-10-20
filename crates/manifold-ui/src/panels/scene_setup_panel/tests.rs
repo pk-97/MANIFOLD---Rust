@@ -32,8 +32,8 @@
     }
 
     /// Rebuild a fixture's tree items from its rows, in `scene_items` order
-    /// (Camera, Known lights, Known objects, forces, physics, World), keeping
-    /// the ids and kinds of items that already exist.
+    /// (Camera, Known lights, Known objects, forces, placed sources, physics,
+    /// World), keeping the ids and kinds of items that already exist.
     pub(super) fn sync_items(vm: &mut SceneSetupVm) {
         use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind};
         let old = std::mem::take(&mut vm.items);
@@ -67,6 +67,7 @@
         items.extend(vm.forces.iter().map(|force| {
             item(SceneItemKind::Force, SceneSelection::Force(force.instance_id.clone()), &force.title, None)
         }));
+        items.extend(old.iter().filter(|item| matches!(item.selection, SceneSelection::Source(_))).cloned());
         items.extend(old.iter().filter(|item| matches!(item.selection, SceneSelection::Physics(_))).cloned());
         items.push(item(SceneItemKind::World, SceneSelection::World, "World", None));
         vm.items = items;
@@ -504,7 +505,7 @@
         row.fluid_role_available = true;
         let expected_index = row.index as u32;
         let expected_scene = vm.scene_root_node_id;
-        let domains = vec![FluidDomainOption { node: FoundationNodeId::new("liquid_b"), name: "Liquid B".into() }];
+        let domains = vec![FluidDomainOption { node: FoundationNodeId::new("liquid_b"), name: "Liquid B".into(), rows: Vec::new() }];
         vm.fluid_domains = domains.clone();
         let mut panel = ScenePanel::new();
         panel.open();
@@ -681,26 +682,70 @@
         let labels = |group| panel.add_menu(group).iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
         assert_eq!(
             labels(SceneGroup::Objects),
-            ["Object", "Plane", "Water", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
+            ["Object", "Plane", "Water", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
         );
         assert_eq!(
             labels(SceneGroup::Lighting),
-            ["Light", "Object", "Plane", "Water", "Force \u{2014} Gravity", "Import Model\u{2026}"],
+            ["Light", "Object", "Plane", "Water", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
         );
         assert_eq!(
             labels(SceneGroup::Forces),
-            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Import Model\u{2026}"],
+            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
         );
         let menu = panel.add_menu(SceneGroup::Objects);
         let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
-            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { layer_id, kind })) if layer_1(layer_id) && *kind == expected);
+            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { layer_id, kind, water: None })) if layer_1(layer_id) && *kind == expected);
         assert!(insert(0, SceneTemplateKind::Object));
         assert!(insert(1, SceneTemplateKind::Plane));
         assert!(insert(2, SceneTemplateKind::Water));
-        assert!(matches!(&menu[3].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
-        assert!(insert(4, SceneTemplateKind::Light));
-        assert!(matches!(&menu[5].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
-        assert!(menu[3].separator_after && !menu[2].separator_after, "the clicked group's entries are set apart");
+        for source in &menu[3..6] {
+            assert!(source.action.is_none() && source.disabled.as_deref() == Some("Add Water first"), "{} needs a water", source.label);
+        }
+        assert!(matches!(&menu[6].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
+        assert!(insert(7, SceneTemplateKind::Light));
+        assert!(matches!(&menu[8].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
+        assert!(menu[6].separator_after && !menu[5].separator_after, "the clicked group's entries are set apart");
+    }
+
+    /// D-94: an Inflow, Drain or Collider goes into the water the selection
+    /// is or sits under, else the only water; with several and none
+    /// selected, the entry says to pick one.
+    #[test]
+    fn fluid_sources_target_the_selected_water() {
+        use manifold_foundation::scene_surface::{SceneItemKind, SceneTemplateKind};
+        let mut vm = azalea_shaped_vm();
+        let water = |node: &str, row| FluidDomainOption { node: FoundationNodeId::new(node), name: node.into(), rows: vec![row] };
+        vm.fluid_domains = vec![water("lake", 40), water("pool", 50)];
+        vm.items.push(SceneItemVm {
+            kind: SceneItemKind::Source,
+            selection: SceneSelection::Source(FoundationNodeId::new("pool_inflow")),
+            name: "Inflow 1".into(),
+            parent: Some(50),
+            parameter_ids: Vec::new(),
+        });
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm.clone()));
+        let target = |panel: &ScenePanel| {
+            let menu = panel.add_menu(SceneGroup::Objects);
+            let drain = menu.iter().find(|entry| entry.label == "Drain").expect("Drain entry");
+            match &drain.action {
+                Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { kind: SceneTemplateKind::Drain, water, .. })) => {
+                    Ok(water.clone().expect("a source names its water").to_string())
+                }
+                _ => Err(drain.disabled.clone().expect("a disabled entry says why")),
+            }
+        };
+        panel.set_selection(vm.layer_id.clone(), SceneSelection::Camera);
+        assert_eq!(target(&panel), Err("Select the water this goes into".into()));
+        panel.set_selection(vm.layer_id.clone(), SceneSelection::Object(40));
+        assert_eq!(target(&panel), Ok("lake".into()));
+        panel.set_selection(vm.layer_id.clone(), SceneSelection::Source(FoundationNodeId::new("pool_inflow")));
+        assert_eq!(target(&panel), Ok("pool".into()), "a selected source targets its own water");
+        vm.fluid_domains.truncate(1);
+        panel.configure(live(vm));
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Camera);
+        assert_eq!(target(&panel), Ok("lake".into()), "the only water needs no selection");
     }
 
     /// D8: Lights, Objects and Forces each own exactly one add button beside

@@ -34,5 +34,5 @@ pub(crate) fn prepare(
         .graph_for_target(target, Some(default))
         .and_then(|def| scene_ref(def, scope, render))
         .ok_or_else(|| "The scene is no longer available".to_string())?;
-    InsertSceneTemplateCommand::new(project, target.clone(), scene, template, default).map_err(|error| error.message)
+    InsertSceneTemplateCommand::new(project, target.clone(), scene, None, template, default).map_err(|error| error.message)
 }

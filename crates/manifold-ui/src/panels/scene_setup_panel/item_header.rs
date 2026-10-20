@@ -41,6 +41,7 @@ pub(super) fn kind_label(kind: SceneItemKind) -> &'static str {
         SceneItemKind::Force => "Force",
         SceneItemKind::Physics => "Physics",
         SceneItemKind::World => "World",
+        SceneItemKind::Source => "Source",
     }
 }
 
@@ -106,7 +107,7 @@ impl ScenePanel {
                 cy + ROW_H + ROW_GAP
             }
             SceneSelection::Camera => self.build_camera_header(tree, (inner_x, inner_w), cy, vm, item),
-            SceneSelection::World | SceneSelection::Physics(_) => {
+            SceneSelection::World | SceneSelection::Physics(_) | SceneSelection::Source(_) => {
                 self.build_name_and_kind(tree, Rect::new(inner_x, cy, inner_w, ROW_H), &item.name, item.kind, None);
                 cy + ROW_H + ROW_GAP
             }
