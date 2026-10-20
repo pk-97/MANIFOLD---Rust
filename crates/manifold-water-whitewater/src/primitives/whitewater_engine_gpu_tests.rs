@@ -145,9 +145,9 @@ fn whitewater_engine_substep_force_hit_values_and_fusion() {
         0.0,
     ];
     let clock = h.array(&schedule, 12);
-    let force: Vec<_> = (0..8).flat_map(|_| [1.0f32, 0.0, 0.0, 0.0]).collect();
+    let force: Vec<_> = (0..8).flat_map(|_| [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).collect();
     let impulse: Vec<_> = (0..8).flat_map(|_| [2.0f32, 0.0, 0.0, 0.0]).collect();
-    let f = h.array(&force, 32);
+    let f = h.array(&force, 64);
     let i = h.array(&impulse, 32);
     let values = motion_values();
     let got: Vec<WhitewaterParticle> = run(

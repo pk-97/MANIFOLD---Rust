@@ -972,7 +972,8 @@ pub trait EffectNode: Send + AsAny {
 
     /// The input that takes the scene's forces when a scene object's
     /// physical chain reaches this node: the scene force list expands into
-    /// it. `None`: the node passes forces by.
+    /// it, and the forces' hits go to the node as a whole
+    /// (`ImpulseTarget::Swarm`). `None`: the node passes forces by.
     fn acceleration_input(&self) -> Option<&'static str> {
         None
     }

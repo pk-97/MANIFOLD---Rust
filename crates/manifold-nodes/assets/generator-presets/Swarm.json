@@ -45,6 +45,8 @@
     {"fromNode": 11, "fromPort": "field_min_y", "toNode": 14, "toPort": "field_min_y"},
     {"fromNode": 11, "fromPort": "field_min_z", "toNode": 14, "toPort": "field_min_z"},
     {"fromNode": 11, "fromPort": "tick_seconds", "toNode": 14, "toPort": "tick_seconds"},
+    {"fromNode": 11, "fromPort": "impulses", "toNode": 14, "toPort": "impulses"},
+    {"fromNode": 11, "fromPort": "impulse_tick", "toNode": 14, "toPort": "impulse_tick"},
     {"fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "particles"},
     {"fromNode": 15, "fromPort": "copies", "toNode": 18, "toPort": "instances"},
     {"fromNode": 16, "fromPort": "vertices", "toNode": 18, "toPort": "vertices"},

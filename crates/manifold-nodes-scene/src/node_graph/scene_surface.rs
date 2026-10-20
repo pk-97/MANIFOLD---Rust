@@ -232,6 +232,7 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
             setup(PhysicsWorld).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
+        "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         _ => return None,
     })
 }
@@ -508,6 +509,7 @@ fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
             setup(Simulation).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
         }
         "grid_budget_mcells" => setup(Simulation).unit(Unit::MillionCells),
+        "air_drag" => setup(Simulation).limit(AT_LEAST_ZERO),
         _ => setup(Simulation),
     })
 }

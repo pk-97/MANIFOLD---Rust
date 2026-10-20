@@ -1264,7 +1264,7 @@ fn ww_phase_advect(
             let c = force_lattice_corner(particle.position_lifetime.xyz, field_origin, field_spacing, dims, corner);
             for (var a = 0u; a < 3u; a = a + 1u) {
                 if force_lattices > 0.0 {
-                    acceleration[a] = fma(buf_forces[base + c.index * 4u + a], c.weight, acceleration[a]);
+                    acceleration[a] = fma(buf_forces[base + c.index * FORCE_NODE_WORDS + a], c.weight, acceleration[a]);
                 }
                 if (event & 0x80000000u) != 0u {
                     let at = (event & 0x7fffffffu) * stride + c.index * 4u + a;

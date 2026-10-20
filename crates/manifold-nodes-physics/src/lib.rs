@@ -4,5 +4,6 @@
 //! it names no liquid solver.
 
 pub mod force_lattice;
+pub mod hits;
 pub mod primitives;
 pub mod tick_sampled;

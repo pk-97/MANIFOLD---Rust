@@ -19,12 +19,15 @@ pub mod coupled_motion;
 mod field_value;
 pub mod force_lattice;
 pub mod tick_samples;
+pub mod tick_hits;
+pub mod turbulence;
 use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
 pub use field_value::{FieldLeaf, FieldValue};
 pub use interaction::{
-    FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
-    VectorField, VortexField,
+    FalloffCurve, FieldInput, ForceSample, RadialField, SampledField, ScaledField, SumField,
+    TickStamp, UniformField, VectorField, VortexField,
 };
+pub use turbulence::TurbulenceField;
 mod mesh;
 pub use mesh::{cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 pub mod sdf;
@@ -730,7 +733,10 @@ impl PhysicsWorld {
 
     /// Apply sampled acceleration and one-shot delta-velocity fields to bodies.
     /// Acceleration is submitted as a force and delta velocity as an impulse,
-    /// both scaled by each body's native mass. Field sampling happens at the
+    /// both scaled by each body's native mass. Air a field carries (scaled
+    /// like its push by the input's acceleration) drags the body's velocity
+    /// toward the wind over `dt`, exactly integrated from its velocity now,
+    /// and joins the impulse. Field sampling happens at the
     /// current world-space center of mass before any application is made.
     pub fn apply_fields(
         &mut self,
@@ -809,10 +815,13 @@ impl PhysicsWorld {
                     return Err(PhysicsError::NativeFailure);
                 }
 
+                let mut air = ForceSample::default();
                 let mut acceleration = [0.0; 3];
                 let mut delta_velocity = [0.0; 3];
                 for input in fields {
-                    let sample = input.field.sample(center);
+                    let force = input.field.sample_force(center);
+                    let sample = force.push;
+                    air = air + ForceSample { push: [0.0; 3], ..force }.scaled(input.acceleration);
                     if !sample.iter().all(|component| component.is_finite()) {
                         return Err(PhysicsError::InvalidInput("field sample must be finite"));
                     }
@@ -829,6 +838,19 @@ impl PhysicsWorld {
                     }
                 }
 
+                if !air.is_finite() || air.drag < 0.0 {
+                    return Err(PhysicsError::InvalidInput("field air must be finite"));
+                }
+                if air.drag > 0.0 {
+                    let mut velocity = [0.0; 3];
+                    if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) } != 0 {
+                        return Err(PhysicsError::NativeFailure);
+                    }
+                    let drag = air.drag_delta_velocity(velocity, dt_f32);
+                    for component in 0..3 {
+                        delta_velocity[component] += drag[component];
+                    }
+                }
                 let force = acceleration.map(|component| component * mass);
                 let impulse = delta_velocity.map(|component| component * mass);
                 if !force
@@ -1624,6 +1646,9 @@ mod tests {
 
     #[path = "coupling_body.rs"]
     mod coupling_body;
+
+    #[path = "air_drag.rs"]
+    mod air_drag;
 
     fn cube(height: f32) -> Vec<[f32; 3]> {
         vec![

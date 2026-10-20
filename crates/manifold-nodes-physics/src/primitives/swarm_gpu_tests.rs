@@ -1,5 +1,5 @@
-//! GPU proofs (SCENE_SETUP_PROGRAMME.md E1). node.swarm_forces lays a
-//! moving vortex onto the shared force lattice tick by tick, through its
+//! GPU proofs (SCENE_SETUP_PROGRAMME.md E1, D2). node.swarm_forces lays a
+//! moving vortex in a wind onto the shared force lattice tick by tick, through its
 //! clock, the history replay and the staged upload, and node.move_swarm moves
 //! 100k particles with it. At 30 fps every frame runs two ticks on two
 //! lattices; at 120 fps every other frame runs none. Every particle lands
@@ -48,10 +48,11 @@ fn particle(i: usize) -> Particle {
     }
 }
 
-/// A vortex about the box's vertical axis that swells with transport time:
-/// every tick has its own lattice.
+/// A vortex about the box's vertical axis that swells with transport time, in
+/// a wind of 0.3 m/s along x at drag rate 0.8/s: every tick has its own lattice.
 fn field(seconds: f64) -> FieldValue {
-    FieldValue::vortex([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 2.0, 1.0).unwrap().scaled(1.0 + seconds as f32).unwrap()
+    let vortex = FieldValue::vortex([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 2.0, 1.0).unwrap().scaled(1.0 + seconds as f32).unwrap();
+    vortex.sum(&FieldValue::uniform([0.3, 0.0, 0.0]).unwrap().air(0.8).unwrap()).unwrap()
 }
 
 /// What a flown swarm ends as: its particles, and each tick it ran with that
@@ -132,8 +133,8 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
     let lattices: Vec<Vec<[f32; 4]>> = ran
         .iter()
         .map(|&(tick, _)| {
-            let mut values = vec![[0.0; 4]; lattice.node_count()];
-            lattice.fill(&mut values, |x| field(tick as f64 * TICK).sample(x)).unwrap();
+            let mut values = vec![[0.0; 4]; 2 * lattice.node_count()];
+            lattice.fill_forces(&mut values, |x| field(tick as f64 * TICK).sample_force(x)).unwrap();
             values
         })
         .collect();
@@ -142,9 +143,8 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
         if i % 4 == 0 {
             let (mut x, mut v) = (from.position, from.velocity);
             for (values, &(_, dt)) in lattices.iter().zip(&ran) {
-                let a = lattice.sample(values, x);
+                v = lattice.sample_forces(values, x).step_velocity(v, dt);
                 for d in 0..3 {
-                    v[d] += a[d] * dt;
                     x[d] += v[d] * dt;
                 }
             }
@@ -183,7 +183,8 @@ fn swarm_speed_ramp_lands_the_same_at_30_and_120_fps() {
 
 /// node.move_swarm into node.swarm_to_copies, fused into one kernel by the
 /// graph compiler's codegen, matches the two standalone kernels bit for bit
-/// over three ticks that each read their own lattice and length.
+/// over three ticks that each read their own lattice and length, the middle
+/// one taking a hit.
 #[test]
 fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
     const N: usize = 4096;
@@ -192,8 +193,8 @@ fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
     let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 17);
     let flat: Vec<f32> = (0..3)
         .flat_map(|tick| {
-            let mut values = vec![[0.0f32; 4]; lattice.node_count()];
-            lattice.fill(&mut values, |x| field(f64::from(tick)).sample(x)).unwrap();
+            let mut values = vec![[0.0f32; 4]; 2 * lattice.node_count()];
+            lattice.fill_forces(&mut values, |x| field(f64::from(tick)).sample_force(x)).unwrap();
             values
         })
         .flatten()
@@ -201,21 +202,28 @@ fn move_swarm_fused_with_swarm_to_copies_matches_unfused() {
     let (forces, forces_buffer) = h.array(&flat, flat.len());
     let lengths = [0.8 * TICK as f32, TICK as f32, 1.3 * TICK as f32];
     let (tick_seconds, tick_seconds_buffer) = h.array(&lengths, lengths.len());
+    // A hit landing on the middle tick: the fused kernel kicks exactly as
+    // the standalone one.
+    let mut kicks = vec![[0.0f32; 4]; lattice.node_count()];
+    lattice.fill(&mut kicks, |x| field(0.0).sample(x).map(|v| -0.5 * v)).unwrap();
+    let kicks: Vec<f32> = kicks.into_iter().flatten().collect();
+    let (impulses, impulses_buffer) = h.array(&kicks, kicks.len());
     let (particles, particles_buffer) = h.array(&start, N);
     let values = [
         ("active_count", N as f32), ("ticks", 3.0), ("first_tick", 5.0), ("force_lattices", 3.0),
         ("field_nodes_x", 17.0), ("field_nodes_y", 17.0), ("field_nodes_z", 17.0), ("field_spacing", 0.25),
-        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("size", 0.07),
+        ("field_min_x", -2.0), ("field_min_y", 0.0), ("field_min_z", -2.0), ("impulse_tick", 6.0),
+        ("size", 0.07),
     ];
     let region = vec![
-        member::<MoveSwarm>(0, vec![InputSource::External(0), InputSource::External(1), InputSource::External(2)]),
+        member::<MoveSwarm>(0, vec![InputSource::External(0), InputSource::External(1), InputSource::External(2), InputSource::External(3)]),
         member::<SwarmToCopies>(1, vec![InputSource::Node(NodeInstanceId(0))]),
     ];
-    let externals = [&particles_buffer, &forces_buffer, &tick_seconds_buffer];
+    let externals = [&particles_buffer, &forces_buffer, &tick_seconds_buffer, &impulses_buffer];
     let fused: Vec<InstanceTransform> = fused_into(&mut h, region, &externals, N, &values, "copies");
 
     let p = params(&values);
-    let inputs = [("in", particles), ("forces", forces), ("tick_seconds", tick_seconds)];
+    let inputs = [("in", particles), ("forces", forces), ("tick_seconds", tick_seconds), ("impulses", impulses)];
     let (_, errors) = h.run(&mut MoveSwarm::new(), &inputs, &[("out", particles)], &p);
     assert!(errors.is_empty(), "{errors:?}");
     let (copies, copies_buffer) = h.array::<InstanceTransform>(&[], N);

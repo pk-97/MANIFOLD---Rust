@@ -63,17 +63,17 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
         use manifold_foundation::scene_surface::Unit;
         use manifold_nodes_scene::node_graph::scene_exposure::all_params_for_node_type;
 
-        const UNITS: [Unit; 10] = [
+        const UNITS: [Unit; 11] = [
             Unit::Metres, Unit::MetresPerSecond, Unit::MetresPerSecondSquared,
             Unit::KilogramsPerCubicMetre, Unit::Ev, Unit::Pixels, Unit::MillionCells,
-            Unit::Seconds, Unit::Nanometres, Unit::Beats,
+            Unit::Seconds, Unit::Nanometres, Unit::Beats, Unit::PerSecond,
         ];
         // A new unit must join UNITS before this compiles.
         fn _every_unit_listed(unit: Unit) {
             match unit {
                 Unit::Metres | Unit::MetresPerSecond | Unit::MetresPerSecondSquared
                 | Unit::KilogramsPerCubicMetre | Unit::Ev | Unit::Pixels | Unit::MillionCells
-                | Unit::Seconds | Unit::Nanometres | Unit::Beats => {}
+                | Unit::Seconds | Unit::Nanometres | Unit::Beats | Unit::PerSecond => {}
             }
         }
         let carries_unit = |label: &str| {

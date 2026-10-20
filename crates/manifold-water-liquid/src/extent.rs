@@ -34,9 +34,10 @@ pub fn liquid_lattice(x: &AtomExtent<'_>) -> Result<LiquidLattice, Verdict> {
 /// buffers must hold them.
 pub fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| whole(x, name, 2.0).max(2));
-    let bytes = nodes.iter().map(|&n| u64::from(n)).product::<u64>() * 16;
-    x.covers_if_bound("forces", u64::from(whole(x, "force_lattices", 0.0)) * bytes)?;
-    x.covers_if_bound("impulses", bytes)
+    let node_count = nodes.iter().map(|&n| u64::from(n)).product::<u64>();
+    let force_bytes = node_count * manifold_physics::force_lattice::FORCE_NODE_FLOATS as u64 * 4;
+    x.covers_if_bound("forces", u64::from(whole(x, "force_lattices", 0.0)) * force_bytes)?;
+    x.covers_if_bound("impulses", node_count * 16)
 }
 
 /// A frame's face grid storage: one array per wired axis over the domain's

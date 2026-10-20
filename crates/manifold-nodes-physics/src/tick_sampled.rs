@@ -20,7 +20,7 @@ pub trait TickSampled: Send {
 /// The inputs a tick-sampled simulation's history replay evaluates; the rest
 /// are setup, held as they stand.
 pub fn replays_input(port: &str) -> bool {
-    port == "acceleration_field" || port == "speed" || port.starts_with("role_")
+    matches!(port, "acceleration_field" | "speed" | "air_drag") || port.starts_with("role_")
 }
 
 /// Checked cast for one concrete tick-sampled node type.

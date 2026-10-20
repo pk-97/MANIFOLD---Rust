@@ -5,6 +5,7 @@
 
 use crate::clock::{ClockFrame, SimulationClock};
 use crate::tick_samples::TickSamples;
+use crate::interaction::ForceSample;
 use crate::{FieldValue, VectorField};
 
 /// Solver cells per force-lattice cell along each axis
@@ -20,8 +21,12 @@ pub const FORCE_LATTICE_RESERVE: u32 = 3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NotFinite;
 
-/// Nodes on a regular grid from `min`, four floats per node (xyz, pad), x
-/// fastest.
+/// Floats per force node: the push (xyz) and drag rate, then drag rate ×
+/// wind (xyz) and a pad. An impulse node is four floats (xyz, pad).
+pub const FORCE_NODE_FLOATS: usize = 8;
+
+/// Nodes on a regular grid from `min`, x fastest. A force lattice holds two
+/// `[f32; 4]` per node ([`FORCE_NODE_FLOATS`]), an impulse lattice one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ForceLattice {
     min: [f32; 3],
@@ -67,9 +72,14 @@ impl ForceLattice {
         self.nodes.iter().map(|&n| n as usize).product()
     }
 
-    /// Bytes of one lattice: four floats per node.
-    pub fn bytes(&self) -> u64 {
+    /// Bytes of one impulse lattice: four floats per node.
+    pub fn impulse_bytes(&self) -> u64 {
         self.node_count() as u64 * 16
+    }
+
+    /// Bytes of one force lattice: [`FORCE_NODE_FLOATS`] per node.
+    pub fn force_bytes(&self) -> u64 {
+        self.node_count() as u64 * FORCE_NODE_FLOATS as u64 * 4
     }
 
     fn position(&self, index: usize) -> [f32; 3] {
@@ -78,7 +88,8 @@ impl ForceLattice {
         std::array::from_fn(|d| self.min[d] + coord[d] as f32 * self.spacing)
     }
 
-    /// Sample `field` at every node into `values` (one lattice long).
+    /// Sample a vector `field` at every node into `values`, one `[f32; 4]` per
+    /// node (an impulse lattice).
     pub fn fill(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> [f32; 3]) -> Result<(), NotFinite> {
         for (index, value) in values.iter_mut().enumerate() {
             let v = field(self.position(index));
@@ -90,10 +101,49 @@ impl ForceLattice {
         Ok(())
     }
 
-    /// The trilinear read of `values` at `x`, clamped to the lattice: the CPU
-    /// twin of the GPU include's eight-corner sum.
+    /// Sample a force `field` at every node into `values`, two `[f32; 4]` per
+    /// node: (push, drag rate) then (drag rate × wind, 0).
+    pub fn fill_forces(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
+        for (index, node) in values.chunks_exact_mut(2).enumerate() {
+            let s = field(self.position(index));
+            if !s.is_finite() {
+                return Err(NotFinite);
+            }
+            node[0] = [s.push[0], s.push[1], s.push[2], s.drag];
+            node[1] = [s.drag_wind[0], s.drag_wind[1], s.drag_wind[2], 0.0];
+        }
+        Ok(())
+    }
+
+    /// The trilinear read of an impulse lattice at `x`, clamped to the lattice:
+    /// the CPU twin of the GPU include's eight-corner sum.
     pub fn sample(&self, values: &[[f32; 4]], x: [f32; 3]) -> [f32; 3] {
         let mut sum = [0.0f32; 3];
+        self.corners(x, |index, weight| {
+            for (axis, total) in sum.iter_mut().enumerate() {
+                *total += values[index][axis] * weight;
+            }
+        });
+        sum
+    }
+
+    /// The trilinear read of a force lattice at `x`, the CPU twin of a
+    /// consumer kernel's read.
+    pub fn sample_forces(&self, values: &[[f32; 4]], x: [f32; 3]) -> ForceSample {
+        let mut sum = ForceSample::default();
+        self.corners(x, |index, weight| {
+            let [a, b] = [values[2 * index], values[2 * index + 1]];
+            for axis in 0..3 {
+                sum.push[axis] += a[axis] * weight;
+                sum.drag_wind[axis] += b[axis] * weight;
+            }
+            sum.drag += a[3] * weight;
+        });
+        sum
+    }
+
+    /// Each of the eight corners around `x` with its trilinear weight.
+    fn corners(&self, x: [f32; 3], mut visit: impl FnMut(usize, f32)) {
         for k in 0..8u32 {
             let mut index = 0usize;
             let mut stride = 1usize;
@@ -107,11 +157,8 @@ impl ForceLattice {
                 index += (base as usize + o as usize) * stride;
                 stride *= nodes as usize;
             }
-            for (axis, total) in sum.iter_mut().enumerate() {
-                *total += values[index][axis] * weight;
-            }
+            visit(index, weight);
         }
-        sum
     }
 }
 
@@ -145,7 +192,8 @@ impl TickForces {
         clock: &SimulationClock,
         frame: &ClockFrame,
     ) -> Result<(), String> {
-        let count = lattice.node_count();
+        // Two [f32; 4] per force node.
+        let count = 2 * lattice.node_count();
         if self.lattice != Some(lattice) {
             self.forces.clear();
             self.lattices = 0;
@@ -167,7 +215,7 @@ impl TickForces {
         if let Some(head) = head.filter(|head| sampled.clone().all(|(_, at)| at == *head)) {
             if self.lattices != 1 || self.source.as_ref() != Some(head) {
                 self.forces.resize(count, [0.0; 4]);
-                lattice.fill(&mut self.forces, |x| head.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
+                lattice.fill_forces(&mut self.forces, |x| head.sample_force(x)).map_err(|_| NOT_FINITE.to_string())?;
                 self.lattices = 1;
                 self.source = Some(head.clone());
                 self.dirty = true;
@@ -175,7 +223,7 @@ impl TickForces {
         } else if ticks > 0 {
             self.forces.resize(ticks * count, [0.0; 4]);
             for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
-                lattice.fill(values, |x| at.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
+                lattice.fill_forces(values, |x| at.sample_force(x)).map_err(|_| NOT_FINITE.to_string())?;
             }
             self.lattices = ticks;
             self.source = None;
@@ -202,9 +250,9 @@ impl TickForces {
         self.lattices
     }
 
-    /// Every force lattice, back to back.
+    /// Every force lattice, back to back, two `[f32; 4]` per node.
     pub fn forces(&self) -> &[[f32; 4]] {
-        &self.forces[..self.lattices * self.lattice.map_or(0, |lattice| lattice.node_count())]
+        &self.forces[..self.lattices * self.lattice.map_or(0, |lattice| 2 * lattice.node_count())]
     }
 
     /// Whether the lattices changed since the last [`Self::mark_uploaded`].
@@ -232,7 +280,8 @@ mod tests {
         let lattice = lattice();
         assert_eq!(lattice.nodes(), [6, 4, 7]);
         assert_eq!(lattice.spacing(), 0.5);
-        assert_eq!(lattice.bytes(), 6 * 4 * 7 * 16);
+        assert_eq!(lattice.impulse_bytes(), 6 * 4 * 7 * 16);
+        assert_eq!(lattice.force_bytes(), 6 * 4 * 7 * 32);
         let solver_extent = [18.0 * 0.125, 10.0 * 0.125, 22.0 * 0.125];
         for (nodes, extent) in lattice.nodes().into_iter().zip(solver_extent) {
             assert!((nodes - 1) as f32 * lattice.spacing() >= extent);
@@ -287,6 +336,31 @@ mod tests {
             assert!(lattice.node_count() <= (detail as usize).pow(3));
         }
         assert_eq!(ForceLattice::over_box([0.0; 3], [4.0; 3], 17).nodes(), [17; 3]);
+    }
+
+    /// A force node carries the push, the drag rate and drag rate × wind;
+    /// the read returns them at a node and blends them between nodes.
+    #[test]
+    fn force_lattice_carries_wind_and_drag() {
+        let field = FieldValue::radial([0.2, 0.1, -0.4], 1.5, 1.0)
+            .unwrap()
+            .sum(&FieldValue::turbulence(0.8, [0.0; 3], 1).unwrap().air(2.0).unwrap())
+            .unwrap();
+        let lattice = lattice();
+        let mut values = vec![[0.0; 4]; 2 * lattice.node_count()];
+        lattice.fill_forces(&mut values, |x| field.sample_force(x)).unwrap();
+        for index in [0, 7, 40, lattice.node_count() - 1] {
+            let position = lattice.position(index);
+            let expected = field.sample_force(position);
+            let read = lattice.sample_forces(&values, position);
+            assert!((read.drag - 2.0).abs() < 1e-5);
+            for axis in 0..3 {
+                assert!((read.push[axis] - expected.push[axis]).abs() < 1e-5);
+                assert!((read.drag_wind[axis] - expected.drag_wind[axis]).abs() < 1e-5);
+            }
+        }
+        let between = lattice.sample_forces(&values, [-0.6, 0.3, -1.1]);
+        assert!((between.drag - 2.0).abs() < 1e-5);
     }
 
     #[test]

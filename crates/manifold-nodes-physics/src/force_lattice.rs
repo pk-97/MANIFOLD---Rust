@@ -6,7 +6,7 @@
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice};
+use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, FORCE_NODE_FLOATS, ForceLattice};
 
 /// Trilinear reads of a force lattice; pure math, included by each atom that
 /// reads one (its own buffer reads stay in its body).
@@ -45,11 +45,12 @@ impl<'a> ForceLatticeBinding<'a> {
             if forces.is_some() { ctx.scalar_or_param("force_lattices", 0.0).round().max(0.0) as i32 } else { 0 };
         let impulse_tick = if impulses.is_some() { ctx.scalar_or_param("impulse_tick", -1.0).round().max(-1.0) as i32 } else { -1 };
         let first_tick = ctx.scalar_or_param("first_tick", 0.0).round().max(0.0) as i32;
-        let lattice_bytes = nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
-        for (name, buffer, lattices) in
-            [("forces", forces, force_lattices.max(0) as u64), ("impulses", impulses, u64::from(impulse_tick >= 0))]
-        {
-            if lattices > 0 && buffer.is_some_and(|buffer| buffer.size < lattices * lattice_bytes) {
+        let node_count = nodes.iter().map(|&n| n as u64).product::<u64>();
+        for (name, buffer, lattices, node_bytes) in [
+            ("forces", forces, force_lattices.max(0) as u64, FORCE_NODE_FLOATS as u64 * 4),
+            ("impulses", impulses, u64::from(impulse_tick >= 0), 16),
+        ] {
+            if lattices > 0 && buffer.is_some_and(|buffer| buffer.size < lattices * node_count * node_bytes) {
                 return Err(format!(
                     "{atom}: the {name} buffer holds fewer than {lattices} lattice(s) of {} × {} × {} field nodes; wire the domain's {name} and field scalars",
                     nodes[0], nodes[1], nodes[2]
@@ -138,8 +139,9 @@ impl LatticeBuffers {
         if self.clock.is_none() {
             self.clock = gpu.device.frame_clock();
         }
-        let bytes = lattice.bytes();
-        let force_lattices = forces.len() / lattice.node_count().max(1);
+        let bytes = lattice.force_bytes();
+        // Two [f32; 4] per force node.
+        let force_lattices = forces.len() / (2 * lattice.node_count()).max(1);
         let force_bytes = (forces.len() * 16) as u64;
         let impulse_bytes = (impulses.len() * 16) as u64;
         let hit_bytes = (hits.len() * 16) as u64;
@@ -238,4 +240,16 @@ impl LatticeBuffers {
         slot.read_stamp = clock.map_or(0, FrameClock::stamp);
         Ok(())
     }
+}
+
+/// The scene's force field on `acceleration_field` as this consumer feels it:
+/// the air it carries scaled by the node's Air Drag (`air_drag`, 0 ignores
+/// the air). Every node that lays or steps the field reads it through here.
+pub fn felt_field(ctx: &EffectNodeContext<'_, '_>, owner: &str) -> Result<Option<manifold_physics::FieldValue>, String> {
+    let air_drag = ctx.scalar_or_param("air_drag", 1.0);
+    ctx.inputs
+        .cpu_value::<manifold_physics::FieldValue>("acceleration_field")
+        .map(|field| field.with_air_drag(air_drag))
+        .transpose()
+        .map_err(|error| format!("{owner}: {error}"))
 }

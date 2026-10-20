@@ -291,8 +291,16 @@ pub fn impulse_recipients_with_index(
             continue;
         };
         let node = index.node(&recipient.node)?;
+        // A node that declares where scene forces enter (a swarm's forces
+        // node) takes hits there too, on everything it moves.
+        let whole = registry
+            .construct(&node.type_id)
+            .and_then(|primitive| primitive.acceleration_input())
+            .is_some_and(|input| input == recipient.port);
         let target = if is_liquid_domain(&node.type_id) {
             ImpulseTarget::Fluid
+        } else if whole {
+            ImpulseTarget::Swarm
         } else {
             let mut targets = RigidImpulseTargets::default();
             if recipient.port == "copies_acceleration" {

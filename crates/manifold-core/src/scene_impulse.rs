@@ -64,6 +64,9 @@ pub enum ImpulseTarget {
     /// One captured field delivered to both participants of a shared worker.
     /// The source sequence is admitted once, even when both materials respond.
     FluidAndRigid(RigidImpulseTargets),
+    /// Every live particle of a swarm feels the hit at its position, once, on
+    /// the fire tick.
+    Swarm,
 }
 
 impl ImpulseTarget {
@@ -74,12 +77,17 @@ impl ImpulseTarget {
     pub fn rigid_targets(self) -> Option<RigidImpulseTargets> {
         match self {
             Self::Rigid(targets) | Self::FluidAndRigid(targets) => Some(targets),
-            Self::Fluid => None,
+            Self::Fluid | Self::Swarm => None,
         }
     }
 
     /// Merge authored selections which resolve to one shared native owner.
     pub fn union(self, other: Self) -> Self {
+        // A swarm owns its hits alone: only another selection of it merges in.
+        if self == Self::Swarm || other == Self::Swarm {
+            assert_eq!(self, other, "a swarm shares its owner with no other recipient");
+            return Self::Swarm;
+        }
         let fluid = self.affects_fluid() || other.affects_fluid();
         let rigid = match (self.rigid_targets(), other.rigid_targets()) {
             (Some(left), Some(right)) => Some(RigidImpulseTargets {
@@ -131,6 +139,7 @@ mod tests {
 
         let cases = [
             (ImpulseTarget::Fluid, r#""fluid""#),
+            (ImpulseTarget::Swarm, r#""swarm""#),
             (
                 ImpulseTarget::Rigid(RigidImpulseTargets {
                     bodies: 1,

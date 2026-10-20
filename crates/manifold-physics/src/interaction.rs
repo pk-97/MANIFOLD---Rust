@@ -4,6 +4,122 @@ use serde::{Deserialize, Serialize};
 /// A dimensionless world-space vector evaluated at a world-space position.
 pub trait VectorField: Send + Sync {
     fn sample(&self, position: [f32; 3]) -> [f32; 3];
+
+    /// The push and the air at `position`. A field without air reads its
+    /// sample as the push in still air.
+    fn sample_force(&self, position: [f32; 3]) -> ForceSample {
+        ForceSample::push(self.sample(position))
+    }
+}
+
+/// What a scene force field says at a point: a push independent of velocity,
+/// and the air the point moves through. A body moving at `v` feels
+/// `push + drag · (wind − v)`; `drag_wind` stores `drag · wind` so samples
+/// add, and summed winds average by their drag rates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ForceSample {
+    pub push: [f32; 3],
+    /// Drag rate in 1/s: how fast a body's velocity relaxes to the wind's.
+    pub drag: f32,
+    pub drag_wind: [f32; 3],
+}
+
+impl std::ops::Add for ForceSample {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            push: add(self.push, other.push),
+            drag: self.drag + other.drag,
+            drag_wind: add(self.drag_wind, other.drag_wind),
+        }
+    }
+}
+
+impl ForceSample {
+    pub const fn push(push: [f32; 3]) -> Self {
+        Self { push, drag: 0.0, drag_wind: [0.0; 3] }
+    }
+
+    /// The acceleration at `velocity`.
+    pub fn acceleration(&self, velocity: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|axis| self.push[axis] + self.drag_wind[axis] - self.drag * velocity[axis])
+    }
+
+    /// `velocity` after `dt` under this sample held fixed, integrated
+    /// exactly: v e^(−k dt) + (push + k·wind)(1 − e^(−k dt))/k, so any drag
+    /// rate is stable and the velocity relaxes to the wind at rate k whatever
+    /// the step. With no drag it is v + push·dt.
+    pub fn step_velocity(&self, velocity: [f32; 3], dt: f32) -> [f32; 3] {
+        let x = self.drag * dt;
+        let decay = (-x).exp();
+        let reach = relaxation_reach(x) * dt;
+        std::array::from_fn(|axis| velocity[axis] * decay + (self.push[axis] + self.drag_wind[axis]) * reach)
+    }
+
+    /// The velocity change drag alone makes over `dt` from `velocity`, under
+    /// the same exact integration; the push is applied separately.
+    pub fn drag_delta_velocity(&self, velocity: [f32; 3], dt: f32) -> [f32; 3] {
+        let reach = relaxation_reach(self.drag * dt) * dt;
+        std::array::from_fn(|axis| (self.drag_wind[axis] - self.drag * velocity[axis]) * reach)
+    }
+
+    /// The sample of a field scaled by `strength`: the push scales, the drag
+    /// rate scales by its size and the wind keeps its speed, so a negative
+    /// scale reverses the push and the wind and never makes drag accelerate.
+    pub fn scaled(self, strength: f32) -> Self {
+        Self {
+            push: scale(self.push, strength),
+            drag: self.drag * strength.abs(),
+            drag_wind: scale(self.drag_wind, strength),
+        }
+    }
+
+    pub fn is_finite(&self) -> bool {
+        self.push.iter().chain(&self.drag_wind).all(|c| c.is_finite()) && self.drag.is_finite()
+    }
+}
+
+/// (1 − e^(−x)) / x, 1 at x = 0.
+fn relaxation_reach(x: f32) -> f32 {
+    if x.abs() < 1.0e-4 { 1.0 - 0.5 * x } else { -(-x).exp_m1() / x }
+}
+
+/// How a radial or vortex field's strength falls with distance from its
+/// centre or axis, `d`, for radius `R` and power `p`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FalloffCurve {
+    /// Full at the centre, fading to nothing at the radius: (1 − d/R)^p.
+    /// Power 0 is a hard-edged ball, 1 a linear fade.
+    #[default]
+    Edge,
+    /// Full inside the radius, then (R/d)^p beyond it with no edge: the
+    /// gravity-like reach of Blender's sphere falloff with its minimum
+    /// distance at R. Power 2 is inverse square.
+    Inverse,
+}
+
+impl FalloffCurve {
+    /// The curve a card's choice index names: 0 Edge, 1 Inverse.
+    pub fn from_index(index: f32) -> Self {
+        if index.round() >= 1.0 { Self::Inverse } else { Self::Edge }
+    }
+
+    pub fn index(self) -> u32 {
+        match self {
+            Self::Edge => 0,
+            Self::Inverse => 1,
+        }
+    }
+
+    /// The strength at `distance` from the centre, 0 to 1.
+    pub fn magnitude(self, distance: f32, radius: f32, power: f32) -> f32 {
+        match self {
+            Self::Edge if distance >= radius => 0.0,
+            Self::Edge => (1.0 - distance / radius).powf(power),
+            Self::Inverse => (radius / distance.max(radius)).powf(power),
+        }
+    }
 }
 
 /// A field and the two inputs consumed by a physics tick.
@@ -55,6 +171,7 @@ pub struct RadialField {
     center: [f32; 3],
     radius: f32,
     falloff: f32,
+    curve: FalloffCurve,
 }
 
 impl RadialField {
@@ -78,7 +195,12 @@ impl RadialField {
             center,
             radius,
             falloff,
+            curve: FalloffCurve::Edge,
         })
+    }
+
+    pub fn with_curve(self, curve: FalloffCurve) -> Self {
+        Self { curve, ..self }
     }
 
     pub fn center(&self) -> [f32; 3] {
@@ -92,6 +214,10 @@ impl RadialField {
     pub fn falloff(&self) -> f32 {
         self.falloff
     }
+
+    pub fn curve(&self) -> FalloffCurve {
+        self.curve
+    }
 }
 
 impl VectorField for RadialField {
@@ -101,10 +227,10 @@ impl VectorField for RadialField {
         }
         let offset = subtract(position, self.center);
         let distance = length(offset);
-        if !distance.is_finite() || distance <= f32::EPSILON || distance >= self.radius {
+        if !distance.is_finite() || distance <= f32::EPSILON {
             return [0.0; 3];
         }
-        let magnitude = (1.0 - distance / self.radius).powf(self.falloff);
+        let magnitude = self.curve.magnitude(distance, self.radius, self.falloff);
         scale(offset, magnitude / distance)
     }
 }
@@ -116,6 +242,7 @@ pub struct VortexField {
     axis: [f32; 3],
     radius: f32,
     falloff: f32,
+    curve: FalloffCurve,
 }
 
 impl VortexField {
@@ -148,6 +275,7 @@ impl VortexField {
             axis,
             radius,
             falloff,
+            curve: FalloffCurve::Edge,
         })
     }
 
@@ -191,6 +319,7 @@ impl VortexField {
             axis,
             radius,
             falloff,
+            curve: FalloffCurve::Edge,
         })
     }
 
@@ -209,6 +338,14 @@ impl VortexField {
     pub fn falloff(&self) -> f32 {
         self.falloff
     }
+
+    pub fn curve(&self) -> FalloffCurve {
+        self.curve
+    }
+
+    pub fn with_curve(self, curve: FalloffCurve) -> Self {
+        Self { curve, ..self }
+    }
 }
 
 impl VectorField for VortexField {
@@ -220,10 +357,10 @@ impl VectorField for VortexField {
         let axial = dot(offset, self.axis);
         let radial = subtract(offset, scale(self.axis, axial));
         let distance = length(radial);
-        if !distance.is_finite() || distance <= f32::EPSILON || distance >= self.radius {
+        if !distance.is_finite() || distance <= f32::EPSILON {
             return [0.0; 3];
         }
-        let magnitude = (1.0 - distance / self.radius).powf(self.falloff);
+        let magnitude = self.curve.magnitude(distance, self.radius, self.falloff);
         let tangent = scale(cross(self.axis, radial), magnitude / distance);
         if tangent.iter().all(|component| component.is_finite()) {
             tangent
@@ -393,6 +530,10 @@ impl VectorField for ScaledField<'_> {
     fn sample(&self, position: [f32; 3]) -> [f32; 3] {
         scale(self.field.sample(position), self.multiplier)
     }
+
+    fn sample_force(&self, position: [f32; 3]) -> ForceSample {
+        self.field.sample_force(position).scaled(self.multiplier)
+    }
 }
 
 /// The component-wise sum of borrowed fields.
@@ -415,6 +556,12 @@ impl VectorField for SumField<'_> {
         self.fields
             .iter()
             .fold([0.0; 3], |sum, field| add(sum, field.sample(position)))
+    }
+
+    fn sample_force(&self, position: [f32; 3]) -> ForceSample {
+        self.fields
+            .iter()
+            .fold(ForceSample::default(), |sum, field| sum + field.sample_force(position))
     }
 }
 

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 392 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 394 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -484,7 +484,7 @@ _Generated from the node registry. Do not hand-edit. 392 nodes registered, group
 | — | `system.generator_input` | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |
 | — | `system.source` | Source | The incoming image at the start of an effect chain. Wired in automatically. |
 
-### Fields & Coordinates (27)
+### Fields & Coordinates (29)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -510,11 +510,13 @@ _Generated from the node registry. Do not hand-edit. 392 nodes registered, group
 | Slice Volume | `node.slice_volume` | Filter | Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field. |
 | Slope Displace | `node.slope_displace` | Filter | Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks. |
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
+| Turbulence Vector Field | `node.turbulence_vector_field` | Source | Outputs smooth swirling vectors that drift through space over time. |
 | Uniform Vector Field | `node.uniform_vector_field` | Source | Outputs the same vector at every world-space sample. |
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 | Vortex Vector Field | `node.vortex_vector_field` | Source | Outputs tangential vectors circling a world-space axis within a radius. |
 | Wave Field 3D | `node.wave_field_3d` | Map | Samples a moving sine wave at every 3D point, producing weights for copy displacement or other maps. |
+| Wind Field | `node.wind_field` | Map | Makes a velocity field into wind that drags things toward its velocity. |
 
 ### Uncategorized (1)
 
@@ -593,12 +595,12 @@ _Generated from the node registry. Do not hand-edit. 392 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `Ocean` | Ocean | generator | Sim | 363 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2353 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2354 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1334 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1995 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1335 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1996 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `Scene` | Scene | generator | Geometry | 368 |
@@ -613,12 +615,12 @@ _Generated from the node registry. Do not hand-edit. 392 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2049 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1402 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2004 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1391 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2332 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1070 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2050 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1403 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2005 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

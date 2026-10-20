@@ -4,7 +4,9 @@
 //   v = v_before + dt · (g + forces(x))              (forces from tick_index's lattice)
 //   v += impulses(x)                                 (substep 0 of impulse_tick)
 // where forces and impulses are trilinear reads of the domain's coarse field
-// lattices (force_lattice.wgsl; origin the lattice minimum, 4 floats a node).
+// lattices (force_lattice.wgsl; origin the lattice minimum). Where the field
+// carries air, v instead relaxes toward the wind at its drag rate over dt,
+// exactly integrated (force_lattice_drag_step).
 // Then the closed walls and each collider in body order (matter_wall_stop in
 // matter_walls.wgsl and liquid_collider_project in liquid_collider.wgsl, which
 // node.matter_body_reaction repeats to attribute each body's share).
@@ -21,14 +23,23 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
-fn grid_update_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> vec3<f32> {
-    var sum = vec3<f32>(0.0);
+// The tick's force at x: push and drag rate, then drag rate × wind.
+struct GridUpdateForce {
+    push_drag: vec4<f32>,
+    drag_wind: vec3<f32>,
+}
+
+fn grid_update_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> GridUpdateForce {
+    var f: GridUpdateForce;
+    f.push_drag = vec4<f32>(0.0);
+    f.drag_wind = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
         let c = force_lattice_corner(x, origin, spacing, dims, k);
-        let w = c.index * 4u;
-        sum = sum + vec3<f32>(buf_forces[base + w], buf_forces[base + w + 1u], buf_forces[base + w + 2u]) * c.weight;
+        let w = base + c.index * FORCE_NODE_WORDS;
+        f.push_drag = f.push_drag + vec4<f32>(buf_forces[w], buf_forces[w + 1u], buf_forces[w + 2u], buf_forces[w + 3u]) * c.weight;
+        f.drag_wind = f.drag_wind + vec3<f32>(buf_forces[w + 4u], buf_forces[w + 5u], buf_forces[w + 6u]) * c.weight;
     }
-    return sum;
+    return f;
 }
 
 fn grid_update_impulses(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
@@ -91,11 +102,21 @@ fn body(
     let x = origin + vec3<f32>(coord) * cell_size;
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
     var accel = vec3<f32>(gravity_x, gravity, gravity_z);
+    var drag = 0.0;
+    var drag_wind = vec3<f32>(0.0);
     if force_lattices > 0 {
         let base = force_lattice_base(tick_index, first_tick, force_lattices, field_dims);
-        accel = accel + grid_update_forces(x, origin, field_spacing, field_dims, base);
+        let f = grid_update_forces(x, origin, field_spacing, field_dims, base);
+        accel = accel + f.push_drag.xyz;
+        drag = f.push_drag.w;
+        drag_wind = f.drag_wind;
     }
     var v = v_before + step_dt * accel;
+    if drag > 0.0 {
+        for (var axis = 0; axis < 3; axis = axis + 1) {
+            v[axis] = force_lattice_drag_step(v_before[axis], accel[axis], drag, drag_wind[axis], step_dt);
+        }
+    }
     if tick_index == impulse_tick && substep_in_tick == 0 {
         v = v + grid_update_impulses(x, origin, field_spacing, field_dims);
     }

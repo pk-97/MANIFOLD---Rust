@@ -18,6 +18,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
+use manifold_nodes_physics::force_lattice::felt_field;
 
 use super::gpu_flip_pressure::{MAX_ITERATIONS, lattice_refusal};
 use super::gpu_flip_step::{read_max_iterations, read_sheet_fill_rate, read_solve_level};
@@ -300,6 +301,7 @@ manifold_node_engine::primitive! {
         fill_height: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
+        air_drag: ScalarF32 optional,
         reset: ScalarF32 optional,
         role_0: FluidRole optional,
         role_1: FluidRole optional,
@@ -421,6 +423,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Left Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Right Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -570,14 +573,22 @@ impl Primitive for GpuFlipDomain {
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
-            let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
-            self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
+            match felt_field(ctx, "Liquid") {
+                Ok(field) => self.fields.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Err(error) => ctx.error(error),
+            }
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
             self.coupled.scenes.observe(ctx.time.seconds.0, None);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
-        self.acceleration = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
+        self.acceleration = match felt_field(ctx, "Liquid") {
+            Ok(field) => field,
+            Err(error) => {
+                ctx.error(error);
+                None
+            }
+        };
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= self.acceleration.is_none();
         }

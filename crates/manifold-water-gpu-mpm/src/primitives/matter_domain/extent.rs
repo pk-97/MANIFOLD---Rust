@@ -29,7 +29,7 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         force_lattices: FORCE_LATTICE_RESERVE,
         impulse_tick: Some(0),
     };
-    let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.bytes();
+    let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.force_bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }
@@ -43,13 +43,13 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("atlas", 4),
         ("reaction", reaction),
         ("forces", forces),
-        ("impulses", field.lattice.bytes()),
+        ("impulses", field.lattice.impulse_bytes()),
     ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
     // The staging ring: the impulse lattice and the force lattices per slot.
-    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces));
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.impulse_bytes() + forces));
     Ok(())
 }
 inventory::submit! {

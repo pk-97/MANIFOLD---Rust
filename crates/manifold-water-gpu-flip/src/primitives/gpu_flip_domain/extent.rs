@@ -36,7 +36,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: FORCE_LATTICE_RESERVE, impulse_tick: Some(0) };
-    let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.bytes();
+    let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.force_bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }
@@ -51,13 +51,13 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("live_hits", 16),
         ("reaction", (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64),
         ("forces", forces),
-        ("impulses", field.lattice.bytes()),
+        ("impulses", field.lattice.impulse_bytes()),
     ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
     // The staging ring: the impulse lattice and the force lattices per slot.
-    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces + 16));
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.impulse_bytes() + forces + 16));
     Ok(())
 }
 inventory::submit! {

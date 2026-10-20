@@ -471,7 +471,7 @@ pub mod gpu {
                             (step + 1) as f32 * [0.125, 0.0625, 0.03125][axis], face_len(shape.face_cells, axis) as usize)).collect();
                         shared(&device, &data)
                     });
-                    let forces = shared(&device, &[[0.125f32, 0.25, -0.125, 0.0]; 16]);
+                    let forces = shared(&device, &[[0.125f32, 0.25, -0.125, 0.0], [0.0; 4]].repeat(16));
                     let mut impulse_data = vec![[0.25f32, -0.5, 0.125, 0.0]; 8];
                     impulse_data.extend_from_slice(&[[0.75, 0.5, -0.125, 0.0]; 8]);
                     let impulses = shared(&device, &impulse_data);

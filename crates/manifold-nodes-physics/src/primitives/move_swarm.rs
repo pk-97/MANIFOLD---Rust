@@ -1,5 +1,8 @@
 //! `node.move_swarm` — advance each swarm particle through the frame's fixed
-//! ticks under the scene's force lattice: v += a·dt, x += v·dt per tick.
+//! ticks under the scene's force lattice: per tick the velocity takes the
+//! push and relaxes toward the wind at the air's drag rate (exactly
+//! integrated), takes a scene hit's kick on the tick it lands on, then
+//! x += v·dt.
 
 use std::borrow::Cow;
 
@@ -27,8 +30,9 @@ pub(crate) struct MoveSwarmUniforms {
     pub(crate) field_min_x: f32,
     pub(crate) field_min_y: f32,
     pub(crate) field_min_z: f32,
+    pub(crate) impulse_tick: i32,
     pub(crate) dispatch_count: u32,
-    pub(crate) _pad: [u32; 4],
+    pub(crate) _pad: [u32; 3],
 }
 
 const fn int(name: &'static str, label: &'static str, default: f32, max: f32) -> ParamDef {
@@ -42,11 +46,12 @@ const fn float(name: &'static str, label: &'static str, default: f32, range: (f3
 manifold_node_engine::primitive! {
     name: MoveSwarm,
     type_id: "node.move_swarm",
-    purpose: "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, a = the trilinear read of that tick's lattice at the particle, then v += a·dt and x += v·dt (semi-implicit Euler, dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
+    purpose: "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, the trilinear read of that tick's lattice at the particle gives the push a, the air's drag rate k and its wind w; v moves to v·e^(−k·dt) + (a + k·w)(1 − e^(−k·dt))/k (v + a·dt with no air), then on impulse_tick v gains the impulse lattice's kick at the particle (a scene hit, once), then x += v·dt (dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
     inputs: {
         in: Array(Particle) required,
         forces: Array(f32) optional,
         tick_seconds: Array(f32) optional,
+        impulses: Array(f32) optional,
         active_count: ScalarF32 optional,
         ticks: ScalarF32 optional,
         first_tick: ScalarF32 optional,
@@ -58,6 +63,7 @@ manifold_node_engine::primitive! {
         field_min_x: ScalarF32 optional,
         field_min_y: ScalarF32 optional,
         field_min_z: ScalarF32 optional,
+        impulse_tick: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
@@ -74,9 +80,10 @@ manifold_node_engine::primitive! {
         float("field_min_x", "Field Min X", 0.0, (-1.0e4, 1.0e4)),
         float("field_min_y", "Field Min Y", 0.0, (-1.0e4, 1.0e4)),
         float("field_min_z", "Field Min Z", 0.0, (-1.0e4, 1.0e4)),
+        ParamDef { name: Cow::Borrowed("impulse_tick"), label: "Impulse Tick", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_216.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm integrator. Wire forces, tick_seconds and every scalar but active_count from node.swarm_forces (its ticks, first_tick, force_lattices, field_nodes_x/y/z, field_spacing and field_min_x/y/z), particles from a node.array_feedback loop (its out into in, out back into its in, the seeder into its seed, node.swarm_forces epoch into its reset_trigger), then node.swarm_to_copies from out. in/out alias one buffer, so the graph compiler keeps the loop in place. Scene forces reach it through node.swarm_forces's acceleration_field, the same force list water and rigid bodies read.",
+    composition_notes: "The swarm integrator. Wire forces, tick_seconds, impulses and every scalar but active_count from node.swarm_forces (its ticks, first_tick, force_lattices, field_nodes_x/y/z, field_spacing, field_min_x/y/z and impulse_tick), particles from a node.array_feedback loop (its out into in, out back into its in, the seeder into its seed, node.swarm_forces epoch into its reset_trigger), then node.swarm_to_copies from out. in/out alias one buffer, so the graph compiler keeps the loop in place. Scene forces reach it through node.swarm_forces's acceleration_field, the same force list water and rigid bodies read.",
     examples: ["Swarm"],
     picker: { label: "Move Swarm", category: Atom },
     summary: "Moves every swarm particle by the scene's forces, one fixed step per simulation tick.",
@@ -85,7 +92,7 @@ manifold_node_engine::primitive! {
     aliases: ["swarm", "move swarm", "particle forces", "force particles"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/move_swarm_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather],
     wgsl_includes: [FORCE_LATTICE],
 }
 
@@ -110,7 +117,7 @@ impl Primitive for MoveSwarm {
     /// The moved particles come from the particles and the forces that move
     /// them: the scene force trace reaches node.swarm_forces through here.
     fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
-        (output == "out").then_some(&["in", "forces"])
+        (output == "out").then_some(&["in", "forces", "impulses"])
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -123,7 +130,7 @@ impl Primitive for MoveSwarm {
         let requested = int(ctx, "active_count", 100_000.0) as u32;
         let ticks = int(ctx, "ticks", 0.0);
         let Some(particles) = ctx.inputs.array("in") else { return };
-        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), None, "Move Swarm") {
+        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Move Swarm") {
             Ok(field) => field,
             Err(error) => {
                 ctx.error(error);
@@ -159,11 +166,13 @@ impl Primitive for MoveSwarm {
             field_min_x: field.min[0],
             field_min_y: field.min[1],
             field_min_z: field.min[2],
+            impulse_tick: field.impulse_tick,
             dispatch_count: active,
-            _pad: [0; 4],
+            _pad: [0; 3],
         };
         // `in`/`out` alias the particle buffer; an unwired lattice is never
-        // read (force_lattices 0), so the particles stand in for it.
+        // read (force_lattices 0, impulse_tick −1), so the particles stand
+        // in for it.
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -171,7 +180,8 @@ impl Primitive for MoveSwarm {
                 GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: field.forces.unwrap_or(particles), offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: tick_seconds, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: particles, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: field.impulses.unwrap_or(particles), offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: particles, offset: 0 },
             ],
             [active.div_ceil(256), 1, 1],
             "node.move_swarm",
@@ -192,7 +202,8 @@ mod tests {
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         assert!(wgsl.contains("buf_forces: array<f32>"), "{wgsl}");
         assert!(wgsl.contains("@binding(3) var<storage, read> buf_tick_seconds: array<f32>"), "{wgsl}");
-        assert!(wgsl.contains("field_min_z: f32,\n    dispatch_count: u32,"), "{wgsl}");
+        assert!(wgsl.contains("@binding(4) var<storage, read> buf_impulses: array<f32>"), "{wgsl}");
+        assert!(wgsl.contains("field_min_z: f32,\n    impulse_tick: i32,\n    dispatch_count: u32,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<MoveSwarmUniforms>(), 64);
     }
 }

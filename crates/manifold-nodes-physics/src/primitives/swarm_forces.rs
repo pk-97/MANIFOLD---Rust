@@ -9,21 +9,26 @@ use manifold_gpu::GpuBuffer;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_physics::FieldValue;
+use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_physics::clock::{LiveLoad, SimulationClock};
 use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, TickForces};
+use manifold_physics::input::{AppliedEvent, EventStamp};
+use manifold_physics::tick_hits::TickHits;
+use manifold_physics::{FieldValue, Seconds, TickStamp, VectorField};
 
-use crate::force_lattice::{LatticeBuffers, LatticeUpload};
+use crate::force_lattice::{felt_field, LatticeBuffers, LatticeUpload};
+use crate::hits::{TakesHits, TakesHitsRegistration};
 use crate::tick_sampled::{TickSampled, TickSampledRegistration};
 
 /// Force Detail's top: 64³ lattice nodes laid on the CPU per tick at most.
 const MAX_FORCE_DETAIL: f32 = 64.0;
 
-const OUTPUTS: [&str; 12] = [
+const OUTPUTS: [&str; 13] = [
     "ticks", "first_tick", "epoch", "force_lattices",
     "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing",
-    "field_min_x", "field_min_y", "field_min_z", "simulation_time",
+    "field_min_x", "field_min_y", "field_min_z", "simulation_time", "impulse_tick",
 ];
+const IMPULSE_TICK: usize = 12;
 
 const fn param(name: &'static str, label: &'static str, ty: ParamType, default: f32, range: (f32, f32)) -> ParamDef {
     ParamDef { name: Cow::Borrowed(name), label, ty, default: ParamValue::Float(default), range: Some(range), enum_values: &[] }
@@ -32,12 +37,13 @@ const fn param(name: &'static str, label: &'static str, ty: ParamType, default: 
 manifold_node_engine::primitive! {
     name: SwarmForces,
     type_id: "node.swarm_forces",
-    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
+    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Scene hits (a force's Impulse) land on the first tick after they fire, once: the hit's field is laid on the impulses lattice and impulse_tick names the tick (−1 none). Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
     inputs: {
         bounds: Transform optional,
         acceleration_field: VectorField optional,
         speed: ScalarF32 optional,
         reset: ScalarF32 optional,
+        air_drag: ScalarF32 optional,
     },
     outputs: {
         ticks: ScalarF32,
@@ -48,15 +54,18 @@ manifold_node_engine::primitive! {
         field_spacing: ScalarF32,
         field_min_x: ScalarF32, field_min_y: ScalarF32, field_min_z: ScalarF32,
         simulation_time: ScalarF32,
+        impulse_tick: ScalarF32,
         forces: Array(f32),
         tick_seconds: Array(f32),
+        impulses: Array(f32),
     },
     params: [
         param("force_detail", "Force Detail", ParamType::Int, 17.0, (2.0, MAX_FORCE_DETAIL)),
         param("speed", "Speed", ParamType::Float, 1.0, (0.0, 4.0)),
+        param("air_drag", "Air Drag", ParamType::Float, 1.0, (0.0, 4.0)),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm's source of truth. Every output but epoch, forces and simulation_time wires into node.move_swarm's port of the same name, forces into its forces. Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Wire a trigger counter into reset to restart on a clip trigger. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box.",
+    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Wire a trigger counter into reset to restart on a clip trigger. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
     examples: ["Swarm"],
     picker: { label: "Swarm Forces", category: Atom },
     summary: "Runs a swarm's simulation clock and lays the scene's forces over its box.",
@@ -70,6 +79,9 @@ manifold_node_engine::primitive! {
         buffers: LatticeBuffers = LatticeBuffers::default(),
         published: [f32; OUTPUTS.len()] = [0.0; OUTPUTS.len()],
         tick_seconds: Vec<f32> = Vec::with_capacity(FORCE_LATTICE_RESERVE as usize),
+        hits: TickHits<FieldValue> = TickHits::new("Swarm impulses"),
+        impulses: Vec<[f32; 4]> = Vec::new(),
+        impulses_dirty: bool = false,
     },
 }
 
@@ -80,6 +92,47 @@ impl TickSampled for SwarmForces {
 }
 
 inventory::submit! { TickSampledRegistration::new::<SwarmForces>() }
+
+impl TakesHits for SwarmForces {
+    fn hit_epoch(&self) -> Option<u64> {
+        self.hits.epoch()
+    }
+
+    /// A swarm whose clock has not started makes a hit wait; a broken clock
+    /// refuses it.
+    fn hit_readiness(&self) -> Result<bool, String> {
+        match self.hits.failure() {
+            Some(error) => Err(error.into()),
+            None => Ok(self.hits.epoch().is_some()),
+        }
+    }
+
+    /// A hit fired this frame is stamped at the swarm's simulated time, so it
+    /// lands on the first tick of the next frame.
+    fn hit_stamp(&self, transport: Seconds, sequence: u64, step: SimStep) -> Result<EventStamp, String> {
+        if !self.hit_readiness()? {
+            return Err("Swarm impulses: the swarm has not started; fire waits for it".into());
+        }
+        let mut stamp = self.hits.stamp(transport.0, sequence)?;
+        let load = step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget });
+        stamp.time = Seconds(self.clock.simulation_at(transport.0, load));
+        Ok(stamp)
+    }
+
+    fn enqueue_hit(&mut self, stamp: EventStamp, field: FieldValue) -> Result<TickStamp, String> {
+        self.hits.enqueue(stamp, field)
+    }
+
+    fn drain_applied_hits(&mut self, consume: &mut dyn FnMut(AppliedEvent<FieldValue>)) {
+        self.hits.drain_applied(consume);
+    }
+
+    fn drain_discarded_hits(&mut self, consume: &mut dyn FnMut(EventStamp)) -> u64 {
+        self.hits.drain_discarded(consume)
+    }
+}
+
+inventory::submit! { TakesHitsRegistration::new::<SwarmForces>() }
 
 impl SwarmForces {
     fn lattice(ctx: &EffectNodeContext<'_, '_>) -> Result<ForceLattice, String> {
@@ -95,7 +148,7 @@ impl SwarmForces {
 
     fn compute(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<[f32; OUTPUTS.len()], String> {
         let lattice = Self::lattice(ctx)?;
-        let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
+        let field = felt_field(ctx, "Swarm Forces")?;
         let frame = self.clock.advance(
             ctx.time.seconds.0,
             ctx.sim_step.interval.0,
@@ -108,6 +161,8 @@ impl SwarmForces {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
         self.forces.prepare(lattice, field.as_ref(), &self.clock, &frame)?;
+        self.hits.observe_frame(ctx.time.seconds.0, &frame)?;
+        let impulse_tick = self.lay_impulses(lattice)?;
         // Speed changes each tick's simulated length, not the tick count, and
         // a Speed ramp gives each tick its own: one length per tick, as water
         // steps each tick by its own interval.
@@ -124,7 +179,34 @@ impl SwarmForces {
             lattice.spacing(),
             min[0], min[1], min[2],
             frame.simulation_time as f32,
+            impulse_tick.map_or(-1.0, |tick| tick as f32),
         ])
+    }
+
+    /// Lay this frame's hits onto the impulse lattice: every hit is stamped
+    /// at a frame's simulated time, so all of them land on the frame's first
+    /// tick.
+    fn lay_impulses(&mut self, lattice: ForceLattice) -> Result<Option<u64>, String> {
+        if self.impulses.len() != lattice.node_count() {
+            self.impulses.clear();
+            self.impulses.resize(lattice.node_count(), [0.0; 4]);
+            self.impulses_dirty = true;
+        }
+        let Some(tick) = self.hits.impulse_tick() else { return Ok(None) };
+        let events = self.hits.frame_events();
+        if events.iter().any(|event| event.applied.tick != tick) {
+            return Err("Swarm impulses: hits landed on two ticks of one frame; restart the simulation".into());
+        }
+        lattice
+            .fill(&mut self.impulses, |x| {
+                events.iter().fold([0.0; 3], |sum, event| {
+                    let kick = event.value.sample(x);
+                    std::array::from_fn(|axis| sum[axis] + kick[axis])
+                })
+            })
+            .map_err(|_| "Swarm impulses: the impulse field is not finite inside the swarm's box".to_string())?;
+        self.impulses_dirty = true;
+        Ok(Some(tick))
     }
 
     fn upload(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
@@ -135,26 +217,30 @@ impl SwarmForces {
             lattice,
             forces: self.forces.forces(),
             forces_dirty: self.forces.is_dirty(),
-            impulses: &[],
-            impulses_dirty: false,
+            impulses: &self.impulses,
+            impulses_dirty: self.impulses_dirty,
             hits: &[],
             tick_seconds: &self.tick_seconds,
         };
         self.buffers.upload(gpu, offline, data)?;
         self.forces.mark_uploaded();
+        self.impulses_dirty = false;
+        // A hit is applied once its tick's lattice is on the GPU.
+        self.hits.commit_frame();
         Ok(())
     }
 }
 
 impl Primitive for SwarmForces {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "forces" | "tick_seconds")
+        matches!(port, "forces" | "tick_seconds" | "impulses")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "forces" => self.buffers.forces(),
             "tick_seconds" => self.buffers.tick_seconds(),
+            "impulses" => self.buffers.impulses(),
             _ => None,
         }
     }
@@ -177,8 +263,10 @@ impl Primitive for SwarmForces {
         // advances time.
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
-            let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
-            self.forces.observe_sample(ctx.time.seconds.0, field.as_ref());
+            match felt_field(ctx, "Swarm Forces") {
+                Ok(field) => self.forces.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Err(error) => ctx.error(error),
+            }
             return;
         }
         // On an error the swarm holds: the last outputs repeat with no ticks.
@@ -186,7 +274,11 @@ impl Primitive for SwarmForces {
         match result {
             Ok(values) => self.published = values,
             Err(error) => {
+                // A frame that fails runs no tick: its hits are discarded
+                // with a receipt, never replayed.
+                self.hits.abandon_frame();
                 self.published[0] = 0.0;
+                self.published[IMPULSE_TICK] = -1.0;
                 ctx.error(error);
             }
         }
@@ -207,7 +299,7 @@ mod tests {
     use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, SimStep};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_physics::VectorField;
+    use manifold_physics::{FieldValue, VectorField};
     use manifold_physics::clock::TICK;
 
     // manifold-water-rigid registers the field wire type in the app; this
@@ -326,13 +418,13 @@ mod tests {
         assert_eq!(total(&fast.frames, "ticks"), 120.0);
         assert_eq!(slow.lattices.len(), 120);
         assert_eq!(slow.lattices, fast.lattices, "every tick reads its own start's lattice at any frame rate");
-        assert!(slow.lattices.iter().all(|lattice| lattice.len() == 17 * 17 * 17));
+        assert!(slow.lattices.iter().all(|lattice| lattice.len() == 2 * 17 * 17 * 17), "two records a force node");
         assert!(slow.lattices.windows(2).all(|pair| pair[0] != pair[1]), "a moving field lays one lattice per tick");
         assert!(slow.frames.iter().all(|frame| frame.get("force_lattices") == frame.get("ticks")));
         // Tick k reads the field at its own start, k Sim Rate intervals in.
         let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 17);
-        let mut expected = vec![[0.0; 4]; lattice.node_count()];
-        lattice.fill(&mut expected, |x| swelling(37.0 * TICK).sample(x)).unwrap();
+        let mut expected = vec![[0.0; 4]; 2 * lattice.node_count()];
+        lattice.fill_forces(&mut expected, |x| swelling(37.0 * TICK).sample_force(x)).unwrap();
         assert_eq!(slow.lattices[37], expected);
         // The 120 fps in-between frames run no tick.
         assert!(fast.frames.iter().any(|frame| frame.get("ticks") == 0.0));
