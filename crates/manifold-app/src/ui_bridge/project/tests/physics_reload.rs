@@ -53,3 +53,17 @@ fn physics_boundary_rigid_reload_keeps_the_switch_and_card_controls() {
     switch(&mut reloaded, &layer_id, scene, true);
     assert!(body(&reloaded, &layer_id).enabled, "the reloaded switch turns back on");
 }
+
+/// A stale second click changes nothing, so it is refused before it reaches
+/// the undo stack.
+#[test]
+fn physics_switch_refuses_a_click_that_changes_nothing() {
+    let (mut project, layer_id, scene) = physics_solids_layer_project();
+    let again = |project: &Project, enabled| {
+        let action = crate::scene_item_transfer::SceneItemAction::SetPhysics { layer: layer_id.clone(), scene, index: 0, enabled };
+        crate::scene_item_transfer::build_action(project, action).map(|_| ())
+    };
+    assert_eq!(again(&project, true), Err("Physics is already on".to_string()));
+    switch(&mut project, &layer_id, scene, false);
+    assert_eq!(again(&project, false), Err("Physics is already off".to_string()));
+}

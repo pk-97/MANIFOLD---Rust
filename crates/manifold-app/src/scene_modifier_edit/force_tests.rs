@@ -121,3 +121,50 @@ fn scene_force_target_changes_and_duplicate_keep_independent_bindings() {
         SceneTargetSelection::Explicit { objects } if objects.is_empty())
     );
 }
+
+/// A duplicated force carries its source's drivers but not its Ableton
+/// mappings: one Live knob keeps driving one force.
+#[test]
+fn scene_force_duplicate_leaves_ableton_mappings_on_the_source() {
+    use manifold_core::ableton_mapping::{
+        AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
+    };
+    use manifold_core::effects::ParamEnvelope;
+    use std::borrow::Cow;
+
+    let (mut project, layer) = project_with_mushroom();
+    let mut editing = EditingService::new();
+    let force = apply_stock(&mut editing, &mut project, &layer, "UniformForce");
+    let source = enabled_binding(&project, &layer, &force);
+    let host = project.graph_target_owner_mut(&GraphTarget::Generator(layer.clone())).unwrap();
+    host.envelopes = Some(vec![ParamEnvelope::new(source.clone())]);
+    host.ableton_mappings = Some(vec![AbletonParamMapping {
+        param_id: Cow::Owned(source.clone()),
+        address: AbletonMacroAddress {
+            track_id: 1,
+            device_id: 2,
+            param_id: 3,
+            device_identity: AbletonDeviceIdentity { device_class_name: "Rack".into() },
+            track_name: "Track".into(),
+            device_name: "Device".into(),
+            macro_name: "Macro".into(),
+        },
+        range_min: 0.0,
+        range_max: 1.0,
+        inverted: false,
+        legacy_param_index: None,
+        last_value: 0.5,
+        status: AbletonMappingStatus::Active,
+    }]);
+
+    let command = build_action(&project, SceneModifierAction::Duplicate(layer.clone(), vec![force.clone()])).unwrap();
+    editing.execute(with_admission(command), &mut project);
+    assert!(editing.take_rejection().is_none());
+    let copy = modifier_ids(&project, &layer).into_iter().find(|id| *id != force).expect("the copy");
+    let copied = enabled_binding(&project, &layer, &copy);
+    let host = project.graph_target_owner(&GraphTarget::Generator(layer)).unwrap();
+    let enveloped: Vec<&str> = host.envelopes.as_ref().unwrap().iter().map(|envelope| envelope.param_id.as_ref()).collect();
+    assert_eq!(enveloped, [source.as_str(), copied.as_str()], "the copy carries the envelope");
+    let mapped: Vec<&str> = host.ableton_mappings.as_ref().unwrap().iter().map(|mapping| mapping.param_id.as_ref()).collect();
+    assert_eq!(mapped, [source.as_str()], "the Ableton mapping stays on the source force");
+}

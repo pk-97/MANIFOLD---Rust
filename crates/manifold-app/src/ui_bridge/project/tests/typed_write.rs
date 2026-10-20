@@ -1,5 +1,6 @@
 //! The scene panel's one write path keeps each unbound param's declared
-//! type, refuses a non-finite value, and undo restores the exact old value.
+//! type, refuses an undeclared param or a non-finite value, and undo
+//! restores the exact old value.
 
 use super::*;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -44,13 +45,11 @@ fn scene_write_keeps_each_declared_type_and_undo_restores_the_old_value() {
         assert_eq!(stored(&project, &layer_id, node, &param), before, "undo restores {param} exactly");
     }
 
-    // A param no node type declares is a Float.
-    let (node, _) = unbound(&def, ParamConvert::BoolThreshold);
-    let mut write = apply_scene_param_write(&project, &layer_id, Vec::new(), node, "not_declared", 0.25).unwrap();
-    write.execute(&mut project);
-    assert_eq!(stored(&project, &layer_id, node, "not_declared"), Some(SerializedParamValue::Float { value: 0.25 }));
-
+    // A param the node does not declare would break the layer's graph build,
+    // and a NaN or infinity is never written: both are refused.
+    let (node, param) = unbound(&def, ParamConvert::BoolThreshold);
+    assert!(apply_scene_param_write(&project, &layer_id, Vec::new(), node, "not_declared", 0.25).is_none());
     for value in [f32::NAN, f32::INFINITY] {
-        assert!(apply_scene_param_write(&project, &layer_id, Vec::new(), node, "not_declared", value).is_none());
+        assert!(apply_scene_param_write(&project, &layer_id, Vec::new(), node, &param, value).is_none());
     }
 }

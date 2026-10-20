@@ -56,8 +56,9 @@ pub(crate) fn scene_binding_id(
 /// `SceneSetupParamChanged`, or batched under one `CompositeCommand` by
 /// frame-selected so a camera frame is one undo unit.
 /// `None` when the layer has no generator default, the value is not finite
-/// (a NaN or infinity is never written), or the bound value is unchanged
-/// (the epsilon no-change guard).
+/// (a NaN or infinity is never written), an unbound param is one its node
+/// does not declare, or the bound value is unchanged (the epsilon no-change
+/// guard).
 pub(crate) fn apply_scene_param_write(
     project: &Project,
     layer_id: &LayerId,
@@ -158,16 +159,13 @@ fn scene_param_write(
     }
     // The def keeps the param's declared shape: a toggle such as a body's
     // `enabled` stays a Bool, which the graph loader and the readers that
-    // match on it require. A param no node type declares is a Float.
-    let declared = find_node_by_scope(effective, &scope_path, node_doc_id).and_then(|node| {
-        manifold_core::param_lookup::node_params(&node.type_id)
-            .into_iter()
-            .find(|meta| meta.name == param_id)
-    });
-    let serialized = match declared {
-        Some(meta) => manifold_editing::commands::graph::effective_value_to_serialized(meta.convert, value),
-        None => manifold_core::effect_graph_def::SerializedParamValue::Float { value },
-    };
+    // match on it require. A param the node does not declare, as the loader
+    // builds it, is refused: the loader would reject the layer's graph.
+    let node = find_node_by_scope(effective, &scope_path, node_doc_id)?;
+    let declared = manifold_nodes_scene::node_graph::scene_exposure::declared_params_for_node(node)?
+        .into_iter()
+        .find(|meta| meta.name == param_id)?;
+    let serialized = manifold_editing::commands::graph::effective_value_to_serialized(declared.convert, value);
     let cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
         manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
             target,

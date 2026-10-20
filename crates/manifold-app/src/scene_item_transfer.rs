@@ -630,7 +630,7 @@ fn paste(
             }
         }
     }
-    crate::scene_modifier_transfer::copy_host_routes(&clipboard.host, &mut after, &remaps, false);
+    manifold_editing::param_routes::copy_param_routes(&clipboard.host, &mut after, &remaps, manifold_editing::param_routes::RouteTransfer::Copy);
     Ok(Box::new(
         crate::generator_change::ReplaceGeneratorStateCommand::new(
             layer,
@@ -656,6 +656,11 @@ fn set_physics(project: &Project, layer: &LayerId, scene: u32, index: u32, enabl
             _ => None,
         }));
     match physics {
+        // A stale second click would change nothing; it is refused, so no
+        // undo step records it.
+        Some(physics) if physics.enabled == enabled => {
+            Err(if enabled { "Physics is already on" } else { "Physics is already off" }.into())
+        }
         Some(physics) => crate::ui_bridge::project::apply_scene_param_write(
             project,
             layer,

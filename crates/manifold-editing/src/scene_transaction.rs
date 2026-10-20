@@ -1,7 +1,5 @@
 //! Prepared whole-owner graph edits with reversible instance parameter state.
 
-use std::borrow::Cow;
-
 use manifold_core::change::ChangeSet;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
@@ -18,15 +16,13 @@ pub(crate) enum SceneGraphRejection {
     Noop,
 }
 
-/// Copy every host-side value and modulation entry addressed by a source
+/// Copy every host-side value and modulation route addressed by a source
 /// param. The graph candidate has already minted the destination metadata;
-/// this keeps duplication's runtime state in the same transaction. Ableton
-/// mappings follow only when `ableton` is set: a copied object leaves them on
-/// its source, as Ableton's own duplicate does.
+/// this keeps duplication's runtime state in the same transaction. Every
+/// remap is a duplicate, so Ableton mappings stay on the source.
 fn duplicate_runtime_parameter_state(
     host: &mut manifold_core::effects::PresetInstance,
     remaps: &[(String, String)],
-    ableton: bool,
 ) {
     let params: Vec<_> = remaps
         .iter()
@@ -44,33 +40,8 @@ fn duplicate_runtime_parameter_state(
         }
     }
 
-    macro_rules! duplicate_entries {
-        ($field:ident) => {
-            if let Some(entries) = host.$field.as_mut() {
-                let copies: Vec<_> = remaps
-                    .iter()
-                    .filter_map(|(source, destination)| {
-                        entries
-                            .iter()
-                            .find(|entry| entry.param_id.as_ref() == source)
-                            .map(|entry| {
-                                let mut copy = entry.clone();
-                                copy.param_id = Cow::Owned(destination.clone());
-                                copy
-                            })
-                    })
-                    .collect();
-                entries.extend(copies);
-            }
-        };
-    }
-    duplicate_entries!(drivers);
-    duplicate_entries!(envelopes);
-    if ableton {
-        duplicate_entries!(ableton_mappings);
-    }
-    duplicate_entries!(audio_mods);
-    duplicate_entries!(automation_lanes);
+    let source = host.clone();
+    crate::param_routes::copy_param_routes(&source, host, remaps, crate::param_routes::RouteTransfer::Copy);
 }
 
 #[derive(Debug)]
@@ -85,8 +56,6 @@ pub(crate) struct SceneGraphTransaction {
     committed: Option<EffectGraphDef>,
     removed_param_ids: Vec<String>,
     parameter_id_remaps: Vec<(String, String)>,
-    /// Whether remapped params carry their Ableton mappings.
-    remaps_ableton_mappings: bool,
     previous_layer: Option<InstanceLayerSnapshot>,
     touches: ChangeSet,
     applied: bool,
@@ -140,7 +109,6 @@ impl SceneGraphTransaction {
             committed: None,
             removed_param_ids: result.removed_param_ids,
             parameter_id_remaps: result.parameter_id_remaps,
-            remaps_ableton_mappings: true,
             previous_layer: None,
             touches,
             applied: false,
@@ -156,12 +124,6 @@ impl SceneGraphTransaction {
 
     pub(crate) fn prepared_graph(&self) -> &EffectGraphDef {
         &self.candidate
-    }
-
-    /// Remapped params leave their Ableton mappings on the source.
-    pub(crate) fn without_ableton_mappings(mut self) -> Self {
-        self.remaps_ableton_mappings = false;
-        self
     }
 
     fn reject(&mut self, error: SceneGraphRejection) {
@@ -189,7 +151,7 @@ impl SceneGraphTransaction {
         if self.previous_layer.is_none() {
             self.previous_layer = Some(InstanceLayerSnapshot::capture(host));
         }
-        duplicate_runtime_parameter_state(host, &self.parameter_id_remaps, self.remaps_ableton_mappings);
+        duplicate_runtime_parameter_state(host, &self.parameter_id_remaps);
         let metadata_changed =
             self.before_resolved.preset_metadata != self.candidate.preset_metadata;
         host.graph = Some(self.candidate.clone());

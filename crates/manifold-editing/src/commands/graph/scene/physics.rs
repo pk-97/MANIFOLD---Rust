@@ -418,7 +418,10 @@ pub(super) fn compound_materials_param(
     sources: &[ScenePhysicsSource],
 ) -> Result<SerializedParamValue, &'static str> {
     if sources.len() > PHYSICS_BODY_SLOTS as usize {
-        return Err("Physics compound objects support at most 64 material parts");
+        static TOO_MANY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            format!("Physics compound objects support at most {PHYSICS_BODY_SLOTS} material parts")
+        });
+        return Err(TOO_MANY.as_str());
     }
     let rows = sources
         .iter()

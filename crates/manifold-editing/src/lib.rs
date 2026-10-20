@@ -7,4 +7,5 @@ pub mod service;
 pub mod undo;
 
 mod scene_transaction;
+pub mod param_routes;
 pub mod scene_template;

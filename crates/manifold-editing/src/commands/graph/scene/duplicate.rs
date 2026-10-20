@@ -45,8 +45,7 @@ impl DuplicateSceneObjectCommand {
                     duplicate_scene_object_edit(graph, &scope_path, render_scene_node_id, source_index, copies)?;
                 copy_maps = maps;
                 Ok(edit)
-            })?
-            .without_ableton_mappings();
+            })?;
         let refuse = |message: String| SceneGraphEditError { at: None, message };
         let owner = project
             .graph_target_owner(&target)

@@ -38,7 +38,7 @@ mod fluid_object_lifecycle_tests;
 
 pub use fluid::*;
 pub use duplicate::{physics_free_body_slots, DuplicateSceneObjectCommand};
-pub use physics_match::{BodySlots, WorldBodySlots};
+pub use manifold_core::physics_body_slots::{BodySlots, WorldBodySlots};
 
 /// The card metadata a scene def gets when a scene edit stamps exposures
 /// into a def that has none.
