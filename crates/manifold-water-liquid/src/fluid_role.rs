@@ -34,8 +34,12 @@ pub const DISTANCE_NODES_ALONG_LONGEST: f32 = 32.0;
 #[serde(rename_all = "camelCase")]
 pub struct PreparedFluidGeometry {
     pub meshes: Vec<TriangleMesh>,
+    /// Metres. How thick the distance lattice makes the meshes' open parts;
+    /// closed parts ignore it (`signed_distance_union`).
+    #[serde(default)]
+    pub shell_thickness: f32,
     /// Derived, never serialized: a take or cache identity hashes the meshes
-    /// only (GPU_MPM_SOLVER_DESIGN.md D11).
+    /// and shell thickness only (GPU_MPM_SOLVER_DESIGN.md D11).
     #[serde(skip)]
     distance: DerivedDistance,
 }
@@ -55,8 +59,8 @@ pub enum DistanceState {
 }
 
 impl PreparedFluidGeometry {
-    pub fn new(meshes: Vec<TriangleMesh>) -> Self {
-        Self { meshes, distance: DerivedDistance::default() }
+    pub fn new(meshes: Vec<TriangleMesh>, shell_thickness: f32) -> Self {
+        Self { meshes, shell_thickness, distance: DerivedDistance::default() }
     }
 
     /// The body-local signed-distance lattice of the union of this
@@ -77,7 +81,7 @@ impl PreparedFluidGeometry {
                 .spawn(move || {
                     // Always settle the lattice, so a waiter never waits on a
                     // build that panicked.
-                    let built = std::panic::catch_unwind(|| build_distance(&geometry.meshes))
+                    let built = std::panic::catch_unwind(|| build_distance(&geometry))
                         .unwrap_or_else(|_| Err("Fluid role distance lattice build panicked".into()));
                     let _ = geometry.distance.lattice.set(built);
                 });
@@ -104,11 +108,11 @@ impl PreparedFluidGeometry {
     }
 }
 
-/// One lattice over every mesh, the union of their signed distances.
-fn build_distance(meshes: &[TriangleMesh]) -> Result<Arc<DistanceLattice>, String> {
+/// One lattice over every mesh: closed parts solid, open parts shells.
+fn build_distance(geometry: &PreparedFluidGeometry) -> Result<Arc<DistanceLattice>, String> {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in meshes.iter().flat_map(|mesh| &mesh.vertices) {
+    for vertex in geometry.meshes.iter().flat_map(|mesh| &mesh.vertices) {
         for axis in 0..3 {
             min[axis] = min[axis].min(vertex[axis]);
             max[axis] = max[axis].max(vertex[axis]);
@@ -119,7 +123,7 @@ fn build_distance(meshes: &[TriangleMesh]) -> Result<Arc<DistanceLattice>, Strin
         return Err("Fluid role geometry has no extent for a distance lattice".into());
     }
     let spacing = longest / DISTANCE_NODES_ALONG_LONGEST;
-    signed_distance_union(meshes, spacing, 2.0 * spacing)
+    signed_distance_union(&geometry.meshes, spacing, 2.0 * spacing, geometry.shell_thickness)
         .map(Arc::new)
         .map_err(|error| format!("Fluid role distance lattice: {error}"))
 }
@@ -226,7 +230,7 @@ mod tests {
                 ],
             }
         };
-        PreparedFluidGeometry::new(vec![cuboid(-0.5, 0.0), cuboid(0.0, 0.5)])
+        PreparedFluidGeometry::new(vec![cuboid(-0.5, 0.0), cuboid(0.0, 0.5)], 0.0)
     }
 
     fn wait_for_distance(geometry: &Arc<PreparedFluidGeometry>) -> Arc<DistanceLattice> {
@@ -262,6 +266,23 @@ mod tests {
         assert!((lattice.value([0, 18, 18]) - 2.0 / 32.0).abs() < 1e-5);
         assert!((lattice.value([0, 0, 18]) - (2.0f32 * (2.0 / 32.0) * (2.0 / 32.0)).sqrt()).abs() < 1e-5);
         assert!(Arc::ptr_eq(&lattice, &wait_for_distance(&geometry)), "built once");
+    }
+
+    /// An open quad is a shell of the geometry's thickness; the thickness is
+    /// part of what a take hashes.
+    #[test]
+    fn scene_physics_fluid_role_distance_lattice_open_mesh_is_a_shell() {
+        let quad = TriangleMesh {
+            vertices: vec![[-0.5, 0.0, -0.5], [0.5, 0.0, -0.5], [0.5, 0.0, 0.5], [-0.5, 0.0, 0.5]],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+        };
+        let geometry = Arc::new(PreparedFluidGeometry::new(vec![quad], 0.5));
+        let lattice = wait_for_distance(&geometry);
+        let centre: [u32; 3] = std::array::from_fn(|axis| (-lattice.origin[axis] / lattice.spacing).round() as u32);
+        assert!((lattice.value(centre) + 0.25).abs() < 1e-5, "{}", lattice.value(centre));
+        let restored: PreparedFluidGeometry =
+            serde_json::from_slice(&serde_json::to_vec(&*geometry).unwrap()).unwrap();
+        assert_eq!(restored.shell_thickness, 0.5);
     }
 
     /// The lattice is derived: serializing the geometry (what a physics take

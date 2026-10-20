@@ -35,6 +35,9 @@ pub(crate) struct SceneSettings {
     /// Collider roles: built-in unit cubes posed by these transforms (their
     /// scale is the box size), wired as node.fluid_role_source Collider roles.
     pub colliders: Vec<Transform>,
+    /// Collider roles load this mesh file in Closed Mesh mode instead of the
+    /// built-in cube; the transforms' scale scales it.
+    pub collider_mesh: Option<std::path::PathBuf>,
 }
 
 impl Default for SceneSettings {
@@ -53,6 +56,7 @@ impl Default for SceneSettings {
             closed: [true; 6],
             block_p2g: false,
             colliders: Vec::new(),
+            collider_mesh: None,
         }
     }
 }
@@ -311,6 +315,10 @@ impl MatterScene {
             // A built-in cube of this radius spans ±0.5, so the transform's
             // scale is the box size.
             set(graph, source, "radius", ParamValue::Float(0.5 / 0.577_350_26));
+            if let Some(path) = &settings.collider_mesh {
+                set(graph, source, "geometry", ParamValue::Enum(1));
+                set(graph, source, "path", ParamValue::String(std::sync::Arc::new(path.to_str().expect("utf-8 path").to_owned())));
+            }
             wire(graph, (transform, "transform"), (source, "transform"));
             wire(graph, (source, "role"), (domain, role));
             transforms.push(transform);

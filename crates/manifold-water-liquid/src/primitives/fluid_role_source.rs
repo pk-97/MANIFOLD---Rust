@@ -22,6 +22,8 @@ use manifold_node_engine::scene::transform::Transform;
 use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
 
 const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Closed Mesh"];
+/// Metres: how thick an open surface is as a solid.
+const DEFAULT_SHELL_THICKNESS: f32 = 0.05;
 const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collider"];
 
 manifold_core::testkit_visible! {
@@ -78,6 +80,7 @@ pub(crate) struct PreparationKey {
     radius: f32,
     source_transform: Transform,
     mode: GeometryMode,
+    shell_thickness: f32,
     compound: Option<CompoundPreparation>,
     wired: Option<Box<WiredPreparation>>,
 }
@@ -90,7 +93,7 @@ impl PreparationKey {
         selection: MeshSelection,
         builtin: (u32, f32),
         source_transform: Transform,
-        mode: GeometryMode,
+        (mode, shell_thickness): (GeometryMode, f32),
         compound: Option<&CompoundPreparation>,
         wired: Option<&WiredPreparation>,
     ) -> bool {
@@ -100,6 +103,7 @@ impl PreparationKey {
             && self.radius == builtin.1
             && self.source_transform == source_transform
             && self.mode == mode
+            && self.shell_thickness == shell_thickness
             && self.compound.as_ref() == compound
             && self.wired.as_deref() == wired
     }
@@ -108,7 +112,7 @@ impl PreparationKey {
 manifold_node_engine::primitive! {
     name: FluidRoleSource,
     type_id: "node.fluid_role_source",
-    purpose: "Prepare one built-in or imported closed volume as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Closed Mesh preserves the exact indexed surface after exact-coordinate welding and validates it as a closed volume. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
+    purpose: "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Closed Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
     inputs: {
         transform: Transform required,
         source_transform: Transform optional,
@@ -249,6 +253,7 @@ manifold_node_engine::primitive! {
         inherit_motion: ScalarF32 optional,
         friction: ScalarF32 optional,
         geometry: ScalarF32 optional,
+        shell_thickness: ScalarF32 optional,
         shape: ScalarF32 optional,
         radius: ScalarF32 optional,
         mesh_index: ScalarF32 optional,
@@ -275,6 +280,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("inherit_motion"), label: "Inherit Motion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 2.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("geometry"), label: "Geometry", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: GEOMETRY_MODES },
+        ParamDef { name: Cow::Borrowed("shell_thickness"), label: "Shell Thickness", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_SHELL_THICKNESS), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("shape"), label: "Builtin Shape", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, (PLATONIC_SHAPES.len() - 1) as f32)), enum_values: PLATONIC_SHAPES },
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("path"), label: "Mesh File", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
@@ -292,7 +298,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("collider_parts"), label: "Collider Detail", ty: ParamType::Int, default: ParamValue::Float(32.0), range: Some((1.0, 64.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use one source for each fluid role and wire all roles into the fluid world. Choose Initial Fill for starting volume, Inflow/Outflow for boundary sources, or Collider for obstacles. Builtin shapes use the shared Platonic geometry; imported paths reuse the existing MeshSelection loader. Collision Proxy is explicit approximate geometry for arbitrary/open source surfaces; Closed Mesh keeps a nonconvex container's cavity and rejects open or invalid surfaces instead of silently substituting a hull.",
+    composition_notes: "Use one source for each fluid role and wire all roles into the fluid world. Choose Initial Fill for starting volume, Inflow/Outflow for boundary sources, or Collider for obstacles. Builtin shapes use the shared Platonic geometry; imported paths reuse the existing MeshSelection loader. Collision Proxy is explicit approximate convex geometry; Closed Mesh keeps a nonconvex container's cavity and turns open surfaces (a ground plane, a scanned wall) into shells Shell Thickness thick. A shell is never thinner than two cells of the role's distance lattice.",
     examples: [],
     picker: { label: "Fluid Role Source", category: Atom },
     summary: "Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire.",
@@ -458,6 +464,21 @@ impl Primitive for FluidRoleSource {
             Ok(_) => unreachable!(),
             Err(error) => return self.fail_setup(ctx, error),
         };
+        // Cooked hulls are always closed, so only the exact mesh reads it.
+        let shell_thickness = if mode == GeometryMode::ClosedMesh {
+            match resolve_f32(ctx, "shell_thickness", DEFAULT_SHELL_THICKNESS) {
+                Ok(value) if value.is_finite() && value >= 0.0 => value,
+                Ok(_) => {
+                    return self.fail_setup(
+                        ctx,
+                        "Fluid role shell_thickness must be finite and non-negative".into(),
+                    );
+                }
+                Err(error) => return self.fail_setup(ctx, error),
+            }
+        } else {
+            0.0
+        };
         let shape = if wired.is_some() {
             1
         } else {
@@ -493,7 +514,7 @@ impl Primitive for FluidRoleSource {
                 selection,
                 (shape, radius),
                 source_transform,
-                mode,
+                (mode, shell_thickness),
                 compound.as_ref(),
                 wired.as_ref(),
             )
@@ -506,6 +527,7 @@ impl Primitive for FluidRoleSource {
                 radius,
                 source_transform,
                 mode,
+                shell_thickness,
                 compound,
                 wired: wired.as_ref().map(|wired| Box::new(wired.clone())),
             });
@@ -535,7 +557,7 @@ impl Primitive for FluidRoleSource {
                             compound.as_ref(),
                         )
                     }
-                    .map(|meshes| Arc::new(PreparedFluidGeometry::new(meshes)));
+                    .map(|meshes| Arc::new(PreparedFluidGeometry::new(meshes, shell_thickness)));
                     let _ = tx.send(result);
                 }) {
                 Ok(_) => self.pending_geometry = Some(rx),

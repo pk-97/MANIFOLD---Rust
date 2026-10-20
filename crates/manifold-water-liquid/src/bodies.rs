@@ -797,7 +797,7 @@ mod tests {
                 [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
                 [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
             ],
-        }]))
+        }], 0.0))
     }
 
     fn collider(geometry: &Arc<PreparedFluidGeometry>, pos: [f32; 3], yaw: f32) -> Option<FluidRole> {

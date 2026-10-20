@@ -362,9 +362,13 @@ sampled per substep through each body's pose. Grid nodes inside a collider take 
 velocity in the normal direction and keep friction-limited tangential velocity. Box3D
 bodies that are fixed or animated act as prescribed colliders; dynamic ones couple two
 ways (D12). Rejected: a GPU mesh-to-SDF atom (a second upload path for geometry that is
-CPU `TriangleMesh`). Rejected for v1: the paper's colored-distance-field compatibility
-test (CPIC proper), which exists for thin shells and cutting; every role and hull here is
-a closed volume (Deferred, with a thinness warning).
+CPU `TriangleMesh`). A closed part of a mesh is the volume it bounds, signed by winding
+number; an open part (a ground plane, a scanned wall) is a shell: unsigned distance minus
+half the role's Shell Thickness, never thinner than two lattice spacings so trilinear
+sampling cannot step over it (SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids)).
+Cooked hulls are always closed. Rejected for v1: the paper's colored-distance-field
+compatibility test (CPIC proper), which exists for zero-thickness shells and cutting;
+every shell here has a thickness (Deferred, with a thinness warning).
 
 **D12 — Two-way coupling: Box3D in lockstep per tick; each body advanced every substep on
 the GPU; the reaction crosses back through a fenced readback.** Section 5 is the

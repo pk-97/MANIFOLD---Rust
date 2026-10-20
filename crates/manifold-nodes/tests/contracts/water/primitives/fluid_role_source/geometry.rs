@@ -97,8 +97,9 @@ pub(super) mod tests {
         if let Some(MeshSource::Gltf { selection, .. }) = &mut wired.sources[1] {
             selection.material = 0;
         }
-        assert!(prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).is_err(),
-            "two copies of one half must not be accepted as the original closed cube");
+        let doubled = prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).unwrap();
+        assert!(manifold_physics::closed_triangles(&doubled[0]).unwrap().contains(&false),
+            "two copies of one half are an open surface, not the original closed cube");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
