@@ -149,11 +149,7 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   **Sun coherence (added 2026-07-15, Peter: "Can we place these fake strips and
   lights in the same positions as the real scene lights so it looks coherent and
   'makes sense'?"):** `softbox` mode additionally paints ONE bright sun disc at
-  the direction given by new params `sun_x/sun_y/sun_z` + `sun_disc_intensity` /
-  `sun_disc_size` (all defaulted to 0 = no disc; direction params bind 1:1 —
-  no conversion math in a binding). The importer binds the SAME card macros that
-  drive the sun `node.light`'s direction into these params, so one gesture moves
-  the sun's illumination, its shadows, AND its reflection together. Sun only:
+  the direction of the wired Sun light (superseded: the bake reads that light's direction and colour live; only `sun_disc_intensity` and `sun_disc_size` stay as params, default 0 = no disc, and with no Sun light the disc is off). One gesture on the Sun light moves its illumination, its shadows AND its reflection together, with no importer fan-out of card macros. Sun only:
   a sun is directional (infinitely far), which an envmap represents exactly;
   point lights are near-field (their reflections need parallax an envmap cannot
   express) and keep their correct specular-dot reflections — do NOT paint point

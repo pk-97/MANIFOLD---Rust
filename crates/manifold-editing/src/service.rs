@@ -13,17 +13,6 @@ use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
 use std::collections::{HashMap, HashSet};
 
-/// Host trait for EditingService — replaces C#'s UIState/CoordinateMapper/PlaybackController.
-pub trait EditingHost {
-    fn current_beat(&self) -> Beats;
-    fn seconds_per_beat(&self) -> f32;
-    fn grid_interval_beats(&self) -> Beats;
-    fn floor_beat_to_grid(&self, beat: Beats) -> Beats;
-    fn snap_beat_to_grid(&self, beat: Beats) -> Beats;
-    fn request_clip_sync(&mut self);
-    fn mark_compositor_dirty(&mut self);
-}
-
 /// Clipboard entry for copy/paste.
 #[derive(Debug, Clone)]
 struct ClipboardEntry {

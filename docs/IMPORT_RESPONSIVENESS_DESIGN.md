@@ -1,6 +1,7 @@
 # Import Responsiveness — big model drops stop freezing (and crashing) the app
 
-**Status:** IN PROGRESS — P1 done (BUG-219, unreproduced on this env, RSS evidence recorded), P2 SHIPPED 2026-07-17 (`lane/import-responsiveness`) — D2's duplicate-device deletion landed, negative gate green. P3 BUILT 2026-07-17 (same branch, session 3), pending landing — D3+D4 wholesale: `import_model_file` is spawn+enqueue only, `import_worker.rs` runs the background pipeline, `drain_import_progress` (per-frame, `app_render.rs`) turns `Stage`/`Done`/`Failed` into toasts + the unchanged UI-thread command-dispatch tail. Gates 1–3 detailed in P3's phase brief below. · 2026-07-17 · Sonnet
+**Status:** SHIPPED · 2026-07-17 · Sonnet · P1 to P3 on main: `import_model_file` is spawn and enqueue only, `import_worker.rs` runs the background pipeline, `drain_import_progress` turns stage, done and failed into toasts and the unchanged UI-thread command tail.
+**Lifecycle: contract** — the import verify gates in `manifold-app` (`import_responsiveness_verify.rs`, `import_worker_drain_verify.rs`) cite P3 gates 1 to 3 as their spec.
 **Prerequisites:** none (BUG-219's diagnosis on `lane/glb-triage` lands independently; this design consumes it)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 

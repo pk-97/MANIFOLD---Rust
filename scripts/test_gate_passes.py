@@ -218,11 +218,14 @@ class CacheTests(unittest.TestCase):
         runs = self.scoped_runs()
         return next(run for run in runs if run['package'] == 'manifold-nodes')
 
-    def scoped_runs(self):
+    # The branch's whole diff. Smoke follows the crates a diff reaches, so a
+    # standalone run covers the landing only when it was scoped to all of it.
+    BRANCH_PATHS = ('crates/a/src/lib.rs', 'crates/b/src/lib.rs',
+                    'crates/manifold-nodes/src/registry.rs')
+
+    def scoped_runs(self, paths=('crates/manifold-nodes/src/registry.rs',)):
         workspace = cache.Workspace(self.repo)
-        plan = gpu_scope.plan_for_paths(
-            ['crates/manifold-nodes/src/registry.rs'], self.repo,
-            workspace=workspace)
+        plan = gpu_scope.plan_for_paths(list(paths), self.repo, workspace=workspace)
         return proofs.normalize_runs(workspace, [dict(run, full=False) for run in plan.runs()])
 
     @staticmethod
@@ -867,13 +870,13 @@ class CacheTests(unittest.TestCase):
     def test_actual_standalone_wrapper_and_queue_save_for_landing(self):
         run = self.run_spec()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-nodes/src/registry.rs']
+                *(arg for changed in self.BRANCH_PATHS for arg in ('--path', changed))]
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
             patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
-            self.assertEqual(executed.call_count, len(self.scoped_runs()))
+            self.assertEqual(executed.call_count, len(self.scoped_runs(self.BRANCH_PATHS)))
             self.assertTrue(cache.proof_pass(self.repo, run).reused())
         self.assertEqual(self.run_landing()[3], 0)
         # A changed source gets its pass from the queue entry point instead.
@@ -902,10 +905,11 @@ class CacheTests(unittest.TestCase):
 
     def test_two_package_standalone_reuse_and_input_invalidation(self):
         path = 'crates/manifold-nodes/src/registry.rs'
-        runs = self.scoped_runs()
+        runs = self.scoped_runs(self.BRANCH_PATHS)
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', path]
+                *(arg for changed in self.BRANCH_PATHS for arg in ('--path', changed))]
         packages = sorted({run['package'] for run in runs})
+        self.assertGreaterEqual(len(packages), 2)
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0) as build, \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \

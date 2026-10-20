@@ -120,7 +120,7 @@ Seams:
 - **I1 — Live defaults are byte-identical to today's constants.** Enforcement: value test in manifold-core (`rt_quality_defaults_match_pre_change_constants`) asserting UltraLow=1/Medium=4/High=8 mapping plus `RtQualitySettings::default()` realtime column equality; P2's gpu-proofs run must show no drift report.
 - **I2 — On/off stays graph-side; tiers never zero a feature.** `RtQualityTier::spp()` never returns 0. Enforcement: exhaustiveness + the value test asserting `spp() >= 1` for all variants.
 - **I3 — Resolution changes reset temporal history.** Enforcement: existing `ensure_rt_irradiance` reset-flag path plus a gpu-proofs test flipping ray_resolution across frames and asserting the reset flag fired. P2 deliverable.
-- **I4 — No env-probe second source of truth.** Enforcement: negative `rg` gate — `rg "MANIFOLD_RT_SWEEP|MANIFOLD_RT_NATIVE_TERMS" crates/` returns zero hits after P2. (`scripts/rt_a2_term_cost.py` / `rt_a3_term_cost.py` name the retired probe in loud inert-warning comments — deliberate, they fail obviously if someone runs them.)
+- **I4 — No env-probe second source of truth.** Enforcement: negative `rg` gate — `rg "MANIFOLD_RT_SWEEP|MANIFOLD_RT_NATIVE_TERMS" crates/` returns zero hits after P2.
 - **I5 — No per-frame allocation for the settings path.** `RtQuality` is `Copy`; `set_rt_quality` stores by value. Enforcement: code shape; `MANIFOLD_RENDER_TRACE=1` run in P2's gate (content-thread work gate, DESIGN_DOC_STANDARD.md section 5 (Phase briefs)).
 
 ## 5. Phasing

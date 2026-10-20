@@ -6,15 +6,15 @@ Commands are run from the scratchpad against `/Users/peterkiemann/MANIFOLD - Rus
 
 Claim: 2 fns used only by their own tests (16 hits, all in the file) and the struct only by those fns; 0 hits in other crates, strings, corpus; sole caller (material_placement.rs in manifold-ui) deleted in 61b52dcef; the pilot found the same
 
-- `decompose_uv_affine` (TEST-ONLY fn, crates/manifold-foundation/src/uv_transform.rs:17)
+- `decompose_uv_affine` (TEST-ONLY fn, uv_transform.rs (deleted):17)
   - RG `decompose_uv_affine` -> 9 hits: the definition; 7 in the same file (lines 60, 74, 89, 100, 107, 108, ...); 1 in docs (docs/SIMPLIFICATION_CENSUS.md)
   - CORPUS `decompose_uv_affine` -> 0 project files (loading check only)
   - GIT `decompose_uv_affine` -> 2 commits, newest: 61b52dcef 2026-09-22 Simplify scene material controls and make colour editing direct
-- `compose_uv_affine` (TEST-ONLY fn, crates/manifold-foundation/src/uv_transform.rs:44)
+- `compose_uv_affine` (TEST-ONLY fn, uv_transform.rs (deleted):44)
   - RG `compose_uv_affine` -> 7 hits: the definition; 5 in the same file (lines 60, 78, 88, 90, 101); 1 in docs (docs/SIMPLIFICATION_CENSUS.md)
   - CORPUS `compose_uv_affine` -> 0 project files (loading check only)
   - GIT `compose_uv_affine` -> 2 commits, newest: 61b52dcef 2026-09-22 Simplify scene material controls and make colour editing direct
-- `UvDecomposition` (rerun CRATE-ONLY struct, crates/manifold-foundation/src/uv_transform.rs:8)
+- `UvDecomposition` (rerun CRATE-ONLY struct, uv_transform.rs (deleted):8)
   - RG `UvDecomposition` -> 7 hits: the definition; 5 in the same file (lines 17, 36, 44, 60, 83); 1 in docs (docs/SIMPLIFICATION_CENSUS.md)
   - CORPUS `UvDecomposition` -> 0 project files (loading check only)
   - GIT `UvDecomposition` -> 2 commits, newest: 61b52dcef 2026-09-22 Simplify scene material controls and make colour editing direct
@@ -38,19 +38,19 @@ Claim: `WorkKind::from_name` is called by one assert in `names_round_trip_and_co
 
 Claim: the file is not in the module tree (no `mod mri` anywhere in manifold-core), so it is never compiled; all four of its items have 0 outside hits; the format was unhooked in 111472546 (MRI generator moved to TIFF slices)
 
-- `MRIVOL_MAGIC` (DEAD const, crates/manifold-core/src/mri.rs:4)
+- `MRIVOL_MAGIC` (DEAD const, mri.rs (deleted):4)
   - RG `MRIVOL_MAGIC` -> 1 hit: the definition
   - CORPUS `MRIVOL_MAGIC` -> 0 project files (loading check only)
   - GIT `MRIVOL_MAGIC` -> 2 commits, newest: 111472546 2026-03-23 refactor: MRI generator loads TIFF slices as 2D textures
-- `MriVolHeader` (rerun DEAD struct, crates/manifold-core/src/mri.rs:36)
+- `MriVolHeader` (rerun DEAD struct, mri.rs (deleted):36)
   - RG `MriVolHeader` -> 2 hits: the definition; 1 in the same file (lines 65)
   - CORPUS `MriVolHeader` -> 0 project files (loading check only)
   - GIT `MriVolHeader` -> 2 commits, newest: 111472546 2026-03-23 refactor: MRI generator loads TIFF slices as 2D textures
-- `VoxelFormat` (rerun CRATE-ONLY enum, crates/manifold-core/src/mri.rs:8)
+- `VoxelFormat` (rerun CRATE-ONLY enum, mri.rs (deleted):8)
   - RG `VoxelFormat` -> 6 hits: the definition; 5 in the same file (lines 17, 21, 22, 23, 48)
   - CORPUS `VoxelFormat` -> 0 project files (loading check only)
   - GIT `VoxelFormat` -> 2 commits, newest: 111472546 2026-03-23 refactor: MRI generator loads TIFF slices as 2D textures
-- `bytes_per_voxel` (rerun CRATE-ONLY fn, crates/manifold-core/src/mri.rs:19)
+- `bytes_per_voxel` (rerun CRATE-ONLY fn, mri.rs (deleted):19)
   - RG `bytes_per_voxel` -> 2 hits: the definition; 1 in the same file (lines 73)
   - CORPUS `bytes_per_voxel` -> 0 project files (loading check only)
   - GIT `bytes_per_voxel` -> 1 commits, newest: 59c8a0901 2026-03-21 feat: MRI Volume generator — slice viewer, raymarch, cine playback
@@ -316,7 +316,7 @@ Claim: 3 `TimelineClip` methods called only by their own unit tests (1, 4 and 3 
   - CORPUS `set_in_point` -> 0 project files (loading check only)
   - GIT `set_in_point` -> 1 commits, newest: 6c5ac86c1 2026-03-17 feat: scheduling/sync parity phases 1-2 — scheduler live slots, active window, data model clamping
 - `warp_ratio` (TEST-ONLY fn, crates/manifold-core/src/clip.rs:276)
-  - RG `warp_ratio` -> 12 hits: the definition; 4 in the same file (lines 535, 536, 543, 546); 7 in docs (docs/landings/2026-07-17-waveform-tempo-map-breakpoints.md, docs/ABLETON_SHOW_SYNC_DESIGN.md x2, docs/archive/AUDIO_LAYER_DESIGN.md, docs/CORE_ENGINE_F5_SCOPING.md, ...)
+  - RG `warp_ratio` -> 12 hits: the definition; 4 in the same file (lines 535, 536, 543, 546); 7 in docs (docs/landings/2026-07-17-waveform-tempo-map-breakpoints.md, docs/ABLETON_SHOW_SYNC_DESIGN.md x2, AUDIO_LAYER_DESIGN.md (deleted), docs/CORE_ENGINE_F5_SCOPING.md, ...)
   - CORPUS `warp_ratio` -> 0 project files (loading check only)
   - GIT `warp_ratio` -> 4+ commits, newest: f3bc86cb6 2026-08-17 audio-warp: beat-anchored source position (playback + waveform + mixdown) — exact under tempo maps, kills settings.bpm stalenes
 - `start_absolute_tick_resolved` (TEST-ONLY fn, crates/manifold-core/src/clip.rs:296)
@@ -486,7 +486,7 @@ Claim: `StageLayout::next_output_id` is called by its one test (stage.rs:645-646
 Claim: `Project::fork_preset` is called by its test only; `ForkPresetCommand` now mints with `mint_forked_preset_id` ('Bloom 2'), so the module doc in editing/commands/preset.rs:7 that says the command wraps `fork_preset` is stale
 
 - `fork_preset` (rerun TEST-ONLY fn, crates/manifold-core/src/project/presets.rs:251)
-  - RG `fork_preset` -> 8 hits: the definition; 2 in the same file (lines 294, 309); 1 in comments (crates/manifold-editing/src/commands/preset.rs); 4 in docs (docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md, docs/archive/PRESET_FORK_INVENTORY.md, docs/archive/PRESET_INSTANCE_COLLAPSE_PLAN.md x2)
+  - RG `fork_preset` -> 8 hits: the definition; 2 in the same file (lines 294, 309); 1 in comments (crates/manifold-editing/src/commands/preset.rs); 4 in docs (docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md, PRESET_FORK_INVENTORY.md (deleted), PRESET_INSTANCE_COLLAPSE_PLAN.md (deleted) x2)
   - CORPUS `fork_preset` -> 0 project files (loading check only)
   - GIT `fork_preset` -> 4+ commits, newest: 002b09e3d 2026-07-22 refactor(core): P-S4b — distribute project test mod beside subjects + test_support fixtures (pure move)
 - `mint_embedded_preset_id` stays: app_lifecycle.rs:781 calls it.
@@ -517,7 +517,7 @@ Claim: 3 `EffectClipboard` methods with 1 hit each (+ an archived doc line for `
   - CORPUS `copy_all` -> 0 project files (loading check only)
   - GIT `copy_all` -> 3 commits, newest: 3e09ce40a 2026-09-26 Unify modifier cards and make card and group editing reliable
 - `get_paste_clones` (DEAD fn, crates/manifold-editing/src/clipboard.rs:97)
-  - RG `get_paste_clones` -> 2 hits: the definition; 1 in docs (docs/archive/BUG_BACKLOG_CLOSED.md)
+  - RG `get_paste_clones` -> 2 hits: the definition; 1 in docs (BUG_BACKLOG_CLOSED.md (deleted))
   - CORPUS `get_paste_clones` -> 0 project files (loading check only)
   - GIT `get_paste_clones` -> 4+ commits, newest: 3e09ce40a 2026-09-26 Unify modifier cards and make card and group editing reliable
 - Lines: 17.
@@ -624,7 +624,7 @@ Claim: `AddSceneObjectCommand::with_physics_world` is called only by 4 tests; so
 Claim: `ChangeGeneratorTypeCommand` has no constructor outside tests (the screen missed it: its `impl` lines and a compositor comment counted as uses); 36249aff4 (2026-10-09) replaced its app caller with `generator_change::build_change`; the 3 `snapshot_gen_*` helpers exist only to feed it in 2 tests
 
 - `ChangeGeneratorTypeCommand` (rerun TEST-ONLY struct, crates/manifold-editing/src/commands/settings.rs:677)
-  - RG `ChangeGeneratorTypeCommand` -> 12 hits: the definition; 2 in the same file (lines 694, 716); 4 in other files (crates/manifold-editing/src/commands/layer.rs x2, crates/manifold-editing/tests/command_roundtrips.rs x2); 2 in comments (crates/manifold-compositor/src/generator_renderer.rs, crates/manifold-editing/tests/command_roundtrips.rs); 3 in docs (docs/LED_STRIPS_DESIGN.md, docs/archive/PRESET_BROWSER_AUDITION_DESIGN.md x2)
+  - RG `ChangeGeneratorTypeCommand` -> 12 hits: the definition; 2 in the same file (lines 694, 716); 4 in other files (crates/manifold-editing/src/commands/layer.rs x2, crates/manifold-editing/tests/command_roundtrips.rs x2); 2 in comments (crates/manifold-compositor/src/generator_renderer.rs, crates/manifold-editing/tests/command_roundtrips.rs); 3 in docs (docs/LED_STRIPS_DESIGN.md, PRESET_BROWSER_AUDITION_DESIGN.md (deleted) x2)
   - CORPUS `ChangeGeneratorTypeCommand` -> 0 project files (loading check only)
   - GIT `ChangeGeneratorTypeCommand` -> 4+ commits, newest: 36249aff4 2026-10-09 Unify scene camera controls and simplify scene authoring surfaces
 - `snapshot_gen_params` (TEST-ONLY fn, crates/manifold-core/src/layer.rs:854)
@@ -687,11 +687,11 @@ Claim: 3 clip command structs with no constructor outside tests (`SlipClipComman
 Claim: 2 expose-toggle command structs with no constructor outside tests (7 and 1 test sites); newest commits to change the name count are 05d1fa10e (2026-09-12, shared card editing) and da177f375 (2026-10-15, audit table); design docs name it as the pattern, not as pending work
 
 - `ToggleEffectParamExposeCommand` (rerun TEST-ONLY struct, crates/manifold-editing/src/commands/effects.rs:786)
-  - RG `ToggleEffectParamExposeCommand` -> 29 hits: the definition; 2 in the same file (lines 861, 882); 14 in other files (crates/manifold-editing/tests/command_roundtrips.rs x7, crates/manifold-app/tests/user_param_bindings_e2e.rs x7); 3 in comments (crates/manifold-editing/tests/command_roundtrips.rs, crates/manifold-app/tests/user_param_bindings_e2e.rs, crates/manifold-node-engine/src/snapshot.rs); 8 in docs (docs/CARD_TARGET_UNIFICATION.md x2, docs/UI_UX_SYSTEM_DESIGN.md, docs/archive/BINDINGS_UNIFICATION_PLAN.md x2, docs/SCENE_MODIFIER_FRAMEWORK_DESIGN.md x3); 1 in beads
+  - RG `ToggleEffectParamExposeCommand` -> 29 hits: the definition; 2 in the same file (lines 861, 882); 14 in other files (crates/manifold-editing/tests/command_roundtrips.rs x7, crates/manifold-app/tests/user_param_bindings_e2e.rs x7); 3 in comments (crates/manifold-editing/tests/command_roundtrips.rs, crates/manifold-app/tests/user_param_bindings_e2e.rs, crates/manifold-node-engine/src/snapshot.rs); 8 in docs (docs/CARD_TARGET_UNIFICATION.md x2, docs/UI_UX_SYSTEM_DESIGN.md, BINDINGS_UNIFICATION_PLAN.md (deleted) x2, docs/SCENE_MODIFIER_FRAMEWORK_DESIGN.md x3); 1 in beads
   - CORPUS `ToggleEffectParamExposeCommand` -> 0 project files (loading check only)
   - GIT `ToggleEffectParamExposeCommand` -> 4+ commits, newest: 05d1fa10e 2026-09-12 Integrate unified scene-modifier presets and shared card editing
 - `ToggleParamExposeCommand` (rerun TEST-ONLY struct, crates/manifold-editing/src/commands/effects.rs:1089)
-  - RG `ToggleParamExposeCommand` -> 6 hits: the definition; 2 in the same file (lines 1097, 1108); 1 in other files (crates/manifold-editing/tests/command_roundtrips.rs); 2 in docs (docs/archive/PARAM_STORAGE_DESIGN.md x2)
+  - RG `ToggleParamExposeCommand` -> 6 hits: the definition; 2 in the same file (lines 1097, 1108); 1 in other files (crates/manifold-editing/tests/command_roundtrips.rs); 2 in docs (PARAM_STORAGE_DESIGN.md (deleted) x2)
   - CORPUS `ToggleParamExposeCommand` -> 0 project files (loading check only)
   - GIT `ToggleParamExposeCommand` -> 2 commits, newest: da177f375 2026-10-15 UI_INVALIDATION P6: every command runs through the change audit
 - Named gap: CARD_TARGET_UNIFICATION.md (status TARGETING-COMPLETE, 'Stage B+' remaining), UI_UX_SYSTEM_DESIGN.md:217 and BUG-6vv7 (Scene Loop remove leaves orphan params, CLOSED) name `ToggleEffectParamExposeCommand`. I did not find which command the card's expose button builds now; the lane should name it before deleting.
@@ -783,7 +783,7 @@ Claim: 7 Session Mode commands (P3, 9a069aa4e, 2026-07-03) with no constructor o
   - CORPUS `AddSceneCommand` -> 0 project files (loading check only)
   - GIT `AddSceneCommand` -> 1 commits, newest: 9a069aa4e 2026-07-03 feat(session): P3 — grid-editing commands + timeline↔session capture/paste
 - `RemoveSceneCommand` (rerun TEST-ONLY struct, crates/manifold-editing/src/commands/session_commands.rs:81)
-  - RG `RemoveSceneCommand` -> 7 hits: the definition; 2 in the same file (lines 88, 99); 2 in other files (crates/manifold-editing/tests/command_roundtrips.rs x2); 2 in docs (docs/archive/BUG_BACKLOG_CLOSED.md, docs/SESSION_MODE_DESIGN.md)
+  - RG `RemoveSceneCommand` -> 7 hits: the definition; 2 in the same file (lines 88, 99); 2 in other files (crates/manifold-editing/tests/command_roundtrips.rs x2); 2 in docs (BUG_BACKLOG_CLOSED.md (deleted), docs/SESSION_MODE_DESIGN.md)
   - CORPUS `RemoveSceneCommand` -> 0 project files (loading check only)
   - GIT `RemoveSceneCommand` -> 2 commits, newest: 3abc998e0 2026-10-15 UI_INVALIDATION P6: Command::touches has no default
 - `RenameSceneCommand` (rerun TEST-ONLY struct, crates/manifold-editing/src/commands/session_commands.rs:145)
@@ -874,7 +874,7 @@ Claim: `load_project_snapshot` (a 3-line wrapper over `load_project_snapshot_wit
   - CORPUS `load_project_snapshot` -> 0 project files (loading check only)
   - GIT `load_project_snapshot` -> 2 commits, newest: b2f787251 2026-07-06 fix(params): dead-LFO-on-reload — register project-local presets BEFORE layer deserialize + keep-dont-drop backstop
 - `load_project_snapshot_with` (crates/manifold-io/src/loader.rs:107)
-  - RG `load_project_snapshot_with` -> 8 hits: the definition; 1 in the same file (lines 101); 2 in other files (crates/manifold-app/src/app_lifecycle.rs x2); 4 in docs (docs/archive/PARAM_STORAGE_BOUNDARIES_DESIGN.md x3, docs/archive/BUG_BACKLOG_CLOSED.md)
+  - RG `load_project_snapshot_with` -> 8 hits: the definition; 1 in the same file (lines 101); 2 in other files (crates/manifold-app/src/app_lifecycle.rs x2); 4 in docs (PARAM_STORAGE_BOUNDARIES_DESIGN.md (deleted) x3, BUG_BACKLOG_CLOSED.md (deleted))
   - CORPUS `load_project_snapshot_with` -> 0 project files (loading check only)
   - GIT `load_project_snapshot_with` -> 1 commits, newest: b2f787251 2026-07-06 fix(params): dead-LFO-on-reload — register project-local presets BEFORE layer deserialize + keep-dont-drop backstop
 - Found only by the rerun that ignores comment hits (a doc comment on `load_project_snapshot_with` names it).
@@ -927,7 +927,7 @@ Claim: the whole module has no user outside itself: the 4 DEAD or TEST-ONLY rows
 Claim: const bool `RELIGHT_FEATURE_ENABLED = false` since 2026-07-18 (blame 50a9da35d9); read at core effects/instance.rs:270, ui param_card/mod.rs:3380, ui param_card/render.rs (6 places), and in 3 test files (manifold-nodes topology_hash_tests.rs and runtime_chain_fusion.rs, manifold-node-engine topology_hash_tests.rs); kept for the patterns sweep
 
 - `RELIGHT_FEATURE_ENABLED`
-  - RG `RELIGHT_FEATURE_ENABLED` -> 30 hits: 16 in other files (crates/manifold-foundation/src/lib.rs, crates/manifold-foundation/src/feature_flags.rs, crates/manifold-core/src/effects/instance.rs, crates/manifold-node-engine/src/runtime/topology_hash_tests.rs, ...); 10 in comments (crates/manifold-core/src/effects/instance.rs, crates/manifold-ui/src/panels/param_card/render.rs x4, crates/manifold-nodes/tests/contracts/runtime/topology_hash_tests.rs, crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_chain_fusion.rs x4); 4 in docs (docs/SIMPLIFICATION_CENSUS.md x2, docs/evidence/simplification_census_2026-10/graph.md, docs/evidence/simplification_census_2026-10/graph.proof.md)
+  - RG `RELIGHT_FEATURE_ENABLED` -> 30 hits: 16 in other files (crates/manifold-foundation/src/lib.rs, feature_flags.rs (deleted), crates/manifold-core/src/effects/instance.rs, crates/manifold-node-engine/src/runtime/topology_hash_tests.rs, ...); 10 in comments (crates/manifold-core/src/effects/instance.rs, crates/manifold-ui/src/panels/param_card/render.rs x4, crates/manifold-nodes/tests/contracts/runtime/topology_hash_tests.rs, crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_chain_fusion.rs x4); 4 in docs (docs/SIMPLIFICATION_CENSUS.md x2, docs/evidence/simplification_census_2026-10/graph.md, docs/evidence/simplification_census_2026-10/graph.proof.md)
   - CORPUS `RELIGHT_FEATURE_ENABLED` -> 0 project files (loading check only)
   - GIT `RELIGHT_FEATURE_ENABLED` -> 4+ commits, newest: bba59955a 2026-10-08 P1 review fixes: tests whose subject is a real node or preset are restored with their original nodes and live renderer-side (tone
 - Peter's call per the census pilot: delete depth relight or turn it back on. Not judged here. engine-027 (`from_current`) is a dead helper in the same feature.
@@ -958,7 +958,7 @@ Claim: env knob `MANIFOLD_WORK_TRACE=1` read once (work_count.rs:268); named by 
 Claim: cargo feature `bench-timing` gates 2 wall-clock benchmarks (params.rs:647, audio_trigger.rs:378); features.tsv count 7 (declaration, 2 cfg uses, comments, a fixture and docs); no gate command passes it, `feature_matrix.py` only builds every non-default feature; for the patterns sweep
 
 - `bench-timing`
-  - RG `bench-timing` -> 11 hits: 5 in other files (scripts/fixtures/gate-p1.json, crates/manifold-core/src/params.rs, crates/manifold-core/src/audio_trigger.rs, crates/manifold-core/Cargo.toml x2); 2 in comments (crates/manifold-core/src/params.rs, crates/manifold-core/src/audio_trigger.rs); 2 in docs (docs/archive/BUG_BACKLOG_CLOSED.md x2); 2 in beads
+  - RG `bench-timing` -> 11 hits: 5 in other files (scripts/fixtures/gate-p1.json, crates/manifold-core/src/params.rs, crates/manifold-core/src/audio_trigger.rs, crates/manifold-core/Cargo.toml x2); 2 in comments (crates/manifold-core/src/params.rs, crates/manifold-core/src/audio_trigger.rs); 2 in docs (BUG_BACKLOG_CLOSED.md (deleted) x2); 2 in beads
   - CORPUS `bench-timing` -> 0 project files (loading check only)
   - GIT `bench-timing` -> 1 commits, newest: ec14d046d 2026-07-14 fix(test-gate): flaky-gate class /142/144
 - Lines: 0.

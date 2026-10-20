@@ -596,6 +596,63 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(contracts["lib"])
         self.assertIn("contracts::", contracts["filters"])
 
+    def test_ui_paint_edit_skips_renderer_smoke_it_cannot_link(self):
+        # BUG-bkfv2 (split bulky gate scopes): the waveform clip paint edit ran
+        # the renderer smoke, though no renderer harness links manifold-ui-paint.
+        repo = Path(__file__).resolve().parents[1]
+        result = g.plan_for_paths(["crates/manifold-ui-paint/src/clip_content_gpu.rs"], repo)
+        self.assertEqual({(run['package'], run['target']) for run in result.runs()},
+                         {('manifold-ui-paint', 'lib'), ('manifold-ui-paint', 'main')})
+        self.assertIn('manifold-ui-paint', result.observers)
+        self.assertIn('smoke runs only in harnesses that link: ', result.describe())
+        self.assertIn('harness runs: 2, 0 unfiltered', result.describe())
+        result.observers = None  # the old rule: smoke in every harness
+        self.assertEqual({(run['package'], run['target']) for run in result.runs()}, {
+            ('manifold-nodes', 'gpu_proofs'), ('manifold-nodes-scene', 'gpu_proofs'),
+            ('manifold-ui-paint', 'lib'), ('manifold-ui-paint', 'main')})
+
+    def test_smoke_stays_in_every_harness_that_links_the_change(self):
+        repo = Path(__file__).resolve().parents[1]
+        result = g.plan_for_paths(["crates/manifold-nodes-scene/src/node_graph/scene_vm.rs"], repo)
+        runs = {(run['package'], run['target']): run for run in result.runs()}
+        for harness in (('manifold-nodes', 'gpu_proofs'), ('manifold-nodes-scene', 'gpu_proofs')):
+            self.assertTrue(set(g.SMOKE_FILTERS) <= set(runs[harness]['filters']), harness)
+
+    def test_manifest_and_lockfile_edits_keep_smoke_and_report_whole_packages(self):
+        # BUG-bkfv2 evidence (BUG-xrdq2 dependency trim): describe() named only
+        # the four smoke filters while three manifold-nodes harnesses ran whole.
+        repo = Path(__file__).resolve().parents[1]
+        result = g.plan_for_paths(["Cargo.lock", "crates/manifold-app/tests/crate_layering.rs",
+                                   "crates/manifold-nodes/Cargo.toml"], repo)
+        self.assertIsNone(result.observers)
+        report = result.describe()
+        self.assertIn('manifold-nodes because: crates/manifold-nodes/Cargo.toml '
+                      '(package manifest or crate root)', report)
+        self.assertIn('harness runs: 4, 3 unfiltered', report)
+        self.assertIn(('manifold-nodes-scene', 'gpu_proofs'),
+                      {(run['package'], run['target']) for run in result.runs()})
+
+    def test_observers_are_owners_and_packages_that_name_the_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            packages = []
+            for name, source in (('a', 'pub fn x() {}\n'),
+                                 ('b', '#[path = "../../a/src/x.rs"]\nmod x;\n'),
+                                 ('c', '// see a/src/x.rs and "a/"\nfn y() {}\n')):
+                (repo / 'crates' / name / 'src').mkdir(parents=True)
+                (repo / 'crates' / name / 'src/lib.rs').write_text(source)
+                packages.append({
+                    'id': f'path+file://{repo}/crates/{name}#{name}@0.1.0', 'name': name,
+                    'manifest_path': str(repo / 'crates' / name / 'Cargo.toml'),
+                    'features': {}, 'dependencies': [], 'targets': []})
+            (repo / 'crates/a/src/x.rs').write_text('pub fn x() {}\n')
+            workspace = g.Workspace(repo, metadata={
+                'workspace_members': [p['id'] for p in packages], 'packages': packages})
+            self.assertEqual(g.observing_packages(['crates/a/src/x.rs'], repo, workspace), {'a', 'b'})
+            self.assertIsNone(g.observing_packages(['crates/a/src/x.wgsl'], repo, workspace))
+            self.assertIsNone(g.observing_packages(['crates/a/Cargo.toml'], repo, workspace))
+            self.assertIsNone(g.observing_packages(['tests/fixtures/x.rs'], repo, workspace))
+
     def test_gpu_core_also_selects_ui_paint(self):
         result = plan(["crates/manifold-gpu/src/testkit.rs"])
         self.assertTrue(result.ui_paint)

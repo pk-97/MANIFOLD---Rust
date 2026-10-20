@@ -46,7 +46,7 @@ use crate::percussion_import::{
 };
 use crate::percussion_parser::{JsonPercussionAnalysisParser, PercussionAnalysisParser};
 use crate::percussion_planner::PercussionTimelinePlanner;
-use crate::process_runner::{ExternalProcessRunner, ProcessHandle, ProcessRunnerImpl};
+use crate::process_runner::{ProcessHandle, ProcessRunnerImpl};
 
 // ──────────────────────────────────────
 // CONSTANTS (preserved from Unity)

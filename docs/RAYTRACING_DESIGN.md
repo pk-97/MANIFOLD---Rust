@@ -723,7 +723,7 @@ Graduates `RT_TIER3_SCOPING.md` section 3 (T3-8 — multi-bounce GI); that secti
 design's intake and its findings stand except where the audit below corrects them. Build
 order is Peter's priority call 2026-07-29 (status header). Execution vehicle: lane
 sessions under lead review — the workflow-program vehicle that ran the P3 shakedown
-(docs/archive/WORKFLOW_RUNTIME_DESIGN.md section 5 (Phasing)) was retired 2026-07-31.
+(WORKFLOW_RUNTIME_DESIGN.md (deleted) section 5 (Phasing)) was retired 2026-07-31.
 
 **Stage translation.** Colour bleeding between surfaces: a red wall tints the white floor
 next to it; a glowing hero object fills a concave shell with its own colour instead of
@@ -865,7 +865,7 @@ recursive specular (section 9.7, unchanged).
   across two runs — the emitted helper broke MSL's declare-before-use ordering, invisible
   to a blind diff); a lane fixed forward on the committed attempt. I-MB1 byte identity and
   I-MB3 single-home held through the program's gate. Boundary lesson recorded as
-  docs/archive/WORKFLOW_RUNTIME_DESIGN.md section 5 (Phasing — P3 outcome).
+  WORKFLOW_RUNTIME_DESIGN.md (deleted) section 5 (Phasing — P3 outcome).
 - **MB-B:** landed. The constant flip succeeded one-shot, first attempt. The bleed probe
   then parked on byte-identical captures — root cause one layer down: the RT pass was
   gated on `!casters.is_empty()` (predates GI), so zero-light emissive scenes had NO

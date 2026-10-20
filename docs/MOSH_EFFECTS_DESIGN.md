@@ -1,6 +1,6 @@
 # Motion Mosh and Data Mosh — retained image corruption
 
-**Status:** IMPLEMENTED · 2026-09-14 · Codex. P1/P2 complete; P3 bounded renderer proofs verified. Unobserved application surfaces are listed in section 9.
+**Status:** SHIPPED · 2026-09-14 · Codex. P1/P2 complete; P3 bounded renderer proofs verified. Unobserved application surfaces are listed in section 9.
 **Prerequisites:** native Farneback plugin for Motion Mosh.
 **Execution contract:** CLAUDE.md and DESIGN_DOC_STANDARD.md sections 5–6.
 

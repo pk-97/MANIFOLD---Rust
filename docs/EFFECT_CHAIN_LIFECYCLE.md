@@ -93,7 +93,7 @@ and reset expectations are defined in
 ## Related docs
 
 - [`MOSH_EFFECTS_DESIGN.md`](MOSH_EFFECTS_DESIGN.md) — retained-state contract for Motion Mosh and Data Mosh.
-- [`CHAIN_POOL_REFACTOR_PLAN.md`](archive/CHAIN_POOL_REFACTOR_PLAN.md) — LayerId-keyed pool design.
+- `CHAIN_POOL_REFACTOR_PLAN.md (deleted)` — LayerId-keyed pool design.
 - [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md) — `PresetRuntime`, graph, and `StateStore` design.
 - [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md) — primitive authoring and lifecycle hooks.
 - [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog and composition patterns.

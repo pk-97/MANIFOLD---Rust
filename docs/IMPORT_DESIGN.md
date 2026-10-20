@@ -27,7 +27,7 @@ precedent: we already parse another app's format — .als — for interop).
 | PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` section 5 (Renderer integration) | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
 | DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` section 4 (TextureCodec backend — HAP and DXV) | A Resolume user's library plays natively |
 | Session grid | `SESSION_MODE_DESIGN.md` | Layer × scene ≅ Resolume layer × column |
-| Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` section 8b (Two cheap wins (added after review with Peter)) | TD/Resolume/AE names per atom — seeds the op-mapping tables |
+| Cross-tool alias dictionary | `NODE_VOCABULARY_AUDIT.md (deleted)` section 8b (Two cheap wins (added after review with Peter)) | TD/Resolume/AE names per atom — seeds the op-mapping tables |
 | .als interop parsing | `ABLETON_SHOW_SYNC_DESIGN.md` | The in-house precedent for parsing user-owned third-party files |
 | Beat atoms | `beat_ramp` etc. | The retimed-playhead drivers |
 
@@ -243,4 +243,4 @@ Corrections to this doc's section 1 audit and P1 scope:
 
 The glTF wave landed *most of P1*, not a mesh-level door. Two stages ship in manifold-nodes: stage 1 `node_graph::gltf_load` (CPU-only `.glb` parse → `GltfImportSummary`) and stage 2 `node_graph::gltf_import::assemble_import_graph`, a pure assembler that turns the summary into a full `node.render_scene` generator graph — **one object per distinct material** (material-filtered geometry via `node.gltf_mesh_source`, base-colour texture via `node.gltf_texture_source`, a `node.pbr_material` carrying the glTF PBR factors), a synthesized framing camera (`node.orbit_camera`), a sun (`node.light`), an IBL envmap (`node.bake_environment`), named+tinted node **groups** per object, an over-cap drop (smallest-by-vertex first), and an `ImportReport`. The production caller `Application::import_model_file` installs the result as one undo transaction via `manifold_editing::commands::layer::ImportModelLayerCommand`.
 
-Known in-app bugs against the shipped nodes: VD-003 in `docs/archive/VERIFICATION_DEBT.md`. Held-out fixtures: the CC0 photoscans untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the section 8 (Addendum) Stewartia was never downloaded; these replace it).
+Known in-app bugs against the shipped nodes: VD-003 in `VERIFICATION_DEBT.md (deleted)`. Held-out fixtures: the CC0 photoscans untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the section 8 (Addendum) Stewartia was never downloaded; these replace it).

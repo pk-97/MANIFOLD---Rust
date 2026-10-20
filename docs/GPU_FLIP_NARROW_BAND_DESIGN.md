@@ -2,7 +2,7 @@
 
 <!-- index: BUG-jyot option B: Ferstl 2016 narrow-band FLIP, fixed three-cell particle support and two-cell velocity combination, interior level set, lifecycle proofs and staged integration. -->
 
-**Status:** IN PROGRESS · 2026-10-03 · Codex · S1 committed and GPU-green per Peter. S2 step and S3 seam integration are implemented in slot-4, uncommitted; integration GPU execution and rendering remain owed.
+**Status:** IN PROGRESS · 2026-10-03 · Codex · S1 committed and GPU-green per Peter. S2 step and S3 seam integration are on `origin/feat/gpu-flip-narrow-band`; integration GPU execution and rendering remain owed.
 CPU references, shader/codegen validation, focused lifecycle/seam tests and the
 8/16-resolution preset extent check pass. The GPU gate's `--build-only` compiles
 the library and `gpu_proofs` binaries with `--features gpu-proofs --no-run`.

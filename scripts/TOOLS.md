@@ -66,8 +66,6 @@ Render and measure:
 CPU reference oracles (f64, seconds, no GPU):
   mgpcg-ref               GPU FLIP pressure solve oracle  [scripts/mgpcg_reference.py]  (cost: unit)
   lentine-ref             Lentine block projection oracle  [scripts/lentine_reference.py]  (cost: unit)
-  narrow-band-ref         narrow-band particle lifecycle oracle  [scripts/narrow_band_reference.py]  (cost: unit)
-  narrow-band-grid-ref    narrow-band grid pass oracle  [scripts/narrow_band_grid_reference.py]  (cost: unit)
 
 Live UI (opt-in connection to a running app):
   live-ui-launch          launch the separate macOS test app  [scripts/launch_live_ui.py]  (cost: broad)

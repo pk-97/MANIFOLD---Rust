@@ -15,7 +15,7 @@ got here, not where we are):
 - `CHAIN_FUSION_DESIGN.md` — segment design. Correct except every mention of a
   "per-region gate on every cross-card region": the fuse decision is structural
   now, there is no measurement.
-- `archive/BUFFER_CHAIN_FUSION_DESIGN.md` — written before derived-uniform fusion
+- `BUFFER_CHAIN_FUSION_DESIGN.md (deleted)` — written before derived-uniform fusion
   shipped. Its blocker table is resolved; FluidSim buffer regions fuse today
   (`fluidsim_buffer_fusion_renders_like_unfused`).
 - `GRAPH_COMPILER.md` — a walked-back 2026-05 brainstorm (`for_each_n`).
@@ -453,7 +453,7 @@ invariant a fused def must respect:
    at `late_capture` (`Backend::swap_texture_2d`, end of frame); cross-format
    loops bridge one dispatch. The editor thumbnail path pins the pre-swap
    texture identity (post-frame re-resolve strobed black on alternate frames).
-   Full history: `docs/archive/FEEDBACK_PINGPONG_DESIGN.md`.
+   Full history: `FEEDBACK_PINGPONG_DESIGN.md (deleted)`.
 6. **Element-space authority** — `space.rs` never re-derives the dim rules; it
    builds the unfused plan and reads `resource_dims`/`resource_canvas_scales`.
    The plan's propagation (concrete / canvas-scaled / canvas, mixed-input ⇒

@@ -1,6 +1,5 @@
 use manifold_core::GraphTarget;
 use manifold_core::change::ChangeSet;
-use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use std::fmt::Debug;
 
@@ -131,15 +130,6 @@ pub fn value_moves_rows(project: &Project, target: &GraphTarget, param_id: &str,
         .and_then(|inst| inst.params.get(param_id))
         .is_some_and(|param| param.spec.row_fact(old) != param.spec.row_fact(new));
     if moves { ChangeSet::of(&[manifold_core::change::Part::Effects]) } else { ChangeSet::NONE }
-}
-
-/// Callbacks for layer lifecycle events (add/remove).
-/// Port of C# ILayerLifecycleCallbacks.cs lines 10-14.
-/// Used by layer add/delete commands to notify UI/compositing for
-/// OSC registration, effect cleanup, etc.
-pub trait LayerLifecycleCallbacks {
-    fn on_layer_added(&mut self, layer: &Layer);
-    fn on_layer_removed(&mut self, layer: &Layer);
 }
 
 /// Composite command that groups multiple commands.

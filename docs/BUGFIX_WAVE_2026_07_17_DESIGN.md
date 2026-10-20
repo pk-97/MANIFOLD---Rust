@@ -24,7 +24,7 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 **Gates:**
 - `scripts/ui-flows/scene-setup-add-fog-drag.json` GREEN against the azalea fixture (it is RED at tip — this is the acceptance test; it needs a `Scroll` step added before the "+ Add Fog" click since the button now sits below the fold).
 - A new minimal flow proving the audio dock scrolls (open dock, Scroll, assert a below-fold widget's y moved).
-- Clear VD-029 in `docs/archive/VERIFICATION_DEBT.md` in the landing.
+- Clear VD-029 in `VERIFICATION_DEBT.md (deleted)` in the landing.
 - `cargo clippy -p manifold-app -p manifold-ui -- -D warnings`, `cargo nextest run -p manifold-ui -p manifold-app`.
 
 ## Lane 2 — scene/automation removal commands (BUG-193 + BUG-184)

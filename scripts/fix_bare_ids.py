@@ -57,10 +57,9 @@ def bead_titles():
         for src in (b.get("external_ref") or "", b.get("title") or ""):
             for num in NUMERIC_RE.findall(src):
                 titles.setdefault(num, t)
-    # pre-beads numeric bugs: BUG_BACKLOG.md (+ closed archive) carry
-    # `BUG-NNN (name)` on their entry lines — the same join, older ledger.
-    for ledger in (REPO / "docs/BUG_BACKLOG.md",
-                   REPO / "docs/archive/BUG_BACKLOG_CLOSED.md"):
+    # pre-beads numeric bugs: BUG_BACKLOG.md carries
+    # `BUG-NNN (name)` on its entry lines — the same join, older ledger.
+    for ledger in (REPO / "docs/BUG_BACKLOG.md",):
         if not ledger.exists():
             continue
         text = ledger.read_text()
@@ -129,7 +128,7 @@ def fix_file(path: Path, titles, write):
             target = fm.group(1)
             base = Path(target).name
             for cand in (path.parent / base, REPO / target.removeprefix("./"),
-                         REPO / "docs" / base, REPO / "docs/archive" / base):
+                         REPO / "docs" / base):
                 if cand.exists():
                     tpath = cand
                     break

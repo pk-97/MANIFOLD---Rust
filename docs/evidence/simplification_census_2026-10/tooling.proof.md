@@ -93,11 +93,11 @@ rg -c "(\"command\":\"|&& |; |\| |\(|python3? (-I )?|bash |sh |nohup |time |\./|
 
 ### tooling-001
 
-Claim: `scripts/audit_rename.py` (2,251 lines) is a one-shot rename tool whose table is spent.
+Claim: `audit_rename.py (deleted)` (2,251 lines) is a one-shot rename tool whose table is spent.
 
 - `STD audit_rename` -> 7 hits: 4 in its own docstring, 2 in `scripts/dev.py` (INTERNAL set line 201, COST_CLASSES line 213), 1 in `docs/PRIMITIVE_LIBRARY_DESIGN.md:820`, which says the script "is not the right tool" for project-file migration.
 - `rg -c -F audit_rename C` -> 0 (no transcript command in 30 days, run or mention).
-- `git log --format='%h %ad %s' -- scripts/audit_rename.py` -> renames applied in 9 commits on 2026-05-17 (phases 1 to 7c); later commits only change paths and permissions.
+- `git log --format='%h %ad %s' -- audit_rename.py (deleted)` -> renames applied in 9 commits on 2026-05-17 (phases 1 to 7c); later commits only change paths and permissions.
 - Script header: apply mode reports `[skip-applied]` for every done rename and then runs `cargo test ... -- --ignored` and the whole lib test set, which would also run against today's tree.
 - Crates, hooks, tests, assets: no hit (the `STD` search covers them).
 
@@ -132,7 +132,7 @@ Claim: `libstdin.rlib` is an accidental commit.
 Claim: `.claude/orchestration/crate-split/` is replay data for a deleted tool.
 
 - `git ls-files .claude/orchestration/crate-split | wc -l` -> 82; `xargs cat | wc -l` -> 4,353 lines. Dirs: p1, p1w, p2a, p2b, p2c, p3a, p3b, p3c (plans, rewrites, manifests, template crates).
-- `ls R/scripts/crate_move_replay.py R/scripts/move_identity_check.py` -> both "No such file". p1's README: "Reviewed input to scripts/crate_move_replay.py".
+- `ls R/crate_move_replay.py (deleted) R/scripts/move_identity_check.py` -> both "No such file". p1's README: "Reviewed input to crate_move_replay.py (deleted)".
 - `git log -3 -- .claude/orchestration/crate-split` -> newest e4a5aa0b8 (2026-10-10) "Retire T2 move scaffolding: crate_move_replay, move_identity_check, test_census, t2 move plans".
 - `rg -n 'plans|retired' docs/RENDERER_CRATE_SPLIT_DESIGN.md` -> status line 3 "SHIPPED ... Owed: none"; line 167 "crate_move_replay (retired; in git history)"; line 248 "The move plans live in git history (move plans retired)".
 - `STD is_inert_plan_path` -> 8 hits: the definition (`scripts/gate_policy.py:6`), import and use in `gate_readiness.py` (15, 303), `gpu_scope.py` (42, 117, 465), `cpu_scope.py` (16, 137). That is 4 call sites. The one test is `test_crate_move_plans_are_inert_for_all_scope_planners` (`scripts/test_gate_readiness.py:364` to about 398), which also asserts the folder `crate-split-other` is not inert.
@@ -205,7 +205,7 @@ Claim (ask): the RT toggle and quality harnesses have no recent runs.
 
 Claim (ask): `land_wave.py` duplicates the landing ceremony.
 
-- `rg -o` on C for any `land_wave.py` command boundary -> only `scripts/land_wave.py --help` (2 mentions). No landing.
+- `rg -o` on C for any `land_wave.py` command boundary -> only `land_wave.py (deleted) --help` (2 mentions). No landing.
 - Docs: `docs/AGENT_ROUTING.md:37` "a fallback for a pile-up of reviewed branches"; `.claude/GIT_TREE_DISCIPLINE.md:76` mentions `--batch`. CLAUDE.md names only `scripts/land_branch.py`.
 - Header: written 2026-09-05 after a worktree-pinning bug; batch mode added 2026-10-01 (854f54888).
 - `wc -l`: 215 + 126 (test).
@@ -214,7 +214,7 @@ Claim (ask): `land_wave.py` duplicates the landing ceremony.
 
 Claim (ask): `depth_relight_sweep.py` waits on Peter's depth relight call.
 
-- `rg -c` on C -> 0. `STD depth_relight_sweep` -> dev.py x2 and `docs/DEPTH_RELIGHT_DESIGN.md:60,67` (P6 acceptance command). The design status is APPROVED, P1 to P5b on main; the census doc line 356 lists depth relight "delete or turn back on" as owed to Peter.
+- `rg -c` on C -> 0. `STD depth_relight_sweep` -> dev.py x2 and `DEPTH_RELIGHT_DESIGN.md (deleted):60,67` (P6 acceptance command). The design status is APPROVED, P1 to P5b on main; the census doc line 356 lists depth relight "delete or turn back on" as owed to Peter.
 - `wc -l` 148; with dev.py lines ~151.
 
 ### tooling-015
@@ -243,7 +243,7 @@ Files and lines: EFFECT_GENERATOR_CARD_UNIFICATION 111, BOKEH_DOF_ROUND2_DESIGN 
 - Live-reference search per stem: `rg -l --hidden -g '!.git/' -g '!target/' -g '!*.jsonl' -g '!docs/README.md' -g '!docs/archive/**' -g '!docs/landings/**' -g '!docs/evidence/**' -g '!.beads/**' -F STEM R` -> empty for all 15.
 - Code-side check: `rg -l -F STEM R/crates R/scripts R/tests R/tools R/assets R/CLAUDE.md` -> empty for all 15.
 - Memory, commands and beads: `rg -l -F STEM <memory dir> ~/.claude/commands R/.beads/issues.jsonl` -> only BOKEH_DOF_ROUND2_DESIGN (closed bead BUG-4myu (BOKEH-ROUND2 tent dilation)), GPU_FLIP_TICK_SPLIT_DESIGN (closed bead BUG-q2s2i (even frames on GPU FLIP)), PROVIDER_OPERATIONS (closed bead BUG-bo5l (glm-4.7 fallback classifier)). Doc mentions inside the archive only: EFFECT_GENERATOR_CARD_UNIFICATION (PRESET_UNIFICATION_PLAN), FUSION_COVERAGE_AUDIT (GRAPH_COMPILER_HARVEST_PLAN), PARAM_STORAGE_REDESIGN_BRIEF (PARAM_STORAGE_DESIGN), PROVIDER_OPERATIONS (FLEET_STACK_HANDOVER, AGENT_ROUTING_PROVIDER_LANES).
-- `docs/archive/README.md`: "Kept for historical record — not active reference."
+- `README.md (deleted)`: "Kept for historical record — not active reference."
 - Follow-up for the deleting lane: `scripts/gen_docs_index.py` regeneration; check `crates/manifold-core/tests/fixtures/docs_cited_paths_baseline.txt` and `.claude/hooks/design_status_dead_refs_baseline.txt` for these names.
 
 ### tooling-018
@@ -255,7 +255,7 @@ Claim (ask): four archived docs have open beads.
 
 ### tooling-019
 
-Claim: `docs/HARNESS_SEAM_EXTRACTION_SPEC.md` is a build sheet for built work.
+Claim: `HARNESS_SEAM_EXTRACTION_SPEC.md (deleted)` is a build sheet for built work.
 
 - Spec: "BUILD SPEC ... folds the main-window immediate-pass assembly into shared code ... Deletes draw_immediate_passes".
 - `rg -n -w 'render_main_ui_passes|draw_immediate_passes' R/crates` -> `ui_snapshot/script.rs:3143` calls `crate::ui_frame::render_main_ui_passes(...)`; `draw_immediate_passes` appears only in comments (`script.rs:3092`). The seam exists and the old function is gone.

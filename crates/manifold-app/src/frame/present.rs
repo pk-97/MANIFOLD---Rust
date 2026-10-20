@@ -1,55 +1,10 @@
 //! Frame present stage: the multi-window present pass
 //! (`present_all_windows`) and the cached-offscreen re-present, plus the
-//! BUG-060 dump + scope-readout helpers. Moved verbatim from app_render.rs
+//! scope-readout helper. Moved verbatim from app_render.rs
 //! (UI_FUNNEL_DECOMPOSITION P-F1, pure move). The drain/events/sync/push
 //! sibling stages remain inline in tick_and_render (parked — semantic).
 
 use crate::app::Application;
-
-static BUG060_DUMP_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Dump cadence: `MANIFOLD_BUG060_DUMP=<N>` dumps every N dirty-present frames
-/// (minimum 2); any other non-empty value (e.g. `=1`) means the default of 30.
-/// Unset → `None`, and the dump code is never reached.
-fn bug060_dump_every() -> Option<u64> {
-    static EVERY: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *EVERY.get_or_init(|| {
-        std::env::var("MANIFOLD_BUG060_DUMP")
-            .ok()
-            .map(|v| v.parse::<u64>().ok().filter(|&e| e >= 2).unwrap_or(30))
-    })
-}
-
-/// Read a linear UI target and save an opaque, sRGB-tagged diagnostic PNG.
-fn bug060_dump_png(
-    device: &manifold_gpu::GpuDevice,
-    tex: &manifold_gpu::GpuTexture,
-    path: &str,
-) {
-    let (w, h) = (tex.width, tex.height);
-    if w == 0 || h == 0 {
-        return;
-    }
-    let bytes_per_row = w * tex.format.bytes_per_pixel();
-    let total = u64::from(h) * u64::from(bytes_per_row);
-    let buf = device.create_buffer_shared(total);
-    let mut enc = device.create_encoder("bug060-dump");
-    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
-    let Some(ptr) = buf.mapped_ptr() else {
-        eprintln!("[BUG-060] {path}: readback buffer not mapped");
-        return;
-    };
-    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
-    use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback};
-    let result = LinearUiReadback::from_bytes(
-        bytes, w, h, tex.format, AlphaInterpretation::PremultipliedOverBlack,
-    ).and_then(|readback| readback.to_srgb_rgba8().write_png(std::path::Path::new(path)));
-    match result {
-        Ok(()) => eprintln!("[BUG-060] wrote {path} ({w}x{h})"),
-        Err(e) => eprintln!("[BUG-060] {path}: {e}"),
-    }
-}
 
 /// Format the audio scope's hover readout: frequency (kHz above 1 kHz, else Hz)
 /// and the raw level in dB, e.g. `4.17 kHz   -17.9 dB`.
@@ -132,7 +87,6 @@ impl Application {
 
         let logical_w = (surface_w as f64 / scale) as u32;
         let logical_h = (surface_h as f64 / scale) as u32;
-        let sf = scale as f32;
 
         // ── Fast path: nothing visual changed — re-blit cached offscreen.
         // Must still present every callback to maintain consistent cadence.
@@ -811,35 +765,6 @@ impl Application {
         );
         present_enc.commit();
         self.ui_profile.add("present.blit_present", pseg.elapsed());
-
-        // BUG-060 surface dump: attribute live stale-pixel dirt to a surface.
-        // Runs only on dirty-present frames, so scrolling produces fresh dumps
-        // and idle frames cost nothing.
-        if let Some(every) = bug060_dump_every() {
-            let n = BUG060_DUMP_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if n.is_multiple_of(every) {
-                let footer = self.ws.ui_root.layout.footer();
-                let inspector = self.ws.ui_root.layout.inspector();
-                eprintln!(
-                    "[BUG-060] dump #{n}: sf={sf} offscreen={}x{} footer=({:.1},{:.1} {:.1}x{:.1}) inspector=({:.1},{:.1} {:.1}x{:.1})",
-                    offscreen.width,
-                    offscreen.height,
-                    footer.x,
-                    footer.y,
-                    footer.width,
-                    footer.height,
-                    inspector.x,
-                    inspector.y,
-                    inspector.width,
-                    inspector.height,
-                );
-                bug060_dump_png(&gpu.device, offscreen, "/tmp/bug060_offscreen.png");
-                if let Some(atlas) = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture())
-                {
-                    bug060_dump_png(&gpu.device, atlas, "/tmp/bug060_atlas.png");
-                }
-            }
-        }
     }
 
     /// Re-blit the cached offscreen onto a fresh drawable and present it,

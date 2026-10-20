@@ -817,7 +817,7 @@ Plus the bundled-preset registry in `bundled_presets.rs` needs a parallel alias 
 - We need to add `EffectTypeAliasMetadata` for a different reason (e.g., genuinely renaming an effect because its function changed), and the infrastructure becomes free to apply to these three too.
 - An LLM-driven refactor pass on the codebase keeps tripping on the inconsistency.
 
-Whoever picks this up: the rename script (`scripts/audit_rename.py`) is *not* the right tool — it does source-code find/replace, not project-file migration. Build the alias metadata + JSON-rewrite pass first, then the source-code changes ride alongside as a single coherent commit gated by a Liveschool round-trip test.
+Whoever picks this up: a source-code find/replace rename is *not* the right tool — it does not migrate project files. Build the alias metadata + JSON-rewrite pass first, then the source-code changes ride alongside as a single coherent commit gated by a Liveschool round-trip test.
 
 ---
 

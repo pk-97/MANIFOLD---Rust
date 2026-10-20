@@ -365,18 +365,6 @@ impl<'a> NodeInputs<'a> {
         self.backend.array_buffer(slot)
     }
 
-    /// [`Material`] bound to an already-resolved [`Slot`] — no name scan,
-    /// unlike [`Self::material`].
-    pub fn material_slot(&self, slot: Slot) -> Option<Material> {
-        self.backend.material(slot)
-    }
-
-    /// [`Transform`] bound to an already-resolved [`Slot`] — no name scan,
-    /// unlike [`Self::transform`].
-    pub fn transform_slot(&self, slot: Slot) -> Option<Transform> {
-        self.backend.transform(slot)
-    }
-
     /// [`Light`] bound to an already-resolved [`Slot`] — no name scan,
     /// unlike [`Self::light`].
     pub fn light_slot(&self, slot: Slot) -> Option<Light> {
@@ -422,7 +410,7 @@ impl<'a> NodeInputs<'a> {
     /// scan, unlike [`Self::object`]. `render_scene`'s draw-assembly loop
     /// resolves `object_k` through its per-frame `build_index()` map
     /// (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4), same shape as
-    /// `material_slot`/`transform_slot` above.
+    /// `array_slot`/`light_slot` above.
     pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
         self.backend.object(slot)
     }

@@ -23,12 +23,12 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 2. CLAUDE.md rewrite: rules kept, incident stories stripped to pointers (~35KB → ~10KB).
 3. MEMORY.md → true index (no status phrasing).
 4. AGENT_ROUTING.md + FLEET_ORCHESTRATION.md: fold in the operating model above.
-5. BUG_BACKLOG.md split: closed entries → `docs/archive/BUG_BACKLOG_CLOSED.md` (solo because every lane writes to the backlog — not laneable).
+5. BUG_BACKLOG.md split: closed entries → `BUG_BACKLOG_CLOSED.md (deleted)` (solo because every lane writes to the backlog — not laneable).
 6. Hook trim: DEFERRED to its own careful pass — behavior changes under live protocol are riskier than the bloat.
 
 ## Wave 1 — lanes (COMPLETE 2026-07-20 — all four landed same day: W1-A `e8f066de`, W1-C `43c9d3d1`, W1-D `726de5a0`, W1-B `7915d4f3`. Full gpu-proofs suite green post-parity-removal. First wave under the steering model: 4/4 briefs executed to the letter, zero improvised mechanisms; lane reports caught one orchestrator-table error, adversarial pass caught 2 blockers pre-spawn.)
 
-- **W1-A doc cull:** move superseded docs to `docs/archive/` from a list Fable writes; regen index.
+- **W1-A doc cull:** delete superseded docs (git holds them) from a list Fable writes; regen index.
 - **W1-B gate cleanup:** CORRECTED 2026-07-20 at briefing — BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale…)'s 8 flows were retargeted and fixed 2026-07-18, NOT dead; only `scene-setup-scrub-fine.json` (BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta…)) dies. Scope now: that one script + retire ALL generated-vs-hand kernel parity tests and their hand-kernel oracles (Peter's ruling 2026-07-20 — migration scaffolding; fusion proofs and freeze proofs KEPT, headless render oracle untouchable) + look-oracle demotion note in HEADLESS_UI_HARNESS.md. Exact lists: the Wave 1 brief set (adversarially reviewed 2026-07-20, 11 findings folded).
 - **W1-C BUG-266 (inspector-tab-pin-dies-on-incidental-selection-c…):** tab pin dies on incidental selection changes — decouple pin invalidation from `selection_version` (disjoint: `ui_state.rs`/`state_sync.rs`).
 - **W1-D BUG-267 (inspector-duplicated-card-lists):** unify master/layer card vecs in `inspector.rs` (the wave's real-code lane; structural, goes BEFORE BUG-265 (inspector-card-drag-indicator-stale-geometry) which touches the same lines).

@@ -7,7 +7,7 @@ Miner: Sonnet (background job), 2026-07-09. Read-only mining; classification bel
 
 ## 1 Method + inputs
 
-Sources: `docs/BUG_BACKLOG.md` (2898 lines, BUG-001–082, full read, no gaps), `docs/archive/FOUNDATIONAL_GAPS.md`
+Sources: `docs/BUG_BACKLOG.md` (2898 lines, BUG-001–082, full read, no gaps), `FOUNDATIONAL_GAPS.md (deleted)`
 (clusters A1–A7 + Part B), `docs/CORE_ENGINE_FINDINGS.md` (findings F1–F17, all `manifold-playback`),
 and `git log --grep='fix' -i` (1672 commits) with a patch-density map + sampled diffs on the top ~10
 files. Extraction of raw bug fields and git mining were delegated to three parallel read-only agents

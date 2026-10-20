@@ -58,7 +58,7 @@ Directory `runtime/effects/`.
 - S2: no output. `git log -S'PARTICLE_COMMON_WGSL'`: c50031653 (2026-03-16). 217 + 4 (doc and const) = 221 lines.
 
 ### graph-006
-- S1 on `outer_routings_from_bindings`: definition param_binding.rs:792; prose in docs/archive/BINDINGS_UNIFICATION_PLAN.md (3 lines) and docs/EFFECT_RUNTIME_UNIFICATION.md:691. No code.
+- S1 on `outer_routings_from_bindings`: definition param_binding.rs:792; prose in BINDINGS_UNIFICATION_PLAN.md (deleted) (3 lines) and docs/EFFECT_RUNTIME_UNIFICATION.md:691. No code.
 - S1 on `inner_routing_for`: composite_handle.rs:74, the call at param_binding.rs:811, doc comments at param_binding.rs:786 and validate.rs:428.
 - The live path: `rg -n outer_routings_from_view crates`: app graph_snapshot.rs:130-141, loaded_preset_view.rs:203.
 - `bd show BUG-axzlz`: names the compositor's `graph_snapshot_for` and `outer_routings_for` only; not this fn. Kept as a sibling, not a duplicate. `OuterParamRouting` stays alive through loaded_preset_view.rs and the app.

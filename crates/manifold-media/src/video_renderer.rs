@@ -349,27 +349,6 @@ impl VideoRenderer {
         }
     }
 
-    /// Submit pre-warm requests for clips near the playhead.
-    pub fn pre_warm_clips(
-        &mut self,
-        candidates: &AHashMap<String, manifold_core::video::VideoClip>,
-    ) {
-        for (video_clip_id, clip) in candidates {
-            let already_active = self
-                .active_clips
-                .values()
-                .any(|c| &c.video_clip_id == video_clip_id);
-            if already_active {
-                continue;
-            }
-
-            self.scheduler.submit(DecodeJob::WarmOpen {
-                video_clip_id: video_clip_id.clone(),
-                path: clip.file_path.clone(),
-            });
-        }
-    }
-
     /// Submit pre-warm requests from engine's lookahead prewarm candidates.
     /// Accepts the PrewarmCandidate type from PlaybackEngine::compute_prewarm_candidates().
     pub fn pre_warm_from_candidates(

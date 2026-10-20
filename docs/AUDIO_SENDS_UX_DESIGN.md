@@ -150,7 +150,7 @@ One new `DrawerControl::Segmented` row in the audio `DrawerSpec`; click maps to 
 
 Folded from `docs/landings/2026-07-06-audio-sends-ux.md` 2026-07-28; the report stays as history, this is the live part.
 
-Owed — Peter's in-app pass (VD-011 P1 trace-count, VD-012 P3 drag feel; `docs/archive/VERIFICATION_DEBT.md`), ≤2 minutes:
+Owed — Peter's in-app pass (VD-011 P1 trace-count, VD-012 P3 drag feel; `VERIFICATION_DEBT.md (deleted)`), ≤2 minutes:
 
 1. Cmd+Shift+A — Audio Setup docks right (~38%), show visible and undimmed behind it; outside clicks pass through, Escape closes.
 2. Click a source's swatch — "Inputs — X", "Spectrogram — X", "Triggers — X", "Consumers — X" sections for that source.

@@ -4,12 +4,6 @@ from pathlib import Path
 import json
 import re
 
-def is_inert_plan_path(path):
-    """Committed crate-move plans are replay data, never live build inputs."""
-    root = ".claude/orchestration/crate-split"
-    return path == root or path.startswith(root + "/")
-
-
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
     "manifold-nodes-water": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
@@ -91,7 +85,9 @@ LANDING_BUDGET_S = 360
 # Fixed end-to-end smoke: always runs when any GPU path is touched. Four proofs
 # that cover the effect chain + alpha contract, command-buffer replay, the
 # camera/scene render, and the G-buffer. Must stay under ~2 minutes in total;
-# the 25-slowest timing report is how that is re-checked.
+# the 25-slowest timing report is how that is re-checked. A smoke proof must
+# read no files: gpu_scope skips smoke in harnesses that cannot link the diff,
+# and a file read would let an unlinked change reach it.
 SMOKE_FILTERS = [
     "alpha_contract::effects_preserve_transparency",
     "encode_replay::encode_replay_parity",

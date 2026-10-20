@@ -131,7 +131,7 @@ Work is measured in bounded work packages, not promised calendar dates. The foun
 - [Scene Loop](SCENE_LOOP_DESIGN.md) and [Endless Corridor](SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md) retain their geometry, timing, capacity and seam invariants.
 - [Scene Mirror](SCENE_MIRROR_DESIGN.md) has a historical status/source discrepancy: its header says shipped, while the September 10 registry audit found Loop/Fog only; the photoscan slice has since added three kinds. `node.reflect_array` exists. F4 source verification resolves Mirror registration/history before migration; never infer another active kind from its document alone.
 - [Merge](MERGE_MODIFIER_DESIGN.md) owns surface merging. This programme does not substitute ordinary deformation for boolean or field-based surface merging.
-- [Mesh Deform](archive/MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md) owns existing atom behaviour. Extend useful atoms; do not replace them with named-look monoliths.
+- Mesh Deform (`MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md`, deleted) owns existing atom behaviour. Extend useful atoms; do not replace them with named-look monoliths.
 - [Gaussian Splats](GAUSSIAN_SPLATS_DESIGN.md) retains source/render/sort ownership. The companion here owns modifier integration only.
 
 Tracking: existing bead `BUG-e3p6` owns the user-authored modifier programme. This proposal replaces its earlier suggestion of permanent Rust plan-builder escape hatches only when accepted and migrated; the old implementation remains current until then.
