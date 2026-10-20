@@ -263,13 +263,30 @@ session is not written and reloads empty. With the fixture missing it fails on i
 `macro_drives_the_exact_effect_among_two_of_the_same_type` in `crates/manifold-app/tests/legacy_param_id_resolution.rs`
 builds its project in code.
 
-Deleted, each covered elsewhere: the Burn V4, Burn V5 and GraphTestsV4 load-and-count tests; the Burn V5 transport
-tests in `engine_tick.rs` (transport clock, tempo map and synthetic engine tests); the four Burn V5 undo round trips
-(`service_integration.rs` multi-step and move undo tests); `commands_work_on_loaded_project`
-(`project_commands_undo_and_redo_restore_the_whole_project`); the seven Liveschool and Burn V5 param-id resolution
-tests; the Liveschool snapshot-size and OSC-sweep checks in `project_io.rs` (`osc_full_sweep_covers_user_slider_range`
-holds the sweep rule). The WAYPOINTS and EFFECT_GEN_UNIFIED fixtures had no code users. Tools that load shows
-(perf soak, the fusion census, freeze profile) are untouched.
+Deleted, with the test that covers each:
 
-Not covered by any test: `migrate_legacy_param_values` in `crates/manifold-core/src/project/load_migration.rs`
-(Mirror 0, 1, 2 to 6, 7, 8) and its macro mapping resolve step. The converted fixtures could not reach either.
+| Deleted | Covered by |
+|---|---|
+| Burn V4, Burn V5 and GraphTestsV4 load-and-count tests | nothing needed: they pinned the counts of one old file |
+| `driver_beat_divisions_survive_load` and `_roundtrip` | the serde tests in `crates/manifold-core/src/effects/driver.rs` (`driver_round_trips_through_canonical_shape`, the `driver_deserialize_*` set) |
+| `pitch_presence_mods_survive_roundtrip_and_drive` | `legacy_flat_feature_migrates_to_matrix` (the saved serde names) and `extract_reads_pitch_and_presence` in `crates/manifold-core/src/audio_mod.rs` |
+| `liveschool_v6_leds_clip_trigger_migration_round_trips_cleanly` | `legacy_clip_trigger_migration_tests` in `crates/manifold-io/src/loader.rs` |
+| `liveschool_roundtrip_preserves_addressing_sites` | the per-type serde shape tests (driver, envelope, Ableton mapping, instance serde) |
+| `commands_work_on_loaded_project` | `project_commands_undo_and_redo_restore_the_whole_project` |
+| the four Burn V5 undo round trips in `undo_roundtrip.rs` | `undo_manager_multi_command_roundtrip` (moved to `service_integration.rs` on a built project, assertions unchanged), `multi_step_undo_redo` and the move undo tests |
+| the seven Liveschool and Burn V5 param-id resolution tests | nothing needed: the converted fixtures store the resolved ids |
+
+The WAYPOINTS and EFFECT_GEN_UNIFIED fixtures had no code users. Tools that load shows (perf soak, the fusion
+census, freeze profile) are untouched.
+
+Not covered by any test now:
+
+- No test ticks a saved show through `PlaybackEngine` any more (the six Burn V5 `engine_tick.rs` deletions). The
+  transport maths is covered by `crates/manifold-playback/tests/frame_exact_transport.rs`. Whether to keep one
+  real-show tick smoke test is BUG-el7da (keep one real-show engine tick smoke test?).
+- `liveschool_snapshot_on_save_size_delta_stays_bounded` was a size measurement on a real show and has no
+  replacement.
+- The real-show OSC sweep in `project_io.rs` is gone; only `osc_full_sweep_covers_user_slider_range` remains, on a
+  built project.
+- `migrate_legacy_param_values` in `crates/manifold-core/src/project/load_migration.rs` (Mirror 0, 1, 2 to 6, 7, 8)
+  and its macro mapping resolve step. The converted fixtures could not reach either.

@@ -86,6 +86,9 @@ fn first_frame_status(json: &str) -> FrameRenderStatus {
 fn node_error_fails_the_frame() {
     // Geometry remains valid, so loading succeeds. The domain's compute path
     // rejects speed outside 0..=4 and reports ctx.error during the frame.
+    // The same graph at a valid speed must complete, so the failure below
+    // comes from the speed check and not from the graph breaking elsewhere.
+    assert_eq!(first_frame_status(&domain_graph(1.0)), FrameRenderStatus::Complete);
     let status = first_frame_status(&domain_graph(5.0));
     assert_eq!(status, FrameRenderStatus::Failed(FrameRenderFailure::NodeError));
 }

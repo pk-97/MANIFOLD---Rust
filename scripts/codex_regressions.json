@@ -5,7 +5,7 @@
     "package": "manifold-editing",
     "target": "service_integration",
     "source": "crates/manifold-editing/tests/service_integration.rs",
-    "tests": ["multi_step_undo_redo", "move_command_missing_target_preserves_source_and_valid_move_undoes_redoes"]
+    "tests": ["undo_manager_multi_command_roundtrip", "multi_step_undo_redo", "move_command_missing_target_preserves_source_and_valid_move_undoes_redoes"]
   },
   "clip-non-overlap": {
     "triggers": ["crates/manifold-editing/", "crates/manifold-core/src/layer"],
