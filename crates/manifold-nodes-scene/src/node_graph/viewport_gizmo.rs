@@ -521,7 +521,13 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
         && snapshot.state == FluidDomainState::Ready
         && let Some(layout) = snapshot.accepted_layout
     {
-        fluid_lattice_lines(layout, chrome.view.camera.pos, out);
+        let view = &chrome.view;
+        let on_screen = |a: [f32; 3], b: [f32; 3]| {
+            let a = view.camera.project_to_pixel(a, view.width, view.height)?;
+            let b = view.camera.project_to_pixel(b, view.width, view.height)?;
+            Some((a.px - b.px).hypot(a.py - b.py) / view.px_per_point)
+        };
+        fluid_lattice_lines(layout, view.camera.pos, view.camera.fwd, on_screen, out);
     }
     let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
     for gizmo in chrome.physics {

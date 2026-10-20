@@ -1,7 +1,7 @@
 //! D-102 after render: a scene object far from the camera, selected, as the
 //! preview draws it: the scene's picture, the outline from its selection
 //! mask, then the handles through the camera it rendered with. Writes
-//! `/tmp/d102_gizmo_outline_after.png`.
+//! `/tmp/d102_gizmo_outline_after.png`. Also A3's water-domain cell grid render.
 
 use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -310,44 +310,76 @@ fn an_export_with_a_selection_renders_no_mask() {
     assert_eq!(thread.content_pipeline.take_selection_outline(), (Some(request), None), "the selection is back after the export");
 }
 
-/// A3 after render: a selected 8 x 4 x 8 m water domain at 64 cells, its
-/// solver-reported cell grid on the three far faces, through the same
-/// `compose_lines` and line renderer the preview uses. Writes
-/// `/tmp/a3_domain_lattice_after.png`.
+/// A3 after render: the real Water Dam Break scene with its liquid domain
+/// selected the way the Scene panel selects it. The cell grid comes from the
+/// solver's own snapshot, the target from `selected_target`, the lines from
+/// `compose_lines`. Writes `/tmp/a3_domain_lattice_after.png`.
 #[test]
-fn a_selected_domain_shows_its_cell_grid() {
-    use manifold_core::NodeId;
-    use manifold_core::fluid_domain::{DomainBox, FluidDomainSnapshot, FluidDomainState, domain_layout};
-    use manifold_node_engine::scene::camera::Camera;
+fn a_selected_water_domain_draws_its_solvers_cell_grid() {
+    use manifold_core::fluid_domain::FluidDomainState;
+    use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetKind;
+    use manifold_ui::panels::scene_setup_panel::SceneSelection;
+
+    const PRESET: &str = include_str!("../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json");
     let device = std::sync::Arc::new(GpuDevice::new_queued("a3 lattice render"));
-    let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
+    let def: EffectGraphDef = serde_json::from_str(PRESET).expect("preset json");
     let scene = SceneVm::from_def(&def).expect("a scene");
-    let mut target_domain = gizmo_targets(&scene).find(|t| t.id.owner == ShapeOwner::Object(41)).expect("a target");
-    target_domain.id.owner = ShapeOwner::LiquidDomain(NodeId::new("dom"));
-    let pose = DomainBox { pos: [0.0, 2.0, 0.0], rot_euler: [0.0; 3], scale: [8.0, 4.0, 8.0], billboard: false };
-    let layout = domain_layout(Some(pose), 8.0, 64).expect("a layout");
-    let domains = [(NodeId::new("dom"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) })];
-    let camera = Camera::look_at([9.0, 7.0, 13.0], [0.0, 1.5, 0.0], [0.0, 1.0, 0.0], 0.8, 0.1, 200.0);
+    let mut runtime = PresetRuntime::from_json_str_with_device(PRESET, &PrimitiveRegistry::with_builtin(), device.clone(), W, H, GpuTextureFormat::Rgba16Float, None)
+        .expect("preset builds");
+    let picture = target(&device, "a3 picture");
+    for frame in 0..6 {
+        render(&device, &mut runtime, &picture, frame);
+    }
+    let mut lights = Vec::new();
+    let (_, camera) = runtime.write_rendered_view(&mut lights).expect("the scene reports its camera");
+    let mut domains = Vec::new();
+    runtime.write_fluid_domains_watched(&mut domains);
+    let (_, snapshot) = domains.first().expect("the solver reports its domain");
+    assert_eq!(snapshot.state, FluidDomainState::Ready);
+    let layout = snapshot.accepted_layout.expect("an accepted layout");
+
+    let row = gizmo_targets(&scene).find(|t| t.kind == GizmoTargetKind::FluidDomain).and_then(|t| t.row).expect("the domain's row");
+    let selected = crate::scene_gizmo::selected_target(&scene, &SceneSelection::Object(row), None).expect("the row's target");
+    assert_eq!(selected.kind, GizmoTargetKind::FluidDomain);
     let view = GizmoView::new(camera, W, H);
-    let mut lines = Vec::new();
-    compose_lines(
-        &GizmoChrome { view, lights: &[], domains: &domains, physics: &[], selected: Some(&target_domain), mode: GizmoMode::Move, fade_handles: false },
-        &mut lines,
-    );
+    let chrome = |selected| GizmoChrome { view, lights: &lights, domains: &domains, physics: &[], selected, mode: GizmoMode::Move, fade_handles: false };
+    let (mut bare, mut lines) = (Vec::new(), Vec::new());
+    compose_lines(&chrome(None), &mut bare);
+    compose_lines(&chrome(Some(&selected)), &mut lines);
+    let handles = selected.handles.iter().filter(|h| h.mode == GizmoMode::Move).count();
+    let lattice = lines.len() - bare.len() - handles;
+    eprintln!("a3: cells {:?}, cell {}, lattice lines {lattice}", layout.cells, layout.cell_size);
+    assert!(lattice > 0, "the selected domain draws its cell grid");
+    let cell = layout.cell_size as f32;
+    for line in &lines[bare.len()..bare.len() + lattice] {
+        let along = (0..3).find(|&k| (line.a[k] - line.b[k]).abs() > 1e-6).expect("an axis line");
+        for k in (0..3).filter(|&k| k != along) {
+            let steps = (line.a[k] - layout.min[k]) / cell;
+            let on_wall = line.a[k] == layout.min[k] || line.a[k] == layout.min[k] + layout.size[k];
+            assert!(on_wall || (steps - steps.round()).abs() < 1e-3, "a line off the solver's cells");
+        }
+    }
+
     let composite = target(&device, "a3 composite");
     let mut enc = device.create_encoder("a3 chrome");
+    enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
     let mut ui = manifold_ui_paint::ui_renderer::UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
     ui.begin_frame();
     crate::scene_viewport::draw_world_lines(&mut ui, manifold_ui::Rect::new(0.0, 0.0, W as f32, H as f32), &camera, W, H, &lines);
     if ui.prepare(&device, W, H, 1.0) {
-        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Clear);
+        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Load);
     }
     enc.commit_and_wait_completed();
     let shown = readback(&device, &composite);
+    let plain = readback(&device, &picture);
+    let tinted = shown.iter().zip(&plain).filter(|(s, p)| s[0] - p[0] > 0.05 && s[1] - p[1] > 0.03).count();
+    eprintln!("a3: grid-tinted pixels {tinted}");
+    assert!(tinted > 500, "the grid shows over the picture ({tinted} px)");
+
     let mut png = Vec::with_capacity((W * H * 4) as usize);
     for px in &shown {
         for (c, v) in px.iter().enumerate() {
-            let v = if c == 3 { 1.0 } else { v.clamp(0.0, 1.0).powf(1.0 / 2.2) };
+            let v = if c == 3 { 1.0 } else { (v / (1.0 + v)).clamp(0.0, 1.0).powf(1.0 / 2.2) };
             png.push((v * 255.0).round() as u8);
         }
     }
