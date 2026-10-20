@@ -86,7 +86,7 @@ Fifteen hook files are registered in `.claude/settings.json`, all through `hook_
 | `conversation-recall-hook.py` | 5,190 | 107 injections | tooling-016 |
 | `local-time.py` | 272 | 272 injections | session start clock |
 | `session-end-worktree-scrub.py` | 89 | 0 (silent by design, mean 201 ms) | trims idle slot caches at session end; disk hygiene, not a hard rule |
-| `wrap-up-stop-guard.py` | 326 | 20 block | enforces the always-end-with-the-summary-box rule |
+| `wrap-up-stop-guard.py (deleted)` | 326 | 20 block | enforces the always-end-with-the-summary-box rule |
 | `permission-request-guard.py` | 151 | 6 deny | PERMISSION_BOUNDARY |
 
 Unregistered files in `.claude/hooks/`: `cargo-check-on-stop.sh` (tooling-003); `design_status.py` and `design_status_check.py` (called by the landing gate and CLAUDE.md, keep); `hook_telemetry.py` (the wrapper); `index-conversations.py` and `search-conversations.py` (called by the recall hook, tooling-016); baseline text files read by the guards; `system-prompt/minimal.md` (used by Peter's `claude-m` alias in `~/.zshrc`); `context-nudges/` (all 7 snippets are named in `table.json`). Every `test_*.py` there tests a live hook.

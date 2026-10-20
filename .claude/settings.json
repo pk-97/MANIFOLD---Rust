@@ -48,17 +48,6 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" wrap-up-stop-guard.py"
-          }
-        ]
-      }
-    ],
     "SessionEnd": [
       {
         "matcher": "",
@@ -111,15 +100,6 @@
       }
     ],
     "PostToolUse": [
-      {
-        "matcher": "mcp__ccd_turn__wrap_up",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" wrap-up-stop-guard.py"
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [
