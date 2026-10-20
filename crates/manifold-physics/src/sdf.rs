@@ -69,6 +69,12 @@ pub fn signed_distance_lattice(
 /// moves the shell's faces with the spacing, so a caller picks the spacing
 /// from what samples the solid, never from the mesh's size alone. When any
 /// part is open, the bounds also grow by that half thickness.
+///
+/// An open part is built as a narrow band: its distance is exact within
+/// `padding` (at least one spacing) of the shell's faces, and every node
+/// farther away reads `padding`, a lower bound. So an open part costs the
+/// nodes near each of its triangles, not nodes × triangles; a closed part
+/// still costs nodes × triangles, for its winding number.
 pub fn signed_distance_union(
     meshes: &[TriangleMesh],
     spacing: f32,
@@ -108,6 +114,7 @@ pub fn signed_distance_union(
         }
         parts.push((closed_part, open_part));
     }
+    let band = f64::from(padding.max(spacing));
     let padding = if parts.iter().any(|(_, open)| !open.is_empty()) {
         padding + half_shell
     } else {
@@ -128,28 +135,60 @@ pub fn signed_distance_union(
         values: vec![f32::INFINITY; total as usize],
     };
     let half_shell = f64::from(half_shell);
+    // An open part is exact within the padding (at least a spacing) of its
+    // shell's faces, as far as the lattice reaches past a closed part; beyond
+    // that every node reads this lower bound, so the build visits only the
+    // nodes near each open triangle.
+    let reach = half_shell + band;
+    let far = band as f32;
     for (closed, open) in &parts {
-        for k in 0..dims[2] {
-            for j in 0..dims[1] {
-                for i in 0..dims[0] {
-                    let p = lattice.node_position([i, j, k]).map(f64::from);
-                    let mut nearest = f64::INFINITY;
-                    let mut solid_angle = 0.0;
-                    for triangle in closed {
-                        nearest = nearest.min(distance_squared_to_triangle(p, triangle));
-                        solid_angle += signed_solid_angle(p, triangle);
+        if !closed.is_empty() {
+            for k in 0..dims[2] {
+                for j in 0..dims[1] {
+                    for i in 0..dims[0] {
+                        let p = lattice.node_position([i, j, k]).map(f64::from);
+                        let mut nearest = f64::INFINITY;
+                        let mut solid_angle = 0.0;
+                        for triangle in closed {
+                            nearest = nearest.min(distance_squared_to_triangle(p, triangle));
+                            solid_angle += signed_solid_angle(p, triangle);
+                        }
+                        // Winding number ΣΩ / 4π is 1 inside an outward-wound
+                        // volume and −1 inside an inside-out one; both are solid.
+                        let inside = solid_angle.abs() > 2.0 * std::f64::consts::PI;
+                        let volume = if inside { -nearest.sqrt() } else { nearest.sqrt() };
+                        let index = lattice.index([i, j, k]);
+                        lattice.values[index] = lattice.values[index].min(volume as f32);
                     }
-                    // Winding number ΣΩ / 4π is 1 inside an outward-wound
-                    // volume and −1 inside an inside-out one; both are solid.
-                    let inside = solid_angle.abs() > 2.0 * std::f64::consts::PI;
-                    let volume = if inside { -nearest.sqrt() } else { nearest.sqrt() };
-                    let mut nearest_open = f64::INFINITY;
-                    for triangle in open {
-                        nearest_open = nearest_open.min(distance_squared_to_triangle(p, triangle));
+                }
+            }
+        }
+        if open.is_empty() {
+            continue;
+        }
+        for value in &mut lattice.values {
+            *value = value.min(far);
+        }
+        for triangle in open {
+            // A node farther than `reach` from the triangle's box is farther
+            // than that from the triangle.
+            let range = |axis: usize| {
+                let low = triangle.iter().map(|v| v[axis]).fold(f64::INFINITY, f64::min) - reach;
+                let high = triangle.iter().map(|v| v[axis]).fold(f64::NEG_INFINITY, f64::max) + reach;
+                let node = |x: f64| (x - f64::from(origin[axis])) / f64::from(spacing);
+                let first = node(low).floor().max(0.0) as u32;
+                let last = (node(high).ceil().max(0.0) as u32).min(dims[axis] - 1);
+                first..=last
+            };
+            let (xs, ys, zs) = (range(0), range(1), range(2));
+            for k in zs {
+                for j in ys.clone() {
+                    for i in xs.clone() {
+                        let p = lattice.node_position([i, j, k]).map(f64::from);
+                        let shell = (distance_squared_to_triangle(p, triangle).sqrt() - half_shell) as f32;
+                        let index = lattice.index([i, j, k]);
+                        lattice.values[index] = lattice.values[index].min(shell);
                     }
-                    let shell = nearest_open.sqrt() - half_shell;
-                    let index = lattice.index([i, j, k]);
-                    lattice.values[index] = lattice.values[index].min(volume.min(shell) as f32);
                 }
             }
         }
@@ -362,10 +401,11 @@ mod tests {
         (dx * dx + dy * dy + p[2] * p[2]).sqrt()
     }
 
-    /// Unsigned distance minus half the thickness at every node: negative
-    /// within half the thickness of the surface on either side, positive
-    /// beyond it. Doubling the thickness moves the shell's faces out by the
-    /// same amount everywhere.
+    /// Unsigned distance minus half the thickness at every node within the
+    /// band, and the band's width beyond it: negative within half the
+    /// thickness of the surface on either side, positive beyond it. Doubling
+    /// the thickness moves the shell's faces out by the same amount
+    /// everywhere.
     #[test]
     fn sdf_open_quad_is_a_shell_scaled_by_thickness() {
         for thickness in [0.2f32, 0.4] {
@@ -382,7 +422,8 @@ mod tests {
                 for j in 0..lattice.dims[1] {
                     for i in 0..lattice.dims[0] {
                         let p = lattice.node_position([i, j, k]);
-                        let expected = quad_distance(p) - half;
+                        let distance = quad_distance(p);
+                        let expected = if distance <= half + 0.1 { distance - half } else { 0.1 };
                         worst = worst.max((lattice.value([i, j, k]) - expected).abs());
                     }
                 }
@@ -396,6 +437,55 @@ mod tests {
                 assert!(lattice.value(inside) < 0.0, "0.05 m from the surface is in the shell");
                 let beyond = [centre[0], centre[1], (centre[2] as i32 + side * (1 + (half / 0.05).round() as i32)) as u32];
                 assert!(lattice.value(beyond) > 0.0, "past half the thickness is outside");
+            }
+        }
+    }
+
+    /// A dense open mesh, a 200k-triangle rolling terrain like an open
+    /// photoscan, builds in about a second: the band visits only nodes near
+    /// each triangle. Every node against all triangles would be about 10¹¹
+    /// distance tests, minutes even optimised, so the budget cannot pass by
+    /// luck and a loaded machine cannot fail it. Sampled nodes match the
+    /// exact shell distance inside the band and its width outside.
+    #[test]
+    fn sdf_dense_open_mesh_builds_as_a_narrow_band() {
+        let side = 317u32;
+        let height = |x: f32, z: f32| 0.4 * (0.7 * x).sin() * (0.5 * z).cos();
+        let mut vertices = Vec::new();
+        for j in 0..=side {
+            for i in 0..=side {
+                let (x, z) = (10.0 * i as f32 / side as f32 - 5.0, 10.0 * j as f32 / side as f32 - 5.0);
+                vertices.push([x, height(x, z), z]);
+            }
+        }
+        let mut triangles = Vec::new();
+        for j in 0..side {
+            for i in 0..side {
+                let at = |i: u32, j: u32| j * (side + 1) + i;
+                triangles.push([at(i, j), at(i, j + 1), at(i + 1, j)]);
+                triangles.push([at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)]);
+            }
+        }
+        assert!(triangles.len() > 200_000);
+        let terrain = TriangleMesh { vertices, triangles };
+        let started = std::time::Instant::now();
+        let lattice = signed_distance_lattice(&terrain, 0.05, 0.1, 0.1).unwrap();
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(20), "the band took {took:?}");
+        let corners: Vec<[[f64; 3]; 3]> = terrain
+            .triangles
+            .iter()
+            .map(|t| t.map(|i| terrain.vertices[i as usize].map(f64::from)))
+            .collect();
+        for (x, z) in [(0.3f32, -1.7f32), (-4.2, 2.9), (3.33, 0.01)] {
+            for dy in [-0.3f32, -0.12, -0.04, 0.0, 0.06, 0.13, 0.4] {
+                let node: [u32; 3] = std::array::from_fn(|axis| {
+                    (([x, height(x, z) + dy, z][axis] - lattice.origin[axis]) / lattice.spacing).round() as u32
+                });
+                let p = lattice.node_position(node).map(f64::from);
+                let nearest = corners.iter().map(|t| distance_squared_to_triangle(p, t)).fold(f64::INFINITY, f64::min).sqrt();
+                let expected = if nearest <= 0.15 { nearest - 0.05 } else { 0.1 };
+                assert!((f64::from(lattice.value(node)) - expected).abs() < 1e-5, "{p:?}: {} against {expected}", lattice.value(node));
             }
         }
     }

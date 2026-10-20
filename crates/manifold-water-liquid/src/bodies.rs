@@ -15,7 +15,7 @@ use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
 use crate::tick_samples::TickSamples;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry};
+use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry, scale_steps};
 use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES};
 use manifold_water_rigid::physics::pose_from_transform;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
@@ -288,9 +288,9 @@ type LatticeBuild = Result<Arc<DistanceLattice>, String>;
 /// time and the newest plan wins.
 struct RoleLattice {
     geometry: Arc<PreparedFluidGeometry>,
-    /// The cell size and scale `plan` was made from; a closed solid's plan
-    /// ignores both, so they are left at (0, 1) for it.
-    asked: (f32, [f32; 3]),
+    /// The cell size and scale steps (`scale_steps`) `plan` was made from; a
+    /// closed solid's plan ignores both, so they are left at zero for it.
+    asked: (f32, [i32; 2]),
     plan: LatticePlan,
     ready: Option<(LatticePlan, Arc<DistanceLattice>)>,
     building: Option<(LatticePlan, mpsc::Receiver<LatticeBuild>)>,
@@ -307,18 +307,18 @@ fn resolve_lattice(
     scale: [f32; 3],
     wait: bool,
 ) -> Result<Option<(Arc<DistanceLattice>, LatticePlan)>, String> {
-    let asked = if geometry.has_open_parts() { (cell_size, scale) } else { (0.0, [1.0; 3]) };
+    let asked = if geometry.has_open_parts() { (cell_size, scale_steps(scale)) } else { (0.0, [0; 2]) };
     let index = match lattices.iter().position(|entry| Arc::ptr_eq(&entry.geometry, geometry)) {
         Some(index) => index,
         None => {
-            let plan = geometry.lattice_plan(asked.0, asked.1)?;
+            let plan = geometry.lattice_plan(cell_size, scale)?;
             lattices.push(RoleLattice { geometry: Arc::clone(geometry), asked, plan, ready: None, building: None, failed: None });
             lattices.len() - 1
         }
     };
     let entry = &mut lattices[index];
     if entry.asked != asked {
-        entry.plan = geometry.lattice_plan(asked.0, asked.1)?;
+        entry.plan = geometry.lattice_plan(cell_size, scale)?;
         entry.asked = asked;
     }
     let plan = entry.plan;
@@ -1567,17 +1567,18 @@ mod tests {
         let plane = open_plane(1.0);
         let roles = [collider(&plane, [0.0; 3], 0.0)];
         let mut bodies = LiquidBodies::default();
+        let spacing = |cell: f32| plane.lattice_plan(cell, [0.4, 0.2, 0.3]).unwrap().spacing;
         assert_eq!(bodies.prepare(&roles, &[], 0.1, true), Ok(BodiesStatus::Ready));
         assert_eq!(bodies.shapes()[0].origin_spacing[3], 2.0 / 32.0);
         let mut polls = 0u32;
-        while (bodies.shapes()[0].origin_spacing[3] - 0.025).abs() > 1e-6 {
+        while bodies.shapes()[0].origin_spacing[3] != spacing(0.01) {
             assert_eq!(bodies.prepare(&roles, &[], 0.01, false), Ok(BodiesStatus::Ready), "live keeps the last lattice");
             polls += 1;
             assert!(polls < 6000, "the finer lattice never arrived");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(bodies.prepare(&roles, &[], 0.005, true), Ok(BodiesStatus::Ready));
-        assert!((bodies.shapes()[0].origin_spacing[3] - 0.0125).abs() < 1e-6, "offline waits for the plan's lattice");
+        assert_eq!(bodies.shapes()[0].origin_spacing[3], spacing(0.005), "offline waits for the plan's lattice");
 
         let cube = cube_of(0.5);
         let roles = [collider(&cube, [0.0; 3], 0.0)];
@@ -1585,5 +1586,32 @@ mod tests {
         let version = bodies.version;
         assert_eq!(bodies.prepare(&roles, &[], 0.01, false), Ok(BodiesStatus::Ready));
         assert_eq!(bodies.version, version);
+    }
+
+    /// An open collider's scale animated within one eighth-octave step keeps
+    /// its lattice: no new plan, no build, only the shapes' scale moves. A
+    /// scale a step away builds a new lattice.
+    #[test]
+    fn liquid_open_collider_scale_within_a_step_keeps_its_lattice() {
+        let plane = open_plane(1.0);
+        let posed = |scale: f32| {
+            let mut role = collider(&plane, [0.0; 3], 0.0);
+            if let Some(role) = &mut role {
+                role.transform.scale = [scale; 3];
+            }
+            [role]
+        };
+        let mut bodies = LiquidBodies::default();
+        assert_eq!(bodies.prepare(&posed(1.0), &[], 0.05, true), Ok(BodiesStatus::Ready));
+        let lattice = Arc::clone(&bodies.used[0]);
+        for k in 0..40 {
+            let scale = 1.0 + 0.04 * (k as f32 * 0.3).sin();
+            assert_eq!(bodies.prepare(&posed(scale), &[], 0.05, true), Ok(BodiesStatus::Ready));
+            assert!(Arc::ptr_eq(&bodies.used[0], &lattice), "scale {scale} replanned");
+            assert!(bodies.lattices[0].building.is_none(), "scale {scale} started a build");
+            assert_eq!(bodies.shapes()[0].scale_min[3], scale);
+        }
+        assert_eq!(bodies.prepare(&posed(1.2), &[], 0.05, true), Ok(BodiesStatus::Ready));
+        assert!(!Arc::ptr_eq(&bodies.used[0], &lattice), "a step away builds a new lattice");
     }
 }

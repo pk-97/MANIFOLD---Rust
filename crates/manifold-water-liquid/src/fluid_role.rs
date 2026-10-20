@@ -28,6 +28,18 @@ pub enum FluidRoleKind {
 /// mesh on the worker (GPU_MPM_SOLVER_DESIGN.md D16).
 pub const DISTANCE_NODES_ALONG_LONGEST: f32 = 32.0;
 
+/// Steps per octave an open mesh's plan rounds its role's scale to, so a
+/// scale moving within one step (about 9%) rebuilds nothing; the shell and
+/// the spacing are off by at most half a step.
+pub const SCALE_STEPS_PER_OCTAVE: f32 = 8.0;
+
+/// A role's smallest and largest scale in eighth-octave steps, the only part
+/// of the scale an open mesh's lattice plan reads.
+pub fn scale_steps(scale: [f32; 3]) -> [i32; 2] {
+    let step = |s: f32| (s.log2() * SCALE_STEPS_PER_OCTAVE).round() as i32;
+    [step(scale[0].min(scale[1]).min(scale[2])), step(scale[0].max(scale[1]).max(scale[2]))]
+}
+
 /// Immutable prepared local-space geometry for a fluid role.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,7 +103,8 @@ impl PreparedFluidGeometry {
     /// thick so the liquid's grid sees it: a ground plane rests the water
     /// within a cell of where it is drawn at any size. If that needs more than
     /// [`MAX_LATTICE_NODES`], the spacing coarsens until it fits and the plan
-    /// says so.
+    /// says so. The scale enters as [`scale_steps`], so one plan covers a
+    /// scale moving within a step.
     pub fn lattice_plan(&self, cell_size: f32, scale: [f32; 3]) -> Result<LatticePlan, String> {
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
@@ -116,6 +129,7 @@ impl PreparedFluidGeometry {
         if !(cell_size.is_finite() && cell_size > 0.0 && smallest > 0.0 && largest.is_finite()) {
             return Err("Fluid role distance lattice needs a positive cell size and scale".into());
         }
+        let [smallest, largest] = scale_steps(scale).map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2());
         // A shell thinner than two of the liquid's cells is one its grid
         // cannot see, so that is the least it is.
         let shell_thickness = self.shell_thickness.max(2.0 * cell_size) / smallest;

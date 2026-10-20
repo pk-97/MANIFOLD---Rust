@@ -368,7 +368,9 @@ shell: unsigned distance minus half the role's Shell Thickness in world metres, 
 thinner than two of the liquid's cells so its grid sees it, and never under two lattice
 spacings so trilinear sampling cannot step over it (SCENE_SETUP_PROGRAMME.md D8 (open
 meshes are solids)). With open parts the lattice is no coarser than the liquid's cells
-(D27), so a shell's faces sit within a cell of the drawn surface at any mesh size.
+(D27), so a shell's faces sit within a cell of the drawn surface at any mesh size. Open
+parts build as a narrow band: exact within the padding of the shell, a lower bound beyond,
+so their cost follows the triangles, not nodes × triangles.
 Cooked hulls are always closed. Rejected for v1: the paper's colored-distance-field
 compatibility test (CPIC proper), which exists for zero-thickness shells and cutting;
 every shell here has a thickness (Deferred, with a thinness warning).
@@ -517,7 +519,8 @@ A closed solid's surface is exact at any spacing, so it keeps this. A mesh with 
 parts takes the finer of this and the liquid's cell over the role's largest scale,
 because a shell's faces move with the spacing; past `MAX_LATTICE_NODES` the spacing
 coarsens until it fits and the thin-collider warning says so. Shell Thickness is world
-metres, so an open mesh's lattice depends on its role's scale (an exception to D26).
+metres, so an open mesh's lattice depends on its role's scale (an exception to D26), read
+in eighth-octave steps (`scale_steps`): a scale animated within a step rebuilds nothing.
 Roles sharing a lattice share one atlas block. World spacing is the local spacing times
 the role scale per axis. At 64³ (dx = 0.0625 m on the 4 m Dam Break domain): the Dam
 Break's moving box (a unit cube scaled 0.6 × 1.16 × 0.85) samples at 0.019–0.036 m,
