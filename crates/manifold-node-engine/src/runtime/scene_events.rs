@@ -2,7 +2,7 @@
 
 use manifold_core::{NodeId, id::EffectId};
 
-use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::SceneImpulseDiagnostics};
+use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::{ImpulseFire, SceneImpulseDiagnostics}};
 use super::{ModifierPreviewContext, PresetRuntime};
 use crate::{
     exec::effect_node::FrameTime,
@@ -46,6 +46,15 @@ impl PresetRuntime {
         }
     }
 
+    /// Append the setup shapes of the same slot's simulations, for the
+    /// gizmo overlay. The caller reuses the buffer.
+    pub fn write_physics_gizmos_watched(&self, output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {
+        let Some(slot) = self.extension_slots().first() else { return };
+        for extension in &self.extensions {
+            extension.write_physics_gizmos(&self.graph, slot, output);
+        }
+    }
+
     /// Translate the selected generated modifier copy back to authored node IDs.
     pub fn write_modifier_fluid_domains(
         &self,
@@ -74,19 +83,19 @@ impl PresetRuntime {
             .any(|extension| extension.is_scene_impulse_param(param))
     }
 
+    /// One extension owns each impulse param; the Fire goes to it alone, so
+    /// its refusal is this Fire's answer and never stops another Fire.
     pub fn fire_scene_impulse(
         &mut self,
         param: &str,
         source: FrameTime,
         next_sequence: &mut u64,
-    ) -> Result<bool, String> {
+    ) -> Result<ImpulseFire, String> {
         let (extensions, mut context) = self.extension_context();
-        for extension in extensions {
-            if extension.fire_scene_impulse(&mut context, param, source, next_sequence)? {
-                return Ok(true);
-            }
+        match extensions.iter_mut().find(|extension| extension.is_scene_impulse_param(param)) {
+            Some(owner) => owner.fire_scene_impulse(&mut context, param, source, next_sequence),
+            None => Ok(ImpulseFire::NotImpulse),
         }
-        Ok(false)
     }
 
     pub fn drain_scene_impulse_diagnostics(&mut self, diagnostics: &mut SceneImpulseDiagnostics) {

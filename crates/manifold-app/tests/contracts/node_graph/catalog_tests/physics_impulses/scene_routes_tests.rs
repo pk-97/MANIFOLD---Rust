@@ -2,6 +2,7 @@ use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
+use manifold_core::scene_impulse::ImpulseFire;
 
 fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     let mut def = fixture();
@@ -65,16 +66,16 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
                 .unwrap();
         let fire = alias(&def, "fire");
         let mut sequence = 41;
-        assert!(
-            runtime
-                .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-                .is_err()
+        assert_eq!(
+            runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence),
+            Ok(ImpulseFire::NotReady),
+            "before the setup renders the Fire waits and consumes nothing"
         );
+        assert_eq!(sequence, 41);
         runtime.execute_frame(time(0.0));
-        assert!(
-            runtime
-                .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-                .unwrap()
+        assert_eq!(
+            runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence),
+            Ok(ImpulseFire::Admitted)
         );
         manifest
             .get_mut(&alias(&def, "impulse_strength"))
@@ -103,10 +104,9 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
             assert_eq!(event.source.sequence, sequence);
             assert_eq!(event.value.field.sample([0.0; 3]), [strength, 0.0, 0.0]);
         }
-        assert!(
-            !runtime
-                .fire_scene_impulse("ordinary-trigger", time(DT), &mut sequence)
-                .unwrap()
+        assert_eq!(
+            runtime.fire_scene_impulse("ordinary-trigger", time(DT), &mut sequence),
+            Ok(ImpulseFire::NotImpulse)
         );
     }
 }
@@ -129,7 +129,7 @@ fn scene_impulse_routes_reload_does_not_replay_saved_counter_and_empty_targets_s
         if targets.is_empty() {
             assert!(result.unwrap_err().contains("select a simulated object"));
         } else {
-            assert!(result.unwrap());
+            assert_eq!(result, Ok(ImpulseFire::Admitted));
         }
     }
 }
@@ -175,10 +175,10 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
     for node in runtime.graph.nodes_mut() {
         node.node.clear_state();
     }
-    assert!(
-        runtime
-            .fire_scene_impulse(&fire, time(0.0), &mut 1)
-            .is_err()
+    assert_eq!(
+        runtime.fire_scene_impulse(&fire, time(0.0), &mut 1),
+        Ok(ImpulseFire::NotReady),
+        "a reset scene waits for its next render"
     );
     runtime.execute_frame(time(0.0));
     runtime
@@ -194,7 +194,7 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
 }
 
 #[test]
-fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
+fn scene_impulse_routes_refuse_one_hit_when_full_and_never_latch() {
     let (def, manifest) = scene_fixture(&["part_a"]);
     let fire = alias(&def, "fire");
     let mut runtime =
@@ -202,31 +202,20 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
     runtime.execute_frame(time(0.0));
     let mut sequence = 0;
     for _ in 0..256 {
-        runtime
-            .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-            .unwrap();
+        assert_eq!(runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence), Ok(ImpulseFire::Admitted));
     }
-    assert!(
-        runtime
-            .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-            .unwrap_err()
-            .contains("retained")
-    );
-    assert!(
-        runtime
-            .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-            .unwrap_err()
-            .contains("previous admission failed")
-    );
-    edit(&mut runtime, "world", "reset", 1.0);
-    runtime.execute_frame(time(0.0));
-    runtime
-        .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-        .unwrap();
+    let error = runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence).unwrap_err();
+    assert!(error.contains("refused"), "{error}");
+    // No reset: the queued hits land, their receipts drain, the next Fire lands.
     runtime.execute_frame(time(DT));
     let mut receipts = 0;
     runtime.water().drain_scene_impulses(|_, _| receipts += 1);
-    assert_eq!(receipts, 1, "the reset cancels the exhausted epoch");
+    assert_eq!(receipts, 256);
+    assert_eq!(runtime.fire_scene_impulse(&fire, time(DT), &mut sequence), Ok(ImpulseFire::Admitted));
+    runtime.execute_frame(time(2.0 * DT));
+    let mut landed = Vec::new();
+    runtime.water().drain_scene_impulses(|_, event| landed.push(event.source.sequence));
+    assert_eq!(landed, [257], "the hit after a refusal lands once");
 }
 
 /// Audio fires arrive stamped with the frame time the engine just ticked to,

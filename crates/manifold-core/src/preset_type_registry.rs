@@ -209,6 +209,7 @@ mod tests {
 
     fn probe_meta(id: &str, display: &str) -> PresetMetadata {
         PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string(id.to_string()),
             display_name: display.to_string(),
             category: "Test".to_string(),

@@ -98,31 +98,8 @@ impl BoundNodeParamDrag {
     }
 }
 
-/// BUG-282: an ordinary (unbound) node-face param/vec scrub session — the
-/// mirror of [`BoundNodeParamDrag`] for the un-rerouted path. Opened at the
-/// first `SetGraphNodeParam`/`SetOuterParam`-family move on a given
-/// `(target, node_id, param_name, scope_path)`, live-written on every
-/// subsequent move via `MutateProject` (Values or Shapes) (no undo entry), closed on the
-/// matching `EndGraphNodeParamScrub` — ONE undo-worthy
-/// `SetGraphNodeParamCommand` for the whole drag (`pre_drag_value` →
-/// `current_value`), not one `Execute` per pointer-move tick.
-#[derive(Debug, Clone)]
-pub(crate) struct UnboundNodeParamDrag {
-    target: manifold_core::GraphTarget,
-    node_id: u32,
-    param_name: String,
-    scope_path: Vec<u32>,
-    catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
-    /// Preparation-only local controls are held in the same draft slot but
-    /// commit through the content-owned modifier action instead of a live
-    /// graph write.
-    preparation: Option<(manifold_core::NodeId, String)>,
-    /// Value before the drag started. `None` means the key was absent —
-    /// the same `Option<SerializedParamValue>` shape `with_previous` takes.
-    pre_drag_value: Option<manifold_core::effect_graph_def::SerializedParamValue>,
-    /// Value as of the last move — the undo redo target.
-    current_value: manifold_core::effect_graph_def::SerializedParamValue,
-}
+mod unbound_node_param_drag;
+pub(crate) use unbound_node_param_drag::UnboundNodeParamDrag;
 
 fn invert_preparation_value(
     node_value: f32,
@@ -362,15 +339,7 @@ impl Application {
         // 1. Take the newest state from the content thread.
         self.intake_content_state();
         self.tick_sync_calibration();
-        // "Show gizmos" follows whichever scene the Scene panel shows; the
-        // content thread reports that layer's rendered view (D7a).
-        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
-        if gizmo_layer != self.ws.gizmo_layer_sent.as_ref()
-            && let Some(tx) = self.content_tx.as_ref()
-        {
-            self.ws.gizmo_layer_sent = gizmo_layer.cloned();
-            ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
-        }
+        self.sync_gizmo_layer();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(
@@ -1804,38 +1773,29 @@ impl Application {
                             );
                             self.scrub.active = Some(
                                 crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
-                                    Box::new(UnboundNodeParamDrag {
-                                        target: target.clone(),
-                                        node_id: *node_id,
-                                        param_name: param_name.clone(),
-                                        scope_path: canvas_scope.clone(),
-                                        catalog_default: default.clone(),
-                                        preparation: None,
+                                    Box::new(UnboundNodeParamDrag::new(
+                                        target.clone(),
+                                        canvas_scope.clone(),
+                                        *node_id,
+                                        param_name.clone(),
+                                        default.clone(),
                                         pre_drag_value,
-                                        current_value: core_value.clone(),
-                                    }),
+                                        core_value.clone(),
+                                    )),
                                 ),
                             );
                         }
-                        if let Some(
-                            crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag),
-                        ) = self.scrub.active.as_mut()
-                        {
-                            drag.current_value = core_value.clone();
-                        }
+                        let Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag)) =
+                            self.scrub.active.as_mut()
+                        else {
+                            continue;
+                        };
+                        drag.set_current(core_value);
                         let graph_absent = self
                             .local_project
                             .preset_instance(&target)
                             .is_none_or(|inst| inst.graph.is_none());
-                        let mut live_cmd =
-                            manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                target,
-                                *node_id,
-                                param_name.clone(),
-                                core_value,
-                                default.clone(),
-                            )
-                            .with_scope(canvas_scope.clone());
+                        let mut live_cmd = drag.live_command();
                         // Unbound node param values are Shapes; the session's
                         // first move may materialize the override (D21).
                         let touches = crate::content_command::touch::shapes_first_move(
@@ -1877,57 +1837,40 @@ impl Application {
                             // post-drag value `execute()`'s self-capture would
                             // otherwise see). No-op if the drag never touched this
                             // `(node_id, param_name)`, or never actually moved.
-                            if drag.node_id == *node_id && drag.param_name == *param_name {
-                                let moved = match &drag.pre_drag_value {
-                                    Some(prev) => *prev != drag.current_value,
-                                    // Key was absent before the drag — inserting
-                                    // it now is always a real change.
-                                    None => true,
-                                };
-                                if moved {
-                                    if let Some((modifier_id, param_id)) = drag.preparation {
-                                        let Some(layer_id) = drag.target.host_target().and_then(
-                                            |target| match target {
-                                                manifold_core::GraphTarget::Generator(layer_id) => {
-                                                    Some(layer_id.clone())
-                                                }
-                                                _ => None,
-                                            },
-                                        ) else {
-                                            self.send_content_cmd(ContentCommand::GraphEditRejected(
-                                                "Preparation target has no generator owner".into(),
-                                            ));
-                                            continue;
-                                        };
-                                        let Some(value) =
-                                            serialized_value_as_f32(&drag.current_value)
-                                        else {
-                                            self.send_content_cmd(ContentCommand::GraphEditRejected(
-                                                "Preparation value is not numeric".into(),
-                                            ));
-                                            continue;
-                                        };
-                                        self.send_content_cmd(ContentCommand::SceneModifier(
-                                            crate::scene_modifier_edit::SceneModifierAction::Preparation(
-                                                layer_id,
-                                                modifier_id,
-                                                param_id,
-                                                value,
-                                            ),
+                            if drag.node_id == *node_id && drag.param_name == *param_name && drag.moved() {
+                                if let Some((modifier_id, param_id)) = drag.preparation {
+                                    let Some(layer_id) = drag.target.host_target().and_then(
+                                        |target| match target {
+                                            manifold_core::GraphTarget::Generator(layer_id) => {
+                                                Some(layer_id.clone())
+                                            }
+                                            _ => None,
+                                        },
+                                    ) else {
+                                        self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                            "Preparation target has no generator owner".into(),
                                         ));
-                                    } else {
-                                        let cmd =
-                                            manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                                drag.target,
-                                                drag.node_id,
-                                                drag.param_name,
-                                                drag.current_value,
-                                                drag.catalog_default,
-                                            )
-                                            .with_scope(drag.scope_path)
-                                            .with_previous(drag.pre_drag_value);
-                                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                                    }
+                                        continue;
+                                    };
+                                    let Some(value) =
+                                        serialized_value_as_f32(&drag.current_value)
+                                    else {
+                                        self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                            "Preparation value is not numeric".into(),
+                                        ));
+                                        continue;
+                                    };
+                                    self.send_content_cmd(ContentCommand::SceneModifier(
+                                        crate::scene_modifier_edit::SceneModifierAction::Preparation(
+                                            layer_id,
+                                            modifier_id,
+                                            param_id,
+                                            value,
+                                        ),
+                                    ));
+                                } else {
+                                    let cmd = drag.into_command();
+                                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                                 }
                             }
                         }
@@ -2333,20 +2276,23 @@ impl Application {
         crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
         crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state);
         let automation_draw_mode = self.selection.automation_draw_mode;
-        let inputs = crate::ui_frame::gather_frame_inputs(
-            &mut self.frame_planner,
-            &self.ws.ui_root,
-            &mut self.selection,
-            &self.active_layer_id,
-            &self.ui_edits,
-            &self.content_state,
-            crate::frame_plan::ChromeSource {
-                project: &self.local_project,
-                is_dirty: self.content_state.editing_is_dirty,
-                project_path: self.current_project_path.as_deref(),
-                automation_draw_mode,
-            },
-        );
+        let inputs = crate::frame_plan::FrameInputs {
+            gizmo_view: self.ws.preview_gizmo.version(),
+            ..crate::ui_frame::gather_frame_inputs(
+                &mut self.frame_planner,
+                &self.ws.ui_root,
+                &mut self.selection,
+                &self.active_layer_id,
+                &self.ui_edits,
+                &self.content_state,
+                crate::frame_plan::ChromeSource {
+                    project: &self.local_project,
+                    is_dirty: self.content_state.editing_is_dirty,
+                    project_path: self.current_project_path.as_deref(),
+                    automation_draw_mode,
+                },
+            )
+        };
         let plan = self.frame_planner.plan(inputs);
         let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
 
@@ -2986,141 +2932,6 @@ mod bound_node_param_drag_tests {
         assert_eq!(
             after, 0.7,
             "bound-node-param stomp must be undone so the card doesn't revert mid-gesture"
-        );
-    }
-}
-
-/// BUG-282 regression. An UNBOUND node-face param scrub used to push a
-/// fresh undo-worthy `SetGraphNodeParamCommand::execute` on EVERY
-/// pointer-move tick — an N-tick drag flooded the 200-cap undo stack
-/// instead of coalescing to one entry. The fix mirrors the bound-row
-/// pattern: N in-flight ticks land via `MutateProject` (Values or Shapes) — a direct
-/// `Command::execute` call on the content-thread `Project` that never
-/// touches an undo manager — and only the ONE release-time command, seeded
-/// with `with_previous(pre_drag_value)` (the seam
-/// `SetGraphNodeParamCommand::with_previous`'s doc comment describes for
-/// exactly this drag-cadence-commit case), goes through
-/// `UndoRedoManager::execute`. This test drives that same sequence against
-/// a real `UndoRedoManager`: N direct `execute()` calls (the tick writes)
-/// followed by one `UndoRedoManager::execute` (the release commit), then
-/// asserts `undo_count() == 1` (not `N + 1`) and that `undo()` restores the
-/// true pre-drag value rather than whatever `execute()`'s self-capture
-/// would have seen post-drag.
-#[cfg(test)]
-mod unbound_node_param_drag_tests {
-    use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-    use manifold_core::effects::PresetInstance;
-    use manifold_core::project::Project;
-    use manifold_core::{GraphTarget, NodeId, PresetTypeId};
-    use manifold_editing::command::Command;
-    use manifold_editing::commands::graph::SetGraphNodeParamCommand;
-    use manifold_editing::undo::UndoRedoManager;
-    use std::collections::BTreeMap;
-
-    fn empty_def() -> EffectGraphDef {
-        EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            scene_modifiers: Vec::new(),
-            nodes: vec![],
-            wires: vec![],
-        }
-    }
-
-    /// One master effect carrying a per-instance graph override with a
-    /// single node (id 1) holding one param ("amount") at `initial` — the
-    /// unbound node-face scrub's write target.
-    fn project_with_node_param(initial: f32) -> (Project, GraphTarget) {
-        let mut project = Project::default();
-        let mut fx = PresetInstance::new(PresetTypeId::new("Test"));
-        let effect_id = fx.id.clone();
-        let mut params = BTreeMap::new();
-        params.insert("amount".to_string(), SerializedParamValue::Float { value: initial });
-        let mut def = empty_def();
-        def.nodes.push(EffectGraphNode {
-            id: 1,
-            node_id: NodeId::new("inner"),
-            type_id: "node.test".to_string(),
-            handle: None,
-            params,
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        });
-        fx.graph = Some(def);
-        project.settings.master_effects.push(fx);
-        (project, GraphTarget::Effect(effect_id))
-    }
-
-    fn read_amount(project: &Project) -> f32 {
-        let def = project.settings.master_effects[0].graph.as_ref().unwrap();
-        match def.nodes[0].params.get("amount") {
-            Some(SerializedParamValue::Float { value }) => *value,
-            other => panic!("expected a Float amount, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn n_tick_scrub_is_one_undo_entry_and_undo_restores_pre_drag_value() {
-        let (mut project, target) = project_with_node_param(0.0);
-        let pre_drag_value = Some(SerializedParamValue::Float { value: 0.0 });
-
-        // N pointer-move ticks: each is a live write — the app's
-        // `MutateProject` (Values or Shapes) path (`live_cmd.execute(p)` in the
-        // `SetGraphNodeParam` arm) calling `Command::execute` directly on
-        // the content-thread project, never touching an undo manager.
-        let ticks = [0.1_f32, 0.3, 0.55, 0.72, 0.9];
-        for &v in &ticks {
-            let mut live = SetGraphNodeParamCommand::new(
-                target.clone(),
-                1,
-                "amount".to_string(),
-                SerializedParamValue::Float { value: v },
-                empty_def(),
-            );
-            live.execute(&mut project);
-        }
-        let last_tick_value = *ticks.last().unwrap();
-        assert_eq!(
-            read_amount(&project),
-            last_tick_value,
-            "live writes DO land on the project every tick"
-        );
-
-        // Release: ONE command, seeded with the true pre-drag baseline via
-        // `with_previous`, pushed through the real undo manager — mirrors
-        // `EndGraphNodeParamScrub`'s unbound-drag close-out.
-        let mut undo_mgr = UndoRedoManager::new();
-        assert_eq!(undo_mgr.undo_count(), 0, "sanity: fresh manager");
-        let commit = SetGraphNodeParamCommand::new(
-            target,
-            1,
-            "amount".to_string(),
-            SerializedParamValue::Float { value: last_tick_value },
-            empty_def(),
-        )
-        .with_previous(pre_drag_value);
-        undo_mgr.execute(Box::new(commit), &mut project);
-
-        assert_eq!(
-            undo_mgr.undo_count(),
-            1,
-            "an N-tick drag must be EXACTLY one undo-worthy commit, not one per tick"
-        );
-        assert_eq!(read_amount(&project), last_tick_value);
-
-        let _ = undo_mgr.undo(&mut project);
-        assert_eq!(
-            read_amount(&project),
-            0.0,
-            "undo must restore the true pre-drag value, not whatever execute()'s \
-             self-capture would have seen post-drag"
         );
     }
 }

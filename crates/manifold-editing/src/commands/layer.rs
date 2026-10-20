@@ -1208,6 +1208,7 @@ mod import_model_tests {
     /// that the id resolves through the overlay — carried in `preset_metadata`.
     fn stub_embedded_preset(id: &str) -> EmbeddedPreset {
         let meta = PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string(id.to_string()),
             display_name: "Azalea".to_string(),
             category: "Geometry".to_string(),

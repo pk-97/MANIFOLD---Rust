@@ -107,6 +107,56 @@ impl FieldValue {
     }
 }
 
+/// One leaf of a [`FieldValue`], for editor overlays.
+#[derive(Clone, Copy, Debug)]
+pub enum FieldLeaf<'a> {
+    Uniform(&'a UniformField),
+    Radial(&'a RadialField),
+    Vortex(&'a VortexField),
+    Sampled(&'a SampledField),
+}
+
+impl FieldValue {
+    /// Visit every leaf with the product of the scale operations applied
+    /// to it, so a negative strength reads as a reversed leaf. A product with
+    /// another field is not folded into either side's scale.
+    pub fn for_each_leaf(&self, mut visit: impl FnMut(FieldLeaf<'_>, f32)) {
+        let operations = &self.operations[..self.len];
+        // Each leaf's operation index and scale, and the first leaf of each
+        // stack entry: a postfix program keeps an entry's leaves contiguous.
+        let mut leaves = [(0usize, 1.0f32); MAX_OPERATIONS];
+        let mut starts = [0usize; MAX_OPERATIONS];
+        let (mut count, mut depth) = (0, 0);
+        for (index, operation) in operations.iter().enumerate() {
+            match operation {
+                Operation::Uniform(_) | Operation::Radial(_) | Operation::Vortex(_) | Operation::Sampled(_) => {
+                    starts[depth] = count;
+                    depth += 1;
+                    leaves[count] = (index, 1.0);
+                    count += 1;
+                }
+                Operation::Add | Operation::Multiply => depth -= 1,
+                Operation::Scale(strength) => {
+                    for leaf in &mut leaves[starts[depth - 1]..count] {
+                        leaf.1 *= strength;
+                    }
+                }
+                Operation::Unused => unreachable!("field program is privately constructed"),
+            }
+        }
+        for &(index, scale) in &leaves[..count] {
+            let leaf = match &operations[index] {
+                Operation::Uniform(field) => FieldLeaf::Uniform(field),
+                Operation::Radial(field) => FieldLeaf::Radial(field),
+                Operation::Vortex(field) => FieldLeaf::Vortex(field),
+                Operation::Sampled(field) => FieldLeaf::Sampled(field),
+                _ => unreachable!("only leaves are recorded"),
+            };
+            visit(leaf, scale);
+        }
+    }
+}
+
 impl VectorField for FieldValue {
     fn sample(&self, position: [f32; 3]) -> [f32; 3] {
         let mut stack = [[0.0; 3]; MAX_OPERATIONS];
@@ -166,6 +216,16 @@ mod tests {
         assert_eq!(combined.sample([2.0, 0.0, 0.0]), [5.0, -2.0, -1.0]);
         assert_eq!(combined.sample([5.0, 0.0, 0.0]), [4.0, -2.0, 0.0]);
         assert_eq!(uniform.sample([2.0, 0.0, 0.0]), [2.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn field_leaves_carry_the_scales_applied_to_them() {
+        let wind = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap().scaled(-2.0).unwrap();
+        let burst = FieldValue::radial([0.0, 1.0, 0.0], 0.5, 1.0).unwrap();
+        let field = wind.sum(&burst).unwrap().scaled(3.0).unwrap();
+        let mut seen = Vec::new();
+        field.for_each_leaf(|leaf, scale| seen.push((matches!(leaf, FieldLeaf::Uniform(_)), scale)));
+        assert_eq!(seen, [(true, -6.0), (false, 3.0)]);
     }
 
     #[test]

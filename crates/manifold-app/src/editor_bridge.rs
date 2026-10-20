@@ -221,7 +221,7 @@ fn node_param_is_wired(
 /// stored override" (falls back to the primitive's own default at apply
 /// time) from an unresolvable scope/node, both of which the caller treats
 /// the same way (`with_previous(None)`).
-fn node_param_value(
+pub(crate) fn node_param_value(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     scope_path: &[u32],
     node_id: u32,
@@ -1216,7 +1216,7 @@ impl Application {
     /// Authoring values for viewport geometry, including exposed controls.
     /// This is a disposable projection, never a project edit or runtime result.
     pub(crate) fn viewport_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        crate::fluid_domain_edit::authored_def(&self.local_project, self.watched_graph_target.as_ref()?)
+        crate::scene_gizmo::authored_def(&self.local_project, self.watched_graph_target.as_ref()?)
     }
 
     /// Resolve the canvas's current selection into copy-ready data: the selected
@@ -1699,7 +1699,6 @@ impl Application {
         }
         ws.viewport_rect = ws.viewport_session.is_some()
             .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
-        ws.viewport_fluid_domains.clear();
         ws.viewport_overlay_lines.clear();
         if let Some(session) = ws.viewport_session.as_ref() {
             show_image = session.displayed.as_ref().is_some_and(|frame| frame.has_image());
@@ -1711,51 +1710,32 @@ impl Application {
                 info.has_image = show_image;
                 info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
             }
-            if let Some(frame) = session.displayed.as_ref().filter(|frame| frame.has_image()) {
-                ws.viewport_fluid_domains.extend(frame.domains.iter().cloned());
-            }
-            // P6: gizmo handle geometry for the current selection/mode,
-            // built against THIS frame's def and editor camera — see
-            // `viewport_gizmo` and the `ws.viewport_selected_object`/
-            // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
-            let mut scene = viewport_def
-                .authored
+            // The selected shape's handles over THIS frame's scene, through
+            // the one composition entry the main preview also calls; mid-drag
+            // they follow the live knob values the drag writes. Domain boxes
+            // are the ones the solver accepted for the displayed frame.
+            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, compose_lines, gizmo_target_for};
+            let target = viewport_def
+                .scene
                 .as_deref()
-                .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def);
-            if let Some(scene) = scene.as_mut() {
-                crate::fluid_domain_edit::apply_runtime_domains(scene, &ws.viewport_fluid_domains);
-            }
-            let draft = ws.viewport_gizmo_drag.as_ref()
-                .and_then(|drag| drag.fluid_domain.as_ref())
-                .filter(|drag| Some(drag.object_node_id) == ws.viewport_selected_object
-                    && matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &drag.layer_id));
-            let target = scene
+                .zip(ws.viewport_selected.as_ref())
+                .and_then(|(scene, id)| gizmo_target_for(scene, id));
+            let domains = session
+                .displayed
                 .as_ref()
-                .zip(ws.viewport_selected_object)
-                .filter(|_| draft.is_none())
-                .and_then(|(scene, object_id)| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(scene, object_id));
-            let gizmo_lines = draft.map(|drag| (&drag.target, drag.mode))
-                .or_else(|| target.as_ref().map(|target| (target, ws.viewport_gizmo_mode)))
-                .map(|(target, mode)| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_lines(mode, target))
-                .unwrap_or_default();
-            let fluid_domain = draft.map(|drag| drag.layout).or_else(|| scene
-                .as_ref()
-                .zip(ws.viewport_selected_object)
-                .and_then(|(scene, object_id)| {
-                    scene.objects.iter().find_map(|object| match object {
-                        manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row)
-                            if row.object_node_id == object_id => row.fluid_domain,
-                        _ => None,
-                    })
-                }));
-            ws.viewport_overlay_lines.clear();
-            ws.viewport_overlay_lines.extend_from_slice(&ws.viewport_grid_lines);
-            if let Some(domain) = fluid_domain {
-                ws.viewport_overlay_lines.extend(
-                    manifold_nodes_scene::node_graph::viewport_overlay::fluid_domain_lines(domain),
-                );
-            }
-            ws.viewport_overlay_lines.extend(gizmo_lines);
+                .filter(|frame| frame.has_image())
+                .map_or(&[][..], |frame| &frame.domains[..]);
+            compose_lines(
+                &GizmoChrome {
+                    lights: &[],
+                    domains,
+                    physics: &[],
+                    selected: target.as_ref(),
+                    mode: ws.viewport_gizmo_mode,
+                    fade_handles: false,
+                },
+                &mut ws.viewport_overlay_lines,
+            );
         }
 
         // The graph-editor panel is now just the node-output inspector + the
@@ -2317,6 +2297,7 @@ mod binding_reroute_tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: manifold_core::preset_type_id::PresetTypeId::new("Test"),
                 display_name: "Test".into(),
                 category: "Test".into(),

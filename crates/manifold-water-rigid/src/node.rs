@@ -15,6 +15,10 @@ pub trait PhysicsNode: Send {
         None
     }
 
+    /// Append the setup shapes this node simulated on its last frame, for
+    /// the gizmo overlay. Read-only; the caller reuses the buffer.
+    fn write_physics_gizmos(&self, _out: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {}
+
     /// Resolved rigid inputs from the latest successful graph evaluation.
     /// Pending or invalid inputs must clear the previous observation.
     fn rigid_scene_observation(&self) -> Option<&crate::physics::RigidSceneObservation> {
@@ -73,6 +77,13 @@ pub trait PhysicsNode: Send {
         None
     }
 
+    /// Whether a hit fired now can be admitted. `Ok(false)`: the simulation
+    /// is still preparing, so the hit waits and lands once it is ready.
+    /// `Err`: the simulation failed, so the hit is refused with that reason.
+    fn physics_impulse_readiness(&self) -> Result<bool, String> {
+        Ok(true)
+    }
+
     /// Timestamp an impulse against the exact native observation accepted at
     /// the supplied transport value, if this node owns such a clock. `step`
     /// is the frame's step, so the stamp never depends on node order.
@@ -104,11 +115,14 @@ pub trait PhysicsNode: Send {
     }
 
     /// Drain the stamps of impulses discarded because the simulation's clock
-    /// was held (pause, Speed 0); they are never applied.
+    /// was held (pause, Speed 0); they are never applied. Returns the count
+    /// of further discards past the bounded receipt list, which carry no
+    /// stamp but are discarded hits all the same.
     fn drain_discarded_impulses(
         &mut self,
         _consume: &mut dyn FnMut(manifold_physics::input::EventStamp),
-    ) {
+    ) -> u64 {
+        0
     }
 }
 

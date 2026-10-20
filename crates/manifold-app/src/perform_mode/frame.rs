@@ -35,9 +35,10 @@ use crate::ui_root::UIRoot;
 const MACRO_DISPLAY_LIMIT: usize = 12;
 
 /// Entry once an output window exists: quiesce in-flight UI state so nothing
-/// is left dangling when normal mode resumes, then switch the main window to
-/// the perform screen. `held_pointer` is the cursor and clock of a mouse
-/// button still down, released here.
+/// is left dangling when normal mode resumes, force Show gizmos off (no
+/// editor chrome is armed over a show, SCENE_SETUP_PROGRAMME D6), then switch
+/// the main window to the perform screen. `held_pointer` is the cursor and
+/// clock of a mouse button still down, released here.
 pub(crate) fn enter(
     perform: &mut PerformModeState,
     ui_root: &mut UIRoot,
@@ -48,6 +49,7 @@ pub(crate) fn enter(
     ui_root.dropdown.close(&mut ui_root.tree);
     ui_root.browser_popup.close();
     ui_root.ableton_picker.close();
+    ui_root.scene_setup_panel.hide_gizmos();
     if let Some((pos, time)) = held_pointer {
         ui_root.pointer_event(pos, manifold_ui::input::PointerAction::Up, time);
     }

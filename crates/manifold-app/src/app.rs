@@ -818,15 +818,6 @@ impl Application {
         }
     }
 
-    /// An undoable edit from an app-level path (text commits): through
-    /// [`crate::ui_bridge::ProjectRef::execute`], which writes the local
-    /// project, stamps what the command touches and sends it (UI_INVALIDATION D5).
-    pub(crate) fn execute_local(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
-        if let Some(tx) = self.content_tx.as_ref() {
-            self.local_project.edit(&mut self.ui_edits, tx).execute(cmd);
-        }
-    }
-
     /// The GPU device import-graph validation (`import_model_file`) builds
     /// its trial `PresetRuntime` against. IMPORT_RESPONSIVENESS_DESIGN.md
     /// D2/P2: never a fresh `GpuDevice` per import. Reuses the app's real
@@ -1965,6 +1956,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // is delivered while the window is out of focus.
                 // Matches Unity OnApplicationFocus(false) in UIBitmapRoot.cs.
                 if is_primary {
+                    self.preview_gizmo_release();
                     log::debug!("Window lost focus — synthesizing PointerUp to cancel drag");
                     self.ws.ui_root.pointer_event(
                         self.cursor_pos,

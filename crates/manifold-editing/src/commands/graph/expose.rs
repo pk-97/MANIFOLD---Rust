@@ -1112,6 +1112,7 @@ mod tests {
             name: Some("wireframe-like".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("test.wireframe"),
                 display_name: "Wireframe".into(),
                 category: "Procedural".into(),
@@ -1391,6 +1392,7 @@ mod tests {
             name: Some("wireframe-like".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("test.wireframe"),
                 display_name: "Wireframe".into(),
                 category: "Procedural".into(),
@@ -1858,6 +1860,7 @@ mod tests {
             name: Some("test-preset".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("test.plasma"),
                 display_name: "Test".into(),
                 category: "Procedural".into(),

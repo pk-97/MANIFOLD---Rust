@@ -171,7 +171,7 @@ pub fn sync_inspector_data(
                     // the node's own saved literal (BUG-l2itk).
                     let authored = def.as_ref().map(|d| {
                         let mut authored = d.clone();
-                        let projected = crate::fluid_domain_edit::project_authored_params(
+                        let projected = crate::scene_gizmo::project_authored_params(
                             &mut authored,
                             project,
                             &manifold_core::GraphTarget::Generator(layer_id.clone()),

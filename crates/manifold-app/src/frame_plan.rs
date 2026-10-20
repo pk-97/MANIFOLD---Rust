@@ -331,6 +331,9 @@ pub(crate) struct FrameInputs {
     /// The newest gizmo entry for the Scene panel's scene (D7a): a late
     /// entry for a frame already on screen redraws it with its lines.
     pub gizmo_frame: u64,
+    /// The main preview's gizmo mode and picked shape
+    /// (`PreviewGizmo::version`): the handles it draws change.
+    pub gizmo_view: u64,
 }
 
 impl FrameInputs {

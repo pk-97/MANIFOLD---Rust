@@ -56,7 +56,6 @@ docs/LIQUID_SOLVER_SEAM_DESIGN.md:crates/manifold-nodes/src/node_graph/primitive
 docs/LIQUID_SOLVER_SEAM_DESIGN.md:crates/manifold-nodes/src/node_graph/primitives/swash_preset.rs
 docs/LIQUID_SOLVER_SEAM_DESIGN.md:crates/manifold-nodes/src/preset_runtime/
 docs/LIQUID_SOLVER_SEAM_DESIGN.md:scripts/swash_reference.py
-docs/LIQUID_SOLVER_SEAM_DESIGN.md:scripts/ui-flows/scene-liquid-forces.json
 docs/LIVE_RECORDING_PROOFS_DESIGN.md:scripts/ui-flows/record-smoke.json
 docs/MATERIAL_SYSTEM_DESIGN.md:crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_cel.wgsl
 docs/MATERIAL_SYSTEM_DESIGN.md:crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_pbr.wgsl
@@ -73,7 +72,6 @@ docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md:crates/manifold-physics-gpu/Cargo.toml
 docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md:crates/manifold-physics-gpu/src/
 docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md:crates/manifold-physics-gpu/src/flip/
 docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md:crates/manifold-physics-gpu/src/whitewater/
-docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md:scripts/test_scene_param_surface.py
 docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md:crates/manifold-nodes/src/node_graph/primitives/cast_array.rs
 docs/PRIMITIVE_LIBRARY_DESIGN.md:crates/manifold-core/src/effect_type_id_aliases.rs
 docs/PRIMITIVE_LIBRARY_DESIGN.md:crates/manifold-nodes/src/effect_chain.rs

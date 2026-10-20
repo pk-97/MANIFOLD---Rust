@@ -1,6 +1,7 @@
 //! Host parameter events backed by authored scene-space field graphs.
 use ahash::{AHashMap, AHashSet};
 use manifold_core::NodeId;
+use manifold_core::scene_impulse::ImpulseFire;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 
 use super::{WaterRuntime, WaterRuntimeState};
@@ -127,34 +128,26 @@ impl WaterRuntimeState {
 }
 
 impl WaterRuntime<'_> {
-    /// Capture one accepted manual event. Host aliases may fan out to multiple
-    /// fields. Capture every field before native admission; a failed admission
-    /// retains the payload and stops further Fire requests until an explicit reset.
+    /// Capture and admit one Fire. A host alias may fan out to several
+    /// fields; each is admitted or refused on its own, and nothing is kept
+    /// from a refusal, so the next Fire is tried afresh. Before the scene's
+    /// changed setup has rendered, or while a recipient is still preparing,
+    /// nothing is consumed: the Fire answers `NotReady` and the host fires it
+    /// again after the next render.
     pub fn fire_scene_impulse(
         &mut self,
         param: &str,
         source: FrameTime,
         next_sequence: &mut u64,
-    ) -> Result<bool, String> {
+    ) -> Result<ImpulseFire, String> {
         if !self.water.is_scene_impulse_param(param) {
-            return Ok(false);
+            return Ok(ImpulseFire::NotImpulse);
         }
         let mut state = std::mem::take(&mut self.water.scene_impulses);
         let result = (|| {
             let indices = &state.aliases[param];
             if indices.iter().any(|&index| state.routes[index].is_none()) {
                 return Err("Impulse: select a simulated object in Targets before firing".into());
-            }
-            if state
-                .routes
-                .iter()
-                .flatten()
-                .any(|route| route.captured.source_time().is_some())
-            {
-                return Err(
-                    "Impulse: previous admission failed; reset the simulation before firing again"
-                        .into(),
-                );
             }
             if !state.setup_observed
                 || state.setup.iter().any(|(id, values)| {
@@ -163,41 +156,39 @@ impl WaterRuntime<'_> {
                         .is_none_or(|node| node.params != *values)
                 })
             {
-                return Err("Impulse: render the changed scene setup before firing".into());
+                return Ok(ImpulseFire::NotReady);
+            }
+            for &index in indices {
+                let route = state.routes[index].as_ref().expect("checked recipients");
+                if matches!(self.impulse_recipients_ready(&route.prepared), Ok(false)) {
+                    return Ok(ImpulseFire::NotReady);
+                }
             }
             let end = next_sequence
                 .checked_add(indices.len() as u64)
                 .ok_or("Impulse: event sequence is exhausted")?;
             let first = *next_sequence;
             *next_sequence = end;
+            let mut refusal = None;
             for (offset, &index) in indices.iter().enumerate() {
                 let route = state.routes[index].as_mut().expect("checked recipients");
-                if let Err(error) = self.capture_scene_impulse_at_source(
-                    &mut route.prepared,
-                    &mut route.captured,
-                    source,
-                    first + offset as u64,
-                ) {
-                    for route in state.routes.iter_mut().flatten() {
-                        route.captured.clear();
-                    }
-                    return Err(error);
+                let admitted = self
+                    .impulse_recipients_ready(&route.prepared)
+                    .and_then(|_| {
+                        self.capture_scene_impulse_at_source(
+                            &mut route.prepared,
+                            &mut route.captured,
+                            source,
+                            first + offset as u64,
+                        )
+                    })
+                    .and_then(|()| self.deliver_scene_impulse(&mut route.captured));
+                route.captured.clear();
+                if let Err(error) = admitted {
+                    refusal.get_or_insert(error);
                 }
             }
-            for &index in indices {
-                let route = state.routes[index].as_mut().expect("checked recipients");
-                self.deliver_scene_impulse(&mut route.captured).map_err(|error| {
-                    format!("{error}; captured impulse retained, reset the simulation before firing again")
-                })?;
-            }
-            for &index in indices {
-                state.routes[index]
-                    .as_mut()
-                    .expect("checked recipients")
-                    .captured
-                    .clear();
-            }
-            Ok(true)
+            refusal.map_or(Ok(ImpulseFire::Admitted), Err)
         })();
         self.water.scene_impulses = state;
         result
@@ -207,19 +198,6 @@ impl WaterRuntime<'_> {
 
 impl super::WaterRuntimeState {
     pub(super) fn observe_impulse_setup(&mut self, graph: &manifold_node_engine::graph::Graph) {
-        // A native Reset parameter creates a new epoch without rebuilding
-        // this graph. That explicit reset cancels any failed retained capture.
-        if self
-            .scene_impulses
-            .routes
-            .iter()
-            .flatten()
-            .any(|route| route.captured.has_stale_epoch(graph))
-        {
-            for route in self.scene_impulses.routes.iter_mut().flatten() {
-                route.captured.clear();
-            }
-        }
         for (id, values) in &mut self.scene_impulses.setup {
             let node = graph.get_node(*id).expect("prepared setup ancestor");
             for (name, value) in values {

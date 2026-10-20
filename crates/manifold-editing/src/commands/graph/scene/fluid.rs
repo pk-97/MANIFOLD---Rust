@@ -567,6 +567,7 @@ fn next_fluid_handle(prefix: &str, handles: &mut HashSet<String>) -> String {
 
 fn empty_scene_metadata() -> PresetMetadata {
     PresetMetadata {
+        shape: None,
         id: manifold_core::PresetTypeId::from_string("UnnamedScene".into()),
         display_name: "Scene".into(),
         category: "Geometry".into(),

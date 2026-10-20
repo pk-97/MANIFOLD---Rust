@@ -178,6 +178,8 @@ pub(crate) struct Button {
     /// A left press landed in the 3D viewport: try a gizmo grab or object
     /// pick there, and when nothing takes it, [`arm_viewport_drag`].
     pub viewport_press: Option<Vec2>,
+    /// A release ended this gizmo drag: commit its scrub.
+    pub gizmo_release: Option<crate::scene_gizmo::GizmoGesture>,
 }
 
 /// A press in the 3D viewport that the gizmo did not take orbits (left) or
@@ -269,15 +271,9 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
     // change shows in the viewport's rendered image, a live surface.
     if state == ElementState::Released
         && button == MouseButton::Left
-        && let Some(drag) = cx.ws.viewport_gizmo_drag.take()
+        && let Some(gesture) = cx.ws.viewport_gizmo_drag.take()
     {
-        if let Some(domain) = drag.fluid_domain
-            && domain.changed()
-            && matches!(cx.watched, Some(GraphTarget::Generator(layer)) if layer == &domain.layer_id)
-            && cx.ws.viewport_selected_object == Some(domain.object_node_id)
-        {
-            cx.send(ContentCommand::FluidDomainEdit(Box::new(domain)));
-        }
+        out.gizmo_release = Some(gesture);
         return out;
     }
     if state == ElementState::Released && cx.ws.viewport_drag.take().is_some() {
@@ -423,15 +419,23 @@ pub(crate) fn pinch(cx: &mut EditorPointer<'_>, magnification: f32) {
     canvas.on_pinch(CanvasRect::new(0.0, 0.0, cx.area.width, cx.area.height), magnification);
 }
 
+/// What cancelling the editor's pointer capture asks of the caller.
+pub(crate) struct Cancelled {
+    /// Something was cancelled.
+    pub any: bool,
+    /// A gizmo drag ended through its release: commit its scrub.
+    pub gizmo_release: Option<crate::scene_gizmo::GizmoGesture>,
+}
+
 /// Ends every editor-owned pointer gesture when the OS withholds the release
-/// (focus loss) or Escape cancels it. True when something was cancelled.
+/// (focus loss) or Escape cancels it.
 ///
 /// The editor tree gets a terminal `Up` even when the cursor is outside its
 /// panels: a press that never crossed the drag threshold is sent off-screen so
 /// cancelling cannot become a click; an active drag ends at the real cursor
 /// through its normal end path. Canvas wire, marquee and pan captures are
 /// discarded first, so a stale cursor over a port cannot connect.
-pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> bool {
+pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> Cancelled {
     let ui_pressed = cx.ws.ui_root.input.pressed_widget().is_some();
     let ui_dragging = cx.ws.ui_root.input.is_dragging();
     let cursor = cx.cursor();
@@ -442,11 +446,6 @@ pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> bool {
     // Cancel the mapping surfaces before the release path, whose `on_release`
     // would otherwise commit a live scrub.
     cx.mapping.close();
-    // Domain motion has not touched the project yet: discard the draft.
-    let cancelled_domain = cx.ws.viewport_gizmo_drag.as_ref().is_some_and(|drag| drag.fluid_domain.is_some());
-    if cancelled_domain {
-        cx.ws.viewport_gizmo_drag = None;
-    }
     if let Some(canvas) = cx.canvas.as_deref_mut()
         && canvas.popover_open()
     {
@@ -459,9 +458,12 @@ pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> bool {
     }
     // The single terminal paths for canvas and viewport gestures; both are
     // idempotent when nothing is active.
-    button(cx, MouseButton::Left, ElementState::Released);
+    let gizmo_release = button(cx, MouseButton::Left, ElementState::Released).gizmo_release;
     button(cx, MouseButton::Middle, ElementState::Released);
-    canvas_capture || ui_pressed || had_mapping || had_canvas_popover || cancelled_domain
+    Cancelled {
+        any: canvas_capture || ui_pressed || had_mapping || had_canvas_popover || gizmo_release.is_some(),
+        gizmo_release,
+    }
 }
 
 /// A key while a mapping popover field is being typed into: the card lane's

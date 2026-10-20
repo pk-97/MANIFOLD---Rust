@@ -19,6 +19,7 @@ pub mod fields;
 pub mod display_cursor;
 pub mod frame_history;
 pub mod frame_ring;
+pub mod gizmos;
 pub mod grid;
 pub mod lattice;
 pub mod tick_samples;

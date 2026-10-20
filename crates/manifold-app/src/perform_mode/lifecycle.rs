@@ -32,8 +32,11 @@ impl Application {
                 }
                 if self.window_registry.has_output_window() {
                     let held_pointer = self.mouse_pressed.then_some((self.cursor_pos, self.time_since_start));
+                    self.preview_gizmo_release();
                     // Entry clears the HUD's shown inputs, so its first frame draws.
                     super::frame::enter(&mut self.perform, &mut self.ws.ui_root, &mut self.text_input, held_pointer);
+                    // Entry switched Show gizmos off; the content thread stops reporting.
+                    self.sync_gizmo_layer();
                     self.mouse_pressed = false;
                     log::info!("[Perform] Entered performance mode");
                 } else {
