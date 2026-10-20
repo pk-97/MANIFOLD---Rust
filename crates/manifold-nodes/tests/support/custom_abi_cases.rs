@@ -447,7 +447,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "render_scene.rs",
+        source: "render_scene/prepasses.rs",
         rust_struct: "ShadowUniforms",
         shader: "shaders/shadow_depth.wgsl",
         shader_struct: "ShadowUniforms",
