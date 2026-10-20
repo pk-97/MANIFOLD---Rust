@@ -597,7 +597,6 @@ mod tests {
         options.bindings.push(PercussionClipBinding::new(
             PercussionTriggerType::Kick,
             0,
-            None,
             gen_type(),
             Beats(0.25),
             0.0,
