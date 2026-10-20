@@ -431,8 +431,20 @@ impl<'a> Join<'a> {
         let Some(described) = self.resolver.describe(key) else {
             return (saved.clone(), unresolved, none);
         };
-        let name_from_lookup = !fan_out && exact_stamp(&saved.id, self.bindings, &self.nodes).is_some();
-        (overlay(saved, described, binding.default_value, name_from_lookup), SpecSource::Lookup, none)
+        let words_from_lookup = self.lookup_owns_words(&saved.id);
+        (overlay(saved, described, binding.default_value, words_from_lookup), SpecSource::Lookup, none)
+    }
+
+    /// A control that is a copy of one declaration: a lone exact auto-stamp,
+    /// or a lone scene-modifier control (a copy of its recipe's). Its saved
+    /// name and tooltip are old copies; a user rename lives in its choices
+    /// (D7 (one saved choice set)).
+    fn lookup_owns_words(&self, id: &str) -> bool {
+        self.single_binding(id).is_some_and(|b| match &b.target {
+            BindingTarget::Node { .. } => exact_stamp(id, self.bindings, &self.nodes).is_some(),
+            BindingTarget::SceneModifier { .. } => !b.user_added,
+            BindingTarget::Composite { .. } => false,
+        })
     }
 
     fn single_binding(&self, id: &str) -> Option<&'a BindingDef> {
@@ -452,12 +464,11 @@ impl<'a> Join<'a> {
     }
 
     /// Whether the lookup supplies this control's name, so a save writes it
-    /// without one: a template control, or a lone exact auto-stamp. Every
-    /// other control owns its name (SCENE_SURFACES_DESIGN.md D24 (who owns a
-    /// control's name)).
+    /// without one: a template control, a lone exact auto-stamp or a lone
+    /// scene-modifier control. Every other control owns its name
+    /// (SCENE_SURFACES_DESIGN.md D24 (who owns a control's name)).
     pub(crate) fn lookup_names(&self, id: &str) -> bool {
-        self.template_for(id).is_some()
-            || (self.single_binding(id).is_some() && exact_stamp(id, self.bindings, &self.nodes).is_some())
+        self.template_for(id).is_some() || self.lookup_owns_words(id)
     }
 
     /// A user-exposed control keeps its saved spec. A saved label that
@@ -533,15 +544,17 @@ fn widen_to(d: &ParamSpecDef, default: f32) -> (f32, f32) {
 
 /// A node or modifier description laid over the saved control. The lookup
 /// owns range and flags, and the section where it declares one (a node
-/// declares none yet, so its saved section stays). The name is the lookup's
-/// only for an exact auto-stamp; every other control owns its name (D24),
-/// and an empty one takes the lookup's. Identity, default, card visibility,
-/// curve, invert, tooltip and periodicity stay as saved.
-fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32, name_from_lookup: bool) -> ParamSpecDef {
+/// declares none yet, so its saved section stays). Name and tooltip are the
+/// lookup's only for a copy of one declaration ([`Join::lookup_owns_words`]);
+/// every other control owns its name (D24), and an empty one takes the
+/// lookup's. Identity, default, card visibility, curve, invert and
+/// periodicity stay as saved.
+fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32, words_from_lookup: bool) -> ParamSpecDef {
     let (min, max) = widen_to(&d, binding_default);
-    let keep_name = !name_from_lookup && !saved.name.is_empty();
+    let keep_name = !words_from_lookup && !saved.name.is_empty();
     ParamSpecDef {
         name: if keep_name { saved.name.clone() } else { d.name },
+        tooltip: if words_from_lookup { d.tooltip } else { saved.tooltip.clone() },
         section: if d.section.is_some() { d.section } else { saved.section.clone() },
         min,
         max,

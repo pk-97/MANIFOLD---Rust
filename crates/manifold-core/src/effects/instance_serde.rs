@@ -243,6 +243,7 @@ impl Serialize for GraphWithDerivedParams<'_> {
                             let mut stub = p.spec.lookup_stub();
                             if lookup_names(&spec.id) {
                                 stub.name.clear();
+                                stub.tooltip = None;
                             }
                             *spec = stub
                         }

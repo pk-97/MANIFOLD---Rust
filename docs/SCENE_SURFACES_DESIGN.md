@@ -239,7 +239,7 @@ Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene p
 
 **D23 — Scene facts follow the bound node.** A template control bound to exactly one node target takes that target's scene placement, unit and limit from the scene table wherever the template declares none. Section 3.3's defaults apply only when neither declares. Fan-outs and user-added controls keep their own. Lead ruling, 2026-10-14.
 
-**D24 — Who owns a control's name.** The lookup names a control only when it is a template control or an exact auto-stamp (id `{doc_id}_{param}`, not user-added, targeting that node's param); those save without a name. Every other node-bound control (curated ids, fan-outs, `user.*`) owns its name: authored, saved, never replaced by the node's label. Range, flags and scaling still come from the lookup (D22).
+**D24 — Who owns a control's name.** The lookup names a control only when it is a template control, an exact auto-stamp (id `{doc_id}_{param}`, not user-added, targeting that node's param) or a lone scene-modifier control (a force's or modifier's host copy of its recipe param); those take name and tooltip from the lookup, save without either, and keep a user rename in `ParamChoices` (D7). Every other node-bound control (curated ids, fan-outs, `user.*`) owns its name: authored, saved, never replaced by the node's label. Range, flags and scaling still come from the lookup (D22).
 
 **Consequences, stated honestly:**
 1. Scene projects get smaller on disk: no names or ranges per control. A file saved after P1 shows placeholders in an older build (format version bump, P1).
