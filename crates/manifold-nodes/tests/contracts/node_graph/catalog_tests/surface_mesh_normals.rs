@@ -48,7 +48,7 @@ fn surface_stage_defaults_and_manifest_bindings() {
             panic!("node binding")
         };
         assert!(
-            water.fluid_controls.contains(node_id),
+            water.control_nodes().contains(node_id),
             "Water must own {id}"
         );
     }

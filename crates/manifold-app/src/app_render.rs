@@ -173,6 +173,20 @@ mod preparation_inversion_tests {
 }
 
 impl Application {
+    /// The graph editor's add-object and add-light buttons: insert `template`
+    /// into the render scene (doc id `render`) under `scope` (group doc ids),
+    /// through the same command the Add menu uses.
+    fn insert_scene_template(&self, scope: &[u32], render: u32, template: manifold_core::scene_template::SceneTemplate) {
+        let (Some(target), Some(default)) = (self.watched_graph_target.as_ref(), self.watched_catalog_default.as_ref()) else {
+            return;
+        };
+        let prepared = crate::scene_insert::prepare(&self.local_project, target, default, scope, render, template);
+        match prepared {
+            Ok(command) => self.send_content_cmd(ContentCommand::Execute(Box::new(command))),
+            Err(message) => self.send_content_cmd(ContentCommand::GraphEditRejected(message)),
+        }
+    }
+
     /// Take the newest state from the content thread: its export notice, its
     /// project snapshot and stamps, its modulation capture and spectrogram
     /// columns, then the state itself. The one reader of the handoff, for the
@@ -2218,52 +2232,14 @@ impl Application {
                     self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(*on));
                     continue;
                 }
-                manifold_ui::GraphEditCommand::AddSceneObject {
-                    scope_path,
-                    render_scene_node_id,
-                    next_index,
-                    centroid,
-                } => {
-                    if let (Some(target), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::AddSceneObjectCommand::new(
-                            target.clone(),
-                            scope_path.clone(),
-                            *render_scene_node_id,
-                            *next_index,
-                            *centroid,
-                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
-                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
-                            default.clone(),
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
+                manifold_ui::GraphEditCommand::AddSceneObject { scope_path, render_scene_node_id, next_index, centroid } => {
+                    let template = manifold_nodes_scene::node_graph::scene_templates::object_template(*next_index, *centroid);
+                    self.insert_scene_template(scope_path, *render_scene_node_id, template);
                     continue;
                 }
-                manifold_ui::GraphEditCommand::AddSceneLight {
-                    scope_path,
-                    render_scene_node_id,
-                    next_index,
-                    pos,
-                } => {
-                    if let (Some(target), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::AddSceneLightCommand::new(
-                            target.clone(),
-                            scope_path.clone(),
-                            *render_scene_node_id,
-                            *next_index,
-                            *pos,
-                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.light"),
-                            default.clone(),
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
+                manifold_ui::GraphEditCommand::AddSceneLight { scope_path, render_scene_node_id, pos, .. } => {
+                    let template = manifold_nodes_scene::node_graph::scene_templates::light_template(*pos);
+                    self.insert_scene_template(scope_path, *render_scene_node_id, template);
                     continue;
                 }
             }

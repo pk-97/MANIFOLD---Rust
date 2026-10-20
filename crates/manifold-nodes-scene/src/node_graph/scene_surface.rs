@@ -178,7 +178,7 @@ static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] = [DOMAIN_BOX, transform_box("i
 static FLUID_ROLE_SOURCE_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
 /// A swarm's forces node (manifold-nodes-physics, which this crate does not
 /// depend on).
-pub(crate) const SWARM_FORCES_TYPE_ID: &str = "node.swarm_forces";
+pub(crate) use manifold_core::scene_object_model::SWARM_FORCES_TYPE_ID;
 /// A swarm's `bounds` transform is the box its forces are laid over. Any
 /// size above zero is valid: Force Detail fits the lattice to the box.
 static SWARM_SHAPES: [SceneShapeDecl; 1] = [transform_box("bounds", false)];
@@ -244,9 +244,8 @@ fn fluid_role_source(param: &str) -> Option<SceneParamFacts> {
         "velocity_x" => card(Source, CardBand::Scene, 1).unit(Unit::MetresPerSecond),
         "velocity_y" => card(Source, CardBand::Scene, 2).unit(Unit::MetresPerSecond),
         "velocity_z" => card(Source, CardBand::Scene, 3).unit(Unit::MetresPerSecond),
-        "role" | "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => {
-            setup(Source)
-        }
+        "role" => setup(Source).switch(Feature::SourceRole),
+        "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => setup(Source),
         "radius" | "shell_thickness" => setup(Source).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "path" | "compound_materials" | "mesh_index" | "primitive_index" | "material_index"
         | "fit" | "recenter" | "translate_x" | "translate_y" | "translate_z" | "fragment_count"

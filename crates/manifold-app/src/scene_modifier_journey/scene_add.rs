@@ -1,7 +1,6 @@
 //! Native render regression for additions to an imported scene while paused.
 use super::*;
-use manifold_editing::commands::graph::{AddSceneLayerPlaneCommand, AddSceneObjectCommand};
-use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type as metadata;
+use manifold_nodes_scene::node_graph::scene_templates::{object_template, plane_template};
 
 #[test]
 fn scene_additions_render_while_paused_and_roundtrip_undo() {
@@ -35,6 +34,9 @@ fn scene_additions_render_while_paused_and_roundtrip_undo() {
     layer.gen_params_mut().unwrap().set_param(&binding, 0.0);
     let default = layer.generator_graph().unwrap().clone();
     project.timeline.layers.push(layer);
+    let target = manifold_core::GraphTarget::Generator(LayerId::new("helmet"));
+    let object = crate::scene_insert::prepare(&project, &target, &default, &[], scene, object_template(1, (900.0, 240.0))).unwrap();
+    let plane = crate::scene_insert::prepare(&project, &target, &default, &[], scene, plane_template(1, (900.0, 240.0), 16.0 / 9.0, 1.0)).unwrap();
     let mut ct = headless_content_thread(Project::default(), 320, 180);
     let (tx, _rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
@@ -43,18 +45,6 @@ fn scene_additions_render_while_paused_and_roundtrip_undo() {
     ct.handle_command(ContentCommand::SeekToBeat(Beats::ZERO));
     let out = Path::new("/private/tmp/scene-add-visibility");
     std::fs::create_dir_all(out).unwrap();
-    let target = manifold_core::GraphTarget::Generator(LayerId::new("helmet"));
-    let object = AddSceneObjectCommand::new(
-        target.clone(),
-        vec![],
-        scene,
-        1,
-        (900.0, 240.0),
-        metadata("node.pbr_material"),
-        metadata("node.transform_3d"),
-        metadata("node.scene_object"),
-        default.clone(),
-    );
     ct.handle_command(ContentCommand::Execute(Box::new(object)));
     assert!(
         ct.graph_edit_diagnostic.is_none(),
@@ -76,19 +66,6 @@ fn scene_additions_render_while_paused_and_roundtrip_undo() {
     ct.handle_command(ContentCommand::Redo);
     capture_output_when_ready(&mut ct, &tx, &out.join("object-redo.png"));
     ct.handle_command(ContentCommand::Undo);
-    let plane = AddSceneLayerPlaneCommand::new(
-        target,
-        vec![],
-        scene,
-        1,
-        (900.0, 240.0),
-        16.0 / 9.0,
-        1.0,
-        metadata("node.pbr_material"),
-        metadata("node.transform_3d"),
-        metadata("node.scene_object"),
-        default,
-    );
     ct.handle_command(ContentCommand::Execute(Box::new(plane)));
     assert!(
         ct.graph_edit_diagnostic.is_none(),

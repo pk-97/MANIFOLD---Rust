@@ -1019,29 +1019,17 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::Root(RootAction::SceneSetupAddObjectMenuClicked(layer_id)) => {
+            PanelAction::Root(RootAction::SceneSetupAddClicked(layer_id, group)) => {
                 if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
                     return true;
                 }
-                let items = self.scene_setup_panel.add_object_menu().into_iter()
-                    .map(|(label, action)| DropdownItem::new(label).with_action(action))
-                    .collect();
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            PanelAction::Root(RootAction::SceneSetupAddForceClicked(layer_id)) => {
-                if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
-                    return true;
-                }
-                let items = self.scene_setup_panel.force_picker().iter().map(|entry| {
-                    match &entry.disabled {
-                        Some(reason) => DropdownItem::disabled(&format!("{} — {}", entry.label, reason)),
-                        None => DropdownItem::new(&entry.label).with_action(
-                            PanelAction::Project(ProjectAction::SceneModifierApply(
-                                layer_id.clone(), entry.preset_id.clone(),
-                            )),
-                        ),
-                    }
+                let items = self.scene_setup_panel.add_menu(*group).into_iter().map(|entry| {
+                    let item = match (&entry.disabled, entry.action) {
+                        (Some(reason), _) => DropdownItem::disabled(&format!("{} \u{2014} {}", entry.label, reason)),
+                        (None, Some(action)) => DropdownItem::new(&entry.label).with_action(action),
+                        (None, None) => DropdownItem::disabled(&entry.label),
+                    };
+                    if entry.separator_after { item.with_separator() } else { item }
                 }).collect();
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1853,11 +1841,11 @@ impl UIRoot {
                         "Cut" => can_cut,
                         // A Water-family child has no graph-removal menu
                         // item; its permanent Hide action writes visible=0.
-                        "Delete" => !selected.is_family_child,
+                        "Delete" => selected.capabilities.delete,
                         "Duplicate" => can_duplicate,
                         _ => true,
                     });
-                    if selected.is_family_child {
+                    if selected.capabilities.hide {
                         let hide = match self.scene_setup_panel.hide_selection_action() {
                             Some(action) => DropdownItem::new("Hide").with_action(action),
                             None => DropdownItem::disabled("Hide"),

@@ -1,6 +1,6 @@
 [
   {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button","under_name":"inspector"}},"gesture":{"Click":{"modifiers":{}}}}},
-  {"Pointer":{"target":{"Query":{"name":"scene_tree.item","text":"Sun"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"name":"scene_tree.item","text":"Lighting"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"Assert":{"selector":{"Query":{"name":"param_row.7_color_r.hex"}},"check":{"TextEquals":"#FFFFFF"}}},
   {"Assert":{"selector":{"Query":{"name":"param_row.7_color_g.value"}},"check":{"Count":0}}},
   "Snapshot",

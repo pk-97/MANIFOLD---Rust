@@ -2781,6 +2781,16 @@ mod tests {
             if *before == EffectId::new("FX2")));
     }
 
+    /// BUG-9rai8: scene modifier cards draw labelled params by kind.
+    #[test]
+    fn scene_modifier_cards_draw_choices_by_kind() {
+        let (configs, layer) = modifier_fixture();
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
+        assert!(!panel.modifier_cards.is_empty());
+        assert!(panel.modifier_cards.iter().all(|card| card.draws_by_kind()));
+    }
+
     #[test]
     fn modifier_drag_emits_complete_stable_id_order() {
         let (configs, layer) = modifier_fixture();

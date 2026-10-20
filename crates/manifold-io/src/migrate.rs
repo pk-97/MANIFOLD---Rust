@@ -108,6 +108,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.21.0".to_string());
     }
 
+    // Scene cards show only pinned rows; the loader flags older files so the
+    // app pins the rows they showed (D-103). No shape change.
+    if is_version_less_than(&version, "1.22.0") {
+        root["projectVersion"] = Value::String("1.22.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

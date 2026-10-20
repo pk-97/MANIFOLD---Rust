@@ -4,11 +4,11 @@ use super::*;
 use manifold_editing::service::EditingService;
 use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
-fn add_water(project: &mut Project, layer: &LayerId, render: u32) {
+fn add_water(project: &mut Project, layer: &LayerId, _render: u32) {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let (tx, rx) = crossbeam_channel::unbounded();
     dispatch_project(
-        &ProjectAction::SceneSetupAddFluid(layer.clone(), render),
+        &crate::ui_bridge::project::insert_template_action(project, layer.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
         &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx),
         &tx,
         &state,
@@ -113,7 +113,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
         .iter()
         .find(|row| row.parent_group_id == Some(water.object_node_id))
         .expect("Foam child");
-    assert!(foam.look_mesh.is_some());
+    assert!(foam.look_node().is_some());
 
     let mut ui = sync_water_ui(&project, &layer);
     ui.scene_setup_panel.set_selection(
@@ -123,7 +123,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     build_scene_tree(&mut ui);
     assert!(!tree_has_name(&ui.tree, "scene_setup.properties.duplicate"));
     assert!(tree_has_name(&ui.tree, "scene_setup.properties.remove"));
-    assert!(ui.scene_setup_panel.selected_scene_item().unwrap().is_family_parent);
+    assert!(!ui.scene_setup_panel.selected_scene_item().unwrap().capabilities.duplicate);
     assert!(ui.scene_setup_panel.remove_selection_action().is_some());
     assert!(!ui.scene_setup_panel.scene_item_edit_allowed(
         manifold_ui::panels::actions::CardEditAction::Duplicate,
@@ -162,8 +162,8 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
         "the flow selector comes from the recipe-owned foam_size binding");
     assert!(!ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Cast Shadows")));
     let selected = ui.scene_setup_panel.selected_scene_item().unwrap();
-    assert!(selected.is_family_child);
-    assert!(!selected.is_family_parent);
+    assert!(selected.capabilities.hide);
+    assert!(!selected.capabilities.delete);
     let hide_button = ui.tree
         .all_nodes()
         .find_map(|node| {
@@ -301,7 +301,7 @@ fn water_family_clipboard_rejects_every_group_output() {
     let (mut project, layer, render) = super::water_family::water_project();
     add_water(&mut project, &layer, render);
     let family = rows(&project, &layer);
-    let family_rows: Vec<_> = family.iter().filter(|row| row.look_mesh.is_some()
+    let family_rows: Vec<_> = family.iter().filter(|row| row.look_node().is_some()
         || (row.is_group && row.liquid_domain.is_some())).collect();
     // Five rows each: Water, three looks and Physics View's dots.
     assert_eq!(family_rows.len(), 10, "both complete families");

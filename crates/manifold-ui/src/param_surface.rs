@@ -376,12 +376,13 @@ impl ParamRow {
     /// Shadows: Off, On) are a switch kept a float so a modulator can move it;
     /// the node reads it past 0.5.
     ///
-    /// `scene` is the surface's fact. The scene card and the Scene tab draw
-    /// labelled params as switches and pick lists; other cards keep them
-    /// sliders, whose driver lane is a performance tool there. A labelled row
-    /// with a modulator or mapping stored on it, armed or disarmed, stays a
-    /// slider anywhere: its D, E and A lane is the only way back to a
-    /// disarmed modulator.
+    /// `scene` is the surface's fact, the card's `CardHost` set by the panel
+    /// that hosts it. The scene card, the inspector's scene modifier cards and
+    /// the Scene tab draw labelled params as switches and pick lists; other
+    /// cards keep them sliders, whose driver lane is a performance tool
+    /// there. A labelled row with a modulator or mapping stored on it, armed
+    /// or disarmed, stays a slider anywhere: its D, E and A lane is the only
+    /// way back to a disarmed modulator.
     ///
     /// On a scene surface the R channel of a grouped colour is the colour
     /// row, modulated or not: its fold keeps each channel's slider and lane.
@@ -412,7 +413,8 @@ impl ParamRow {
     /// Whether the row can open a modulation drawer under itself: a slider
     /// and a fire button can, and so can a trigger-gate switch (its audio
     /// drawer) and a colour row (its R slider's drawer, in the fold); a plain
-    /// switch and a pick list cannot.
+    /// switch and a pick list cannot. A pick list's T, D and A buttons arm a
+    /// modulator, and the armed row draws as a slider, which can.
     pub fn grows_drawer(&self, scene: bool) -> bool {
         match self.kind(scene) {
             RowKind::Number | RowKind::Trigger | RowKind::Colour => true,

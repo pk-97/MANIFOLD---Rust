@@ -116,12 +116,16 @@ pub enum Feature {
     LightType,
     /// An environment bake's mode: 0 Gradient, 1 Softbox.
     EnvironmentMode,
+    /// A fluid source's role: 0 Initial Fill, 1 Inflow, 2 Outflow, 3
+    /// Collider. An Initial Fill is no source row of its own: its controls
+    /// join the water's, so the role decides which rows exist.
+    SourceRole,
 }
 
 impl Feature {
     /// Whether the switch picks a mode rather than turning the feature on.
     pub fn has_modes(self) -> bool {
-        matches!(self, Self::LightType | Self::EnvironmentMode)
+        matches!(self, Self::LightType | Self::EnvironmentMode | Self::SourceRole)
     }
 
     /// Why a row gated on this feature does nothing right now.
@@ -131,6 +135,7 @@ impl Feature {
             Self::MotionBlur => "Motion blur is off",
             Self::LightType => "This light type does not use it",
             Self::EnvironmentMode => "This environment mode does not use it",
+            Self::SourceRole => "This source role does not use it",
         }
     }
 }
@@ -208,6 +213,65 @@ pub enum SceneItemKind {
     Force,
     Physics,
     World,
+    /// A placed fluid source, listed under the water it feeds.
+    Source(SourceRole),
+}
+
+/// What a placed fluid source does to its water.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceRole {
+    Inflow,
+    Drain,
+    Collider,
+}
+
+/// Where a scene object row sits (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section
+/// 5.2 (One scene-object model)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SceneObjectRowKind {
+    /// An ordinary object, a placed fluid source, or a part of an imported
+    /// model.
+    #[default]
+    Object,
+    /// The row that owns a simulation or a shared body for its children:
+    /// Water's real object, or an imported model's group.
+    PhysicsParent,
+    /// One of Water's looks (Foam, Spray, Bubbles, Physics View's dots): it
+    /// owns its material, Size and visibility only.
+    LookChild,
+}
+
+/// What a scene object row's commands accept. The tree, the header, the
+/// shortcuts and the commands read the same facts, so a shortcut cannot do
+/// what a hidden button would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SceneObjectCapabilities {
+    pub rename: bool,
+    /// The header's Hide action (a look child's own eye).
+    pub hide: bool,
+    pub delete: bool,
+    pub duplicate: bool,
+    /// The row has its own placement transform.
+    pub transform: bool,
+    pub enable_physics: bool,
+    /// The row can feed a liquid as a fluid role.
+    pub fluid_role: bool,
+    /// The row takes mesh modifiers.
+    pub modifiers: bool,
+}
+
+/// What the one Add menu inserts into a scene through a template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SceneTemplateKind {
+    Object,
+    Plane,
+    Light,
+    Water,
+    /// The placed fluid sources, inserted inside their water.
+    Inflow,
+    Drain,
+    Collider,
 }
 
 /// A user's card pin on one control. `None` on the control follows its role.

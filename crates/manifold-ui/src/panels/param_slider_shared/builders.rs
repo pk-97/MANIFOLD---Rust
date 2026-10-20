@@ -1785,6 +1785,32 @@ pub(crate) fn build_button_row(
     let mut audio_config = None;
     let mut drawer_clip = None;
     let mut mode_badge_id = None;
+    let mut envelope_btn = None;
+    let mut driver_btn = None;
+
+    // A pick list keeps a slider row's T, D and A lane, in the same columns:
+    // arming one attaches the modulator, and an attached row draws as the
+    // slider whose drawer shows it (`ParamRow::kind`).
+    if kind == RowKind::Choice {
+        let env_arm_w = if build_env_button { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
+        let btn_x = x + slider_w + MOD_LANE_GAP;
+        let drv_btn_x = btn_x + env_arm_w;
+        let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
+        let btn_y = row_top_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+        let lane = |tree: &mut UITree, x: f32, active: Color32, text: &str, role: u64| {
+            add_row_button(tree, parent, x, btn_y, DE_BUTTON_SIZE, DE_BUTTON_SIZE, de_btn_style(false, active), text, row_key_base, role)
+        };
+        if build_env_button {
+            let id = lane(tree, btn_x, color::ENVELOPE_ACTIVE_C32, "T", ROW_ROLE_ENV);
+            tree.set_name(id, format!("param_row.{}.trigger_btn", info.id));
+            envelope_btn = Some(id);
+        }
+        let wave = mod_state.driver_waveform_idx.get(i).copied().unwrap_or(0);
+        let id = lane(tree, drv_btn_x, color::DRIVER_ACTIVE_C32, &crate::icons::waveform_icon_char(wave).to_string(), ROW_ROLE_DRV);
+        tree.set_name(id, format!("param_row.{}.driver_btn", info.id));
+        driver_btn = Some(id);
+        audio_btn = Some(lane(tree, audio_btn_x, AUDIO_MOD_ACTIVE_C32, "A", ROW_ROLE_AUDIO));
+    }
 
     // is_trigger (D5b) and is_trigger_gate (section 9) both reach the standard
     // per-param audio-mod "A" drawer — a fire-button counts by count-add, a
@@ -1921,6 +1947,8 @@ pub(crate) fn build_button_row(
         label_id: Some(label_id),
         button_id,
         kind,
+        envelope_btn,
+        driver_btn,
         audio_btn,
         audio_config,
         mode_badge_id,

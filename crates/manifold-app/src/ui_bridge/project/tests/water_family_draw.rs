@@ -200,7 +200,7 @@ mod gpu {
         let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
-            &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_node_id),
+            &crate::ui_bridge::project::insert_template_action(&project, layer_id.clone(), manifold_core::scene_surface::SceneTemplateKind::Water),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
@@ -251,7 +251,7 @@ mod gpu {
             .cloned()
             .collect();
         assert_eq!(children.len(), 3, "Water has Foam, Spray and Bubbles rows");
-        assert!(children.iter().all(|row| row.look_mesh.is_some()));
+        assert!(children.iter().all(|row| row.look_node().is_some()));
 
         let mut family_rows = vec![water.clone()];
         family_rows.extend(children.iter().cloned());

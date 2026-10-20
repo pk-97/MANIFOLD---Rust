@@ -29,7 +29,7 @@ use super::super::DispatchResult;
 use super::resolve_effects_read;
 use super::resolve::{resolve_graph_target, resolve_preset_target};
 
-fn find_effect_string_node(
+pub(crate) fn find_effect_string_node(
     nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
     stable_id: &manifold_core::NodeId,
     scope: &mut Vec<u32>,

@@ -548,3 +548,34 @@ fn preparation_edit_rebuilds_one_local_snapshot_and_round_trips_with_undo() {
     assert!(service.redo(&mut project));
     assert_eq!(serde_json::to_value(&project).unwrap(), after);
 }
+
+/// BUG-9rai8: a modifier's labelled whole-number control keeps its labels
+/// on a fresh insert and through a save and reload, so every shared card
+/// draws it as a pick list.
+#[test]
+fn physics_boundary_modifier_choices_survive_reload() {
+    let (mut project, layer) = project_with_mushroom();
+    let mut service = EditingService::new();
+    let modifier = apply_stock(&mut service, &mut project, &layer, "ElasticSculpture");
+    let id = host_graph(&project, &layer)
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target,
+            BindingTarget::SceneModifier { modifier_id, param_id } if *modifier_id == modifier && param_id == "mask_shape"))
+        .expect("Mask Shape is a host card")
+        .id
+        .clone();
+    let labels = |project: &Project| {
+        let host = project.graph_target_owner(&GraphTarget::Generator(layer.clone())).unwrap();
+        let spec = &host.params.get(&id).unwrap().spec;
+        (spec.whole_numbers, spec.value_labels.clone())
+    };
+    let (whole, fresh) = labels(&project);
+    assert!(whole && fresh.len() > 1, "a fresh Mask Shape is a pick list: {fresh:?}");
+    let saved = serde_json::to_string(&project).unwrap();
+    let reloaded = manifold_io::loader::load_project_from_json(&saved).expect("load");
+    assert_eq!(labels(&reloaded), (true, fresh), "a reload keeps the labels");
+}

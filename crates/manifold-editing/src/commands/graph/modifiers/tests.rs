@@ -28,8 +28,8 @@ fn plain_node(id: u32, handle: &str, type_id: &str) -> EffectGraphNode {
 /// named group (id 1) containing a mesh source (id 10) → the given
 /// modifier chain (ids 11, 12, … in wire order) → `node.scene_object`
 /// (id 90) → `system.group_output` (id 99, re-exporting `object` only)
-/// — the real D12 `AddSceneObjectCommand`/importer shape (see
-/// `AddSceneObjectCommand::execute`), close enough to exercise the
+/// — the real D12 Add Object's template/importer shape (see
+/// Add Object's template), close enough to exercise the
 /// splice commands against a realistic nested-group body. BUG-218: this
 /// fixture used to construct the pre-D12 shape (group_output's own
 /// `vertices` port re-exported directly, no scene_object at all) — that

@@ -61,7 +61,7 @@ impl ScenePanel {
             return Some("Emission".to_string());
         }
         let Some(role) = row.spec.material_role else {
-            return Some(self.property_group(row).title().to_string());
+            return Some(self.lighting_section_title(row).unwrap_or(self.property_group(row).title()).to_string());
         };
         let name = match role {
             MaterialParamRole::Placement(family, ..) | MaterialParamRole::Sampler(family, ..) => {
@@ -767,6 +767,8 @@ impl ScenePanel {
             );
             let host = &mut self.properties_card.row_host;
             host.toggle_ids[slot] = Some(row.button_ids());
+            host.envelope_btn_ids[slot] = row.envelope_btn;
+            host.driver_btn_ids[slot] = row.driver_btn;
             host.audio_btn_ids[slot] = row.audio_btn;
             host.audio_configs[slot] = row.audio_config;
             host.audio_trigger_mode_badge_ids[slot] = row.mode_badge_id;
@@ -857,6 +859,7 @@ impl ScenePanel {
         };
         cy = self.build_item_header(tree, (inner_x, inner_w), cy, vm, item);
         let owned = item.parameter_ids.as_slice();
+        self.property_lights.clear();
         match selected {
             SceneSelection::Object(id) => {
                 let Some(row) = vm.objects.iter().find_map(|o| match o {
@@ -873,7 +876,11 @@ impl ScenePanel {
             SceneSelection::Physics(_) => {
                 self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::PhysicsWorld))
             }
+            SceneSelection::Source(_) => {
+                self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Source))
+            }
             SceneSelection::Camera => self.build_camera_section(tree, (inner_x, inner_w), cy, vm, owned),
+            SceneSelection::Lighting => self.build_lighting_properties(tree, (inner_x, inner_w), cy, vm, owned),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm, owned),
             SceneSelection::Force(id) => self.build_force_card(tree, inner_x, inner_w, cy, &id),
             SceneSelection::OutlinerFold(_) => cy,
@@ -998,7 +1005,7 @@ impl ScenePanel {
                 row.object_node_id as usize,
                 row.group_node_id.unwrap_or(row.object_node_id),
             );
-        } else if row.look_mesh.is_none() {
+        } else if row.capabilities.modifiers {
             tree.add_label(
                 Some(self.content_parent),
                 inner_x,

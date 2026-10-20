@@ -1721,8 +1721,9 @@ impl Application {
                 .as_deref()
                 .zip(ws.viewport_selected.as_ref())
                 .and_then(|(scene, id)| gizmo_target_for(scene, id));
-            if let (Some(scene), Some(manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object))) =
-                (viewport_def.scene.as_deref(), target.as_ref().and_then(crate::scene_gizmo::scene_selection))
+            if let Some(scene) = viewport_def.scene.as_deref()
+                && let Some(manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object)) =
+                    target.as_ref().and_then(|target| crate::scene_gizmo::scene_selection(scene, target))
             {
                 crate::selection_outline::outline_slots(scene, object, &mut ws.viewport_outline);
             }

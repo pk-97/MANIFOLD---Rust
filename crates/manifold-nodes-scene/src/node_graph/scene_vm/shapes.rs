@@ -124,8 +124,9 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
     let rows = known_rows(objects);
     let mut out = Vec::new();
     for row in &rows {
-        // A liquid-built surface is placed by its domain, not its transform.
-        if row.liquid_domain.is_some() || (row.transform.is_none() && !row.transform_chain_parseable) {
+        // The model says which rows move by their transform: a liquid-built
+        // surface is placed by its domain, a water look by its water.
+        if !row.capabilities.transform || (row.transform.is_none() && !row.transform_chain_parseable) {
             continue;
         }
         let frame = row.parent_group_id.and_then(|id| {
@@ -202,7 +203,7 @@ fn liquid_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &m
 }
 
 /// Each swarm's forces box, at any group depth. It selects the object row
-/// the swarm feeds on the same level, if one does.
+/// the scene object model gives the swarm, if any.
 fn swarm_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &mut Vec<SceneShapeVm>) {
     let mut levels = vec![(Level { nodes: root.nodes, wires: root.wires }, Vec::new(), None)];
     while let Some((level, scope, parent)) = levels.pop() {
@@ -216,8 +217,7 @@ fn swarm_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &mu
         }
         for node in level.nodes.iter().filter(|node| node.type_id == SWARM_FORCES_TYPE_ID) {
             let row = rows.iter().find(|row| {
-                level.node(row.object_node_id).is_some_and(|object| object.node_id == row.object)
-                    && super::reachable_backward(&level, row.object_node_id).contains(&node.id)
+                row.swarm.as_ref().and_then(|swarm| locate_node(root, swarm)).is_some_and(|at| at.node.id == node.id && at.scope == scope)
             });
             let pickable = row.is_none_or(|row| row.visible_value && row.parent_group_id.is_none());
             let parent = parent.as_ref().map(|(outer, group): &(Level<'_>, u32)| (Level { nodes: outer.nodes, wires: outer.wires }, *group));

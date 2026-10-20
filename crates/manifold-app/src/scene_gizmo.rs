@@ -16,7 +16,7 @@ use manifold_core::{GraphTarget, LayerId, NodeId, project::Project};
 use manifold_editing::command::Command;
 use manifold_node_engine::param_binding::convert_param_value;
 use manifold_node_engine::parameters::ParamValue;
-use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneVm, ShapeOwner, ShapeWrite};
+use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, ShapeOwner, ShapeWrite};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
     GizmoDrag, GizmoMode, GizmoTarget, GizmoTargetId, GizmoTargetKind, HandleValues, HandleWrite, gizmo_target_for,
     gizmo_targets, pick_axis, pick_target,
@@ -337,7 +337,7 @@ pub(crate) fn press(
         });
     }
     let picked = pick_target(scene, view, point);
-    if let Some(selection) = picked.as_ref().and_then(|id| gizmo_target_for(scene, id)).as_ref().and_then(scene_selection) {
+    if let Some(selection) = picked.as_ref().and_then(|id| gizmo_target_for(scene, id)).as_ref().and_then(|target| scene_selection(scene, target)) {
         ctx.ui.scene_setup_panel.set_selection(layer.clone(), selection);
     }
     GizmoPress::Picked(picked)
@@ -361,9 +361,17 @@ fn place(ctx: &mut DispatchCtx, layer: &LayerId, target: &GizmoTarget) -> Option
 }
 
 /// The Scene panel item a target belongs to, by its kind: a force selects
-/// itself; an object, a liquid domain, a placed fluid source and a swarm box
-/// select their object row.
-pub(crate) fn scene_selection(target: &GizmoTarget) -> Option<SceneSelection> {
+/// itself; a placed Inflow, Drain or Collider selects its own row; an
+/// object, a liquid domain, a water's own fluid source and a swarm box select
+/// their object row.
+pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<SceneSelection> {
+    if let ShapeOwner::RoleSource { node, .. } = &target.id.owner
+        && scene.objects.iter().any(|object| {
+            matches!(object, SceneObjectVm::Known(row) if row.placed_sources.iter().any(|source| &source.node == node))
+        })
+    {
+        return Some(SceneSelection::Source(node.clone()));
+    }
     match target.kind {
         GizmoTargetKind::Force => match &target.id.owner {
             ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
@@ -381,7 +389,7 @@ pub(crate) fn scene_selection(target: &GizmoTarget) -> Option<SceneSelection> {
 /// The shape whose handles show for the Scene panel's `selection`: `picked`
 /// when it belongs to that item, else the item's first declared shape.
 pub(crate) fn selected_target(scene: &SceneVm, selection: &SceneSelection, picked: Option<&GizmoTargetId>) -> Option<GizmoTarget> {
-    let belongs = |target: &GizmoTarget| scene_selection(target).as_ref() == Some(selection);
+    let belongs = |target: &GizmoTarget| scene_selection(scene, target).as_ref() == Some(selection);
     picked
         .and_then(|id| gizmo_target_for(scene, id))
         .filter(belongs)
@@ -558,7 +566,7 @@ mod tests {
         let family = def
             .nodes
             .iter_mut()
-            .find(|node| node.node_id == NodeId::new("water_family"))
+            .find(|node| node.group.as_deref().and_then(manifold_core::scene_object_model::water_family).is_some())
             .expect("GPU FLIP family");
         let group = family.group.as_mut().expect("GPU FLIP family body");
         let domain = group
@@ -860,16 +868,16 @@ mod tests {
         let layer = LayerId::new("scene");
         let force = target(&project, &layer, GizmoTargetKind::Force);
         let ShapeOwner::Force(node) = &force.id.owner else { panic!("a force owner") };
-        assert_eq!(scene_selection(&force), Some(SceneSelection::Force(node.clone())));
         let scene = scene(&project, &layer);
+        assert_eq!(scene_selection(&scene, &force), Some(SceneSelection::Force(node.clone())));
         let found = selected_target(&scene, &SceneSelection::Force(node.clone()), None).expect("the force's shape");
         assert_eq!(found.id, force.id);
 
         let (fluid, fluid_layer) = fluid_project(false);
         let domain = target(&fluid, &fluid_layer, GizmoTargetKind::FluidDomain);
         let row = domain.row.expect("a domain belongs to its water object");
-        assert_eq!(scene_selection(&domain), Some(SceneSelection::Object(row)));
         let scene = self::scene(&fluid, &fluid_layer);
+        assert_eq!(scene_selection(&scene, &domain), Some(SceneSelection::Object(row)));
         let column = gizmo_targets(&scene)
             .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
             .expect("the GPU FLIP family wires an Initial Fill column");
@@ -915,6 +923,11 @@ mod tests {
         let row = swarm.row.expect("the swarm box belongs to the swarm's object row");
         let object = scene_vm_node_doc_id(&project, &layer, "swarm_object");
         assert_eq!(row, object, "the row is the scene object the swarm's copies feed");
+        let modelled = scene.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(known) if known.object_node_id == row => known.swarm.as_ref().map(|swarm| swarm.node.clone()),
+            _ => None,
+        });
+        assert_eq!(modelled, Some(NodeId::new("swarm_forces")), "the scene object model gives the row its swarm");
 
         let view = GizmoView::new(camera(), W, H);
         let mut rig = Rig::new(&layer);
@@ -922,7 +935,7 @@ mod tests {
         let GizmoPress::Picked(Some(id)) = picked else { panic!("the swarm box is picked, got {picked:?}") };
         assert_eq!(id, swarm.id);
         let picked = gizmo_target_for(&scene, &id).expect("the picked target");
-        assert_eq!(scene_selection(&picked), Some(SceneSelection::Object(row)));
+        assert_eq!(scene_selection(&scene, &picked), Some(SceneSelection::Object(row)));
         assert_eq!(selected_target(&scene, &SceneSelection::Object(row), Some(&id)).map(|t| t.id), Some(id));
     }
 

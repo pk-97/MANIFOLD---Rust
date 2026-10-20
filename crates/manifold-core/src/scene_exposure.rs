@@ -91,7 +91,7 @@ pub fn stamp_scene_node_exposures(
 /// before extending it. Not a real preset identity — every real generator's
 /// catalog default already carries its own `preset_metadata`; this exists so
 /// a hand-built def with none doesn't silently drop the new card entries.
-fn empty_scene_preset_metadata() -> PresetMetadata {
+pub(crate) fn empty_scene_preset_metadata() -> PresetMetadata {
     PresetMetadata {
         shape: None,
         id: crate::PresetTypeId::from_string("__scene_exposure__".to_string()),

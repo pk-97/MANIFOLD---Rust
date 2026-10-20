@@ -44,10 +44,12 @@ pub(crate) fn fluid_domains(
     for object in &scene.objects {
         let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
         let Some(domain) = &row.liquid_domain else { continue; };
-        if !result.iter().any(|option| option.node == domain.node) {
-            result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
-                node: domain.node.clone(), name: row.name.clone(),
-            });
+        let rows = std::iter::once(row.object_node_id).chain(row.parent_group_id);
+        match result.iter_mut().find(|option| option.node == domain.node) {
+            Some(option) => option.rows.extend(rows),
+            None => result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
+                node: domain.node.clone(), name: row.name.clone(), rows: rows.collect(),
+            }),
         }
     }
     result
@@ -103,15 +105,25 @@ pub(crate) fn world_and_physics_nodes(
 /// objects pair with their Known rows in order, since `scene_items` lists
 /// exactly those, in that order. `object_ids` are each Known object's
 /// filtered control ids; every other item owns its nodes' controls.
+///
+/// One Lighting item follows Camera: it takes the Camera's and World's
+/// lighting controls (a Lighting-band row such as exposure, and every
+/// Environment-group row), and the Scene tab shows every light inside it.
+/// The per-light items stay, since lights keep their own names and rows.
 pub(crate) fn scene_item_vms(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
     objects: &[manifold_ui::panels::scene_setup_panel::ObjectRowVm],
     lights: &[manifold_ui::panels::scene_setup_panel::LightRowVm],
     object_ids: Vec<Vec<String>>,
+    scene_of: &dyn Fn(&str) -> Option<manifold_core::scene_surface::SceneParamDesc>,
 ) -> Vec<manifold_ui::panels::scene_setup_panel::SceneItemVm> {
+    use manifold_core::scene_surface::{CardBand, ControlGroup, SceneItemKind};
     use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
     use manifold_ui::panels::scene_setup_panel::{LightRowVm, ObjectRowVm, SceneItemVm, SceneSelection};
+    let lighting_row = |id: &String| {
+        scene_of(id).is_some_and(|scene| scene.band == Some(CardBand::Lighting) || scene.group == ControlGroup::Environment)
+    };
     let mut known_objects = objects.iter().filter_map(|object| match object {
         ObjectRowVm::Known(row) => Some((row.object_node_id, row.parent_group_id)),
         ObjectRowVm::Custom { .. } => None,
@@ -121,10 +133,17 @@ pub(crate) fn scene_item_vms(
         LightRowVm::Custom { .. } => None,
     });
     let mut object_ids = object_ids.into_iter();
-    items
+    let mut lighting_ids = Vec::new();
+    let mut out: Vec<SceneItemVm> = items
         .iter()
         .filter_map(|item| {
-            let owned = || parameter_ids_for_nodes(def, &item.owned_nodes);
+            let mut owned = || {
+                let mut ids = parameter_ids_for_nodes(def, &item.owned_nodes);
+                if matches!(item.id, SceneItemId::Camera | SceneItemId::World) {
+                    lighting_ids.extend(ids.extract_if(.., |id| lighting_row(id)));
+                }
+                ids
+            };
             let (selection, parent, parameter_ids) = match &item.id {
                 SceneItemId::Camera => (SceneSelection::Camera, None, owned()),
                 SceneItemId::World => (SceneSelection::World, None, owned()),
@@ -135,10 +154,44 @@ pub(crate) fn scene_item_vms(
                 }
                 SceneItemId::Force(id) => (SceneSelection::Force(id.clone()), None, Vec::new()),
                 SceneItemId::Physics(id) => (SceneSelection::Physics(id.clone()), None, owned()),
+                SceneItemId::Source { node, water } => (SceneSelection::Source(node.clone()), Some(*water), owned()),
             };
             Some(SceneItemVm { kind: item.kind, selection, name: item.name.clone(), parent, parameter_ids })
         })
-        .collect()
+        .collect();
+    let at = out.iter().position(|item| item.selection == SceneSelection::Camera).map_or(0, |camera| camera + 1);
+    out.insert(at, SceneItemVm {
+        kind: SceneItemKind::Light,
+        selection: SceneSelection::Lighting,
+        name: "Lighting".into(),
+        parent: None,
+        parameter_ids: lighting_ids,
+    });
+    out
+}
+
+/// The generator string param that loads the HDRI node `hdri_doc_id`'s file:
+/// the one whose string binding targets that node's `path`. Its index is
+/// the layer card's string row index, so the Scene tab opens the same edit.
+pub(crate) fn hdri_string_param(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    preset: &manifold_core::PresetTypeId,
+    hdri_doc_id: u32,
+) -> Option<usize> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let def = def?;
+    let binding = def.preset_metadata.as_ref()?.string_bindings.iter().find(|binding| match &binding.target {
+        BindingTarget::Node { node_id, param } => {
+            param == "path"
+                && super::super::dispatch::params::find_effect_string_node(&def.nodes, node_id, &mut Vec::new())
+                    .is_some_and(|(doc_id, _)| doc_id == hdri_doc_id)
+        }
+        _ => false,
+    })?;
+    manifold_core::preset_definition_registry::try_get(preset)?
+        .string_param_defs
+        .iter()
+        .position(|sp| sp.key == binding.id)
 }
 
 /// Family eyes and look rows use the existing manifest, with one visible
@@ -149,12 +202,15 @@ pub(crate) fn filter_family_parameter_ids(
     ids: &mut Vec<String>,
 ) {
     let Some(metadata) = def.and_then(|def| def.preset_metadata.as_ref()) else { return; };
-    if row.look_mesh.is_none() && !(row.is_group && row.liquid_domain.is_some()) { return; }
+    use manifold_core::scene_surface::SceneObjectRowKind;
+    let look = row.kind == SceneObjectRowKind::LookChild;
+    let water = row.kind == SceneObjectRowKind::PhysicsParent && row.liquid_domain.is_some();
+    if !look && !water { return; }
     ids.retain(|id| {
         let Some(binding) = metadata.bindings.iter().find(|binding| &binding.id == id) else { return false; };
         match &binding.target {
             manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if node_id == &row.object => {
-                if row.look_mesh.is_some() { param == "visible" } else { param != "visible" }
+                if look { param == "visible" } else { param != "visible" }
             }
             _ => true,
         }
@@ -224,15 +280,20 @@ pub fn sync_scene_outliner_eyes(ui: &mut UIRoot, project: &Project) {
     };
     let inst = layer.gen_params();
     let mut value_of = |addr: &manifold_ui::panels::scene_setup_panel::RowAddr| {
+        use crate::ui_bridge::project::{find_node_by_scope, is_water_object, scene_param_value};
         let (scope, node, param) = (addr.scope_path.as_slice(), addr.node_doc_id, addr.param_id.as_str());
-        if let Some(inst) = inst
-            && let Some(id) = crate::ui_bridge::project::scene_binding_id(def, scope, node, param)
-            && inst.params.contains(id.as_str())
-        {
-            return Some(inst.get_base_param(id.as_str()));
+        let bound = inst.is_some_and(|inst| {
+            crate::ui_bridge::project::scene_binding_id(def, scope, node, param).is_some_and(|id| inst.params.contains(id.as_str()))
+        });
+        if !bound && find_node_by_scope(def, scope, node).is_none() {
+            return None;
         }
-        let node = crate::ui_bridge::project::find_node_by_scope(def, scope, node)?;
-        Some(node.params.get(param).and_then(crate::editor_bridge::serialized_value_as_f32).unwrap_or(1.0))
+        let value = scene_param_value(def, inst, scope, node, param);
+        // A water's eye shows it as drawn: hidden by either flag.
+        if param == "parent_visible" && is_water_object(def, scope, node) {
+            return Some(value.min(scene_param_value(def, inst, scope, node, "visible")));
+        }
+        Some(value)
     };
     ui.scene_setup_panel.sync_outliner_eyes(&mut ui.tree, &mut value_of);
 }
@@ -975,7 +1036,7 @@ mod ownership_tests {
                     MaterialVm::Known(material) => material.node.clone(),
                     MaterialVm::None => panic!("{preset}: {} has no material", child.name),
                 };
-                let mesh = child.look_mesh.clone().expect("look mesh");
+                let mesh = child.look_node().expect("look mesh");
                 let owned = object_nodes(def.as_ref(), child);
                 assert!(owned.contains(&child.object));
                 assert!(owned.contains(&mesh));
@@ -1394,7 +1455,6 @@ mod ownership_tests {
         for grouped in [false, true] {
             let def = fluid_role_projection_fixture(grouped, true);
             let group_id = grouped.then_some(40);
-            assert_eq!(manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&def, group_id), if grouped { ids(&["role"]) } else { Vec::new() });
             let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["role", "mesh"]));
             filter_inactive_fluid_role_parameter_ids(Some(&def), group_id, &mut parameter_ids);
             assert_eq!(parameter_ids, expected_ids);
