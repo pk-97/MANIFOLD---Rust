@@ -549,43 +549,10 @@ struct Runner {
     /// absorbed watch commands set, and its snapshot cache.
     content_watched: Option<manifold_core::GraphTarget>,
     graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
-    /// The main preview's gizmo host, as the App's `ws.preview_gizmo`.
-    preview_gizmo: crate::physics_overlay::PreviewGizmo,
-    /// The content thread's gizmo report for the Scene panel's scene, one
-    /// entry per frame. No scene renders here, so each entry carries
-    /// [`stand_in_camera`] and no lights, domains or physics shapes.
-    physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
-    overlay_frame: u64,
-    /// The preview's handle grips this frame, the `gizmo` surface.
-    gizmo_grips: Vec<(String, Vec2)>,
+    gizmo: preview_gizmo::RunnerGizmo,
 }
 
-/// The camera the runner's gizmo report says the scene rendered through:
-/// a front view of the origin a few units back, where the fixtures' scene
-/// objects sit.
-/// The render size the preview shows: the project's output, as the App's
-/// content pipeline renders it.
-fn preview_dims(project: &manifold_core::project::Project) -> (u32, u32) {
-    (project.settings.output_width.max(1) as u32, project.settings.output_height.max(1) as u32)
-}
-
-/// Where the show picture sits in the main window, fitted as the App's
-/// draw and input paths fit it (`ui_frame::video_fit_rect`).
-fn preview_fit(ui: &UIRoot, project: &manifold_core::project::Project) -> Option<Rect> {
-    let (w, h) = preview_dims(project);
-    crate::ui_frame::video_fit_rect(ui.layout.video_area(), (w as f32, h as f32))
-}
-
-fn stand_in_camera() -> manifold_node_engine::scene::camera::Camera {
-    manifold_node_engine::scene::camera::Camera::look_at(
-        [0.0, 1.5, 6.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        std::f32::consts::FRAC_PI_3,
-        0.05,
-        200.0,
-    )
-}
+mod preview_gizmo;
 
 /// The graph editor window as the App holds it (`graph_editor`,
 /// `graph_canvas`, `graph_editor_panel`), opened and built through the
@@ -686,10 +653,7 @@ impl Runner {
             editor_mapping: crate::mapping_popover::MappingPopover::new(),
             content_watched: None,
             graph_snapshot: None,
-            preview_gizmo: Default::default(),
-            physics_overlay: Default::default(),
-            overlay_frame: 0,
-            gizmo_grips: Vec::new(),
+            gizmo: Default::default(),
         }
     }
 
@@ -1274,21 +1238,10 @@ impl Runner {
         );
         data.content.active_graph_target = target;
         data.content.active_graph_snapshot = snapshot;
-        // The Scene panel's gizmo report, as the content thread records one
-        // per rendered frame (D7a), and the preview host's present-time read
-        // of it: no bridge here, so the newest entry is the one shown.
-        let gizmo_layer = ui.scene_setup_panel.gizmo_layer().cloned();
-        self.physics_overlay.set_layer(gizmo_layer.clone());
-        if gizmo_layer.is_some() {
-            self.overlay_frame += 1;
-            self.physics_overlay.record(0, self.overlay_frame, |_, _, _, _| Some(stand_in_camera()));
-        }
-        data.content.physics_overlay_frames = self.physics_overlay.frames.clone();
+        self.gizmo.report(ui, data);
         let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
         self.work.excluded = self.work.excluded.plus(&content_work);
-        self.preview_gizmo.show(data.content.physics_overlay_frames[0].as_ref(), preview_dims(&data.project));
-        let _ = self.preview_gizmo.compose(&data.project, &ui.scene_setup_panel, &self.edits.stamps.parts());
-        self.gizmo_grips = preview_fit(ui, &data.project).map_or_else(Vec::new, |fit| self.preview_gizmo.grips(fit));
+        self.gizmo.present(ui, data, &self.edits.stamps.parts());
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
@@ -1307,7 +1260,7 @@ impl Runner {
         crate::ui_bridge::check_auto_scroll(ui, &data.content);
         let automation_draw_mode = data.selection.automation_draw_mode;
         let inputs = crate::frame_plan::FrameInputs {
-            gizmo_view: self.preview_gizmo.version(),
+            gizmo_view: self.gizmo.host.version(),
             ..crate::ui_frame::gather_frame_inputs(
                 &mut self.planner,
                 ui,
@@ -1891,31 +1844,6 @@ impl Runner {
         }
     }
 
-    /// Run `f` with the main preview's gizmo host, a dispatch context and
-    /// the picture's fit, as `window_input`'s preview handlers do. A press
-    /// over an open overlay never reaches the preview.
-    fn preview_gizmo(
-        &mut self,
-        ui: &mut UIRoot,
-        data: &mut SceneData,
-        f: impl FnOnce(&mut crate::physics_overlay::PreviewGizmo, &mut crate::ui_bridge::DispatchCtx, Option<Rect>) -> bool,
-    ) -> bool {
-        let fit = preview_fit(ui, &data.project);
-        let mut dctx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
-            content_tx: &self.content_tx,
-            content_state: &self.content_state,
-            ui: &mut *ui,
-            selection: &mut data.selection,
-            active_layer: &mut self.active_layer,
-            user_prefs: &mut self.user_prefs,
-            editor_target: None,
-            scrub: &mut self.scrub,
-            dialogs: Default::default(),
-        };
-        f(&mut self.preview_gizmo, &mut dctx, fit)
-    }
-
     /// What a frame shows that the tree dump cannot see: the inputs of the
     /// immediate passes (playhead, insert cursor, selection band, markers,
     /// the clip draw list, automation lanes, overview strip), the pending
@@ -2316,12 +2244,12 @@ impl Runner {
         // The perform screen's exit button is a surface only while it shows.
         let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
         // The preview gizmo's handles are a surface while Show gizmos draws them.
-        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo_grips);
+        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo.grips);
         let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
         if self.perform.active {
             surfaces.push(&perform_targets);
         }
-        if !self.gizmo_grips.is_empty() {
+        if !self.gizmo.grips.is_empty() {
             surfaces.push(&gizmo_targets);
         }
         automation::resolve(&ui.tree, &surfaces, target)
@@ -2340,12 +2268,12 @@ impl Runner {
         // The perform screen's exit button is a surface only while it shows.
         let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
         // The preview gizmo's handles are a surface while Show gizmos draws them.
-        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo_grips);
+        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo.grips);
         let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
         if self.perform.active {
             surfaces.push(&perform_targets);
         }
-        if !self.gizmo_grips.is_empty() {
+        if !self.gizmo.grips.is_empty() {
             surfaces.push(&gizmo_targets);
         }
         // The focused window answers first; a selector nothing there matches
@@ -3426,77 +3354,4 @@ pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
 }
 
 #[cfg(test)]
-mod composite_gate_tests {
-    use super::*;
-
-    fn flow(name: &str) -> Vec<AutomationAction> {
-        let path = format!("{}/../../scripts/ui-flows/{name}.json", env!("CARGO_MANIFEST_DIR"));
-        serde_json::from_str(&std::fs::read_to_string(path).expect("read flow")).expect("parse flow")
-    }
-
-    /// Mirrors `run_flow`: flush before a reader, a `Step` composites and
-    /// tiles every frame, a `Snapshot` advances nothing, every other step
-    /// advances one frame. Returns (composites, filmstrip tiles).
-    fn composites_for(actions: &[AutomationAction]) -> (usize, usize) {
-        let mut gate = CompositeGate::default();
-        gate.mark();
-        let mut tiles = 0;
-        for action in actions {
-            if reads_composite(action) {
-                gate.take();
-            }
-            match action {
-                AutomationAction::Step { frames } => {
-                    for _ in 0..*frames {
-                        gate.step_frame();
-                        tiles += 1;
-                    }
-                }
-                AutomationAction::Snapshot => {}
-                _ => gate.mark(),
-            }
-        }
-        (gate.composites, tiles)
-    }
-
-    #[test]
-    fn step_composites_and_tiles_every_frame() {
-        let actions = [AutomationAction::Dump, AutomationAction::Step { frames: 5 }];
-        // Seed + the Dump frame are owed but folded into the first Step frame.
-        assert_eq!(composites_for(&actions), (5, 5));
-        let actions = [AutomationAction::Step { frames: 3 }, AutomationAction::Step { frames: 2 }];
-        assert_eq!(composites_for(&actions), (5, 5));
-    }
-
-    #[test]
-    fn run_without_snapshot_steps_never_composites() {
-        let mut actions = flow("water-family-preset");
-        actions.retain(|a| !matches!(a, AutomationAction::Step { .. }));
-        let snapshots = actions.iter().filter(|a| reads_composite(a)).count();
-        assert!(snapshots > 0, "fixture flow should carry Snapshot steps");
-        assert_eq!(composites_for(&actions).0, snapshots);
-        actions.retain(|a| !reads_composite(a));
-        assert!(actions.len() > 20);
-        assert_eq!(composites_for(&actions).0, 0);
-    }
-
-    #[test]
-    fn only_snapshot_reads_the_composite() {
-        let non_readers = [
-            AutomationAction::Dump,
-            AutomationAction::Step { frames: 3 },
-            AutomationAction::SaveReloadProject,
-        ];
-        assert!(non_readers.iter().all(|a| !reads_composite(a)));
-        assert!(reads_composite(&AutomationAction::Snapshot));
-    }
-
-    #[test]
-    fn back_to_back_snapshots_composite_once() {
-        let mut gate = CompositeGate::default();
-        gate.mark();
-        assert!(gate.take());
-        assert!(!gate.take());
-        assert_eq!(gate.composites, 1);
-    }
-}
+mod composite_gate_tests;

@@ -3689,24 +3689,12 @@ fn add_scene_fog_scales_density_with_scene_bounds() {
     let (mut project, fx) = project_with_graph({
         let mut def = render_scene_graph(0, 0);
         def.preset_metadata = Some(manifold_core::effect_graph_def::PresetMetadata {
-            shape: None,
             id: manifold_core::PresetTypeId::from_string("TestScene".to_string()),
             display_name: "Test".to_string(),
-            category: "Geometry".to_string(),
             osc_prefix: "test".to_string(),
-            legacy_discriminant: None,
-            available: true,
-            is_line_based: false,
-            layer_types: None,
-            params: Vec::new(),
-            bindings: Vec::new(),
-            param_aliases: Vec::new(),
-            value_aliases: Vec::new(),
-            string_params: Vec::new(),
-            string_bindings: Vec::new(),
             // bbox diagonal = sqrt(20^2+20^2+20^2) = 34.64 -> radius = 17.32
-            scene_modifier: None,
             scene_bounds: Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])),
+            ..super::unnamed_scene_metadata()
         });
         def
     });
@@ -4087,23 +4075,10 @@ fn import_model_into_scene_command_bumps_objects_adds_nodes_wires_and_undo_resto
 fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
     let mut base = render_scene_graph(1, 0);
     base.preset_metadata = Some(PresetMetadata {
-        shape: None,
         id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
         display_name: "Existing".to_string(),
-        category: "Geometry".to_string(),
         osc_prefix: "existing".to_string(),
-        legacy_discriminant: None,
-        scene_modifier: None,
-        scene_bounds: None,
-        available: true,
-        is_line_based: false,
-        layer_types: None,
-        params: vec![],
-        bindings: vec![],
-        param_aliases: Vec::new(),
-        value_aliases: Vec::new(),
-        string_params: Vec::new(),
-        string_bindings: Vec::new(),
+        ..super::unnamed_scene_metadata()
     });
     let (mut project, fx) = project_with_graph(base);
     let before = graph_of(&project, &fx).clone();
@@ -4542,25 +4517,13 @@ fn scene_item_add_commands_spawn_node_and_wire_port() {
 fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
     let mut base = render_scene_graph(1, 0);
     base.preset_metadata = Some(PresetMetadata {
-        shape: None,
         id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
         display_name: "Existing".to_string(),
-        category: "Geometry".to_string(),
         osc_prefix: "existing".to_string(),
-        legacy_discriminant: None,
-        scene_modifier: None,
-        scene_bounds: None,
-        available: true,
-        is_line_based: false,
-        layer_types: None,
         // One control already on the card, so the undone graph still names
         // its controls and the manifest is rebuilt rather than kept.
         params: vec![ParamSpecDef { id: "existing".to_string(), name: "Existing".to_string(), max: 1.0, ..ParamSpecDef::default() }],
-        bindings: vec![],
-        param_aliases: Vec::new(),
-        value_aliases: Vec::new(),
-        string_params: Vec::new(),
-        string_bindings: Vec::new(),
+        ..super::unnamed_scene_metadata()
     });
     let (mut project, layer_id) = project_with_generator_graph(base);
     // A typed generator: an untyped instance has no manifest to refresh.
