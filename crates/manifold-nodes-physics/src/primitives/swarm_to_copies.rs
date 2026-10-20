@@ -16,7 +16,8 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 pub(crate) struct Uniforms {
     pub(crate) size: f32,
     pub(crate) dispatch_count: u32,
-    pub(crate) _pad: [u32; 2],
+    pub(crate) _pad0: u32,
+    pub(crate) _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
@@ -73,7 +74,7 @@ impl Primitive for SwarmToCopies {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = Uniforms { size, dispatch_count: count, _pad: [0; 2] };
+        let uniforms = Uniforms { size, dispatch_count: count, _pad0: 0, _pad1: 0 };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[

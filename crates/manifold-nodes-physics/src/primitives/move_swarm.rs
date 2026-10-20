@@ -32,7 +32,9 @@ pub(crate) struct MoveSwarmUniforms {
     pub(crate) field_min_z: f32,
     pub(crate) impulse_tick: i32,
     pub(crate) dispatch_count: u32,
-    pub(crate) _pad: [u32; 3],
+    pub(crate) _pad0: u32,
+    pub(crate) _pad1: u32,
+    pub(crate) _pad2: u32,
 }
 
 const fn int(name: &'static str, label: &'static str, default: f32, max: f32) -> ParamDef {
@@ -168,7 +170,9 @@ impl Primitive for MoveSwarm {
             field_min_z: field.min[2],
             impulse_tick: field.impulse_tick,
             dispatch_count: active,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         // `in`/`out` alias the particle buffer; an unwired lattice is never
         // read (force_lattices 0, impulse_tick −1), so the particles stand
