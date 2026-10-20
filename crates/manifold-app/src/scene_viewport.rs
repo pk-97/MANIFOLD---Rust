@@ -37,6 +37,7 @@ pub(crate) struct SceneViewportFrame {
     pub request: Arc<SceneViewportRequest>,
     pub status: Result<FrameRenderStatus, SceneViewportHostError>,
     pub domains: Arc<Domains>,
+    pub live_columns: crate::physics_overlay::LiveColumns,
     /// The outline mask bridge generation when this frame drew a selection
     /// mask into the same surface slot (`selection_outline.rs`).
     pub outline: Option<u64>,
@@ -217,15 +218,14 @@ impl SceneViewportObservations {
         request: Arc<SceneViewportRequest>,
         status: Result<FrameRenderStatus, SceneViewportHostError>,
     ) {
-        if self.scratch.as_slice() != self.domains.as_ref() {
-            self.domains = Arc::from(self.scratch.as_slice());
-        }
+        let live_columns = crate::physics_overlay::share_domains(&mut self.scratch, &mut self.domains);
         self.frames[slot] = Some(SceneViewportFrame {
             frame,
             surface_generation,
             request,
             status,
             domains: self.domains.clone(),
+            live_columns,
             outline: None,
         });
     }
@@ -354,6 +354,7 @@ mod tests {
             request: old_request.clone(),
             status: Ok(FrameRenderStatus::Complete),
             domains: Arc::from([]),
+            live_columns: Default::default(),
             outline: None,
         };
         navigation.camera_mut().orbit(80.0, 40.0, 0.01);

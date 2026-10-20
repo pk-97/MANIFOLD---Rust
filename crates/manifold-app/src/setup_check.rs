@@ -21,7 +21,7 @@ use manifold_core::liquid_domain::liquid_domains_in;
 use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::project::Project;
-use manifold_core::{LayerId, NodeId};
+use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_node_engine::param_binding::convert_param_value;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_nodes_scene::node_graph::scene_vm::{
@@ -46,44 +46,84 @@ pub(crate) struct SetupFitEntry {
 pub(crate) type SetupFitReport = Arc<[SetupFitEntry]>;
 
 /// Content-thread side of the report. A warning the solver reports latches
-/// on like a clip light and stays until that layer's authored values or graph
-/// change, so a driven fill or column sweeping in and out of the walls shows
-/// one steady line, not a flicker. A column seen both clipped and outside
-/// latches as clipped, one line. The buffers are reused; a new report is
-/// allocated only when the latched set changes.
+/// on like a clip light and stays until an authored edit changes that layer:
+/// a graph edit, or a card value a command through `EditingService` (an edit
+/// or an undo) moved. Automation, a live hand and modulation never release
+/// it, so a driven fill or column sweeping in and out of the walls shows one
+/// steady line, not a flicker. A column seen both clipped and outside latches
+/// as clipped, one line. The buffers are reused; a new report is allocated
+/// only when the latched set changes.
 pub(crate) struct SetupFitObservations {
     domains: Vec<(NodeId, FluidDomainSnapshot)>,
     /// The latched entries; `report` is a copy taken when they change.
     scratch: Vec<SetupFitEntry>,
-    /// Each layer with a latched entry, with its authored key at latch time.
-    latched_layers: Vec<(LayerId, u64)>,
+    latched_layers: Vec<LatchedLayer>,
+    /// The edit stamps at the last frame.
+    edits: Option<u64>,
     pub report: SetupFitReport,
 }
 
 impl Default for SetupFitObservations {
     fn default() -> Self {
-        Self { domains: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), report: Arc::from([]) }
+        Self { domains: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
+    }
+}
+
+/// What can release a latch: an edit to a layer's cards, graph or manifest.
+const LATCH_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::EmbeddedPresets, Part::Values]);
+
+/// A layer holding latched warnings, followed frame by frame so an authored
+/// edit is told apart from automation. Allocated when it latches.
+struct LatchedLayer {
+    layer: LayerId,
+    graph: (u32, u32, PresetTypeId),
+    /// Each card's authored value at the last frame, in manifest order.
+    values: Vec<f32>,
+    /// Cards whose value moved on a frame with no edit (automation or a live
+    /// hand): their moves never release the latch.
+    playing: Vec<bool>,
+}
+
+impl LatchedLayer {
+    fn graph(layer: &Layer) -> (u32, u32, PresetTypeId) {
+        (layer.generator_graph_version(), layer.generator_graph_structure_version(), layer.generator_type().clone())
+    }
+
+    fn new(layer: &Layer) -> Self {
+        let values: Vec<f32> = layer.gen_params().map_or_else(Vec::new, |inst| inst.params.iter().map(|param| authored_value(inst, param)).collect());
+        Self { layer: layer.layer_id.clone(), graph: Self::graph(layer), playing: vec![false; values.len()], values }
+    }
+
+    /// Follow this frame's card values. True when an authored edit changed the
+    /// layer: its graph, its manifest, or on a frame with an edit (`edit`) a
+    /// card that is not playing.
+    fn edited(&mut self, layer: &Layer, edit: bool) -> bool {
+        let (version, structure, kind) = &self.graph;
+        if layer.generator_graph_version() != *version || layer.generator_graph_structure_version() != *structure || layer.generator_type() != kind {
+            return true;
+        }
+        let Some(inst) = layer.gen_params() else { return true };
+        if inst.params.len() != self.values.len() {
+            return true;
+        }
+        for ((param, value), playing) in inst.params.iter().zip(&mut self.values).zip(&mut self.playing) {
+            let now = authored_value(inst, param);
+            if now.to_bits() == value.to_bits() {
+                continue;
+            }
+            if edit && !*playing {
+                return true;
+            }
+            *playing |= !edit;
+            *value = now;
+        }
+        false
     }
 }
 
 /// Hands each rendered layer's domain snapshots to the callback, refilling
 /// the buffer it is given.
 pub(crate) type EachRenderedDomains<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)]);
-
-/// What a layer's latch holds through: its graph and every card's authored
-/// value. A modulator or driver moves none of them.
-fn authored_key(layer: &Layer) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    layer.generator_graph_version().hash(&mut hasher);
-    layer.generator_graph_structure_version().hash(&mut hasher);
-    layer.generator_type().hash(&mut hasher);
-    if let Some(inst) = layer.gen_params() {
-        for param in inst.params.iter() {
-            authored_value(inst, param).to_bits().hash(&mut hasher);
-        }
-    }
-    hasher.finish()
-}
 
 /// A card param's authored value, as `PresetInstance::get_base_param` reads
 /// it, from the param in hand rather than a lookup by id.
@@ -94,17 +134,20 @@ fn authored_value(inst: &PresetInstance, param: &manifold_core::params::Param) -
 impl SetupFitObservations {
     /// Take this frame's report from `observe`, which walks the layers that
     /// rendered (`GeneratorRenderer::each_rendered_fluid_domains`), into the
-    /// latch. `project` is what releases it.
+    /// latch. `project` and the editing service's `stamps` release it.
     pub fn record(
         &mut self,
         project: Option<&Project>,
+        stamps: PartStamps,
         observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, EachRenderedDomains<'_>),
     ) {
-        let key = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| authored_key(layer));
+        let find = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| layer);
+        let edits = stamps.key(LATCH_PARTS);
+        let edit = self.edits.replace(edits).is_some_and(|last| last != edits);
         let before = self.scratch.len();
-        self.latched_layers.retain(|(layer, at)| key(layer) == Some(*at));
+        self.latched_layers.retain_mut(|latched| find(&latched.layer).is_some_and(|layer| !latched.edited(layer, edit)));
         let latched_layers = &self.latched_layers;
-        self.scratch.retain(|entry| latched_layers.iter().any(|(layer, _)| layer == &entry.layer));
+        self.scratch.retain(|entry| latched_layers.iter().any(|latched| latched.layer == entry.layer));
         let mut changed = self.scratch.len() != before;
         let (scratch, latched_layers) = (&mut self.scratch, &mut self.latched_layers);
         observe(&mut self.domains, &mut |layer, domains| {
@@ -112,9 +155,9 @@ impl SetupFitObservations {
                 if snapshot.fit.is_clean() && snapshot.refusal.is_none() {
                     continue;
                 }
-                if !latched_layers.iter().any(|(latched, _)| latched == layer) {
-                    let Some(at) = key(layer) else { continue };
-                    latched_layers.push((layer.clone(), at));
+                if !latched_layers.iter().any(|latched| &latched.layer == layer) {
+                    let Some(found) = find(layer) else { continue };
+                    latched_layers.push(LatchedLayer::new(found));
                 }
                 match scratch.iter_mut().find(|entry| &entry.layer == layer && &entry.node == node) {
                     Some(entry) => {

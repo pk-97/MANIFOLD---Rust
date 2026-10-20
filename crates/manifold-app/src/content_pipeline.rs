@@ -2593,7 +2593,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
                 generators?.write_physics_overlay(layer, domains, lights, gizmos)
             });
-            self.setup_fits.record(project, |domains, each| generators.into_iter().for_each(|g| g.each_rendered_fluid_domains(domains, &mut *each)));
+            self.setup_fits.record(project, stamps, |domains, each| generators.into_iter().for_each(|g| g.each_rendered_fluid_domains(domains, &mut *each)));
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,

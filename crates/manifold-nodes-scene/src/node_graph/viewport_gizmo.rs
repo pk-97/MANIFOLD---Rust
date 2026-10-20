@@ -491,6 +491,10 @@ pub struct GizmoChrome<'a> {
     pub view: GizmoView,
     pub lights: &'a [[f32; 3]],
     pub domains: &'a [(NodeId, FluidDomainSnapshot)],
+    /// The live column box of `domains[i]` when the host carries it apart
+    /// from the snapshot (so a moving column re-shares nothing); empty
+    /// otherwise.
+    pub live_columns: &'a [Option<([f32; 3], [f32; 3])>],
     pub physics: &'a [PhysicsGizmo],
     /// The scene's setup check: each shape that does not fit its domain
     /// draws a red box.
@@ -542,7 +546,7 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
         let count = physics_gizmo_lines(gizmo, &mut shape);
         out.extend_from_slice(&shape[..count]);
     }
-    for (lo, hi) in chrome.problems.iter().filter_map(|problem| problem.live_bounds(chrome.domains)) {
+    for (lo, hi) in chrome.problems.iter().filter_map(|problem| problem.live_bounds(chrome.domains, chrome.live_columns)) {
         out.extend(box_lines(lo, hi, PROBLEM_COLOR));
     }
     if let Some(target) = chrome.selected {

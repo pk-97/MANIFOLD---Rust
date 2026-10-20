@@ -88,12 +88,15 @@ impl SetupProblem {
     /// Where the viewport outlines it this frame: a fill or column problem on
     /// a domain the frame reports reads that domain's live box, so a driven
     /// column is outlined where it is now without rebuilding the list.
-    pub fn live_bounds(&self, domains: &[(NodeId, FluidDomainSnapshot)]) -> Option<([f32; 3], [f32; 3])> {
+    /// `live_columns[i]`, when given, is `domains[i]`'s column box held apart
+    /// from its snapshot.
+    pub fn live_bounds(&self, domains: &[(NodeId, FluidDomainSnapshot)], live_columns: &[Option<([f32; 3], [f32; 3])>]) -> Option<([f32; 3], [f32; 3])> {
         let ShapeOwner::LiquidDomain(node) = &self.owner else { return self.bounds };
-        let Some((_, snapshot)) = domains.iter().find(|(id, _)| id == node) else { return self.bounds };
+        let Some(at) = domains.iter().position(|(id, _)| id == node) else { return self.bounds };
+        let snapshot = &domains[at].1;
         let live = match self.kind {
             SetupProblemKind::FillCapped => snapshot.accepted_layout.as_ref().map(fill_top),
-            SetupProblemKind::ColumnClipped | SetupProblemKind::ColumnOutside => snapshot.column_box,
+            SetupProblemKind::ColumnClipped | SetupProblemKind::ColumnOutside => live_columns.get(at).copied().flatten().or(snapshot.column_box),
             _ => None,
         };
         live.or(self.bounds)

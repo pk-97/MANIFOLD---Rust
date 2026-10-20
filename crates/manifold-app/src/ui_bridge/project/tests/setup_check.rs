@@ -104,6 +104,17 @@ impl Rig {
         card.row(id).expect("the pinned row on the card").spec.setup_warning.clone()
     }
 
+    /// A card param on the water that places no setup shape.
+    fn unrelated_card(&self) -> String {
+        let def = effective_def(&self.project, &self.layer);
+        let placing = ["fill_height", "domain_size", "resolution", "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "billboard", "role"];
+        let unrelated = def.preset_metadata.as_ref().unwrap().bindings.iter().find_map(|binding| match &binding.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if !placing.contains(&param.as_str()) => Some(binding.id.clone()),
+            _ => None,
+        });
+        unrelated.expect("a water card param that places nothing")
+    }
+
     /// The solver's report for this water's domain.
     fn report(&self, fit: SetupFit) -> SetupFitReport {
         Arc::from([SetupFitEntry { layer: self.layer.clone(), node: self.domain.clone(), fit, refusal: None }])
@@ -221,13 +232,7 @@ fn a_scrub_that_leaves_the_list_alone_never_syncs_the_inspector() {
     rig.parts.bump(ChangeSet::of(&[Part::Values]));
     assert!(!frame(&mut check, &rig), "a scrub elsewhere");
     // A knob on this water that places no setup shape.
-    let def = effective_def(&rig.project, &rig.layer);
-    let placing = ["fill_height", "domain_size", "resolution", "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "billboard", "role"];
-    let unrelated = def.preset_metadata.as_ref().unwrap().bindings.iter().find_map(|binding| match &binding.target {
-        manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if !placing.contains(&param.as_str()) => Some(binding.id.clone()),
-        _ => None,
-    });
-    let unrelated = unrelated.expect("a water card param that places nothing");
+    let unrelated = rig.unrelated_card();
     let (index, _) = rig.project.timeline.find_layer_by_id(&rig.layer).unwrap();
     let base = rig.project.timeline.layers[index].gen_params().unwrap().get_base_param(&unrelated);
     rig.project.timeline.layers[index].gen_params_mut().unwrap().set_base_param(&unrelated, base + 0.01);
@@ -287,7 +292,7 @@ fn a_swept_driven_fill_syncs_the_inspector_once_until_an_edit() {
             let capped = (frame * 8 / 60) % 2 == 1;
             let fit = if capped { CAPPED_FIT } else { SetupFit::default() };
             let domains = [(rig.domain.clone(), snapshot(fit))];
-            observations.record(Some(&rig.project), |_, each| each(&rig.layer, &domains));
+            observations.record(Some(&rig.project), rig.parts, |_, each| each(&rig.layer, &domains));
             let next = FrameInputs { setup_check: check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &observations.report), ..Default::default() };
             *syncs += usize::from(plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
             last = next;
@@ -304,6 +309,64 @@ fn a_swept_driven_fill_syncs_the_inspector_once_until_an_edit() {
     assert_eq!(syncs, 2, "the warning clears");
     run(&rig, 121..240, &mut syncs);
     assert_eq!(syncs, 3, "and latches once more");
+}
+
+/// Automation writes card values but is not an edit: with a lane playing on
+/// another of the water's knobs, a driven fill's latched cap holds and the
+/// cards re-project once. A card edit through the editing service releases
+/// it, and so does undoing one.
+#[test]
+fn automation_never_releases_the_latch_and_an_edit_or_undo_does() {
+    use crate::frame_plan::{FrameInputs, Projection, plan_frame};
+    let mut rig = Rig::new();
+    let mut editing = EditingService::new();
+    let unrelated = rig.unrelated_card();
+    let fill = binding(&effective_def(&rig.project, &rig.layer), &rig.domain, "fill_height");
+    let (index, _) = rig.project.timeline.find_layer_by_id(&rig.layer).unwrap();
+    let snapshot = |fit: SetupFit| FluidDomainSnapshot {
+        epoch: 1,
+        state: manifold_core::fluid_domain::FluidDomainState::Ready,
+        accepted_layout: None,
+        fit,
+        column_box: None,
+        refusal: None,
+    };
+    let mut observations = crate::setup_check::SetupFitObservations::default();
+    let mut check = CardCheck::default();
+    let mut last = FrameInputs::default();
+    let mut syncs = 0;
+    let mut run = |rig: &mut Rig, editing: &EditingService, frames: std::ops::Range<usize>, capped: bool, syncs: &mut usize| -> SetupFitReport {
+        for frame in frames {
+            // The lane plays every frame; automation never goes through the editing service.
+            let value = 0.2 + (frame % 30) as f32 * 0.01;
+            rig.project.timeline.layers[index].gen_params_mut().unwrap().set_base_param_from_automation(&unrelated, value);
+            let fit = if capped { CAPPED_FIT } else { SetupFit::default() };
+            let domains = [(rig.domain.clone(), snapshot(fit))];
+            observations.record(Some(&rig.project), editing.stamps(), |_, each| each(&rig.layer, &domains));
+            let next = FrameInputs { setup_check: check.input(&rig.project, editing.stamps(), [Some(&rig.layer), None], &observations.report), ..Default::default() };
+            *syncs += usize::from(plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
+            last = next;
+        }
+        observations.report.clone()
+    };
+    let target = manifold_core::GraphTarget::Generator(rig.layer.clone());
+    let edit = |rig: &mut Rig, editing: &mut EditingService, value: f32| {
+        let old = rig.project.timeline.layers[index].gen_params().unwrap().get_base_param(&fill);
+        editing.execute(Box::new(manifold_editing::commands::effects::ChangeGraphParamCommand::new(target.clone(), fill.clone(), old, value)), &mut rig.project);
+    };
+    edit(&mut rig, &mut editing, 0.5);
+
+    run(&mut rig, &editing, 0..1, true, &mut syncs);
+    let held = run(&mut rig, &editing, 1..120, false, &mut syncs);
+    assert_eq!(syncs, 1, "one sync for the cap, none while automation plays");
+    assert_eq!(rig.problems_with(&held), vec![SetupProblemKind::FillCapped], "automation never released the latch");
+
+    edit(&mut rig, &mut editing, 0.45);
+    assert!(run(&mut rig, &editing, 120..121, false, &mut syncs).is_empty(), "a card edit releases it");
+    run(&mut rig, &editing, 121..122, true, &mut syncs);
+    assert!(!run(&mut rig, &editing, 122..150, false, &mut syncs).is_empty(), "latched again");
+    assert!(editing.undo(&mut rig.project), "the edit undoes");
+    assert!(run(&mut rig, &editing, 150..151, false, &mut syncs).is_empty(), "an undo releases it");
 }
 
 /// A gizmo host rebuilds its list only when the scene or a domain's fit or
@@ -336,7 +399,7 @@ fn a_steady_gizmo_frame_rebuilds_nothing() {
         assert!(!host.update(Some(&scene), Some(&moving)), "a moving column inside its warning rebuilds nothing");
         assert!(!host.update(Some(&scene), Some(&domains)), "a steady frame rebuilds nothing");
         let column = host.problems().iter().find(|problem| problem.kind == SetupProblemKind::ColumnClipped).unwrap();
-        assert_eq!(column.live_bounds(&moving), at(1.5 + step as f32 * 0.01), "the box is where the column is now");
+        assert_eq!(column.live_bounds(&moving, &[]), at(1.5 + step as f32 * 0.01), "the box is where the column is now");
     }
     assert_eq!((host.problems().as_ptr(), host.problems().len()), list, "the same list, never reallocated");
     let fitting: crate::physics_overlay::SharedDomains = Arc::from([(domain, snapshot(SetupFit::default(), None))]);
@@ -363,7 +426,7 @@ fn the_fit_report_is_reallocated_only_on_change() {
     let (water, other, calm) = (NodeId::new("water"), NodeId::new("other"), NodeId::new("calm"));
     let mut observations = crate::setup_check::SetupFitObservations::default();
     let mut record = |rig: &Rig, domains: &[(NodeId, FluidDomainSnapshot)]| {
-        observations.record(Some(&rig.project), |_, each| each(&rig.layer, domains));
+        observations.record(Some(&rig.project), rig.parts, |_, each| each(&rig.layer, domains));
         observations.report.clone()
     };
     let capped = |node: &NodeId| (node.clone(), snapshot(CAPPED_FIT));

@@ -1727,7 +1727,8 @@ impl Application {
             {
                 crate::selection_outline::outline_slots(scene, object, &mut ws.viewport_outline);
             }
-            let shown = session.displayed.as_ref().filter(|frame| frame.has_image()).map(|frame| &frame.domains);
+            let displayed = session.displayed.as_ref().filter(|frame| frame.has_image());
+            let shown = displayed.map(|frame| &frame.domains);
             let config = session.displayed_config().unwrap_or(session.config);
             ws.viewport_problems.update(viewport_def.scene.as_ref(), shown);
             compose_lines(
@@ -1735,6 +1736,7 @@ impl Application {
                     view: crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height),
                     lights: &[],
                     domains: shown.map_or(&[][..], |domains| &domains[..]),
+                    live_columns: displayed.map_or(&[][..], |frame| &frame.live_columns[..]),
                     physics: &[],
                     problems: ws.viewport_problems.problems(),
                     selected: target.as_ref(),

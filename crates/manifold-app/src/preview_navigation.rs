@@ -307,6 +307,7 @@ mod tests {
             scene_node: NodeId::new("render"),
             camera: Camera::look_at([0.0, 1.5, 6.0], [0.0; 3], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_3, 0.05, 200.0),
             domains: Arc::from([]),
+            live_columns: Default::default(),
             lights: Arc::from([]),
             gizmos: Arc::from([]),
             outline: None,
@@ -324,6 +325,7 @@ mod tests {
             request: request.clone(),
             status: Ok(FrameRenderStatus::Complete),
             domains: Arc::from([]),
+            live_columns: Default::default(),
             outline: None,
         }
     }
