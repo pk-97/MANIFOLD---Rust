@@ -145,6 +145,7 @@ mod bridge_probe;
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod export_repro;
 mod project_io;
+mod quit;
 mod session_log;
 mod present_feedback;
 mod sync_prefs;
