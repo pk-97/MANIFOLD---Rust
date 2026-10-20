@@ -218,6 +218,14 @@ pub struct Application {
     /// view size, and the pane re-imports on the generation bump.
     #[cfg(target_os = "macos")]
     pub(crate) scene_viewport_pane: Option<crate::texture_pane::TexturePane>,
+    /// The selection outline's mask bridges (D-102): beside the output
+    /// preview's surfaces and beside the scene viewport's.
+    #[cfg(target_os = "macos")]
+    pub(crate) outline_output_pane: Option<crate::texture_pane::TexturePane>,
+    #[cfg(target_os = "macos")]
+    pub(crate) outline_viewport_pane: Option<crate::texture_pane::TexturePane>,
+    /// The pass that draws the outline over a picture.
+    pub(crate) selection_outline: Option<crate::selection_outline::SelectionOutline>,
     /// IOSurface bridge for the per-node thumbnail atlas (one big texture packed
     /// as a cell grid). The editor present pass samples cells onto canvas nodes.
     #[cfg(target_os = "macos")]
@@ -620,6 +628,11 @@ impl Application {
             ui_node_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             scene_viewport_pane: None,
+            #[cfg(target_os = "macos")]
+            outline_output_pane: None,
+            #[cfg(target_os = "macos")]
+            outline_viewport_pane: None,
+            selection_outline: None,
             #[cfg(target_os = "macos")]
             node_atlas_texture_bridge: None,
             #[cfg(target_os = "macos")]
@@ -1274,6 +1287,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 mag_filter: manifold_gpu::GpuFilterMode::Linear,
                 ..Default::default()
             }));
+            self.selection_outline = Some(crate::selection_outline::SelectionOutline::new(&native_device));
 
             // Atlas blit pipeline (premultiplied alpha — One/OneMinusSrcAlpha)
             let atlas_shader = r#"
@@ -1480,6 +1494,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let viewport_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(64, 64));
                 self.scene_viewport_pane = Some(crate::texture_pane::TexturePane::bridged(viewport_bridge));
 
+                // Selection outline masks, sized by the content thread to each mask.
+                let mask_bridge = || Arc::new(crate::shared_texture::SharedTextureBridge::with_format(64, 64, manifold_gpu::GpuTextureFormat::R8Unorm));
+                self.outline_output_pane = Some(crate::texture_pane::TexturePane::bridged(mask_bridge()));
+                self.outline_viewport_pane = Some(crate::texture_pane::TexturePane::bridged(mask_bridge()));
+
                 // Per-node thumbnail atlas bridge — one big cell-grid texture of
                 // 16:9 cells (not square), so thumbnails keep a video aspect.
                 let atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
@@ -1604,6 +1623,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_scene_viewport_textures(textures, Arc::clone(bridge));
+            }
+            #[cfg(target_os = "macos")]
+            if let (Some(output), Some(viewport)) = (
+                self.outline_output_pane.as_ref().and_then(|pane| pane.bridge()),
+                self.outline_viewport_pane.as_ref().and_then(|pane| pane.bridge()),
+            ) {
+                content_pipeline.set_outline_bridges(Arc::clone(output), Arc::clone(viewport));
             }
             // Content-side import of the thumbnail-atlas IOSurfaces.
             #[cfg(target_os = "macos")]

@@ -286,14 +286,7 @@ impl GizmoGesture {
     }
 }
 
-/// The picture a host shows: the camera it was rendered through and the
-/// render's size. Pointer points are in that render's pixels.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GizmoView {
-    pub camera: Camera,
-    pub width: u32,
-    pub height: u32,
-}
+pub(crate) use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoView;
 
 /// What a left press on a gizmo host did.
 #[derive(Debug)]
@@ -771,7 +764,7 @@ mod tests {
         assert!(!force.handle(GizmoMode::Move, GizmoAxis::Y).unwrap().write.locked(), "an unlocked card's handle does not");
         let view = GizmoView { camera: camera(), width: W, height: H };
         let scene = scene(&project, &layer);
-        let grip = force.grip(GizmoMode::Move, GizmoAxis::X).unwrap();
+        let grip = force.grip(GizmoMode::Move, GizmoAxis::X, &view).unwrap();
         let mut rig = Rig::new(&layer);
         let pressed = rig.with_ctx(&mut project, |ctx| press(ctx, &layer, &scene, Some(&force.id), GizmoMode::Move, &view, px(grip)));
         assert!(matches!(pressed, GizmoPress::Handle(None)), "the locked handle takes the press and refuses it: {pressed:?}");
@@ -842,7 +835,7 @@ mod tests {
         // content thread, so the output render cannot change.
         assert!(rig.rx.try_iter().next().is_none(), "a pick sends no content command");
 
-        let grip = force.grip(GizmoMode::Move, GizmoAxis::X).unwrap();
+        let grip = force.grip(GizmoMode::Move, GizmoAxis::X, &view).unwrap();
         rig.with_ctx(&mut local, |ctx| {
             let GizmoPress::Handle(Some(mut gesture)) = press(ctx, &layer, &scene, Some(&id), GizmoMode::Move, &view, px(grip)) else {
                 panic!("the move handle takes the press")

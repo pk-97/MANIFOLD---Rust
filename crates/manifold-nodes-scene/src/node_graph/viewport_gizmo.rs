@@ -34,9 +34,9 @@ use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
 use manifold_core::physics_gizmo::PhysicsGizmo;
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ParamTriple, SceneShape};
-use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
-use crate::node_graph::scene_vm::{FluidRole, SceneShapeVm, SceneVm, ShapeOwner, ShapeParamVm, ShapeWrite};
+use crate::node_graph::scene_vm::{FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, ShapeOwner, ShapeParamVm, ShapeWrite};
 use crate::node_graph::viewport_overlay::{
     PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, grid_lines, light_billboard_lines,
     physics_gizmo_lines,
@@ -46,8 +46,10 @@ use crate::node_graph::viewport_overlay::{
 pub const PICK_RADIUS_PX: f32 = 22.0;
 /// Axis-handle hit-test tolerance, screen pixels.
 pub const AXIS_PICK_TOLERANCE_PX: f32 = 10.0;
-/// World-space length of a gizmo axis handle.
-pub const GIZMO_HANDLE_LEN: f32 = 1.25;
+/// A handle's length as a share of the view's height. Handles keep this
+/// size on screen at any camera distance or field of view, as Blender, Unity
+/// and Unreal scale theirs (D-102).
+pub const HANDLE_VIEW_FRACTION: f32 = 0.12;
 /// The smallest size or radius a scale handle writes.
 const MIN_EXTENT: f32 = 0.01;
 
@@ -316,16 +318,47 @@ impl GizmoTarget {
         direction_drag_delta(self.origin, self.axis_direction(axis), cam, width, height, delta)
     }
 
-    /// The world point a pointer grabs `mode`'s handle on `axis` by: a
-    /// linear handle's tip, or a ring an eighth of a turn round, where no
-    /// other ring passes. [`pick_axis`] returns that handle there unless
-    /// another ring stands edge-on over it.
-    pub fn grip(&self, mode: GizmoMode, axis: GizmoAxis) -> Option<[f32; 3]> {
+    /// The world point a pointer grabs `mode`'s handle on `axis` by in
+    /// `view`: a linear handle's tip, or a ring an eighth of a turn round,
+    /// where no other ring passes. [`pick_axis`] returns that handle there
+    /// unless another ring stands edge-on over it.
+    pub fn grip(&self, mode: GizmoMode, axis: GizmoAxis, view: &GizmoView) -> Option<[f32; 3]> {
         self.handle(mode, axis)?;
+        let len = handle_length(self.origin, &view.camera, view.height);
         match mode {
-            GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.axis_direction(axis), GIZMO_HANDLE_LEN)),
-            GizmoMode::Rotate => ring_lines(self.origin, axis, GIZMO_HANDLE_LEN, [0; 4]).nth(3).map(|line| self.world_point(line.a)),
+            GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.axis_direction(axis), len)),
+            GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4]).nth(3).map(|line| self.world_point(line.a)),
         }
+    }
+}
+
+/// The picture a host shows: the camera it was rendered through and the
+/// render's size. Pointer points are in that render's pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct GizmoView {
+    pub camera: Camera,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The world length a handle at `origin` takes so it spans
+/// [`HANDLE_VIEW_FRACTION`] of a `height`-pixel view through `cam`. Draw,
+/// grip and hit-test all read this one length.
+pub fn handle_length(origin: [f32; 3], cam: &Camera, height: u32) -> f32 {
+    HANDLE_VIEW_FRACTION * height as f32 * world_per_pixel(origin, cam, height)
+}
+
+/// World units one pixel spans at `point`'s depth in a `height`-pixel view.
+/// A point at or behind the near plane takes the near plane's scale.
+fn world_per_pixel(point: [f32; 3], cam: &Camera, height: u32) -> f32 {
+    let height = height.max(1) as f32;
+    match cam.mode {
+        CameraMode::Perspective { fov_y } => {
+            let d = [point[0] - cam.pos[0], point[1] - cam.pos[1], point[2] - cam.pos[2]];
+            let depth = (d[0] * cam.fwd[0] + d[1] * cam.fwd[1] + d[2] * cam.fwd[2]).max(cam.near.max(1e-4));
+            2.0 * depth * (fov_y * 0.5).tan() / height
+        }
+        CameraMode::Orthographic { half_height } => 2.0 * half_height / height,
     }
 }
 
@@ -369,6 +402,8 @@ fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
 /// shape's declaration.
 #[derive(Clone, Copy)]
 pub struct GizmoChrome<'a> {
+    /// The picture the lines draw over; handles size to it.
+    pub view: GizmoView,
     pub lights: &'a [[f32; 3]],
     pub domains: &'a [(NodeId, FluidDomainSnapshot)],
     pub physics: &'a [PhysicsGizmo],
@@ -405,7 +440,8 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     }
     if let Some(target) = chrome.selected {
         let start = out.len();
-        gizmo_lines(chrome.mode, target, out);
+        let len = handle_length(target.origin, &chrome.view.camera, chrome.view.height);
+        gizmo_lines(chrome.mode, target, len, out);
         if chrome.fade_handles {
             for line in &mut out[start..] {
                 line.color[3] = line.color[3].min(FADED_HANDLE_ALPHA);
@@ -415,31 +451,31 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
 }
 
 /// World-space handle geometry for `mode` at `target`, plus the declared
-/// direction when the shape has one, appended to `lines`. Locked handles
-/// draw in [`LOCKED_COLOR`].
-pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, lines: &mut Vec<WorldLine>) {
+/// direction when the shape has one, appended to `lines`, with handles
+/// `len` long ([`handle_length`]). Locked handles draw in [`LOCKED_COLOR`].
+pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, len: f32, lines: &mut Vec<WorldLine>) {
     let origin = target.origin;
     if let Some(direction) = target.direction.and_then(normalized) {
-        lines.push(WorldLine { a: origin, b: offset(origin, direction, GIZMO_HANDLE_LEN * 1.4), color: DIRECTION_COLOR });
+        lines.push(WorldLine { a: origin, b: offset(origin, direction, len * 1.4), color: DIRECTION_COLOR });
     }
     for handle in target.handles.iter().filter(|handle| handle.mode == mode) {
         let color = if handle.write.locked() { LOCKED_COLOR } else { handle.axis.color() };
         match mode {
             GizmoMode::Move => {
-                let tip = offset(origin, target.axis_direction(handle.axis), GIZMO_HANDLE_LEN);
+                let tip = offset(origin, target.axis_direction(handle.axis), len);
                 lines.push(WorldLine { a: origin, b: tip, color });
             }
             GizmoMode::Scale => {
                 let u = target.axis_direction(handle.axis);
-                let tip = offset(origin, u, GIZMO_HANDLE_LEN);
+                let tip = offset(origin, u, len);
                 // A short tick at the tip tells scale from move.
                 let perp = perpendicular(u);
-                let tick = GIZMO_HANDLE_LEN * 0.12;
+                let tick = len * 0.12;
                 lines.push(WorldLine { a: origin, b: tip, color });
                 lines.push(WorldLine { a: offset(tip, perp, tick), b: offset(tip, perp, -tick), color });
             }
             GizmoMode::Rotate => {
-                lines.extend(ring_lines(origin, handle.axis, GIZMO_HANDLE_LEN, color).map(|line| WorldLine {
+                lines.extend(ring_lines(origin, handle.axis, len, color).map(|line| WorldLine {
                     a: target.world_point(line.a),
                     b: target.world_point(line.b),
                     color: line.color,
@@ -502,15 +538,16 @@ fn point_segment_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
 pub fn pick_axis(mode: GizmoMode, target: &GizmoTarget, cam: &Camera, width: u32, height: u32, click: (f32, f32)) -> Option<GizmoAxis> {
     let origin = target.origin;
     let origin_px = cam.project_to_pixel(origin, width, height)?;
+    let len = handle_length(origin, cam, height);
     let mut best: Option<(GizmoAxis, f32)> = None;
     for handle in target.handles.iter().filter(|handle| handle.mode == mode) {
         let d = match mode {
             GizmoMode::Move | GizmoMode::Scale => {
-                let tip = offset(origin, target.axis_direction(handle.axis), GIZMO_HANDLE_LEN);
+                let tip = offset(origin, target.axis_direction(handle.axis), len);
                 let Some(tip_px) = cam.project_to_pixel(tip, width, height) else { continue };
                 point_segment_dist(click, (origin_px.px, origin_px.py), (tip_px.px, tip_px.py))
             }
-            GizmoMode::Rotate => ring_lines(origin, handle.axis, GIZMO_HANDLE_LEN, [0; 4])
+            GizmoMode::Rotate => ring_lines(origin, handle.axis, len, [0; 4])
                 .filter_map(|seg| {
                     let a = cam.project_to_pixel(target.world_point(seg.a), width, height)?;
                     let b = cam.project_to_pixel(target.world_point(seg.b), width, height)?;
@@ -640,6 +677,28 @@ pub fn rotate_drag_delta(
         d += std::f32::consts::TAU;
     }
     Some(d)
+}
+
+/// The render slots that draw scene object `object_node_id`, for its
+/// selection outline (D-102): its own, or every part's for an imported
+/// model's group row. Written into `out`, sorted.
+pub fn outline_slots(scene: &SceneVm, object_node_id: u32, out: &mut Vec<u32>) {
+    let rows = || {
+        scene.objects.iter().filter_map(|object| match object {
+            SceneObjectVm::Known(row) => Some(row),
+            SceneObjectVm::Custom { .. } => None,
+        })
+    };
+    out.clear();
+    for row in rows().filter(|row| row.object_node_id == object_node_id) {
+        if row.is_group {
+            out.extend(rows().filter(|part| part.parent_group_id == Some(object_node_id) && !part.is_group).map(|part| part.index as u32));
+        } else {
+            out.push(row.index as u32);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
 }
 
 #[cfg(test)]

@@ -37,6 +37,9 @@ pub(crate) struct SceneViewportFrame {
     pub request: Arc<SceneViewportRequest>,
     pub status: Result<FrameRenderStatus, SceneViewportHostError>,
     pub domains: Arc<Domains>,
+    /// The outline mask bridge generation when this frame drew a selection
+    /// mask into the same surface slot (`selection_outline.rs`).
+    pub outline: Option<u64>,
 }
 
 impl SceneViewportFrame {
@@ -151,8 +154,9 @@ impl SceneViewportNavigation {
 /// The frame `request` produced on the viewport bridge's published surface,
 /// for either host. With an image, the leased surface's texture comes back
 /// and the lease joins `leases`, retired when the sampling GPU work does;
-/// otherwise the lease retires at once. `None` when the surface holds no
-/// frame of this request.
+/// otherwise the lease retires at once. The surface slot comes back too, for
+/// the selection mask beside it. `None` when the surface holds no frame of
+/// this request.
 #[cfg(target_os = "macos")]
 pub(crate) fn lease_frame(
     pane: &mut crate::texture_pane::TexturePane,
@@ -160,7 +164,7 @@ pub(crate) fn lease_frame(
     frames: &SceneViewportFrames,
     request: &SceneViewportRequest,
     leases: &mut crate::shared_texture::BridgeLeaseBatch,
-) -> Option<(SceneViewportFrame, Option<manifold_gpu::GpuTexture>)> {
+) -> Option<(SceneViewportFrame, Option<manifold_gpu::GpuTexture>, usize)> {
     let bridge = pane.bridge()?.clone();
     let lease = bridge.acquire_read();
     let matched = bridge.leased_frame(lease).and_then(|frame| {
@@ -174,7 +178,7 @@ pub(crate) fn lease_frame(
     } else {
         bridge.retire_read(lease);
     }
-    matched.map(|frame| (frame.clone(), texture))
+    matched.map(|frame| (frame.clone(), texture, lease.slot()))
 }
 
 /// Reuse the domain buffer each frame; allocate a published snapshot only when
@@ -183,6 +187,15 @@ pub(crate) struct SceneViewportObservations {
     pub scratch: Vec<(NodeId, FluidDomainSnapshot)>,
     domains: Arc<Domains>,
     pub frames: SceneViewportFrames,
+}
+
+impl SceneViewportObservations {
+    /// Stamp surface `slot`'s frame with its selection mask generation.
+    pub fn set_outline(&mut self, slot: usize, outline: Option<u64>) {
+        if let Some(frame) = self.frames[slot].as_mut() {
+            frame.outline = outline;
+        }
+    }
 }
 
 impl Default for SceneViewportObservations {
@@ -213,6 +226,7 @@ impl SceneViewportObservations {
             request,
             status,
             domains: self.domains.clone(),
+            outline: None,
         });
     }
 }
@@ -225,27 +239,35 @@ pub(crate) struct SceneViewportPaint<'a> {
     pub rect: manifold_ui::Rect,
     pub frame: &'a SceneViewportFrame,
     pub lines: &'a [WorldLine],
+    /// The selection outline pass and this frame's mask (D-102).
+    pub outline: Option<(&'a crate::selection_outline::SelectionOutline, &'a manifold_gpu::GpuTexture)>,
 }
 
 impl SceneViewportPaint<'_> {
+    /// The picture, then its lines. With an outline the caller splits the
+    /// two around the outline pass ([`Self::draw_image`], [`Self::draw_lines`]).
     pub fn draw(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
+        self.draw_image(ui);
+        self.draw_lines(ui);
+    }
+
+    pub fn draw_image(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
         use manifold_ui_paint::ui_renderer::Depth;
         let r = self.rect;
         ui.push_depth(Depth::CONTENT);
         ui.push_immediate_clip(r.x, r.y, r.width, r.height);
-        ui.draw_image_uv(
-            r.x,
-            r.y,
-            r.width,
-            r.height,
-            texture_handle(),
-            [0.0, 0.0, 1.0, 1.0],
-            0.0,
-        );
+        ui.draw_image_uv(r.x, r.y, r.width, r.height, texture_handle(), [0.0, 0.0, 1.0, 1.0], 0.0);
+        ui.pop_immediate_clip();
+        ui.pop_depth();
+    }
+
+    pub fn draw_lines(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
+        use manifold_ui_paint::ui_renderer::Depth;
+        let r = self.rect;
         ui.push_depth(Depth(Depth::CONTENT.0 + 1));
+        ui.push_immediate_clip(r.x, r.y, r.width, r.height);
         let config = self.frame.request.config;
         draw_world_lines(ui, r, &config.camera.to_camera(), config.width, config.height, self.lines);
-        ui.pop_depth();
         ui.pop_immediate_clip();
         ui.pop_depth();
     }
@@ -332,6 +354,7 @@ mod tests {
             request: old_request.clone(),
             status: Ok(FrameRenderStatus::Complete),
             domains: Arc::from([]),
+            outline: None,
         };
         navigation.camera_mut().orbit(80.0, 40.0, 0.01);
         let request = navigation.request(&target(), &node, None, Some(&old_request));

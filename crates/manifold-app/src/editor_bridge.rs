@@ -1640,6 +1640,9 @@ impl Application {
 
         #[cfg(target_os = "macos")]
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
+        // The leased viewport frame's selection mask, for the outline (D-102).
+        #[cfg(target_os = "macos")]
+        let mut viewport_mask: Option<manifold_gpu::GpuTexture> = None;
         let viewport_scale = scale as f32;
         let viewport_tex_w = ((preview_w * viewport_scale).round() as u32).clamp(64, 4096);
         let viewport_tex_h = ((preview_h * viewport_scale).round() as u32).clamp(64, 4096);
@@ -1674,9 +1677,11 @@ impl Application {
             session.displayed = None;
             #[cfg(target_os = "macos")]
             if let Some(pane) = self.scene_viewport_pane.as_mut()
-                && let Some((frame, texture)) = crate::scene_viewport::lease_frame(
+                && let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(
                     pane, &gpu.device, &self.content_state.scene_viewport_frames, &request, &mut bridge_leases)
             {
+                viewport_mask = crate::selection_outline::leased_mask(self.outline_viewport_pane.as_mut(), &gpu.device, slot, frame.outline)
+                    .filter(|_| !ws.viewport_outline.is_empty());
                 if let Some(texture) = texture
                     && let Some(ui) = self.ui_renderer.as_mut()
                 {
@@ -1696,6 +1701,7 @@ impl Application {
         ws.viewport_rect = ws.viewport_session.is_some()
             .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
         ws.viewport_overlay_lines.clear();
+        ws.viewport_outline.clear();
         if let Some(session) = ws.viewport_session.as_ref() {
             show_image = session.displayed.as_ref().is_some_and(|frame| frame.has_image());
             if let Some(node) = self.last_preview_node.as_ref() {
@@ -1716,13 +1722,20 @@ impl Application {
                 .as_deref()
                 .zip(ws.viewport_selected.as_ref())
                 .and_then(|(scene, id)| gizmo_target_for(scene, id));
+            if let (Some(scene), Some(manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object))) =
+                (viewport_def.scene.as_deref(), target.as_ref().and_then(crate::scene_gizmo::scene_selection))
+            {
+                crate::selection_outline::outline_slots(scene, object, &mut ws.viewport_outline);
+            }
             let domains = session
                 .displayed
                 .as_ref()
                 .filter(|frame| frame.has_image())
                 .map_or(&[][..], |frame| &frame.domains[..]);
+            let config = session.displayed_config().unwrap_or(session.config);
             compose_lines(
                 &GizmoChrome {
+                    view: crate::scene_gizmo::GizmoView { camera: config.camera.to_camera(), width: config.width, height: config.height },
                     lights: &[],
                     domains,
                     physics: &[],
@@ -1938,7 +1951,15 @@ impl Application {
                 ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
                     .filter(|frame| frame.has_image())
                     .zip(ws.viewport_rect)
-                    .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint { rect, frame, lines: &ws.viewport_overlay_lines }),
+                    .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint {
+                        rect,
+                        frame,
+                        lines: &ws.viewport_overlay_lines,
+                        #[cfg(target_os = "macos")]
+                        outline: self.selection_outline.as_ref().zip(viewport_mask.as_ref()),
+                        #[cfg(not(target_os = "macos"))]
+                        outline: None,
+                    }),
             );
             ws.offscreen_dirty = false;
         }

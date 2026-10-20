@@ -340,6 +340,7 @@ impl Application {
         self.intake_content_state();
         self.tick_sync_calibration();
         self.sync_gizmo_layer();
+        self.sync_selection_outline();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(

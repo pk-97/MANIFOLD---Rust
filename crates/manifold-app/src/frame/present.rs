@@ -188,7 +188,7 @@ impl Application {
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch =
             preview_lease.zip(self.preview_texture_bridge.clone()).map(|(lease, bridge)| (bridge, lease)).into_iter().collect();
         #[cfg(target_os = "macos")]
-        let navigated_tex = crate::preview_navigation::lease_navigated_frame(
+        let navigated = crate::preview_navigation::lease_navigated_frame(
             &mut self.ws.preview_navigation,
             self.scene_viewport_pane.as_mut(),
             &gpu.device,
@@ -196,11 +196,13 @@ impl Application {
             &mut bridge_leases,
         );
         #[cfg(target_os = "macos")]
-        let navigated_view = navigated_tex.as_ref().and_then(|_| self.ws.preview_navigation.view());
+        let navigated_tex = navigated.as_ref().map(|(texture, _, _)| texture);
+        #[cfg(target_os = "macos")]
+        let navigated_view = navigated_tex.and_then(|_| self.ws.preview_navigation.view());
         #[cfg(not(target_os = "macos"))]
         let navigated_view = None;
         #[cfg(target_os = "macos")]
-        let compositor_tex = navigated_tex.as_ref().or(self.ui_preview_textures[preview_slot].as_ref());
+        let compositor_tex = navigated_tex.or(self.ui_preview_textures[preview_slot].as_ref());
         #[cfg(not(target_os = "macos"))]
         let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
         let video_source_dims = self.video_source_dims();
@@ -218,12 +220,26 @@ impl Application {
             });
         #[cfg(not(target_os = "macos"))]
         let gizmo_frame: Option<&crate::physics_overlay::PhysicsOverlayFrame> = None;
+        // The selected object's mask beside the picture on screen, under
+        // that picture's lease: the navigated view's or the output's (D-102).
+        #[cfg(target_os = "macos")]
+        let outline_mask = if self.ws.preview_gizmo.outline().is_empty() {
+            None
+        } else {
+            match navigated.as_ref() {
+                Some((_, slot, outline)) => crate::selection_outline::leased_mask(self.outline_viewport_pane.as_mut(), &gpu.device, *slot, *outline),
+                None => crate::selection_outline::leased_mask(
+                    self.outline_output_pane.as_mut(), &gpu.device, preview_slot, gizmo_frame.and_then(|frame| frame.outline)),
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let outline_mask: Option<manifold_gpu::GpuTexture> = None;
         self.ws.preview_gizmo.show(gizmo_frame, (video_source_dims.0 as u32, video_source_dims.1 as u32), navigated_view);
         let gizmos = self
             .ws
             .preview_gizmo
             .compose(&self.local_project, &self.ws.ui_root.scene_setup_panel, &self.ui_edits.stamps.parts())
-            .map(|(lines, view)| crate::ui_frame::MainGizmos { lines, view });
+            .map(|(lines, view)| crate::ui_frame::MainGizmos { lines, view, outline: self.selection_outline.as_ref().zip(outline_mask.as_ref()) });
         if let (
             Some(cm),
             Some(ui),

@@ -481,6 +481,7 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::SetGraphPreviewNode(_)
         | ContentCommand::SetSceneViewport(_)
         | ContentCommand::SetPhysicsOverlay(_)
+        | ContentCommand::SetSelectionOutline { .. }
         | ContentCommand::SetModifierPreviewContext { .. }
         | ContentCommand::SetNodePreviewNormalize(_)
         | ContentCommand::SetNodeAtlasVisible(_)

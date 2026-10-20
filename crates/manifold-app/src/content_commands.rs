@@ -847,6 +847,12 @@ impl ContentThread {
             ContentCommand::SetPhysicsOverlay(layer) => {
                 self.content_pipeline.set_physics_overlay(layer);
             }
+            #[cfg(target_os = "macos")]
+            ContentCommand::SetSelectionOutline { output, viewport } => {
+                self.content_pipeline.set_selection_outline(&output, &viewport);
+            }
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::SetSelectionOutline { .. } => {}
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
             }

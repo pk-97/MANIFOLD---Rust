@@ -121,6 +121,21 @@ between this doc and execution.
     over `SceneVm` built from the UI's project snapshot, at the authored values
     the knob shows. No host keeps editor-side domain state.
 
+  Handles keep one size on screen: a handle is `HANDLE_VIEW_FRACTION` of the
+  view height long at any distance or field of view, turned into world length
+  at the origin's depth through the host's camera. The gizmo core computes it
+  once, so the drawn handle and the pick use the same length on both hosts.
+
+  The selected object gets a selection outline in Blender orange on both hosts.
+  `render_scene` draws the selected objects' coverage into a mask through the
+  camera the picture was rendered with (`render_scene/selection_mask.rs`), only
+  while something is selected. The content thread copies the mask into a mask
+  bridge on the same surface slot as the picture, so the picture's read lease
+  covers both. The UI draws a fixed-width edge around the mask over the picture
+  (`crates/manifold-app/src/selection_outline.rs`), under the handles. The
+  outline is a full silhouette: it shows through anything in front of the
+  object. It hides when handles fade.
+
   The pipeline records each frame's entry, with the content frame number, for
   the output surface being written; a layer that did not render that frame
   (clip ended, occluded, or the scene bailed early) records nothing. The UI uses
@@ -175,7 +190,9 @@ between this doc and execution.
   the UI over the preview blit, never in a render pass. Preview-only navigation
   on the main preview (orbit, pan, dolly) renders an extra view and never moves
   the output camera; the output keeps looking through the show camera. The extra
-  render pass has a GPU cost; it introduces no simulation clock.
+  render pass has a GPU cost; it introduces no simulation clock. The selection
+  mask (D7a) is an editing-only extra pass beside the picture: it never writes
+  the picture, and the output is byte-identical with or without a selection.
 - **D10 — Ease ships as content:** a bundled **Scene starter preset** (mesh + PBR
   material + sun & rim point light + atmosphere haze + orbit camera, good at
   defaults) plus component-library entries once components land. Three clicks: drop

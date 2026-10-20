@@ -133,6 +133,12 @@ pub struct Workspace {
     /// The gizmo drag in progress, a knob scrub ended on release or
     /// cancellation.
     pub viewport_gizmo_drag: Option<crate::scene_gizmo::GizmoGesture>,
+    /// Render slots of the editor viewport's selected object, for its
+    /// outline (D-102).
+    pub viewport_outline: Vec<u32>,
+    /// The outline slots last sent to the content thread (output, viewport);
+    /// main window only.
+    pub outline_sent: (Vec<u32>, Vec<u32>),
     /// The graph editor's frame planner state and atlas (P5c); unused by
     /// the main window.
     pub(crate) editor_frame: crate::editor_frame::EditorFrameState,
@@ -178,6 +184,8 @@ impl Workspace {
             gizmo_layer_sent: None,
             viewport_selected: None,
             viewport_gizmo_drag: None,
+            viewport_outline: Vec::new(),
+            outline_sent: (Vec::new(), Vec::new()),
             editor_frame: Default::default(),
         }
     }

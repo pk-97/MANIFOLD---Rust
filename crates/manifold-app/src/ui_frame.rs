@@ -721,6 +721,10 @@ pub(crate) fn composite_main_ui_frame(
         && video.is_some()
         && let Some(fit) = fit
     {
+        // The selected object's outline under the lines (D-102).
+        if let Some((outline, mask)) = gizmos.outline {
+            outline.draw(&mut encoder, offscreen, mask, (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf), sf);
+        }
         ui_renderer.begin_frame();
         ui_renderer.push_immediate_clip(fit.x, fit.y, fit.width, fit.height);
         let view = gizmos.view;
@@ -743,6 +747,8 @@ pub(crate) fn composite_main_ui_frame(
 pub(crate) struct MainGizmos<'a> {
     pub lines: &'a [manifold_nodes_scene::node_graph::viewport_overlay::WorldLine],
     pub view: crate::scene_gizmo::GizmoView,
+    /// The selection outline pass and the shown picture's mask (D-102).
+    pub outline: Option<(&'a crate::selection_outline::SelectionOutline, &'a manifold_gpu::GpuTexture)>,
 }
 
 /// Where the show picture sits inside `area`: aspect-fit and centred, in

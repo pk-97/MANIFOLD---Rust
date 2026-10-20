@@ -215,6 +215,8 @@ pub struct Executor {
         Box<dyn crate::scene::scene_viewport::ViewportPass>,
     )>,
     scene_viewport_captured: bool,
+    /// Render slots the viewport outlines (D-102); a new pass takes them.
+    scene_viewport_selection: Vec<u32>,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
     /// the active quality column (realtime vs export). Default = live constants
     /// so tests and non-RT graphs run unchanged. Set per frame via
@@ -596,6 +598,7 @@ impl Executor {
             preview_target: None,
             scene_viewport: None,
             scene_viewport_captured: false,
+            scene_viewport_selection: Vec::new(),
             rt_quality: crate::exec::effect_node::RtQuality::default(),
             sim_step: crate::exec::effect_node::SimStep::default(),
             sim_metrics: Default::default(),
@@ -917,7 +920,8 @@ impl Executor {
         {
             *current = config;
         } else {
-            let Some(pass) = make() else { return false; };
+            let Some(mut pass) = make() else { return false; };
+            pass.set_selection_mask(&self.scene_viewport_selection);
             self.scene_viewport = Some((node, config, pass));
         }
         self.scene_viewport_captured = false;
@@ -940,6 +944,24 @@ impl Executor {
         self.scene_viewport.as_ref()
             .filter(|_| self.scene_viewport_captured)
             .and_then(|(_, _, pass)| pass.texture())
+    }
+
+    /// Outline these render slots in the viewport (D-102); empty stops it.
+    pub(crate) fn set_scene_viewport_selection_mask(&mut self, slots: &[u32]) {
+        if self.scene_viewport_selection == slots {
+            return;
+        }
+        self.scene_viewport_selection.clear();
+        self.scene_viewport_selection.extend_from_slice(slots);
+        if let Some((_, _, pass)) = self.scene_viewport.as_mut() {
+            pass.set_selection_mask(slots);
+        }
+    }
+
+    pub(crate) fn scene_viewport_selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.scene_viewport.as_ref()
+            .filter(|_| self.scene_viewport_captured)
+            .and_then(|(_, _, pass)| pass.selection_mask())
     }
 
     pub(crate) fn scene_viewport_status(&self) -> Option<crate::runtime::frame_status::FrameRenderStatus> {

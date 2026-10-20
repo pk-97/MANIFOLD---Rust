@@ -412,6 +412,36 @@ impl GeneratorRenderer {
         state.generator.write_rendered_view(lights)
     }
 
+    /// Outline render slots `slots` of `layer_id`'s scene in its output
+    /// render (D-102). Editing chrome: the output never changes.
+    pub fn set_selection_mask(&mut self, layer_id: &LayerId, slots: &[u32]) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_selection_mask(slots);
+        }
+    }
+
+    /// Outline render slots `slots` in `layer_id`'s scene viewport.
+    pub fn set_scene_viewport_selection_mask(&mut self, layer_id: &LayerId, slots: &[u32]) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_scene_viewport_selection_mask(slots);
+        }
+    }
+
+    /// The selection mask `layer_id`'s output render drew in the last
+    /// `render_all`.
+    pub fn selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.layer_generators.get(layer_id)
+            .filter(|state| state.rendered_pass == Some(self.render_pass))?
+            .generator
+            .selection_mask()
+    }
+
+    /// The selection mask of `layer_id`'s scene viewport frame.
+    pub fn scene_viewport_selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.scene_viewport_texture(layer_id)?;
+        self.layer_generators.get(layer_id)?.generator.scene_viewport_selection_mask()
+    }
+
     /// Keep local modifier addresses out of the host's node namespace.
     pub fn set_modifier_preview_node(
         &mut self,

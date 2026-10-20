@@ -1010,6 +1010,9 @@ pub struct ContentPipeline {
     /// its own bridge, never the workspace preview bridge (D9).
     scene_viewport: scene_viewport_capture::SceneViewportCapture,
     physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
+    /// The selection outline's requests and mask bridges (D-102).
+    #[cfg(target_os = "macos")]
+    outline: crate::selection_outline::OutlineCapture,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
@@ -1184,6 +1187,8 @@ impl ContentPipeline {
             last_node_preview_info: None,
             scene_viewport: Default::default(),
             physics_overlay: Default::default(),
+            #[cfg(target_os = "macos")]
+            outline: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
             clip_desc_scratch: Vec::new(),
@@ -2568,6 +2573,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         });
                         gen_renderer.set_scene_viewport_request(scene_request,
                             self.scene_viewport.request.as_ref().and_then(|request| request.modifier.clone()));
+                        #[cfg(target_os = "macos")]
+                        self.outline.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -2593,6 +2600,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
                 generators?.write_physics_overlay(layer, domains, lights, gizmos)
             });
+            // The selection mask beside the output surface (D-102), never in it (D9).
+            #[cfg(target_os = "macos")]
+            {
+                let mask = generators.zip(self.physics_overlay.layer()).and_then(|(g, layer)| g.selection_mask(layer));
+                let outline = self.outline.output_masks.write(native_device, &mut gen_enc, self.write_surface_index, mask);
+                self.physics_overlay.set_outline(self.write_surface_index, outline);
+            }
             // The scene viewport's frame for a generator scene, whichever host
             // asked for it, into the viewport bridge; the output is untouched
             // (D9).
@@ -2602,6 +2616,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 self.write_surface_index, frame_count)
             {
                 Self::copy_scene_viewport(&mut gen_enc, copy, &self.preview_pipelines(), self.preview_sampler.as_ref());
+                let mask = self.scene_viewport.generator_mask(generators);
+                let outline = self.outline.viewport_masks.write(native_device, &mut gen_enc, self.write_surface_index, mask);
+                self.scene_viewport.observations.set_outline(self.write_surface_index, outline);
             }
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),

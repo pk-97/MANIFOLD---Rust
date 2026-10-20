@@ -31,6 +31,20 @@ pub(crate) struct SceneViewportCapture {
 pub(super) type ViewportCopy = (Option<manifold_gpu::GpuTexture>, manifold_gpu::GpuTexture);
 
 impl SceneViewportCapture {
+    /// The generator layer the request renders a viewport of.
+    pub(super) fn generator_layer(&self) -> Option<&manifold_core::LayerId> {
+        match self.request.as_ref()?.target.host_target()? {
+            manifold_core::GraphTarget::Generator(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// The selection mask of this frame's generator viewport (D-102).
+    #[cfg(target_os = "macos")]
+    pub(super) fn generator_mask<'g>(&self, generators: Option<&'g GeneratorRenderer>) -> Option<&'g manifold_gpu::GpuTexture> {
+        generators?.scene_viewport_selection_mask(self.generator_layer()?)
+    }
+
     /// Record a generator scene's frame for surface `slot`; what to copy
     /// when this frame has a request for one.
     #[cfg(target_os = "macos")]
@@ -121,6 +135,22 @@ impl ContentPipeline {
     /// The host owning the viewport request, if any.
     pub fn scene_viewport_host(&self) -> Option<ViewportHost> {
         self.scene_viewport.request.as_ref().map(|request| request.host)
+    }
+
+    /// The selection outline's render slots for the output and the scene
+    /// viewport (D-102).
+    #[cfg(target_os = "macos")]
+    pub fn set_selection_outline(&mut self, output: &[u32], viewport: &[u32]) {
+        self.outline.set(output, viewport);
+    }
+
+    /// Install the outline mask bridges: the output preview's and the scene
+    /// viewport's.
+    #[cfg(target_os = "macos")]
+    pub fn set_outline_bridges(&mut self, output: Arc<crate::shared_texture::SharedTextureBridge>, viewport: Arc<crate::shared_texture::SharedTextureBridge>) {
+        let Some(device) = self.native_device.clone() else { return };
+        self.outline.output_masks.install(&device, output);
+        self.outline.viewport_masks.install(&device, viewport);
     }
 
     pub fn scene_viewport_frames(&self) -> &SceneViewportFrames {

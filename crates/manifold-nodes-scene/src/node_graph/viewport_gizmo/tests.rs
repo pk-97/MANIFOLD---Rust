@@ -131,6 +131,16 @@ fn node_write(param: &str) -> ShapeWrite {
     ShapeWrite::Node(ParamAddr { scope_path: vec![9], node_doc_id: 77, param_id: param.to_string() })
 }
 
+/// The 640x480 view every helper projects through.
+fn view() -> GizmoView {
+    GizmoView { camera: cam_looking_down_neg_z([0.0, 0.0, 0.0]), width: 640, height: 480 }
+}
+
+/// The handle length at `point` in [`view`].
+fn len_at(point: [f32; 3]) -> f32 {
+    handle_length(point, &view().camera, 480)
+}
+
 fn px(point: [f32; 3]) -> (f32, f32) {
     let p = cam_looking_down_neg_z([0.0, 0.0, 0.0]).project_to_pixel(point, 640, 480).unwrap();
     (p.px, p.py)
@@ -180,13 +190,13 @@ fn child_gizmo_composes_parent_origin_axes_and_drag_units() {
 
 #[test]
 fn wired_param_shows_locked_and_refuses_the_drag() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (true, false, false))]);
+    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (true, false, false))]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let lines = lines_of(GizmoMode::Move, &target);
     assert_eq!(lines.len(), 3);
-    let x_line = lines.iter().find(|l| (l.b[0] - l.a[0]).abs() > 0.5).unwrap();
+    let x_line = lines.iter().find(|l| (l.b[0] - l.a[0]).abs() > 0.1).unwrap();
     assert_eq!(x_line.color, LOCKED_COLOR, "wired pos_x draws locked");
-    let y_line = lines.iter().find(|l| (l.b[1] - l.a[1]).abs() > 0.5).unwrap();
+    let y_line = lines.iter().find(|l| (l.b[1] - l.a[1]).abs() > 0.1).unwrap();
     assert_eq!(y_line.color, Y_COLOR);
     assert!(GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, (0.0, 0.0)).is_none());
     assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::Y, (0.0, 0.0)).is_some());
@@ -274,7 +284,7 @@ fn radial_force_target_derives_from_its_point_radius_declaration() {
     };
     assert!((radius - 3.0).abs() < 1e-3, "one unit along the handle grows the radius by one, got {radius}");
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_axis(GizmoMode::Scale, &target, &cam, 640, 480, px(offset(target.origin, GizmoAxis::Uniform.unit(), GIZMO_HANDLE_LEN))), Some(GizmoAxis::Uniform));
+    assert_eq!(pick_axis(GizmoMode::Scale, &target, &cam, 640, 480, px(offset(target.origin, GizmoAxis::Uniform.unit(), len_at(target.origin)))), Some(GizmoAxis::Uniform));
 }
 
 #[test]
@@ -339,7 +349,7 @@ fn pick_axis_returns_the_handle_under_the_click() {
     let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    let tip = offset(target.origin, GizmoAxis::X.unit(), GIZMO_HANDLE_LEN);
+    let tip = offset(target.origin, GizmoAxis::X.unit(), len_at(target.origin));
     assert_eq!(pick_axis(GizmoMode::Move, &target, &cam, 640, 480, px(tip)), Some(GizmoAxis::X));
     assert_eq!(pick_axis(GizmoMode::Move, &target, &cam, 640, 480, (0.0, 0.0)), None);
 }
@@ -372,7 +382,7 @@ fn scale_gizmo_lines_have_tick_marks() {
 
 fn lines_of(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
     let mut lines = Vec::new();
-    gizmo_lines(mode, target, &mut lines);
+    gizmo_lines(mode, target, len_at(target.origin), &mut lines);
     lines
 }
 
@@ -394,6 +404,7 @@ fn composition_draws_what_physics_did_then_the_selected_handles() {
     let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (false, false, false))]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let mut chrome = GizmoChrome {
+        view: view(),
         lights: &[[0.0, 4.0, 0.0], [2.0, 1.0, -1.0]],
         domains: &domains,
         physics: &physics,
@@ -424,8 +435,95 @@ fn each_grip_picks_its_own_handle() {
     let at = |p: [f32; 3]| cam.project_to_pixel(p, 640, 480).map(|p| (p.px, p.py)).unwrap();
     for mode in [GizmoMode::Move, GizmoMode::Scale, GizmoMode::Rotate] {
         for axis in GizmoAxis::XYZ {
-            let grip = target.grip(mode, axis).expect("an object has every handle");
+            let grip = target.grip(mode, axis, &GizmoView { camera: cam, width: 640, height: 480 }).expect("an object has every handle");
             assert_eq!(pick_axis(mode, &target, &cam, 640, 480, at(grip)), Some(axis), "{mode:?} {axis:?}");
         }
     }
+}
+
+/// D-102: a handle spans the same share of the view at any distance, field
+/// of view and view size, perspective or orthographic.
+#[test]
+fn handles_keep_their_screen_length_across_distance_and_field_of_view() {
+    for height in [480_u32, 1080] {
+        let width = height * 16 / 9;
+        for fov in [0.3_f32, 0.9, 1.6] {
+            for distance in [0.5_f32, 2.0, 30.0, 400.0, 5000.0] {
+                let camera = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], fov, 0.1, 10_000.0);
+                // Off centre too: the scale follows depth, not distance.
+                let origin = [distance * 0.2, -distance * 0.1, -distance];
+                let len = handle_length(origin, &camera, height);
+                let a = camera.project_to_pixel(origin, width, height).unwrap();
+                let b = camera.project_to_pixel(offset(origin, [1.0, 0.0, 0.0], len), width, height).unwrap();
+                let on_screen = (b.px - a.px).hypot(b.py - a.py);
+                let want = HANDLE_VIEW_FRACTION * height as f32;
+                assert!((on_screen - want).abs() < want * 0.01, "{height}p fov {fov} at {distance}: {on_screen} px, want {want}");
+            }
+        }
+    }
+    let mut ortho = cam_looking_down_neg_z([0.0; 3]);
+    ortho.mode = CameraMode::Orthographic { half_height: 40.0 };
+    for distance in [1.0_f32, 90.0] {
+        let origin = [0.0, 0.0, -distance];
+        let a = ortho.project_to_pixel(origin, 640, 480).unwrap();
+        let b = ortho.project_to_pixel(offset(origin, [0.0, 1.0, 0.0], handle_length(origin, &ortho, 480)), 640, 480).unwrap();
+        assert!(((a.py - b.py) - HANDLE_VIEW_FRACTION * 480.0).abs() < 0.5, "ortho at {distance}");
+    }
+}
+
+/// D-102: the drawn tip is where the press lands, near or far.
+#[test]
+fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
+    for distance in [1.5_f32, 20.0, 300.0, 4000.0] {
+        let scene = scene_with(vec![known_object(1, (0.0, 0.0, -distance), (false, false, false))]);
+        let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+        // Oblique, so no handle stands over another; the same direction at every distance.
+        let eye = [3.0 * distance / 6.32, 2.5 * distance / 6.32, -distance + 5.0 * distance / 6.32];
+        let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
+        let view = GizmoView { camera, width: 1280, height: 720 };
+        let chrome = GizmoChrome {
+            view,
+            lights: &[],
+            domains: &[],
+            physics: &[],
+            selected: Some(&target),
+            mode: GizmoMode::Move,
+            fade_handles: false,
+        };
+        let mut lines = Vec::new();
+        compose_lines(&chrome, &mut lines);
+        let drawn = &lines[lines.len() - 3..];
+        for (axis, line) in GizmoAxis::XYZ.into_iter().zip(drawn) {
+            assert_eq!(Some(line.b), target.grip(GizmoMode::Move, axis, &view), "the grip is the drawn tip");
+            let tip = camera.project_to_pixel(line.b, view.width, view.height).unwrap();
+            assert_eq!(pick_axis(GizmoMode::Move, &target, &camera, view.width, view.height, (tip.px, tip.py)), Some(axis), "{axis:?} at {distance}");
+        }
+    }
+}
+
+/// D-102: an object outlines its own render slot; an imported model's group
+/// row outlines every part's.
+#[test]
+fn outline_slots_cover_an_object_or_every_part_of_its_group() {
+    let row = |id: u32, index: usize, group: Option<u32>, is_group: bool| {
+        let SceneObjectVm::Known(mut row) = known_object(id, (0.0, 0.0, 0.0), (false, false, false)) else { unreachable!() };
+        row.index = index;
+        row.parent_group_id = group;
+        row.is_group = is_group;
+        SceneObjectVm::Known(row)
+    };
+    let scene = scene_with(vec![
+        row(1, 0, None, false),
+        row(10, 1, None, true),
+        row(11, 2, Some(10), false),
+        row(12, 3, Some(10), false),
+        SceneObjectVm::Custom { index: 4 },
+    ]);
+    let mut slots = vec![99];
+    outline_slots(&scene, 1, &mut slots);
+    assert_eq!(slots, [0]);
+    outline_slots(&scene, 10, &mut slots);
+    assert_eq!(slots, [2, 3], "the group's parts, not its own virtual slot");
+    outline_slots(&scene, 7, &mut slots);
+    assert!(slots.is_empty(), "no such object, no outline");
 }

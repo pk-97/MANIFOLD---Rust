@@ -38,6 +38,9 @@ pub struct SharedTextureBridge {
     /// Three IOSurface kernel objects — triple-buffered for async pipeline.
     /// Behind RwLock for resize (rare write, frequent read via import_texture).
     io_surfaces: RwLock<[io_surface::IOSurface; SURFACE_COUNT]>,
+    /// Pixel format of every surface: `Rgba16Float`, or `R8Unorm` for a
+    /// selection mask.
+    format: manifold_gpu::GpuTextureFormat,
     /// Texture dimensions (atomic for lock-free dimension checks).
     width: AtomicU32,
     height: AtomicU32,
@@ -95,6 +98,16 @@ unsafe impl Sync for SharedTextureBridge {}
 /// Bytes per pixel for Rgba16Float.
 const BPP: u32 = 8;
 
+/// The IOSurface layout of a bridge format: bytes per pixel and the
+/// CoreVideo pixel format code.
+fn surface_layout(format: manifold_gpu::GpuTextureFormat) -> (u32, i32) {
+    match format {
+        manifold_gpu::GpuTextureFormat::Rgba16Float => (BPP, PIXEL_FORMAT_RGBA16_FLOAT),
+        manifold_gpu::GpuTextureFormat::R8Unorm => (1, PIXEL_FORMAT_ONE_COMPONENT_8),
+        other => panic!("no IOSurface layout for {other:?}"),
+    }
+}
+
 /// A batch of bridge read leases held by one UI frame.
 pub(crate) type BridgeLeaseBatch = Vec<(std::sync::Arc<SharedTextureBridge>, BridgeReadLease)>;
 
@@ -143,15 +156,22 @@ pub(crate) fn retire_leases_via_marker(
 
 /// FourCC for kCVPixelFormatType_64RGBAHalf ('RGhA').
 const PIXEL_FORMAT_RGBA16_FLOAT: i32 = 0x52476841u32 as i32;
+/// FourCC for kCVPixelFormatType_OneComponent8 ('L008').
+const PIXEL_FORMAT_ONE_COMPONENT_8: i32 = 0x4C303038u32 as i32;
 
 /// Create an IOSurface for Rgba16Float at the given dimensions (kernel-managed
 /// GPU memory). Shared by [`SharedTextureBridge`]'s triple buffer and
 /// [`SharedAtlasSurface`]'s single surface — same pixel format, same stride
 /// alignment requirement, just a different number of them.
 fn create_rgba16f_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
+    create_io_surface(width, height, manifold_gpu::GpuTextureFormat::Rgba16Float)
+}
+
+fn create_io_surface(width: u32, height: u32, format: manifold_gpu::GpuTextureFormat) -> io_surface::IOSurface {
+    let (bpp, pixel_format) = surface_layout(format);
     // Align bytes_per_row to 256 bytes — Metal validation rejects IOSurface-backed
     // textures whose stride doesn't meet the GPU's minimum linear texture alignment.
-    let bytes_per_row = (width * BPP + 255) & !255;
+    let bytes_per_row = (width * bpp + 255) & !255;
     let total_bytes = bytes_per_row * height;
 
     let mut props = CFMutableDictionary::new();
@@ -168,10 +188,10 @@ fn create_rgba16f_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
         props.set(key_width, CFNumber::from(width as i64));
         props.set(key_height, CFNumber::from(height as i64));
         props.set(key_bytes_per_row, CFNumber::from(bytes_per_row as i64));
-        props.set(key_bytes_per_elem, CFNumber::from(BPP as i64));
+        props.set(key_bytes_per_elem, CFNumber::from(bpp as i64));
         props.set(
             key_pixel_format,
-            CFNumber::from(PIXEL_FORMAT_RGBA16_FLOAT as i64),
+            CFNumber::from(pixel_format as i64),
         );
         props.set(key_alloc_size, CFNumber::from(total_bytes as i64));
 
@@ -194,19 +214,24 @@ fn slot_reusable(published: bool, front_is_slot: bool, reads_in_flight: u64, qui
 impl SharedTextureBridge {
     /// Create a new triple-buffered IOSurface bridge at the given dimensions.
     pub fn new(width: u32, height: u32) -> Self {
-        let surface_a = create_rgba16f_io_surface(width, height);
-        let surface_b = create_rgba16f_io_surface(width, height);
-        let surface_c = create_rgba16f_io_surface(width, height);
+        Self::with_format(width, height, manifold_gpu::GpuTextureFormat::Rgba16Float)
+    }
+
+    /// A bridge of `format` surfaces (`Rgba16Float` or `R8Unorm`).
+    pub fn with_format(width: u32, height: u32, format: manifold_gpu::GpuTextureFormat) -> Self {
+        let [surface_a, surface_b, surface_c] = std::array::from_fn(|_| create_io_surface(width, height, format));
 
         log::info!(
-            "[SharedTextureBridge] created {}x IOSurface {}x{} Rgba16Float ({} bytes each)",
+            "[SharedTextureBridge] created {}x IOSurface {}x{} {:?} ({} bytes each)",
             SURFACE_COUNT,
             width,
             height,
-            width * height * BPP,
+            format,
+            width * height * surface_layout(format).0,
         );
 
         Self {
+            format,
             io_surfaces: RwLock::new([surface_a, surface_b, surface_c]),
             width: AtomicU32::new(width),
             height: AtomicU32::new(height),
@@ -249,7 +274,7 @@ impl SharedTextureBridge {
                 io_surface_ref,
                 width,
                 height,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                self.format,
                 manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             );
             drop(io_surfaces_guard);
@@ -261,9 +286,7 @@ impl SharedTextureBridge {
     /// Both devices must re-import their textures after this call
     /// (detected via generation counter).
     pub fn resize(&self, width: u32, height: u32) {
-        let surface_a = create_rgba16f_io_surface(width, height);
-        let surface_b = create_rgba16f_io_surface(width, height);
-        let surface_c = create_rgba16f_io_surface(width, height);
+        let [surface_a, surface_b, surface_c] = std::array::from_fn(|_| create_io_surface(width, height, self.format));
         {
             let mut guard = self.io_surfaces.write();
             // Update dimensions while holding the write lock so that

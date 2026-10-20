@@ -69,6 +69,7 @@
 mod rt_changes;
 mod volume_optics;
 mod live_draw_args;
+mod selection_mask;
 mod construction;
 mod frame_setup;
 mod post_passes;
@@ -1122,6 +1123,14 @@ pub struct RenderScene {
     /// This frame's light positions, for the same overlays. Retained so a
     /// steady frame allocates nothing.
     rendered_lights: Vec<[f32; 3]>,
+    /// Render slots the selection mask draws (D-102), kept so a steady
+    /// selection allocates nothing. Empty draws no mask.
+    selection_slots: Vec<u32>,
+    /// The selection mask target, sized to the output; kept while slots are set.
+    selection_mask: Option<manifold_gpu::GpuTexture>,
+    selection_mask_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// This frame drew the mask.
+    selection_mask_drawn: bool,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -1792,6 +1801,8 @@ fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderF
 // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): one ObjectDraw per wired,
 // visible object.
 struct ObjectDraw<'ctx> {
+    /// The render slot (`object_n`) this draw came from.
+    slot: u32,
     vertices: &'ctx manifold_gpu::GpuBuffer,
     /// Optional per-vertex appearance weights. Unwired draws bind `vertices`
     /// at the weights slot as an unused ABI dummy.
@@ -2491,6 +2502,18 @@ impl EffectNode for RenderScene {
         &self.rendered_lights
     }
 
+    fn set_selection_mask(&mut self, slots: &[u32]) {
+        self.selection_slots.clear();
+        self.selection_slots.extend_from_slice(slots);
+        if slots.is_empty() {
+            self.selection_mask = None;
+        }
+    }
+
+    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.selection_mask.as_ref().filter(|_| self.selection_mask_drawn)
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,
@@ -2658,6 +2681,7 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        self.selection_mask_drawn = false;
         self.rendered_camera = None;
         self.render_objects(ctx, None);
     }
@@ -2977,6 +3001,7 @@ impl RenderScene {
         else {
             return;
         };
+        self.selection_mask_pass(ctx, &pre, &draws);
         let target = &target;
         let resolve_target = &resolve_target;
         let depth_resolve_target = depth_resolve_target.as_ref();

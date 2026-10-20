@@ -166,7 +166,8 @@ impl PreviewNavigation {
 
 /// The navigated frame the present shows instead of the output: the leased
 /// viewport surface's texture when this host's frame has an image. The
-/// lease joins `leases` and retires with the present's sampling work.
+/// lease joins `leases` and retires with the present's sampling work. With
+/// it come its surface slot and selection mask generation, for the outline.
 #[cfg(target_os = "macos")]
 pub(crate) fn lease_navigated_frame(
     nav: &mut PreviewNavigation,
@@ -174,15 +175,18 @@ pub(crate) fn lease_navigated_frame(
     device: &manifold_gpu::GpuDevice,
     frames: &SceneViewportFrames,
     leases: &mut crate::shared_texture::BridgeLeaseBatch,
-) -> Option<manifold_gpu::GpuTexture> {
+) -> Option<(manifold_gpu::GpuTexture, usize, Option<u64>)> {
     let (Some(pane), Some(request)) = (pane, nav.request_sent().cloned()) else {
         nav.show(None);
         return None;
     };
-    let leased = crate::scene_viewport::lease_frame(pane, device, frames, &request, leases);
-    let (frame, texture) = leased.map_or((None, None), |(frame, texture)| (Some(frame), texture));
-    nav.show(frame);
-    texture
+    let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(pane, device, frames, &request, leases) else {
+        nav.show(None);
+        return None;
+    };
+    let outline = frame.outline;
+    nav.show(Some(frame));
+    Some((texture?, slot, outline))
 }
 
 impl crate::app::Application {
@@ -293,6 +297,7 @@ mod tests {
             domains: Arc::from([]),
             lights: Arc::from([]),
             gizmos: Arc::from([]),
+            outline: None,
         }
     }
 
@@ -307,6 +312,7 @@ mod tests {
             request: request.clone(),
             status: Ok(FrameRenderStatus::Complete),
             domains: Arc::from([]),
+            outline: None,
         }
     }
 
