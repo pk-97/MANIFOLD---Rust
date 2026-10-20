@@ -16,5 +16,6 @@ pub mod bundled_generator_presets;
 pub mod registry;
 pub mod bundled_presets;
 pub mod catalog_gen;
+pub mod scene_modifier_qualify;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
