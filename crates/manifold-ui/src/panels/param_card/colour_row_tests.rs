@@ -74,6 +74,7 @@ fn scene_card(editable: bool) -> (ParamCardPanel, UITree) {
     let mut panel = ParamCardPanel::new();
     panel.configure(&surface);
     panel.set_scene_sections(Some(&[]));
+    panel.set_host(super::CardHost::SceneCard);
     let mut tree = UITree::new();
     panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 600.0));
     (panel, tree)
