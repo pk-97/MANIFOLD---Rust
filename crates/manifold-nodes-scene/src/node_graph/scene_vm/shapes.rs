@@ -16,7 +16,7 @@ use manifold_node_engine::load::catalog_source::preset_def;
 
 use manifold_core::liquid_setup::DEFAULT_FILL_HEIGHT;
 
-use super::setup_check::{DomainState, SetupAnchor, SetupProblem, check_domain, check_source};
+use super::setup_check::{SetupAnchor, SetupProblem, SetupSite, SiteLayout};
 use super::{Level, ParamAddr, SceneObjectVm, TRANSFORM_3D_TYPE_ID, TransformVm, locate_node, param_f32, resolve_producer_through_group, trace_transform};
 use crate::node_graph::scene_surface::scene_shape;
 
@@ -101,18 +101,19 @@ pub(super) fn trace_shapes(
     root: &Level<'_>,
     def: &EffectGraphDef,
     objects: &[SceneObjectVm],
-) -> (Vec<SceneShapeVm>, Vec<SetupProblem>, Vec<SetupAnchor>) {
+) -> (Vec<SceneShapeVm>, Vec<SetupProblem>, Vec<SetupAnchor>, Vec<SetupSite>) {
     let rows = known_rows(objects);
     let mut out = object_shapes(objects);
     let mut problems = Vec::new();
     let mut anchors = Vec::new();
-    liquid_shapes(root, &rows, &mut out, &mut problems, &mut anchors);
+    let mut sites = Vec::new();
+    liquid_shapes(root, &rows, &mut out, &mut problems, &mut anchors, &mut sites);
     for instance in &def.scene_modifiers {
         if let Some(shape) = force_shape(def, instance, &rows, root) {
             out.push(shape);
         }
     }
-    (out, problems, anchors)
+    (out, problems, anchors, sites)
 }
 
 fn known_rows(objects: &[SceneObjectVm]) -> Vec<&super::SceneObjectKnownRow> {
@@ -175,6 +176,7 @@ fn liquid_shapes(
     out: &mut Vec<SceneShapeVm>,
     problems: &mut Vec<SetupProblem>,
     anchors: &mut Vec<SetupAnchor>,
+    sites: &mut Vec<SetupSite>,
 ) {
     let mut seen = Vec::new();
     for row in rows {
@@ -188,20 +190,35 @@ fn liquid_shapes(
         let first = out.len();
         let owner = ShapeOwner::LiquidDomain(at.node.node_id.clone());
         node_shapes(&at, owner.clone(), Some(row.object_node_id), pickable, out);
-        let declared = |via: &str| out[first..].iter().find(|shape| shape.decl.via.as_deref() == Some(via)).cloned();
-        let fill_addr = ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: "fill_height".to_owned() };
-        anchors.push(SetupAnchor::new(owner.clone(), fill_addr, declared("domain").as_ref(), declared("initial_volume").as_ref()));
-        let state = match (row.fluid_domain.as_ref(), row.fluid_domain_error.as_deref()) {
-            (Some(layout), _) => Some(DomainState::Layout(layout)),
-            (None, Some(reason)) => Some(DomainState::Refused(reason)),
-            (None, None) => None,
+        let declared = |via: &str| out[first..].iter().position(|shape| shape.decl.via.as_deref() == Some(via)).map(|at| first + at);
+        let (box_shape, column) = (declared("domain"), declared("initial_volume"));
+        let param = |id: &str, default: f32| {
+            (ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: id.to_owned() }, param_f32(at.node, id, default))
         };
-        if let Some(state) = state {
-            let fill = at.level.producer(at.node.id, "fill_height").is_none().then(|| {
-                (anchors.last().map(|anchor| anchor.fill.clone()).expect("pushed above"), param_f32(at.node, "fill_height", DEFAULT_FILL_HEIGHT))
-            });
-            check_domain(&owner, state, declared("domain").as_ref(), declared("initial_volume").as_ref(), fill, problems);
-        }
+        let (fill, fill_value) = param("fill_height", DEFAULT_FILL_HEIGHT);
+        let fill_authored = at.level.producer(at.node.id, "fill_height").is_none().then_some(fill_value);
+        let (size, resolution) = (param("domain_size", 4.0), param("resolution", 24.0));
+        let structure = row.fluid_domain_transform.as_ref().map(|transform| ParamAddr {
+            scope_path: transform.pos_addr.0.scope_path.clone(),
+            node_doc_id: transform.node_doc_id,
+            param_id: "billboard".to_owned(),
+        });
+        // `trace_fluid_domain` leaves both unset exactly when a wire drives the box.
+        let layout = match (row.fluid_domain.is_some() || row.fluid_domain_error.is_some(), row.fluid_domain_transform.clone()) {
+            (false, _) => SiteLayout::Unchecked,
+            (true, None) => SiteLayout::Cube { size, resolution },
+            (true, Some(transform)) => SiteLayout::Box { transform: Box::new(transform), size, resolution },
+        };
+        let mut site = SetupSite {
+            owner: owner.clone(),
+            layout,
+            box_shape,
+            column,
+            fill,
+            fill_authored,
+            sources: Vec::new(),
+            structure: structure.into_iter().collect(),
+        };
         for k in 0..manifold_core::fluid_domain::MAX_FLUID_ROLES {
             let Some((role_level, crossed, role, _)) = resolve_producer_through_group(&at.level, at.node.id, &format!("role_{k}"))
             else {
@@ -213,6 +230,9 @@ fn liquid_shapes(
             if role_level.producer(role.id, "role").is_some() {
                 continue;
             }
+            let mut role_scope = at.scope.clone();
+            role_scope.extend(crossed);
+            site.structure.push(ParamAddr { scope_path: role_scope, node_doc_id: role.id, param_id: "role".to_owned() });
             let kind = match param_f32(role, "role", 1.0).round() as i32 {
                 1 => FluidRole::Inflow,
                 2 => FluidRole::Outflow,
@@ -226,13 +246,11 @@ fn liquid_shapes(
             let role_at = NodeAt { level: role_level, scope, node: role, parent };
             let owner = ShapeOwner::RoleSource { node: role.node_id.clone(), role: kind };
             let first = out.len();
-            node_shapes(&role_at, owner.clone(), Some(row.object_node_id), pickable, out);
-            if let Some(layout) = row.fluid_domain.as_ref() {
-                for shape in &out[first..] {
-                    check_source(layout, &owner, kind, shape, problems);
-                }
-            }
+            node_shapes(&role_at, owner, Some(row.object_node_id), pickable, out);
+            site.sources.extend((first..out.len()).map(|at| (kind, at)));
         }
+        site.check(out, &|_| None, problems, anchors);
+        sites.push(site);
     }
 }
 

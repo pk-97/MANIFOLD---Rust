@@ -22,6 +22,8 @@ struct Rig {
     layer: LayerId,
     domain: NodeId,
     column: NodeId,
+    /// The UI's part stamps, bumped with every edit the rig makes.
+    parts: PartStamps,
 }
 
 impl Rig {
@@ -40,7 +42,7 @@ impl Rig {
             .node_id
             .clone();
         let domain = water.liquid_domain.expect("domain").node;
-        Self { project, layer, domain, column }
+        Self { project, layer, domain, column, parts: PartStamps::default() }
     }
 
     fn set(&mut self, node: &NodeId, param: &str, value: f32) {
@@ -48,6 +50,7 @@ impl Rig {
         let id = binding(&def, node, param);
         let (index, _) = self.project.timeline.find_layer_by_id(&self.layer).unwrap();
         self.project.timeline.layers[index].gen_params_mut().unwrap().set_base_param(&id, value);
+        self.parts.bump(ChangeSet::of(&[Part::Values]));
     }
 
     fn problems(&self) -> Vec<SetupProblemKind> {
@@ -182,70 +185,90 @@ fn a_driven_fill_capped_live_warns_on_the_card_with_gizmos_off_and_in_perform_mo
 
     // The planner input moves with the live cap, so the cards re-project.
     let mut check = CardCheck::default();
-    let parts = PartStamps::default();
-    let fitting = check.input(&rig.project, parts, [Some(&rig.layer), None], &Arc::from([]));
-    let capped = check.input(&rig.project, parts, [Some(&rig.layer), None], &ui.setup_fits);
+    let fitting = check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &Arc::from([]));
+    let capped = check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &ui.setup_fits);
     assert_ne!(capped, fitting, "a live cap moves the cards' input");
 }
 
 /// The planner input is the problem list itself: a scrub that leaves the
 /// list alone, on this layer or another, never schedules InspectorSync
 /// (UI_INVALIDATION_DESIGN.md D22); a scrub that adds or clears a warning
-/// does. A layer with no water is 0 and builds nothing.
+/// does. Only a value the setup shapes read re-checks, and nothing short of a
+/// graph edit rebuilds the scene model. A layer with no water is 0.
 #[test]
 fn a_scrub_that_leaves_the_list_alone_never_syncs_the_inspector() {
     use crate::frame_plan::{FrameInputs, Projection, plan_frame};
     let mut rig = Rig::new();
     let domain = rig.domain.clone();
+    let other = rig.project.timeline.add_layer("Other", manifold_core::types::LayerType::Generator, manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"));
     let none: SetupFitReport = Arc::from([]);
     let mut check = CardCheck::default();
-    let mut parts = PartStamps::default();
     let mut last = FrameInputs::default();
     let layer = rig.layer.clone();
-    let mut frame = |check: &mut CardCheck, project: &Project, parts: PartStamps| {
-        let next = FrameInputs { parts, setup_check: check.input(project, parts, [Some(&layer), None], &none), ..Default::default() };
+    let mut frame = |check: &mut CardCheck, rig: &Rig| {
+        let next = FrameInputs { setup_check: check.input(&rig.project, rig.parts, [Some(&layer), Some(&layer)], &none), ..Default::default() };
         let synced = plan_frame(&last, &next).projections.contains(Projection::InspectorSync);
         last = next;
         synced
     };
-    frame(&mut check, &rig.project, parts);
-    assert_eq!(check.input(&rig.project, parts, [Some(&rig.layer), None], &none), 0, "a fitting water has an empty list");
+    frame(&mut check, &rig);
+    assert_eq!(check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &none), 0, "a fitting water has an empty list");
+    assert_eq!(check.work(), (1, 1), "the Scene panel on the same layer is checked once");
 
-    // A knob tick on another layer: the global Values stamp moves.
-    parts.bump(ChangeSet::of(&[Part::Values]));
-    assert!(!frame(&mut check, &rig.project, parts), "a scrub elsewhere");
+    // A knob tick on another layer.
+    let first = rig.project.timeline.layers[other].gen_params().unwrap().params.iter().next().unwrap().id().to_owned();
+    rig.project.timeline.layers[other].gen_params_mut().unwrap().set_base_param(&first, 0.123);
+    rig.parts.bump(ChangeSet::of(&[Part::Values]));
+    assert!(!frame(&mut check, &rig), "a scrub elsewhere");
+    // A knob on this water that places no setup shape.
+    let def = effective_def(&rig.project, &rig.layer);
+    let placing = ["fill_height", "domain_size", "resolution", "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "billboard", "role"];
+    let unrelated = def.preset_metadata.as_ref().unwrap().bindings.iter().find_map(|binding| match &binding.target {
+        manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if !placing.contains(&param.as_str()) => Some(binding.id.clone()),
+        _ => None,
+    });
+    let unrelated = unrelated.expect("a water card param that places nothing");
+    let (index, _) = rig.project.timeline.find_layer_by_id(&rig.layer).unwrap();
+    let base = rig.project.timeline.layers[index].gen_params().unwrap().get_base_param(&unrelated);
+    rig.project.timeline.layers[index].gen_params_mut().unwrap().set_base_param(&unrelated, base + 0.01);
+    rig.parts.bump(ChangeSet::of(&[Part::Values]));
+    assert!(!frame(&mut check, &rig), "a scrub of a knob that places nothing");
+    assert_eq!(check.work(), (1, 1), "neither scrub re-checked or rebuilt");
     // A scrub of this water's fill that still fits.
     rig.set(&domain, "fill_height", 0.6);
-    parts.bump(ChangeSet::of(&[Part::Values]));
-    assert!(!frame(&mut check, &rig.project, parts), "a fitting scrub");
+    assert!(!frame(&mut check, &rig), "a fitting scrub");
+    assert_eq!(check.work(), (1, 2), "a Fill Height scrub re-checks without a rebuild");
 
     // Past the top: the warning appears, once.
     rig.set(&domain, "fill_height", 15.0);
-    parts.bump(ChangeSet::of(&[Part::Values]));
-    assert!(frame(&mut check, &rig.project, parts), "a warning appears");
+    assert!(frame(&mut check, &rig), "a warning appears");
+    let fresh = |rig: &Rig| CardCheck::default().input(&rig.project, rig.parts, [Some(&rig.layer), None], &none);
+    assert_eq!(check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &none), fresh(&rig), "the re-check finds what a rebuild finds");
     rig.set(&domain, "fill_height", 16.0);
-    parts.bump(ChangeSet::of(&[Part::Values]));
-    assert!(!frame(&mut check, &rig.project, parts), "still capped: the same list");
-    parts.bump(ChangeSet::of(&[Part::Values]));
-    assert!(!frame(&mut check, &rig.project, parts), "a scrub elsewhere while warning");
+    assert!(!frame(&mut check, &rig), "still capped: the same list");
     rig.set(&domain, "fill_height", 0.5);
-    parts.bump(ChangeSet::of(&[Part::Values]));
-    assert!(frame(&mut check, &rig.project, parts), "the warning clears");
+    assert!(frame(&mut check, &rig), "the warning clears");
+    // A column scrub past a wall, re-checked, matches a rebuild too.
+    let column = rig.column.clone();
+    rig.set(&column, "pos_x", 40.0);
+    assert!(frame(&mut check, &rig), "the column warning appears");
+    assert_eq!(check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &none), fresh(&rig));
+    assert_eq!(check.work().0, 1, "no scrub rebuilt the scene model");
 
     let forces = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
     let scene = LayerId::new("scene");
-    assert_eq!(CardCheck::default().input(&forces, parts, [Some(&scene), None], &none), 0, "no water, no list");
+    assert_eq!(CardCheck::default().input(&forces, PartStamps::default(), [Some(&scene), None], &none), 0, "no water, no list");
 }
 
-/// A gizmo host rebuilds its list only when the scene or the reported
-/// domains change; a steady frame does no work and allocates nothing.
+/// A driven fill sweeping in and out of the top four times a second latches
+/// its warning like a clip light: the cards re-project once, not on every
+/// crossing, and an edit to the layer releases it.
 #[test]
-fn a_steady_gizmo_frame_rebuilds_nothing() {
+fn a_swept_driven_fill_syncs_the_inspector_once_until_an_edit() {
+    use crate::frame_plan::{FrameInputs, Projection, plan_frame};
     let mut rig = Rig::new();
     let domain = rig.domain.clone();
-    rig.set(&domain, "fill_height", 15.0);
-    let target = manifold_core::GraphTarget::Generator(rig.layer.clone());
-    let scene = Arc::new(crate::scene_gizmo::authored_def(&rig.project, &target).as_ref().and_then(SceneVm::from_def).expect("the scene"));
+    rig.set(&domain, "fill_height", 0.5);
     let snapshot = |fit: SetupFit| FluidDomainSnapshot {
         epoch: 1,
         state: manifold_core::fluid_domain::FluidDomainState::Ready,
@@ -254,36 +277,81 @@ fn a_steady_gizmo_frame_rebuilds_nothing() {
         column_box: None,
         refusal: None,
     };
-    let domains: crate::physics_overlay::SharedDomains = Arc::from([(domain.clone(), snapshot(CAPPED_FIT))]);
+    let mut observations = crate::setup_check::SetupFitObservations::default();
+    let mut check = CardCheck::default();
+    let mut last = FrameInputs::default();
+    let mut syncs = 0;
+    let mut run = |rig: &Rig, frames: std::ops::Range<usize>, syncs: &mut usize| -> SetupFitReport {
+        for frame in frames {
+            // 4 Hz at 60 frames a second: capped for 7 or 8 frames, then not.
+            let capped = (frame * 8 / 60) % 2 == 1;
+            let fit = if capped { CAPPED_FIT } else { SetupFit::default() };
+            let domains = [(rig.domain.clone(), snapshot(fit))];
+            observations.record(Some(&rig.project), |_, each| each(&rig.layer, &domains));
+            let next = FrameInputs { setup_check: check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &observations.report), ..Default::default() };
+            *syncs += usize::from(plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
+            last = next;
+        }
+        observations.report.clone()
+    };
+    let report = run(&rig, 0..120, &mut syncs);
+    assert_eq!(syncs, 1, "one sync for the first cap, none for the sweep");
+    assert_eq!(rig.problems_with(&report), vec![SetupProblemKind::FillCapped], "the warning holds through the dips");
+
+    // An edit releases the latch; the sweep latches again at its next cap.
+    rig.set(&domain, "fill_height", 0.4);
+    assert!(run(&rig, 120..121, &mut syncs).is_empty(), "released while the sweep fits");
+    assert_eq!(syncs, 2, "the warning clears");
+    run(&rig, 121..240, &mut syncs);
+    assert_eq!(syncs, 3, "and latches once more");
+}
+
+/// A gizmo host rebuilds its list only when the scene or a domain's fit or
+/// refusal changes. A steady frame, or a driven column moving inside its
+/// warning, keeps the same list; the box is read from the frame.
+#[test]
+fn a_steady_gizmo_frame_rebuilds_nothing() {
+    let mut rig = Rig::new();
+    let domain = rig.domain.clone();
+    rig.set(&domain, "fill_height", 15.0);
+    let target = manifold_core::GraphTarget::Generator(rig.layer.clone());
+    let scene = Arc::new(crate::scene_gizmo::authored_def(&rig.project, &target).as_ref().and_then(SceneVm::from_def).expect("the scene"));
+    let snapshot = |fit: SetupFit, column_box| FluidDomainSnapshot {
+        epoch: 1,
+        state: manifold_core::fluid_domain::FluidDomainState::Ready,
+        accepted_layout: None,
+        fit,
+        column_box,
+        refusal: None,
+    };
+    let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped };
+    let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
+    let domains: crate::physics_overlay::SharedDomains = Arc::from([(domain.clone(), snapshot(clipped, at(1.5)))]);
     let mut host = GizmoProblems::default();
     assert!(host.update(Some(&scene), Some(&domains)), "the first frame builds");
-    assert_eq!(host.problems().len(), 1);
-    let start = manifold_core::work_count::thread_work_snapshot();
-    for _ in 0..100 {
+    let list = (host.problems().as_ptr(), host.problems().len());
+    assert_eq!(list.1, 2, "the capped fill and the clipped column");
+    for step in 0..100 {
+        let moving: crate::physics_overlay::SharedDomains = Arc::from([(domain.clone(), snapshot(clipped, at(1.5 + step as f32 * 0.01)))]);
+        assert!(!host.update(Some(&scene), Some(&moving)), "a moving column inside its warning rebuilds nothing");
         assert!(!host.update(Some(&scene), Some(&domains)), "a steady frame rebuilds nothing");
+        let column = host.problems().iter().find(|problem| problem.kind == SetupProblemKind::ColumnClipped).unwrap();
+        assert_eq!(column.live_bounds(&moving), at(1.5 + step as f32 * 0.01), "the box is where the column is now");
     }
-    let steady = manifold_core::work_count::thread_work_snapshot().since(&start);
-    // Counted only in a `work-trace` build (the counting allocator).
-    assert_eq!(steady.get(manifold_core::work_count::WorkKind::FrameAlloc), 0, "a steady frame allocates nothing");
-    let moved: crate::physics_overlay::SharedDomains = Arc::from([(domain, snapshot(SetupFit::default()))]);
-    let start = manifold_core::work_count::thread_work_snapshot();
-    assert!(host.update(Some(&scene), Some(&moved)), "a new report rebuilds");
-    #[cfg(feature = "work-trace")]
-    assert!(
-        manifold_core::work_count::thread_work_snapshot().since(&start).get(manifold_core::work_count::WorkKind::FrameAlloc) > 0,
-        "the counter sees a rebuild's allocations"
-    );
-    #[cfg(not(feature = "work-trace"))]
-    let _ = start;
+    assert_eq!((host.problems().as_ptr(), host.problems().len()), list, "the same list, never reallocated");
+    let fitting: crate::physics_overlay::SharedDomains = Arc::from([(domain, snapshot(SetupFit::default(), None))]);
+    assert!(host.update(Some(&scene), Some(&fitting)), "a new fit rebuilds");
     assert!(host.update(None, None), "no scene clears");
     assert!(host.problems().is_empty());
 }
 
-/// The content thread publishes a new report only when an entry changes:
-/// layers arriving in another order, or a fitting domain, change nothing.
+/// The content thread publishes a new report only when the latched set
+/// changes: domains arriving in another order, or a capped domain fitting
+/// again, change nothing until an edit releases it.
 #[test]
 fn the_fit_report_is_reallocated_only_on_change() {
     use manifold_core::fluid_domain::FluidDomainState;
+    let mut rig = Rig::new();
     let snapshot = |fit: SetupFit| FluidDomainSnapshot {
         epoch: 1,
         state: FluidDomainState::Ready,
@@ -292,16 +360,26 @@ fn the_fit_report_is_reallocated_only_on_change() {
         column_box: None,
         refusal: None,
     };
-    let (a, b) = (LayerId::new("a"), LayerId::new("b"));
-    let capped = [(NodeId::new("water"), snapshot(CAPPED_FIT)), (NodeId::new("calm"), snapshot(SetupFit::default()))];
+    let (water, other, calm) = (NodeId::new("water"), NodeId::new("other"), NodeId::new("calm"));
     let mut observations = crate::setup_check::SetupFitObservations::default();
-    let mut record = |order: [&LayerId; 2], domains: &[(NodeId, FluidDomainSnapshot)]| {
-        observations.record(|_, each| order.iter().for_each(|layer| each(layer, domains)));
+    let mut record = |rig: &Rig, domains: &[(NodeId, FluidDomainSnapshot)]| {
+        observations.record(Some(&rig.project), |_, each| each(&rig.layer, domains));
         observations.report.clone()
     };
-    let first = record([&a, &b], &capped);
+    let capped = |node: &NodeId| (node.clone(), snapshot(CAPPED_FIT));
+    let first = record(&rig, &[capped(&water), capped(&other), (calm.clone(), snapshot(SetupFit::default()))]);
     assert_eq!(first.len(), 2, "one entry per capped domain, none for a fitting one");
-    assert!(Arc::ptr_eq(&first, &record([&b, &a], &capped)), "hash order is not a change");
-    let fitting = record([&a, &b], &[(NodeId::new("water"), snapshot(SetupFit::default()))]);
-    assert!(fitting.is_empty() && !Arc::ptr_eq(&first, &fitting));
+    assert!(Arc::ptr_eq(&first, &record(&rig, &[capped(&other), capped(&water)])), "order is not a change");
+    assert!(Arc::ptr_eq(&first, &record(&rig, &[(water.clone(), snapshot(SetupFit::default()))])), "a latched cap holds");
+    let column = SetupFit { fill_capped: false, column: ColumnOutcome::Outside };
+    let both = record(&rig, &[(water.clone(), snapshot(column))]);
+    assert!(!Arc::ptr_eq(&first, &both), "a new kind joins the latch");
+    let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped };
+    let swept = record(&rig, &[(water.clone(), snapshot(clipped))]);
+    assert_eq!(swept.iter().find(|entry| entry.node == water).unwrap().fit.column, ColumnOutcome::Clipped, "outside then clipped latches as clipped");
+    assert!(Arc::ptr_eq(&swept, &record(&rig, &[(water.clone(), snapshot(column))])), "clipped and outside share one latched line");
+    let domain = rig.domain.clone();
+    rig.set(&domain, "fill_height", 0.3);
+    let released = record(&rig, &[(water, snapshot(SetupFit::default()))]);
+    assert!(released.is_empty(), "an edit releases the latch");
 }

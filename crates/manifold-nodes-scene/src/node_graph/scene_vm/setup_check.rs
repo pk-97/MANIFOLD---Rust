@@ -84,6 +84,20 @@ impl SetupProblem {
         self.kind.hash(state);
         self.params.hash(state);
     }
+
+    /// Where the viewport outlines it this frame: a fill or column problem on
+    /// a domain the frame reports reads that domain's live box, so a driven
+    /// column is outlined where it is now without rebuilding the list.
+    pub fn live_bounds(&self, domains: &[(NodeId, FluidDomainSnapshot)]) -> Option<([f32; 3], [f32; 3])> {
+        let ShapeOwner::LiquidDomain(node) = &self.owner else { return self.bounds };
+        let Some((_, snapshot)) = domains.iter().find(|(id, _)| id == node) else { return self.bounds };
+        let live = match self.kind {
+            SetupProblemKind::FillCapped => snapshot.accepted_layout.as_ref().map(fill_top),
+            SetupProblemKind::ColumnClipped | SetupProblemKind::ColumnOutside => snapshot.column_box,
+            _ => None,
+        };
+        live.or(self.bounds)
+    }
 }
 
 /// The flat box a capped fill outlines: the domain's top face.
@@ -344,6 +358,133 @@ pub fn problems_with_runtime<'a>(
             let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
             add(SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
         }
+    }
+}
+
+/// How a liquid domain's box is laid out, with the params that size it.
+/// Which form it takes depends on wires alone, so a value change never moves
+/// a domain between forms.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum SiteLayout {
+    /// A wire drives the domain's size, transform or billboard: no stable
+    /// box to check against.
+    Unchecked,
+    /// A cube of Domain Size standing on the floor.
+    Cube { size: (ParamAddr, f32), resolution: (ParamAddr, f32) },
+    /// The box a Transform 3D places.
+    Box { transform: Box<super::TransformVm>, size: (ParamAddr, f32), resolution: (ParamAddr, f32) },
+}
+
+/// One liquid domain's setup as the check reads it: the shapes it checks (by
+/// index into `SceneVm::shapes`) and every param that places them, so the
+/// check re-runs at new param values without rebuilding the scene model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetupSite {
+    pub(super) owner: ShapeOwner,
+    pub(super) layout: SiteLayout,
+    pub(super) box_shape: Option<usize>,
+    pub(super) column: Option<usize>,
+    /// The Fill Height param, read by the check only when no wire drives it.
+    pub(super) fill: ParamAddr,
+    pub(super) fill_authored: Option<f32>,
+    pub(super) sources: Vec<(FluidRole, usize)>,
+    /// Params the site's form depends on (the domain transform's billboard,
+    /// each source's role): a change to one needs a rebuild, not a re-check.
+    pub(super) structure: Vec<ParamAddr>,
+}
+
+/// Where a value lookup overrides the authored value of a param, else the
+/// authored one.
+pub type SetupValues<'a> = &'a dyn Fn(&ParamAddr) -> Option<f32>;
+
+fn at_value(value: SetupValues<'_>, (addr, authored): &(ParamAddr, f32)) -> f32 {
+    value(addr).unwrap_or(*authored)
+}
+
+/// `shape` with each node param it names at `value`, borrowed when none moved.
+fn shape_at<'a>(shape: &'a SceneShapeVm, value: SetupValues<'_>) -> std::borrow::Cow<'a, SceneShapeVm> {
+    let moved = |param: &super::ShapeParamVm| match &param.write {
+        ShapeWrite::Node(addr) => value(addr).filter(|v| v.to_bits() != param.value.to_bits()),
+        ShapeWrite::Card { .. } | ShapeWrite::Unplaced => None,
+    };
+    if !shape.params.iter().any(|param| moved(param).is_some()) {
+        return std::borrow::Cow::Borrowed(shape);
+    }
+    let mut shape = shape.clone();
+    for param in &mut shape.params {
+        if let Some(v) = moved(param) {
+            param.value = v;
+        }
+    }
+    std::borrow::Cow::Owned(shape)
+}
+
+impl SetupSite {
+    /// Check the site at `value`, appending its problems and its anchor. With
+    /// no override this is the check the scene model was built with.
+    pub(super) fn check(&self, shapes: &[SceneShapeVm], value: SetupValues<'_>, problems: &mut Vec<SetupProblem>, anchors: &mut Vec<SetupAnchor>) {
+        let at = |index: Option<usize>| index.map(|i| shape_at(&shapes[i], value));
+        let (box_shape, column) = (at(self.box_shape), at(self.column));
+        let fill = self.fill_authored.map(|authored| (self.fill.clone(), value(&self.fill).unwrap_or(authored)));
+        anchors.push(SetupAnchor::new(self.owner.clone(), self.fill.clone(), box_shape.as_deref(), column.as_deref()));
+        let layout = match &self.layout {
+            SiteLayout::Unchecked => return,
+            SiteLayout::Cube { size, resolution } => {
+                manifold_core::fluid_domain::domain_layout(None, at_value(value, size), at_value(value, resolution).round() as u32)
+            }
+            SiteLayout::Box { transform, size, resolution } => {
+                let triple = |addr: &(ParamAddr, ParamAddr, ParamAddr), v: (f32, f32, f32)| {
+                    [at_value(value, &(addr.0.clone(), v.0)), at_value(value, &(addr.1.clone(), v.1)), at_value(value, &(addr.2.clone(), v.2))]
+                };
+                let pose = manifold_core::fluid_domain::DomainBox {
+                    pos: triple(&transform.pos_addr, transform.pos_value),
+                    rot_euler: triple(&transform.rot_addr, transform.rot_value),
+                    scale: triple(&transform.scale_addr, transform.scale_value),
+                    billboard: false,
+                };
+                manifold_core::fluid_domain::domain_layout(Some(pose), at_value(value, size), at_value(value, resolution).round() as u32)
+            }
+        };
+        let state = match &layout {
+            Ok(layout) => DomainState::Layout(layout),
+            Err(reason) => DomainState::Refused(reason),
+        };
+        check_domain(&self.owner, state, box_shape.as_deref(), column.as_deref(), fill, problems);
+        if let Ok(layout) = &layout {
+            for &(role, index) in &self.sources {
+                let shape = shape_at(&shapes[index], value);
+                check_source(layout, &shape.owner, role, &shape, problems);
+            }
+        }
+    }
+
+    /// Every param the check reads, with whether a change to it needs a
+    /// rebuild rather than a re-check.
+    pub(super) fn params<'a>(&'a self, shapes: &'a [SceneShapeVm]) -> impl Iterator<Item = (&'a ParamAddr, bool)> + 'a {
+        let layout: Vec<&ParamAddr> = match &self.layout {
+            SiteLayout::Unchecked => Vec::new(),
+            SiteLayout::Cube { size, resolution } => vec![&size.0, &resolution.0],
+            SiteLayout::Box { transform, size, resolution } => {
+                let t = transform.as_ref();
+                vec![
+                    &size.0, &resolution.0, &t.pos_addr.0, &t.pos_addr.1, &t.pos_addr.2, &t.rot_addr.0, &t.rot_addr.1, &t.rot_addr.2,
+                    &t.scale_addr.0, &t.scale_addr.1, &t.scale_addr.2,
+                ]
+            }
+        };
+        let shape_params = self.box_shape.into_iter().chain(self.column).chain(self.sources.iter().map(|&(_, i)| i)).flat_map(move |i| {
+            shapes[i].params.iter().filter_map(|param| match &param.write {
+                ShapeWrite::Node(addr) => Some(addr),
+                ShapeWrite::Card { .. } | ShapeWrite::Unplaced => None,
+            })
+        });
+        self.fill_authored
+            .map(|_| &self.fill)
+            .into_iter()
+            .chain(layout)
+            .chain(shape_params)
+            .map(|addr| (addr, false))
+            .chain(self.structure.iter().map(|addr| (addr, true)))
     }
 }
 

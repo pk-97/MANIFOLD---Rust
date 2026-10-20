@@ -54,7 +54,7 @@ use liquid::locate_node;
 use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
 mod setup_check;
-pub use setup_check::{RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, problems_with_runtime};
+pub use setup_check::{RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, problems_with_runtime};
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;
@@ -156,6 +156,9 @@ pub struct SceneVm {
     /// Where each liquid's fill and column params sit, driven or not: what
     /// the solver's run-time report ([`problems_with_runtime`]) attaches to.
     pub setup_anchors: Vec<SetupAnchor>,
+    /// Each liquid's setup as the check reads it, so a value change re-checks
+    /// without a rebuild ([`SceneVm::recheck_setup`]).
+    pub(crate) setup_sites: Vec<SetupSite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -679,7 +682,7 @@ impl SceneVm {
         let atmosphere = trace_atmosphere(&root, scene_node);
         let world_nodes = world_nodes(&root, scene_node, &environment, &atmosphere);
         let physics_nodes = physics_nodes(&root);
-        let (shapes, problems, setup_anchors) = shapes::trace_shapes(&root, def, &objects);
+        let (shapes, problems, setup_anchors, setup_sites) = shapes::trace_shapes(&root, def, &objects);
         let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
@@ -745,7 +748,26 @@ impl SceneVm {
             shapes,
             problems,
             setup_anchors,
+            setup_sites,
         })
+    }
+
+    /// The setup check re-run with `value` overriding the authored value of
+    /// any param it reads: what a rebuild at those values would find, without
+    /// one. `problems` and `anchors` are cleared first.
+    pub fn recheck_setup(&self, value: SetupValues<'_>, problems: &mut Vec<SetupProblem>, anchors: &mut Vec<SetupAnchor>) {
+        problems.clear();
+        anchors.clear();
+        for site in &self.setup_sites {
+            site.check(&self.shapes, value, problems, anchors);
+        }
+    }
+
+    /// Every param the setup check reads, with whether a change to it
+    /// changes the scene model's form (needs a rebuild) rather than only a
+    /// value [`SceneVm::recheck_setup`] takes.
+    pub fn setup_params(&self) -> impl Iterator<Item = (&ParamAddr, bool)> {
+        self.setup_sites.iter().flat_map(|site| site.params(&self.shapes))
     }
 }
 

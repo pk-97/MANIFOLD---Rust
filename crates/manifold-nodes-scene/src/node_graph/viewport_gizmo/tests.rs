@@ -80,6 +80,7 @@ fn scene_of(objects: Vec<SceneObjectVm>, shapes: Vec<SceneShapeVm>) -> SceneVm {
         shapes,
         problems: Vec::new(),
         setup_anchors: Vec::new(),
+        setup_sites: Vec::new(),
     }
 }
 

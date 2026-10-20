@@ -3,7 +3,8 @@
 //! the values the knobs show) plus `problems_with_runtime` (what each
 //! solver's fit did to the values it ran). This module carries the solver's
 //! half from the content thread to the cards whatever Show gizmos says
-//! ([`SetupFitObservations`], published as `ContentState::setup_fits`), puts
+//! ([`SetupFitObservations`], published as `ContentState::setup_fits` and
+//! latched), puts
 //! each warning on the card row that edits its shape ([`mark_rows`]), keys
 //! the frame planner on the cards' problem list ([`CardCheck`]) and keeps
 //! each gizmo host's list for its red boxes ([`GizmoProblems`]).
@@ -13,14 +14,19 @@ use std::sync::Arc;
 
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::PresetInstance;
+use manifold_core::effects::{ParamConvert, PresetInstance, apply_card_reshape};
 use manifold_core::fluid_domain::FluidDomainSnapshot;
 use manifold_core::layer::Layer;
 use manifold_core::liquid_domain::liquid_domains_in;
-use manifold_core::liquid_setup::SetupFit;
+use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
+use manifold_core::macro_bank::MacroCurve;
 use manifold_core::project::Project;
 use manifold_core::{LayerId, NodeId};
-use manifold_nodes_scene::node_graph::scene_vm::{RuntimeFit, SceneVm, SetupProblem, problems_with_runtime};
+use manifold_node_engine::param_binding::convert_param_value;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_nodes_scene::node_graph::scene_vm::{
+    ParamAddr, RuntimeFit, SceneVm, SetupAnchor, SetupProblem, problems_with_runtime,
+};
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
 use crate::physics_overlay::SharedDomains;
@@ -35,21 +41,28 @@ pub(crate) struct SetupFitEntry {
     pub refusal: Option<Arc<str>>,
 }
 
-/// Every such domain on the layers that rendered: the content thread's
-/// report to the cards. Empty while every setup fits.
+/// Every such domain the cards warn about: the content thread's report,
+/// latched ([`SetupFitObservations`]). Empty while nothing is latched.
 pub(crate) type SetupFitReport = Arc<[SetupFitEntry]>;
 
-/// Content-thread side of the report. The buffers are reused; a new report
-/// is allocated only when an entry changes.
+/// Content-thread side of the report. A warning the solver reports latches
+/// on like a clip light and stays until that layer's authored values or graph
+/// change, so a driven fill or column sweeping in and out of the walls shows
+/// one steady line, not a flicker. A column seen both clipped and outside
+/// latches as clipped, one line. The buffers are reused; a new report is
+/// allocated only when the latched set changes.
 pub(crate) struct SetupFitObservations {
     domains: Vec<(NodeId, FluidDomainSnapshot)>,
+    /// The latched entries; `report` is a copy taken when they change.
     scratch: Vec<SetupFitEntry>,
+    /// Each layer with a latched entry, with its authored key at latch time.
+    latched_layers: Vec<(LayerId, u64)>,
     pub report: SetupFitReport,
 }
 
 impl Default for SetupFitObservations {
     fn default() -> Self {
-        Self { domains: Vec::new(), scratch: Vec::new(), report: Arc::from([]) }
+        Self { domains: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), report: Arc::from([]) }
     }
 }
 
@@ -57,23 +70,81 @@ impl Default for SetupFitObservations {
 /// the buffer it is given.
 pub(crate) type EachRenderedDomains<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)]);
 
+/// What a layer's latch holds through: its graph and every card's authored
+/// value. A modulator or driver moves none of them.
+fn authored_key(layer: &Layer) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    layer.generator_graph_version().hash(&mut hasher);
+    layer.generator_graph_structure_version().hash(&mut hasher);
+    layer.generator_type().hash(&mut hasher);
+    if let Some(inst) = layer.gen_params() {
+        for param in inst.params.iter() {
+            authored_value(inst, param).to_bits().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+/// A card param's authored value, as `PresetInstance::get_base_param` reads
+/// it, from the param in hand rather than a lookup by id.
+fn authored_value(inst: &PresetInstance, param: &manifold_core::params::Param) -> f32 {
+    if inst.base_tracked { param.base } else { param.value }
+}
+
 impl SetupFitObservations {
     /// Take this frame's report from `observe`, which walks the layers that
-    /// rendered (`GeneratorRenderer::each_rendered_fluid_domains`).
-    pub fn record(&mut self, observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, EachRenderedDomains<'_>)) {
-        self.scratch.clear();
-        let scratch = &mut self.scratch;
+    /// rendered (`GeneratorRenderer::each_rendered_fluid_domains`), into the
+    /// latch. `project` is what releases it.
+    pub fn record(
+        &mut self,
+        project: Option<&Project>,
+        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, EachRenderedDomains<'_>),
+    ) {
+        let key = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| authored_key(layer));
+        let before = self.scratch.len();
+        self.latched_layers.retain(|(layer, at)| key(layer) == Some(*at));
+        let latched_layers = &self.latched_layers;
+        self.scratch.retain(|entry| latched_layers.iter().any(|(layer, _)| layer == &entry.layer));
+        let mut changed = self.scratch.len() != before;
+        let (scratch, latched_layers) = (&mut self.scratch, &mut self.latched_layers);
         observe(&mut self.domains, &mut |layer, domains| {
             for (node, snapshot) in domains {
-                if !snapshot.fit.is_clean() || snapshot.refusal.is_some() {
-                    let refusal = snapshot.refusal.clone();
-                    scratch.push(SetupFitEntry { layer: layer.clone(), node: node.clone(), fit: snapshot.fit, refusal });
+                if snapshot.fit.is_clean() && snapshot.refusal.is_none() {
+                    continue;
+                }
+                if !latched_layers.iter().any(|(latched, _)| latched == layer) {
+                    let Some(at) = key(layer) else { continue };
+                    latched_layers.push((layer.clone(), at));
+                }
+                match scratch.iter_mut().find(|entry| &entry.layer == layer && &entry.node == node) {
+                    Some(entry) => {
+                        let mut fit = entry.fit;
+                        fit.fill_capped |= snapshot.fit.fill_capped;
+                        fit.column = match (fit.column, snapshot.fit.column) {
+                            (ColumnOutcome::Fits, ran) => ran,
+                            // A column that was outside also crossed the wall.
+                            (held, ran) if ran != ColumnOutcome::Fits && ran != held => ColumnOutcome::Clipped,
+                            (held, _) => held,
+                        };
+                        if fit != entry.fit {
+                            entry.fit = fit;
+                            changed = true;
+                        }
+                        if entry.refusal.is_none() && snapshot.refusal.is_some() {
+                            entry.refusal = snapshot.refusal.clone();
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        scratch.push(SetupFitEntry { layer: layer.clone(), node: node.clone(), fit: snapshot.fit, refusal: snapshot.refusal.clone() });
+                        changed = true;
+                    }
                 }
             }
         });
-        // Layers arrive in hash order: sort, so an unchanged report is equal.
-        self.scratch.sort_unstable_by(|a, b| (a.layer.as_str(), a.node.as_str()).cmp(&(b.layer.as_str(), b.node.as_str())));
-        if self.scratch.as_slice() != &*self.report {
+        if changed {
+            // Layers arrive in hash order: sort, so the report reads the same each time.
+            self.scratch.sort_unstable_by(|a, b| (a.layer.as_str(), a.node.as_str()).cmp(&(b.layer.as_str(), b.node.as_str())));
             self.report = Arc::from(self.scratch.as_slice());
         }
     }
@@ -143,65 +214,277 @@ pub(crate) fn mark_rows(rows: &mut [ParamRow], problems: &[SetupProblem], def: &
     }
 }
 
-/// What can move a shape, a card value or which graph a layer resolves.
+/// A card param that places a setup shape: how its value reaches the node
+/// param the check reads, the same reshape `scene_gizmo::fold_card_values`
+/// folds it with.
+struct BoundParam {
+    addr: ParamAddr,
+    card: String,
+    /// The card param's place in the manifest; the model is rebuilt when the
+    /// manifest's order changes.
+    index: usize,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: MacroCurve,
+    scale: f32,
+    offset: f32,
+    convert: ParamConvert,
+    /// A change needs a rebuild ([`SceneVm::setup_params`]).
+    structural: bool,
+}
+
+impl BoundParam {
+    /// The node param value the card's base value puts here. `None` keeps the
+    /// value the scene model was built at (no card value, or one the fold
+    /// does not write either).
+    fn value(&self, inst: &PresetInstance) -> Option<f32> {
+        let param = inst.params.iter().nth(self.index).filter(|param| param.id() == self.card)?;
+        let base = authored_value(inst, param);
+        if !base.is_finite() {
+            return None;
+        }
+        let effective = apply_card_reshape(base, self.min, self.max, self.invert, self.curve, self.scale, self.offset);
+        match convert_param_value(self.convert, effective) {
+            ParamValue::Float(v) if v.is_finite() => Some(v),
+            ParamValue::Enum(v) => Some(v as f32),
+            _ => None,
+        }
+    }
+}
+
+/// One layer's scene model, built once per graph, with the card params that
+/// move its setup shapes.
+struct SlotModel {
+    vm: SceneVm,
+    bound: Vec<BoundParam>,
+}
+
+impl SlotModel {
+    /// `None` for a graph with no liquid domain, which has no setup to check.
+    fn build(def: &EffectGraphDef, inst: &PresetInstance) -> Option<Self> {
+        if liquid_domains_in(&def.nodes).is_empty() {
+            return None;
+        }
+        let mut authored = def.clone();
+        if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
+            authored = def.clone();
+        }
+        let vm = SceneVm::from_def(&authored)?;
+        let metadata = def.preset_metadata.as_ref();
+        let mut bound: Vec<BoundParam> = Vec::new();
+        for (addr, structural) in vm.setup_params() {
+            if bound.iter().any(|known| &known.addr == addr) {
+                continue;
+            }
+            let Some(card) = crate::ui_bridge::project::scene_binding_id(def, &addr.scope_path, addr.node_doc_id, &addr.param_id) else {
+                continue;
+            };
+            let Some(binding) = metadata.and_then(|m| m.bindings.iter().find(|b| b.id == card)) else { continue };
+            let Some(spec) = metadata.and_then(|m| m.params.iter().find(|spec| spec.id == card)) else { continue };
+            if binding.convert == ParamConvert::Trigger || spec.is_trigger {
+                continue;
+            }
+            // A card param the instance lacks folds its default, never a value.
+            let Some(index) = inst.params.iter().position(|param| param.id() == card) else { continue };
+            bound.push(BoundParam {
+                addr: addr.clone(),
+                card,
+                index,
+                min: spec.min,
+                max: spec.max,
+                invert: spec.invert,
+                curve: spec.curve,
+                scale: binding.scale,
+                offset: binding.offset,
+                convert: binding.convert,
+                structural,
+            });
+        }
+        Some(Self { vm, bound })
+    }
+
+    /// The bound card values of one kind, hashed without allocating.
+    fn hash_values(&self, inst: &PresetInstance, structural: bool, state: &mut impl Hasher) {
+        for param in self.bound.iter().filter(|param| param.structural == structural) {
+            param.value(inst).map(f32::to_bits).hash(state);
+        }
+    }
+
+    fn value(&self, inst: &PresetInstance, addr: &ParamAddr) -> Option<f32> {
+        self.bound.iter().find(|param| !param.structural && &param.addr == addr)?.value(inst)
+    }
+}
+
+/// What can move a shape, a card value or which graph a layer resolves: a
+/// frame where none moved skips the per-layer keys.
 const CHECK_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::Shapes, Part::EmbeddedPresets, Part::Values]);
 
-/// What the cards' list was built from: the check's stamps, the catalog
-/// generation, the two layers and the solver's report.
-type CardKey = (u64, u64, [Option<LayerId>; 2], SetupFitReport);
+/// One card's setup check: the active layer's or the Scene panel's.
+#[derive(Default)]
+struct SlotCheck {
+    layer: Option<LayerId>,
+    /// The graph, catalog and manifest the model was built from.
+    graph: u64,
+    /// The card values that set the model's form, at build.
+    form: u64,
+    model: Option<SlotModel>,
+    /// Every card's base value: when it holds, no card value moved.
+    card: u64,
+    /// The card values the setup shapes read, at the last check.
+    values: u64,
+    report: Option<SetupFitReport>,
+    authored: Vec<SetupProblem>,
+    anchors: Vec<SetupAnchor>,
+    problems: Vec<SetupProblem>,
+    /// What the card shows of the problems; 0 when none.
+    hash: u64,
+    builds: usize,
+    checks: usize,
+}
+
+impl SlotCheck {
+    fn graph_key(layer: &Layer, inst: &PresetInstance, generation: u64) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        layer.generator_graph().is_some().hash(&mut hasher);
+        layer.generator_graph_version().hash(&mut hasher);
+        layer.generator_graph_structure_version().hash(&mut hasher);
+        layer.generator_type().hash(&mut hasher);
+        generation.hash(&mut hasher);
+        inst.params.topology().hash(&mut hasher);
+        inst.params.len().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Every card base value in one pass: a manifest lookup per bound param
+    /// costs more than this, so it gates them.
+    fn card_key(inst: &PresetInstance) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for param in inst.params.iter() {
+            authored_value(inst, param).to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn model_values(&self, inst: &PresetInstance, structural: bool) -> u64 {
+        self.model.as_ref().map_or(0, |model| {
+            let mut hasher = DefaultHasher::new();
+            model.hash_values(inst, structural, &mut hasher);
+            hasher.finish()
+        })
+    }
+
+    /// Follow `layer`'s graph, card values and solver report. The scene model
+    /// is rebuilt only when the graph or its form changes; a card value the
+    /// setup reads re-checks it; any other card value costs one pass over the
+    /// card's base values. Unless `woke` (a part the check reads moved) or the
+    /// report changed, it costs nothing.
+    fn follow(&mut self, project: &Project, layer: Option<&LayerId>, report: &SetupFitReport, generation: u64, woke: bool) {
+        if !woke && self.layer.as_ref() == layer && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
+            return;
+        }
+        let found = layer.and_then(|id| project.timeline.find_layer_by_id(id)).and_then(|(_, layer)| Some((layer, layer.gen_params()?)));
+        let Some((layer, inst)) = found else {
+            if self.layer.take().is_some() || self.hash != 0 {
+                self.model = None;
+                self.report = None;
+                self.problems.clear();
+                self.hash = 0;
+            }
+            return;
+        };
+        let graph = Self::graph_key(layer, inst, generation);
+        let card = Self::card_key(inst);
+        let same_layer = self.layer.as_ref() == Some(&layer.layer_id);
+        let mut moved = false;
+        if !same_layer || graph != self.graph || (card != self.card && self.model_values(inst, true) != self.form) {
+            self.layer = Some(layer.layer_id.clone());
+            self.model = with_layer_def(layer, SlotModel::build).flatten();
+            self.graph = graph;
+            self.form = self.model_values(inst, true);
+            self.builds += 1;
+            moved = true;
+        }
+        if moved || card != self.card {
+            self.card = card;
+            let values = self.model_values(inst, false);
+            if moved || values != self.values {
+                self.values = values;
+                match &self.model {
+                    Some(model) => model.vm.recheck_setup(&|addr| model.value(inst, addr), &mut self.authored, &mut self.anchors),
+                    None => {
+                        self.authored.clear();
+                        self.anchors.clear();
+                    }
+                }
+                self.checks += 1;
+                moved = true;
+            }
+        }
+        if !moved && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
+            return;
+        }
+        self.report = Some(report.clone());
+        problems_with_runtime(&self.anchors, &self.authored, runtime_fits(report, &layer.layer_id), &mut self.problems);
+        let mut hasher = DefaultHasher::new();
+        for problem in &self.problems {
+            problem.hash_card(&mut hasher);
+        }
+        self.hash = if self.problems.is_empty() { 0 } else { hasher.finish() };
+    }
+}
 
 /// The cards' setup check as a frame-planner input (UI_INVALIDATION_DESIGN.md
 /// D6): a hash of the problem list the active layer's card and the Scene
 /// panel's card show. A knob scrub that leaves the list alone, or one on
 /// another layer, leaves the hash alone, so live values still update in
-/// place (D22).
+/// place (D22). Each card keeps its own layer's scene model and re-checks it
+/// only when a value its setup shapes read moves.
 #[derive(Default)]
 pub(crate) struct CardCheck {
-    key: Option<CardKey>,
-    hash: u64,
+    slots: [SlotCheck; 2],
+    /// The parts' stamps and catalog generation at the last frame.
+    seen: Option<(u64, u64)>,
 }
 
 impl CardCheck {
-    /// The input this frame. The list is rebuilt only when what it reads
-    /// moved; 0 while neither layer has a problem (a layer with no liquid
-    /// domain builds nothing).
+    /// The input this frame; 0 while neither layer has a problem.
     pub fn input(&mut self, project: &Project, parts: PartStamps, layers: [Option<&LayerId>; 2], report: &SetupFitReport) -> u64 {
-        let stamps = parts.key(CHECK_PARTS);
         let generation = manifold_node_engine::load::preset_loader::catalog_generation();
-        if let Some((cached, cached_generation, cached_layers, cached_report)) = &self.key
-            && *cached == stamps
-            && *cached_generation == generation
-            && cached_layers[0].as_ref() == layers[0]
-            && cached_layers[1].as_ref() == layers[1]
-            && Arc::ptr_eq(cached_report, report)
-        {
-            return self.hash;
+        let seen = Some((parts.key(CHECK_PARTS), generation));
+        let woke = seen != self.seen;
+        self.seen = seen;
+        // The Scene panel on the active layer shows the same list: check it once.
+        let second = layers[1].filter(|layer| Some(*layer) != layers[0]);
+        self.slots[0].follow(project, layers[0], report, generation, woke);
+        self.slots[1].follow(project, second, report, generation, woke);
+        if self.slots.iter().all(|slot| slot.hash == 0) {
+            return 0;
         }
         let mut hasher = DefaultHasher::new();
-        let mut any = false;
-        for (slot, layer) in layers.iter().enumerate() {
-            let Some((_, layer)) = layer.and_then(|id| project.timeline.find_layer_by_id(id)) else { continue };
-            let problems = with_layer_def(layer, |def, inst| problems_of(def, inst, runtime_fits(report, &layer.layer_id)));
-            let Some(problems) = problems.filter(|problems| !problems.is_empty()) else { continue };
-            any = true;
-            slot.hash(&mut hasher);
-            for problem in &problems {
-                problem.hash_card(&mut hasher);
-            }
+        for slot in &self.slots {
+            slot.hash.hash(&mut hasher);
         }
-        self.hash = if any { hasher.finish() } else { 0 };
-        self.key = Some((stamps, generation, layers.map(Option::<&LayerId>::cloned), report.clone()));
-        self.hash
+        hasher.finish()
+    }
+
+    /// Scene model builds and setup checks so far, over both cards.
+    #[cfg(test)]
+    pub fn work(&self) -> (usize, usize) {
+        self.slots.iter().fold((0, 0), |(builds, checks), slot| (builds + slot.builds, checks + slot.checks))
     }
 }
 
 /// A gizmo host's setup problems, for its red boxes: the shown scene's
-/// authored list plus what the shown frame's solvers reported. Rebuilt only
-/// when the scene or the domains change, compared by pointer (both are
-/// re-allocated only on change), so a steady frame allocates nothing.
+/// authored list plus what the shown frame's solvers reported. Keyed on the
+/// scene by pointer and on each domain's fit and refusal, never its boxes: a
+/// driven column moving inside its warning rebuilds nothing, and the box is
+/// read from the frame at draw time ([`SetupProblem::live_bounds`]). A steady
+/// frame allocates nothing.
 #[derive(Default)]
 pub(crate) struct GizmoProblems {
-    key: Option<(Arc<SceneVm>, Option<SharedDomains>)>,
+    scene: Option<Arc<SceneVm>>,
+    fits: Vec<(NodeId, SetupFit, Option<Arc<str>>)>,
     problems: Vec<SetupProblem>,
 }
 
@@ -209,23 +492,25 @@ impl GizmoProblems {
     /// Follow the shown scene and domains. True when the list was rebuilt.
     pub fn update(&mut self, scene: Option<&Arc<SceneVm>>, domains: Option<&SharedDomains>) -> bool {
         let Some(scene) = scene else {
-            let rebuilt = self.key.take().is_some();
+            let rebuilt = self.scene.take().is_some();
+            self.fits.clear();
             self.problems.clear();
             return rebuilt;
         };
-        if let Some((cached, cached_domains)) = &self.key
-            && Arc::ptr_eq(cached, scene)
-            && match (cached_domains, domains) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
-        {
+        let domains = domains.map_or(&[][..], |domains| &domains[..]);
+        let same_fits = self.fits.len() == domains.len()
+            && self.fits.iter().zip(domains).all(|((node, fit, refusal), (id, snapshot))| {
+                node == id && *fit == snapshot.fit && refusal.as_deref() == snapshot.refusal.as_deref()
+            });
+        if same_fits && self.scene.as_ref().is_some_and(|cached| Arc::ptr_eq(cached, scene)) {
             return false;
         }
-        let runtime = domains.map_or(&[][..], |domains| &domains[..]);
-        problems_with_runtime(&scene.setup_anchors, &scene.problems, runtime.iter().map(RuntimeFit::of), &mut self.problems);
-        self.key = Some((scene.clone(), domains.cloned()));
+        problems_with_runtime(&scene.setup_anchors, &scene.problems, domains.iter().map(RuntimeFit::of), &mut self.problems);
+        self.scene = Some(scene.clone());
+        if !same_fits {
+            self.fits.clear();
+            self.fits.extend(domains.iter().map(|(id, snapshot)| (id.clone(), snapshot.fit, snapshot.refusal.clone())));
+        }
         true
     }
 
