@@ -540,7 +540,6 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::ExecuteSelecting(..)
         | ContentCommand::SceneModifier(_)
         | ContentCommand::ObjectModifier(_)
-        | ContentCommand::FluidDomainEdit(_)
         | ContentCommand::SceneItem(_)
         | ContentCommand::SceneCameraSetup(_)
         | ContentCommand::ChangeGeneratorType { .. }

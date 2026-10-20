@@ -14,6 +14,12 @@
     "crates/manifold-app/src/ui_bridge/scrub.rs": [
       "rack-wet-dry"
     ],
+    "crates/manifold-app/src/physics_overlay.rs": [
+      "scene-preview-gizmo-drag"
+    ],
+    "crates/manifold-app/src/scene_gizmo.rs": [
+      "scene-preview-gizmo-drag"
+    ],
     "crates/manifold-ui/src/chrome/diff.rs": [
       "rack-bypass",
       "rack-wet-dry"
@@ -355,6 +361,7 @@
     "work-fold-toggle": "inspector",
     "water-family-controls": "scene-setup",
     "scene-fluid-dam-break-controls": "waterdambreak",
+    "scene-liquid-forces": "waterdambreakmatter",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
@@ -393,6 +400,7 @@
     "scene-submesh-controls": "gltfscene",
     "scene-setup-modifier": "gltfscene",
     "scene-setup-modifier-trigger": "gltfscene",
+    "scene-preview-gizmo-drag": "gltfscene",
     "scene-skin": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",

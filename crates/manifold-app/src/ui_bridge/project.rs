@@ -911,7 +911,11 @@ pub(super) fn dispatch_project(
                 eprintln!("[Scene] frame-selected: no scene in this graph");
                 return DispatchResult::handled();
             };
-            let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(&vm, *object_node_id) else {
+            // The row's first declared shape: its object box, or its liquid
+            // domain's box.
+            let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(&vm)
+                .find(|target| target.row == Some(*object_node_id))
+            else {
                 eprintln!("[Scene] frame-selected: object {object_node_id} has no transform target");
                 return DispatchResult::handled();
             };

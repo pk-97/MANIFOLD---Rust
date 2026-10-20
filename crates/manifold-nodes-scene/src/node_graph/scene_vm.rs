@@ -50,6 +50,11 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 
 mod item_nodes;
 use item_nodes::{camera_nodes, physics_nodes, world_nodes};
+mod shapes;
+use shapes::NodeAt;
+#[cfg(test)]
+pub(crate) use shapes::object_shapes;
+pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite};
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
@@ -141,6 +146,9 @@ pub struct SceneVm {
     /// slider ranges. Fallback chain in `from_def`: camera-distance proxy →
     /// descriptor defaults.
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
+    /// Every declared shape: objects, liquid domains, their fluid role
+    /// sources and forces. Gizmo targets derive from these alone.
+    pub shapes: Vec<SceneShapeVm>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -617,6 +625,7 @@ impl SceneVm {
         let atmosphere = trace_atmosphere(&root, scene_node);
         let world_nodes = world_nodes(&root, scene_node, &environment, &atmosphere);
         let physics_nodes = physics_nodes(&root);
+        let shapes = shapes::trace_shapes(&root, def, &objects);
         let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
@@ -679,6 +688,7 @@ impl SceneVm {
             world_nodes,
             physics_nodes,
             scene_bounds,
+            shapes,
         })
     }
 }
@@ -1024,18 +1034,24 @@ fn slot_liquid_domain<'a>(
     let scene = SceneNodeRef { scope: Vec::new(), node: scene_node.node_id.clone() };
     let object = index.scene_object_at(&scene, slot as u32).ok()??;
     let domain = liquid_domain_of(index, &object).ok()??;
+    let NodeAt { level, scope, node, parent } = locate_node(root, &domain)?;
+    Some(LiquidDomainAt { level, scope, node, stable: domain, parent, surface_controls: true })
+}
+
+/// Find `reference` in the authored graph from the root.
+fn locate_node<'a>(root: &Level<'a>, reference: &SceneNodeRef) -> Option<NodeAt<'a>> {
     let mut level = Level { nodes: root.nodes, wires: root.wires };
     let mut parent = None;
-    let mut scope = Vec::with_capacity(domain.scope.len());
-    for group_id in &domain.scope {
+    let mut scope = Vec::with_capacity(reference.scope.len());
+    for group_id in &reference.scope {
         let group = level.nodes.iter().find(|node| &node.node_id == group_id)?;
         let body = group.group.as_deref()?;
         scope.push(group.id);
         parent = Some((Level { nodes: level.nodes, wires: level.wires }, group.id));
         level = Level { nodes: &body.nodes, wires: &body.wires };
     }
-    let node = level.nodes.iter().find(|node| node.node_id == domain.node)?;
-    Some(LiquidDomainAt { level, scope, node, stable: domain, parent, surface_controls: true })
+    let node = level.nodes.iter().find(|node| node.node_id == reference.node)?;
+    Some(NodeAt { level, scope, node, parent })
 }
 
 fn trace_objects(
@@ -2072,6 +2088,13 @@ mod tests {
         assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
         assert_eq!(row.fluid_domain.expect("static domain").size, [4.0, 4.0, 1.0]);
         assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
+        // The domain box and the initial column come from the declaration,
+        // each through its own transform; the surface gets no object box.
+        let shapes: Vec<_> = vm.shapes.iter().map(|shape| (&shape.owner, shape.index, shape.params[0].write.clone())).collect();
+        let owner = ShapeOwner::LiquidDomain(NodeId::new("n4"));
+        let at = |node_doc_id| ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id, param_id: "pos_x".into() });
+        assert_eq!(shapes, [(&owner, 0, at(6)), (&owner, 1, at(5))]);
+        assert_eq!(vm.shapes[0].params[1].value, 2.0);
     }
 
     #[test]
@@ -2137,6 +2160,10 @@ mod tests {
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.fluid_controls, ["n4", "n11", "n12"].map(NodeId::new));
         assert!(row.transform.is_none());
+        let role = vm.shapes.iter().find(|shape| matches!(shape.owner, ShapeOwner::RoleSource { .. })).expect("role shape");
+        assert_eq!(role.owner, ShapeOwner::RoleSource { node: NodeId::new("n11"), role: FluidRole::Inflow });
+        assert_eq!(role.params[0].write, ShapeWrite::Node(ParamAddr { scope_path: vec![10], node_doc_id: 12, param_id: "pos_x".into() }));
+        assert_eq!(vm.shapes.iter().filter(|shape| matches!(shape.owner, ShapeOwner::RoleSource { .. })).count(), 1, "a role wired twice is one target");
     }
 
     #[test]

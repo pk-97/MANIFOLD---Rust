@@ -1241,6 +1241,20 @@ impl ScenePanel {
         self.live_layer_id().filter(|_| self.show_gizmos)
     }
 
+    /// Turn "Show gizmos" off: perform mode forces it off (D6), so a show
+    /// never starts with editor chrome armed over the preview.
+    pub fn hide_gizmos(&mut self) {
+        if self.show_gizmos {
+            self.show_gizmos = false;
+            self.view_version += 1;
+        }
+    }
+
+    /// The selected item of the scene this panel shows.
+    pub fn live_selection(&self) -> Option<&SceneSelection> {
+        self.selection.get(self.live_layer_id()?)
+    }
+
     /// Build into the inspector's Scene tab content rect
     /// (`InspectorCompositePanel::scene_content_rect`). No-op when closed.
     pub fn build_docked(&mut self, tree: &mut UITree, rect: Rect) {

@@ -124,6 +124,57 @@ pub(crate) struct UnboundNodeParamDrag {
     current_value: manifold_core::effect_graph_def::SerializedParamValue,
 }
 
+impl UnboundNodeParamDrag {
+    /// An unbound node param scrub on `target`, starting from
+    /// `pre_drag_value`.
+    pub(crate) fn new(
+        target: manifold_core::GraphTarget,
+        scope_path: Vec<u32>,
+        node_id: u32,
+        param_name: String,
+        catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
+        pre_drag_value: Option<manifold_core::effect_graph_def::SerializedParamValue>,
+        current_value: manifold_core::effect_graph_def::SerializedParamValue,
+    ) -> Self {
+        Self { target, node_id, param_name, scope_path, catalog_default, preparation: None, pre_drag_value, current_value }
+    }
+
+    /// The live, non-undoable write of the current value.
+    pub(crate) fn live_command(&self) -> manifold_editing::commands::graph::SetGraphNodeParamCommand {
+        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+            self.target.clone(),
+            self.node_id,
+            self.param_name.clone(),
+            self.current_value.clone(),
+            self.catalog_default.clone(),
+        )
+        .with_scope(self.scope_path.clone())
+    }
+
+    pub(crate) fn set_current(&mut self, value: manifold_core::effect_graph_def::SerializedParamValue) {
+        self.current_value = value;
+    }
+
+    /// The drag changed the value. An absent key is always a change.
+    pub(crate) fn moved(&self) -> bool {
+        self.pre_drag_value.as_ref() != Some(&self.current_value)
+    }
+
+    /// The one undoable write for the whole drag, seeded with the true
+    /// pre-drag value so undo restores it.
+    pub(crate) fn into_command(self) -> manifold_editing::commands::graph::SetGraphNodeParamCommand {
+        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+            self.target,
+            self.node_id,
+            self.param_name,
+            self.current_value,
+            self.catalog_default,
+        )
+        .with_scope(self.scope_path)
+        .with_previous(self.pre_drag_value)
+    }
+}
+
 fn invert_preparation_value(
     node_value: f32,
     target: &crate::scene_modifier_edit::PreparationTarget,
@@ -362,15 +413,7 @@ impl Application {
         // 1. Take the newest state from the content thread.
         self.intake_content_state();
         self.tick_sync_calibration();
-        // "Show gizmos" follows whichever scene the Scene panel shows; the
-        // content thread reports that layer's rendered view (D7a).
-        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
-        if gizmo_layer != self.ws.gizmo_layer_sent.as_ref()
-            && let Some(tx) = self.content_tx.as_ref()
-        {
-            self.ws.gizmo_layer_sent = gizmo_layer.cloned();
-            ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
-        }
+        self.sync_gizmo_layer();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(
@@ -1804,38 +1847,29 @@ impl Application {
                             );
                             self.scrub.active = Some(
                                 crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
-                                    Box::new(UnboundNodeParamDrag {
-                                        target: target.clone(),
-                                        node_id: *node_id,
-                                        param_name: param_name.clone(),
-                                        scope_path: canvas_scope.clone(),
-                                        catalog_default: default.clone(),
-                                        preparation: None,
+                                    Box::new(UnboundNodeParamDrag::new(
+                                        target.clone(),
+                                        canvas_scope.clone(),
+                                        *node_id,
+                                        param_name.clone(),
+                                        default.clone(),
                                         pre_drag_value,
-                                        current_value: core_value.clone(),
-                                    }),
+                                        core_value.clone(),
+                                    )),
                                 ),
                             );
                         }
-                        if let Some(
-                            crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag),
-                        ) = self.scrub.active.as_mut()
-                        {
-                            drag.current_value = core_value.clone();
-                        }
+                        let Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag)) =
+                            self.scrub.active.as_mut()
+                        else {
+                            continue;
+                        };
+                        drag.set_current(core_value);
                         let graph_absent = self
                             .local_project
                             .preset_instance(&target)
                             .is_none_or(|inst| inst.graph.is_none());
-                        let mut live_cmd =
-                            manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                target,
-                                *node_id,
-                                param_name.clone(),
-                                core_value,
-                                default.clone(),
-                            )
-                            .with_scope(canvas_scope.clone());
+                        let mut live_cmd = drag.live_command();
                         // Unbound node param values are Shapes; the session's
                         // first move may materialize the override (D21).
                         let touches = crate::content_command::touch::shapes_first_move(
@@ -1877,57 +1911,40 @@ impl Application {
                             // post-drag value `execute()`'s self-capture would
                             // otherwise see). No-op if the drag never touched this
                             // `(node_id, param_name)`, or never actually moved.
-                            if drag.node_id == *node_id && drag.param_name == *param_name {
-                                let moved = match &drag.pre_drag_value {
-                                    Some(prev) => *prev != drag.current_value,
-                                    // Key was absent before the drag — inserting
-                                    // it now is always a real change.
-                                    None => true,
-                                };
-                                if moved {
-                                    if let Some((modifier_id, param_id)) = drag.preparation {
-                                        let Some(layer_id) = drag.target.host_target().and_then(
-                                            |target| match target {
-                                                manifold_core::GraphTarget::Generator(layer_id) => {
-                                                    Some(layer_id.clone())
-                                                }
-                                                _ => None,
-                                            },
-                                        ) else {
-                                            self.send_content_cmd(ContentCommand::GraphEditRejected(
-                                                "Preparation target has no generator owner".into(),
-                                            ));
-                                            continue;
-                                        };
-                                        let Some(value) =
-                                            serialized_value_as_f32(&drag.current_value)
-                                        else {
-                                            self.send_content_cmd(ContentCommand::GraphEditRejected(
-                                                "Preparation value is not numeric".into(),
-                                            ));
-                                            continue;
-                                        };
-                                        self.send_content_cmd(ContentCommand::SceneModifier(
-                                            crate::scene_modifier_edit::SceneModifierAction::Preparation(
-                                                layer_id,
-                                                modifier_id,
-                                                param_id,
-                                                value,
-                                            ),
+                            if drag.node_id == *node_id && drag.param_name == *param_name && drag.moved() {
+                                if let Some((modifier_id, param_id)) = drag.preparation {
+                                    let Some(layer_id) = drag.target.host_target().and_then(
+                                        |target| match target {
+                                            manifold_core::GraphTarget::Generator(layer_id) => {
+                                                Some(layer_id.clone())
+                                            }
+                                            _ => None,
+                                        },
+                                    ) else {
+                                        self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                            "Preparation target has no generator owner".into(),
                                         ));
-                                    } else {
-                                        let cmd =
-                                            manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                                drag.target,
-                                                drag.node_id,
-                                                drag.param_name,
-                                                drag.current_value,
-                                                drag.catalog_default,
-                                            )
-                                            .with_scope(drag.scope_path)
-                                            .with_previous(drag.pre_drag_value);
-                                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                                    }
+                                        continue;
+                                    };
+                                    let Some(value) =
+                                        serialized_value_as_f32(&drag.current_value)
+                                    else {
+                                        self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                            "Preparation value is not numeric".into(),
+                                        ));
+                                        continue;
+                                    };
+                                    self.send_content_cmd(ContentCommand::SceneModifier(
+                                        crate::scene_modifier_edit::SceneModifierAction::Preparation(
+                                            layer_id,
+                                            modifier_id,
+                                            param_id,
+                                            value,
+                                        ),
+                                    ));
+                                } else {
+                                    let cmd = drag.into_command();
+                                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                                 }
                             }
                         }
@@ -2333,20 +2350,23 @@ impl Application {
         crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
         crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state);
         let automation_draw_mode = self.selection.automation_draw_mode;
-        let inputs = crate::ui_frame::gather_frame_inputs(
-            &mut self.frame_planner,
-            &self.ws.ui_root,
-            &mut self.selection,
-            &self.active_layer_id,
-            &self.ui_edits,
-            &self.content_state,
-            crate::frame_plan::ChromeSource {
-                project: &self.local_project,
-                is_dirty: self.content_state.editing_is_dirty,
-                project_path: self.current_project_path.as_deref(),
-                automation_draw_mode,
-            },
-        );
+        let inputs = crate::frame_plan::FrameInputs {
+            gizmo_view: self.ws.preview_gizmo.version(),
+            ..crate::ui_frame::gather_frame_inputs(
+                &mut self.frame_planner,
+                &self.ws.ui_root,
+                &mut self.selection,
+                &self.active_layer_id,
+                &self.ui_edits,
+                &self.content_state,
+                crate::frame_plan::ChromeSource {
+                    project: &self.local_project,
+                    is_dirty: self.content_state.editing_is_dirty,
+                    project_path: self.current_project_path.as_deref(),
+                    automation_draw_mode,
+                },
+            )
+        };
         let plan = self.frame_planner.plan(inputs);
         let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
 

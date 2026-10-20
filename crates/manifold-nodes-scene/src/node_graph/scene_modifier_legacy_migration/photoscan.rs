@@ -929,6 +929,7 @@ fn build_instance(
         .map(|controller| controller.host_id.clone())
         .ok_or_else(|| format!("{} controller set has no enabled binding", kind.id()))?;
     let metadata = PresetMetadata {
+        shape: None,
         id: PresetTypeId::from_string(kind.preset_id().into()),
         display_name: kind.display_name().into(),
         category: host_metadata.category.clone(),

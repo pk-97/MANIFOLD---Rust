@@ -503,6 +503,11 @@ pub struct PresetMetadata {
     /// Its presence requires graph schema v3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_modifier: Option<crate::scene_modifier_preset::SceneModifierRecipe>,
+    /// A scene-modifier preset's extent and handles, by its card param ids
+    /// (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object
+    /// model)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<manifold_foundation::scene_surface::SceneShapeDecl>,
 }
 
 fn default_available() -> bool {
@@ -1421,6 +1426,7 @@ mod tests {
     #[test]
     fn v2_document_with_preset_metadata_round_trips() {
         let meta = PresetMetadata {
+            shape: None,
             scene_modifier: None,
             id: PresetTypeId::new("EdgeStretchByColor"),
             display_name: "Edge Stretch By Colour".to_string(),

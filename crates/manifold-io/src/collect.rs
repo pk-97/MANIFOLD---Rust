@@ -1211,6 +1211,7 @@ mod tests {
         nodes: Vec<EffectGraphNode>,
     ) -> manifold_core::project::EmbeddedPreset {
         let meta = PresetMetadata {
+            shape: None,
             scene_modifier: None,
             id: PresetTypeId::from_string(name.to_string()),
             display_name: name.to_string(),

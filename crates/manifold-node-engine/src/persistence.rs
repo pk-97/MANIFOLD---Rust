@@ -1272,6 +1272,7 @@ mod tests {
         use manifold_core::PresetTypeId;
 
         let preset_metadata = Some(PresetMetadata {
+            shape: None,
             id: PresetTypeId::new("test-preset"),
             display_name: "Test".into(),
             category: "Diagnostic".into(),
