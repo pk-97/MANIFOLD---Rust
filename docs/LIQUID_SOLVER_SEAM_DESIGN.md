@@ -59,7 +59,7 @@ Historical pre-retirement inventory: CPU FLIP runtime entries below are now proo
 
 | Kind | Production sites | Becomes |
 |---|---|---|
-| A — "is this a liquid domain" (10) | `core/scene_exposure.rs:69`, `core/scene_object_migration.rs:31`, `edit/commands/graph/scene/fluid/roles.rs:24`, `RP/physics_impulses.rs:184`, `R/scene_exposure.rs:35`, `:97`, `:399`, `app/fluid_domain_edit.rs:124`, `:234`, `app/ui_bridge/projection/scene.rs:42` | `is_liquid_domain` or a dial-table lookup (P2a) |
+| A — "is this a liquid domain" (9) | `core/scene_exposure.rs:69`, `core/scene_object_migration.rs:31`, `edit/commands/graph/scene/fluid/roles.rs:24`, `RP/physics_impulses.rs:184`, `R/scene_exposure.rs:35`, `:97`, `:399`, `nodes-scene/node_graph/scene_surface.rs:187` (the domain's gizmo shapes, `scene_shape`), `app/ui_bridge/projection/scene.rs:42` | `is_liquid_domain` or a dial-table lookup (P2a) |
 | B — FLIP-only meaning (17) | `core/file_loader.rs:81`; `RP/physics_sampling.rs:20`, `:147`, `:198` (history replay); `RP/physics_carry.rs:70`; `R/scene_exposure/fluid_quality.rs:6`; `R/scene_exposure/fluid_objects.rs:14`; (retired with CPU FLIP; in git history), `:65`, `:78`, `:728`; (retired with CPU FLIP; in git history), `:358`, `:435`, `:445`; `RP/physics_source_chain.rs:18`; `RP/physics_source_runtime.rs:72` | `FLIP_DOMAIN_TYPE_ID` (P2a); takes and caches join the predicate only when a shared bake exists |
 | C — its own walk (1) | `R/scene_vm.rs:1234`, FLIP only: the missing MPM water panel | the core walk (P2b) |
 | D — Add Fluid (2) | `edit/commands/graph/scene/fluid.rs:23`, `app/ui_bridge/project.rs:619` | `FLIP_DOMAIN_TYPE_ID` (P2a), then the template (P9) |

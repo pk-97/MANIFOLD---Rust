@@ -11,6 +11,7 @@
 //! from P8 (D15 (slider range and hard limit)); a limit is in the param's
 //! storage unit (radians for angles).
 
+use manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
 use manifold_core::liquid_domain::{
     GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain, liquid_dial_params,
 };
@@ -158,15 +159,21 @@ const fn transform_box(port: &'static str, rotates: bool) -> SceneShapeDecl {
     SceneShapeDecl {
         shape: SceneShape::Box { center: POS, rotation: if rotates { Some(ROT) } else { None }, size: SCALE },
         via: Some(id(port)),
+        extent_limit: None,
     }
 }
 
 static SCENE_OBJECT_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
+/// The liquid domain box: each side stays inside what the solvers accept.
+const DOMAIN_BOX: SceneShapeDecl = {
+    let mut decl = transform_box("domain", false);
+    decl.extent_limit = Some(HardLimit::Between(DOMAIN_EXTENT_METRES.0, DOMAIN_EXTENT_METRES.1));
+    decl
+};
 /// The solvers take axis-aligned boxes only, so neither box rotates. The
 /// Initial Fill height is a level above the domain floor, not a world
 /// value, so it has no handle yet.
-static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] =
-    [transform_box("domain", false), transform_box("initial_volume", false)];
+static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] = [DOMAIN_BOX, transform_box("initial_volume", false)];
 /// The `transform` input places the role's volume.
 static FLUID_ROLE_SOURCE_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
 

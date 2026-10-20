@@ -2,13 +2,17 @@
 //! their write address, authored value and wired flag
 //! (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model)).
 //! Node shapes come from the scene table (`scene_shape`), force shapes from
-//! their preset manifest. The gizmo core builds every target from this list
+//! their preset manifest in the registry. The gizmo core builds every target from this list
 //! alone; nothing here knows a handle.
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, GROUP_INPUT_TYPE_ID};
 use manifold_core::effects::apply_card_reshape;
-use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection, is_force_recipe};
+use manifold_core::preset_type_id::PresetTypeId;
+use manifold_core::scene_modifier_preset::{
+    SceneModifierInstanceDef, SceneTargetSelection, is_force_recipe, scene_modifier_macro_lock_reason,
+};
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
+use manifold_node_engine::load::catalog_source::preset_def;
 
 use super::{Level, ParamAddr, SceneObjectVm, TRANSFORM_3D_TYPE_ID, TransformVm, locate_node, param_f32, resolve_producer_through_group, trace_transform};
 use crate::node_graph::scene_surface::scene_shape;
@@ -282,7 +286,7 @@ fn force_shape(
         return None;
     }
     let local = instance.graph.preset_metadata.as_ref()?;
-    let decl = local.shape.clone()?;
+    let decl = declared_force_shape(&local.id)?;
     let host = def.preset_metadata.as_ref()?;
     let params = decl
         .shape
@@ -301,12 +305,9 @@ fn force_shape(
             let scale = binding.scale * local_scale;
             let offset = binding.offset * local_scale + local_offset;
             let value = apply_card_reshape(binding.default_value, spec.min, spec.max, spec.invert, spec.curve, scale, offset);
-            Some(ShapeParamVm {
-                id: id.to_string(),
-                write: ShapeWrite::Card { id: binding.id.clone(), scale, offset },
-                value,
-                wired: false,
-            })
+            // The press refuses a macro-locked card, so its handle draws locked.
+            let wired = scene_modifier_macro_lock_reason(def, &binding.id).is_some();
+            Some(ShapeParamVm { id: id.to_string(), write: ShapeWrite::Card { id: binding.id.clone(), scale, offset }, value, wired })
         })
         .collect::<Option<Vec<_>>>()?;
     Some(SceneShapeVm {
@@ -319,6 +320,13 @@ fn force_shape(
         row: None,
         pickable: true,
     })
+}
+
+/// The shape a force preset declares, read from the preset registry by its
+/// type. The declaration is preset data: an instance's saved graph copy may
+/// predate it, so the copy is never read for it.
+fn declared_force_shape(preset: &PresetTypeId) -> Option<SceneShapeDecl> {
+    preset_def(preset)?.preset_metadata.as_ref()?.shape.clone()
 }
 
 /// D-78: the centre of the one liquid domain a force acts on, else the

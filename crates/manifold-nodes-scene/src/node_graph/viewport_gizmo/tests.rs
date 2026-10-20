@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use manifold_core::NodeId;
+use manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 
@@ -223,7 +224,15 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([-50.0, 2.0, -6.0])) else {
         panic!("one value")
     };
-    assert_eq!(size, MIN_EXTENT, "a box never scales below its smallest size");
+    assert_eq!(size, DOMAIN_EXTENT_METRES.0, "a domain never scales below what the solvers accept");
+    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([0.0, 2.0, -6.0]), px([50.0, 2.0, -6.0])) else {
+        panic!("one value")
+    };
+    assert_eq!(size, DOMAIN_EXTENT_METRES.1, "nor above it");
+    let HandleValues::One(column) = drag(&targets[1], GizmoMode::Scale, GizmoAxis::X, px([-1.0, 0.0, -6.0]), px([-50.0, 0.0, -6.0])) else {
+        panic!("one value")
+    };
+    assert_eq!(column, MIN_EXTENT, "an undeclared box stops only at the smallest extent");
     assert_eq!(targets[1].id, GizmoTargetId { owner, shape: 1 });
     assert_eq!(targets[1].origin, [-1.0, 0.0, -6.0]);
 }
@@ -315,6 +324,7 @@ fn plane_rotate_writes_a_unit_normal() {
             normal: [Cow::Borrowed("nx"), Cow::Borrowed("ny"), Cow::Borrowed("nz")],
         },
         via: None,
+        extent_limit: None,
     };
     let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Object(1), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
     let o = px(target.origin);

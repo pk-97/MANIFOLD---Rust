@@ -599,36 +599,32 @@ mod tests {
             to_port: "domain".into(),
         });
         if bound {
-            def.preset_metadata
-                .as_mut()
-                .unwrap()
-                .params
-                .push(ParamSpecDef {
-                    id: "domain_x".into(),
-                    name: "Domain X".into(),
-                    min: -10.0,
-                    max: 10.0,
-                    default_value: 0.0,
+            // The width card's range is wider than the solvers accept, so
+            // only the domain's declared limit can stop its drag.
+            for (id, name, param, min, max, default_value) in
+                [("domain_x", "Domain X", "pos_x", -10.0, 10.0, 0.0), ("domain_width", "Domain Width", "scale_x", 0.0, 50.0, 4.0)]
+            {
+                let metadata = def.preset_metadata.as_mut().unwrap();
+                metadata.params.push(ParamSpecDef {
+                    id: id.into(),
+                    name: name.into(),
+                    min,
+                    max,
+                    default_value,
                     ..ParamSpecDef::default()
                 });
-            def.preset_metadata
-                .as_mut()
-                .unwrap()
-                .bindings
-                .push(BindingDef {
-                    id: "domain_x".into(),
-                    label: "Domain X".into(),
-                    default_value: 0.0,
-                    target: BindingTarget::Node {
-                        node_id: NodeId::new("domain_transform"),
-                        param: "pos_x".into(),
-                    },
+                metadata.bindings.push(BindingDef {
+                    id: id.into(),
+                    label: name.into(),
+                    default_value,
+                    target: BindingTarget::Node { node_id: NodeId::new("domain_transform"), param: param.into() },
                     convert: ParamConvert::Float,
                     user_added: false,
                     scale: 1.0,
                     offset: 0.0,
                     default_mirrors_node_param: false,
                 });
+            }
         }
         let layer = &mut project.timeline.layers[index];
         let generator = layer.gen_params_mut().unwrap();
@@ -692,6 +688,94 @@ mod tests {
         }
         assert!(service.undo(&mut content));
         assert_eq!(value(&content), Some(SerializedParamValue::Float { value: 4.0 }));
+    }
+
+    /// The solvers refuse a domain side outside their range, so a scale
+    /// drag stops at it through either knob path.
+    #[test]
+    fn domain_scale_drag_stops_at_the_solver_range() {
+        let (min, max) = manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
+        for bound in [false, true] {
+            for (reach, stop) in [(-10.0, min), (30.0, max)] {
+                let (mut project, layer) = fluid_project(bound);
+                let domain = target(&project, &layer, GizmoTargetKind::FluidDomain);
+                let mut rig = Rig::new(&layer);
+                let to = px(plus(domain.origin, [reach, 0.0, 0.0]));
+                rig.drag(&mut project, &layer, &domain, GizmoMode::Scale, GizmoAxis::X, px(domain.origin), to);
+                let size = shape_value(&project, &layer, &domain, "scale_x");
+                assert!((size - stop).abs() < 1e-4, "bound {bound}: a drag by {reach} stops at {stop}, got {size}");
+                if bound {
+                    assert!((base(&project, &layer, "domain_width") - stop).abs() < 1e-4, "the card stops with it");
+                }
+            }
+        }
+    }
+
+    /// A force saved before shapes were declared still gets its gizmo: the
+    /// declaration is read from the preset registry, not the saved copy.
+    #[test]
+    fn a_force_saved_before_shape_declarations_gets_its_gizmo() {
+        let mut def: EffectGraphDef =
+            serde_json::from_str(include_str!("../../manifold-io/tests/fixtures/water_layer_graph_v1160.json")).unwrap();
+        assert!(!def.scene_modifiers.is_empty(), "the saved layer has forces");
+        assert!(
+            def.scene_modifiers.iter().all(|m| m.graph.preset_metadata.as_ref().is_some_and(|p| p.shape.is_none())),
+            "the saved copies predate the declaration"
+        );
+        // Give each force its host cards, as adding it does.
+        for id in def.scene_modifiers.iter().map(|m| m.id.clone()).collect::<Vec<_>>() {
+            def = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(&def, &id).unwrap().graph;
+        }
+        let scene = SceneVm::from_def(&def).expect("the saved layer builds a scene");
+        for modifier in &def.scene_modifiers {
+            let owner = ShapeOwner::Force(modifier.id.clone());
+            assert!(scene.shapes.iter().any(|shape| shape.owner == owner), "{} has a gizmo shape", modifier.id);
+        }
+    }
+
+    /// A force card locked by a calibrated modifier draws locked, and the
+    /// press refuses it: draw and press read one predicate.
+    #[test]
+    fn a_macro_locked_force_handle_draws_locked_and_refuses_the_press() {
+        let mut project = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
+        let layer = LayerId::new("scene");
+        let generator = project.timeline.layers[0].gen_params_mut().unwrap();
+        let graph = generator.graph.as_mut().unwrap();
+        let metadata = graph.preset_metadata.as_mut().unwrap();
+        let card = metadata
+            .bindings
+            .iter()
+            .find(|b| matches!(&b.target, BindingTarget::SceneModifier { param_id, .. } if param_id == "center_x"))
+            .expect("the force's center X card")
+            .clone();
+        let source = NodeId::new("scan_render");
+        metadata.bindings.push(BindingDef {
+            target: BindingTarget::Node { node_id: source.clone(), param: "calibration_probe".into() },
+            ..card.clone()
+        });
+        let scan = manifold_core::scene_modifier_preset::SceneNodeRef { scope: vec![], node: source };
+        graph.scene_modifiers[0].mesh_frames.push(manifold_core::scene_modifier_preset::SceneMeshReferenceFrame {
+            target: scan.clone(),
+            source: scan,
+            source_definition_hash: String::new(),
+            source_offset: [0.0; 3],
+            scene_radius: 1.0,
+        });
+        assert!(
+            crate::scene_modifier_edit::macro_parameter_lock_reason(&project, &GraphTarget::Generator(layer.clone()), &card.id).is_some(),
+            "the press side refuses the card"
+        );
+
+        let force = target(&project, &layer, GizmoTargetKind::Force);
+        assert!(force.handle(GizmoMode::Move, GizmoAxis::X).unwrap().write.locked(), "the locked card's handle draws locked");
+        assert!(!force.handle(GizmoMode::Move, GizmoAxis::Y).unwrap().write.locked(), "an unlocked card's handle does not");
+        let view = GizmoView { camera: camera(), width: W, height: H };
+        let scene = scene(&project, &layer);
+        let grip = force.grip(GizmoMode::Move, GizmoAxis::X).unwrap();
+        let mut rig = Rig::new(&layer);
+        let pressed = rig.with_ctx(&mut project, |ctx| press(ctx, &layer, &scene, Some(&force.id), GizmoMode::Move, &view, px(grip)));
+        assert!(matches!(pressed, GizmoPress::Handle(None)), "the locked handle takes the press and refuses it: {pressed:?}");
+        assert!(rig.rx.try_iter().next().is_none(), "nothing reaches the content thread");
     }
 
     #[test]
@@ -790,14 +874,14 @@ mod tests {
         let row = domain.row.expect("a domain belongs to its water object");
         assert_eq!(scene_selection(&domain), Some(SceneSelection::Object(row)));
         let scene = self::scene(&fluid, &fluid_layer);
-        let column = gizmo_targets(&scene).find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape);
-        if let Some(column) = column {
-            assert_eq!(
-                selected_target(&scene, &SceneSelection::Object(row), Some(&column.id)).map(|t| t.id),
-                Some(column.id.clone()),
-                "a picked shape of the selected item keeps its handles"
-            );
-        }
+        let column = gizmo_targets(&scene)
+            .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
+            .expect("the GPU FLIP family wires an Initial Fill column");
+        assert_eq!(
+            selected_target(&scene, &SceneSelection::Object(row), Some(&column.id)).map(|t| t.id),
+            Some(column.id.clone()),
+            "a picked shape of the selected item keeps its handles"
+        );
         assert_eq!(selected_target(&scene, &SceneSelection::Object(row), None).map(|t| t.id), gizmo_targets(&scene).find(|t| t.row == Some(row)).map(|t| t.id));
     }
 }

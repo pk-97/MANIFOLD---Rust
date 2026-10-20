@@ -309,7 +309,7 @@ impl SceneShape {
 }
 
 /// One declared shape of a scene object.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneShapeDecl {
     #[serde(flatten)]
     pub shape: SceneShape,
@@ -317,6 +317,11 @@ pub struct SceneShapeDecl {
     /// `None` when the declaring node or card owns them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<Cow<'static, str>>,
+    /// The hard limit on every size and radius the shape names, in their
+    /// storage unit. A scale handle stops at it as a knob stops at its
+    /// param's limit. `None` keeps only the gizmo's smallest extent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent_limit: Option<crate::param_range::HardLimit>,
 }
 
 #[cfg(test)]
@@ -337,6 +342,7 @@ mod shape_tests {
                     radius: Cow::Borrowed("radius"),
                 },
                 via: None,
+                extent_limit: None,
             }
         );
         let axis: SceneShapeDecl =

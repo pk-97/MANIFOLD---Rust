@@ -32,6 +32,7 @@ use std::sync::LazyLock;
 use manifold_core::NodeId;
 use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
 use manifold_core::physics_gizmo::PhysicsGizmo;
+use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ParamTriple, SceneShape};
 use manifold_node_engine::scene::camera::Camera;
 
@@ -142,8 +143,8 @@ pub struct GizmoTargetId {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HandleWrite {
     /// One param moved along the handle: a position, a size or a radius.
-    /// `min` is the smallest value it writes.
-    Linear { param: ShapeParamVm, min: Option<f32> },
+    /// `limit` stops the value as the param's knob stops at its hard limit.
+    Linear { param: ShapeParamVm, limit: HardLimit },
     /// One angle param, turned by the ring.
     Angle(ShapeParamVm),
     /// A direction's three components, turned by the ring about the
@@ -207,17 +208,18 @@ impl GizmoTarget {
         let mut handles = Vec::new();
         let mut local = None;
         let mut direction = None;
+        let extent_limit = shape.decl.extent_limit.unwrap_or(HardLimit::AtLeast(MIN_EXTENT));
         let mut place = |center: &ParamTriple, handles: &mut Vec<GizmoHandle>| {
             if let Some(center) = triple(center) {
                 local = Some(center.each_ref().map(|param| param.value));
                 for (axis, param) in GizmoAxis::XYZ.into_iter().zip(center) {
-                    handles.push(GizmoHandle { mode: GizmoMode::Move, axis, write: HandleWrite::Linear { param, min: None } });
+                    handles.push(GizmoHandle { mode: GizmoMode::Move, axis, write: HandleWrite::Linear { param, limit: HardLimit::Unlimited } });
                 }
             }
         };
         let extent = |id: &str, handles: &mut Vec<GizmoHandle>| {
             if let Some(param) = param(id) {
-                let write = HandleWrite::Linear { param, min: Some(MIN_EXTENT) };
+                let write = HandleWrite::Linear { param, limit: extent_limit };
                 handles.push(GizmoHandle { mode: GizmoMode::Scale, axis: GizmoAxis::Uniform, write });
             }
         };
@@ -240,7 +242,7 @@ impl GizmoTarget {
                 }
                 for (axis, id) in GizmoAxis::XYZ.into_iter().zip(size) {
                     if let Some(param) = param(id) {
-                        let write = HandleWrite::Linear { param, min: Some(MIN_EXTENT) };
+                        let write = HandleWrite::Linear { param, limit: extent_limit };
                         handles.push(GizmoHandle { mode: GizmoMode::Scale, axis, write });
                     }
                 }
@@ -565,10 +567,10 @@ impl GizmoDrag {
         self.last = cur;
         let write = self.handle().write.clone();
         let values = match &write {
-            HandleWrite::Linear { param, min } => {
+            HandleWrite::Linear { param, limit } => {
                 let delta = self.target.projected_drag_delta(self.axis, cam, width, height, (cur.0 - self.start.0, cur.1 - self.start.1))?;
-                let value = param.value + delta;
-                HandleValues::One(min.map_or(value, |min| value.max(min)))
+                // A handle has no slider range: only the declared limit stops it.
+                HandleValues::One(limit.clamp_input(param.value + delta, (f32::NEG_INFINITY, f32::INFINITY)))
             }
             HandleWrite::Angle(param) => {
                 self.angle += turned?;
