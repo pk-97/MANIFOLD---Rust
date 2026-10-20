@@ -610,7 +610,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
-| `Swarm` | Swarm | generator | Geometry | 372 |
+| `Swarm` | Swarm | generator | Geometry | 378 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |

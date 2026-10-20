@@ -290,12 +290,18 @@ pub fn insert_scene_template(
     let mut remap = Remap { docs: HashMap::new(), stable: HashMap::new() };
     renumber_group(&mut group, &mut alloc, &mut remap, &handle)?;
     let group_doc = group.id;
-    let domain = match crate::liquid_domain::liquid_domains_in(group.group.as_deref().map_or(&[][..], |body| body.nodes.as_slice())) {
-        domains if domains.len() > 1 => return Err(fail("Scene template holds more than one liquid domain")),
-        mut domains => domains.pop(),
+    let body_nodes = group.group.as_deref().map_or(&[][..], |body| body.nodes.as_slice());
+    if crate::liquid_domain::liquid_domains_in(body_nodes).len() > 1 {
+        return Err(fail("Scene template holds more than one liquid domain"));
+    }
+    // The one node that follows the Physics World (a liquid's domain, a
+    // swarm's clock), found by what its type declares it takes.
+    let taker = match crate::scene_world_controls::world_control_takers(body_nodes) {
+        takers if takers.len() > 1 => return Err(fail("Scene template holds more than one simulation")),
+        mut takers => takers.pop(),
     };
-    if domain.is_some() && !scene.scope.is_empty() {
-        return Err(at("A liquid inserts into the root scene"));
+    if taker.is_some() && !scene.scope.is_empty() {
+        return Err(at("A simulation inserts into the root scene"));
     }
 
     // Outputs, routed by port type.
@@ -313,8 +319,8 @@ pub fn insert_scene_template(
         route_to_render_slots(&mut candidate, scene, group, &outputs)?;
     }
     merge_exposures(&mut candidate, template, &remap, group_doc, &handle)?;
-    if let Some(domain) = domain {
-        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &domain).map_err(fail)?;
+    if let Some(taker) = taker {
+        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &taker).map_err(fail)?;
     }
     Ok(SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() })
 }

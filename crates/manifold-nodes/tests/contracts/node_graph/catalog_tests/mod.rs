@@ -82,6 +82,7 @@ pub(crate) mod whitewater_scene;
 pub(crate) mod whitewater_emitters;
 
 mod gpu_flip_preset;
+mod swarm_preset;
 
 mod liquid_bricks;
 

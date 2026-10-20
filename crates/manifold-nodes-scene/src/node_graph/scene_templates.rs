@@ -8,9 +8,10 @@ use std::collections::BTreeMap;
 use manifold_core::NodeId;
 use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::effect_graph_def::{
-    EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
-    InterfacePortDef, PresetMetadata, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
+    InterfacePortDef, PresetMetadata, RENDER_SCENE_TYPE_ID, SerializedParamValue,
 };
+use manifold_core::scene_object_model::scene_object_models;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate};
 
@@ -270,13 +271,24 @@ pub fn light_template(position: (f32, f32)) -> SceneTemplate {
     SceneTemplate { group: light, metadata }
 }
 
+
 /// Add Swarm: thousands of GPU instances of a small shape, pushed by the
-/// scene's forces. The group is the `Swarm` generator preset's body (a clock
-/// and force lattice over the `bounds` box, a seeded particle loop, copies
-/// placed at the particles) ending in one scene object, so the row, its card
-/// and its box gizmo work as for any object. The card carries the swarm's
-/// Speed, Air Drag and Force Detail, its box and its look.
+/// scene's forces. `slot` picks its tint; `centroid` its graph editor
+/// position. The same group, inserted into the preset's dressing, is the
+/// shipped `Swarm` preset ([`swarm_preset_def`]).
 pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> SceneTemplate {
+    swarm_body(tint(slot), centroid)
+}
+
+/// The Swarm preset's warm orange.
+#[cfg(any(test, feature = "testkit"))]
+const SWARM_PRESET_TINT: [f32; 3] = [0.9, 0.55, 0.2];
+
+/// One swarm: a clock and force lattice over the `bounds` box, a seeded
+/// particle loop the forces move, copies placed at the particles, ending in
+/// one scene object, so the row, its card and its box gizmo work as for any
+/// object. Its Speed and Reset come from the Physics World on insert (D-107).
+fn swarm_body(tint: manifold_core::Color, centroid: (f32, f32)) -> SceneTemplate {
     const BOUNDS: u32 = 1;
     const FORCES: u32 = 2;
     const START: u32 = 3;
@@ -289,77 +301,57 @@ pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> SceneTemplate {
     const OBJECT_NODE: u32 = 10;
     const OUTPUT_NODE: u32 = 11;
     const GROUP_NODE: u32 = 12;
-    let tint = tint(slot);
-    let bounds = node(
-        BOUNDS,
-        "node.transform_3d",
-        Some(&format!("{HANDLE_TOKEN} Bounds")),
-        BTreeMap::from([
-            ("scale_x".to_owned(), float(4.0)),
-            ("scale_y".to_owned(), float(4.0)),
-            ("scale_z".to_owned(), float(4.0)),
-        ]),
-    );
-    let forces = node(FORCES, "node.swarm_forces", Some(&format!("{HANDLE_TOKEN} Forces")), BTreeMap::new());
-    let start = node(START, "node.cube_mesh", None, BTreeMap::from([("size".to_owned(), float(4.0))]));
-    let seed = node(
-        SEED,
-        "node.spawn_from_mesh",
-        None,
-        BTreeMap::from([
-            ("mode".to_owned(), SerializedParamValue::Enum { value: 1 }),
-            ("max_capacity".to_owned(), float(100_000.0)),
-            ("active_count".to_owned(), float(20_000.0)),
-        ]),
-    );
-    let state = node(STATE, "node.array_feedback", None, BTreeMap::new());
-    let movement = node(MOVE, "node.move_swarm", None, BTreeMap::from([("active_count".to_owned(), float(100_000.0))]));
-    let copies = node(COPIES, "node.swarm_to_copies", None, BTreeMap::from([("size".to_owned(), float(0.05))]));
-    let shape = node(SHAPE, "node.platonic_solid_mesh", None, BTreeMap::new());
-    let material = node(
-        MATERIAL_NODE,
-        "node.pbr_material",
-        None,
-        BTreeMap::from([
-            ("color_r".to_owned(), float(tint.r)),
-            ("color_g".to_owned(), float(tint.g)),
-            ("color_b".to_owned(), float(tint.b)),
-            ("metallic".to_owned(), float(0.1)),
-            ("roughness".to_owned(), float(0.5)),
-        ]),
-    );
-    let object = node(OBJECT_NODE, "node.scene_object", Some(HANDLE_TOKEN), BTreeMap::new());
+    let named = |id: u32, name: &str, type_id: &str, handle: Option<String>, params: BTreeMap<String, SerializedParamValue>| {
+        let mut built = node(id, type_id, handle.as_deref(), params);
+        built.node_id = NodeId::new(name);
+        built
+    };
+    let suffixed = |suffix: &str| Some(format!("{HANDLE_TOKEN} {suffix}"));
     let nodes = vec![
-        bounds,
-        forces,
-        start,
-        seed,
-        state,
-        movement,
-        copies,
-        shape,
-        material,
-        object,
+        named(
+            BOUNDS,
+            "swarm_bounds",
+            "node.transform_3d",
+            suffixed("Bounds"),
+            BTreeMap::from([
+                ("scale_x".to_owned(), float(4.0)),
+                ("scale_y".to_owned(), float(4.0)),
+                ("scale_z".to_owned(), float(4.0)),
+            ]),
+        ),
+        named(FORCES, "swarm_forces", "node.swarm_forces", suffixed("Forces"), BTreeMap::new()),
+        named(START, "swarm_start", "node.cube_mesh", None, BTreeMap::from([("size".to_owned(), float(4.0))])),
+        named(
+            SEED,
+            "swarm_seed",
+            "node.spawn_from_mesh",
+            suffixed("Seed"),
+            BTreeMap::from([
+                ("mode".to_owned(), SerializedParamValue::Enum { value: 1 }),
+                ("max_capacity".to_owned(), float(100_000.0)),
+                ("active_count".to_owned(), float(20_000.0)),
+            ]),
+        ),
+        named(STATE, "swarm_state", "node.array_feedback", None, BTreeMap::new()),
+        named(MOVE, "swarm_move", "node.move_swarm", None, BTreeMap::from([("active_count".to_owned(), float(100_000.0))])),
+        named(COPIES, "swarm_copies", "node.swarm_to_copies", suffixed("Copies"), BTreeMap::from([("size".to_owned(), float(0.05))])),
+        named(SHAPE, "swarm_shape", "node.platonic_solid_mesh", None, BTreeMap::new()),
+        named(
+            MATERIAL_NODE,
+            "swarm_material",
+            "node.pbr_material",
+            None,
+            BTreeMap::from([
+                ("color_r".to_owned(), float(tint.r)),
+                ("color_g".to_owned(), float(tint.g)),
+                ("color_b".to_owned(), float(tint.b)),
+                ("metallic".to_owned(), float(0.1)),
+                ("roughness".to_owned(), float(0.5)),
+            ]),
+        ),
+        named(OBJECT_NODE, "swarm_object", "node.scene_object", Some(HANDLE_TOKEN.to_owned()), BTreeMap::new()),
         node(OUTPUT_NODE, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new()),
     ];
-    let mut metadata = empty_metadata("Swarm");
-    for (id, label) in [
-        (FORCES, format!("{HANDLE_TOKEN} — Swarm")),
-        (BOUNDS, format!("{HANDLE_TOKEN} — Box")),
-        (MATERIAL_NODE, format!("{HANDLE_TOKEN} — Material")),
-        (OBJECT_NODE, HANDLE_TOKEN.to_owned()),
-    ] {
-        let found = nodes.iter().find(|candidate| candidate.id == id).expect("template node");
-        stamp_scene_node_exposures_into(
-            &mut metadata.params,
-            &mut metadata.bindings,
-            id,
-            &found.node_id,
-            &label,
-            &metadata_for_node_type(&found.type_id),
-            &found.params,
-        );
-    }
     // The forces node's clock and field scalars go to the mover port for
     // port; `epoch` also restarts the seed and the particle loop.
     const CLOCK_PORTS: [&str; 14] = [
@@ -393,5 +385,101 @@ pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> SceneTemplate {
         wires,
         tint: Some([tint.r, tint.g, tint.b, 1.0]),
     }));
+    let metadata = owned_card("Swarm", &group);
     SceneTemplate { group, metadata }
+}
+
+/// The card rows of a one-object group's own nodes, read off the one scene
+/// object model: every node its row owns controls on, then its material and
+/// the object. A control the Physics World drives on insert is the World's
+/// row, never the node's own (it would be dead).
+fn owned_card(display_name: &str, group: &EffectGraphNode) -> PresetMetadata {
+    const SCENE: u32 = 0;
+    let body = group.group.as_deref().expect("a template group has a body");
+    let mut render = node(SCENE, RENDER_SCENE_TYPE_ID, None, BTreeMap::from([("objects".to_owned(), float(1.0))]));
+    render.node_id = NodeId::new("scene");
+    let output = &body.interface.outputs.first().expect("the group places one object").name;
+    let mut probe: EffectGraphDef =
+        serde_json::from_value(serde_json::json!({"version": 2, "nodes": [], "wires": []})).expect("an empty graph");
+    probe.nodes = vec![render, group.clone()];
+    probe.wires = vec![wire(group.id, output, SCENE, "object_0")];
+    let scene = manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+    let rows = scene_object_models(&probe, &scene).expect("the template's object resolves");
+    let [row] = rows.as_slice() else { panic!("a one-object template has one row: {rows:?}") };
+    let local = |id: &NodeId| body.nodes.iter().find(|candidate| candidate.node_id == *id).expect("the row's node is in the template");
+    let object = local(&row.object.node);
+    let section = |suffix: &str| format!("{HANDLE_TOKEN} — {suffix}");
+    let mut owned: Vec<(&EffectGraphNode, String)> =
+        row.controls.iter().map(|control| (local(&control.node), section(display_name))).collect();
+    if let Some(material) = body.wires.iter().find(|wire| wire.to_node == object.id && wire.to_port == "material") {
+        let material = body.nodes.iter().find(|candidate| candidate.id == material.from_node).expect("material node");
+        owned.push((material, section("Material")));
+    }
+    owned.push((object, HANDLE_TOKEN.to_owned()));
+    let mut metadata = empty_metadata(display_name);
+    for (found, label) in owned {
+        let taken = manifold_core::param_lookup::world_control_inputs(&found.type_id);
+        let descriptors: Vec<_> = metadata_for_node_type(&found.type_id)
+            .into_iter()
+            .filter(|meta| !taken.iter().any(|input| input.input == meta.name))
+            .collect();
+        stamp_scene_node_exposures_into(
+            &mut metadata.params,
+            &mut metadata.bindings,
+            found.id,
+            &found.node_id,
+            &label,
+            &descriptors,
+            &found.params,
+        );
+    }
+    metadata
+}
+
+/// The shipped `Swarm` generator preset: [`swarm_template`]'s group inserted
+/// into a camera, light and environment by the one template insertion, so
+/// the preset and an Add menu swarm are the same graph. The manifold-nodes
+/// freshness test rewrites `Swarm.json` from this with `UPDATE_SWARM_PRESET=1`.
+#[cfg(any(test, feature = "testkit"))]
+pub fn swarm_preset_def() -> EffectGraphDef {
+    let dressing = serde_json::json!({
+        "name": "Swarm",
+        "version": 2,
+        "nodes": [
+            {"id": 0, "nodeId": "input", "typeId": "system.generator_input", "handle": "input"},
+            {"id": 1, "nodeId": "camera", "typeId": "node.orbit_camera", "handle": "camera", "params": {
+                "distance": {"type": "Float", "value": 9.0}, "fov_y": {"type": "Float", "value": 0.9},
+                "look_y": {"type": "Float", "value": 0.0}, "orbit": {"type": "Float", "value": 0.55},
+                "tilt": {"type": "Float", "value": 0.4}}},
+            {"id": 3, "nodeId": "environment", "typeId": "node.bake_environment", "handle": "environment", "params": {
+                "fill": {"type": "Float", "value": 0.3}, "intensity": {"type": "Float", "value": 1.0},
+                "mode": {"type": "Enum", "value": 1}}},
+            {"id": 4, "nodeId": "sun", "typeId": "node.light", "handle": "sun", "params": {
+                "intensity": {"type": "Float", "value": 1.5}, "mode": {"type": "Enum", "value": 0},
+                "pos_x": {"type": "Float", "value": -6.0}, "pos_y": {"type": "Float", "value": 10.0},
+                "pos_z": {"type": "Float", "value": 6.0}}},
+            {"id": 30, "nodeId": "scene", "typeId": "node.render_scene", "handle": "scene", "params": {
+                "lights": {"type": "Float", "value": 1.0}, "objects": {"type": "Float", "value": 0.0},
+                "rt_enabled": {"type": "Bool", "value": false}, "temporal_upscale": {"type": "Bool", "value": false}}},
+            {"id": 31, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output"}
+        ],
+        "wires": [
+            {"fromNode": 1, "fromPort": "out", "toNode": 30, "toPort": "camera"},
+            {"fromNode": 3, "fromPort": "envmap", "toNode": 30, "toPort": "envmap"},
+            {"fromNode": 4, "fromPort": "out", "toNode": 30, "toPort": "light_0"},
+            {"fromNode": 4, "fromPort": "out", "toNode": 3, "toPort": "sun"},
+            {"fromNode": 30, "fromPort": "color", "toNode": 31, "toPort": "in"}
+        ],
+        "presetMetadata": {
+            "id": "Swarm", "displayName": "Swarm", "category": "Geometry", "oscPrefix": "swarm",
+            "available": true, "isLineBased": false, "params": [], "bindings": []
+        }
+    });
+    let def: EffectGraphDef = serde_json::from_value(dressing).expect("the Swarm dressing parses");
+    let scene = manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+    let [r, g, b] = SWARM_PRESET_TINT;
+    let template = swarm_body(manifold_core::Color::new(r, g, b, 1.0), (900.0, 200.0));
+    manifold_core::scene_template::insert_scene_template(&def, &scene, None, &template)
+        .expect("the swarm inserts into its dressing")
+        .graph
 }

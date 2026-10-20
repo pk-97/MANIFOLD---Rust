@@ -71,7 +71,7 @@ pub mod scene_exposure;
 pub mod scene_graph_edit;
 pub mod scene_template;
 pub mod scene_object_model;
-mod scene_world_controls;
+pub mod scene_world_controls;
 pub mod scene_index;
 pub mod scene_impulse;
 pub mod scene_modifier_preset;

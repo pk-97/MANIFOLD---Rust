@@ -517,6 +517,11 @@ const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
 impl Primitive for MatterDomain {
+    /// A liquid follows the Physics World: its gravity and its clock.
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        &manifold_core::scene_world_controls::WORLD_INPUTS
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
     }
