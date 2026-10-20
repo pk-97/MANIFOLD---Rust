@@ -1654,7 +1654,7 @@ impl ScenePanel {
                     .unwrap_or(retained.len());
                 cy = self.build_light_headers_through(tree, (inner_x, inner_w), cy, light);
                 for row in i..run_end {
-                    cy = self.build_properties_row(tree, inner_x, cy, row, label_width, slider_w, target.clone());
+                    cy = self.build_properties_block(tree, inner_x, cy, row, label_width, slider_w, target.clone());
                 }
                 i = run_end;
                 continue;
