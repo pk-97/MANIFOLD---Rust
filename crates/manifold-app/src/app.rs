@@ -1090,9 +1090,9 @@ impl Application {
 
 impl ApplicationHandler for Application {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        // A macOS terminate: that `quit::install` could not intercept ends
-        // the process through this callback without returning from run_app,
-        // so clean-session bookkeeping must happen here too.
+        // A macOS terminate: (answered yes by `quit.rs`, or not intercepted)
+        // ends the process through this callback without returning from
+        // run_app, so clean-session bookkeeping must happen here too.
         crate::clear_session_sentinel();
     }
 
@@ -1131,9 +1131,6 @@ impl ApplicationHandler for Application {
         // the render loop and routed through the normal `PanelAction` dispatch.
         let mut app_menu = crate::menu::AppMenu::new();
         app_menu.init_platform();
-        // The menu's Quit (⌘Q) and the Dock's Quit call `terminate:`; route
-        // it into the same quit prompt as the close button.
-        crate::quit::install();
         // Populate the File → Open Recent submenu from the persisted list.
         app_menu.set_recent_projects(&self.project_io.recent_projects());
         self.app_menu = Some(app_menu);
@@ -2131,17 +2128,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.initialized || self.shutting_down {
-            return;
-        }
-
-        // An OS quit (⌘Q, the menu, the Dock) or a quit that waited on a
-        // cancelled export asks here, in editor and perform mode alike.
+        // An OS quit (⌘Q, the menu, the Dock, logout) or a quit that waited
+        // on a cancelled export asks here, in editor and perform mode alike.
+        // Ahead of the guard below: AppKit waits for the reply, so a quit
+        // before init or after shutdown still answers it.
         if crate::quit::take_os_quit_request() || self.quit_after_export_ready() {
             self.quit(event_loop);
-            if self.shutting_down {
-                return;
-            }
+        }
+        if !self.initialized || self.shutting_down {
+            return;
         }
 
         // Deferred output window toggle (needs ActiveEventLoop).

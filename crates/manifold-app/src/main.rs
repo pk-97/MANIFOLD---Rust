@@ -380,6 +380,9 @@ fn main() {
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+    // winit set its app delegate in EventLoop::new and nothing is in flight
+    // yet: route terminate: (⌘Q, the Dock, logout) into the quit prompt.
+    quit::install();
 
     let mut application = app::Application::new();
     #[cfg(all(feature = "ui-automation", unix))]
