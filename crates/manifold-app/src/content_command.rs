@@ -344,6 +344,13 @@ pub enum ContentCommand {
     /// The scene layer whose rendered camera, lights and fluid domains are
     /// reported for the Scene panel's gizmo overlay; `None` stops reporting.
     SetPhysicsOverlay(Option<manifold_core::LayerId>),
+    /// The render slots the selection outline covers (D-102) in the output
+    /// render and in the scene viewport, each with the layer it was read
+    /// from. `None` draws none.
+    SetSelectionOutline {
+        output: Option<crate::selection_outline::OutlineSlots>,
+        viewport: Option<crate::selection_outline::OutlineSlots>,
+    },
     SetModifierPreviewContext {
         scope: Vec<manifold_core::NodeId>,
         object: Option<manifold_core::scene_modifier_preset::SceneNodeRef>,

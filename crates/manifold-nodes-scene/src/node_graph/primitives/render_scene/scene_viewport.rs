@@ -159,6 +159,13 @@ impl ViewportPass for SceneViewportPass {
     fn status(&self) -> FrameRenderStatus { SceneViewportPass::status(self) }
     fn errors(&self) -> &[String] { SceneViewportPass::errors(self) }
     fn clear_state(&mut self) { SceneViewportPass::clear_state(self); }
+    fn set_selection_mask(&mut self, slots: &[u32]) { self.renderer.set_selection_mask(slots); }
+    fn selection_mask(&self) -> Option<&GpuTexture> {
+        if !self.last_attempt_valid {
+            return None;
+        }
+        self.renderer.selection_mask()
+    }
 }
 
 #[cfg(test)]

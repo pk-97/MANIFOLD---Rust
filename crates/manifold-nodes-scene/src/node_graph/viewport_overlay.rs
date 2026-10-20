@@ -97,6 +97,91 @@ pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
     ]
 }
 
+/// Most interior cell lines drawn along one axis. A cell grid on three box
+/// faces then never exceeds `2 * 3 * LATTICE_LINES_PER_AXIS` lines however
+/// fine the domain's resolution (Blender and Houdini draw the cell grid on
+/// the box faces, not through the volume).
+pub const LATTICE_LINES_PER_AXIS: u32 = 256;
+
+/// Upper bound on the lines [`fluid_lattice_lines`] appends.
+pub const LATTICE_LINE_BUDGET: usize = 6 * LATTICE_LINES_PER_AXIS as usize;
+
+/// The least on-screen gap, in points, the grid keeps between neighbouring
+/// lines. Finer cells are thinned by a whole-cell stride so a dense domain
+/// reads as a grid, never a moire or a solid wash.
+pub const LATTICE_MIN_POINTS: f32 = 5.0;
+
+const LATTICE_COLOR: [u8; 4] = [230, 200, 60, 70];
+
+/// Which face of the box the grid draws on, per axis. Outside the box's slab
+/// on an axis, the face away from the eye (a backdrop that never fills the
+/// view); inside it, the wall the camera looks toward.
+pub fn lattice_faces(layout: &FluidDomainLayout, eye: [f32; 3], fwd: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|k| {
+        let (lo, hi) = (layout.min[k], layout.min[k] + layout.size[k]);
+        let toward_max = if eye[k] > lo && eye[k] < hi { fwd[k] >= 0.0 } else { eye[k] < lo + layout.size[k] * 0.5 };
+        if toward_max { hi } else { lo }
+    })
+}
+
+/// The solver's cell grid on the three faces [`lattice_faces`] picks, on the
+/// layout's own cell boundaries (`min + i * cell_size`). Each axis draws
+/// every `stride`th boundary, the stride set by [`LATTICE_LINES_PER_AXIS`]
+/// and by `screen_points(a, b)`, the on-screen distance in points between two
+/// world points (read across one cell at the face corner farthest from the
+/// eye, where foreshortening is worst), so neighbours stay
+/// [`LATTICE_MIN_POINTS`] apart. A floor face resting on
+/// the ground plane (y = 0) is skipped: it would sit on the ground grid.
+/// The box edges themselves are [`fluid_domain_lines`].
+pub fn fluid_lattice_lines(
+    layout: FluidDomainLayout,
+    eye: [f32; 3],
+    fwd: [f32; 3],
+    screen_points: impl Fn([f32; 3], [f32; 3]) -> Option<f32>,
+    out: &mut Vec<WorldLine>,
+) {
+    let cell = layout.cell_size as f32;
+    let face = lattice_faces(&layout, eye, fwd);
+    for k in 0..3 {
+        if k == 1 && face[1] == layout.min[1] && layout.min[1].abs() <= cell * 0.5 {
+            continue;
+        }
+        // The face corner farthest from the eye: neighbours are closest on
+        // screen there, so keeping them apart at it keeps them apart everywhere.
+        let far: [f32; 3] = std::array::from_fn(|a| {
+            if a == k {
+                face[k]
+            } else if eye[a] < layout.min[a] + layout.size[a] * 0.5 {
+                layout.min[a] + layout.size[a]
+            } else {
+                layout.min[a]
+            }
+        });
+        let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+        for (along, across) in [(i, j), (j, i)] {
+            let cap = layout.cells[across].saturating_sub(1).div_ceil(LATTICE_LINES_PER_AXIS);
+            let mut next = far;
+            next[across] += if far[across] == layout.min[across] { cell } else { -cell };
+            let thin = match screen_points(far, next) {
+                Some(gap) if gap > 1e-4 => (LATTICE_MIN_POINTS / gap).ceil() as u32,
+                _ => 1,
+            };
+            let stride = cap.max(thin).max(1);
+            let mut step = stride;
+            while step < layout.cells[across] {
+                let mut a = [0.0; 3];
+                a[k] = face[k];
+                a[across] = layout.min[across] + step as f32 * cell;
+                a[along] = layout.min[along];
+                let mut b = a;
+                b[along] = layout.min[along] + layout.size[along];
+                out.push(WorldLine { a, b, color: LATTICE_COLOR });
+                step += stride;
+            }
+        }
+    }
+}
+
 /// A ground-plane (XZ, y=0) grid centred at the origin. The two lines through
 /// the origin are tinted to read as the X/Z axes (Blender/Maya convention),
 /// every other line is neutral gray.

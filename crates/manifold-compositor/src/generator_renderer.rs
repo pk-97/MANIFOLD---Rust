@@ -265,15 +265,16 @@ impl GeneratorRenderer {
     /// generator (no preview active). Clearing the dump here too means a closed
     /// editor leaves no generator dumping — a live show pays nothing — without
     /// depending on the unfused→fused executor rebuild to reset it.
+    ///
+    /// The scene viewport is left alone: the pipeline calls this every frame
+    /// the editor watches nothing, and a viewport pass torn down here would be
+    /// rebuilt each frame and never finish its warmup. Its lifetime belongs to
+    /// [`Self::set_scene_viewport_request`].
     pub fn clear_preview(&mut self) {
         self.preview_layer = None;
-        self.scene_viewport_request = None;
-        self.scene_viewport_modifier = None;
-        self.scene_viewport_error = None;
         for state in self.layer_generators.values_mut() {
             state.generator.set_preview_node(None);
             state.generator.clear_dump_set();
-            state.generator.clear_scene_viewport();
         }
     }
 
@@ -395,21 +396,51 @@ impl GeneratorRenderer {
 
     /// What the Scene panel's gizmo overlay needs from `layer_id`'s scene:
     /// its accepted fluid domains, light positions and physics setup shapes
-    /// (appended) and the camera it rendered through. `None` unless the layer
-    /// rendered in the last `render_all` (a finished clip or an occluded layer
-    /// reports nothing).
+    /// (appended) and the scene node and camera it rendered through. `None`
+    /// unless the layer rendered in the last `render_all` (a finished clip or
+    /// an occluded layer reports nothing).
     pub fn write_physics_overlay(
         &self,
         layer_id: &LayerId,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         lights: &mut Vec<[f32; 3]>,
         gizmos: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
-    ) -> Option<manifold_node_engine::scene::camera::Camera> {
+    ) -> Option<(NodeId, manifold_node_engine::scene::camera::Camera)> {
         let state = self.layer_generators.get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?;
         state.generator.write_fluid_domains_watched(domains);
         state.generator.write_physics_gizmos_watched(gizmos);
         state.generator.write_rendered_view(lights)
+    }
+
+    /// Outline render slots `slots` of `layer_id`'s scene in its output
+    /// render (D-102). Editing chrome: the output never changes.
+    pub fn set_selection_mask(&mut self, layer_id: &LayerId, slots: &[u32]) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_selection_mask(slots);
+        }
+    }
+
+    /// Outline render slots `slots` in `layer_id`'s scene viewport.
+    pub fn set_scene_viewport_selection_mask(&mut self, layer_id: &LayerId, slots: &[u32]) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_scene_viewport_selection_mask(slots);
+        }
+    }
+
+    /// The selection mask `layer_id`'s output render drew in the last
+    /// `render_all`.
+    pub fn selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.layer_generators.get(layer_id)
+            .filter(|state| state.rendered_pass == Some(self.render_pass))?
+            .generator
+            .selection_mask()
+    }
+
+    /// The selection mask of `layer_id`'s scene viewport frame.
+    pub fn scene_viewport_selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.scene_viewport_texture(layer_id)?;
+        self.layer_generators.get(layer_id)?.generator.scene_viewport_selection_mask()
     }
 
     /// Keep local modifier addresses out of the host's node namespace.

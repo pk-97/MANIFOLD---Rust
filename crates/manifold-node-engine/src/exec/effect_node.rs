@@ -1436,6 +1436,22 @@ pub trait EffectNode: Send + AsAny {
         &[]
     }
 
+    /// From the next render on, also draw the objects in render slots
+    /// `slots` into a coverage mask through the camera this node renders
+    /// with, so the editor can outline the selection (D-102). Empty stops
+    /// it. Editing chrome: the output never changes (REALTIME_3D_DESIGN.md
+    /// D9).
+    fn set_selection_mask(&mut self, _slots: &[u32]) {}
+
+    /// The coverage mask the last render drew for [`Self::set_selection_mask`]:
+    /// `R8Unorm` at the scene's native render size (smaller than the output
+    /// under temporal upscale; read it by UV), 1 where a selected object
+    /// covers the picture. `None` when nothing is selected or the frame drew
+    /// nothing.
+    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,

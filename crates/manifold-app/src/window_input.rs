@@ -299,6 +299,9 @@ impl Application {
             self.preview_gizmo_drag_to();
             return;
         }
+        if self.preview_navigation_move() {
+            return;
+        }
 
         // Split handle drag takes highest priority
         // From Unity PanelResizeHandle.OnDrag
@@ -501,7 +504,7 @@ impl Application {
                                         );
                                     }
                                 }
-                            } else if !self.preview_gizmo_press() {
+                            } else if !self.preview_gizmo_press() && !self.preview_navigation_press(MouseButton::Left) {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,
                                     PointerAction::Down,
@@ -524,8 +527,8 @@ impl Application {
                                     self.cursor_pos.x, self.cursor_pos.y
                                 );
                             }
-                            if self.preview_gizmo_release() {
-                                // The preview's gizmo drag held the pointer.
+                            if self.preview_gizmo_release() || self.preview_navigation_release() {
+                                // A preview gizmo or navigation drag held the pointer.
                             } else if self.split_dragging {
                                 // End video/timeline split drag.
                                 // From Unity PanelResizeHandle.OnPointerUp.
@@ -550,6 +553,13 @@ impl Application {
                                 );
                             }
                         }
+                    }
+                }
+                MouseButton::Middle => {
+                    if state == ElementState::Pressed {
+                        self.preview_navigation_press(MouseButton::Middle);
+                    } else {
+                        self.preview_navigation_release();
                     }
                 }
                 MouseButton::Right => {
@@ -668,6 +678,9 @@ impl Application {
                     .ui_root
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
+                return;
+            }
+            if self.preview_navigation_wheel(delta) {
                 return;
             }
             // Convert line deltas (mouse wheel notches) to logical pixels.
@@ -872,11 +885,11 @@ impl Application {
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
                 return false;
             };
-            let view = GizmoView { camera: config.camera.to_camera(), width: config.width, height: config.height };
+            let view = GizmoView::new(config.camera.to_camera(), config.width, config.height);
             (view, ed.viewport_gizmo_mode, ed.viewport_selected.clone())
         };
         let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
-        let Some(point) = crate::viewport_input::gizmo_point(rect, (view.width, view.height), (cx, cy)) else { return false };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(rect, view, (cx, cy)) else { return false };
         let Some(pressed) = self.with_dispatch_ctx(|ctx| {
             crate::scene_gizmo::press(ctx, &layer_id, &scene, selected.as_ref(), mode, &view, point)
         }) else {
@@ -930,7 +943,7 @@ impl Application {
 
     /// Where the show picture sits in the main window: the same fit of the
     /// same render size the draw path blits (`ui_frame::composite_main_ui_frame`).
-    fn preview_fit(&self) -> Option<manifold_ui::Rect> {
+    pub(crate) fn preview_fit(&self) -> Option<manifold_ui::Rect> {
         crate::ui_frame::video_fit_rect(self.ws.ui_root.layout.video_area(), self.video_source_dims())
     }
 
@@ -956,7 +969,7 @@ impl Application {
 
     /// "Show gizmos" follows whichever scene the Scene panel shows; the
     /// content thread reports that layer's rendered view (D7a). Switching it
-    /// off ends a preview drag.
+    /// off ends a preview drag and preview navigation.
     pub(crate) fn sync_gizmo_layer(&mut self) {
         if self.ws.ui_root.scene_setup_panel.gizmo_layer().is_none() {
             self.preview_gizmo_release();
@@ -968,6 +981,7 @@ impl Application {
             self.ws.gizmo_layer_sent = gizmo_layer.cloned();
             ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
         }
+        self.sync_preview_navigation();
     }
 
     /// P6: move the armed gizmo drag (if any) to the pointer. The gesture
@@ -978,11 +992,11 @@ impl Application {
         let Some(mut gesture) = ed.viewport_gizmo_drag.take() else { return false };
         let point = ed.viewport_rect.zip(ed.viewport_session.as_ref().and_then(|session| session.displayed_config()))
             .and_then(|(rect, config)| {
-                let point = crate::viewport_input::gizmo_point(rect, (config.width, config.height), (x, y))?;
-                Some((config.width, config.height, config.camera.to_camera(), point))
+                let view = crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height);
+                crate::viewport_input::gizmo_pointer(rect, view, (x, y))
             });
-        if let Some((w, h, cam, point)) = point {
-            self.with_dispatch_ctx(|ctx| gesture.drag_to(ctx, &cam, w, h, point));
+        if let Some((view, point)) = point {
+            self.with_dispatch_ctx(|ctx| gesture.drag_to(ctx, &view, point));
         }
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.viewport_gizmo_drag = Some(gesture);
@@ -1680,9 +1694,12 @@ impl Application {
                     return;
                 }
             }
-            // The preview's gizmo: Escape ends a drag; with the preview
-            // focused, W, E and R pick the mode, as in the editor viewport.
-            if matches!(logical_key, Key::Named(NamedKey::Escape)) && self.preview_gizmo_release() {
+            // The preview: Escape ends a gizmo drag, else navigation; with
+            // the preview focused, W, E and R pick the mode, as in the
+            // editor viewport.
+            if matches!(logical_key, Key::Named(NamedKey::Escape))
+                && (self.preview_gizmo_release() || self.end_preview_navigation())
+            {
                 return;
             }
             if self.modifiers.is_none()

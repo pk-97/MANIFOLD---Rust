@@ -3,7 +3,7 @@
 //!
 //! This is pure CPU state + math: an orbit-around-target camera with
 //! industry-standard navigation (LMB-drag orbit, Shift/MMB-drag pan,
-//! scroll/pinch dolly, trackpad two-finger pan) — no GPU, no graph, no
+//! wheel and Ctrl-scroll dolly, trackpad two-finger pan) — no GPU, no graph, no
 //! `EditingService`. It exists ONLY in the editor preview context (D9): the
 //! UI owns navigation and sends immutable copies to the content renderer.
 //! It never edits the `Project` or show camera. [`ViewportCamera::to_camera`] emits the
@@ -20,7 +20,7 @@
 //! the viewport to its default framing, exactly like every other DCC tool's
 //! unsaved viewport camera.
 
-use crate::scene::camera::Camera;
+use crate::scene::camera::{Camera, CameraMode};
 
 /// Radians. Keeps pitch strictly inside ±90° so the analytic frame in
 /// `Camera::from_pos_euler` (which this mirrors) never crosses the pole —
@@ -28,6 +28,8 @@ use crate::scene::camera::Camera;
 const MAX_PITCH: f32 = 1.5;
 const MIN_DISTANCE: f32 = 0.05;
 const MAX_DISTANCE: f32 = 5000.0;
+/// A seeded orbit pivot never sits closer than this in front of the camera.
+const MIN_SEED_PIVOT: f32 = 1.0;
 
 /// Orbit-around-target navigation camera. `yaw`/`pitch` follow
 /// `node.free_camera`'s convention exactly (yaw about world +Y, pitch about
@@ -68,6 +70,31 @@ impl Default for ViewportCamera {
 }
 
 impl ViewportCamera {
+    /// Navigation that starts exactly where `camera` looks from: same
+    /// position, direction and field of view, orbiting the point where its
+    /// view ray passes closest to the world origin (at least `MIN_SEED_PIVOT`
+    /// ahead). A preview host seeds from the output camera so the first
+    /// gesture moves away from the picture on screen instead of jumping.
+    /// An orthographic camera keeps the default field of view.
+    pub fn seeded_from(camera: &Camera) -> Self {
+        let fwd = camera.fwd;
+        let pitch = fwd[1].clamp(-1.0, 1.0).asin().clamp(-MAX_PITCH, MAX_PITCH);
+        let yaw = (-fwd[0]).atan2(-fwd[2]);
+        let ahead = -(camera.pos[0] * fwd[0] + camera.pos[1] * fwd[1] + camera.pos[2] * fwd[2]);
+        let distance = ahead.max(MIN_SEED_PIVOT).clamp(MIN_DISTANCE, MAX_DISTANCE);
+        let target = [
+            camera.pos[0] + fwd[0] * distance,
+            camera.pos[1] + fwd[1] * distance,
+            camera.pos[2] + fwd[2] * distance,
+        ];
+        let defaults = Self::default();
+        let fov_y = match camera.mode {
+            CameraMode::Perspective { fov_y } => fov_y,
+            CameraMode::Orthographic { .. } => defaults.fov_y,
+        };
+        Self { target, yaw, pitch, distance, fov_y, near: camera.near, far: camera.far }
+    }
+
     /// LMB-drag orbit. `dx`/`dy` are screen-pixel deltas; `sensitivity` is
     /// radians per pixel (the panel owns the constant so it can tune per
     /// input device — mouse vs. trackpad drag report different natural
@@ -107,21 +134,18 @@ impl ViewportCamera {
         self.pan(dx, dy, sensitivity);
     }
 
-    /// Scroll-wheel or trackpad-pinch dolly. `delta` > 0 zooms in (moves
-    /// closer); multiplicative so the zoom feels consistent whether the
-    /// camera is 1 unit or 1000 units from the target. Clamped so the
-    /// camera can never reach the target (a `distance` of 0 would make
-    /// `to_camera`'s look-at direction degenerate) or fly to infinity.
+    /// Wheel dolly, in notches. `delta` > 0 zooms in (moves
+    /// closer). Exponential in `delta`: every unit of delta scales the
+    /// distance by the same factor whatever the zoom level, N notches equal
+    /// one notch applied N times, and in-then-out returns to the start. A
+    /// linear `1 - delta * k` factor goes negative for a large delta and its
+    /// clamp turned one wheel notch into a 10x jump. The distance clamp keeps
+    /// `to_camera`'s look-at direction defined and the camera finite.
     pub fn dolly(&mut self, delta: f32, sensitivity: f32) {
-        let factor = (1.0 - delta * sensitivity).clamp(0.1, 10.0);
-        self.distance = (self.distance * factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
-    }
-
-    /// Trackpad pinch-to-zoom — same math as [`Self::dolly`], separate entry
-    /// point for the same per-device-sensitivity reason as
-    /// [`Self::trackpad_pan`].
-    pub fn trackpad_pinch_dolly(&mut self, delta: f32, sensitivity: f32) {
-        self.dolly(delta, sensitivity);
+        let factor = (-delta * sensitivity).exp();
+        if factor.is_finite() {
+            self.distance = (self.distance * factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
+        }
     }
 
     /// The camera's right/up basis at the current yaw/pitch, zero roll —
@@ -247,6 +271,42 @@ mod tests {
     }
 
     #[test]
+    fn seeded_navigation_reproduces_the_seed_camera() {
+        let show = ViewportCamera { target: [1.0, 0.5, -2.0], yaw: -0.8, pitch: 0.3, distance: 6.0, fov_y: 0.7, near: 0.1, far: 300.0 }.to_camera();
+        let seeded = ViewportCamera::seeded_from(&show).to_camera();
+        for i in 0..3 {
+            assert!((seeded.pos[i] - show.pos[i]).abs() < 1e-4, "position {i}");
+            assert!((seeded.fwd[i] - show.fwd[i]).abs() < 1e-4, "direction {i}");
+        }
+        assert_eq!(seeded.mode, show.mode);
+        assert_eq!((seeded.near, seeded.far), (show.near, show.far));
+    }
+
+    #[test]
+    fn dolly_is_bounded_and_proportional_per_notch() {
+        let sens = 0.08;
+        for notches in [1.0_f32, 2.0, 5.0, 20.0] {
+            let mut vp = ViewportCamera::default();
+            let d0 = vp.distance;
+            vp.dolly(notches, sens);
+            let mut step = ViewportCamera::default();
+            for _ in 0..notches as usize {
+                step.dolly(1.0, sens);
+            }
+            assert!((vp.distance - step.distance).abs() <= d0 * 1e-4, "{notches} notches at once must equal {notches} single notches");
+            let expected = d0 * (-notches * sens).exp();
+            assert!((vp.distance - expected).abs() <= d0 * 1e-4);
+        }
+        let mut one = ViewportCamera::default();
+        let d0 = one.distance;
+        one.dolly(1.0, sens);
+        let ratio = one.distance / d0;
+        assert!(ratio > 0.9 && ratio < 0.95, "one notch in moves about 8%, got {ratio}");
+        one.dolly(-1.0, sens);
+        assert!((one.distance - d0).abs() <= d0 * 1e-5, "in then out returns to the start");
+    }
+
+    #[test]
     fn pan_translates_target_without_changing_orientation() {
         let mut vp = ViewportCamera::default();
         let (yaw0, pitch0) = (vp.yaw, vp.pitch);
@@ -258,18 +318,12 @@ mod tests {
     }
 
     #[test]
-    fn trackpad_gestures_apply_same_math_as_mouse() {
+    fn trackpad_pan_applies_the_same_math_as_mouse_pan() {
         let mut a = ViewportCamera::default();
         let mut b = ViewportCamera::default();
         a.pan(4.0, -2.0, 0.02);
         b.trackpad_pan(4.0, -2.0, 0.02);
         assert_eq!(a.target, b.target);
-
-        let mut c = ViewportCamera::default();
-        let mut d = ViewportCamera::default();
-        c.dolly(0.5, 0.1);
-        d.trackpad_pinch_dolly(0.5, 0.1);
-        assert_eq!(c.distance, d.distance);
     }
 
     #[test]

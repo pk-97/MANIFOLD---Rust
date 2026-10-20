@@ -69,6 +69,7 @@
 mod rt_changes;
 mod volume_optics;
 mod live_draw_args;
+mod selection_mask;
 mod construction;
 mod frame_setup;
 mod post_passes;
@@ -76,6 +77,7 @@ mod pass2_draw;
 mod rt_trace;
 mod rt_frame;
 mod prepasses;
+use prepasses::ShadowUniforms;
 mod pipelines;
 mod resources;
 #[cfg(feature = "gpu-proofs")]
@@ -890,36 +892,6 @@ fn material_map_uniforms(material: &Material) -> [MaterialMapUniform; 19] {
     })
 }
 
-/// Per-(caster, object) uniform for the shadow depth pass
-/// (`shaders/shadow_depth.wgsl`). The vertex shader composes
-/// `light_view_proj · model · position` and writes only depth. 128 bytes.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShadowUniforms {
-    light_view_proj: [[f32; 4]; 4],
-    model: [[f32; 4]; 4],
-    /// `(gain, weights_wired, 0, 0)` for the depth visibility discard.
-    appearance: [f32; 4],
-    alpha: [f32; 4],
-    uv_m: [f32; 4],
-    uv_t: [f32; 4],
-}
-const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 192);
-
-impl ShadowUniforms {
-    fn for_draw(view_proj: [[f32; 4]; 4], draw: &ObjectDraw<'_>) -> Self {
-        Self {
-            light_view_proj: view_proj,
-            model: draw.uniforms.model,
-            appearance: draw.uniforms.appearance,
-            alpha: [draw.uniforms.alpha_params[0], draw.uniforms.alpha_params[1],
-                draw.uniforms.base_color[3], draw.uniforms.texture_flags[2]],
-            uv_m: draw.uniforms.base_color_uv_m,
-            uv_t: draw.map_uniforms[0].offset_set,
-        }
-    }
-}
-
 pub struct RenderScene {
     inputs: Vec<NodeInput>,
     params: Vec<ParamDef>,
@@ -1122,6 +1094,8 @@ pub struct RenderScene {
     /// This frame's light positions, for the same overlays. Retained so a
     /// steady frame allocates nothing.
     rendered_lights: Vec<[f32; 3]>,
+    /// The selection mask the editor outlines (D-102).
+    selection: selection_mask::SelectionMask,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -1792,6 +1766,8 @@ fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderF
 // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): one ObjectDraw per wired,
 // visible object.
 struct ObjectDraw<'ctx> {
+    /// The render slot (`object_n`) this draw came from.
+    slot: u32,
     vertices: &'ctx manifold_gpu::GpuBuffer,
     /// Optional per-vertex appearance weights. Unwired draws bind `vertices`
     /// at the weights slot as an unused ABI dummy.
@@ -2491,6 +2467,9 @@ impl EffectNode for RenderScene {
         &self.rendered_lights
     }
 
+    fn set_selection_mask(&mut self, slots: &[u32]) { self.selection.set(slots); }
+    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> { self.selection.texture() }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,
@@ -2658,6 +2637,7 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        self.selection.drawn = false;
         self.rendered_camera = None;
         self.render_objects(ctx, None);
     }
@@ -2977,6 +2957,7 @@ impl RenderScene {
         else {
             return;
         };
+        self.selection_mask_pass(ctx, &pre, &draws);
         let target = &target;
         let resolve_target = &resolve_target;
         let depth_resolve_target = depth_resolve_target.as_ref();

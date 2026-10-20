@@ -81,6 +81,7 @@ mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
 mod scene_gizmo;
+mod selection_outline;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_item_transfer;
@@ -172,6 +173,7 @@ mod live_ui;
 mod viewport_input;
 mod scene_viewport;
 mod physics_overlay;
+mod preview_navigation;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;
