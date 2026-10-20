@@ -280,15 +280,20 @@ pub fn sync_scene_outliner_eyes(ui: &mut UIRoot, project: &Project) {
     };
     let inst = layer.gen_params();
     let mut value_of = |addr: &manifold_ui::panels::scene_setup_panel::RowAddr| {
+        use crate::ui_bridge::project::{find_node_by_scope, is_water_object, scene_param_value};
         let (scope, node, param) = (addr.scope_path.as_slice(), addr.node_doc_id, addr.param_id.as_str());
-        if let Some(inst) = inst
-            && let Some(id) = crate::ui_bridge::project::scene_binding_id(def, scope, node, param)
-            && inst.params.contains(id.as_str())
-        {
-            return Some(inst.get_base_param(id.as_str()));
+        let bound = inst.is_some_and(|inst| {
+            crate::ui_bridge::project::scene_binding_id(def, scope, node, param).is_some_and(|id| inst.params.contains(id.as_str()))
+        });
+        if !bound && find_node_by_scope(def, scope, node).is_none() {
+            return None;
         }
-        let node = crate::ui_bridge::project::find_node_by_scope(def, scope, node)?;
-        Some(node.params.get(param).and_then(crate::editor_bridge::serialized_value_as_f32).unwrap_or(1.0))
+        let value = scene_param_value(def, inst, scope, node, param);
+        // A water's eye shows it as drawn: hidden by either flag.
+        if param == "parent_visible" && is_water_object(def, scope, node) {
+            return Some(value.min(scene_param_value(def, inst, scope, node, "visible")));
+        }
+        Some(value)
     };
     ui.scene_setup_panel.sync_outliner_eyes(&mut ui.tree, &mut value_of);
 }

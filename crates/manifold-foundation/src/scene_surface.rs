@@ -116,12 +116,16 @@ pub enum Feature {
     LightType,
     /// An environment bake's mode: 0 Gradient, 1 Softbox.
     EnvironmentMode,
+    /// A fluid source's role: 0 Initial Fill, 1 Inflow, 2 Outflow, 3
+    /// Collider. An Initial Fill is no source row of its own: its controls
+    /// join the water's, so the role decides which rows exist.
+    SourceRole,
 }
 
 impl Feature {
     /// Whether the switch picks a mode rather than turning the feature on.
     pub fn has_modes(self) -> bool {
-        matches!(self, Self::LightType | Self::EnvironmentMode)
+        matches!(self, Self::LightType | Self::EnvironmentMode | Self::SourceRole)
     }
 
     /// Why a row gated on this feature does nothing right now.
@@ -131,6 +135,7 @@ impl Feature {
             Self::MotionBlur => "Motion blur is off",
             Self::LightType => "This light type does not use it",
             Self::EnvironmentMode => "This environment mode does not use it",
+            Self::SourceRole => "This source role does not use it",
         }
     }
 }

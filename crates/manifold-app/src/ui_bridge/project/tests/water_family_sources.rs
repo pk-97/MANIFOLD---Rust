@@ -206,6 +206,59 @@ fn physics_boundary_delete_placed_source_one_undo() {
     assert_eq!(effective_def(&project, &layer), removed);
 }
 
+/// Role set to Initial Fill from the card moves Effects, so the frame that
+/// shows the write rebuilds the Scene tab tree: the Inflow's row goes and its
+/// controls join the water's. Undo moves Effects back the same way.
+#[test]
+fn physics_boundary_role_to_initial_fill_rebuilds_the_tree() {
+    let (mut project, layer, _) = super::water_family::water_project();
+    let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+    selection.select_layer(layer.clone());
+    selection.pin_scope(manifold_ui::InspectorTab::Scene);
+    sync(&mut ui, &project, &selection);
+    let menu = ui.scene_setup_panel.add_menu(manifold_ui::panels::scene_setup_panel::SceneGroup::Objects);
+    let Some(manifold_ui::PanelAction::Project(insert)) = menu.iter().find(|entry| entry.label == "Inflow").and_then(|entry| entry.action.clone())
+    else { panic!("Inflow in the Add menu") };
+    let (tx, rx) = crossbeam_channel::unbounded();
+    dispatch_project(&insert, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state,
+        &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+    let Ok(ContentCommand::ExecuteSelecting(command, select)) = rx.try_recv() else { panic!("an Inflow inserts on content") };
+    let pending = select.capture(&project);
+    let mut editing = EditingService::new();
+    editing.execute(command, &mut project);
+    assert_eq!(editing.take_rejection(), None);
+    let added = effective_def(&project, &layer);
+    let water = water_row(&added);
+    assert_eq!(water.placed_sources.len(), 1);
+    // The receipt selects the Inflow and unfolds its water.
+    let update = crate::edit_selection::EditSelectionUpdate { sequence: 1, selection: pending.resolve(&project).expect("the Inflow is found") };
+    assert!(crate::edit_selection::apply_update(&mut ui, &project, Some(&update), &mut selection, &mut active));
+    sync(&mut ui, &project, &selection);
+    assert!(scene_tree_rows(&mut ui).iter().any(|name| name == "Inflow 1"));
+
+    let group = source_group(domain_level(&added, &water), "Inflow 1");
+    let role = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == "node.fluid_role_source").expect("the Inflow's role");
+    let scope = vec![water.group_node_id.expect("family group"), group.id];
+    editing.execute(apply_scene_param_write(&project, &layer, scope, role.id, "role", 0.0).expect("Role is a card"), &mut project);
+    assert_eq!(editing.take_rejection(), None);
+    assert!(editing.peek_undo_touches().contains(manifold_core::change::Part::Effects), "the role write moves the tree's input");
+    // The Scene tab reads the authored graph: the card value over the literal.
+    let authored = |project: &Project| {
+        let mut def = effective_def(project, &layer);
+        crate::scene_gizmo::project_authored_params(&mut def, project, &manifold_core::GraphTarget::Generator(layer.clone()));
+        def
+    };
+    let filled = water_row(&authored(&project));
+    assert!(filled.placed_sources.is_empty(), "an Initial Fill is no source row");
+    assert!(filled.control_nodes().contains(&role.node_id), "its controls join the water's");
+    sync(&mut ui, &project, &selection);
+    assert!(!scene_tree_rows(&mut ui).iter().any(|name| name == "Inflow 1"));
+
+    assert!(editing.undo(&mut project));
+    assert!(editing.peek_redo_touches().contains(manifold_core::change::Part::Effects), "undo moves it back");
+    assert_eq!(water_row(&authored(&project)).placed_sources.len(), 1);
+}
+
 /// Inserting into an imported scene keeps every imported row: the model
 /// still lists the import's group and its parts.
 #[test]

@@ -1052,16 +1052,16 @@ fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObj
             // selection, rename and deletion address the render slot.
             row.is_group = true;
             row.parent_group_id = None;
-            // The family's eye is `parent_visible`. A water saved hidden by
-            // its own `visible` (built before it read as Water) keeps that
-            // flag as its eye until shown, so the panel can bring it back.
+            // The family's eye is `parent_visible`, and it shows the water as
+            // drawn: hidden by either flag. A water saved hidden by its own
+            // `visible` (built before it read as Water) reads hidden, and
+            // showing it raises both flags in one write
+            // (`apply_scene_param_write`).
             if let Some((level, _)) = locate_doc_path(root, &model.doc_path) {
                 let shown = |param: &str| level.node(row.object_node_id).is_none_or(|node| param_f32(node, param, 1.0) > 0.5);
-                if shown("visible") || !shown("parent_visible") {
-                    row.visible_addr.param_id = "parent_visible".into();
-                    row.visible_value = shown("parent_visible");
-                    row.visible_driven = level.producer(row.object_node_id, "parent_visible").is_some();
-                }
+                row.visible_addr.param_id = "parent_visible".into();
+                row.visible_value = shown("visible") && shown("parent_visible");
+                row.visible_driven = level.producer(row.object_node_id, "parent_visible").is_some();
             }
         }
         SceneObjectRowKind::LookChild => {

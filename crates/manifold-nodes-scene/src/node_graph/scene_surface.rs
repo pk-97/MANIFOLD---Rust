@@ -236,9 +236,8 @@ fn fluid_role_source(param: &str) -> Option<SceneParamFacts> {
         "velocity_x" => card(Source, CardBand::Scene, 1).unit(Unit::MetresPerSecond),
         "velocity_y" => card(Source, CardBand::Scene, 2).unit(Unit::MetresPerSecond),
         "velocity_z" => card(Source, CardBand::Scene, 3).unit(Unit::MetresPerSecond),
-        "role" | "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => {
-            setup(Source)
-        }
+        "role" => setup(Source).switch(Feature::SourceRole),
+        "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => setup(Source),
         "radius" | "shell_thickness" => setup(Source).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "path" | "compound_materials" | "mesh_index" | "primitive_index" | "material_index"
         | "fit" | "recenter" | "translate_x" | "translate_y" | "translate_z" | "fragment_count"

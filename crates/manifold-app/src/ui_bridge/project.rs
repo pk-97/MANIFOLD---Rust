@@ -1229,6 +1229,70 @@ pub(crate) fn apply_scene_param_write(
     param_id: &str,
     value: f32,
 ) -> Option<Box<dyn manifold_editing::command::Command + Send>> {
+    // A water's eye is its family flag, but a water can also be hidden by
+    // its object's own `visible` (saved before it read as Water): showing
+    // it raises both, as one undo step.
+    if param_id == "parent_visible" && value > 0.5 {
+        let default = generator_catalog_default(project, layer_id)?;
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let def = project.graph_target_owner(&target).and_then(|instance| instance.graph.as_ref()).unwrap_or(&default);
+        let inst = project.graph_target_owner(&target);
+        if is_water_object(def, &scope_path, node_doc_id)
+            && scene_param_value(def, inst, &scope_path, node_doc_id, "visible") < 0.5
+        {
+            let own = scene_param_write(project, layer_id, scope_path.clone(), node_doc_id, "visible", 1.0);
+            let family = scene_param_write(project, layer_id, scope_path, node_doc_id, param_id, value);
+            let writes: Vec<Box<dyn manifold_editing::command::Command>> =
+                own.into_iter().chain(family).map(|cmd| cmd as Box<dyn manifold_editing::command::Command>).collect();
+            return Some(Box::new(manifold_editing::command::CompositeCommand::new(writes, "Show water".into())));
+        }
+    }
+    scene_param_write(project, layer_id, scope_path, node_doc_id, param_id, value)
+}
+
+/// Whether the node at `scope_path`/`node_doc_id` is a Water family's real
+/// object: the parent `water_family` finds in its enclosing group.
+pub(crate) fn is_water_object(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    scope_path: &[u32],
+    node_doc_id: u32,
+) -> bool {
+    let Some((group, outer)) = scope_path.split_last() else { return false };
+    find_node_by_scope(def, outer, *group)
+        .and_then(|group| group.group.as_deref())
+        .and_then(manifold_core::scene_object_model::water_family)
+        .is_some_and(|family| family.parent == node_doc_id)
+}
+
+/// A scene param's base value as the panel reads it: the binding's instance
+/// slot for a bound param, else the node's own value (default on).
+pub(crate) fn scene_param_value(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    inst: Option<&manifold_core::effects::PresetInstance>,
+    scope_path: &[u32],
+    node_doc_id: u32,
+    param: &str,
+) -> f32 {
+    if let Some(inst) = inst
+        && let Some(id) = scene_binding_id(def, scope_path, node_doc_id, param)
+        && inst.params.contains(id.as_str())
+    {
+        return inst.get_base_param(id.as_str());
+    }
+    find_node_by_scope(def, scope_path, node_doc_id)
+        .and_then(|node| node.params.get(param))
+        .and_then(crate::editor_bridge::serialized_value_as_f32)
+        .unwrap_or(1.0)
+}
+
+fn scene_param_write(
+    project: &Project,
+    layer_id: &LayerId,
+    scope_path: Vec<u32>,
+    node_doc_id: u32,
+    param_id: &str,
+    value: f32,
+) -> Option<Box<dyn manifold_editing::command::Command + Send>> {
     let default = generator_catalog_default(project, layer_id)?;
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
     let effective = project.graph_target_owner(&target)

@@ -378,7 +378,8 @@ fn water_port_project() -> (Project, LayerId) {
 }
 
 /// A water the panel hid through its object's own `visible`, before it read
-/// as Water, shows hidden and comes back from its eye, undoably.
+/// as Water, shows hidden. Hidden by that flag, or by both flags, one eye
+/// click shows it, and one undo hides it again.
 #[test]
 fn water_family_saved_hidden_water_shows_from_its_eye() {
     let (mut project, layer) = water_port_project();
@@ -390,25 +391,28 @@ fn water_family_saved_hidden_water_shows_from_its_eye() {
             .expect("a water")
     };
     let water = water_row(&project);
-    assert_eq!(water.visible_addr.param_id, "parent_visible");
+    assert_eq!(water.visible_addr.param_id, "parent_visible", "a water's eye is its family flag");
+    let addr = water.visible_addr.clone();
     let mut editing = EditingService::new();
-    let hide = apply_scene_param_write(&project, &layer, water.visible_addr.scope_path.clone(), water.visible_addr.node_doc_id, "visible", 0.0)
-        .expect("the object's own visible flag");
-    editing.execute(hide, &mut project);
+    let write = |project: &Project, param: &str, value: f32| {
+        apply_scene_param_write(project, &layer, addr.scope_path.clone(), addr.node_doc_id, param, value).expect("a write")
+    };
+    editing.execute(write(&project, "visible", 0.0), &mut project);
+    assert!(!water_row(&project).visible_value, "hidden by its own flag, the eye shows it hidden");
 
-    let hidden = water_row(&project);
-    assert!(!hidden.visible_value, "the eye shows the water hidden");
-    assert_eq!(hidden.visible_addr.param_id, "visible", "the eye writes the flag that hid it");
-    let show = apply_scene_param_write(&project, &layer, hidden.visible_addr.scope_path.clone(), hidden.visible_addr.node_doc_id,
-        &hidden.visible_addr.param_id, 1.0).expect("the eye shows it");
-    editing.execute(show, &mut project);
-    let shown = water_row(&project);
-    assert!(shown.visible_value && shown.visible_addr.param_id == "parent_visible", "shown, the eye is the family's again");
-
-    assert!(editing.undo(&mut project));
-    assert!(!water_row(&project).visible_value, "undo hides it again");
-    assert!(editing.redo(&mut project));
-    assert!(water_row(&project).visible_value, "redo shows it");
+    for both in [false, true] {
+        if both {
+            editing.execute(write(&project, "parent_visible", 0.0), &mut project);
+            assert!(!water_row(&project).visible_value);
+        }
+        editing.execute(write(&project, "parent_visible", 1.0), &mut project);
+        assert!(water_row(&project).visible_value, "one eye click shows it (both flags hidden: {both})");
+        assert!(editing.undo(&mut project));
+        assert!(!water_row(&project).visible_value, "one undo hides it again");
+        let own = crate::ui_bridge::project::scene_param_value(&effective_def(&project, &layer), project.graph_target_owner(&target),
+            &addr.scope_path, addr.node_doc_id, "visible");
+        assert_eq!(own, 0.0, "the one undo puts back the object's own flag too");
+    }
 }
 
 fn visibility_rename_round_trip(preset: &'static str) {
