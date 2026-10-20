@@ -20,6 +20,7 @@ use manifold_nodes_scene::node_graph::viewport_gizmo::{
     GizmoChrome, GizmoMode, GizmoTarget, GizmoTargetId, compose_lines,
 };
 use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{Rect, Vec2};
 
 use crate::scene_gizmo::{GizmoGesture, GizmoPress, GizmoView};
@@ -40,12 +41,17 @@ pub(crate) struct PhysicsOverlayFrame {
     /// The content frame that wrote the surface; matched against the frame
     /// the preview bridge published so lines never sit on another frame.
     pub frame: u64,
+    /// The scene node that rendered the picture: what the preview navigates.
+    pub scene_node: NodeId,
     pub camera: Camera,
     pub domains: Arc<Domains>,
     pub lights: Arc<Lights>,
     /// Forces, colliders, bodies, sources, drains and the fill, as the
     /// simulation used them.
     pub gizmos: Arc<Gizmos>,
+    /// The outline mask bridge generation when this frame drew a selection
+    /// mask into the same surface slot (`selection_outline.rs`).
+    pub outline: Option<u64>,
 }
 
 impl PhysicsOverlayFrame {
@@ -74,9 +80,14 @@ pub(crate) struct PreviewGizmo {
     /// The overlay frame the last present showed, and the output size it
     /// was rendered at.
     shown: Option<(PhysicsOverlayFrame, (u32, u32))>,
+    /// The navigated picture shown instead of the output, if any.
+    navigated: Option<GizmoView>,
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
     lines: Vec<WorldLine>,
+    /// Render slots of the selected object, for its outline (D-102); empty
+    /// while an effect moves the picture off the scene.
+    outline: Vec<u32>,
 }
 
 /// What the shown handles read: the scene, the panel selection, this host's
@@ -94,6 +105,11 @@ struct PreviewDrag {
 }
 
 impl PreviewGizmo {
+    /// The render slots the selection outline covers.
+    pub fn outline(&self) -> &[u32] {
+        &self.outline
+    }
+
     /// Moves when the mode or the picked shape changes.
     pub fn version(&self) -> u64 {
         self.version
@@ -112,12 +128,22 @@ impl PreviewGizmo {
 
     /// The overlay frame the present is about to draw, or `None` when no
     /// frame matches the picture on screen. Input picks against it.
-    pub fn show(&mut self, frame: Option<&PhysicsOverlayFrame>, output: (u32, u32)) {
+    /// `navigated` is the preview's navigated picture when it shows instead
+    /// of the output (`preview_navigation.rs`): the lines and picks follow
+    /// its camera, the output camera stays as reported.
+    pub fn show(&mut self, frame: Option<&PhysicsOverlayFrame>, output: (u32, u32), navigated: Option<GizmoView>) {
         self.shown = frame.map(|frame| (frame.clone(), output));
+        self.navigated = navigated;
+    }
+
+    /// The output frame on screen: what navigation seeds from.
+    pub fn shown(&self) -> Option<&PhysicsOverlayFrame> {
+        self.shown.as_ref().map(|(frame, _)| frame)
     }
 
     fn view(&self) -> Option<GizmoView> {
-        self.shown.as_ref().map(|(frame, (width, height))| GizmoView { camera: frame.camera, width: *width, height: *height })
+        let (frame, (width, height)) = self.shown.as_ref()?;
+        Some(self.navigated.unwrap_or(GizmoView::new(frame.camera, *width, *height)))
     }
 
     /// The shown frame's chrome and the selected item's handles, through
@@ -144,12 +170,21 @@ impl PreviewGizmo {
                 let selected = panel
                     .live_selection()
                     .and_then(|selection| crate::scene_gizmo::selected_target(&key.0, selection, self.picked.as_ref()));
-                (key, selected, effect_follows(project, &layer))
+                let fade = effect_follows(project, &layer);
+                self.outline.clear();
+                if let Some(SceneSelection::Object(object)) = panel.live_selection().filter(|_| !fade) {
+                    crate::selection_outline::outline_slots(&key.0, *object, &mut self.outline);
+                }
+                (key, selected, fade)
             });
+            if self.target.is_none() {
+                self.outline.clear();
+            }
         }
         let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
         let (frame, _) = self.shown.as_ref()?;
         let chrome = GizmoChrome {
+            view,
             lights: &frame.lights,
             domains: &frame.domains,
             physics: &frame.gizmos,
@@ -171,7 +206,7 @@ impl PreviewGizmo {
         let inside = fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
         self.focused = inside && layer.is_some();
         let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view()) else { return false };
-        let Some(point) = crate::viewport_input::gizmo_point(fit, (view.width, view.height), (pos.x, pos.y)) else { return false };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return false };
         let graph = GraphTarget::Generator(layer.clone());
         let Some(scene) = crate::scene_gizmo::authored_def(&ctx.project, &graph).as_ref().and_then(SceneVm::from_def) else {
             return false;
@@ -203,14 +238,16 @@ impl PreviewGizmo {
     pub fn drag_to(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) -> bool {
         let view = self.view();
         let Some(drag) = self.drag.as_mut() else { return false };
-        // Follow the camera frame for frame; hold the press's while no
-        // matched frame shows.
+        // Follow the camera frame for frame, so the grabbed point stays
+        // under the cursor in the picture on screen; the grab itself was
+        // fixed at the press (`GizmoDrag::begin`). Hold the last camera
+        // while no matched frame shows.
         if let Some(view) = view {
             drag.view = view;
         }
         let view = drag.view;
-        if let Some(point) = fit.and_then(|fit| crate::viewport_input::gizmo_point(fit, (view.width, view.height), (pos.x, pos.y))) {
-            drag.gesture.drag_to(ctx, &view.camera, view.width, view.height, point);
+        if let Some((view, point)) = fit.and_then(|fit| crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y))) {
+            drag.gesture.drag_to(ctx, &view, point);
         }
         true
     }
@@ -243,8 +280,9 @@ impl PreviewGizmo {
     }
 
     /// The shown handles as screen points in the window, for the ui-snap
-    /// runner's `gizmo` surface: each grip, labelled `"<Mode> <Axis>"`, and
-    /// the shape's origin. Call after [`Self::compose`].
+    /// runner's `gizmo` surface: each grip, labelled `"<Mode> <Axis>"`, the
+    /// shape's origin, and `"Outline"` at the origin while the selected
+    /// object asks for one. Call after [`Self::compose`].
     #[cfg(feature = "ui-snapshot")]
     pub fn grips(&self, fit: Rect) -> Vec<(String, Vec2)> {
         let (Some(view), Some((_, Some(target), _))) = (self.view(), self.target.as_ref()) else { return Vec::new() };
@@ -253,9 +291,14 @@ impl PreviewGizmo {
             Some(Vec2::new(fit.x + p.px * fit.width / view.width as f32, fit.y + p.py * fit.height / view.height as f32))
         };
         let mut out: Vec<_> = at(target.origin).map(|p| ("Origin".to_string(), p)).into_iter().collect();
+        if !self.outline.is_empty()
+            && let Some(p) = at(target.origin)
+        {
+            out.push(("Outline".to_string(), p));
+        }
         use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis;
         for axis in [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z, GizmoAxis::Uniform] {
-            if let Some(p) = target.grip(self.mode, axis).and_then(at) {
+            if let Some(p) = target.grip(self.mode, axis, &view).and_then(at) {
                 out.push((format!("{:?} {:?}", self.mode, axis), p));
             }
         }
@@ -278,7 +321,7 @@ impl manifold_ui::hit_targets::HitTargets for GizmoHitTargets<'_> {
     fn enumerate(&self, out: &mut Vec<manifold_ui::hit_targets::HitTargetEntry>) {
         for (label, at) in self.0 {
             out.push(manifold_ui::hit_targets::HitTargetEntry {
-                kind: "handle",
+                kind: if label == "Outline" { "outline" } else { "handle" },
                 label: label.clone(),
                 rect: Rect::new(at.x - 3.0, at.y - 3.0, 6.0, 6.0),
                 payload: label.clone(),
@@ -346,6 +389,17 @@ impl Default for PhysicsOverlayObservations {
 }
 
 impl PhysicsOverlayObservations {
+    pub fn layer(&self) -> Option<&LayerId> {
+        self.layer.as_ref()
+    }
+
+    /// Stamp surface `slot`'s entry with its selection mask generation.
+    pub fn set_outline(&mut self, slot: usize, outline: Option<u64>) {
+        if let Some(frame) = self.frames[slot].as_mut() {
+            frame.outline = outline;
+        }
+    }
+
     pub fn set_layer(&mut self, layer: Option<LayerId>) {
         if layer != self.layer {
             self.frames.fill(None);
@@ -355,21 +409,21 @@ impl PhysicsOverlayObservations {
 
     /// Record what surface `slot` was rendered with on content frame `frame`.
     /// `observe` appends the layer's domains, light positions and physics
-    /// setup shapes and returns
-    /// the camera, or `None` when the layer did not render this frame, which
-    /// clears the slot.
+    /// setup shapes and returns the scene node and camera that rendered it,
+    /// or `None` when the layer did not render this frame, which clears the
+    /// slot.
     pub fn record(
         &mut self,
         slot: usize,
         frame: u64,
-        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>, &mut Vec<PhysicsGizmo>) -> Option<Camera>,
+        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>, &mut Vec<PhysicsGizmo>) -> Option<(NodeId, Camera)>,
     ) {
         self.frames[slot] = None;
         let Some(layer) = self.layer.as_ref() else { return };
         self.domain_scratch.clear();
         self.light_scratch.clear();
         self.gizmo_scratch.clear();
-        let Some(camera) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
+        let Some((scene_node, camera)) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
         if self.domain_scratch.as_slice() != self.domains.as_ref() {
             self.domains = Arc::from(self.domain_scratch.as_slice());
         }
@@ -382,10 +436,12 @@ impl PhysicsOverlayObservations {
         self.frames[slot] = Some(PhysicsOverlayFrame {
             layer: layer.clone(),
             frame,
+            scene_node,
             camera,
             domains: self.domains.clone(),
             lights: self.lights.clone(),
             gizmos: self.gizmos.clone(),
+            outline: None,
         });
     }
 }
@@ -451,7 +507,7 @@ mod tests {
         observations.set_layer(Some(LayerId::new("water")));
         let observe = |gizmos: &mut Vec<PhysicsGizmo>| {
             gizmos.extend([collider, wind]);
-            Some(Camera::default_perspective())
+            Some((NodeId::new("scene"), Camera::default_perspective()))
         };
         observations.record(0, 1, |_, _, _, gizmos| observe(gizmos));
         let first = observations.frames[0].as_ref().unwrap().gizmos.clone();
@@ -484,7 +540,7 @@ mod tests {
         };
         // The surface was published and drawn before its entry arrived.
         let shown = inputs(&observations.frames);
-        observations.record(2, 41, |_, _, _, _| Some(Camera::default_perspective()));
+        observations.record(2, 41, |_, _, _, _| Some((NodeId::new("scene"), Camera::default_perspective())));
         let arrived = inputs(&observations.frames);
         assert!(crate::frame_plan::plan_frame(&shown, &arrived).redraw);
         assert!(!crate::frame_plan::plan_frame(&arrived, &arrived).redraw);
@@ -499,7 +555,7 @@ mod tests {
         observations.set_layer(Some(layer.clone()));
         observations.record(0, 7, |_, _, lights, _| {
             lights.push([0.0; 3]);
-            Some(Camera::default_perspective())
+            Some((NodeId::new("scene"), Camera::default_perspective()))
         });
         let frame = observations.frames[0].as_ref().expect("a rendered layer reports");
         assert!(frame.matches(Some(&layer), 7) && !frame.matches(Some(&layer), 8));

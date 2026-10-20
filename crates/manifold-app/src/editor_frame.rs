@@ -783,8 +783,22 @@ pub(crate) fn composite_editor_frame(
     }
 
     ui_renderer.begin_frame();
-    if let Some(viewport) = viewport {
-        viewport.draw(ui_renderer);
+    match viewport.as_ref().map(|viewport| (viewport, viewport.outline)) {
+        // The selection outline (D-102) sits between the picture and its
+        // lines: the picture renders first, the outline over it, then the
+        // lines and everything else.
+        Some((viewport, Some((outline, mask)))) => {
+            viewport.draw_image(ui_renderer);
+            if ui_renderer.prepare(device, logical_w, logical_h, scale) {
+                ui_renderer.render(&mut encoder, offscreen, GpuLoadAction::Load);
+            }
+            let (r, sf) = (viewport.rect, scale as f32);
+            outline.draw(&mut encoder, offscreen, mask, (r.x * sf, r.y * sf, r.width * sf, r.height * sf), sf);
+            ui_renderer.begin_frame();
+            viewport.draw_lines(ui_renderer);
+        }
+        Some((viewport, None)) => viewport.draw(ui_renderer),
+        None => {}
     }
     // Column dividers: a thin seam always, a highlight band on hover/drag,
     // over both the canvas and the sidebar backgrounds.

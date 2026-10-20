@@ -121,6 +121,34 @@ between this doc and execution.
     over `SceneVm` built from the UI's project snapshot, at the authored values
     the knob shows. No host keeps editor-side domain state.
 
+  Handles keep one size on screen: a handle is `HANDLE_VIEW_FRACTION` of the
+  view height long at any distance or field of view, turned into world length
+  at the origin's depth through the host's camera. The gizmo core computes it
+  once, so the drawn handle and the pick use the same length on both hosts.
+  Hit tolerances are in screen points (`GizmoView::px_per_point`), so a handle
+  is as easy to grab on a 2x display or over a 4K output as at 1x. A Move or
+  Scale drag takes the closest point between the pointer ray and the handle's
+  axis, as Blender and Unity do, so the grabbed point stays under the cursor;
+  the grab is fixed at the press, so a camera that moves mid-drag never shifts
+  it. Move adds the distance dragged; Scale multiplies by the ratio of axis
+  distances, so the same on-screen drag scales alike near and far. A handle
+  pointing along the line of sight takes no press, and a drag past a receding
+  axis's vanishing point holds rather than putting the object behind the
+  camera. Handles under a scaled parent keep the fixed size; drags still
+  write the child's own units.
+
+  The selected object gets a selection outline in Blender orange on both hosts.
+  `render_scene` draws the selected objects' coverage into a mask through the
+  camera the picture was rendered with (`render_scene/selection_mask.rs`), only
+  while something is selected and never during an export. The content thread
+  copies the mask into a mask bridge on the same surface slot as the picture,
+  so the picture's read lease covers both. The UI draws a fixed-width edge
+  around the mask over the picture (`crates/manifold-app/src/selection_outline.rs`),
+  under the handles. Selecting Water outlines the water body and its looks.
+  The outline is a full silhouette that shows through anything in front of
+  the object, as Unity's does: selection comes from the Scene panel, and the
+  outline is how a hidden object is found. It hides when handles fade.
+
   The pipeline records each frame's entry, with the content frame number, for
   the output surface being written; a layer that did not render that frame
   (clip ended, occluded, or the scene bailed early) records nothing. The UI uses
@@ -135,6 +163,22 @@ between this doc and execution.
   longer lines up with the scene. Limits: a layer transform or a generator
   rendered at a different aspect from the output is not accounted for, and the
   separate Output window gets no chrome.
+
+  Preview-only navigation: with Show gizmos on, a drag on the picture orbits
+  (Shift or the middle button pans), a bare two-finger trackpad scroll pans,
+  and the wheel or a Ctrl + two-finger scroll dollies, each wheel event
+  bounded. It runs through the same camera session and input mapping as the
+  graph editor viewport (`scene_viewport.rs`, `viewport_input.rs`), seeded
+  from the output camera so the first move starts on the picture on screen
+  (`crates/manifold-app/src/preview_navigation.rs`). While it navigates, the
+  preview shows the scene's extra view (D9) and lines, picks and drags project
+  through the navigated camera. That view is the `render_scene` node's raw
+  output: no downstream nodes, layer effects, other layers or master effects,
+  so it can look different from the output beyond the camera. Escape, Show gizmos off, another scene, or
+  opening the editor viewport returns the preview to the output. The two hosts
+  own the one viewport request in turn: whichever starts navigating ends the
+  other. Its frames travel through their own bridge, sized from the request,
+  never the preview bridge that carries the output.
 - **D8 — Gizmos are param editors.** Every handle writes a param through
   `EditingService`: an object's `node.transform_3d` params (found by following
   the `transform_n` wire), a light's pos and aim, a camera's pos, and each
@@ -162,7 +206,9 @@ between this doc and execution.
   the UI over the preview blit, never in a render pass. Preview-only navigation
   on the main preview (orbit, pan, dolly) renders an extra view and never moves
   the output camera; the output keeps looking through the show camera. The extra
-  render pass has a GPU cost; it introduces no simulation clock.
+  render pass has a GPU cost; it introduces no simulation clock. The selection
+  mask (D7a) is an editing-only extra pass beside the picture: it never writes
+  the picture, and the output is byte-identical with or without a selection.
 - **D10 — Ease ships as content:** a bundled **Scene starter preset** (mesh + PBR
   material + sun & rim point light + atmosphere haze + orbit camera, good at
   defaults) plus component-library entries once components land. Three clicks: drop

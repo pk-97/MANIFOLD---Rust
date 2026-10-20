@@ -276,12 +276,6 @@ impl ViewportSession {
         self.push_camera_to_graph();
     }
 
-    /// Trackpad pinch dolly — see [`ViewportCamera::trackpad_pinch_dolly`].
-    pub fn trackpad_pinch_dolly(&mut self, delta: f32, sensitivity: f32) {
-        self.camera.trackpad_pinch_dolly(delta, sensitivity);
-        self.push_camera_to_graph();
-    }
-
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }

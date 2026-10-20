@@ -39,6 +39,7 @@ use crate::gpu::render_target::RenderTarget;
 
 mod errors;
 mod scene_events;
+mod selection_mask;
 pub mod generator_provider;
 pub use errors::{ChainError, JsonGeneratorLoadError};
 use errors::record_chain_error;

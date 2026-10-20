@@ -411,6 +411,7 @@ impl RenderScene {
                 + (world_pos[2] - cam.pos[2]) * cam.fwd[2];
 
             draws.push(ObjectDraw {
+                slot: n as u32,
                 vertices,
                 weights,
                 uniforms,
