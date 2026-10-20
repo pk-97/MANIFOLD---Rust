@@ -3,7 +3,7 @@
 // after node.matter_grid_update. It repeats grid_update's projection from the
 // node's velocity after forces (v_before + dt·(g + forces(x)), plus impulses(x)
 // on the impulse tick's first substep, the walls, then each body in order, the
-// same helpers in matter_walls.wgsl, liquid_field.wgsl and liquid_collider.wgsl) and adds what each dynamic
+// same helpers in matter_walls.wgsl, force_lattice.wgsl and liquid_collider.wgsl) and adds what each dynamic
 // body (inv_mass > 0) removed from the node, m·(v_in − v_out), to that body's
 // 16 words of `reaction_out`:
 //   [0..3)  Σ inv_mass·m·Δv                       (velocity change, m/s)
@@ -54,7 +54,7 @@ fn reaction_add(base: u32, value: vec3<f32>, key: u32) {
 fn body_reaction_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let c = force_lattice_corner(x, origin, spacing, dims, k);
         let w = c.index * 4u;
         sum = sum + vec3<f32>(buf_forces[base + w], buf_forces[base + w + 1u], buf_forces[base + w + 2u]) * c.weight;
     }
@@ -64,7 +64,7 @@ fn body_reaction_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec
 fn body_reaction_impulses(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let c = force_lattice_corner(x, origin, spacing, dims, k);
         let w = c.index * 4u;
         sum = sum + vec3<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u]) * c.weight;
     }
@@ -113,7 +113,7 @@ fn body(
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
     var accel = vec3<f32>(gravity_x, gravity, gravity_z);
     if force_lattices > 0 {
-        let base = liquid_field_force_base(tick_index, first_tick, force_lattices, field_dims);
+        let base = force_lattice_base(tick_index, first_tick, force_lattices, field_dims);
         accel = accel + body_reaction_forces(x, origin, field_spacing, field_dims, base);
     }
     var v = e_grid.velocity_before.xyz + step_dt * accel;

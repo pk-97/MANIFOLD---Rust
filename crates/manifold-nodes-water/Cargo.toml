@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+manifold-nodes-physics = { path = "../manifold-nodes-physics" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
 manifold-foundation = { path = "../manifold-foundation" }

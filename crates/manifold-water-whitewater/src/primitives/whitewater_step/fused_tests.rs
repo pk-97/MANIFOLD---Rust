@@ -478,7 +478,7 @@ pub mod gpu {
                     let mut inputs = fixture.inputs();
                     inputs.motion = Some(MotionInputs {
                         schedule: &schedule, faces: histories.each_ref(), count: 3,
-                        fields: FieldBinding { nodes: [2; 3], spacing: 0.5, force_lattices: 2,
+                        fields: ForceLatticeBinding { nodes: [2; 3], spacing: 0.5, force_lattices: 2,
                             impulse_tick: 0, first_tick: 3, forces: Some(&forces), impulses: Some(&impulses) },
                         tick_index: 4.0, regions: None, shapes: None, atlas: None, region_count: 0,
                     });

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 392 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -302,7 +302,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (72)
+### Particles 3D (75)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -347,6 +347,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Move Swarm | `node.move_swarm` | Filter | Moves every swarm particle by the scene's forces, one fixed step per simulation tick. |
 | — | `node.nearest_crossing` | Filter | Passes each grid cell the closest known point on the liquid's surface from its neighbours. |
 | Offset Lattice | `node.offset_lattice` | Filter | Add a distance to every scalar lattice sample. Zero returns the input bits unchanged. Negative offsets grow a negative-inside surface; positive offsets shrink … |
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
@@ -366,6 +367,8 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | — | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | — | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
+| Swarm Forces | `node.swarm_forces` | Source | Runs a swarm's simulation clock and lays the scene's forces over its box. |
+| Swarm To Copies | `node.swarm_to_copies` | Map | Places a copy of a shape at every swarm particle. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 | — | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
@@ -519,7 +522,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
 
-### Effect & generator presets (95)
+### Effect & generator presets (96)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -605,6 +608,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
+| `Swarm` | Swarm | generator | Geometry | 371 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |

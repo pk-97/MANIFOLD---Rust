@@ -35,7 +35,7 @@ use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
 use {manifold_water_liquid::fields, manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
-use manifold_water_liquid::tick_samples::TickSamples;
+use manifold_physics::tick_samples::TickSamples;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::{ROLE_PORTS, WATER_DENSITY};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

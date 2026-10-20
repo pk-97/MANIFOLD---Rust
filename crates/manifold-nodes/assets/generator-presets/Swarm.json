@@ -1,0 +1,67 @@
+{
+  "name": "Swarm",
+  "version": 2,
+  "nodes": [
+    {"id": 0, "nodeId": "input", "typeId": "system.generator_input", "handle": "input"},
+    {"id": 1, "nodeId": "camera", "typeId": "node.orbit_camera", "handle": "camera", "params": {"distance": {"type": "Float", "value": 9}, "fov_y": {"type": "Float", "value": 0.9}, "look_y": {"type": "Float", "value": 0}, "orbit": {"type": "Float", "value": 0.55}, "tilt": {"type": "Float", "value": 0.4}}},
+    {"id": 3, "nodeId": "environment", "typeId": "node.bake_environment", "handle": "environment", "params": {"fill": {"type": "Float", "value": 0.3}, "intensity": {"type": "Float", "value": 1.0}, "mode": {"type": "Enum", "value": 1}}},
+    {"id": 4, "nodeId": "sun", "typeId": "node.light", "handle": "sun", "params": {"intensity": {"type": "Float", "value": 1.5}, "mode": {"type": "Enum", "value": 0}, "pos_x": {"type": "Float", "value": -6}, "pos_y": {"type": "Float", "value": 10}, "pos_z": {"type": "Float", "value": 6}}},
+    {"id": 30, "nodeId": "scene", "typeId": "node.render_scene", "handle": "scene", "params": {"lights": {"type": "Float", "value": 1}, "objects": {"type": "Float", "value": 1}, "rt_enabled": {"type": "Bool", "value": false}, "temporal_upscale": {"type": "Bool", "value": false}}},
+    {"id": 31, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output"},
+    {"id": 10, "nodeId": "swarm_bounds", "typeId": "node.transform_3d", "handle": "Swarm Bounds", "params": {"pos_x": {"type": "Float", "value": 0}, "pos_y": {"type": "Float", "value": 0}, "pos_z": {"type": "Float", "value": 0}, "scale_x": {"type": "Float", "value": 4}, "scale_y": {"type": "Float", "value": 4}, "scale_z": {"type": "Float", "value": 4}}},
+    {"id": 11, "nodeId": "swarm_forces", "typeId": "node.swarm_forces", "handle": "Swarm Forces", "params": {"field_spacing": {"type": "Float", "value": 0.25}, "speed": {"type": "Float", "value": 1.0}}},
+    {"id": 12, "nodeId": "swarm_start", "typeId": "node.cube_mesh", "handle": "Swarm Start", "params": {"size": {"type": "Float", "value": 4}}},
+    {"id": 13, "nodeId": "swarm_seed", "typeId": "node.spawn_from_mesh", "handle": "Swarm Seed", "params": {"mode": {"type": "Enum", "value": 1}, "max_capacity": {"type": "Float", "value": 100000}, "active_count": {"type": "Float", "value": 20000}}},
+    {"id": 14, "nodeId": "swarm_move", "typeId": "node.move_swarm", "handle": "Move Swarm", "params": {"active_count": {"type": "Float", "value": 100000}}},
+    {"id": 15, "nodeId": "swarm_copies", "typeId": "node.swarm_to_copies", "handle": "Swarm Copies", "params": {"size": {"type": "Float", "value": 0.05}}},
+    {"id": 16, "nodeId": "swarm_shape", "typeId": "node.platonic_solid_mesh", "handle": "Swarm Shape", "params": {}},
+    {"id": 17, "nodeId": "swarm_material", "typeId": "node.pbr_material", "handle": "Swarm Material", "params": {"color_r": {"type": "Float", "value": 0.9}, "color_g": {"type": "Float", "value": 0.55}, "color_b": {"type": "Float", "value": 0.2}, "metallic": {"type": "Float", "value": 0.1}, "roughness": {"type": "Float", "value": 0.5}}},
+    {"id": 18, "nodeId": "swarm_object", "typeId": "node.scene_object", "handle": "Swarm", "params": {}}
+  ],
+  "wires": [
+    {"fromNode": 1, "fromPort": "out", "toNode": 30, "toPort": "camera"},
+    {"fromNode": 3, "fromPort": "envmap", "toNode": 30, "toPort": "envmap"},
+    {"fromNode": 4, "fromPort": "out", "toNode": 30, "toPort": "light_0"},
+    {"fromNode": 4, "fromPort": "out", "toNode": 3, "toPort": "sun"},
+    {"fromNode": 30, "fromPort": "color", "toNode": 31, "toPort": "in"},
+    {"fromNode": 10, "fromPort": "transform", "toNode": 11, "toPort": "bounds"},
+    {"fromNode": 12, "fromPort": "vertices", "toNode": 13, "toPort": "vertices"},
+    {"fromNode": 0, "fromPort": "trigger_count", "toNode": 13, "toPort": "reset_trigger"},
+    {"fromNode": 13, "fromPort": "particles", "toNode": 14, "toPort": "in"},
+    {"fromNode": 11, "fromPort": "forces", "toNode": 14, "toPort": "forces"},
+    {"fromNode": 11, "fromPort": "ticks", "toNode": 14, "toPort": "ticks"},
+    {"fromNode": 11, "fromPort": "first_tick", "toNode": 14, "toPort": "first_tick"},
+    {"fromNode": 11, "fromPort": "force_lattices", "toNode": 14, "toPort": "force_lattices"},
+    {"fromNode": 11, "fromPort": "field_nodes_x", "toNode": 14, "toPort": "field_nodes_x"},
+    {"fromNode": 11, "fromPort": "field_nodes_y", "toNode": 14, "toPort": "field_nodes_y"},
+    {"fromNode": 11, "fromPort": "field_nodes_z", "toNode": 14, "toPort": "field_nodes_z"},
+    {"fromNode": 11, "fromPort": "field_spacing", "toNode": 14, "toPort": "field_spacing"},
+    {"fromNode": 11, "fromPort": "field_min_x", "toNode": 14, "toPort": "field_min_x"},
+    {"fromNode": 11, "fromPort": "field_min_y", "toNode": 14, "toPort": "field_min_y"},
+    {"fromNode": 11, "fromPort": "field_min_z", "toNode": 14, "toPort": "field_min_z"},
+    {"fromNode": 11, "fromPort": "tick_seconds", "toNode": 14, "toPort": "tick_seconds"},
+    {"fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "particles"},
+    {"fromNode": 15, "fromPort": "copies", "toNode": 18, "toPort": "instances"},
+    {"fromNode": 16, "fromPort": "vertices", "toNode": 18, "toPort": "vertices"},
+    {"fromNode": 17, "fromPort": "out", "toNode": 18, "toPort": "material"},
+    {"fromNode": 18, "fromPort": "object", "toNode": 30, "toPort": "object_0"}
+  ],
+  "presetMetadata": {
+    "id": "Swarm",
+    "displayName": "Swarm",
+    "category": "Geometry",
+    "oscPrefix": "swarm",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {"id": "swarm_speed", "name": "Speed", "min": 0, "max": 4, "defaultValue": 1, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2", "oscSuffix": "speed", "section": "Swarm", "cardVisible": true},
+      {"id": "swarm_count", "name": "Count", "min": 0, "max": 100000, "defaultValue": 20000, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "oscSuffix": "count", "section": "Swarm", "cardVisible": true},
+      {"id": "swarm_size", "name": "Size", "min": 0, "max": 1, "defaultValue": 0.05, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F3", "oscSuffix": "size", "section": "Swarm", "cardVisible": true}
+    ],
+    "bindings": [
+      {"id": "swarm_speed", "label": "Speed", "defaultValue": 1, "target": {"kind": "node", "nodeId": "swarm_forces", "param": "speed"}, "convert": {"type": "Float"}},
+      {"id": "swarm_count", "label": "Count", "defaultValue": 20000, "target": {"kind": "node", "nodeId": "swarm_seed", "param": "active_count"}, "convert": {"type": "IntRound"}},
+      {"id": "swarm_size", "label": "Size", "defaultValue": 0.05, "target": {"kind": "node", "nodeId": "swarm_copies", "param": "size"}, "convert": {"type": "Float"}}
+    ]
+  }
+}

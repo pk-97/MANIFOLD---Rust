@@ -22,7 +22,7 @@ use manifold_water_liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, 
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_physics::coupled_motion::{Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at};
 use manifold_physics::force_lattice::ForceLattice;
-use manifold_water_liquid::fields::LIQUID_FIELD;
+use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_node_engine::parameters::ParamValue;
 
@@ -1022,7 +1022,7 @@ fn density_support_sources() -> [String; 2] {
     assert_eq!(source.matches(CULL).count(), 1, "density support predicate occurs once");
     let original = source.replacen(CULL, "", 1);
     [original.as_str(), source].map(|shader| {
-        with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{shader}"))
+        with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{shader}"))
     })
 }
 

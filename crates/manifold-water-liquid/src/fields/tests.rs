@@ -384,9 +384,9 @@ fn liquid_force_lattice_matches_field() {
         }
     }
     // An unchanged field is not resampled; no field turns forces off.
-    rig.fields.forces_dirty = false;
+    rig.fields.forces.mark_uploaded();
     let (still, _) = rig.frame(2.0 * TICK, TICK, 1.0, false, &held).unwrap();
-    assert!(!rig.fields.forces_dirty);
+    assert!(!rig.fields.forces.is_dirty());
     let off = rig.fields.prepare(lattice, None, &rig.clock, &still, &rig.impulses).unwrap();
     assert_eq!(off.force_lattices, 0);
     assert!(rig.fields.forces().is_empty());

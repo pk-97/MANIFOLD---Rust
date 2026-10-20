@@ -4,7 +4,7 @@
 //   v = v_before + dt · (g + forces(x))              (forces from tick_index's lattice)
 //   v += impulses(x)                                 (substep 0 of impulse_tick)
 // where forces and impulses are trilinear reads of the domain's coarse field
-// lattices (liquid_field.wgsl; origin the lattice minimum, 4 floats a node).
+// lattices (force_lattice.wgsl; origin the lattice minimum, 4 floats a node).
 // Then the closed walls and each collider in body order (matter_wall_stop in
 // matter_walls.wgsl and liquid_collider_project in liquid_collider.wgsl, which
 // node.matter_body_reaction repeats to attribute each body's share).
@@ -24,7 +24,7 @@ fn liquid_atlas_half(index: u32) -> f32 {
 fn grid_update_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let c = force_lattice_corner(x, origin, spacing, dims, k);
         let w = c.index * 4u;
         sum = sum + vec3<f32>(buf_forces[base + w], buf_forces[base + w + 1u], buf_forces[base + w + 2u]) * c.weight;
     }
@@ -34,7 +34,7 @@ fn grid_update_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<
 fn grid_update_impulses(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let c = force_lattice_corner(x, origin, spacing, dims, k);
         let w = c.index * 4u;
         sum = sum + vec3<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u]) * c.weight;
     }
@@ -92,7 +92,7 @@ fn body(
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
     var accel = vec3<f32>(gravity_x, gravity, gravity_z);
     if force_lattices > 0 {
-        let base = liquid_field_force_base(tick_index, first_tick, force_lattices, field_dims);
+        let base = force_lattice_base(tick_index, first_tick, force_lattices, field_dims);
         accel = accel + grid_update_forces(x, origin, field_spacing, field_dims, base);
     }
     var v = v_before + step_dt * accel;

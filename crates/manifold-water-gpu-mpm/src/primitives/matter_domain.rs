@@ -31,7 +31,7 @@ use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
 use {manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_water_liquid::tick_samples::TickSamples;
+use manifold_physics::tick_samples::TickSamples;
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

@@ -13,7 +13,7 @@ use manifold_physics::coupled_motion::{SupportPoint, MAX_SUPPORT_POINTS};
 use manifold_node_engine::channel_names::well_known;
 use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
-use crate::tick_samples::TickSamples;
+use manifold_physics::tick_samples::TickSamples;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 use crate::fluid_role::{DistanceState, FluidRole, FluidRoleKind, PreparedFluidGeometry};

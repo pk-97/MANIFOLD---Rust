@@ -6,7 +6,7 @@ use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::clock::FIELD_RESERVE_INTERVALS;
 use manifold_water_liquid::fields::FieldFrame;
-use manifold_water_liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
+use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::matter::REACTION_WORDS;
 use crate::primitives::matter_domain::matter_geometry;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};

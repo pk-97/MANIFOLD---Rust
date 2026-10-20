@@ -3,6 +3,10 @@
 //! trilinear include beside each solver's kernels, and [`ForceLattice::sample`]
 //! is its CPU twin.
 
+use crate::clock::{ClockFrame, SimulationClock};
+use crate::tick_samples::TickSamples;
+use crate::{FieldValue, VectorField};
+
 /// Solver cells per force-lattice cell along each axis
 /// (GPU_MPM_SOLVER_DESIGN.md D13).
 pub const FORCE_LATTICE_STRIDE: u32 = 4;
@@ -30,6 +34,16 @@ impl ForceLattice {
             spacing: cell_size * FORCE_LATTICE_STRIDE as f32,
             nodes: solver_nodes.map(|n| n.saturating_sub(1).div_ceil(FORCE_LATTICE_STRIDE).max(1) + 1),
         }
+    }
+
+    /// The lattice over a box from `min` of `size`, nodes `spacing` apart,
+    /// reaching at least the far corner.
+    pub fn over_box(min: [f32; 3], size: [f32; 3], spacing: f32) -> Self {
+        Self { min, spacing, nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32).saturating_add(1)) }
+    }
+
+    pub fn min(&self) -> [f32; 3] {
+        self.min
     }
 
     pub fn nodes(&self) -> [u32; 3] {
@@ -92,10 +106,113 @@ impl ForceLattice {
     }
 }
 
+/// A scene force field laid onto its lattice at each fixed tick's start,
+/// never per display frame, so a tick reads the same forces at any frame
+/// rate: one lattice while the frame's ticks agree, one per tick otherwise.
+/// Before each frame the host's physics history replay asks
+/// [`Self::request_samples`] for the coming ticks' starts and hands each
+/// result to [`Self::observe_sample`]; a tick nobody sampled is an error.
+#[derive(Default)]
+pub struct TickForces {
+    lattice: Option<ForceLattice>,
+    /// `lattices` lattices back to back.
+    forces: Vec<[f32; 4]>,
+    lattices: usize,
+    /// The field every lattice holds while it holds still.
+    source: Option<FieldValue>,
+    /// The field at each tick's start, from the oldest tick not yet run.
+    samples: TickSamples<FieldValue>,
+    dirty: bool,
+}
+
+impl TickForces {
+    /// Lay each of the frame's ticks' fields onto `lattice`. Call right after
+    /// `clock` advanced to `frame`; `field` is this frame's, which belongs to
+    /// any tick starting exactly now. `None` turns forces off.
+    pub fn prepare(
+        &mut self,
+        lattice: ForceLattice,
+        field: Option<&FieldValue>,
+        clock: &SimulationClock,
+        frame: &ClockFrame,
+    ) -> Result<(), String> {
+        let count = lattice.node_count();
+        if self.lattice != Some(lattice) {
+            self.forces.clear();
+            self.lattices = 0;
+            self.lattice = Some(lattice);
+            self.source = None;
+        }
+        let first = frame.first_sequence;
+        self.samples.settle(clock, frame, field);
+        if field.is_none() {
+            self.lattices = 0;
+            self.source = None;
+            return Ok(());
+        }
+        let ticks = frame.ticks as usize;
+        let sampled = self.samples.span(first, ticks).map_err(|tick| {
+            format!("Forces: tick {tick} was never sampled; the host must replay physics history before each frame")
+        })?;
+        let head = sampled.clone().next().map(|(_, at)| at);
+        if let Some(head) = head.filter(|head| sampled.clone().all(|(_, at)| at == *head)) {
+            if self.lattices != 1 || self.source.as_ref() != Some(head) {
+                self.forces.resize(count, [0.0; 4]);
+                lattice.fill(&mut self.forces, |x| head.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
+                self.lattices = 1;
+                self.source = Some(head.clone());
+                self.dirty = true;
+            }
+        } else if ticks > 0 {
+            self.forces.resize(ticks * count, [0.0; 4]);
+            for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
+                lattice.fill(values, |x| at.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
+            }
+            self.lattices = ticks;
+            self.source = None;
+            self.dirty = true;
+        }
+        // Keep only ticks not yet run.
+        self.samples.prune_before(first + ticks as u64);
+        Ok(())
+    }
+
+    /// Each not-yet-run tick's start under `clock` in `(from, until]`.
+    pub fn request_samples(&mut self, clock: &SimulationClock, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.samples.request(clock, from, until, out);
+    }
+
+    /// A history replay sample of the field at transport `now`.
+    pub fn observe_sample(&mut self, now: f64, field: Option<&FieldValue>) {
+        self.samples.observe(now, field);
+    }
+
+    /// Lattices laid this frame: 0 without a field, 1 while it holds still
+    /// (every tick reads it), else one per tick from the frame's first tick.
+    pub fn lattices(&self) -> usize {
+        self.lattices
+    }
+
+    /// Every force lattice, back to back.
+    pub fn forces(&self) -> &[[f32; 4]] {
+        &self.forces[..self.lattices * self.lattice.map_or(0, |lattice| lattice.node_count())]
+    }
+
+    /// Whether the lattices changed since the last [`Self::mark_uploaded`].
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn mark_uploaded(&mut self) {
+        self.dirty = false;
+    }
+}
+
+const NOT_FINITE: &str = "Forces: the acceleration field is not finite on the force lattice";
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FieldValue, VectorField};
 
     fn lattice() -> ForceLattice {
         ForceLattice::covering([-1.0, -0.5, -2.0], 0.125, [19, 11, 23])

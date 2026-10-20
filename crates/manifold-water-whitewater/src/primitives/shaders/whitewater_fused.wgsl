@@ -1246,7 +1246,7 @@ fn ww_phase_advect(
     let field_origin = origin + vec3<f32>(padding * h);
     let dims = vec3<u32>(vec3<f32>(field_nodes_x,field_nodes_y,field_nodes_z));
     let stride = dims.x * dims.y * dims.z * 4u;
-    let base = liquid_field_force_base(i32(tick_index), i32(first_tick), i32(force_lattices), dims);
+    let base = force_lattice_base(i32(tick_index), i32(first_tick), i32(force_lattices), dims);
     var particle = e_pool;
     for (var step = 0u; step < max(steps,1u); step = step + 1u) {
         var duration = dt;
@@ -1261,7 +1261,7 @@ fn ww_phase_advect(
         var acceleration = vec3<f32>(gravity_x,gravity_y,gravity_z);
         var impulse = vec3<f32>(0.0);
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let c = liquid_field_corner(particle.position_lifetime.xyz, field_origin, field_spacing, dims, corner);
+            let c = force_lattice_corner(particle.position_lifetime.xyz, field_origin, field_spacing, dims, corner);
             for (var a = 0u; a < 3u; a = a + 1u) {
                 if force_lattices > 0.0 {
                     acceleration[a] = fma(buf_forces[base + c.index * 4u + a], c.weight, acceleration[a]);

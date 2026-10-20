@@ -18,6 +18,7 @@ use manifold_core::audio_mod::HopValue;
 use manifold_core::effects::PresetInstance;
 use manifold_foundation::ParamId;
 use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+use manifold_nodes_physics::primitives::swarm_forces::{SwarmForces, SWARM_FORCES_TYPE_ID};
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
@@ -46,13 +47,13 @@ pub(crate) fn execute_physics_sample_frame(
 }
 }
 
-/// GPU liquids whose force field is evaluated at each tick's start.
-fn gpu_liquid(kind: &str) -> bool {
-    matches!(kind, GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID)
+/// GPU liquids and swarms, whose force field is evaluated at each tick's start.
+fn tick_sampled(kind: &str) -> bool {
+    matches!(kind, GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID | SWARM_FORCES_TYPE_ID)
 }
 
 fn setup_input(kind: &str, port: &str) -> bool {
-    if gpu_liquid(kind) {
+    if tick_sampled(kind) {
         return port != "acceleration_field" && port != "speed" && !port.starts_with("role_");
     }
     match kind {
@@ -83,7 +84,7 @@ pub(crate) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
             graph
                 .wires_into(node.id)
                 // A GPU liquid's sample run reads only its force field and roles.
-                .filter(move |wire| !gpu_liquid(kind) && setup_input(kind, wire.to.1))
+                .filter(move |wire| !tick_sampled(kind) && setup_input(kind, wire.to.1))
                 .map(|wire| wire.from)
         })
         .collect();
@@ -256,7 +257,7 @@ pub(crate) fn physics_sample_steps(
     use std::collections::HashSet;
 
     let replays_history = |type_id: &str| {
-        type_id == "node.physics_world" || gpu_liquid(type_id)
+        type_id == "node.physics_world" || tick_sampled(type_id)
     };
     // A GPU liquid replays its force field, roles and paired world at each
     // tick's start; its paired world's scene is captured for it there.
@@ -306,7 +307,7 @@ pub(crate) fn physics_sample_steps(
                 | "node.affine_scalar"
         ) || node.node.is_pure();
         // A GPU liquid's sample run only records its field; it never encodes.
-        if gpu_liquid(type_id) {
+        if tick_sampled(type_id) {
             continue;
         }
         let requires = node.node.requires();
@@ -509,8 +510,9 @@ impl super::WaterRuntimeState {
                 })
                 .peekable()
         });
-        // GPU liquids sample exactly at their ticks' starts: each tick's force
-        // comes from its own simulated time, whatever the display rate.
+        // GPU liquids and swarms sample exactly at their ticks' starts: each
+        // tick's force comes from its own simulated time, whatever the
+        // display rate.
         inputs.tick_times.clear();
         for instance in graph.nodes_mut() {
             if let Some(native) = node::get_mut(instance.node.as_mut()) {
@@ -519,6 +521,8 @@ impl super::WaterRuntimeState {
                     current.seconds.0,
                     &mut inputs.tick_times,
                 );
+            } else if let Some(swarm) = instance.node.as_any_mut().downcast_mut::<SwarmForces>() {
+                swarm.request_physics_samples(previous.seconds.0, current.seconds.0, &mut inputs.tick_times);
             }
         }
         inputs.tick_times.sort_by(f64::total_cmp);

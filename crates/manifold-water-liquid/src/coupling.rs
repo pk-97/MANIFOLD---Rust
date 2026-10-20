@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn liquid_coupled_animated_rows_match_at_every_frame_rate() {
         use crate::clock::LiquidClock;
-        use crate::tick_samples::TickSamples;
+        use manifold_physics::tick_samples::TickSamples;
 
         let scene_at = |t: f64| {
             // Smoothstep ease along an arc that turns as it goes.

@@ -1,7 +1,7 @@
 // GPU FLIP's water step (gpu_flip_step.rs, docs/GPU_FLIP_PRESSURE_SOLVE.md
 // section 1 (the step)): every pass of one step but the sort, the solid
 // distance and the pressure solve, each a separate entry point. Included
-// after liquid_pose.wgsl, liquid_collider.wgsl and liquid_field.wgsl.
+// after liquid_pose.wgsl, liquid_collider.wgsl and force_lattice.wgsl.
 // Narrow-band transport, sharp coupling and lifecycle integration follow
 // Ferstl et al., Narrow Band FLIP for Liquid Simulations, CGF 35(2), 2016,
 // doi:10.1111/cgf.12825. FLIP Fluids attribution below covers only the
@@ -419,7 +419,7 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn gravity_force(x: vec3<f32>, origin: vec3<f32>, base: u32, axis: u32) -> f32 {
     var sum = 0.0;
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, u.field_spacing, u.field_nodes, k);
+        let c = force_lattice_corner(x, origin, u.field_spacing, u.field_nodes, k);
         sum = fma(forces[base + c.index * 4u + axis], c.weight, sum);
     }
     return sum;
@@ -431,7 +431,7 @@ fn gravity_impulse(x: vec3<f32>, origin: vec3<f32>, axis: u32) -> f32 {
     let live = (event & 0x80000000u) != 0u && u.live_impulse_stride > 0u;
     let base = select(0u, (event & 0x7fffffffu) * u.live_impulse_stride, live);
     for (var k = 0u; k < 8u; k = k + 1u) {
-        let c = liquid_field_corner(x, origin, u.field_spacing, u.field_nodes, k);
+        let c = force_lattice_corner(x, origin, u.field_spacing, u.field_nodes, k);
         let value = impulses[base + c.index * 4u + axis];
         sum = fma(value, c.weight, sum);
     }
@@ -510,7 +510,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let origin = u.box_min;
     var force_base = 0u;
     if u.force_lattices > 0 {
-        force_base = liquid_field_force_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
+        force_base = force_lattice_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
     }
     let live_event = (clock_plan[0].event & 0x80000000u) != 0u;
     let impulse = select(u.tick_index == u.impulse_tick && u.step_in_tick == 0,
