@@ -157,6 +157,7 @@
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
       "scene-card-bands",
+      "scene-card-new-empty",
       "scene-card-free-camera",
       "scene-card-dof-switch",
       "scene-naming",
@@ -413,6 +414,7 @@
     "effect-browser-open": "inspector",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "scene-card-bands": "physicsscene",
+    "scene-card-new-empty": "newscene",
     "scene-card-free-camera": "oceanscene",
     "scene-card-dof-switch": "gltfscene",
     "scene-naming": "gltfscene",

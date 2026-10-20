@@ -205,7 +205,7 @@ pub(crate) fn apply_update(
             focus_scene_tab(selection, active_layer, layer_id);
             ui.scene_setup_panel.set_selection(
                 layer_id.clone(),
-                manifold_ui::panels::scene_setup_panel::SceneSelection::Light(*light_id),
+                manifold_ui::panels::scene_setup_panel::SceneSelection::Lighting,
             );
         }
         EditSelection::Object {

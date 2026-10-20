@@ -103,15 +103,25 @@ pub(crate) fn world_and_physics_nodes(
 /// objects pair with their Known rows in order, since `scene_items` lists
 /// exactly those, in that order. `object_ids` are each Known object's
 /// filtered control ids; every other item owns its nodes' controls.
+///
+/// One Lighting item follows Camera: it takes the Camera's and World's
+/// lighting controls (a Lighting-band row such as exposure, and every
+/// Environment-group row), and the Scene tab shows every light inside it.
+/// The per-light items stay, since lights keep their own names and rows.
 pub(crate) fn scene_item_vms(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
     objects: &[manifold_ui::panels::scene_setup_panel::ObjectRowVm],
     lights: &[manifold_ui::panels::scene_setup_panel::LightRowVm],
     object_ids: Vec<Vec<String>>,
+    scene_of: &dyn Fn(&str) -> Option<manifold_core::scene_surface::SceneParamDesc>,
 ) -> Vec<manifold_ui::panels::scene_setup_panel::SceneItemVm> {
+    use manifold_core::scene_surface::{CardBand, ControlGroup, SceneItemKind};
     use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
     use manifold_ui::panels::scene_setup_panel::{LightRowVm, ObjectRowVm, SceneItemVm, SceneSelection};
+    let lighting_row = |id: &String| {
+        scene_of(id).is_some_and(|scene| scene.band == Some(CardBand::Lighting) || scene.group == ControlGroup::Environment)
+    };
     let mut known_objects = objects.iter().filter_map(|object| match object {
         ObjectRowVm::Known(row) => Some((row.object_node_id, row.parent_group_id)),
         ObjectRowVm::Custom { .. } => None,
@@ -121,10 +131,17 @@ pub(crate) fn scene_item_vms(
         LightRowVm::Custom { .. } => None,
     });
     let mut object_ids = object_ids.into_iter();
-    items
+    let mut lighting_ids = Vec::new();
+    let mut out: Vec<SceneItemVm> = items
         .iter()
         .filter_map(|item| {
-            let owned = || parameter_ids_for_nodes(def, &item.owned_nodes);
+            let mut owned = || {
+                let mut ids = parameter_ids_for_nodes(def, &item.owned_nodes);
+                if matches!(item.id, SceneItemId::Camera | SceneItemId::World) {
+                    lighting_ids.extend(ids.extract_if(.., |id| lighting_row(id)));
+                }
+                ids
+            };
             let (selection, parent, parameter_ids) = match &item.id {
                 SceneItemId::Camera => (SceneSelection::Camera, None, owned()),
                 SceneItemId::World => (SceneSelection::World, None, owned()),
@@ -138,7 +155,40 @@ pub(crate) fn scene_item_vms(
             };
             Some(SceneItemVm { kind: item.kind, selection, name: item.name.clone(), parent, parameter_ids })
         })
-        .collect()
+        .collect();
+    let at = out.iter().position(|item| item.selection == SceneSelection::Camera).map_or(0, |camera| camera + 1);
+    out.insert(at, SceneItemVm {
+        kind: SceneItemKind::Light,
+        selection: SceneSelection::Lighting,
+        name: "Lighting".into(),
+        parent: None,
+        parameter_ids: lighting_ids,
+    });
+    out
+}
+
+/// The generator string param that loads the HDRI node `hdri_doc_id`'s file:
+/// the one whose string binding targets that node's `path`. Its index is
+/// the layer card's string row index, so the Scene tab opens the same edit.
+pub(crate) fn hdri_string_param(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    preset: &manifold_core::PresetTypeId,
+    hdri_doc_id: u32,
+) -> Option<usize> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let def = def?;
+    let binding = def.preset_metadata.as_ref()?.string_bindings.iter().find(|binding| match &binding.target {
+        BindingTarget::Node { node_id, param } => {
+            param == "path"
+                && super::super::dispatch::params::find_effect_string_node(&def.nodes, node_id, &mut Vec::new())
+                    .is_some_and(|(doc_id, _)| doc_id == hdri_doc_id)
+        }
+        _ => false,
+    })?;
+    manifold_core::preset_definition_registry::try_get(preset)?
+        .string_param_defs
+        .iter()
+        .position(|sp| sp.key == binding.id)
 }
 
 /// Family eyes and look rows use the existing manifest, with one visible

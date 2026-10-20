@@ -43,7 +43,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Environment"
+          "name_suffix": "_rt_enabled"
         }
       },
       "check": "Exists"

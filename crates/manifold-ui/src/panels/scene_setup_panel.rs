@@ -36,6 +36,8 @@ mod forces;
 mod parameter_navigation;
 #[path = "scene_setup_panel/value_sync.rs"]
 mod value_sync;
+#[path = "scene_setup_panel/lighting.rs"]
+mod lighting;
 #[path = "scene_setup_panel/fluid_roles.rs"]
 mod fluid_roles;
 mod panes;
@@ -274,7 +276,9 @@ pub enum EnvironmentRowVm {
     /// Importer shape (switch_texture selecting Softbox/HDRI) — Mode is
     /// shown as a static chip in P1 (toggling it is a P2+ affordance; the
     /// value is legible, just not yet a control here).
-    Importer { mode_is_hdri: bool, intensity: ModulatedRow, fill: ModulatedRow, hdri_file: String },
+    /// `hdri_param` is the generator's string param that loads the HDRI
+    /// file, when the preset declares one.
+    Importer { mode_is_hdri: bool, intensity: ModulatedRow, fill: ModulatedRow, hdri_file: String, hdri_param: Option<usize> },
     Bare { intensity: ModulatedRow, fill: ModulatedRow },
     /// Some other producer wired into `envmap` — honest custom row, no
     /// controls (D3).
@@ -585,9 +589,14 @@ pub struct SceneSetupVm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneSelection {
     Object(u32),
+    /// One light, by its doc id. It names the light's item; the tree and the
+    /// properties show every light under [`SceneSelection::Lighting`].
     Light(u32),
     Force(FoundationNodeId),
     Camera,
+    /// All lighting in one place: the environment and its HDRI, exposure,
+    /// and every light.
+    Lighting,
     World,
     /// A physics world, by its node.
     Physics(FoundationNodeId),
@@ -888,6 +897,8 @@ pub struct ScenePanel {
     pub(crate) content_parent: NodeId,
     bg_id: NodeId,
     add_environment_id: Option<NodeId>,
+    /// Lighting's HDRI file row and its string param index.
+    hdri_file_id: Option<(NodeId, usize)>,
     add_fog_id: Option<NodeId>,
     camera_setup_id: Option<NodeId>,
     new_scene_id: Option<NodeId>,
@@ -1047,6 +1058,11 @@ pub struct ScenePanel {
     /// The Material section's preset and add-feature menu buttons.
     material_menus: Vec<(NodeId, material_menus::MaterialMenu)>,
     active_material_info: Option<MaterialInspectorInfo>,
+    /// The current properties pass's per-light sub-sections, in light
+    /// order; empty outside Lighting.
+    property_lights: Vec<lighting::PropertyLight>,
+    /// How many of `property_lights` have their header drawn this pass.
+    property_lights_drawn: usize,
     /// The current properties pass's group for undescribed controls.
     property_fallback_group: ControlGroup,
     /// Where the current pass is in the material block: 0 not drawn, 1 its
@@ -1077,6 +1093,7 @@ impl Default for ScenePanel {
             content_parent: NodeId::PLACEHOLDER,
             bg_id: NodeId::PLACEHOLDER,
             add_environment_id: None,
+            hdri_file_id: None,
             add_fog_id: None,
             camera_setup_id: None,
             new_scene_id: None,
@@ -1136,6 +1153,8 @@ impl Default for ScenePanel {
             material_remove_ids: Vec::new(),
             material_menus: Vec::new(),
             active_material_info: None,
+            property_lights: Vec::new(),
+            property_lights_drawn: 0,
             property_fallback_group: ControlGroup::Transform,
             material_block_stage: 0,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -1289,6 +1308,7 @@ impl ScenePanel {
         // `build_*` branch below actually builds this frame (state_sync
         // rebuilds fresh every pass, D1 "no staleness").
         self.add_environment_id = None;
+        self.hdri_file_id = None;
         self.add_fog_id = None;
         self.camera_setup_id = None;
         self.new_scene_id = None;
@@ -1404,7 +1424,7 @@ impl ScenePanel {
     /// rebuilds the Properties section.
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
         self.clear_item_focus();
-        self.selection.insert(layer_id.clone(), sel);
+        self.selection.insert(layer_id.clone(), sel.shown());
         self.reveal_properties = true;
         self.note_selection(&layer_id);
     }
@@ -1462,7 +1482,7 @@ impl ScenePanel {
     /// into `self.selection` so a later `object_name_rect`/click lookup
     /// this same frame sees the same answer `build_outliner` used.
     fn resolve_selection(&mut self, vm: &SceneSetupVm) -> SceneSelection {
-        let current = self.selection.get(&vm.layer_id).cloned();
+        let current = self.selection.get(&vm.layer_id).cloned().map(SceneSelection::shown);
         let resolved = match current {
             Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
@@ -1591,7 +1611,11 @@ impl ScenePanel {
         }
         retained.sort_by_key(|&index| {
             let row = &config.rows[index];
-            (self.property_group(row) as usize, row.spec.scene.is_none_or(|scene| scene.switch.is_none()))
+            (
+                self.property_section_rank(row),
+                self.property_group(row) as usize,
+                row.spec.scene.is_none_or(|scene| scene.switch.is_none()),
+            )
         });
         // Material rows use the material inspector's stable buckets, inside
         // the Material group's positions.
@@ -1612,7 +1636,7 @@ impl ScenePanel {
         // Optional material features sit directly above their Add controls.
         retained.sort_by_key(|&index| {
             let row = &config.rows[index];
-            (self.property_group(row) as usize, self.material_row_feature(row).is_some())
+            (self.property_section_rank(row), self.property_group(row) as usize, self.material_row_feature(row).is_some())
         });
         self.properties_card.configure_from_filtered(&config, &retained);
         self.prepare_pending_parameter_properties();
@@ -1624,6 +1648,17 @@ impl ScenePanel {
         self.material_block_stage = 0;
         let mut i = 0usize;
         while i < retained.len() {
+            if let Some(light) = self.property_light_of(&config.rows[retained[i]]) {
+                let run_end = (i..retained.len())
+                    .find(|&j| self.property_light_of(&config.rows[retained[j]]) != Some(light))
+                    .unwrap_or(retained.len());
+                cy = self.build_light_headers_through(tree, (inner_x, inner_w), cy, light);
+                for row in i..run_end {
+                    cy = self.build_properties_row(tree, inner_x, cy, row, label_width, slider_w, target.clone());
+                }
+                i = run_end;
+                continue;
+            }
             let group = self.property_group(&config.rows[retained[i]]) as usize;
             if let Some(object) = material {
                 cy = self.advance_material_block(tree, (inner_x, inner_w), cy, object, group);
@@ -1714,8 +1749,8 @@ impl ScenePanel {
         cy
     }
 
-    /// World: the environment and fog structure (custom or missing), then
-    /// the World item's controls (Environment, Fog, Ray Tracing).
+    /// World: the World item's controls left once Lighting takes the
+    /// environment (Fog, Ray Tracing), then the missing-fog row.
     fn build_world_properties(
         &mut self,
         tree: &mut UITree,
@@ -1725,26 +1760,7 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         owned: &[String],
     ) -> f32 {
-        match &vm.environment {
-            EnvironmentRowVm::Importer { hdri_file, .. } if !hdri_file.is_empty() => {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &format!("HDRI: {hdri_file}"), label_style());
-                cy += ROW_H;
-            }
-            EnvironmentRowVm::Custom => {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment: Custom (edit in graph)", label_style());
-                cy += ROW_H;
-            }
-            EnvironmentRowVm::None => {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment: None", label_style());
-                cy += ROW_H;
-                self.add_environment_id = Some(tree.add_button_keyed(
-                    Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "+ Add Environment", KEY_ADD_ENVIRONMENT,
-                ));
-                cy += ROW_H;
-            }
-            EnvironmentRowVm::Importer { .. } | EnvironmentRowVm::Bare { .. } => {}
-        }
-        cy = self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Environment));
+        cy = self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Fog));
         if matches!(vm.atmosphere, AtmosphereRowVm::None) {
             tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Fog: None", label_style());
             cy += ROW_H;
@@ -1979,6 +1995,7 @@ impl ScenePanel {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupAddFog(vm.layer_id.clone(), vm.scene_root_node_id)));
                     } else if let Some(act) = self
                         .outliner_click(*node_id, vm)
+                        .or_else(|| self.hdri_file_click(*node_id))
                         .or_else(|| self.item_header_click(*node_id, vm))
                     {
                         actions.push(act);

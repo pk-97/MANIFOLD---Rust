@@ -1,7 +1,8 @@
 //! The selected item's header (SCENE_SURFACES D8): its name once (a rename
 //! button where a rename command exists), its kind, and copy and delete
 //! where commands exist. Objects copy and delete, forces copy and delete,
-//! lights delete only; Camera, Physics and World have neither. The Camera
+//! lights delete only; Camera, Lighting, Physics and World have neither.
+//! Each light's header heads its sub-section inside Lighting. The Camera
 //! header also carries "Use this view" (D14).
 
 use super::*;
@@ -78,27 +79,11 @@ impl ScenePanel {
                 }) else {
                     return cy;
                 };
-                let name_w = inner_w - STEP_W - 4.0;
-                let name_id = self.build_name_and_kind(
-                    tree,
-                    Rect::new(inner_x, cy, name_w, ROW_H),
-                    &row.name,
-                    item.kind,
-                    Some(light_key(row.index, LIGHT_OFF_NAME)),
-                );
-                self.light_name_ids.push((row.node_doc_id, name_id, row.name.clone()));
-                let remove_id = tree.add_button_keyed(
-                    Some(self.content_parent),
-                    inner_x + name_w + 4.0,
-                    cy,
-                    STEP_W,
-                    ROW_H,
-                    btn_style(),
-                    "\u{2715}",
-                    light_key(row.index, LIGHT_OFF_REMOVE),
-                );
-                tree.set_name(remove_id, "scene_setup.properties.remove");
-                self.light_remove_ids.push((remove_id, row.index));
+                self.build_light_header(tree, (inner_x, inner_w), cy, (row.node_doc_id, row.index, &row.name))
+            }
+            SceneSelection::Lighting => {
+                let name = tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &item.name, header_label_style());
+                tree.set_name(name, "scene_setup.properties.name_value");
                 cy + ROW_H + ROW_GAP
             }
             SceneSelection::Force(id) => {
@@ -127,6 +112,38 @@ impl ScenePanel {
             }
             SceneSelection::OutlinerFold(_) => cy,
         }
+    }
+
+    /// One light's name (click to rename) and kind, and its delete button.
+    pub(super) fn build_light_header(
+        &mut self,
+        tree: &mut UITree,
+        (inner_x, inner_w): (f32, f32),
+        cy: f32,
+        (doc_id, index, name): (u32, usize, &str),
+    ) -> f32 {
+        let name_w = inner_w - STEP_W - 4.0;
+        let name_id = self.build_name_and_kind(
+            tree,
+            Rect::new(inner_x, cy, name_w, ROW_H),
+            name,
+            SceneItemKind::Light,
+            Some(light_key(index, LIGHT_OFF_NAME)),
+        );
+        self.light_name_ids.push((doc_id, name_id, name.to_string()));
+        let remove_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + name_w + 4.0,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2715}",
+            light_key(index, LIGHT_OFF_REMOVE),
+        );
+        tree.set_name(remove_id, "scene_setup.properties.remove");
+        self.light_remove_ids.push((remove_id, index));
+        cy + ROW_H + ROW_GAP
     }
 
     /// The name (a rename button when `rename_key` is set, else a label)

@@ -57,8 +57,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name_suffix": ".value",
-          "nth": 0
+          "name_suffix": "_rt_enabled"
         }
       },
       "check": "Exists"
@@ -69,7 +68,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_tree.item", "text": "Sun"
+          "name": "scene_tree.item", "text": "Lighting"
         }
       },
       "gesture": {
