@@ -135,6 +135,19 @@ between this doc and execution.
   longer lines up with the scene. Limits: a layer transform or a generator
   rendered at a different aspect from the output is not accounted for, and the
   separate Output window gets no chrome.
+
+  Preview-only navigation: with Show gizmos on, a drag on the picture orbits
+  (Shift or the middle button pans) and the wheel dollies, through the same
+  camera session and input mapping as the graph editor viewport
+  (`scene_viewport.rs`, `viewport_input.rs`), seeded from the output camera so
+  the first move starts on the picture on screen
+  (`crates/manifold-app/src/preview_navigation.rs`). While it navigates, the
+  preview shows the scene's extra view (D9) and lines, picks and drags project
+  through the navigated camera. Escape, Show gizmos off, another scene, or
+  opening the editor viewport returns the preview to the output. The two hosts
+  own the one viewport request in turn: whichever starts navigating ends the
+  other. Its frames travel through their own bridge, sized from the request,
+  never the preview bridge that carries the output.
 - **D8 — Gizmos are param editors.** Every handle writes a param through
   `EditingService`: an object's `node.transform_3d` params (found by following
   the `transform_n` wire), a light's pos and aim, a camera's pos, and each

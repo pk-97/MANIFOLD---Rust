@@ -213,6 +213,11 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) ui_node_preview_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// The scene viewport's frames for whichever host owns the request
+    /// (D7a): the content thread resizes the bridge to the request's
+    /// view size, and the pane re-imports on the generation bump.
+    #[cfg(target_os = "macos")]
+    pub(crate) scene_viewport_pane: Option<crate::texture_pane::TexturePane>,
     /// IOSurface bridge for the per-node thumbnail atlas (one big texture packed
     /// as a cell grid). The editor present pass samples cells onto canvas nodes.
     #[cfg(target_os = "macos")]
@@ -613,6 +618,8 @@ impl Application {
             node_preview_texture_bridge: None,
             #[cfg(target_os = "macos")]
             ui_node_preview_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
+            scene_viewport_pane: None,
             #[cfg(target_os = "macos")]
             node_atlas_texture_bridge: None,
             #[cfg(target_os = "macos")]
@@ -1469,6 +1476,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.ui_node_preview_textures = node_textures.map(Some);
                 self.node_preview_texture_bridge = Some(Arc::clone(&node_bridge));
 
+                // Scene viewport frames: sized from the first request.
+                let viewport_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(64, 64));
+                self.scene_viewport_pane = Some(crate::texture_pane::TexturePane::bridged(viewport_bridge));
+
                 // Per-node thumbnail atlas bridge — one big cell-grid texture of
                 // 16:9 cells (not square), so thumbnails keep a video aspect.
                 let atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
@@ -1584,6 +1595,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_node_preview_textures(node_textures, Arc::clone(bridge));
+            }
+            // Content-side import of the scene viewport IOSurfaces.
+            #[cfg(target_os = "macos")]
+            if let Some(bridge) = self.scene_viewport_pane.as_ref().and_then(|pane| pane.bridge()) {
+                let native_dev = content_pipeline.native_device().unwrap();
+                let textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
+                content_pipeline.set_scene_viewport_textures(textures, Arc::clone(bridge));
             }
             // Content-side import of the thumbnail-atlas IOSurfaces.
             #[cfg(target_os = "macos")]

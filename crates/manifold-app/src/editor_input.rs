@@ -373,18 +373,7 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
         && rect.contains(pos)
         && let Some(session) = ws.viewport_session.as_mut()
     {
-        // A wheel notch dollies. On macOS a trackpad pinch arrives as a
-        // Ctrl-modified pixel scroll, which dollies too; a bare pixel scroll
-        // is a two-finger pan.
-        let gesture = match delta {
-            MouseScrollDelta::LineDelta(_, y) => {
-                crate::viewport_input::classify_scroll(y * crate::window_input::LINE_DELTA_PX)
-            }
-            MouseScrollDelta::PixelDelta(p) if cx.modifiers.ctrl => {
-                crate::viewport_input::classify_trackpad_pinch_dolly(p.y as f32)
-            }
-            MouseScrollDelta::PixelDelta(p) => crate::viewport_input::classify_trackpad_pan(p.x as f32, p.y as f32),
-        };
+        let gesture = crate::viewport_input::classify_wheel(delta, cx.modifiers.ctrl);
         crate::viewport_input::apply(
             session.camera_mut(),
             gesture,

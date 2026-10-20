@@ -9,8 +9,20 @@ use std::sync::{
 type Domains = [(NodeId, FluidDomainSnapshot)];
 pub(crate) type SceneViewportFrames = [Option<SceneViewportFrame>; 3];
 
+/// Which view owns the one scene viewport request (D7a). One host
+/// navigates at a time: whichever starts navigating ends the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewportHost {
+    /// The graph editor's 3D viewport pane.
+    GraphEditor,
+    /// The main window's output preview, navigating away from the output
+    /// camera without moving it (D9).
+    OutputPreview,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SceneViewportRequest {
+    pub host: ViewportHost,
     pub session: u64,
     pub target: GraphTarget,
     pub node: NodeId,
@@ -31,6 +43,7 @@ impl SceneViewportFrame {
     pub fn matches(&self, request: &SceneViewportRequest, frame: u64, generation: u64) -> bool {
         self.frame == frame
             && self.surface_generation == generation
+            && self.request.host == request.host
             && self.request.session == request.session
             && self.request.target == request.target
             && self.request.node == request.node
@@ -55,15 +68,17 @@ impl SceneViewportFrame {
 
 /// UI owns navigation only. Picking reads `displayed`, never a newer request.
 pub(crate) struct SceneViewportNavigation {
+    pub host: ViewportHost,
     pub session: u64,
     pub config: SceneViewportConfig,
     pub displayed: Option<SceneViewportFrame>,
 }
 
 impl SceneViewportNavigation {
-    pub fn new(width: u32, height: u32) -> Self {
+    pub fn new(host: ViewportHost, width: u32, height: u32) -> Self {
         static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
         Self {
+            host,
             session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             config: SceneViewportConfig {
                 camera: ViewportCamera::default(),
@@ -103,6 +118,7 @@ impl SceneViewportNavigation {
             _ => None,
         };
         if let Some(previous) = previous
+            && previous.host == self.host
             && previous.session == self.session
             && previous.target == *target
             && previous.node == *node
@@ -116,6 +132,7 @@ impl SceneViewportNavigation {
             return previous.clone();
         }
         Arc::new(SceneViewportRequest {
+            host: self.host,
             session: self.session,
             target: target.clone(),
             node: node.clone(),
@@ -129,6 +146,35 @@ impl SceneViewportNavigation {
             }),
         })
     }
+}
+
+/// The frame `request` produced on the viewport bridge's published surface,
+/// for either host. With an image, the leased surface's texture comes back
+/// and the lease joins `leases`, retired when the sampling GPU work does;
+/// otherwise the lease retires at once. `None` when the surface holds no
+/// frame of this request.
+#[cfg(target_os = "macos")]
+pub(crate) fn lease_frame(
+    pane: &mut crate::texture_pane::TexturePane,
+    device: &manifold_gpu::GpuDevice,
+    frames: &SceneViewportFrames,
+    request: &SceneViewportRequest,
+    leases: &mut crate::shared_texture::BridgeLeaseBatch,
+) -> Option<(SceneViewportFrame, Option<manifold_gpu::GpuTexture>)> {
+    let bridge = pane.bridge()?.clone();
+    let lease = bridge.acquire_read();
+    let matched = bridge.leased_frame(lease).and_then(|frame| {
+        frames[lease.slot()].as_ref().filter(|observation| observation.matches(request, frame, bridge.generation()))
+    });
+    let texture = matched
+        .filter(|frame| frame.has_image())
+        .and_then(|_| pane.leased(device, lease.slot()).cloned());
+    if texture.is_some() {
+        leases.push((bridge, lease));
+    } else {
+        bridge.retire_read(lease);
+    }
+    matched.map(|frame| (frame.clone(), texture))
 }
 
 /// Reuse the domain buffer each frame; allocate a published snapshot only when
@@ -261,7 +307,7 @@ mod tests {
 
     #[test]
     fn scene_viewport_reuses_requests_but_reopen_has_a_new_identity() {
-        let mut navigation = SceneViewportNavigation::new(320, 200);
+        let mut navigation = SceneViewportNavigation::new(ViewportHost::GraphEditor, 320, 200);
         let node = NodeId::new("scene");
         let first = navigation.request(&target(), &node, None, None);
         let same = navigation.request(&target(), &node, None, Some(&first));
@@ -271,13 +317,13 @@ mod tests {
         assert!(!Arc::ptr_eq(&same, &moved));
         assert_eq!(same.session, moved.session);
         let reopened =
-            SceneViewportNavigation::new(320, 200).request(&target(), &node, None, Some(&first));
+            SceneViewportNavigation::new(ViewportHost::GraphEditor, 320, 200).request(&target(), &node, None, Some(&first));
         assert_ne!(first.session, reopened.session);
     }
 
     #[test]
     fn scene_viewport_matches_the_leased_frame_and_uses_its_camera() {
-        let mut navigation = SceneViewportNavigation::new(320, 200);
+        let mut navigation = SceneViewportNavigation::new(ViewportHost::GraphEditor, 320, 200);
         let node = NodeId::new("scene");
         let old_request = navigation.request(&target(), &node, None, None);
         let frame = SceneViewportFrame {
@@ -310,7 +356,7 @@ mod tests {
 
     #[test]
     fn scene_viewport_domains_share_storage_until_accepted_state_changes() {
-        let navigation = SceneViewportNavigation::new(320, 200);
+        let navigation = SceneViewportNavigation::new(ViewportHost::GraphEditor, 320, 200);
         let request = navigation.request(&target(), &NodeId::new("scene"), None, None);
         let mut observations = SceneViewportObservations::default();
         observations.scratch.push((

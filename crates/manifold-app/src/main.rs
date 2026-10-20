@@ -172,6 +172,7 @@ mod live_ui;
 mod viewport_input;
 mod scene_viewport;
 mod physics_overlay;
+mod preview_navigation;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;
