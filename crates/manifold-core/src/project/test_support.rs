@@ -44,6 +44,7 @@ use super::*;
             name: Some(name.to_string()),
             description: None,
             preset_metadata: Some(crate::effect_graph_def::PresetMetadata {
+                shape: None,
                 id: PresetTypeId::from_string(id.to_string()),
                 display_name: name.to_string(),
                 category: String::new(),

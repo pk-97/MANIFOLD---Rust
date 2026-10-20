@@ -10,6 +10,11 @@ pub struct DomainBox {
     pub billboard: bool,
 }
 
+/// The smallest and largest side of a liquid domain box, in metres. The
+/// solvers refuse a layout outside it, so the domain's scale handle stops
+/// at it.
+pub const DOMAIN_EXTENT_METRES: (f32, f32) = (0.5, 20.0);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FluidDomainLayout {
     pub min: [f32; 3],
@@ -48,7 +53,7 @@ pub fn domain_layout(
         || pose
             .scale
             .iter()
-            .any(|v| !v.is_finite() || !(0.5..=20.0).contains(v))
+            .any(|v| !v.is_finite() || !(DOMAIN_EXTENT_METRES.0..=DOMAIN_EXTENT_METRES.1).contains(v))
     {
         return Err("Fluid: domain position must be finite and each dimension must be between 0.5 and 20 metres".into());
     }

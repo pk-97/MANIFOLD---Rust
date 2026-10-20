@@ -45,6 +45,30 @@ mod fluid_object_lifecycle_tests;
 pub use fluid::*;
 pub use duplicate::DuplicateSceneObjectCommand;
 
+/// The card metadata a scene def gets when a scene edit stamps exposures
+/// into a def that has none.
+fn unnamed_scene_metadata() -> PresetMetadata {
+    PresetMetadata {
+        shape: None,
+        id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+        display_name: "Scene".to_string(),
+        category: "Geometry".to_string(),
+        osc_prefix: "scene".to_string(),
+        legacy_discriminant: None,
+        available: true,
+        is_line_based: false,
+        layer_types: None,
+        params: Vec::new(),
+        bindings: Vec::new(),
+        param_aliases: Vec::new(),
+        value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
+        scene_modifier: None,
+        scene_bounds: None,
+    }
+}
+
 /// Scene commands snapshot the complete owner, including modifier-local edits.
 fn restore_scene_owner_graph(
     project: &mut Project,
@@ -253,24 +277,7 @@ impl AddSceneObjectCommand {
                         );
                     (added, prev)
                 };
-                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                    display_name: "Scene".to_string(),
-                    category: "Geometry".to_string(),
-                    osc_prefix: "scene".to_string(),
-                    legacy_discriminant: None,
-                    available: true,
-                    is_line_based: false,
-                    layer_types: None,
-                    params: Vec::new(),
-                    bindings: Vec::new(),
-                    param_aliases: Vec::new(),
-                    value_aliases: Vec::new(),
-                    string_params: Vec::new(),
-                    string_bindings: Vec::new(),
-                    scene_modifier: None,
-                    scene_bounds: None,
-                });
+                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
                 stamp_scene_node_exposures_into(
                     &mut meta.params,
                     &mut meta.bindings,
@@ -565,24 +572,7 @@ impl Command for AddSceneObjectCommand {
                 // param of the freshly minted material/transform/scene_object
                 // nodes, into the def's TOP-LEVEL preset_metadata, targeting each
                 // node's bare NodeId — same convention the glTF importer uses.
-                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                    display_name: "Scene".to_string(),
-                    category: "Geometry".to_string(),
-                    osc_prefix: "scene".to_string(),
-                    legacy_discriminant: None,
-                    available: true,
-                    is_line_based: false,
-                    layer_types: None,
-                    params: Vec::new(),
-                    bindings: Vec::new(),
-                    param_aliases: Vec::new(),
-                    value_aliases: Vec::new(),
-                    string_params: Vec::new(),
-                    string_bindings: Vec::new(),
-                    scene_modifier: None,
-                    scene_bounds: None,
-                });
+                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
                 stamp_scene_node_exposures_into(
                     &mut meta.params,
                     &mut meta.bindings,
@@ -870,24 +860,7 @@ impl Command for AddSceneLightCommand {
                 // — independent of the node's own internal `handle` (`light_{k}`,
                 // 0-based, used only for wire/lookup bookkeeping).
                 let section = format!("Light {}", k + 1);
-                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                    display_name: "Scene".to_string(),
-                    category: "Geometry".to_string(),
-                    osc_prefix: "scene".to_string(),
-                    legacy_discriminant: None,
-                    available: true,
-                    is_line_based: false,
-                    layer_types: None,
-                    params: Vec::new(),
-                    bindings: Vec::new(),
-                    param_aliases: Vec::new(),
-                    value_aliases: Vec::new(),
-                    string_params: Vec::new(),
-                    string_bindings: Vec::new(),
-                    scene_modifier: None,
-                    scene_bounds: None,
-                });
+                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
                 stamp_scene_node_exposures_into(
                     &mut meta.params,
                     &mut meta.bindings,
@@ -2289,24 +2262,7 @@ impl Command for AddSceneEnvironmentCommand {
                 // this the panel's `world_sections` lookup (`state_sync.rs`'s
                 // `sections_for_doc_ids`) comes back empty and
                 // `build_filtered_properties` renders nothing for the row.
-                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                    display_name: "Scene".to_string(),
-                    category: "Geometry".to_string(),
-                    osc_prefix: "scene".to_string(),
-                    legacy_discriminant: None,
-                    available: true,
-                    is_line_based: false,
-                    layer_types: None,
-                    params: Vec::new(),
-                    bindings: Vec::new(),
-                    param_aliases: Vec::new(),
-                    value_aliases: Vec::new(),
-                    string_params: Vec::new(),
-                    string_bindings: Vec::new(),
-                    scene_modifier: None,
-                    scene_bounds: None,
-                });
+                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
                 stamp_scene_node_exposures_into(
                     &mut meta.params,
                     &mut meta.bindings,
@@ -2443,24 +2399,7 @@ impl Command for AddSceneFogCommand {
                 // `sections_for_doc_ids`) comes back empty and
                 // `build_filtered_properties` renders nothing for the row —
                 // the R1 bug: freshly-added fog was structurally invisible.
-                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                    display_name: "Scene".to_string(),
-                    category: "Geometry".to_string(),
-                    osc_prefix: "scene".to_string(),
-                    legacy_discriminant: None,
-                    available: true,
-                    is_line_based: false,
-                    layer_types: None,
-                    params: Vec::new(),
-                    bindings: Vec::new(),
-                    param_aliases: Vec::new(),
-                    value_aliases: Vec::new(),
-                    string_params: Vec::new(),
-                    string_bindings: Vec::new(),
-                    scene_modifier: None,
-                    scene_bounds: None,
-                });
+                let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
                 stamp_scene_node_exposures_into(
                     &mut meta.params,
                     &mut meta.bindings,
@@ -2764,32 +2703,10 @@ impl Command for ImportModelIntoSceneCommand {
                     || !new_card_bindings.is_empty()
                     || !new_string_bindings.is_empty()
                 {
-                    let meta = def.preset_metadata.get_or_insert_with(|| {
-                        // Safety net only: every real generator's catalog default
-                        // carries a `preset_metadata` (D9) — this arm exists so a
-                        // hand-built def with none doesn't silently drop the new
-                        // card entries rather than panic.
-                        PresetMetadata {
-                            id: manifold_core::PresetTypeId::from_string(
-                                "UnnamedScene".to_string(),
-                            ),
-                            display_name: "Scene".to_string(),
-                            category: "Geometry".to_string(),
-                            osc_prefix: "scene".to_string(),
-                            legacy_discriminant: None,
-                            available: true,
-                            is_line_based: false,
-                            layer_types: None,
-                            params: Vec::new(),
-                            bindings: Vec::new(),
-                            param_aliases: Vec::new(),
-                            value_aliases: Vec::new(),
-                            string_params: Vec::new(),
-                            string_bindings: Vec::new(),
-                            scene_modifier: None,
-                            scene_bounds: None,
-                        }
-                    });
+                    // Safety net only: every real generator's catalog default
+                    // carries a `preset_metadata` (D9), so a hand-built def with
+                    // none still keeps the new card entries.
+                    let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
                     meta.params.extend(new_card_params);
                     meta.bindings.extend(new_card_bindings);
                     meta.string_bindings.extend(new_string_bindings);

@@ -282,6 +282,10 @@ pub struct ContentState {
     pub graph_edit_diagnostic: Option<Arc<GraphEditDiagnostic>>,
     /// Latched trigger delivery failure; Stop, seek or project load resets it.
     pub trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
+    /// Scene impulse counts since launch: hits started, discarded (paused or
+    /// Speed 0) and refused, with the newest refusal. The UI shows each
+    /// increase once.
+    pub scene_impulses: manifold_core::scene_impulse::SceneImpulseDiagnostics,
     /// Most recent authoritative selection update for newly created scene
     /// modifier cards. Persistent across snapshots for sequence-gated UI use.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
@@ -667,6 +671,7 @@ impl Default for ContentState {
             undo_redo_event: None,
             graph_edit_diagnostic: None,
             trigger_delivery_failure: None,
+            scene_impulses: Default::default(),
             edit_selection_update: None,
             modifier_selection_update: None,
             object_modifier_selection_update: None,

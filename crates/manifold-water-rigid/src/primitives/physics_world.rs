@@ -661,6 +661,13 @@ impl PhysicsNode for PhysicsWorldNode {
         self.simulation.impulse_epoch()
     }
 
+    fn physics_impulse_readiness(&self) -> Result<bool, String> {
+        if self.coupled_mode {
+            return Ok(true);
+        }
+        self.simulation.impulse_readiness()
+    }
+
     fn physics_impulse_stamp(
         &self,
         transport: manifold_core::Seconds,
@@ -705,6 +712,16 @@ impl PhysicsNode for PhysicsWorldNode {
         for event in self.simulation.drain_applied_impulses() {
             map_rigid_receipt(event, consume);
         }
+    }
+
+    fn drain_discarded_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(manifold_physics::input::EventStamp),
+    ) -> u64 {
+        for stamp in self.simulation.drain_discarded_impulses() {
+            consume(stamp);
+        }
+        self.simulation.take_discarded_beyond()
     }
 
     fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {

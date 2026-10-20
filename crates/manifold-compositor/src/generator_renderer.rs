@@ -60,6 +60,7 @@ const WARMUP_FRAMES: usize = 45;
 pub struct GeneratorRenderer {
     next_physics_event: u64,
     scene_impulse_diagnostics: manifold_core::scene_impulse::SceneImpulseDiagnostics,
+    waiting_fires: Vec<physics_events::WaitingFire>,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -108,6 +109,9 @@ pub struct GeneratorRenderer {
     last_structure_key: u64,
     /// Counts `render_all` calls; a layer stamps it when it actually renders.
     render_pass: u64,
+    /// Sum of every `render_all` step: the content clock a waiting Fire's
+    /// age is measured on, the same at any frame rate and in export.
+    content_clock: Seconds,
     /// The layer whose generator is currently open in the graph editor (watched),
     /// or `None`. Set each frame by [`Self::set_preview_node`] / cleared by
     /// [`Self::clear_preview`]. A watched generator renders *unfused* so the
@@ -182,6 +186,7 @@ impl GeneratorRenderer {
         Self {
             next_physics_event: 0,
             scene_impulse_diagnostics: Default::default(),
+            waiting_fires: Vec::with_capacity(physics_events::WAITING_FIRE_CAPACITY),
             device,
             width,
             height,
@@ -197,6 +202,7 @@ impl GeneratorRenderer {
             uniform_arena,
             last_structure_key: u64::MAX, // force scan on first frame
             render_pass: 0,
+            content_clock: Seconds::ZERO,
             preview_layer: None,
             profiling_enabled: false,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
@@ -388,18 +394,21 @@ impl GeneratorRenderer {
     }
 
     /// What the Scene panel's gizmo overlay needs from `layer_id`'s scene:
-    /// its accepted fluid domains and light positions (appended) and the
-    /// camera it rendered through. `None` unless the layer rendered in the last
-    /// `render_all` (a finished clip or an occluded layer reports nothing).
+    /// its accepted fluid domains, light positions and physics setup shapes
+    /// (appended) and the camera it rendered through. `None` unless the layer
+    /// rendered in the last `render_all` (a finished clip or an occluded layer
+    /// reports nothing).
     pub fn write_physics_overlay(
         &self,
         layer_id: &LayerId,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         lights: &mut Vec<[f32; 3]>,
+        gizmos: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
     ) -> Option<manifold_node_engine::scene::camera::Camera> {
         let state = self.layer_generators.get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?;
         state.generator.write_fluid_domains_watched(domains);
+        state.generator.write_physics_gizmos_watched(gizmos);
         state.generator.write_rendered_view(lights)
     }
 
@@ -728,6 +737,7 @@ impl GeneratorRenderer {
         project_tempo: Option<&ProjectTempo>,
     ) {
         self.render_pass += 1;
+        self.content_clock.0 += f64::from(dt);
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
         gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
@@ -1019,6 +1029,14 @@ impl GeneratorRenderer {
                     &mut self.scene_impulse_diagnostics,
                 );
             }
+            if !self.waiting_fires.is_empty()
+                && let Some(layer) = layers.get(layer_index as usize)
+            {
+                self.land_waiting_fires(layer, project_tempo);
+            }
+        }
+        if !self.waiting_fires.is_empty() {
+            self.settle_waiting_fires(render_skip);
         }
 
         // Flush uniform arena (recreates buffer if capacity grew).
@@ -1081,6 +1099,7 @@ impl GeneratorRenderer {
     /// Reset all generator simulation state to initial conditions.
     /// Called after export warmup re-seek.
     pub fn reset_all_generator_state(&mut self) {
+        self.refuse_all_waiting_fires();
         let device = Arc::clone(&self.device);
         let device = &*device;
         for layer_state in self.layer_generators.values_mut() {
@@ -1103,6 +1122,7 @@ impl GeneratorRenderer {
     /// `manifold_playback::modulation::clear_all_trigger_edges` already
     /// fires (transport stop, project load).
     pub fn clear_all_trigger_state(&mut self) {
+        self.refuse_all_waiting_fires();
         for layer_state in self.layer_generators.values_mut() {
             layer_state.generator.clear_trigger_state();
         }
@@ -1718,6 +1738,8 @@ impl ClipRenderer for GeneratorRenderer {
     }
 
     fn release_all(&mut self) {
+        // Waiting hits are keyed by `LayerId`, which collides across projects.
+        self.refuse_all_waiting_fires();
         for (_, active) in self.active_clips.drain() {
             self.available_rts.push(active.render_target);
         }

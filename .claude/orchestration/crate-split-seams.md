@@ -1999,8 +1999,6 @@ crates/manifold-app/src/ui_snapshot/script.rs
 crates/manifold-app/src/ui_translate.rs
 crates/manifold-app/src/user_library.rs
 crates/manifold-app/src/viewport_input.rs
-crates/manifold-app/src/viewport_p5c_demo.rs
-crates/manifold-app/src/viewport_p6_demo.rs
 crates/manifold-app/src/workspace.rs
 crates/manifold-app/tests/project_local_preset_reload.rs
 crates/manifold-app/tests/scene_skin_binding_e2e.rs

@@ -145,17 +145,12 @@ between this doc and execution.
   `crates/manifold-app/src/ui_bridge/scrub.rs`), so live non-undoable writes
   while dragging and one undo entry on release. When the param is bound to a
   card param, the gizmo scrubs the card param, as the card's knob does. Domain
-  and object drags both follow this rule; neither keeps a private path. Today
-  they differ: the object drag sends one undoable `SetGraphNodeParamCommand`
-  per pointer move (`window_input.rs` `editor_viewport_gizmo_drag_move`), and
-  the domain drag keeps a UI-side draft (`FluidDomainDrag`,
-  `fluid_domain_edit.rs`) that changes nothing live and commits one
-  `ContentCommand::FluidDomainEdit` on release (`editor_input.rs`). The draft
-  exists because the editor positioned domains from the runtime's accepted
-  layout rather than the authored transform, so it had to revalidate against
-  content before writing. Handles now sit at the authored values (D7a), so
-  that reason is gone and both paths are replaced by the scrub. A wired param
-  shows its handle locked, axis by axis; the viewport never fights the graph.
+  and object drags both follow this rule; neither keeps a private path
+  (`crates/manifold-app/src/scene_gizmo.rs`): an unbound node param scrubs as
+  the graph node face does, and a direction's three card params turn as one
+  gesture with one undo entry. Handles sit at the authored values (D7a). A
+  wired param shows its handle locked, axis by axis; the viewport never
+  fights the graph.
   An unwired `transform_n` gets its atom created on first drag. Anything you
   can grab in the viewport, you can perform from a knob.
 - **D9 — Show state and output stay isolated from the viewport.** Editor camera,

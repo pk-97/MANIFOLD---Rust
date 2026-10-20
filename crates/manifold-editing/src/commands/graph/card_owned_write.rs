@@ -100,6 +100,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("CardOwned"),
                 display_name: "Card Owned".to_string(),
                 category: "Stylize".to_string(),
@@ -404,6 +405,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::new("WarnTest"),
                 display_name: "Warn Test".to_string(),
                 category: "Stylize".to_string(),

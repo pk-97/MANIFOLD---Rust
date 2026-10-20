@@ -118,6 +118,15 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
+    /// Three card params moved as one gesture: a gizmo turning a direction
+    /// (REALTIME_3D_DESIGN.md D8). Each id keeps its own knob; the gesture
+    /// lands as one undo entry.
+    ParamTriple {
+        target: GraphTarget,
+        param_ids: [ParamId; 3],
+        baseline: [f32; 3],
+        live: [f32; 3],
+    },
     /// The master-opacity slider (`settings.master_opacity`).
     MasterOpacity { baseline: f32, live: f32 },
     /// The LED master-brightness slider (`settings.led_brightness`).
@@ -339,6 +348,13 @@ impl ResolvedScrub {
                 // leave base stale and the commit would see old == new.
                 project.with_preset_graph_mut(target, |inst| {
                     inst.set_base_param(param_id.as_ref(), *live);
+                });
+            }
+            ResolvedScrub::ParamTriple { target, param_ids, live, .. } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    for (id, value) in param_ids.iter().zip(live) {
+                        inst.set_base_param(id.as_ref(), *value);
+                    }
                 });
             }
             ResolvedScrub::MasterOpacity { live, .. } => {
@@ -2126,6 +2142,95 @@ pub(crate) fn dispatch_scrub(
                 DispatchResult::handled()
             }
         },
+    }
+}
+
+/// Begin moving three card params of `target` as one gesture. False, with
+/// the reason sent, when any of them is locked or missing.
+pub(crate) fn begin_param_triple(ctx: &mut DispatchCtx, target: GraphTarget, param_ids: [ParamId; 3]) -> bool {
+    if let Some(reason) = param_ids
+        .iter()
+        .find_map(|id| crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()))
+    {
+        ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
+        return false;
+    }
+    let Some(baseline) = ctx
+        .project
+        .with_preset_graph(&target, |inst| {
+            param_ids
+                .iter()
+                .all(|id| inst.params.contains(id.as_ref()))
+                .then(|| std::array::from_fn(|i| inst.get_base_param(param_ids[i].as_ref())))
+        })
+        .flatten()
+    else {
+        return false;
+    };
+    ctx.scrub.check_single_active_on_begin("param-triple");
+    for id in &param_ids {
+        ContentCommand::send(
+            ctx.content_tx,
+            ContentCommand::AutomationHold { target: target.clone(), param_id: id.clone(), held: true },
+        );
+    }
+    ctx.scrub.active = Some(ResolvedScrub::ParamTriple { target, param_ids, baseline, live: baseline });
+    true
+}
+
+/// Move the live three-param gesture to `values`, each stopped at its hard
+/// limit as its own knob stops it.
+pub(crate) fn move_param_triple(ctx: &mut DispatchCtx, values: [f32; 3]) {
+    let Some(ResolvedScrub::ParamTriple { target, param_ids, .. }) = &ctx.scrub.active else { return };
+    let (target, param_ids) = (target.clone(), param_ids.clone());
+    let Some(values) = ctx
+        .project
+        .with_preset_graph(&target, |inst| -> Option<[f32; 3]> {
+            let mut out = values;
+            for (value, id) in out.iter_mut().zip(&param_ids) {
+                *value = inst.params.get(id.as_ref())?.spec.clamp_input(*value);
+            }
+            Some(out)
+        })
+        .flatten()
+    else {
+        return;
+    };
+    if let Some(ResolvedScrub::ParamTriple { live, .. }) = &mut ctx.scrub.active {
+        *live = values;
+    }
+    ctx.gesture_move(crate::content_command::touch::VALUES, move |project| {
+        project.with_preset_graph_mut(&target, |inst| {
+            for (id, value) in param_ids.iter().zip(values) {
+                inst.set_base_param(id.as_ref(), value);
+            }
+        });
+    });
+}
+
+/// End the three-param gesture: one undo entry for every param it changed,
+/// and the pointer holds its Begin sent released.
+pub(crate) fn commit_param_triple(ctx: &mut DispatchCtx) {
+    let Some(ResolvedScrub::ParamTriple { target, param_ids, baseline, live }) = ctx.scrub.active.take() else {
+        return;
+    };
+    for id in &param_ids {
+        ContentCommand::send(
+            ctx.content_tx,
+            ContentCommand::AutomationHold { target: target.clone(), param_id: id.clone(), held: false },
+        );
+    }
+    let changes: Vec<Box<dyn manifold_editing::command::Command>> = param_ids
+        .iter()
+        .zip(baseline.iter().zip(live))
+        .filter(|(_, (old, new))| (*old - new).abs() > f32::EPSILON)
+        .map(|(id, (old, new))| {
+            Box::new(ChangeGraphParamCommand::new(target.clone(), id.clone(), *old, new)) as Box<dyn manifold_editing::command::Command>
+        })
+        .collect();
+    if !changes.is_empty() {
+        let cmd = manifold_editing::command::CompositeCommand::new(changes, "Turn direction".into());
+        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
     }
 }
 

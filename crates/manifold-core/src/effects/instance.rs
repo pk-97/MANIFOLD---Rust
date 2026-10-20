@@ -762,6 +762,7 @@ impl PresetInstance {
             wires: Vec::new(),
         });
         let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            shape: None,
             id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),
@@ -851,6 +852,7 @@ impl PresetInstance {
             wires: Vec::new(),
         });
         let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            shape: None,
             id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),
@@ -1759,6 +1761,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::BLOOM,
                 display_name: String::new(),
                 category: String::new(),

@@ -946,6 +946,7 @@ fn int(value: i32) -> SerializedParamValue {
 
 fn empty_scene_metadata() -> PresetMetadata {
     PresetMetadata {
+        shape: None,
         id: manifold_core::PresetTypeId::from_string("UnnamedScene".into()),
         display_name: "Scene".into(),
         category: "Geometry".into(),

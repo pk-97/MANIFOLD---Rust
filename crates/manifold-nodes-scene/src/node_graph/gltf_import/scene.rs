@@ -819,6 +819,7 @@ pub(super) fn build_import_graph(
     }
 
     let metadata = PresetMetadata {
+        shape: None,
         id: PresetTypeId::from_string(sanitized),
         display_name: stem.clone(),
         category: "Geometry".to_string(),

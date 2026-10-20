@@ -390,13 +390,19 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn duplicate_force_project() -> Project {
+        force_project("RadialForce", &["force_a", "force_b"])
+    }
+
+    /// A scene layer `scene` holding one `recipe` force per id, all objects
+    /// targeted.
+    pub(crate) fn force_project(recipe: &'static str, ids: &[&str]) -> Project {
         let mut graph: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
             manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON,
         ).unwrap();
         let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
-            &PresetTypeId::new("RadialForce"),
+            &PresetTypeId::new(recipe),
         ).unwrap();
-        for id in ["force_a", "force_b"] {
+        for &id in ids {
             let modifier = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 &graph,
                 recipe.as_ref(),

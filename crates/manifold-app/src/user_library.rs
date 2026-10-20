@@ -340,6 +340,7 @@ mod tests {
             name: Some(display_name.to_string()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                shape: None,
                 id: PresetTypeId::from_string("placeholder".to_string()),
                 display_name: display_name.to_string(),
                 category: "Test".to_string(),

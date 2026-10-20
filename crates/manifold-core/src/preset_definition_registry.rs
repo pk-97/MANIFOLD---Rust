@@ -908,6 +908,7 @@ mod tests {
 
     fn bloom_preset_metadata() -> PresetMetadata {
         PresetMetadata {
+            shape: None,
             id: PresetTypeId::new("BloomFromJson"),
             display_name: "Bloom (from JSON)".to_string(),
             category: "Filmic".to_string(),
@@ -1009,6 +1010,7 @@ mod tests {
         let inv_def = inv_meta.to_effect_def();
 
         let json_meta = PresetMetadata {
+            shape: None,
             id: PresetTypeId::new("ParityCheck"),
             display_name: "Parity Check".to_string(),
             category: "Filmic".to_string(),
@@ -1081,6 +1083,7 @@ mod tests {
     #[test]
     fn scene_modifier_metadata_builds_scene_modifier_definitions() {
         let metadata = PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string("TestSceneModifier".to_string()),
             display_name: "Test Scene Modifier".to_string(),
             category: "Geometry".to_string(),
@@ -1111,6 +1114,7 @@ mod tests {
     #[should_panic(expected = "duplicate preset id")]
     fn duplicate_id_across_scene_modifier_and_effect_kinds_panics() {
         let metadata = PresetMetadata {
+            shape: None,
             id: PresetTypeId::from_string("DuplicateAcrossKinds".to_string()),
             display_name: "Duplicate".to_string(),
             category: "Test".to_string(),

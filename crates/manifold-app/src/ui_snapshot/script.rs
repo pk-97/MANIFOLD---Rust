@@ -549,7 +549,10 @@ struct Runner {
     /// absorbed watch commands set, and its snapshot cache.
     content_watched: Option<manifold_core::GraphTarget>,
     graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
+    gizmo: preview_gizmo::RunnerGizmo,
 }
+
+mod preview_gizmo;
 
 /// The graph editor window as the App holds it (`graph_editor`,
 /// `graph_canvas`, `graph_editor_panel`), opened and built through the
@@ -650,6 +653,7 @@ impl Runner {
             editor_mapping: crate::mapping_popover::MappingPopover::new(),
             content_watched: None,
             graph_snapshot: None,
+            gizmo: Default::default(),
         }
     }
 
@@ -1234,8 +1238,10 @@ impl Runner {
         );
         data.content.active_graph_target = target;
         data.content.active_graph_snapshot = snapshot;
+        self.gizmo.report(ui, data);
         let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
         self.work.excluded = self.work.excluded.plus(&content_work);
+        self.gizmo.present(ui, data, &self.edits.stamps.parts());
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
@@ -1253,20 +1259,23 @@ impl Runner {
         crate::ui_bridge::intake_overlay_state(ui, &data.content);
         crate::ui_bridge::check_auto_scroll(ui, &data.content);
         let automation_draw_mode = data.selection.automation_draw_mode;
-        let inputs = crate::ui_frame::gather_frame_inputs(
-            &mut self.planner,
-            ui,
-            &mut data.selection,
-            &self.active_layer,
-            &self.edits,
-            &data.content,
-            crate::frame_plan::ChromeSource {
-                project: &data.project,
-                is_dirty: false,
-                project_path: None,
-                automation_draw_mode,
-            },
-        );
+        let inputs = crate::frame_plan::FrameInputs {
+            gizmo_view: self.gizmo.host.version(),
+            ..crate::ui_frame::gather_frame_inputs(
+                &mut self.planner,
+                ui,
+                &mut data.selection,
+                &self.active_layer,
+                &self.edits,
+                &data.content,
+                crate::frame_plan::ChromeSource {
+                    project: &data.project,
+                    is_dirty: false,
+                    project_path: None,
+                    automation_draw_mode,
+                },
+            )
+        };
         let mut plan = self.planner.plan(inputs);
         let fresh = std::mem::take(&mut self.fresh_reference);
         if fresh {
@@ -1811,20 +1820,26 @@ impl Runner {
 
     /// A left press through the text gate, then the tree, as the App routes it.
     fn press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
-        if !self.text_press(ui, data, pos, self.modifiers.shift) {
+        if !self.text_press(ui, data, pos, self.modifiers.shift) && !self.preview_gizmo(ui, data, |host, ctx, fit| host.press(ctx, fit, pos)) {
             ui.pointer_event(pos, PointerAction::Down, self.clock);
         }
     }
 
-    /// A left release: it ends a text drag, then reaches the tree.
-    fn release(&mut self, ui: &mut UIRoot, pos: Vec2) {
+    /// A left release: it ends a text drag, then a preview gizmo drag
+    /// (`window_input`'s release order), else reaches the tree.
+    fn release(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         crate::text_session::pointer_up(&mut self.text_input);
-        ui.pointer_event(pos, PointerAction::Up, self.clock);
+        if !self.preview_gizmo(ui, data, |host, ctx, _| host.release(ctx)) {
+            ui.pointer_event(pos, PointerAction::Up, self.clock);
+        }
     }
 
-    /// Pointer motion: an armed text drag takes it, else the tree.
-    fn move_to(&mut self, ui: &mut UIRoot, pos: Vec2) {
-        if !crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos) {
+    /// Pointer motion: an armed text drag takes it, then a preview gizmo
+    /// drag, else the tree.
+    fn move_to(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
+        if !crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos)
+            && !self.preview_gizmo(ui, data, |host, ctx, fit| host.drag_to(ctx, fit, pos))
+        {
             ui.pointer_event(pos, PointerAction::Move, self.clock);
         }
     }
@@ -2117,12 +2132,6 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
-                ContentCommand::FluidDomainEdit(drag) => {
-                    match crate::fluid_domain_edit::build_action(&data.project, *drag) {
-                        Ok(command) => ContentCommand::ExecuteOnContent(command),
-                        Err(message) => ContentCommand::GraphEditRejected(message),
-                    }
-                }
                 ContentCommand::ObjectModifier(action) => {
                     match crate::object_modifier_transfer::build_action(&data.project, action) {
                         Ok(command) => ContentCommand::ExecuteOnContent(command),
@@ -2234,9 +2243,14 @@ impl Runner {
         let automation_targets = AutomationHitTargets(&automation_lanes);
         // The perform screen's exit button is a surface only while it shows.
         let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        // The preview gizmo's handles are a surface while Show gizmos draws them.
+        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo.grips);
         let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
         if self.perform.active {
             surfaces.push(&perform_targets);
+        }
+        if !self.gizmo.grips.is_empty() {
+            surfaces.push(&gizmo_targets);
         }
         automation::resolve(&ui.tree, &surfaces, target)
             .map(|r| r.rect)
@@ -2253,9 +2267,14 @@ impl Runner {
         let automation_targets = AutomationHitTargets(&automation_lanes);
         // The perform screen's exit button is a surface only while it shows.
         let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        // The preview gizmo's handles are a surface while Show gizmos draws them.
+        let gizmo_targets = crate::physics_overlay::GizmoHitTargets(&self.gizmo.grips);
         let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
         if self.perform.active {
             surfaces.push(&perform_targets);
+        }
+        if !self.gizmo.grips.is_empty() {
+            surfaces.push(&gizmo_targets);
         }
         // The focused window answers first; a selector nothing there matches
         // is looked up in the other open window, so a flow can assert on
@@ -2307,7 +2326,7 @@ impl Runner {
             }
             Gesture::Release => {
                 self.last_gesture_points.push(center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Click { modifiers } => {
@@ -2315,16 +2334,16 @@ impl Runner {
                 ui.input.set_modifiers(*modifiers);
                 self.last_gesture_points.push(center);
                 self.press(ui, data, center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DoubleClick => {
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
                 self.press(ui, data, center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.press(ui, data, center);
-                self.release(ui, center);
+                self.release(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::RightClick => {
@@ -2334,7 +2353,7 @@ impl Runner {
             }
             Gesture::Hover => {
                 self.last_gesture_points.push(center);
-                self.move_to(ui, center);
+                self.move_to(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Scroll { delta } => {
@@ -2351,10 +2370,10 @@ impl Runner {
                 self.press(ui, data, center);
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.last_gesture_points.push(pt);
-                    self.move_to(ui, pt);
+                    self.move_to(ui, data, pt);
                 }
                 self.last_gesture_points.push(to_center);
-                self.release(ui, to_center);
+                self.release(ui, data, to_center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
@@ -2369,7 +2388,7 @@ impl Runner {
                 if pressed {
                     self.press(ui, data, center);
                 } else {
-                    self.move_to(ui, center);
+                    self.move_to(ui, data, center);
                     self.overlay_hover(ui, data, center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -2377,7 +2396,7 @@ impl Runner {
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.clock += DT;
                     self.last_gesture_points.push(pt);
-                    self.move_to(ui, pt);
+                    self.move_to(ui, data, pt);
                     self.overlay_hover(ui, data, pt);
                     self.drain_and_dispatch(ui, data);
                     self.live_frame(ui, data, render, false, true);
@@ -2385,9 +2404,9 @@ impl Runner {
                 self.clock += DT;
                 self.last_gesture_points.push(to_center);
                 if pressed {
-                    self.release(ui, to_center);
+                    self.release(ui, data, to_center);
                 } else {
-                    self.move_to(ui, to_center);
+                    self.move_to(ui, data, to_center);
                     self.overlay_hover(ui, data, to_center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -3335,77 +3354,4 @@ pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
 }
 
 #[cfg(test)]
-mod composite_gate_tests {
-    use super::*;
-
-    fn flow(name: &str) -> Vec<AutomationAction> {
-        let path = format!("{}/../../scripts/ui-flows/{name}.json", env!("CARGO_MANIFEST_DIR"));
-        serde_json::from_str(&std::fs::read_to_string(path).expect("read flow")).expect("parse flow")
-    }
-
-    /// Mirrors `run_flow`: flush before a reader, a `Step` composites and
-    /// tiles every frame, a `Snapshot` advances nothing, every other step
-    /// advances one frame. Returns (composites, filmstrip tiles).
-    fn composites_for(actions: &[AutomationAction]) -> (usize, usize) {
-        let mut gate = CompositeGate::default();
-        gate.mark();
-        let mut tiles = 0;
-        for action in actions {
-            if reads_composite(action) {
-                gate.take();
-            }
-            match action {
-                AutomationAction::Step { frames } => {
-                    for _ in 0..*frames {
-                        gate.step_frame();
-                        tiles += 1;
-                    }
-                }
-                AutomationAction::Snapshot => {}
-                _ => gate.mark(),
-            }
-        }
-        (gate.composites, tiles)
-    }
-
-    #[test]
-    fn step_composites_and_tiles_every_frame() {
-        let actions = [AutomationAction::Dump, AutomationAction::Step { frames: 5 }];
-        // Seed + the Dump frame are owed but folded into the first Step frame.
-        assert_eq!(composites_for(&actions), (5, 5));
-        let actions = [AutomationAction::Step { frames: 3 }, AutomationAction::Step { frames: 2 }];
-        assert_eq!(composites_for(&actions), (5, 5));
-    }
-
-    #[test]
-    fn run_without_snapshot_steps_never_composites() {
-        let mut actions = flow("water-family-preset");
-        actions.retain(|a| !matches!(a, AutomationAction::Step { .. }));
-        let snapshots = actions.iter().filter(|a| reads_composite(a)).count();
-        assert!(snapshots > 0, "fixture flow should carry Snapshot steps");
-        assert_eq!(composites_for(&actions).0, snapshots);
-        actions.retain(|a| !reads_composite(a));
-        assert!(actions.len() > 20);
-        assert_eq!(composites_for(&actions).0, 0);
-    }
-
-    #[test]
-    fn only_snapshot_reads_the_composite() {
-        let non_readers = [
-            AutomationAction::Dump,
-            AutomationAction::Step { frames: 3 },
-            AutomationAction::SaveReloadProject,
-        ];
-        assert!(non_readers.iter().all(|a| !reads_composite(a)));
-        assert!(reads_composite(&AutomationAction::Snapshot));
-    }
-
-    #[test]
-    fn back_to_back_snapshots_composite_once() {
-        let mut gate = CompositeGate::default();
-        gate.mark();
-        assert!(gate.take());
-        assert!(!gate.take());
-        assert_eq!(gate.composites, 1);
-    }
-}
+mod composite_gate_tests;

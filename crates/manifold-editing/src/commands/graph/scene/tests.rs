@@ -254,6 +254,7 @@ fn imported_group_scene_graph() -> EffectGraphDef {
     def.nodes.push(group_node);
     def.wires.push(wire(10, "object", 0, "object_0"));
     def.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: PresetTypeId::from_string("Imported".into()), display_name: "Imported".into(), category: "Geometry".into(), osc_prefix: "imported".into(),
         legacy_discriminant: None, scene_modifier: None, scene_bounds: None, available: true, is_line_based: false, layer_types: None,
         params: vec![], bindings: vec![], param_aliases: vec![], value_aliases: vec![], string_params: vec![],
@@ -1322,6 +1323,7 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
     let mut def = render_scene_graph(1, 0);
     def.nodes.push(nested_group);
     def.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: PresetTypeId::new("test.scene"),
         display_name: "Test Scene".to_string(),
         category: "Test".to_string(),
@@ -2124,6 +2126,7 @@ fn duplicate_physics_scene_object_preserves_numeric_and_string_bindings() {
         .node_id
         .clone();
     graph.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: PresetTypeId::new("physics_test"),
         display_name: "Physics Test".to_string(),
         category: String::new(),
@@ -2250,6 +2253,7 @@ fn duplicate_physics_scene_object_renames_sections_and_repeated_ids() {
         .node_id
         .clone();
     graph.preset_metadata = Some(PresetMetadata {
+        shape: None,
         id: PresetTypeId::new("physics_sections"),
         display_name: "Physics Sections".to_string(),
         category: String::new(),
@@ -3321,6 +3325,7 @@ fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_
         let effect = project.find_effect_by_id_mut(&fx).unwrap();
         let def = effect.graph.as_mut().unwrap();
         def.preset_metadata = Some(PresetMetadata {
+            shape: None,
             id: PresetTypeId::new("test.scene"),
             display_name: "Test Scene".into(),
             category: String::new(),
@@ -3686,21 +3691,10 @@ fn add_scene_fog_scales_density_with_scene_bounds() {
         def.preset_metadata = Some(manifold_core::effect_graph_def::PresetMetadata {
             id: manifold_core::PresetTypeId::from_string("TestScene".to_string()),
             display_name: "Test".to_string(),
-            category: "Geometry".to_string(),
             osc_prefix: "test".to_string(),
-            legacy_discriminant: None,
-            available: true,
-            is_line_based: false,
-            layer_types: None,
-            params: Vec::new(),
-            bindings: Vec::new(),
-            param_aliases: Vec::new(),
-            value_aliases: Vec::new(),
-            string_params: Vec::new(),
-            string_bindings: Vec::new(),
             // bbox diagonal = sqrt(20^2+20^2+20^2) = 34.64 -> radius = 17.32
-            scene_modifier: None,
             scene_bounds: Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])),
+            ..super::unnamed_scene_metadata()
         });
         def
     });
@@ -4083,20 +4077,8 @@ fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
     base.preset_metadata = Some(PresetMetadata {
         id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
         display_name: "Existing".to_string(),
-        category: "Geometry".to_string(),
         osc_prefix: "existing".to_string(),
-        legacy_discriminant: None,
-        scene_modifier: None,
-        scene_bounds: None,
-        available: true,
-        is_line_based: false,
-        layer_types: None,
-        params: vec![],
-        bindings: vec![],
-        param_aliases: Vec::new(),
-        value_aliases: Vec::new(),
-        string_params: Vec::new(),
-        string_bindings: Vec::new(),
+        ..super::unnamed_scene_metadata()
     });
     let (mut project, fx) = project_with_graph(base);
     let before = graph_of(&project, &fx).clone();
@@ -4537,22 +4519,11 @@ fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
     base.preset_metadata = Some(PresetMetadata {
         id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
         display_name: "Existing".to_string(),
-        category: "Geometry".to_string(),
         osc_prefix: "existing".to_string(),
-        legacy_discriminant: None,
-        scene_modifier: None,
-        scene_bounds: None,
-        available: true,
-        is_line_based: false,
-        layer_types: None,
         // One control already on the card, so the undone graph still names
         // its controls and the manifest is rebuilt rather than kept.
         params: vec![ParamSpecDef { id: "existing".to_string(), name: "Existing".to_string(), max: 1.0, ..ParamSpecDef::default() }],
-        bindings: vec![],
-        param_aliases: Vec::new(),
-        value_aliases: Vec::new(),
-        string_params: Vec::new(),
-        string_bindings: Vec::new(),
+        ..super::unnamed_scene_metadata()
     });
     let (mut project, layer_id) = project_with_generator_graph(base);
     // A typed generator: an untyped instance has no manifest to refresh.

@@ -135,6 +135,7 @@ mod tests {
         let model_path = super::super::synthetic_glbs::write_synthetic_sized_glb(5.0);
 
         let meta = PresetMetadata {
+            shape: None,
             id: manifold_core::preset_type_id::PresetTypeId::from_string("test.scene".to_string()),
             display_name: "Test Scene".to_string(),
             category: "Spatial".to_string(),

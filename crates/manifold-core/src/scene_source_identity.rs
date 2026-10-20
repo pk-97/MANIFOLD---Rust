@@ -666,6 +666,7 @@ mod tests {
 
     fn metadata() -> PresetMetadata {
         PresetMetadata {
+            shape: None,
             id: crate::preset_type_id::PresetTypeId::from_string("identity-test".into()),
             display_name: "Identity test".into(),
             category: "Diagnostic".into(),
