@@ -387,7 +387,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("drag_rate"), label: "Drag Rate", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 20.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire a velocity field (node.uniform_vector_field scaled to m/s, plus node.turbulence_vector_field for gusts) and add the result to any force list. A still velocity (zero) is plain air resistance. Each consumer (liquid domain, swarm, physics world) scales the drag rate by its own Air Drag. Mask the velocity before it becomes wind: node.multiply_vector_fields refuses a field carrying air.",
+    composition_notes: "Wire a velocity field (node.uniform_vector_field scaled to m/s, plus node.turbulence_vector_field for gusts) and add the result to any force list. A still velocity (zero) is plain air resistance. Each consumer (water, swarm, physics world) scales the drag rate by its own Air Drag. Mask the velocity before it becomes wind: node.multiply_vector_fields refuses a field carrying air.",
     examples: [],
     picker: { label: "Wind Field", category: Atom },
     summary: "Makes a velocity field into wind that drags things toward its velocity.",
