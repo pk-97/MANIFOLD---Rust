@@ -123,6 +123,15 @@ pub trait PrimitiveSpec: Send {
     /// `run()` end-to-end.
     const PURE: bool = false;
 
+    /// A time-integrating primitive: `run()` accumulates its inputs over
+    /// frame time. Evaluated at non-decreasing times it advances by the
+    /// elapsed time; when time goes back it starts again, as a simulation
+    /// clock restarts on a seek or loop. It may be evaluated by a host that
+    /// replays past ticks in time order (the physics history replay). Never
+    /// pure, so never memoized. Opt in via the macro's `integrates_time:`
+    /// field.
+    const INTEGRATES_TIME: bool = false;
+
     /// Optional fusable body fragment: a WGSL `fn body(...)` with no global
     /// accesses (purity-checked) that the fusion codegen chains into one
     /// kernel — and from which the standalone `cs_main` is generated
@@ -689,6 +698,18 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::acceleration_input`](crate::exec::effect_node::EffectNode::acceleration_input).
+    fn acceleration_input(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Mirror of
+    /// [`EffectNode::physical_sources`](crate::exec::effect_node::EffectNode::physical_sources).
+    fn physical_sources(&self, _output: &str) -> Option<&'static [&'static str]> {
+        None
+    }
+
+    /// Mirror of
     /// [`EffectNode::canvas_sized_array_outputs`](crate::node_graph::effect_node::EffectNode::canvas_sized_array_outputs).
     /// Output Array port names whose buffer size must equal the
     /// canvas (`width × height` cells). Used by scatter accumulators
@@ -896,6 +917,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn aliased_array_io(&self) -> &[(&str, &str)] {
         Primitive::aliased_array_io(self)
     }
+    fn acceleration_input(&self) -> Option<&'static str> {
+        Primitive::acceleration_input(self)
+    }
+    fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
+        Primitive::physical_sources(self, output)
+    }
     fn canvas_sized_array_outputs(&self) -> &[&str] {
         Primitive::canvas_sized_array_outputs(self)
     }
@@ -975,6 +1002,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn is_pure(&self) -> bool {
         P::PURE
+    }
+    fn integrates_time(&self) -> bool {
+        P::INTEGRATES_TIME
     }
     fn fusion_register_heavy(&self) -> bool {
         Primitive::fusion_register_heavy(self)
@@ -1151,6 +1181,7 @@ macro_rules! primitive {
         $( role: $role:ident, )?
         $( aliases: [ $($alias:literal),* $(,)? ], )?
         $( pure: $pure:literal, )?
+        $( integrates_time: $integrates_time:literal, )?
         $( fusion_kind: $fusion_kind:ident, )?
         $( boundary_reason: $boundary_reason:ident, )?
         $( param_contracts: [ $(($contract_param:literal, $contract_expr:expr)),* $(,)? ], )?
@@ -1216,6 +1247,7 @@ macro_rules! primitive {
                 $crate::scene::depth_rule::DepthRule::$depth_rule;
 
             $( const PURE: bool = $pure; )?
+            $( const INTEGRATES_TIME: bool = $integrates_time; )?
             $( const FUSION_KIND: $crate::freeze::classify::FusionKind =
                 $crate::freeze::classify::FusionKind::$fusion_kind; )?
             $( const BOUNDARY_REASON: Option<$crate::freeze::classify::BoundaryReason> =

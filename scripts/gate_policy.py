@@ -13,6 +13,7 @@ GPU_DEFAULT_CPU_ONLY = {
     "manifold-water-gpu-mpm": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-whitewater": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-surface": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
+    "manifold-nodes-physics": "Default tests are CPU contracts (swarm clock and lattices, codegen); device proofs require gpu-proofs",
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
@@ -37,6 +38,7 @@ CATALOG_PACKAGE = 'manifold-nodes'
 PRIMITIVE_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
                    'crates/manifold-nodes-image/src/node_graph/primitives/',
                    'crates/manifold-node-engine/src/primitives/',
+                   'crates/manifold-nodes-physics/src/primitives/',
                    'crates/manifold-nodes-water/src/primitives/',
                    'crates/manifold-water-rigid/src/primitives/',
                    'crates/manifold-water-liquid/src/primitives/',
@@ -580,7 +582,8 @@ PREFIX_ROWS += [
       "runtime::physics_sampling"], []),
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
-      "contracts::node_graph::catalog_tests::physics_host_modulation", "physics_scene"], []),
+      "contracts::node_graph::catalog_tests::physics_host_modulation",
+      "contracts::node_graph::catalog_tests::wind_gust_replay", "physics_scene"], []),
 ]
 
 # The GPU MPM leaf's CPU contract: the default-build tests that construct Matter nodes.

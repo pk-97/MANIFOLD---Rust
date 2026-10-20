@@ -554,6 +554,9 @@ const NON_STANDALONE: &[&str] = &[
     "node.range",
     "node.repeat_outline",
     "node.switch_array",
+    // A swarm's CPU clock: its array outputs are lattice and tick-length
+    // uploads, with no kernel and no uniform.
+    "node.swarm_forces",
     // Blit-only routing: a buffer copy of the chosen input, no kernel.
     "node.switch_indices",
     "node.switch_instances",

@@ -29,6 +29,9 @@ fn recipe(name: &str) -> EffectGraphDef {
         "UniformForce" => include_str!("../assets/scene-modifier-presets/UniformForce.json"),
         "RadialForce" => include_str!("../assets/scene-modifier-presets/RadialForce.json"),
         "VortexForce" => include_str!("../assets/scene-modifier-presets/VortexForce.json"),
+        "Wind" => include_str!("../assets/scene-modifier-presets/Wind.json"),
+        "Attractor" => include_str!("../assets/scene-modifier-presets/Attractor.json"),
+        "Explosion" => include_str!("../assets/scene-modifier-presets/Explosion.json"),
         _ => panic!("unknown force recipe {name}"),
     };
     serde_json::from_str(source).expect("force recipe parses")
@@ -408,7 +411,8 @@ impl EffectNode for FieldObserver {
             ctx.mark_outputs_pending();
             return;
         };
-        let value = field.sample([0.25, -0.5, 0.75]);
+        // The acceleration of a body at rest there: push plus drag rate × wind.
+        let value = field.sample_force([0.25, -0.5, 0.75]).acceleration([0.0; 3]);
         for (port, component) in [("x", value[0]), ("y", value[1]), ("z", value[2])] {
             ctx.outputs.set_scalar(port, ParamValue::Float(component));
         }
@@ -473,22 +477,21 @@ fn frame_time() -> FrameTime {
 }
 
 fn evaluate_force_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [f32; 3] {
-    evaluate_force_output(names, strengths, enabled, None)
+    let controls: Vec<_> = strengths.iter().zip(enabled).map(|(&s, &e)| vec![("strength", s), ("enabled", e)]).collect();
+    evaluate_force_output(names, &controls, false)
 }
 
 fn evaluate_impulse_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [f32; 3] {
-    evaluate_force_output(names, strengths, enabled, Some(2.0))
+    let controls: Vec<_> =
+        strengths.iter().zip(enabled).map(|(&s, &e)| vec![("strength", s), ("enabled", e), ("impulse_strength", 2.0)]).collect();
+    evaluate_force_output(names, &controls, true)
 }
 
-fn evaluate_force_output(
-    names: &[&str],
-    strengths: &[f32],
-    enabled: &[f32],
-    impulse_strength: Option<f32>,
-) -> [f32; 3] {
-    assert_eq!(names.len(), strengths.len());
-    assert_eq!(names.len(), enabled.len());
-    if impulse_strength.is_some() {
+/// The prepared force list's acceleration at rest at one point, or the
+/// first recipe's impulse field there, with each recipe's controls set.
+fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse: bool) -> [f32; 3] {
+    assert_eq!(names.len(), controls.len());
+    if impulse {
         assert_eq!(names.len(), 1, "impulse proof uses one source branch");
     }
     let registry = PrimitiveRegistry::with_builtin();
@@ -510,11 +513,10 @@ fn evaluate_force_output(
         to_node: 40,
         to_port: "body_acceleration_1".into(),
     });
-    for (index, ((name, strength), enabled)) in names.iter().zip(strengths).zip(enabled).enumerate()
-    {
+    for (index, (name, controls)) in names.iter().zip(controls).enumerate() {
         let mut recipe = recipe(name);
         let metadata = recipe.preset_metadata.as_mut().unwrap();
-        for (id, value) in [("strength", *strength), ("enabled", *enabled)] {
+        for &(id, value) in controls {
             metadata
                 .params
                 .iter_mut()
@@ -528,20 +530,6 @@ fn evaluate_force_output(
             {
                 binding.default_value = value;
             }
-        }
-        if let Some(value) = impulse_strength {
-            metadata
-                .params
-                .iter_mut()
-                .find(|param| param.id == "impulse_strength")
-                .unwrap()
-                .default_value = value;
-            metadata
-                .bindings
-                .iter_mut()
-                .find(|binding| binding.id == "impulse_strength")
-                .unwrap()
-                .default_value = value;
         }
         let instance = prepare_new_scene_modifier(
             &host,
@@ -564,7 +552,7 @@ fn evaluate_force_output(
     let prepared = prepare_scene_modifiers(&host, &registry).unwrap();
     let routes = prepared.routes;
     let mut def = prepared.def;
-    let (producer, root) = if impulse_strength.is_some() {
+    let (producer, root) = if impulse {
         let route = routes
             .iter()
             .find(|route| {
@@ -686,4 +674,161 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
         prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
             .unwrap_or_else(|error| panic!("{name} prepares with zero selected bodies: {error}"));
     }
+}
+
+/// The industry set (SCENE_SETUP_PROGRAMME.md section D2): Wind, Attractor
+/// and Explosion validate, declare a shape, bind every control but Impulse,
+/// attach with and without bodies, and expand to the field they promise.
+#[test]
+fn industry_force_recipes_attach_and_evaluate() {
+    let host: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).expect("host parses");
+    let scene = host
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_scene")
+        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() })
+        .expect("physics host has render_scene");
+    for name in ["Wind", "Attractor", "Explosion"] {
+        let def = recipe(name);
+        validate_scene_modifier_schema(&def).unwrap_or_else(|error| panic!("{name} schema is valid: {error}"));
+        let metadata = def.preset_metadata.as_ref().expect("preset metadata");
+        assert_eq!(metadata.category, "Forces");
+        assert!(metadata.shape.is_some(), "{name} declares its shape");
+        assert!(manifold_core::scene_modifier_preset::is_force_recipe(&def), "{name} is a force");
+        assert!(metadata.params.iter().all(|p| p.min <= p.default_value && p.default_value <= p.max));
+        let bound: std::collections::BTreeSet<_> = metadata.bindings.iter().map(|b| b.id.as_str()).collect();
+        for param in &metadata.params {
+            assert_eq!(bound.contains(param.id.as_str()), param.id != "fire", "{name}.{} binding", param.id);
+        }
+        for objects in [Vec::new(), vec![manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: NodeId::new("physics_demo_114") }]] {
+            let instance = prepare_new_scene_modifier(&host, &def, NodeId::new(format!("set-{name}")), scene.clone(), SceneTargetSelection::Explicit { objects })
+                .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
+            let attached = insert_scene_modifier(&host, 0, instance).unwrap_or_else(|error| panic!("{name} inserts: {error}")).graph;
+            prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin()).unwrap_or_else(|error| panic!("{name} prepares: {error}"));
+        }
+    }
+
+    let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
+    let previous = [1.0, 2.0, 3.0];
+    // A body at rest in a 4 m/s wind along z at drag rate 0.5 is pushed at
+    // 0.5 × 4 = 2 m/s² along z; with no air resistance the wind adds nothing.
+    let wind = [("direction_x", 0.0), ("direction_y", 0.0), ("direction_z", 1.0), ("speed", 4.0)];
+    let windy = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.5)]].concat()], false);
+    assert!(close(windy, [1.0, 2.0, 5.0]), "{windy:?}");
+    // The direction is only a direction: a diagonal wind still blows at Speed.
+    let diagonal = [("direction_x", 1.0), ("direction_y", 0.0), ("direction_z", 1.0), ("speed", 4.0), ("air_resistance", 0.5)];
+    let gust = evaluate_force_output(&["Wind"], &[diagonal.to_vec()], false);
+    let side = 2.0 * std::f32::consts::FRAC_1_SQRT_2;
+    assert!(close(gust, [1.0 + side, 2.0, 3.0 + side]), "{gust:?}");
+    let still = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.0)]].concat()], false);
+    assert!(close(still, previous), "{still:?}");
+
+    // The sample point sits 0.935 m from the origin, inside the attractor's
+    // 1 m radius, so the Inverse curve pulls at full strength toward it.
+    let at = [0.25f32, -0.5, 0.75];
+    let d = at.iter().map(|c| c * c).sum::<f32>().sqrt();
+    let pulled = evaluate_force_output(&["Attractor"], &[vec![("strength", 5.0)]], false);
+    assert!(close(pulled, std::array::from_fn(|i| previous[i] - 5.0 * at[i] / d)), "{pulled:?}");
+
+    // An explosion has no steady push; its impulse kicks outward, fading to
+    // nothing at its 3 m radius.
+    let calm = evaluate_force_output(&["Explosion"], &[vec![("impulse_strength", 8.0)]], false);
+    assert!(close(calm, previous), "{calm:?}");
+    let blast = evaluate_force_output(&["Explosion"], &[vec![("impulse_strength", 8.0)]], true);
+    let size = 8.0 * (1.0 - d / 3.0);
+    assert!(close(blast, std::array::from_fn(|i| size * at[i] / d)), "{blast:?}");
+}
+
+const SWARM: &str = include_str!("../assets/generator-presets/Swarm.json");
+const FLOATING_BOX: &str = include_str!("../assets/generator-presets/WaterFloatingBoxMatter.json");
+
+fn render_scene(host: &EffectGraphDef) -> manifold_core::scene_modifier_preset::SceneNodeRef {
+    let node = host.nodes.iter().find(|node| node.type_id == "node.render_scene").expect("a render scene");
+    manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() }
+}
+
+/// `host` with the force `name` on every object of its scene.
+fn with_force(host: &EffectGraphDef, name: &str) -> EffectGraphDef {
+    with_recipe(host, name, &recipe(name))
+}
+
+fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> EffectGraphDef {
+    let instance = prepare_new_scene_modifier(host, recipe, NodeId::new(format!("all-{name}")), render_scene(host), SceneTargetSelection::AllObjects)
+        .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
+    insert_scene_modifier(host, 0, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}")).graph
+}
+
+/// The Swarm template's swarm nodes grafted into `host`, its object in the
+/// render scene's next slot.
+fn graft_swarm(host: &EffectGraphDef) -> EffectGraphDef {
+    const OFFSET: u64 = 1000;
+    let swarm: serde_json::Value = serde_json::from_str(SWARM).unwrap();
+    let mut doc = serde_json::to_value(host).unwrap();
+    let ids: Vec<u64> = (10..=19).collect();
+    let moved = |id: &serde_json::Value| id.as_u64().filter(|id| ids.contains(id));
+    for node in swarm["nodes"].as_array().unwrap().iter().filter(|node| moved(&node["id"]).is_some()) {
+        let mut node = node.clone();
+        node["id"] = (node["id"].as_u64().unwrap() + OFFSET).into();
+        doc["nodes"].as_array_mut().unwrap().push(node);
+    }
+    for wire in swarm["wires"].as_array().unwrap().iter().filter(|wire| moved(&wire["toNode"]).is_some()) {
+        let mut wire = wire.clone();
+        for end in ["fromNode", "toNode"] {
+            if let Some(id) = moved(&wire[end]) {
+                wire[end] = (id + OFFSET).into();
+            }
+        }
+        doc["wires"].as_array_mut().unwrap().push(wire);
+    }
+    let scene = doc["nodes"].as_array_mut().unwrap().iter_mut().find(|node| node["typeId"] == "node.render_scene").unwrap();
+    let slots = scene["params"]["objects"]["value"].as_u64().unwrap();
+    scene["params"]["objects"]["value"] = (slots + 1).into();
+    let scene_id = scene["id"].clone();
+    doc["wires"].as_array_mut().unwrap().push(serde_json::json!({"fromNode": 18 + OFFSET, "fromPort": "object", "toNode": scene_id, "toPort": format!("object_{slots}")}));
+    serde_json::from_value(doc).unwrap()
+}
+
+/// BUG-g5rw2: a scene force on every object reaches a swarm through its
+/// forces node, and its Impulse goes to the swarm as a whole. The Swarm
+/// template with a Radial force builds; so does a scene with water, a
+/// physics world and a swarm under one force.
+#[test]
+fn a_swarm_takes_force_hits_and_builds_beside_water_and_a_physics_world() {
+    use manifold_core::scene_impulse::ImpulseTarget;
+    use manifold_node_engine::load::expand::impulse_recipients;
+    use manifold_node_engine::runtime::PresetRuntime;
+    let registry = PrimitiveRegistry::with_builtin();
+    let swarm: EffectGraphDef = serde_json::from_str(SWARM).unwrap();
+    let pushed = with_force(&swarm, "RadialForce");
+    let recipients = impulse_recipients(&pushed, &render_scene(&pushed), &SceneTargetSelection::AllObjects, &registry).expect("the swarm takes hits");
+    assert_eq!(recipients, vec![(NodeId::new("swarm_forces"), ImpulseTarget::Swarm)]);
+    PresetRuntime::from_def_for_render(pushed, &registry, None, false).expect("the Swarm template with a Radial force builds");
+
+    let host: EffectGraphDef = serde_json::from_str(FLOATING_BOX).unwrap();
+    let mixed = with_force(&graft_swarm(&host), "RadialForce");
+    let recipients = impulse_recipients(&mixed, &render_scene(&mixed), &SceneTargetSelection::AllObjects, &registry).expect("every recipient takes hits");
+    assert!(recipients.contains(&(NodeId::new("swarm_forces"), ImpulseTarget::Swarm)), "{recipients:?}");
+    assert!(recipients.iter().any(|(_, target)| target.affects_fluid()), "{recipients:?}");
+    assert!(recipients.iter().any(|(_, target)| target.rigid_targets().is_some()), "{recipients:?}");
+    PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("water, a physics world and a swarm install under one force");
+}
+
+/// A Wind with Turbulence on drifts its gusts over time, and they replay
+/// with the physics ticks: the card builds over water, a physics world and
+/// a swarm together, and over the stock solids.
+#[test]
+fn a_gusty_wind_builds_over_water_a_physics_world_and_a_swarm() {
+    use manifold_node_engine::runtime::PresetRuntime;
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut wind = recipe("Wind");
+    let metadata = wind.preset_metadata.as_mut().unwrap();
+    metadata.params.iter_mut().find(|param| param.id == "turbulence").unwrap().default_value = 6.0;
+    for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == "turbulence") {
+        binding.default_value = 6.0;
+    }
+    let host: EffectGraphDef = serde_json::from_str(FLOATING_BOX).unwrap();
+    let mixed = with_recipe(&graft_swarm(&host), "Wind", &wind);
+    PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("gusts over water, a physics world and a swarm build");
+    let solids: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
+    PresetRuntime::from_def_for_render(with_recipe(&solids, "Wind", &wind), &registry, None, false).expect("gusts over the solids build");
 }

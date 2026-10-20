@@ -10,6 +10,9 @@ use crate::stepping::{FramePlan, StepInterval};
 
 pub const TICK: f64 = 1.0 / 60.0;
 pub const MAX_LIVE_INTERVALS: u64 = 2;
+/// Transport time going back by more than this is a seek or loop: the clock
+/// restarts, and so does anything integrating over the same transport.
+pub const BACKWARD_SEEK: f64 = 1e-9;
 
 /// The previous live frame's measured load (render work plus GPU surface wait)
 /// against the display frame budget. A live frame takes a second interval only
@@ -352,7 +355,7 @@ impl SimulationClock {
             .is_some_and(|previous| previous != reset);
         self.previous_reset = Some(reset);
         let restarted =
-            !self.started || rate_changed || setup_changed || reset_edge || transport < self.last_transport - 1e-9;
+            !self.started || rate_changed || setup_changed || reset_edge || transport < self.last_transport - BACKWARD_SEEK;
         let mut held = false;
         // Within an epoch the target never moves back past the last frame's.
         // Accepted work ends on a Sim Rate boundary in both modes: equal clock

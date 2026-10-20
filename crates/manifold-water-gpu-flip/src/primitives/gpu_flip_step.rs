@@ -57,7 +57,7 @@ use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
-use manifold_water_liquid::fields::{FieldBinding, LIQUID_FIELD};
+use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -412,11 +412,11 @@ struct Pipelines {
 
 fn step_source() -> String {
     let source = STEP_SHADER.replace("return narrow_mask[index] != 0u;", "return true;");
-    with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{source}"))
+    with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{source}"))
 }
 
 fn band_source() -> String {
-    with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{STEP_SHADER}"))
+    with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{STEP_SHADER}"))
 }
 
 impl Pipelines {
@@ -2396,7 +2396,7 @@ impl Primitive for GpuFlipStep {
             ctx.error(format!("{NAME}: {reason}. Lower Resolution."));
             return;
         }
-        let field = match FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), NAME) {
+        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), NAME) {
             Ok(field) => field,
             Err(error) => {
                 ctx.error(error);

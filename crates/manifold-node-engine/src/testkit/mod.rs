@@ -37,6 +37,10 @@ pub mod shader_source;
 #[cfg(any(test, feature = "testkit"))]
 pub mod atom;
 
+#[cfg(feature = "gpu-proofs")]
+#[cfg(any(test, feature = "testkit"))]
+pub mod fused_atoms;
+
 #[cfg(test)]
 pub(crate) mod fusion_fixtures;
 

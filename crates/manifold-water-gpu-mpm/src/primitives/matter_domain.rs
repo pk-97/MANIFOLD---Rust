@@ -16,6 +16,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
+use manifold_nodes_physics::force_lattice::felt_field;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
@@ -29,9 +30,9 @@ use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
-use {manifold_water_liquid::fields, manifold_water_liquid::fields::FieldLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use {manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_water_liquid::tick_samples::TickSamples;
+use manifold_physics::tick_samples::TickSamples;
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -39,6 +40,7 @@ use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
+use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
 use manifold_node_engine::scene::transform::Transform;
@@ -190,6 +192,7 @@ manifold_node_engine::primitive! {
         fill_height: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
+        air_drag: ScalarF32 optional,
         reset: ScalarF32 optional,
         stiffness: ScalarF32 optional,
         cohesion: ScalarF32 optional,
@@ -316,6 +319,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Particles per Cell", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["8", "27"] },
         ParamDef { name: Cow::Borrowed("stiffness"), label: "Stiffness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.5, 3.0)), enum_values: &[] },
@@ -593,14 +597,22 @@ impl Primitive for MatterDomain {
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
-            let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
-            self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
+            match felt_field(ctx, "Matter") {
+                Ok(field) => self.fields.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Err(error) => ctx.error(error),
+            }
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
             self.coupled.scenes.observe(ctx.time.seconds.0, None);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
-        self.acceleration = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
+        self.acceleration = match felt_field(ctx, "Matter") {
+            Ok(field) => field,
+            Err(error) => {
+                ctx.error(error);
+                None
+            }
+        };
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= self.acceleration.is_none();
         }
@@ -696,14 +708,6 @@ impl PhysicsNode for MatterDomain {
         manifold_water_liquid::gizmos::write_liquid_gizmos(&layout, &self.bodies, self.acceleration.as_ref(), out);
     }
 
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
-        self.fields.request_samples(&self.clock, from, until, out);
-        self.bodies.request_samples(&self.clock, from, until, out);
-        if self.coupled.mode {
-            self.coupled.scenes.request(&self.clock, from, until, out);
-        }
-    }
-
     fn set_coupled_physics(&mut self, enabled: bool) {
         if self.coupled.mode != enabled {
             self.coupled.mode = enabled;
@@ -794,6 +798,18 @@ impl PhysicsNode for MatterDomain {
 }
 
 inventory::submit! { PhysicsNodeRegistration::new::<MatterDomain>() }
+
+impl TickSampled for MatterDomain {
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.fields.request_samples(&self.clock, from, until, out);
+        self.bodies.request_samples(&self.clock, from, until, out);
+        if self.coupled.mode {
+            self.coupled.scenes.request(&self.clock, from, until, out);
+        }
+    }
+}
+
+inventory::submit! { TickSampledRegistration::new::<MatterDomain>() }
 
 impl MatterDomain {
     /// Keep the reaction and the provided body, shape and atlas buffers
@@ -994,7 +1010,7 @@ impl MatterDomain {
         self.coupled.transport = Some(ctx.time.seconds.0);
         let field = self
             .fields
-            .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
+            .prepare(lattice.force_lattice(), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
 
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),

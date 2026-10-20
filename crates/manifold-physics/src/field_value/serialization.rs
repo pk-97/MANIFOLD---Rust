@@ -5,7 +5,39 @@ use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 use serde::{Deserialize as DeriveDeserialize, Serialize as DeriveSerialize};
 
 use super::{FieldValue, MAX_OPERATIONS, Operation};
-use crate::{RadialField, SampledField, UniformField, VortexField};
+use crate::{FalloffCurve, RadialField, SampledField, TurbulenceField, UniformField, VortexField};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, DeriveSerialize, DeriveDeserialize)]
+#[serde(rename_all = "camelCase")]
+enum CurveRecord {
+    #[default]
+    Edge,
+    Inverse,
+}
+
+impl CurveRecord {
+    fn is_edge(&self) -> bool {
+        *self == Self::Edge
+    }
+}
+
+impl From<FalloffCurve> for CurveRecord {
+    fn from(curve: FalloffCurve) -> Self {
+        match curve {
+            FalloffCurve::Edge => Self::Edge,
+            FalloffCurve::Inverse => Self::Inverse,
+        }
+    }
+}
+
+impl From<CurveRecord> for FalloffCurve {
+    fn from(curve: CurveRecord) -> Self {
+        match curve {
+            CurveRecord::Edge => Self::Edge,
+            CurveRecord::Inverse => Self::Inverse,
+        }
+    }
+}
 
 #[derive(Debug, DeriveSerialize, DeriveDeserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -17,12 +49,16 @@ enum OperationRecord<'a> {
         center: [f32; 3],
         radius: f32,
         falloff: f32,
+        #[serde(default, skip_serializing_if = "CurveRecord::is_edge")]
+        curve: CurveRecord,
     },
     Vortex {
         center: [f32; 3],
         axis: [f32; 3],
         radius: f32,
         falloff: f32,
+        #[serde(default, skip_serializing_if = "CurveRecord::is_edge")]
+        curve: CurveRecord,
     },
     Sampled {
         origin: [f32; 3],
@@ -31,10 +67,26 @@ enum OperationRecord<'a> {
         dimensions: [u32; 3],
         values: Cow<'a, [[f32; 3]]>,
     },
+    Turbulence {
+        size: f32,
+        offset: [f32; 3],
+        seed: u32,
+    },
+    Zero {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        air: bool,
+    },
     Add,
     Multiply,
     Scale {
         strength: f32,
+    },
+    Air {
+        #[serde(rename = "dragRate")]
+        drag_rate: f32,
+    },
+    AirDrag {
+        weight: f32,
     },
 }
 
@@ -132,12 +184,14 @@ impl Serialize for FieldValue {
                         center: field.center(),
                         radius: field.radius(),
                         falloff: field.falloff(),
+                        curve: field.curve().into(),
                     },
                     Operation::Vortex(field) => OperationRecord::Vortex {
                         center: field.center(),
                         axis: field.axis(),
                         radius: field.radius(),
                         falloff: field.falloff(),
+                        curve: field.curve().into(),
                     },
                     Operation::Sampled(field) => OperationRecord::Sampled {
                         origin: field.origin(),
@@ -145,11 +199,19 @@ impl Serialize for FieldValue {
                         dimensions: field.dimensions(),
                         values: Cow::Borrowed(field.values()),
                     },
+                    Operation::Turbulence(field) => OperationRecord::Turbulence {
+                        size: field.size(),
+                        offset: field.offset(),
+                        seed: field.seed(),
+                    },
+                    Operation::Zero { air } => OperationRecord::Zero { air: *air },
                     Operation::Add => OperationRecord::Add,
                     Operation::Multiply => OperationRecord::Multiply,
                     Operation::Scale(strength) => OperationRecord::Scale {
                         strength: *strength,
                     },
+                    Operation::Air(drag_rate) => OperationRecord::Air { drag_rate: *drag_rate },
+                    Operation::AirDrag(weight) => OperationRecord::AirDrag { weight: *weight },
                     Operation::Unused => unreachable!("field program is privately constructed"),
                 })
             }),
@@ -185,10 +247,11 @@ impl<'de> Deserialize<'de> for FieldValue {
                     center,
                     radius,
                     falloff,
+                    curve,
                 } => {
                     depth += 1;
                     RadialField::new(center, radius, falloff)
-                        .map(Operation::Radial)
+                        .map(|field| Operation::Radial(field.with_curve(curve.into())))
                         .map_err(invalid::<D::Error>)?
                 }
                 OperationRecord::Vortex {
@@ -196,10 +259,11 @@ impl<'de> Deserialize<'de> for FieldValue {
                     axis,
                     radius,
                     falloff,
+                    curve,
                 } => {
                     depth += 1;
                     VortexField::new_normalized(center, axis, radius, falloff)
-                        .map(Operation::Vortex)
+                        .map(|field| Operation::Vortex(field.with_curve(curve.into())))
                         .map_err(invalid::<D::Error>)?
                 }
                 OperationRecord::Sampled {
@@ -212,6 +276,16 @@ impl<'de> Deserialize<'de> for FieldValue {
                     SampledField::new(origin, cell_size, dimensions, values.into_owned())
                         .map(|field| Operation::Sampled(Arc::new(field)))
                         .map_err(invalid::<D::Error>)?
+                }
+                OperationRecord::Turbulence { size, offset, seed } => {
+                    depth += 1;
+                    TurbulenceField::new(size, offset, seed)
+                        .map(Operation::Turbulence)
+                        .map_err(invalid::<D::Error>)?
+                }
+                OperationRecord::Zero { air } => {
+                    depth += 1;
+                    Operation::Zero { air }
                 }
                 OperationRecord::Add => {
                     require_stack(&mut depth, 2).map_err(invalid_message::<D::Error>)?;
@@ -229,6 +303,20 @@ impl<'de> Deserialize<'de> for FieldValue {
                     }
                     require_stack(&mut depth, 1).map_err(invalid_message::<D::Error>)?;
                     Operation::Scale(strength)
+                }
+                OperationRecord::Air { drag_rate } => {
+                    if !drag_rate.is_finite() || drag_rate < 0.0 {
+                        return Err(de::Error::custom("air drag rate must be finite and non-negative"));
+                    }
+                    require_stack(&mut depth, 1).map_err(invalid_message::<D::Error>)?;
+                    Operation::Air(drag_rate)
+                }
+                OperationRecord::AirDrag { weight } => {
+                    if !weight.is_finite() || weight < 0.0 {
+                        return Err(de::Error::custom("air drag must be finite and non-negative"));
+                    }
+                    require_stack(&mut depth, 1).map_err(invalid_message::<D::Error>)?;
+                    Operation::AirDrag(weight)
                 }
             };
             operations[index] = operation;
@@ -311,6 +399,30 @@ mod tests {
                 .any(|operation| operation.get("cellSize").is_some())
         );
         round_trip(field);
+    }
+
+    #[test]
+    fn field_value_serde_round_trips_air_turbulence_and_curves() {
+        let field = FieldValue::turbulence(1.5, [0.5, 0.0, -1.0], 4)
+            .unwrap()
+            .sum(&FieldValue::uniform([2.0, 0.0, 0.0]).unwrap())
+            .unwrap()
+            .air(1.25)
+            .unwrap()
+            .sum(&FieldValue::radial_curve([0.0; 3], 2.0, 2.0, FalloffCurve::Inverse).unwrap())
+            .unwrap()
+            .sum(&FieldValue::vortex_curve([0.0; 3], [0.0, 1.0, 0.0], 2.0, 1.0, FalloffCurve::Inverse).unwrap())
+            .unwrap()
+            .with_air_drag(0.5)
+            .unwrap();
+        let json = serde_json::to_string(&field).unwrap();
+        let restored: FieldValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, field, "{json}");
+        for position in [[0.0, 0.0, 0.0], [0.25, 0.5, 0.75], [3.0, -1.0, 2.0]] {
+            assert_eq!(restored.sample_force(position), field.sample_force(position));
+        }
+        let plain = serde_json::to_string(&FieldValue::radial([0.0; 3], 1.0, 1.0).unwrap()).unwrap();
+        assert!(!plain.contains("curve"), "{plain}");
     }
 
     #[test]

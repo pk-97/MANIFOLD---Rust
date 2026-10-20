@@ -28,7 +28,9 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const EXPECTED_STOCK_IDS: &[&str] = &[
+    "Attractor",
     "ElasticSculpture",
+    "Explosion",
     "MaskedPeel",
     "MathView",
     "OrderedRecon",
@@ -46,13 +48,16 @@ const EXPECTED_STOCK_IDS: &[&str] = &[
     "VortexForce",
     "VortexFragments",
     "WavesEchoes",
+    "Wind",
 ];
 
 fn recipe_json(id: &str) -> &'static str {
     match id {
+        "Attractor" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ATTRACTOR_JSON,
         "ElasticSculpture" => {
             manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ELASTICSCULPTURE_JSON
         }
+        "Explosion" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_EXPLOSION_JSON,
         "MaskedPeel" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MASKEDPEEL_JSON,
         "MathView" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON,
         "OrderedRecon" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECON_JSON,
@@ -74,6 +79,7 @@ fn recipe_json(id: &str) -> &'static str {
             manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON
         }
         "WavesEchoes" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_WAVESECHOES_JSON,
+        "Wind" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_WIND_JSON,
         other => panic!("unknown scene-modifier acceptance fixture {other}"),
     }
 }

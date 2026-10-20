@@ -173,6 +173,8 @@ pub enum Unit {
     Seconds,
     Nanometres,
     Beats,
+    /// A rate, such as a drag rate: how much changes per second.
+    PerSecond,
 }
 
 impl Unit {
@@ -188,6 +190,7 @@ impl Unit {
             Self::Seconds => " s",
             Self::Nanometres => " nm",
             Self::Beats => " beats",
+            Self::PerSecond => " /s",
         }
     }
 }

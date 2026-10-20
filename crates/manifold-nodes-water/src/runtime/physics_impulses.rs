@@ -13,7 +13,18 @@ use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_core::scene_impulse::ImpulseTarget;
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 use manifold_water_rigid::node;
+use manifold_nodes_physics::hits;
+use manifold_node_engine::exec::effect_node::EffectNode;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
+
+/// The epoch a recipient's hits carry: a native simulation's (rigid world,
+/// liquid) or a swarm's.
+fn hit_epoch(node: &dyn EffectNode) -> Option<u64> {
+    match node::get(node) {
+        Some(native) => native.physics_impulse_epoch(),
+        None => hits::get(node).and_then(|swarm| swarm.hit_epoch()),
+    }
+}
 
 struct Recipient {
     id: NodeId,
@@ -114,6 +125,9 @@ impl WaterRuntime<'_> {
             source,
             sequence,
             |_, effect_node, transport, sequence| {
+                if let Some(swarm) = hits::get(effect_node) {
+                    return swarm.hit_stamp(transport, sequence, step);
+                }
                 let native = node::get(effect_node)
                     .ok_or_else(|| "node does not expose a native impulse clock".to_owned())?;
                 native.physics_impulse_stamp(transport, sequence, step)
@@ -129,6 +143,8 @@ impl WaterRuntime<'_> {
             let node = self.graph.get_node(recipient.instance).expect("prepared recipient belongs to this graph");
             if let Some(native) = node::get(node.node.as_ref()) {
                 ready &= native.physics_impulse_readiness()?;
+            } else if let Some(swarm) = hits::get(node.node.as_ref()) {
+                ready &= swarm.hit_readiness()?;
             }
         }
         Ok(ready)
@@ -202,6 +218,7 @@ impl WaterRuntimeRef<'_> {
                 ImpulseTarget::Fluid => is_liquid_domain(type_id),
                 ImpulseTarget::Rigid(_) => type_id == "node.physics_world",
                 ImpulseTarget::FluidAndRigid(_) => unreachable!("authoring resolves individual owners"),
+                ImpulseTarget::Swarm => hits::get(node.node.as_ref()).is_some(),
             };
             if !expected {
                 return Err(format!("Impulse: recipient `{id}` changed type"));
@@ -214,7 +231,7 @@ impl WaterRuntimeRef<'_> {
                 id = self.graph.get_node(instance).expect("coupled owner exists").node_id.clone();
             }
             if let Some(existing) = recipients.iter_mut().find(|entry| entry.instance == instance) {
-                existing.target = existing.target.union(target);
+                existing.target = existing.target.union(target)?;
             } else {
                 recipients.push(Recipient { id, instance, target });
             }
@@ -240,6 +257,8 @@ impl WaterRuntimeRef<'_> {
             }
             let node = self.graph.get_node(id).expect("compiled ancestry node");
             let kind = node.node.type_id().as_str();
+            // A capture evaluates its field once, at the fire, outside the
+            // replay's time order, so a time-integrating node stays refused.
             let pure = node.node.is_pure()
                 || matches!(
                     kind,
@@ -308,9 +327,7 @@ impl WaterRuntime<'_> {
         self.capture_scene_impulse_with_stamp(
             binding, captured, source, sequence,
             |id, node, transport, sequence| {
-                let epoch = node::get(node)
-                    .and_then(|native| native.physics_impulse_epoch())
-                    .ok_or_else(|| format!("Impulse: `{id}` is not initialized"))?;
+                let epoch = hit_epoch(node).ok_or_else(|| format!("Impulse: `{id}` is not initialized"))?;
                 Ok(EventStamp { epoch, time: map_time(id, transport)?, sequence })
             },
         )
@@ -397,12 +414,7 @@ impl WaterRuntime<'_> {
             .ok_or_else(|| "Impulse: no captured field".to_string())?;
         // Reject stale epochs before admitting any remaining recipient.
         for (recipient, stamp) in captured.recipients.iter().zip(&captured.stamps) {
-            if self
-                .graph
-                .get_node(recipient.instance)
-                .and_then(|node| node::get(node.node.as_ref()))
-                .and_then(|native| native.physics_impulse_epoch())
-                != Some(stamp.epoch)
+            if self.graph.get_node(recipient.instance).and_then(|node| hit_epoch(node.node.as_ref())) != Some(stamp.epoch)
             {
                 return Err(format!(
                     "Impulse: `{}` was reset after capture",
@@ -423,6 +435,10 @@ impl WaterRuntime<'_> {
                 .graph
                 .get_node_mut(recipient.instance)
                 .expect("validated recipient");
+            if let Some(swarm) = hits::get_mut(node.node.as_mut()) {
+                *planned = Some(swarm.enqueue_hit(stamp, field.clone())?);
+                continue;
+            }
             let native = node::get_mut(node.node.as_mut())
                 .ok_or_else(|| "node does not accept physics impulses".to_owned())?;
             *planned = Some(native.enqueue_physics_impulse(
@@ -446,6 +462,10 @@ impl WaterRuntime<'_> {
             let id = &node.node_id;
             if let Some(native) = node::get_mut(node.node.as_mut()) {
                 native.drain_physics_impulses(&mut |event| consume(id, event));
+            } else if let Some(swarm) = hits::get_mut(node.node.as_mut()) {
+                swarm.drain_applied_hits(&mut |AppliedEvent { source, applied, lateness, value }| {
+                    consume(id, AppliedEvent { source, applied, lateness, value: ResolvedNodeImpulse { field: value, target: ImpulseTarget::Swarm } });
+                });
             }
         }
     }
@@ -459,6 +479,8 @@ impl WaterRuntime<'_> {
             let id = &node.node_id;
             if let Some(native) = node::get_mut(node.node.as_mut()) {
                 beyond += native.drain_discarded_impulses(&mut |stamp| consume(id, stamp));
+            } else if let Some(swarm) = hits::get_mut(node.node.as_mut()) {
+                beyond += swarm.drain_discarded_hits(&mut |stamp| consume(id, stamp));
             }
         }
         beyond

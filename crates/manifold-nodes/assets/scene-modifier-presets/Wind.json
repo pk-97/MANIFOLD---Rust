@@ -1,0 +1,611 @@
+{
+  "version": 3,
+  "name": "Wind",
+  "presetMetadata": {
+    "id": "Wind",
+    "displayName": "Wind",
+    "category": "Forces",
+    "oscPrefix": "wind",
+    "available": true,
+    "params": [
+      {
+        "id": "enabled",
+        "scene": {
+          "role": "performance",
+          "group": "force",
+          "band": "forces",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "direction_x",
+        "scene": {
+          "role": "setup",
+          "group": "force",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
+        "name": "Direction X",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "direction_y",
+        "scene": {
+          "role": "setup",
+          "group": "force",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
+        "name": "Direction Y",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "direction_z",
+        "scene": {
+          "role": "setup",
+          "group": "force",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
+        "name": "Direction Z",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "speed",
+        "scene": {
+          "role": "performance",
+          "group": "force",
+          "band": "forces",
+          "cardOrder": 1,
+          "cardLabel": "param"
+        },
+        "name": "Speed",
+        "unit": "metresPerSecond",
+        "min": 0.0,
+        "max": 50.0,
+        "defaultValue": 5.0
+      },
+      {
+        "id": "turbulence",
+        "scene": {
+          "role": "performance",
+          "group": "force",
+          "band": "forces",
+          "cardOrder": 2,
+          "cardLabel": "param"
+        },
+        "name": "Turbulence",
+        "tooltip": "Gusts on top of the wind's speed",
+        "unit": "metresPerSecond",
+        "min": 0.0,
+        "max": 50.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "turbulence_size",
+        "scene": {
+          "role": "setup",
+          "group": "force",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
+        "name": "Gust Size",
+        "unit": "metres",
+        "min": 0.05,
+        "max": 100.0,
+        "defaultValue": 2.0
+      },
+      {
+        "id": "air_resistance",
+        "scene": {
+          "role": "performance",
+          "group": "force",
+          "band": "forces",
+          "cardOrder": 3,
+          "cardLabel": "param"
+        },
+        "name": "Air Resistance",
+        "tooltip": "How fast things take on the wind's speed; with Speed 0 it is still-air drag",
+        "unit": "perSecond",
+        "min": 0.0,
+        "max": 20.0,
+        "defaultValue": 1.0
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "direction_x",
+        "label": "Direction X",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_direction_x",
+          "param": "value"
+        }
+      },
+      {
+        "id": "direction_y",
+        "label": "Direction Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_direction_y",
+          "param": "value"
+        }
+      },
+      {
+        "id": "direction_z",
+        "label": "Direction Z",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_direction_z",
+          "param": "value"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 5.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_speed",
+          "param": "value"
+        }
+      },
+      {
+        "id": "turbulence",
+        "label": "Turbulence",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_gusts",
+          "param": "strength"
+        }
+      },
+      {
+        "id": "turbulence_size",
+        "label": "Gust Size",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_turbulence",
+          "param": "size"
+        }
+      },
+      {
+        "id": "air_resistance",
+        "label": "Air Resistance",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wind_air",
+          "param": "drag_rate"
+        }
+      }
+    ],
+    "shape": {
+      "kind": "axis",
+      "direction": [
+        "direction_x",
+        "direction_y",
+        "direction_z"
+      ]
+    },
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "impulses": [],
+      "stages": [
+        {
+          "group": "force_source_stage",
+          "scope": "scene",
+          "inputs": [],
+          "outputs": []
+        },
+        {
+          "group": "force_apply_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "previous",
+              "source": {
+                "previous": {
+                  "endpoint": "acceleration"
+                }
+              }
+            },
+            {
+              "port": "field",
+              "source": {
+                "stageOutput": {
+                  "stage": "force_source_stage",
+                  "port": "field"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "acceleration",
+              "endpoint": "acceleration"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "force_source_stage",
+      "typeId": "group",
+      "handle": "ForceSourceStage",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "field",
+              "portType": "VectorField"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "wind_direction",
+            "typeId": "node.uniform_vector_field",
+            "handle": "wind_direction",
+            "params": {
+              "x": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "normalize": {
+                "type": "Bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": 2,
+            "nodeId": "wind_velocity",
+            "typeId": "node.scale_vector_field",
+            "handle": "wind_velocity",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 5.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "wind_turbulence",
+            "typeId": "node.turbulence_vector_field",
+            "handle": "wind_turbulence",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "wind_gusts",
+            "typeId": "node.scale_vector_field",
+            "handle": "wind_gusts",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 5,
+            "nodeId": "wind_sum",
+            "typeId": "node.add_vector_fields",
+            "handle": "wind_sum"
+          },
+          {
+            "id": 6,
+            "nodeId": "wind_air",
+            "typeId": "node.wind_field",
+            "handle": "wind_air",
+            "params": {
+              "drag_rate": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 7,
+            "nodeId": "force_enabled",
+            "typeId": "node.value",
+            "handle": "force_enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 8,
+            "nodeId": "force_gate",
+            "typeId": "node.scale_vector_field",
+            "handle": "force_gate",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 9,
+            "nodeId": "wind_direction_x",
+            "typeId": "node.value",
+            "handle": "wind_direction_x",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 10,
+            "nodeId": "wind_direction_y",
+            "typeId": "node.value",
+            "handle": "wind_direction_y",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 11,
+            "nodeId": "wind_direction_z",
+            "typeId": "node.value",
+            "handle": "wind_direction_z",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 12,
+            "nodeId": "wind_speed",
+            "typeId": "node.value",
+            "handle": "wind_speed",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 5.0
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "force_source_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "x"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "y"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "z"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "drift_x"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "drift_y"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "drift_z"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "strength"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "drift_speed"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "velocity"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "strength"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "field"
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "force_apply_stage",
+      "typeId": "group",
+      "handle": "ForceApplyStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "previous",
+              "portType": "VectorField"
+            },
+            {
+              "name": "field",
+              "portType": "VectorField"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "acceleration",
+              "portType": "VectorField"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_previous",
+            "typeId": "system.group_input",
+            "handle": "previous"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_field",
+            "typeId": "system.group_input",
+            "handle": "field"
+          },
+          {
+            "id": 3,
+            "nodeId": "force_add",
+            "typeId": "node.add_vector_fields",
+            "handle": "force_add"
+          },
+          {
+            "id": 4,
+            "nodeId": "force_apply_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "previous",
+            "toNode": 3,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "field",
+            "toNode": 3,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "acceleration"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

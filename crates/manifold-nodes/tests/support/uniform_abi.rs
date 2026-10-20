@@ -36,7 +36,6 @@ pub const ABI_SOURCE_FILES: &[&str] = &[
     "../manifold-water-liquid/src/grid.rs",
     "../manifold-water-liquid/src/lattice.rs",
     "../manifold-water-liquid/src/substep_history.rs",
-    "../manifold-water-liquid/src/tick_samples.rs",
 ];
 
 pub fn abi_source_files() -> Result<Vec<PathBuf>, String> {

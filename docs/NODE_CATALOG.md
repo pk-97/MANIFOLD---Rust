@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 394 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -302,7 +302,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (72)
+### Particles 3D (75)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -347,6 +347,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Move Swarm | `node.move_swarm` | Filter | Moves every swarm particle by the scene's forces, one fixed step per simulation tick. |
 | — | `node.nearest_crossing` | Filter | Passes each grid cell the closest known point on the liquid's surface from its neighbours. |
 | Offset Lattice | `node.offset_lattice` | Filter | Add a distance to every scalar lattice sample. Zero returns the input bits unchanged. Negative offsets grow a negative-inside surface; positive offsets shrink … |
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
@@ -366,6 +367,8 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | — | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | — | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
+| Swarm Forces | `node.swarm_forces` | Source | Runs a swarm's simulation clock and lays the scene's forces over its box. |
+| Swarm To Copies | `node.swarm_to_copies` | Map | Places a copy of a shape at every swarm particle. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 | — | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
@@ -481,7 +484,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | — | `system.generator_input` | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |
 | — | `system.source` | Source | The incoming image at the start of an effect chain. Wired in automatically. |
 
-### Fields & Coordinates (27)
+### Fields & Coordinates (29)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -507,11 +510,13 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Slice Volume | `node.slice_volume` | Filter | Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field. |
 | Slope Displace | `node.slope_displace` | Filter | Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks. |
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
+| Turbulence Vector Field | `node.turbulence_vector_field` | Source | Outputs smooth swirling vectors that drift through space over time. |
 | Uniform Vector Field | `node.uniform_vector_field` | Source | Outputs the same vector at every world-space sample. |
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 | Vortex Vector Field | `node.vortex_vector_field` | Source | Outputs tangential vectors circling a world-space axis within a radius. |
 | Wave Field 3D | `node.wave_field_3d` | Map | Samples a moving sine wave at every 3D point, producing weights for copy displacement or other maps. |
+| Wind Field | `node.wind_field` | Map | Makes a velocity field into wind that drags things toward its velocity. |
 
 ### Uncategorized (1)
 
@@ -519,7 +524,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
 
-### Effect & generator presets (95)
+### Effect & generator presets (96)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -590,12 +595,12 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `Ocean` | Ocean | generator | Sim | 363 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2360 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2361 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1334 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1995 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1335 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1996 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `Scene` | Scene | generator | Geometry | 368 |
@@ -605,16 +610,17 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
+| `Swarm` | Swarm | generator | Geometry | 372 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2050 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1403 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2005 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1391 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1070 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2051 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1404 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2006 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2334 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

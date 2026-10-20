@@ -22,7 +22,6 @@ pub mod frame_ring;
 pub mod gizmos;
 pub mod grid;
 pub mod lattice;
-pub mod tick_samples;
 
 use manifold_node_engine::bindings::NodeInputs;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;

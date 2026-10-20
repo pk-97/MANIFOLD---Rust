@@ -13,7 +13,7 @@ use manifold_water_liquid::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
-use manifold_water_liquid::fields::{FieldBinding, LIQUID_FIELD};
+use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
 use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -147,7 +147,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/advect_whitewater_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "pool" },
-    wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES, LIQUID_FIELD],
+    wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES, FORCE_LATTICE],
 }
 
 impl Primitive for AdvectWhitewater {
@@ -196,7 +196,7 @@ impl Primitive for AdvectWhitewater {
         let [nodes_x, nodes_y, nodes_z] = grid.nodes.map(|n| n as f32);
         let [face_cells_x, face_cells_y, face_cells_z] = face_cells.map(|n| n as f32);
         let [gravity_x, gravity_y, gravity_z] = gravity;
-        let field = match FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Advect Whitewater") {
+        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Advect Whitewater") {
             Ok(field) => field,
             Err(error) => { ctx.error(error); return; }
         };
