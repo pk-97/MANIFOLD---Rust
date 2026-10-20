@@ -30,6 +30,7 @@ pub use interaction::{
 pub use turbulence::{TurbulenceDrift, TurbulenceField};
 mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
+use mesh::triangle_mesh_mass_properties;
 pub mod sdf;
 use std::cell::Cell;
 use std::fmt;
@@ -1441,130 +1442,6 @@ impl Drop for PhysicsWorld {
             }
         }
     }
-}
-
-fn triangle_mesh_mass_properties(
-    vertices: &[[f32; 3]],
-    triangles: &[[u32; 3]],
-    mass: f32,
-) -> Result<([f32; 3], [f32; 9]), PhysicsError> {
-    if vertices.len() < 3 {
-        return Err(PhysicsError::InvalidInput("mesh needs at least 3 vertices"));
-    }
-    if triangles.is_empty() {
-        return Err(PhysicsError::InvalidInput("mesh needs at least 1 triangle"));
-    }
-    if vertices
-        .iter()
-        .any(|vertex| !vertex.iter().all(|value| value.is_finite()))
-    {
-        return Err(PhysicsError::InvalidInput("mesh vertices must be finite"));
-    }
-
-    let mut area_sum = 0.0_f64;
-    let mut first_moment = [0.0_f64; 3];
-    let mut second_moment = [[0.0_f64; 3]; 3];
-    for triangle in triangles {
-        let [a_index, b_index, c_index] = *triangle;
-        let a = *vertices
-            .get(a_index as usize)
-            .ok_or(PhysicsError::InvalidInput("mesh index is out of bounds"))?;
-        let b = *vertices
-            .get(b_index as usize)
-            .ok_or(PhysicsError::InvalidInput("mesh index is out of bounds"))?;
-        let c = *vertices
-            .get(c_index as usize)
-            .ok_or(PhysicsError::InvalidInput("mesh index is out of bounds"))?;
-        let ab = [
-            f64::from(b[0]) - f64::from(a[0]),
-            f64::from(b[1]) - f64::from(a[1]),
-            f64::from(b[2]) - f64::from(a[2]),
-        ];
-        let ac = [
-            f64::from(c[0]) - f64::from(a[0]),
-            f64::from(c[1]) - f64::from(a[1]),
-            f64::from(c[2]) - f64::from(a[2]),
-        ];
-        let cross = [
-            ab[1] * ac[2] - ab[2] * ac[1],
-            ab[2] * ac[0] - ab[0] * ac[2],
-            ab[0] * ac[1] - ab[1] * ac[0],
-        ];
-        let area = 0.5 * cross.iter().map(|value| value * value).sum::<f64>().sqrt();
-        if !area.is_finite() || area <= 0.0 {
-            return Err(PhysicsError::InvalidInput(
-                "mesh triangles must have positive area",
-            ));
-        }
-        area_sum += area;
-        let points = [a, b, c];
-        for axis in 0..3 {
-            first_moment[axis] += area
-                * points
-                    .iter()
-                    .map(|point| f64::from(point[axis]))
-                    .sum::<f64>()
-                / 3.0;
-        }
-        let mut sum = [0.0_f64; 3];
-        for axis in 0..3 {
-            sum[axis] = points.iter().map(|point| f64::from(point[axis])).sum();
-        }
-        for row in 0..3 {
-            for column in 0..3 {
-                second_moment[row][column] += area
-                    * (sum[row] * sum[column]
-                        + points
-                            .iter()
-                            .map(|point| f64::from(point[row]) * f64::from(point[column]))
-                            .sum::<f64>())
-                    / 12.0;
-            }
-        }
-    }
-
-    if !area_sum.is_finite() || area_sum <= 0.0 {
-        return Err(PhysicsError::InvalidInput(
-            "mesh surface area must be positive",
-        ));
-    }
-    let center = first_moment.map(|value| value / area_sum);
-    let mut inertia = [[0.0_f64; 3]; 3];
-    let center_norm = center.iter().map(|value| value * value).sum::<f64>();
-    for row in 0..3 {
-        for column in 0..3 {
-            let identity = if row == column { 1.0 } else { 0.0 };
-            inertia[row][column] = (identity
-                * second_moment
-                    .iter()
-                    .enumerate()
-                    .map(|(axis, values)| values[axis])
-                    .sum::<f64>()
-                - second_moment[row][column])
-                - area_sum * (identity * center_norm - center[row] * center[column]);
-        }
-    }
-    let density = f64::from(mass) / area_sum;
-    let center = center.map(|value| value as f32);
-    let inertia = [
-        (inertia[0][0] * density) as f32,
-        (inertia[1][0] * density) as f32,
-        (inertia[2][0] * density) as f32,
-        (inertia[0][1] * density) as f32,
-        (inertia[1][1] * density) as f32,
-        (inertia[2][1] * density) as f32,
-        (inertia[0][2] * density) as f32,
-        (inertia[1][2] * density) as f32,
-        (inertia[2][2] * density) as f32,
-    ];
-    if !center.iter().all(|value| value.is_finite())
-        || !inertia.iter().all(|value| value.is_finite())
-    {
-        return Err(PhysicsError::InvalidInput(
-            "mesh mass properties are non-finite",
-        ));
-    }
-    Ok((center, inertia))
 }
 
 fn validate_field_input(input: FieldInput<'_>) -> Result<(), PhysicsError> {
