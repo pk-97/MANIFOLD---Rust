@@ -125,6 +125,13 @@ impl ContentPipeline {
         self.scene_viewport.request = request;
     }
 
+    /// Withdraw the viewport request, returning it for later.
+    pub fn take_scene_viewport_request(&mut self) -> Option<Arc<SceneViewportRequest>> {
+        let request = self.scene_viewport.request.clone();
+        self.set_scene_viewport_request(None);
+        request
+    }
+
     /// The host owning the viewport request, if any.
     pub fn scene_viewport_host(&self) -> Option<ViewportHost> {
         self.scene_viewport.request.as_ref().map(|request| request.host)
