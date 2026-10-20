@@ -15,6 +15,10 @@ pub trait PhysicsNode: Send {
         None
     }
 
+    /// Append the setup shapes this node simulated on its last frame, for
+    /// the gizmo overlay. Read-only; the caller reuses the buffer.
+    fn write_physics_gizmos(&self, _out: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {}
+
     /// Resolved rigid inputs from the latest successful graph evaluation.
     /// Pending or invalid inputs must clear the previous observation.
     fn rigid_scene_observation(&self) -> Option<&crate::physics::RigidSceneObservation> {

@@ -78,6 +78,15 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
         _output: &mut Vec<(NodeId, FluidDomainSnapshot)>,
     ) {
     }
+    /// Append the setup shapes the slot's simulations used on their last
+    /// frame, for the gizmo overlay.
+    fn write_physics_gizmos(
+        &self,
+        _graph: &Graph,
+        _slot: RuntimeSlot<'_>,
+        _output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
+    ) {
+    }
     fn is_scene_impulse_param(&self, _param: &str) -> bool {
         false
     }
