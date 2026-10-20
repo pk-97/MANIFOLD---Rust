@@ -3,7 +3,7 @@
 //!
 //! This is pure CPU state + math: an orbit-around-target camera with
 //! industry-standard navigation (LMB-drag orbit, Shift/MMB-drag pan,
-//! scroll/pinch dolly, trackpad two-finger pan) — no GPU, no graph, no
+//! wheel and Ctrl-scroll dolly, trackpad two-finger pan) — no GPU, no graph, no
 //! `EditingService`. It exists ONLY in the editor preview context (D9): the
 //! UI owns navigation and sends immutable copies to the content renderer.
 //! It never edits the `Project` or show camera. [`ViewportCamera::to_camera`] emits the
@@ -134,7 +134,7 @@ impl ViewportCamera {
         self.pan(dx, dy, sensitivity);
     }
 
-    /// Scroll-wheel or trackpad-pinch dolly. `delta` > 0 zooms in (moves
+    /// Wheel dolly, in notches. `delta` > 0 zooms in (moves
     /// closer). Exponential in `delta`: every unit of delta scales the
     /// distance by the same factor whatever the zoom level, N notches equal
     /// one notch applied N times, and in-then-out returns to the start. A
@@ -146,13 +146,6 @@ impl ViewportCamera {
         if factor.is_finite() {
             self.distance = (self.distance * factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
         }
-    }
-
-    /// Trackpad pinch-to-zoom — same math as [`Self::dolly`], separate entry
-    /// point for the same per-device-sensitivity reason as
-    /// [`Self::trackpad_pan`].
-    pub fn trackpad_pinch_dolly(&mut self, delta: f32, sensitivity: f32) {
-        self.dolly(delta, sensitivity);
     }
 
     /// The camera's right/up basis at the current yaw/pitch, zero roll —
@@ -325,18 +318,12 @@ mod tests {
     }
 
     #[test]
-    fn trackpad_gestures_apply_same_math_as_mouse() {
+    fn trackpad_pan_applies_the_same_math_as_mouse_pan() {
         let mut a = ViewportCamera::default();
         let mut b = ViewportCamera::default();
         a.pan(4.0, -2.0, 0.02);
         b.trackpad_pan(4.0, -2.0, 0.02);
         assert_eq!(a.target, b.target);
-
-        let mut c = ViewportCamera::default();
-        let mut d = ViewportCamera::default();
-        c.dolly(0.5, 0.1);
-        d.trackpad_pinch_dolly(0.5, 0.1);
-        assert_eq!(c.distance, d.distance);
     }
 
     #[test]

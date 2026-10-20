@@ -630,7 +630,13 @@ impl ContentThread {
         state_tx: &StateTx,
     ) {
         self.send_export_phase(state_tx, true, 0.0, "Preparing export...", false);
+        // A scene viewport (the editor's or the preview's navigation) is a
+        // second render of the scene the export does not need: it sits out
+        // the export and resumes after it. A new request sent meanwhile is
+        // held and runs after this one is put back, so the newest still wins.
+        let viewport = self.content_pipeline.take_scene_viewport_request();
         self.run_export_inner(config, cmd_rx, state_tx);
+        self.content_pipeline.set_scene_viewport_request(viewport);
         // Edits sent while it ran were dropped, but a direct UI write may
         // still show one: publish the project once so the UI copy is replaced
         // by this thread's (the existing publish_pending path, no data_version bump).
@@ -2110,5 +2116,41 @@ mod tests {
         assert!(matches!(started, Ok(ContentCommand::StartExport(_))));
         assert!(poll(&mut thread, &cmd_rx), "the held cancel stops the export");
         assert!(thread.held_commands.is_empty(), "the cancel is spent on its export");
+    }
+
+    /// A live scene viewport (here the preview's navigation) sits out an
+    /// export: no export frame renders or records a viewport frame, and the
+    /// same request is back once the export ends.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_export_renders_no_scene_viewport_and_navigation_resumes_after() {
+        use crate::scene_viewport::{SceneViewportNavigation, ViewportHost};
+        let mut project = manifold_core::project::Project::default();
+        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
+        layer.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats(0.0), manifold_core::Beats(0.5)));
+        let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
+        project.timeline.layers.push(layer);
+        let mut thread = crate::headless_harness::headless_content_thread(project, 64, 64);
+        let request = SceneViewportNavigation::new(ViewportHost::OutputPreview, 64, 64)
+            .request(&target, &manifold_core::NodeId::new("scene"), None, None);
+        thread.handle_command(ContentCommand::SetSceneViewport(Some(request.clone())));
+
+        let dir = std::env::temp_dir().join(format!("manifold-viewport-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("export dir");
+        let mut config = meta_config(false);
+        (config.width, config.height, config.fps, config.end_beat) = (64, 64, 30.0, 0.5);
+        config.output_path = dir.join("viewport.mp4").to_string_lossy().into_owned();
+        let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
+        thread.run_export(config, &cmd_rx, &state_tx);
+        let finished = state_rx.try_iter().flat_map(|state| state.export_finished.clone()).last();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(finished.is_some_and(|event| event.success), "the export renders its frames");
+
+        assert!(thread.content_pipeline.scene_viewport_frames().iter().all(Option::is_none),
+            "an export frame rendered the scene viewport");
+        assert_eq!(thread.content_pipeline.scene_viewport_host(), Some(ViewportHost::OutputPreview));
+        assert!(thread.content_pipeline.take_scene_viewport_request().is_some_and(|back| Arc::ptr_eq(&back, &request)),
+            "navigation resumes with the same request");
     }
 }
