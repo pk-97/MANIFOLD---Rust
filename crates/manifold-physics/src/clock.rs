@@ -94,8 +94,7 @@ pub struct SimulationClock {
     simulation_interval: f64,
     transport_origin: f64,
     transport_done: u64,
-    /// Speed over the interval after the last frame. Like every replayed
-    /// control, a Speed edit takes effect from the frame that observes it.
+    /// The last valid Speed a frame passed in, held over an invalid one.
     speed: f64,
     /// Retain the continuity anchor and all speed edits after accepted time.
     speed_history: Vec<SpeedAnchor>,
@@ -116,7 +115,8 @@ impl Clone for ClockInstance {
     }
 }
 
-/// Piecewise-constant speed, integrated once at each observed edit. Accepted
+/// Piecewise-constant speed, integrated once at each edit. Within an epoch an
+/// edit sits on a tick start, so every tick runs at one speed. Accepted
 /// frames retain an immutable view; later edits cannot rewrite their endpoints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpeedAnchor {
@@ -154,24 +154,39 @@ impl SimulationClock {
         } else {
             self.last_transport
         };
+        // Speed applies from tick starts only (D4): an observation between
+        // two starts takes effect at the next one, so where speed changes
+        // depends on the Sim Rate grid, never on when frames land.
         let transport = if self.started && !self.speed_history.is_empty() {
-            transport.max(accepted_transport)
+            self.next_tick_start(transport.max(accepted_transport))
         } else {
             transport
         };
-        let simulation = map_transport(&self.speed_history, transport);
-        if self.speed_history.last().is_none_or(|last| {
-            transport >= last.transport && last.speed != f64::from(speed)
-        }) {
-            let history = &mut self.speed_history;
-            let anchor = SpeedAnchor { transport, simulation, speed: f64::from(speed) };
-            if history.last().is_some_and(|last| last.transport == transport) {
-                *history.last_mut().expect("last anchor") = anchor;
-            } else {
-                history.push(anchor);
+        let speed = f64::from(speed);
+        let history = &mut self.speed_history;
+        // The latest observation for a tick start wins. Dropping the earlier
+        // one, rather than overwriting it, keeps an unchanged speed from
+        // leaving an anchor behind, so equal speeds give equal anchors and
+        // bit-equal intervals whatever frames observed them.
+        if history.len() > 1 && history.last().is_some_and(|last| last.transport == transport) {
+            history.pop();
+        }
+        match history.last_mut() {
+            Some(last) if last.transport == transport => last.speed = speed,
+            Some(last) if last.transport > transport || last.speed == speed => {}
+            _ => {
+                let simulation = map_transport(history, transport);
+                history.push(SpeedAnchor { transport, simulation, speed });
             }
         }
         observed_simulation
+    }
+
+    /// The first tick start at or after `transport` on this epoch's grid,
+    /// rounded as `advance` counts reached boundaries.
+    fn next_tick_start(&self, transport: f64) -> f64 {
+        let index = ((transport - self.transport_origin) / self.simulation_interval - 1e-9).ceil().max(0.0);
+        self.transport_origin + index * self.simulation_interval
     }
 
     /// Intervals this live frame may accept. The load is fixed for the whole
@@ -227,13 +242,37 @@ impl SimulationClock {
         self.history_snapshots[index].clone()
     }
 
-    /// The transport time tick `tick` starts at, under the current speed.
-    /// None before the clock starts or while Speed is 0.
+    /// The transport time not-yet-run tick `tick` starts at, under the
+    /// speeds observed so far. A transport interval at Speed 0 runs no tick,
+    /// so it is skipped. None before the clock starts, for a tick already
+    /// run, or once Speed stays 0.
     pub fn tick_start(&self, tick: u64) -> Option<f64> {
-        (self.started && self.speed > 0.0).then(|| {
-            self.transport_origin
-                + (self.transport_done + tick - self.ticks_done) as f64 * self.simulation_interval
-        })
+        if !self.started || tick < self.ticks_done {
+            return None;
+        }
+        let at = |index: u64| self.transport_origin + index as f64 * self.simulation_interval;
+        let mut remaining = tick - self.ticks_done;
+        let mut index = self.transport_done;
+        let mut next = self.speed_history.partition_point(|anchor| anchor.transport <= at(index));
+        let mut speed = self.speed_history.get(next.checked_sub(1)?)?.speed;
+        loop {
+            // Anchors sit on tick starts, so each transport interval runs at
+            // the speed of the last anchor at or before its start.
+            if next == self.speed_history.len() {
+                return (speed > 0.0).then(|| at(index + remaining));
+            }
+            if speed > 0.0 {
+                if remaining == 0 {
+                    return Some(at(index));
+                }
+                remaining -= 1;
+            }
+            index += 1;
+            while self.speed_history.get(next).is_some_and(|anchor| anchor.transport <= at(index)) {
+                speed = self.speed_history[next].speed;
+                next += 1;
+            }
+        }
     }
 
     /// The transport of the last frame.
@@ -395,7 +434,8 @@ impl SimulationClock {
             self.speed_history.clear();
             self.observe_speed(transport, speed as f32);
         } else {
-            // The interval since the last frame ran at the last frame's speed.
+            // This frame's Speed applies from the next tick start; the
+            // intervals already begun keep the speed of their own start.
             held = transport <= self.last_transport || speed <= 0.0;
             self.observe_speed(transport, speed as f32);
             let reached = self.simulation_at(transport, self.live_load);
@@ -404,9 +444,7 @@ impl SimulationClock {
             } else {
                 numerical_error = true;
             }
-            if speed != self.speed {
-                self.speed = speed;
-            }
+            self.speed = speed;
         }
         self.last_transport = transport;
         let first_sequence = self.ticks_done;
@@ -646,6 +684,106 @@ mod tests {
         for fps in [1, 20, 24, 30, 120] {
             assert_eq!(run(fps), expected, "export {fps} fps");
         }
+    }
+
+    /// Frames at `fps` over one second, driven as the host drives them: the
+    /// history replay observes Speed on its 240 Hz grid and at each coming
+    /// tick's start, then the frame observes it at its own time and advances.
+    /// Returns every accepted interval's endpoints as bits.
+    fn smooth_ramp_run(fps: u32, interval: f64, offline: bool, speed: impl Fn(f64) -> f32) -> Vec<(u64, u64)> {
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, interval, speed(0.0), 0.0, false, offline);
+        let mut intervals = Vec::new();
+        let mut previous = 0.0;
+        let mut samples = Vec::new();
+        for frame in 1..=fps {
+            let now = f64::from(frame) / f64::from(fps);
+            samples.clear();
+            clock.tick_starts(previous, now, |transport, _| samples.push(transport));
+            let mut grid = (previous * 240.0).floor() + 1.0;
+            while grid / 240.0 < now {
+                samples.push(grid / 240.0);
+                grid += 1.0;
+            }
+            samples.sort_by(f64::total_cmp);
+            for &at in &samples {
+                clock.observe_speed(at, speed(at));
+            }
+            let accepted = clock.advance(now, interval, speed(now), 0.0, false, offline);
+            intervals.extend((0..u64::from(accepted.ticks)).map(|i| {
+                let interval = accepted.interval(i).unwrap();
+                (interval.start.0.to_bits(), interval.end.0.to_bits())
+            }));
+            previous = now;
+        }
+        intervals
+    }
+
+    /// BUG-aatmc (smooth Speed and display rate): a Speed curve that moves
+    /// between ticks gives the same tick lengths, bit for bit, at every
+    /// display rate, live and exported, and each tick runs at the Speed of
+    /// its own start.
+    #[test]
+    fn smooth_speed_ramp_ticks_the_same_at_30_60_120_144_fps_live_and_export() {
+        let ramp = |t: f64| 0.5 + 0.75 * t as f32;
+        for rate in crate::SimRate::ALL {
+            let reference = smooth_ramp_run(60, rate.interval(), true, ramp);
+            assert_eq!(reference.len() as u32, rate.hz(), "{} Hz", rate.hz());
+            for (k, &(start, end)) in reference.iter().enumerate() {
+                let length = f64::from_bits(end) - f64::from_bits(start);
+                let expected = rate.interval() * f64::from(ramp(k as f64 * rate.interval()));
+                assert!((length - expected).abs() < 1e-12, "{} Hz tick {k}: {length} against {expected}", rate.hz());
+            }
+            for fps in [30, 60, 120, 144] {
+                for offline in [false, true] {
+                    assert_eq!(
+                        smooth_ramp_run(fps, rate.interval(), offline, ramp),
+                        reference,
+                        "{} Hz at {fps} fps, offline {offline}",
+                        rate.hz()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A Speed step seen mid-tick leaves that tick at the old speed and takes
+    /// effect from the next tick start: at most one Sim Rate interval late.
+    #[test]
+    fn speed_step_takes_effect_at_the_next_tick_start() {
+        let interval = 1.0 / 30.0;
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, interval, 1.0, 0.0, false, false);
+        let seen = clock.advance(0.4 * interval, interval, 2.0, 0.0, false, false);
+        assert_eq!(seen.ticks, 0);
+        let frame = clock.advance(2.0 * interval, interval, 2.0, 0.0, false, false);
+        assert_eq!(frame.ticks, 2);
+        assert!((frame.interval(0).unwrap().duration().0 - interval).abs() < 1e-12, "the tick the step landed in keeps its speed");
+        assert!((frame.interval(1).unwrap().duration().0 - 2.0 * interval).abs() < 1e-12, "the next tick runs at the new speed");
+    }
+
+    /// Resuming from Speed 0 between tick starts: the tick containing the
+    /// resume stays empty, and the first tick to run is the one starting at
+    /// the next boundary, which `tick_start` names before the frame runs it.
+    #[test]
+    fn resume_from_speed_zero_runs_from_the_next_tick_start() {
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        clock.advance(2.0 * TICK, TICK, 0.0, 0.0, false, false);
+        let held = clock.advance(5.0 * TICK, TICK, 0.0, 0.0, false, false);
+        assert_eq!((clock.ticks_done(), held.ticks), (2, 0));
+        assert_eq!(clock.tick_start(2), None, "Speed 0 runs no tick");
+        let resumed = clock.advance(5.5 * TICK, TICK, 1.0, 0.0, false, false);
+        assert_eq!(resumed.ticks, 0);
+        let start = clock.tick_start(2).expect("the next tick is known once Speed is back");
+        assert!((start - 6.0 * TICK).abs() < 1e-12, "{start}");
+        let mut starts = Vec::new();
+        clock.tick_starts(5.5 * TICK, 7.0 * TICK, |transport, tick| starts.push((transport, tick)));
+        assert_eq!(starts.iter().map(|&(_, tick)| tick).collect::<Vec<_>>(), [2, 3]);
+        let frame = clock.advance(7.0 * TICK, TICK, 1.0, 0.0, false, false);
+        assert_eq!((frame.first_sequence, frame.ticks), (2, 1));
+        assert!((frame.interval(0).unwrap().duration().0 - TICK).abs() < 1e-12);
+        assert!((frame.simulation_time - 3.0 * TICK).abs() < 1e-12);
     }
 
     #[test]

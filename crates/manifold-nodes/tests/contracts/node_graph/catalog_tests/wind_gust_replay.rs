@@ -235,7 +235,7 @@ fn wind_gusts_drift_the_same_for_every_consumer_at_any_rate_live_and_export() {
     let liquid: Vec<_> = baseline.iter().filter(|reading| reading.0 == "liquid").map(|reading| reading.2).collect();
     assert!(liquid.windows(2).all(|pair| pair[0] != pair[1]), "the gust drifts every tick");
 
-    for (fps, export, rebuild) in [(30, false, false), (30, true, false), (120, true, false), (120, false, true), (30, true, true)] {
+    for (fps, export, rebuild) in [(144, false, false), (144, true, false), (30, false, false), (30, true, false), (120, true, false), (120, false, true), (30, true, true)] {
         let mut run = play(&json, fps, export, rebuild);
         let mut expected = baseline.clone();
         // Readings are compared per consumer in tick order.

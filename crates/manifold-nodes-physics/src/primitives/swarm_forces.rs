@@ -507,25 +507,34 @@ mod tests {
         assert!((half.frames.last().unwrap().get("simulation_time") - 0.5).abs() < 1e-5);
     }
 
-    /// Speed rising under a playing swarm, one step per Sim Rate tick. The
-    /// clock applies a Speed edit from where it is observed, so only edits on
-    /// tick starts read the same at every display rate.
-    fn stepped_ramp(seconds: f64) -> f32 {
-        0.5 + 0.75 * ((seconds / TICK + 1e-6).floor() * TICK) as f32
+    /// Speed rising smoothly under a playing swarm, changing between every
+    /// pair of frames at any display rate.
+    fn smooth_ramp(seconds: f64) -> f32 {
+        0.5 + 0.75 * seconds as f32
     }
 
-    /// While Speed moves, each tick runs for its own length: a 30 fps frame's
-    /// two ticks differ, and every tick is told exactly what it is at 120 fps.
+    /// While Speed moves, each tick runs for its own length, at the Speed of
+    /// its own start: a 30 fps frame's two ticks differ, and every tick is
+    /// told exactly the same at 60, 120 and 144 fps, live or exported.
     #[test]
-    fn swarm_speed_ramp_ticks_match_at_30_and_120_fps() {
-        let step = SimStep::live(Seconds(TICK));
-        let rig = |speed| Rig { speed: Some(speed), ..Rig::new(Some(swelling), step) };
-        let slow = rig(stepped_ramp).play(30.0, 2.0, 0.0, &[]);
-        let fast = rig(stepped_ramp).play(120.0, 2.0, 0.0, &[]);
+    fn swarm_speed_ramp_ticks_match_at_30_60_120_144_fps_live_and_export() {
+        let rig = |step| Rig { speed: Some(smooth_ramp), ..Rig::new(Some(swelling), step) };
+        let live = SimStep::live(Seconds(TICK));
+        let slow = rig(live).play(30.0, 2.0, 0.0, &[]);
         assert_eq!(slow.tick_seconds.len(), 120);
         let bits = |seconds: &[f32]| seconds.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
-        assert_eq!(bits(&slow.tick_seconds), bits(&fast.tick_seconds), "a Speed ramp ticks the same at any frame rate");
-        assert_eq!(slow.lattices, fast.lattices);
+        for (k, &seconds) in slow.tick_seconds.iter().enumerate() {
+            let expected = TICK * f64::from(smooth_ramp(k as f64 * TICK));
+            assert!((f64::from(seconds) - expected).abs() < 1e-8, "tick {k} runs at its start's Speed: {seconds} against {expected}");
+        }
+        for step in [live, SimStep::export(Seconds(TICK))] {
+            for fps in [30.0, 60.0, 120.0, 144.0] {
+                let run = rig(step).play(fps, 2.0, 0.0, &[]);
+                assert_eq!(bits(&run.tick_seconds), bits(&slow.tick_seconds), "a Speed ramp ticks the same at {fps} fps, offline {}", step.offline());
+                assert_eq!(run.lattices, slow.lattices, "{fps} fps lattices");
+                assert_eq!(run.frames.last().unwrap().get("simulation_time"), slow.frames.last().unwrap().get("simulation_time"));
+            }
+        }
         // At 30 fps each frame after the first runs ticks 2k and 2k + 1.
         assert!(slow.frames[1..].iter().all(|frame| frame.get("ticks") == 2.0));
         assert!(slow.tick_seconds.chunks(2).all(|pair| pair[1] > pair[0]), "a frame's ticks keep their own lengths: {:?}", &slow.tick_seconds[..8]);

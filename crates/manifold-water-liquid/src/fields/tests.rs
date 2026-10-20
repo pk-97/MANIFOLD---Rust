@@ -44,6 +44,9 @@ struct Rig {
     impulses: LiquidImpulses,
     last: Option<f64>,
     times: Vec<f64>,
+    /// The Speed curve over transport time, when it moves: the replay
+    /// observes it with the field, and the frame passes its own value.
+    speed: Option<fn(f64) -> f32>,
 }
 
 impl Rig {
@@ -54,7 +57,16 @@ impl Rig {
             impulses: LiquidImpulses::default(),
             last: None,
             times: Vec::new(),
+            speed: None,
         }
+    }
+
+    /// The domain's replay sample at `time`: Speed first, then the field.
+    fn observe(&mut self, time: f64, field: &dyn Fn(f64) -> FieldValue) {
+        if let Some(speed) = self.speed {
+            self.clock.observe_speed(time, speed(time));
+        }
+        self.fields.observe_sample(time, Some(&field(time)));
     }
 
     fn frame(
@@ -68,12 +80,16 @@ impl Rig {
         if let Some(last) = self.last.filter(|&last| transport > last) {
             self.times.clear();
             self.fields.request_samples(&self.clock, last, transport, &mut self.times);
-            for &time in self.times.iter().filter(|&&time| time < transport) {
-                self.fields.observe_sample(time, Some(&field(time)));
+            let mut times = std::mem::take(&mut self.times);
+            for &time in times.iter().filter(|&&time| time < transport) {
+                self.observe(time, field);
             }
-            self.fields.observe_sample(transport, Some(&field(transport)));
+            times.clear();
+            self.times = times;
+            self.observe(transport, field);
         }
         self.last = Some(transport);
+        let speed = self.speed.map_or(speed, |speed| speed(transport));
         let frame = self.clock.advance(transport, interval, speed, 0.0, false, offline);
         self.impulses.observe_frame(transport, &frame)?;
         let laid = self.fields.prepare(lattice(), Some(&field(transport)), &self.clock, &frame, &self.impulses)?;
@@ -184,6 +200,43 @@ fn liquid_forces_per_tick_follow_simulation_speed() {
         assert_eq!(run.len(), fps as usize, "{fps} fps live interval count");
         for &(tick, start, ref lattice) in &run {
             assert_lattice_exact(lattice, &expected(start / 0.5), &format!("{fps} fps tick {tick}"));
+        }
+    }
+}
+
+/// BUG-aatmc (smooth Speed and display rate): Speed rising smoothly under the
+/// liquid changes between every pair of frames, yet every tick gets the same
+/// interval, bit for bit, and the same force lattice at 30, 60, 120 and
+/// 144 fps, live and exported. Each tick runs at the Speed of its own start.
+#[test]
+fn liquid_smooth_speed_ramp_ticks_the_same_at_30_60_120_144_fps_live_and_export() {
+    fn ramp(time: f64) -> f32 {
+        0.5 + 0.75 * time as f32
+    }
+    let run = |fps: f64, offline: bool| {
+        let mut rig = Rig { speed: Some(ramp), ..Rig::new() };
+        let mut ticks = Vec::new();
+        for index in 0..=fps as u32 {
+            let (frame, laid) = rig.frame(f64::from(index) / fps, TICK, 1.0, offline, &modulated).unwrap();
+            let first = first_tick(&frame);
+            for (offset, lattice) in rig.tick_lattices(&frame, &laid).into_iter().enumerate() {
+                let interval = frame.interval(offset as u64).unwrap();
+                ticks.push((first + offset as u64, interval.start.0.to_bits(), interval.end.0.to_bits(), lattice));
+            }
+        }
+        ticks
+    };
+    let reference = run(30.0, false);
+    assert_eq!(reference.len(), 60);
+    for &(tick, start, end, ref lattice) in &reference {
+        let length = f64::from_bits(end) - f64::from_bits(start);
+        let expected_length = TICK * f64::from(ramp(tick as f64 * TICK));
+        assert!((length - expected_length).abs() < 1e-12, "tick {tick}: {length} against {expected_length}");
+        assert_lattice_exact(lattice, &expected(tick as f64 * TICK), &format!("tick {tick} reads its own start"));
+    }
+    for offline in [false, true] {
+        for fps in [30.0, 60.0, 120.0, 144.0] {
+            assert!(run(fps, offline) == reference, "{fps} fps, offline {offline}: ticks differ from 30 fps live");
         }
     }
 }

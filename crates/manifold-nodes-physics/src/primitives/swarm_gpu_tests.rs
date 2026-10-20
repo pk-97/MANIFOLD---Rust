@@ -3,9 +3,9 @@
 //! clock, the history replay and the staged upload, and node.move_swarm moves
 //! 100k particles with it. At 30 fps every frame runs two ticks on two
 //! lattices; at 120 fps every other frame runs none. Every particle lands
-//! where the lattice's CPU twin integrates it. Under a Speed ramp, 30 and
-//! 120 fps land on the same particles. And the fused swarm kernel matches the
-//! unfused pair.
+//! where the lattice's CPU twin integrates it. Under a smooth Speed ramp,
+//! every display rate, live or exported, lands on the same particles. And the
+//! fused swarm kernel matches the unfused pair.
 
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
@@ -65,8 +65,8 @@ struct Flown {
 
 /// node.swarm_forces into node.move_swarm over frames at `times`, the
 /// history replay sampling each tick's start, with Speed `speed` over
-/// transport time.
-fn fly(start: &[Particle], times: &[f64], speed: fn(f64) -> f32) -> Flown {
+/// transport time, stepped as `step` (live or export).
+fn fly(start: &[Particle], times: &[f64], speed: fn(f64) -> f32, step: SimStep) -> Flown {
     let mut h = Harness::new();
     let (particles, buffer) = h.array(start, start.len());
     let field_slot = h.cpu_input(PortType::VectorField, field(0.0));
@@ -78,7 +78,6 @@ fn fly(start: &[Particle], times: &[f64], speed: fn(f64) -> f32) -> Flown {
     let mut mover_inputs = vec![("in", particles), ("forces", forces), ("tick_seconds", tick_seconds)];
     mover_inputs.extend(&scalars);
     let mover_params = params(&[("active_count", start.len() as f32)]);
-    let step = SimStep::export(Seconds(TICK));
     let mut forces_node = SwarmForces::new();
     let mut mover = MoveSwarm::new();
     let (mut previous, mut ran, mut costs) = (0.0, Vec::new(), Vec::new());
@@ -122,7 +121,7 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
     let start: Vec<Particle> = (0..COUNT).map(particle).collect();
     // One second at 30 fps, then half a second at 120 fps.
     let times: Vec<f64> = (0..=30).map(|i| f64::from(i) / 30.0).chain((1..=60).map(|i| 1.0 + f64::from(i) / 120.0)).collect();
-    let Flown { particles: moved, ran, mut costs } = fly(&start, &times, |_| 1.0);
+    let Flown { particles: moved, ran, mut costs } = fly(&start, &times, |_| 1.0, SimStep::export(Seconds(TICK)));
     costs.sort_by(f64::total_cmp);
     println!("move_swarm 100k particles: median frame {:.3} ms (encode + GPU + wait), worst {:.3} ms", costs[costs.len() / 2], costs[costs.len() - 1]);
     assert_eq!(ran.iter().map(|&(tick, _)| tick).collect::<Vec<_>>(), (0..90).collect::<Vec<_>>(), "every tick runs once, in order");
@@ -160,25 +159,29 @@ fn swarm_forces_lattices_move_100k_particles_tick_by_tick() {
     assert!(pushes != 0.0 && (-spin).signum() == pushes, "the swarm turns the way the vortex pushes: spin {spin}");
 }
 
-/// Speed rising tick by tick while the swarm plays: at 30 fps every frame runs two ticks
-/// of different lengths, at 120 fps every other frame runs one. The swarm
-/// lands on the same particles, bit for bit.
+/// Speed rising smoothly while the swarm plays, changing between every pair
+/// of frames: at 30 fps every frame runs two ticks of different lengths, at
+/// 144 fps most frames run none. Live and exported at 30, 60, 120 and 144 fps,
+/// the swarm lands on the same particles, bit for bit.
 #[test]
-fn swarm_speed_ramp_lands_the_same_at_30_and_120_fps() {
+fn swarm_smooth_speed_ramp_lands_the_same_at_30_60_120_144_fps_live_and_export() {
     const N: usize = 16_384;
     let start: Vec<Particle> = (0..N).map(|i| particle(i * (COUNT / N))).collect();
-    // Stepped on tick starts: the clock applies a Speed edit from where it is
-    // observed, so a smooth curve would differ in the clock itself.
-    let ramp = |seconds: f64| 0.5 + 0.75 * ((seconds / TICK + 1e-6).floor() * TICK) as f32;
+    let ramp = |seconds: f64| 0.5 + 0.75 * seconds as f32;
     let at = |fps: f64| (0..=(fps as u32)).map(|i| f64::from(i) / fps).collect::<Vec<_>>();
-    let slow = fly(&start, &at(30.0), ramp);
-    let fast = fly(&start, &at(120.0), ramp);
+    let live = SimStep::live(Seconds(TICK));
+    let slow = fly(&start, &at(30.0), ramp, live);
     assert_eq!(slow.ran.len(), 60);
-    assert_eq!(slow.ran, fast.ran, "every tick runs with its own length at any frame rate");
     assert!(slow.ran.chunks(2).all(|pair| pair[1].1 > pair[0].1), "a 30 fps frame's two ticks keep their own lengths");
     let bits = |particles: &[Particle]| bytemuck::cast_slice::<Particle, u32>(particles).to_vec();
-    assert_eq!(bits(&slow.particles), bits(&fast.particles), "a Speed ramp moves the swarm the same at any frame rate");
     assert!(slow.particles.iter().zip(&start).all(|(a, b)| a.position != b.position), "the ramp moved the swarm");
+    for step in [live, SimStep::export(Seconds(TICK))] {
+        for fps in [30.0, 60.0, 120.0, 144.0] {
+            let run = fly(&start, &at(fps), ramp, step);
+            assert_eq!(run.ran, slow.ran, "every tick runs with its own length at {fps} fps, offline {}", step.offline());
+            assert_eq!(bits(&run.particles), bits(&slow.particles), "a Speed ramp moves the swarm the same at {fps} fps, offline {}", step.offline());
+        }
+    }
 }
 
 /// node.move_swarm into node.swarm_to_copies, fused into one kernel by the
