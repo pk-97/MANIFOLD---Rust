@@ -277,7 +277,9 @@ fn move_swarm_kicks_each_tick_from_its_own_impulse_lattice() {
                 x[axis] += v[axis] * dt;
             }
         }
-        // Trilinear weights sum to 1 up to rounding.
+        // Trilinear weights sum to 1 up to f32 rounding: the worst case over
+        // 2M points of the shader's corner math is 4.8e-7 (the -2 kick), so
+        // 1e-6 is twice the real bound.
         for axis in 0..3 {
             assert!((moved.velocity[axis] - v[axis]).abs() < 1e-6, "every particle took both kicks, once each: {:?} vs {v:?}", moved.velocity);
             assert!((moved.position[axis] - x[axis]).abs() < 1e-5, "{:?} vs {x:?}", moved.position);

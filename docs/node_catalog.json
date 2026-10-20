@@ -47127,7 +47127,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Emit a smooth swirling dimensionless vector field (curl noise, divergence free) whose swirls are about Size metres across and drift through space at Drift Speed along the drift direction as transport time runs.",
+      "purpose": "Emit a smooth swirling dimensionless vector field (curl noise, divergence free) whose swirls are about Size metres across and drift through space along the drift direction, travelling Drift Speed integrated over transport time (an automated speed bends the drift, never jumps it). A backward seek or loop starts the drift again.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Outputs smooth swirling vectors that drift through space over time.",

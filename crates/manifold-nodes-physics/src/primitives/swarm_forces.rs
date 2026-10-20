@@ -189,6 +189,13 @@ impl SwarmForces {
     /// `first`, each the sum of the hits landing on that tick (zero where
     /// none did), as the liquids do offline. Returns the first tick.
     fn lay_impulses(&mut self, lattice: ForceLattice, first: u64, ticks: u32) -> Result<Option<u64>, String> {
+        // Room for a live frame's hit lattices, made when the lattice
+        // changes, so a hit never allocates on stage; only offline catch-up
+        // grows it.
+        let reserve = FORCE_LATTICE_RESERVE as usize * lattice.node_count();
+        if self.impulses.capacity() < reserve {
+            self.impulses.reserve_exact(reserve - self.impulses.len());
+        }
         if self.hits.impulse_tick().is_none() {
             return Ok(None);
         }
@@ -585,6 +592,24 @@ mod tests {
         assert_eq!(ticks[1], ticks[0] + 1, "two fires a tick apart land a tick apart");
         assert_eq!(kicks[0], vec![(ticks[0], laid([1.0, 0.0, 0.0])), (ticks[1], laid([0.0, 2.0, 0.0]))]);
         assert_eq!(kicks[0], kicks[1], "the same fires kick the same ticks at 30 and 120 fps");
+    }
+
+    /// The first hit, and a later frame with hits on more ticks, lay their
+    /// lattices in the room reserved when the lattice was set: no allocation.
+    #[test]
+    fn swarm_hits_allocate_nothing() {
+        let push = |v: [f32; 3]| FieldValue::uniform(v).unwrap();
+        let mut rig = Rig::new(None, SimStep::live(Seconds(TICK)));
+        rig.play(30.0, 0.5, 0.0, &[]);
+        let room = (rig.node.impulses.as_ptr(), rig.node.impulses.capacity());
+        assert!(room.1 >= FORCE_LATTICE_RESERVE as usize * 17 * 17 * 17);
+        rig.fire(0.5 + 0.3 * TICK, 1, push([1.0, 0.0, 0.0]));
+        let one = rig.kicks_until(30.0, 0.5, 0.5 + 2.0 * TICK);
+        rig.fire(0.5 + 2.2 * TICK, 2, push([0.0, 1.0, 0.0]));
+        rig.fire(0.5 + 3.4 * TICK, 3, push([0.0, 0.0, 1.0]));
+        let two = rig.kicks_until(30.0, 0.5 + 2.0 * TICK, 0.5 + 4.0 * TICK);
+        assert_eq!((one.len(), two.len()), (1, 2));
+        assert_eq!((rig.node.impulses.as_ptr(), rig.node.impulses.capacity()), room);
     }
 
     /// A fire while the swarm is paused (Speed 0) is discarded with a

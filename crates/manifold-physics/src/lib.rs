@@ -27,7 +27,7 @@ pub use interaction::{
     FalloffCurve, FieldInput, ForceSample, RadialField, SampledField, ScaledField, SumField,
     TickStamp, UniformField, VectorField, VortexField,
 };
-pub use turbulence::TurbulenceField;
+pub use turbulence::{TurbulenceDrift, TurbulenceField};
 mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 pub mod sdf;

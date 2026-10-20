@@ -72,6 +72,10 @@ enum OperationRecord<'a> {
         offset: [f32; 3],
         seed: u32,
     },
+    Zero {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        air: bool,
+    },
     Add,
     Multiply,
     Scale {
@@ -200,6 +204,7 @@ impl Serialize for FieldValue {
                         offset: field.offset(),
                         seed: field.seed(),
                     },
+                    Operation::Zero { air } => OperationRecord::Zero { air: *air },
                     Operation::Add => OperationRecord::Add,
                     Operation::Multiply => OperationRecord::Multiply,
                     Operation::Scale(strength) => OperationRecord::Scale {
@@ -277,6 +282,10 @@ impl<'de> Deserialize<'de> for FieldValue {
                     TurbulenceField::new(size, offset, seed)
                         .map(Operation::Turbulence)
                         .map_err(invalid::<D::Error>)?
+                }
+                OperationRecord::Zero { air } => {
+                    depth += 1;
+                    Operation::Zero { air }
                 }
                 OperationRecord::Add => {
                     require_stack(&mut depth, 2).map_err(invalid_message::<D::Error>)?;

@@ -137,3 +137,38 @@ fn zero_scaled_gusts_hold_the_field_still() {
     assert_eq!(card(0.0, 0.0, 1.0).sample_force(x), wind([5.0, 0.0, 0.0], 1.0).sample_force(x));
     assert_eq!(card(0.0, 2.0, 0.0).sample_force(x), ForceSample::default());
 }
+
+/// A consumer at Air Drag 0 under gusts keeps only the push: it samples as
+/// the field felt at zero and holds still from tick to tick, so its lattice
+/// is laid once.
+#[test]
+fn air_drag_zero_drops_the_air_and_its_gusts() {
+    let scene = |travel: f32| {
+        let gusts = FieldValue::turbulence(2.0, [travel, 0.0, 0.0], 0).unwrap().scaled(2.0).unwrap();
+        let air = FieldValue::uniform([5.0, 0.0, 0.0]).unwrap().sum(&gusts).unwrap().air(1.0).unwrap();
+        let pull = FieldValue::radial([0.0; 3], 3.0, 1.0).unwrap().scaled(-2.0).unwrap();
+        air.scaled(0.5).unwrap().sum(&pull).unwrap()
+    };
+    let ignored = |travel: f32| scene(travel).with_air_drag(0.0).unwrap();
+    assert_eq!(ignored(0.0), ignored(0.083), "gusts the consumer ignores never move its field");
+    for x in [[0.3, 1.1, -0.4], [2.0, -0.5, 0.25]] {
+        let felt = scene(0.0).push_unary(Operation::AirDrag(0.0)).unwrap().sample_force(x);
+        let collapsed = ignored(0.0).sample_force(x);
+        assert_eq!(collapsed.push, felt.push);
+        assert_eq!(collapsed.drag, 0.0);
+        assert!(collapsed.drag_wind.iter().chain(&felt.drag_wind).all(|c| *c == 0.0));
+    }
+    assert!(ignored(0.0).carries_air(), "the air is gone, the rule about it stays");
+}
+
+/// Multiply refuses a field carrying air whether the force is on or off:
+/// one rule, checked when the graph builds.
+#[test]
+fn multiply_refuses_air_switched_on_or_off() {
+    let mask = FieldValue::uniform([1.0, 0.5, 1.0]).unwrap();
+    let card = |enabled: f32| wind([3.0, 0.0, 0.0], 1.0).scaled(enabled).unwrap();
+    assert!(card(1.0).multiply(&mask).is_err());
+    assert!(card(0.0).multiply(&mask).is_err(), "a disabled wind is still air");
+    assert!(mask.multiply(&card(0.0)).is_err());
+    assert!(FieldValue::uniform([1.0; 3]).unwrap().scaled(0.0).unwrap().multiply(&mask).is_ok());
+}

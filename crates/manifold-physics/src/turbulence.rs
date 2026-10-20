@@ -80,6 +80,45 @@ impl VectorField for TurbulenceField {
     }
 }
 
+/// How far drifting turbulence has travelled: its drift velocity (direction
+/// times Drift Speed, which a card may automate) integrated over transport
+/// time, so a Speed change bends the drift instead of jumping the swirls.
+/// Each evaluation holds the velocity it sees until the next one. The host
+/// evaluates at the same transport times at any display rate (the physics
+/// history replay's fixed grid and tick starts, with frame ends on that grid
+/// at the usual rates), so live and export travel the same way. Time going
+/// back (a seek or loop) starts again from zero, as a simulation restarts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TurbulenceDrift {
+    last: Option<f64>,
+    travelled: [f64; 3],
+    velocity: [f64; 3],
+}
+
+impl TurbulenceDrift {
+    /// The offset travelled by `transport`, then hold `velocity` (m/s) from
+    /// here on.
+    pub fn advance(&mut self, transport: f64, velocity: [f64; 3]) -> [f64; 3] {
+        match self.last {
+            Some(last) if transport >= last => {
+                let elapsed = transport - last;
+                for (travelled, velocity) in self.travelled.iter_mut().zip(self.velocity) {
+                    *travelled += velocity * elapsed;
+                }
+            }
+            _ => self.travelled = [0.0; 3],
+        }
+        self.last = Some(transport);
+        self.velocity = velocity;
+        self.travelled
+    }
+
+    /// Start again from zero at the next evaluation.
+    pub fn restart(&mut self) {
+        *self = Self::default();
+    }
+}
+
 fn hash(x: i32, y: i32, z: i32, seed: u32) -> u32 {
     let [x, y, z] = [x, y, z].map(|c| c.rem_euclid(TURBULENCE_PERIOD_CELLS as i32));
     let mut h = seed ^ (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ (z as u32).wrapping_mul(0xcb1a_b31f);
@@ -217,5 +256,56 @@ mod tests {
         let wrapped = TurbulenceField::wrap_offset(2.0, [180_000.25 + 512.0 * 351.0, -0.75, 0.0]);
         assert_eq!(wrapped, [288.25, 511.25, 0.0]);
         assert!(wrapped.iter().all(|c| (0.0..period).contains(c)));
+    }
+
+    /// The replay's evaluation times for frames at `fps` over one second: a
+    /// 240 Hz grid strictly inside each frame, then the frame's end.
+    fn evaluations(fps: f64) -> Vec<f64> {
+        let mut times = Vec::new();
+        for frame in 1..=fps as u32 {
+            let (previous, now) = (f64::from(frame - 1) / fps, f64::from(frame) / fps);
+            let mut grid = (previous * 240.0).floor() + 1.0;
+            while grid / 240.0 < now {
+                times.push(grid / 240.0);
+                grid += 1.0;
+            }
+            times.push(now);
+        }
+        times
+    }
+
+    /// Speed stepping from 2 to 6 m/s at 0.5 s, then easing up: the drift
+    /// bends without a jump, and 30 and 120 fps travel bit for bit the same
+    /// at every 30 fps frame end. A loop back starts again from zero.
+    #[test]
+    fn drift_integrates_speed_the_same_at_any_frame_rate() {
+        let speed = |t: f64| if t < 0.5 { 2.0 } else { 6.0 + 4.0 * (t - 0.5) };
+        let fly = |fps: f64| {
+            let mut drift = TurbulenceDrift::default();
+            let mut previous: Option<(f64, f64)> = None;
+            let mut at = Vec::new();
+            for t in evaluations(fps) {
+                let offset = drift.advance(t, [speed(t), 0.0, 0.0])[0];
+                if let Some((before, was)) = previous {
+                    let step = offset - was;
+                    assert!((0.0..=8.0 * (t - before) + 1e-12).contains(&step), "no jump at {t}: {step}");
+                }
+                previous = Some((t, offset));
+                if (t * 30.0 - (t * 30.0).round()).abs() < 1e-9 {
+                    at.push((t.to_bits(), offset.to_bits()));
+                }
+            }
+            at
+        };
+        let (slow, fast) = (fly(30.0), fly(120.0));
+        assert_eq!(slow.len(), 30);
+        assert_eq!(slow, fast);
+        // About 2 m by 0.5 s, then faster.
+        let half = f64::from_bits(slow[14].1);
+        assert!((half - 1.0).abs() < 0.01, "{half}");
+        let mut drift = TurbulenceDrift::default();
+        drift.advance(0.0, [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(1.0, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(0.25, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
     }
 }

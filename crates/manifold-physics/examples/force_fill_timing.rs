@@ -4,14 +4,15 @@
 //! `cargo run --release -p manifold-physics --example force_fill_timing`
 //!
 //! A field that holds still between ticks is laid once and cached
-//! (`TickForces::prepare`); the "per tick" column is what a field that moves
-//! every tick (drifting gusts) pays. "laid again" says whether two tick starts
-//! read different fields, so the cache misses.
+//! (`TickForces::prepare`); a field that moves every tick (drifting gusts)
+//! pays a fill every tick. "laid again" says whether two tick starts read
+//! different fields, so the cache misses. Each fill is timed on one thread and
+//! on the fill workers `TickForces` uses for big lattices.
 
 use std::time::Instant;
 
 use manifold_physics::FieldValue;
-use manifold_physics::force_lattice::{ForceLattice, FORCE_LATTICE_STRIDE};
+use manifold_physics::force_lattice::{FILL_THREADS, FillWorkers, ForceLattice, FORCE_LATTICE_STRIDE};
 use manifold_physics::VectorField;
 
 /// The Wind card's graph (Wind.json) at transport time `t`: steady air plus
@@ -32,14 +33,20 @@ fn water(resolution: u32) -> ForceLattice {
     ForceLattice::covering([-2.0; 3], dx, [resolution + 7; 3])
 }
 
-fn time_fill(lattice: ForceLattice, field: &FieldValue) -> f64 {
+/// Milliseconds per fill: on one thread, then on `workers`.
+fn time_fill(lattice: ForceLattice, field: &FieldValue, workers: &mut FillWorkers) -> (f64, f64) {
     let mut values = vec![[0.0f32; 4]; 2 * lattice.node_count()];
     let runs = 3;
     let start = Instant::now();
     for _ in 0..runs {
         lattice.fill_forces(&mut values, |x| field.sample_force(x)).unwrap();
     }
-    start.elapsed().as_secs_f64() * 1e3 / f64::from(runs)
+    let single = start.elapsed().as_secs_f64() * 1e3 / f64::from(runs);
+    let start = Instant::now();
+    for _ in 0..runs {
+        workers.fill(lattice, &mut values, field).unwrap();
+    }
+    (single, start.elapsed().as_secs_f64() * 1e3 / f64::from(runs))
 }
 
 fn main() {
@@ -55,15 +62,17 @@ fn main() {
         ("water 256", water(256)),
         ("swarm detail 64", ForceLattice::over_box([-2.0; 3], [4.0; 3], 64)),
     ];
-    println!("force lattice stride {FORCE_LATTICE_STRIDE}; times are one fill, ms");
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(FILL_THREADS);
+    let mut workers = FillWorkers::start(threads - 1);
+    println!("force lattice stride {FORCE_LATTICE_STRIDE}; one fill, ms, on 1 and {threads} threads");
     for (label, lattice) in lattices {
         for (case, speed, gusts, enabled) in cases {
             let now = wind(10.0, speed, gusts, enabled);
             let next = wind(10.0 + tick, speed, gusts, enabled);
+            let (single, shared) = time_fill(lattice, &now, &mut workers);
             println!(
-                "{label:16} {nodes:>7} nodes  {case:26} {ms:8.2} ms per fill  laid again each tick: {moves}",
+                "{label:16} {nodes:>7} nodes  {case:26} {single:8.2} / {shared:6.2} ms  laid again each tick: {moves}",
                 nodes = lattice.node_count(),
-                ms = time_fill(lattice, &now),
                 moves = now != next,
             );
         }

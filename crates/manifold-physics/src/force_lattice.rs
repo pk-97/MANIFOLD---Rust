@@ -17,8 +17,11 @@ pub const FORCE_LATTICE_STRIDE: u32 = 4;
 /// or quality cap.
 pub const FORCE_LATTICE_RESERVE: u32 = 3;
 
-/// Lattices below this many nodes fill on the calling thread: a thread costs
-/// more than the work it would take (water 64 is about 7k nodes).
+mod fill_workers;
+pub use fill_workers::FillWorkers;
+
+/// Lattices below this many nodes fill on the calling thread: handing out
+/// the shares costs more than the work (water 64 is about 7k nodes).
 const PARALLEL_FILL_NODES: usize = 32_768;
 
 /// Most threads one fill uses, leaving cores for the GPU driver, audio and
@@ -110,31 +113,10 @@ impl ForceLattice {
     }
 
     /// Sample a force `field` at every node into `values`, two `[f32; 4]` per
-    /// node: (push, drag rate) then (drag rate × wind, 0). A large lattice is
-    /// split across up to [`FILL_THREADS`] threads: a field that moves every
-    /// tick (drifting gusts) is laid again each tick, which one core cannot
-    /// do at water resolution 128 inside a frame. Every node is computed the
-    /// same way whatever the split, so the result is bit for bit the same.
-    pub fn fill_forces(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> ForceSample + Sync) -> Result<(), NotFinite> {
-        let nodes = values.len() / 2;
-        let threads = if nodes < PARALLEL_FILL_NODES {
-            1
-        } else {
-            std::thread::available_parallelism().map_or(1, |n| n.get()).min(FILL_THREADS)
-        };
-        if threads <= 1 {
-            return self.fill_forces_from(0, values, &field);
-        }
-        let per_thread = nodes.div_ceil(threads);
-        std::thread::scope(|scope| {
-            let field = &field;
-            let workers: Vec<_> = values
-                .chunks_mut(2 * per_thread)
-                .enumerate()
-                .map(|(part, values)| scope.spawn(move || self.fill_forces_from(part * per_thread, values, field)))
-                .collect();
-            workers.into_iter().try_for_each(|worker| worker.join().expect("force fill worker panicked"))
-        })
+    /// node: (push, drag rate) then (drag rate × wind, 0). [`TickForces`]
+    /// splits a big lattice across its [`FillWorkers`].
+    pub fn fill_forces(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
+        self.fill_forces_from(0, values, &field)
     }
 
     fn fill_forces_from(&self, first: usize, values: &mut [[f32; 4]], field: &impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
@@ -213,6 +195,20 @@ pub struct TickForces {
     /// The field at each tick's start, from the oldest tick not yet run.
     samples: TickSamples<FieldValue>,
     dirty: bool,
+    /// Started on the first big fill, then reused every tick.
+    workers: Option<FillWorkers>,
+}
+
+/// Lay `field` onto `values`, on `workers` when the lattice is big enough to
+/// share out (starting them the first time).
+fn fill_lattice(workers: &mut Option<FillWorkers>, lattice: ForceLattice, values: &mut [[f32; 4]], field: &FieldValue) -> Result<(), String> {
+    let result = if values.len() / 2 < PARALLEL_FILL_NODES {
+        lattice.fill_forces(values, |x| field.sample_force(x))
+    } else {
+        let threads = || std::thread::available_parallelism().map_or(1, |n| n.get()).min(FILL_THREADS);
+        workers.get_or_insert_with(|| FillWorkers::start(threads() - 1)).fill(lattice, values, field)
+    };
+    result.map_err(|_| NOT_FINITE.to_string())
 }
 
 impl TickForces {
@@ -249,7 +245,7 @@ impl TickForces {
         if let Some(head) = head.filter(|head| sampled.clone().all(|(_, at)| at == *head)) {
             if self.lattices != 1 || self.source.as_ref() != Some(head) {
                 self.forces.resize(count, [0.0; 4]);
-                lattice.fill_forces(&mut self.forces, |x| head.sample_force(x)).map_err(|_| NOT_FINITE.to_string())?;
+                fill_lattice(&mut self.workers, lattice, &mut self.forces, head)?;
                 self.lattices = 1;
                 self.source = Some(head.clone());
                 self.dirty = true;
@@ -257,7 +253,7 @@ impl TickForces {
         } else if ticks > 0 {
             self.forces.resize(ticks * count, [0.0; 4]);
             for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
-                lattice.fill_forces(values, |x| at.sample_force(x)).map_err(|_| NOT_FINITE.to_string())?;
+                fill_lattice(&mut self.workers, lattice, values, at)?;
             }
             self.lattices = ticks;
             self.source = None;

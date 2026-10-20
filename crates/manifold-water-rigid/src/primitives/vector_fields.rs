@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use manifold_physics::{FalloffCurve, FieldValue, PhysicsError, TurbulenceField};
+use manifold_physics::{FalloffCurve, FieldValue, PhysicsError, TurbulenceDrift, TurbulenceField};
 
 /// The radial and vortex fields' Falloff Curve choices, by index.
 const FALLOFF_CURVES: &[&str] = &["Edge", "Inverse"];
@@ -316,7 +316,7 @@ impl Primitive for ScaleVectorField {
 manifold_node_engine::primitive! {
     name: TurbulenceVectorField,
     type_id: "node.turbulence_vector_field",
-    purpose: "Emit a smooth swirling dimensionless vector field (curl noise, divergence free) whose swirls are about Size metres across and drift through space at Drift Speed along the drift direction as transport time runs.",
+    purpose: "Emit a smooth swirling dimensionless vector field (curl noise, divergence free) whose swirls are about Size metres across and drift through space along the drift direction, travelling Drift Speed integrated over transport time (an automated speed bends the drift, never jumps it). A backward seek or loop starts the drift again.",
     inputs: {
         size: ScalarF32 optional,
         drift_x: ScalarF32 optional,
@@ -344,8 +344,10 @@ manifold_node_engine::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["turbulence", "noise field", "curl noise", "gusts"],
-    pure: true,
     boundary_reason: NonGpu,
+    extra_fields: {
+        drift: TurbulenceDrift = TurbulenceDrift::default(),
+    },
 }
 
 impl Primitive for TurbulenceVectorField {
@@ -355,14 +357,17 @@ impl Primitive for TurbulenceVectorField {
         let speed = ctx.scalar_or_param("drift_speed", 0.0);
         let seed = ctx.scalar_or_param("seed", 0.0).round().max(0.0) as u32;
         let length = drift.iter().map(|c| c * c).sum::<f32>().sqrt();
-        // Transport time, so a sample at a past tick reads the swirls as they
-        // were then; in f64 and wrapped to the noise period, so the gusts keep
-        // their precision through a long set.
-        let travel = ctx.time.seconds.0 * f64::from(speed);
-        let offset = if length > 0.0 { drift.map(|c| f64::from(c / length) * travel) } else { [0.0; 3] };
+        // The drift travelled so far, in f64 and wrapped to the noise period,
+        // so the gusts keep their precision through a long set.
+        let velocity = if length > 0.0 { drift.map(|c| f64::from(c / length) * f64::from(speed)) } else { [0.0; 3] };
+        let offset = self.drift.advance(ctx.time.seconds.0, velocity);
         // A size that is not positive is refused before the offset is read.
         let field = FieldValue::turbulence(size, TurbulenceField::wrap_offset(size, offset), seed);
         write_result(ctx, field, "turbulence vector field");
+    }
+
+    fn clear_state(&mut self) {
+        self.drift.restart();
     }
 }
 

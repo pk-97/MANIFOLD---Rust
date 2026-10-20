@@ -29,6 +29,10 @@ enum Operation {
     Air(f32),
     /// A consumer's Air Drag: scales the entry's drag rate, the wind kept.
     AirDrag(f32),
+    /// Nothing, where a field was scaled to zero or its air felt at zero.
+    /// `air` remembers the field carried air, so a rule about air (multiply
+    /// refuses it) holds whether a force is switched on or not.
+    Zero { air: bool },
 }
 
 /// A dimensionless spatial vector expression. Strength belongs to the
@@ -156,7 +160,7 @@ impl FieldValue {
             ));
         }
         if strength == 0.0 {
-            return Self::uniform([0.0; 3]);
+            return Ok(Self::leaf(Operation::Zero { air: self.carries_air() }));
         }
         self.push_unary(Operation::Scale(strength))
     }
@@ -177,6 +181,9 @@ impl FieldValue {
     /// The field as one consumer feels it: its drag rate times `air_drag`
     /// (Blender's per-object field weights). 0 ignores the air. A field with
     /// no air is returned as is.
+    /// At Air Drag 0 the air drops out as a zero scale does: only the push
+    /// is left, so drifting gusts the consumer ignores never refill its
+    /// lattice.
     pub fn with_air_drag(&self, air_drag: f32) -> Result<Self, PhysicsError> {
         if !air_drag.is_finite() || air_drag < 0.0 {
             return Err(PhysicsError::InvalidInput("air drag must be finite and non-negative"));
@@ -184,12 +191,51 @@ impl FieldValue {
         if !self.carries_air() {
             return Ok(self.clone());
         }
+        if air_drag == 0.0 {
+            return Ok(self.without_air());
+        }
         self.push_unary(Operation::AirDrag(air_drag))
     }
 
-    /// Whether any part of this field is air.
+    /// The field with every entry that became air replaced by nothing. Air
+    /// zeroes its entry's push, and nothing after it turns drag back into
+    /// push, so what is left samples as this field felt at Air Drag 0.
+    fn without_air(&self) -> Self {
+        let mut result = Self { operations: std::array::from_fn(|_| Operation::Unused), len: 0 };
+        // Where each stack entry starts in `result`.
+        let mut starts = [0usize; MAX_OPERATIONS];
+        let mut depth = 0;
+        for operation in &self.operations[..self.len] {
+            match operation {
+                Operation::Air(_) => {
+                    result.len = starts[depth - 1];
+                    result.operations[result.len] = Operation::Zero { air: true };
+                    result.len += 1;
+                    continue;
+                }
+                Operation::Add | Operation::Multiply => depth -= 1,
+                Operation::Scale(_) | Operation::AirDrag(_) => {}
+                Operation::Unused => unreachable!("field program is privately constructed"),
+                _ => {
+                    starts[depth] = result.len;
+                    depth += 1;
+                }
+            }
+            result.operations[result.len] = operation.clone();
+            result.len += 1;
+        }
+        // Equality reads the whole program array: clear what was cut.
+        for operation in &mut result.operations[result.len..] {
+            *operation = Operation::Unused;
+        }
+        result
+    }
+
+    /// Whether any part of this field is air, switched on or not.
     pub fn carries_air(&self) -> bool {
-        self.operations[..self.len].iter().any(|operation| matches!(operation, Operation::Air(_)))
+        self.operations[..self.len]
+            .iter()
+            .any(|operation| matches!(operation, Operation::Air(_) | Operation::Zero { air: true }))
     }
 }
 
@@ -221,7 +267,8 @@ impl FieldValue {
                 | Operation::Radial(_)
                 | Operation::Vortex(_)
                 | Operation::Sampled(_)
-                | Operation::Turbulence(_) => {
+                | Operation::Turbulence(_)
+                | Operation::Zero { .. } => {
                     starts[depth] = count;
                     depth += 1;
                     leaves[count] = (index, 1.0);
@@ -244,6 +291,8 @@ impl FieldValue {
                 Operation::Vortex(field) => FieldLeaf::Vortex(field),
                 Operation::Sampled(field) => FieldLeaf::Sampled(field),
                 Operation::Turbulence(field) => FieldLeaf::Turbulence(field),
+                // Nothing acts there, so nothing is drawn.
+                Operation::Zero { .. } => continue,
                 _ => unreachable!("only leaves are recorded"),
             };
             visit(leaf, scale);
@@ -266,6 +315,7 @@ impl VectorField for FieldValue {
                 Operation::Vortex(field) => Some(field.sample(position)),
                 Operation::Sampled(field) => Some(field.sample(position)),
                 Operation::Turbulence(field) => Some(field.sample(position)),
+                Operation::Zero { .. } => Some([0.0; 3]),
                 Operation::Add => {
                     depth -= 1;
                     stack[depth - 1] = stack[depth - 1] + stack[depth];

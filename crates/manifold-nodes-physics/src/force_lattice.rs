@@ -92,12 +92,63 @@ struct StagingSlot {
     read_stamp: u64,
 }
 
-struct Buffers {
+/// What the stable buffers and every staging slot hold room for. Live
+/// frames fit the reserve made up front; only offline catch-up (more ticks
+/// than a live frame runs) or a new lattice grows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Capacity {
     lattice: ForceLattice,
-    force_capacity: usize,
-    impulse_capacity: usize,
-    hit_capacity: usize,
-    tick_capacity: usize,
+    /// Force lattices.
+    forces: usize,
+    /// Impulse records, four floats each: whole lattices of the field nodes.
+    impulses: usize,
+    hits: usize,
+    ticks: usize,
+}
+
+impl Capacity {
+    /// Room for `needed` and at least `FORCE_LATTICE_RESERVE` force
+    /// lattices, impulse lattices and tick lengths, so a swarm's first hit,
+    /// or a later hit frame with more ticks, finds the room already there.
+    fn reserve(needed: Capacity) -> Self {
+        let reserve = FORCE_LATTICE_RESERVE as usize;
+        Self {
+            lattice: needed.lattice,
+            forces: needed.forces.max(reserve),
+            impulses: needed.impulses.max(reserve * needed.lattice.node_count()),
+            hits: needed.hits,
+            ticks: needed.ticks.max(reserve),
+        }
+    }
+
+    fn holds(&self, needed: &Capacity) -> bool {
+        self.lattice == needed.lattice
+            && self.forces >= needed.forces
+            && self.impulses >= needed.impulses
+            && self.hits >= needed.hits
+            && self.ticks >= needed.ticks
+    }
+
+    /// Staging layout: impulses, forces, hit records, tick lengths.
+    fn impulse_bytes(&self) -> u64 {
+        (self.impulses as u64 * 16).max(16)
+    }
+
+    fn hits_offset(&self) -> u64 {
+        self.impulse_bytes() + self.forces as u64 * self.lattice.force_bytes()
+    }
+
+    fn ticks_offset(&self) -> u64 {
+        self.hits_offset() + (self.hits as u64 * 16).max(16)
+    }
+
+    fn staging_bytes(&self) -> u64 {
+        self.ticks_offset() + self.ticks as u64 * 4
+    }
+}
+
+struct Buffers {
+    capacity: Capacity,
     hits: GpuBuffer,
     tick_seconds: GpuBuffer,
     forces: GpuBuffer,
@@ -140,45 +191,38 @@ impl LatticeBuffers {
             self.clock = gpu.device.frame_clock();
         }
         let bytes = lattice.force_bytes();
-        // Two [f32; 4] per force node.
-        let force_lattices = forces.len() / (2 * lattice.node_count()).max(1);
         let force_bytes = (forces.len() * 16) as u64;
         let impulse_bytes = (impulses.len() * 16) as u64;
         let hit_bytes = (hits.len() * 16) as u64;
         let tick_bytes = (tick_seconds.len() * 4) as u64;
-        if self.gpu.as_ref().is_none_or(|buffers| {
-            buffers.lattice != lattice
-                || buffers.force_capacity < force_lattices
-                || buffers.impulse_capacity < impulses.len()
-                || buffers.hit_capacity < hits.len()
-                || buffers.tick_capacity < tick_seconds.len()
-        }) {
-            // Room for a live frame's ticks up front; offline catch-up grows it.
-            let force_capacity = force_lattices.max(FORCE_LATTICE_RESERVE as usize);
-            let tick_capacity = tick_seconds.len().max(FORCE_LATTICE_RESERVE as usize);
+        let needed = Capacity {
+            lattice,
+            // Two [f32; 4] per force node.
+            forces: forces.len() / (2 * lattice.node_count()).max(1),
+            impulses: impulses.len(),
+            hits: hits.len(),
+            ticks: tick_seconds.len(),
+        };
+        if self.gpu.as_ref().is_none_or(|buffers| !buffers.capacity.holds(&needed)) {
+            let capacity = Capacity::reserve(needed);
             let create = |what: &str, size: u64| {
                 gpu.device
                     .try_create_buffer_shared(size)
                     .map_err(|error| format!("Force lattice: the {what} need {size} bytes: {error}"))
             };
-            let forces_buffer = create("forces", force_capacity as u64 * bytes)?;
-            let impulses_buffer = create("impulses", impulse_bytes.max(16))?;
-            let hits_buffer = create("hits", hit_bytes.max(16))?;
-            let ticks_buffer = create("tick lengths", tick_capacity as u64 * 4)?;
+            let forces_buffer = create("forces", capacity.forces as u64 * bytes)?;
+            let impulses_buffer = create("impulses", capacity.impulse_bytes())?;
+            let hits_buffer = create("hits", (capacity.hits as u64 * 16).max(16))?;
+            let ticks_buffer = create("tick lengths", capacity.ticks as u64 * 4)?;
             forces_buffer.zero_fill();
             impulses_buffer.zero_fill();
             hits_buffer.zero_fill();
             ticks_buffer.zero_fill();
-            let staging_bytes = impulse_bytes + force_capacity as u64 * bytes + hit_bytes.max(16) + tick_capacity as u64 * 4;
             let staging = (0..STAGING_SLOTS)
-                .map(|_| create("staging lattices", staging_bytes).map(|buffer| StagingSlot { buffer, read_stamp: 0 }))
+                .map(|_| create("staging lattices", capacity.staging_bytes()).map(|buffer| StagingSlot { buffer, read_stamp: 0 }))
                 .collect::<Result<_, _>>()?;
             self.gpu = Some(Buffers {
-                lattice,
-                force_capacity,
-                impulse_capacity: impulses.len(),
-                hit_capacity: hits.len(),
-                tick_capacity,
+                capacity,
                 hits: hits_buffer,
                 tick_seconds: ticks_buffer,
                 forces: forces_buffer,
@@ -210,28 +254,31 @@ impl LatticeBuffers {
                 index
             }
         };
+        let capacity = buffers.capacity;
         let slot = &mut buffers.staging[index];
         if impulses_dirty && impulse_bytes > 0 {
-            // SAFETY: shared storage of (1 + capacity) × `bytes` plus the hit
-            // records; its last GPU reader has retired (checked or waited
-            // above) and the copy below is the next.
+            // SAFETY: shared storage laid out by `Capacity` (impulses, forces,
+            // hit records, tick lengths), each region within its capacity;
+            // its last GPU reader has retired (checked or waited above) and
+            // the copy below is the next.
             unsafe { slot.buffer.write(0, bytemuck::cast_slice(impulses)) };
             gpu.native_enc.copy_buffer_range(&slot.buffer, 0, &buffers.impulses, 0, impulse_bytes);
         }
         if forces_dirty && force_bytes > 0 {
-            // SAFETY: as above, after the impulse lattice; the capacity holds
+            let offset = capacity.impulse_bytes();
+            // SAFETY: as above, after the impulse region; the capacity holds
             // every force lattice.
-            unsafe { slot.buffer.write(impulse_bytes, bytemuck::cast_slice(forces)) };
-            gpu.native_enc.copy_buffer_range(&slot.buffer, impulse_bytes, &buffers.forces, 0, force_bytes);
+            unsafe { slot.buffer.write(offset, bytemuck::cast_slice(forces)) };
+            gpu.native_enc.copy_buffer_range(&slot.buffer, offset, &buffers.forces, 0, force_bytes);
         }
         if hit_bytes > 0 {
-            let offset = impulse_bytes + buffers.force_capacity as u64 * bytes;
+            let offset = capacity.hits_offset();
             // SAFETY: the retired staging slot includes the hit records.
             unsafe { slot.buffer.write(offset, bytemuck::cast_slice(hits)) };
             gpu.native_enc.copy_buffer_range(&slot.buffer, offset, &buffers.hits, 0, hit_bytes);
         }
         if tick_bytes > 0 {
-            let offset = impulse_bytes + buffers.force_capacity as u64 * bytes + (buffers.hit_capacity as u64 * 16).max(16);
+            let offset = capacity.ticks_offset();
             // SAFETY: the retired staging slot ends with room for every tick
             // length, after the hit records.
             unsafe { slot.buffer.write(offset, bytemuck::cast_slice(tick_seconds)) };
@@ -252,4 +299,30 @@ pub fn felt_field(ctx: &EffectNodeContext<'_, '_>, owner: &str) -> Result<Option
         .map(|field| field.with_air_drag(air_drag))
         .transpose()
         .map_err(|error| format!("{owner}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A swarm uploads before its first hit with no impulse lattice at all.
+    /// The reserve made then holds its first hit and a later live hit frame
+    /// with more ticks, so neither reallocates a buffer or a staging slot.
+    #[test]
+    fn lattice_reserve_holds_live_hit_frames() {
+        let lattice = ForceLattice::over_box([-2.0; 3], [4.0; 3], 64);
+        let nodes = lattice.node_count();
+        let frame = |ticks: usize, hit_lattices: usize| Capacity { lattice, forces: ticks, impulses: hit_lattices * nodes, hits: 0, ticks };
+        let reserved = Capacity::reserve(frame(1, 0));
+        for (ticks, hit_lattices) in [(1, 1), (2, 2), (3, 3)] {
+            assert!(reserved.holds(&frame(ticks, hit_lattices)), "{ticks} ticks with hits");
+        }
+        // Offline catch-up past a live frame grows it; so does a new lattice.
+        assert!(!reserved.holds(&frame(8, 8)));
+        assert!(!reserved.holds(&Capacity { lattice: ForceLattice::over_box([-2.0; 3], [4.0; 3], 17), ..frame(1, 0) }));
+        // The staging regions follow one another without overlap.
+        assert!(reserved.impulse_bytes() >= 3 * lattice.impulse_bytes());
+        assert_eq!(reserved.hits_offset(), reserved.impulse_bytes() + 3 * lattice.force_bytes());
+        assert!(reserved.staging_bytes() >= reserved.ticks_offset() + 3 * 4);
+    }
 }
