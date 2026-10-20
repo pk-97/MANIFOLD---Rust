@@ -750,6 +750,53 @@ mod tests {
         assert_eq!(row.spec.inactive_reason.as_deref(), Some(Feature::DepthOfField.off_reason()));
     }
 
+    /// D-103: an old show keeps its depth of field rows whichever way the
+    /// switch was saved. Saved off, switching it on brings the folded row
+    /// live; saved on, switching it off dims the row, as on any pinned card.
+    #[test]
+    fn old_show_gated_rows_follow_the_switch_both_ways() {
+        let switch_id = |project: &Project| {
+            project.timeline.layers[0].gen_params().unwrap().params.iter()
+                .find(|param| param.spec.scene.is_some_and(|scene| scene.switch == Some(Feature::DepthOfField)))
+                .map(|param| param.id().to_string())
+                .expect("a depth of field switch")
+        };
+        let fold_id = |project: &Project| {
+            project.timeline.layers[0].gen_params().unwrap().params.iter()
+                .find(|param| param.spec.scene.is_some_and(|scene| scene.gate == Some(Gate::Fold(Feature::DepthOfField))))
+                .map(|param| param.id().to_string())
+                .expect("a folded depth of field row")
+        };
+        let set_switch = |project: &mut Project, on: bool| {
+            let id = switch_id(project);
+            project.timeline.layers[0].gen_params_mut().unwrap().set_base_param(&id, if on { 1.0 } else { 0.0 });
+        };
+        let load_old = |project: &Project| {
+            let mut json: serde_json::Value = serde_json::to_value(project).unwrap();
+            json["projectVersion"] = serde_json::Value::String("1.21.0".into());
+            let mut loaded = manifold_io::loader::load_project_from_json(&json.to_string()).expect("load");
+            crate::project_io::migrate_project_scene_graphs(&mut loaded);
+            loaded
+        };
+        let fold_row = |project: &Project| {
+            let id = fold_id(project);
+            surface(project, SurfaceVisibility::CuratedCard)
+                .into_iter()
+                .find(|row| row.id == id.as_str())
+                .map(|row| row.spec.inactive_reason)
+        };
+        let dimmed = Some(Some(Feature::DepthOfField.off_reason().to_string()));
+
+        for saved_on in [false, true] {
+            let mut saved = project("PhysicsSolids");
+            set_switch(&mut saved, saved_on);
+            let mut old = load_old(&saved);
+            assert_eq!(fold_row(&old), if saved_on { Some(None) } else { dimmed.clone() }, "saved on: {saved_on}");
+            set_switch(&mut old, !saved_on);
+            assert_eq!(fold_row(&old), if saved_on { dimmed.clone() } else { Some(None) }, "switched from {saved_on}");
+        }
+    }
+
     fn folds(project: &Project) -> Vec<String> {
         let inst = project.timeline.layers[0].gen_params().unwrap();
         let def = inst.graph.clone().unwrap_or_else(|| catalog_def(inst.effect_type().as_str()));

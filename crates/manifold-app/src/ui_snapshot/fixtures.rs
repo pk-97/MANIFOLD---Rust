@@ -188,7 +188,8 @@ fn empty_scene() -> SceneData {
 /// Real-project scene (`project:<abs-or-relative-path>`): loads an actual
 /// `.manifold` file through the SAME path the live app uses
 /// (`ProjectIOService::open_project_from_path`) — `load_project_with` plus the
-/// embedded-preset install hook, so project-local forked presets resolve
+/// embedded-preset install hook and the app's load steps
+/// (`prepare_loaded_project`), so project-local forked presets resolve
 /// their params exactly as the app would show them (BUG-036). Missing
 /// media does not fail the load: `run_post_load_validation` only logs
 /// (`manifold-io/src/loader.rs`'s step 6), so real projects with unreachable
@@ -200,13 +201,16 @@ fn project_scene(path: &str) -> Option<SceneData> {
         std::path::Path::new(path),
         crate::project_io::install_embedded_presets,
     );
-    let project = match load_result {
+    let mut project = match load_result {
         Ok(p) => p,
         Err(e) => {
             eprintln!("ui-snap: failed to load project '{path}': {e}");
             return None;
         }
     };
+    for notice in crate::project_io::prepare_loaded_project(&mut project) {
+        eprintln!("ui-snap: load notice: {notice}");
+    }
     Some(SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() })
 }
 

@@ -560,7 +560,7 @@ pub(super) fn dispatch_project(
                             && node.type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID
                     })
                     .ok_or("The scene is no longer available")?;
-                let scene =manifold_core::SceneNodeRef::locate(def, &render.node_id).ok_or("The scene is no longer available")?;
+                let scene = manifold_core::SceneNodeRef::locate(def, &render.node_id).ok_or("The scene is no longer available")?;
                 let count = |name: &str| match render.params.get(name) {
                     Some(SerializedParamValue::Float { value }) => *value as u32,
                     Some(SerializedParamValue::Int { value }) => *value as u32,
@@ -574,11 +574,15 @@ pub(super) fn dispatch_project(
                     }
                     None => None,
                 };
-                // A source is placed inside its water's simulated box.
+                // A source is placed inside its water's simulated box, at the
+                // values the card holds (BUG-l2itk (card binding overrides
+                // node literal)).
                 let source = |kind| {
                     use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
                     let water = water.as_ref().ok_or("Select the water this goes into")?;
-                    SceneVm::from_def(def)
+                    crate::scene_gizmo::authored_def(project, &target)
+                        .as_ref()
+                        .and_then(SceneVm::from_def)
                         .and_then(|vm| {
                             vm.objects.into_iter().find_map(|row| match row {
                                 SceneObjectVm::Known(row) if row.liquid_domain.as_ref() == Some(water) => row.fluid_domain,

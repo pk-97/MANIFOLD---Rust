@@ -1347,6 +1347,8 @@ impl ParamCardPanel {
                 self.drawer_clips[i] = row.drawer_clip;
                 self.row_host.toggle_ids[i] = Some(row.button_ids());
                 self.toggle_cache[i] = info.spec.default > 0.5;
+                self.row_host.envelope_btn_ids[i] = row.envelope_btn;
+                self.row_host.driver_btn_ids[i] = row.driver_btn;
                 self.row_host.audio_btn_ids[i] = row.audio_btn;
                 self.row_host.audio_configs[i] = row.audio_config;
                 self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
@@ -1701,6 +1703,8 @@ impl ParamCardPanel {
                     self.drawer_clips[i] = row.drawer_clip;
                     self.row_host.toggle_ids[i] = Some(row.button_ids());
                     self.toggle_cache[i] = info.spec.default > 0.5;
+                    self.row_host.envelope_btn_ids[i] = row.envelope_btn;
+                    self.row_host.driver_btn_ids[i] = row.driver_btn;
                     self.row_host.audio_btn_ids[i] = row.audio_btn;
                     self.row_host.audio_configs[i] = row.audio_config;
                     self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;

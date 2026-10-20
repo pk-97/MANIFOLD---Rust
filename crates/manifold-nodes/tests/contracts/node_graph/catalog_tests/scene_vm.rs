@@ -133,11 +133,64 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
 
 /// The document id `reference` names, walking its group scope.
 fn doc_id(def: &EffectGraphDef, reference: &SceneNodeRef) -> Option<u32> {
+    node_of(def, reference).map(|node| node.id)
+}
+
+fn node_of<'a>(def: &'a EffectGraphDef, reference: &SceneNodeRef) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
     let mut nodes = &def.nodes;
     for group in &reference.scope {
         nodes = &nodes.iter().find(|node| &node.node_id == group)?.group.as_deref()?.nodes;
     }
-    nodes.iter().find(|node| node.node_id == reference.node).map(|node| node.id)
+    nodes.iter().find(|node| node.node_id == reference.node)
+}
+
+/// What the graph itself says each model row is, read without the model:
+/// a water's domain is a liquid domain inside the water's own group, the only
+/// one there; a look sits beside its water and owns one look mesh; an
+/// imported part sits in the group that is its parent; a placed source is a
+/// role node under a water.
+fn assert_model_matches_graph(label: &str, def: &EffectGraphDef, models: &[manifold_core::scene_object_model::SceneObjectModel]) {
+    use manifold_core::scene_object_model::SceneObjectRowKind as Kind;
+    for model in models {
+        let object = node_of(def, &model.object).unwrap_or_else(|| panic!("{label}: {:?} resolves", model.object));
+        let parent = model.parent.as_ref().map(|parent| {
+            models.iter().find(|row| &row.object == parent).unwrap_or_else(|| panic!("{label}: {:?}'s parent is a row", model.object))
+        });
+        match model.kind {
+            Kind::PhysicsParent if model.liquid_domain.is_some() => {
+                let domain = model.liquid_domain.as_ref().unwrap();
+                assert!(manifold_core::liquid_domain::is_liquid_domain(&node_of(def, domain).expect("the domain resolves").type_id),
+                    "{label}: {:?} simulates a liquid domain", model.object);
+                let owner = node_of(def, &model.owner).expect("the owner resolves");
+                let body = owner.group.as_deref().unwrap_or_else(|| panic!("{label}: a water's owner is its group"));
+                assert_eq!(manifold_core::liquid_domain::liquid_domains_in(&body.nodes).len(), 1, "{label}: one liquid in the water's group");
+                assert!(model.object.scope.starts_with(&[model.owner.scope.clone(), vec![model.owner.node.clone()]].concat()),
+                    "{label}: the water's object is inside its group");
+            }
+            Kind::PhysicsParent => {
+                assert_eq!(object.type_id, "group", "{label}: an imported model's row is its group");
+            }
+            Kind::LookChild => {
+                let water = parent.unwrap_or_else(|| panic!("{label}: a look has its water"));
+                assert!(water.kind == Kind::PhysicsParent && water.liquid_domain.is_some(), "{label}: a look's parent is a water");
+                assert_eq!(model.object.scope, water.object.scope, "{label}: a look sits beside its water");
+                assert_eq!(model.owner, water.owner, "{label}: a look follows its water's group");
+                let [mesh] = model.controls.as_slice() else { panic!("{label}: a look owns one look mesh: {:?}", model.controls) };
+                assert_eq!(node_of(def, mesh).expect("the look mesh resolves").type_id, "node.platonic_solid_mesh");
+            }
+            Kind::Object if object.type_id == "node.fluid_role_source" => {
+                let water = parent.unwrap_or_else(|| panic!("{label}: a placed source has its water"));
+                assert!(water.liquid_domain.is_some(), "{label}: a placed source feeds a water");
+            }
+            Kind::Object => {
+                assert_eq!(object.type_id, "node.scene_object", "{label}: an object row is a scene object");
+                if let Some(group) = parent {
+                    assert_eq!(model.object.scope.last(), Some(&group.object.node), "{label}: a part sits in its model's group");
+                    assert!(model.controls.is_empty(), "{label}: a part leaves its controls to its model");
+                }
+            }
+        }
+    }
 }
 
 /// Every Known row reads its parent, kind and controls from the scene
@@ -146,6 +199,7 @@ fn doc_id(def: &EffectGraphDef, reference: &SceneNodeRef) -> Option<u32> {
 fn assert_rows_share_owner(label: &str, def: &EffectGraphDef) -> usize {
     let Some(vm) = SceneVm::from_def(def) else { return 0 };
     let models = SceneVm::object_models(def).expect("a scene has a model");
+    assert_model_matches_graph(label, def, &models);
     let mut checked = 0;
     for row in vm.objects.iter().filter_map(|object| match object {
         SceneObjectVm::Known(row) => Some(row),
@@ -177,6 +231,15 @@ fn physics_boundary_rows_share_owner() {
             SceneObjectVm::Known(row) if row.kind == manifold_core::scene_object_model::SceneObjectRowKind::LookChild))));
     }
     assert!(families >= 2, "the water family presets are covered");
+    // The shipped waters: one water, its looks in output order.
+    for (preset, looks) in [("WaterDamBreakGpuFlip", 4), ("WaterDamBreakParticles", 3)] {
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new(preset)).expect("bundled def");
+        let models = SceneVm::object_models(&def).expect("a scene");
+        let waters: Vec<_> = models.iter().filter(|model| model.liquid_domain.is_some() && model.kind == manifold_core::scene_object_model::SceneObjectRowKind::PhysicsParent).collect();
+        let [water] = waters.as_slice() else { panic!("{preset}: one water, got {}", waters.len()) };
+        let children = models.iter().filter(|model| model.parent.as_ref() == Some(&water.object)).count();
+        assert_eq!(children, looks, "{preset}: the water's looks");
+    }
     // An imported model: its group is the parent of its parts.
     let (import, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(
         &manifold_nodes_scene::node_graph::gltf_import::testkit::azalea_fixture_path(),

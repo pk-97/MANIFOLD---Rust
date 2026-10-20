@@ -247,6 +247,8 @@ fn run_flow(
         || scene == "bug047"
         || scene == "envmod"
         || scene == "dmxcard"
+        // A real show's layer card is what a script on it inspects.
+        || scene.starts_with("project:")
     {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;

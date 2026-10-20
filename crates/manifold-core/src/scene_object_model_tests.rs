@@ -198,4 +198,24 @@ fn physics_boundary_remove_placed_source() {
     assert!(!models.iter().any(|model| model.object.node.as_str() == "lake_inflow"));
 
     assert!(remove_placed_source(&graph, &reference(&["lake"], "lake_water")).is_err(), "only a placed source");
+
+    // An Inflow group wrapped in another group: the tree lists the wrapper,
+    // and deleting removes the wrapper, never refuses.
+    let mut nested = graph.clone();
+    let lake = nested.nodes.iter_mut().find(|node| node.id == 1).unwrap().group.as_deref_mut().unwrap();
+    let inflow = lake.nodes.iter().position(|node| node.id == 9).unwrap();
+    let inner = lake.nodes.remove(inflow);
+    let mut wrapper: EffectGraphNode = serde_json::from_value(group(9, "lake_wrapper", &["role"],
+        vec![node(5, "lake_wrapper_out", "system.group_output")], vec![wire(4, "role", 5, "role")])).unwrap();
+    let mut inner = inner;
+    inner.id = 4;
+    wrapper.group.as_deref_mut().unwrap().nodes.push(inner);
+    lake.nodes.push(wrapper);
+    let models = scene_object_models(&nested, &scene()).unwrap();
+    let listed = models.iter().find(|model| model.object.node.as_str() == "lake_inflow").expect("the nested source is listed");
+    assert_eq!(listed.owner, reference(&["lake"], "lake_wrapper"));
+    let edit = remove_placed_source(&nested, &reference(&["lake", "lake_wrapper", "lake_inflow_group"], "lake_inflow")).expect("removes the wrapper");
+    let body = edit.graph.nodes.iter().find(|node| node.id == 1).unwrap().group.as_deref().unwrap();
+    assert!(!body.nodes.iter().any(|node| node.id == 9) && !body.wires.iter().any(|wire| wire.to_port == "role_0"));
+    assert_eq!(edit.removed_param_ids, ["inflow_y"]);
 }

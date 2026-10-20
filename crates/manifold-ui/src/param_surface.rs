@@ -413,7 +413,8 @@ impl ParamRow {
     /// Whether the row can open a modulation drawer under itself: a slider
     /// and a fire button can, and so can a trigger-gate switch (its audio
     /// drawer) and a colour row (its R slider's drawer, in the fold); a plain
-    /// switch and a pick list cannot.
+    /// switch and a pick list cannot. A pick list's T, D and A buttons arm a
+    /// modulator, and the armed row draws as a slider, which can.
     pub fn grows_drawer(&self, scene: bool) -> bool {
         match self.kind(scene) {
             RowKind::Number | RowKind::Trigger | RowKind::Colour => true,

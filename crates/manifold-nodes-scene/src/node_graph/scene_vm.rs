@@ -51,7 +51,7 @@ mod item_nodes;
 use item_nodes::{camera_nodes, physics_nodes, world_nodes};
 mod liquid;
 use liquid::locate_node;
-use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models};
+use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
 mod shapes;
 #[cfg(test)]
@@ -655,7 +655,7 @@ impl SceneVm {
             Some(models) => models,
             None => {
                 let scene = SceneNodeRef { scope: Vec::new(), node: scene_node.node_id.clone() };
-                derived = scene_object_models(def, &scene).unwrap_or_default();
+                derived = scene_object_models_in(def, &scene, index.as_ref()).unwrap_or_default();
                 &derived
             }
         };
@@ -967,27 +967,40 @@ fn trace_objects(
                 out.push((anchor, SceneObjectVm::Known(parent)));
             }
             None => {
-                // A placed fluid source: its own row under the water it feeds.
+                // A placed fluid source: its own row under the water it feeds,
+                // named by its role. An Initial Fill group stays the water's:
+                // its controls join the water's row. The model reads no
+                // values, so the role is read here.
                 let Some(water) = model.parent.as_ref().and_then(doc_of) else { continue };
+                let Some((_, SceneObjectVm::Known(row))) =
+                    out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if row.object_node_id == water))
+                else {
+                    continue;
+                };
+                let role = match locate_node(root, &model.object).map_or(1, |at| param_f32(at.node, "role", 1.0).round() as i32) {
+                    0 => None,
+                    2 => Some(SourceRole::Drain),
+                    3 => Some(SourceRole::Collider),
+                    _ => Some(SourceRole::Inflow),
+                };
+                let Some(role) = role else {
+                    for control in &model.controls {
+                        if !row.controls.contains(control) {
+                            row.controls.push(control.clone());
+                        }
+                    }
+                    continue;
+                };
                 let name = locate_node(root, &model.owner)
                     .and_then(|at| at.node.handle.clone().or_else(|| at.node.title.clone()))
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| "Source".into());
-                let source = PlacedSourceVm {
+                row.placed_sources.push(PlacedSourceVm {
                     node: model.object.node.clone(),
                     name,
                     owned: model.controls.iter().map(|control| control.node.clone()).collect(),
-                    role: locate_node(root, &model.object).map_or(SourceRole::Inflow, |at| match param_f32(at.node, "role", 1.0).round() as i32 {
-                        2 => SourceRole::Drain,
-                        3 => SourceRole::Collider,
-                        _ => SourceRole::Inflow,
-                    }),
-                };
-                if let Some((_, SceneObjectVm::Known(row))) =
-                    out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if row.object_node_id == water))
-                {
-                    row.placed_sources.push(source);
-                }
+                    role,
+                });
             }
         }
     }
@@ -1039,10 +1052,16 @@ fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObj
             // selection, rename and deletion address the render slot.
             row.is_group = true;
             row.parent_group_id = None;
+            // The family's eye is `parent_visible`. A water saved hidden by
+            // its own `visible` (built before it read as Water) keeps that
+            // flag as its eye until shown, so the panel can bring it back.
             if let Some((level, _)) = locate_doc_path(root, &model.doc_path) {
-                row.visible_addr.param_id = "parent_visible".into();
-                row.visible_value = level.node(row.object_node_id).is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
-                row.visible_driven = level.producer(row.object_node_id, "parent_visible").is_some();
+                let shown = |param: &str| level.node(row.object_node_id).is_none_or(|node| param_f32(node, param, 1.0) > 0.5);
+                if shown("visible") || !shown("parent_visible") {
+                    row.visible_addr.param_id = "parent_visible".into();
+                    row.visible_value = shown("parent_visible");
+                    row.visible_driven = level.producer(row.object_node_id, "parent_visible").is_some();
+                }
             }
         }
         SceneObjectRowKind::LookChild => {
@@ -1890,6 +1909,20 @@ mod tests {
                 wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
                 wire(10, "role", 4, "role_1")]);
         let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        // Each role names its row; an Initial Fill group stays the water's.
+        let with_role = |role: f32| {
+            let mut graph = restored.clone();
+            let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_deref_mut().unwrap();
+            group.nodes.iter_mut().find(|node| node.id == 11).unwrap().params.insert("role".into(), SerializedParamValue::Float { value: role });
+            let vm = SceneVm::from_def(&graph).unwrap();
+            let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+            (row.placed_sources.iter().map(|source| source.role).collect::<Vec<_>>(), row.control_nodes())
+        };
+        assert_eq!(with_role(2.0).0, [SourceRole::Drain]);
+        assert_eq!(with_role(3.0).0, [SourceRole::Collider]);
+        let (sources, controls) = with_role(0.0);
+        assert!(sources.is_empty(), "an Initial Fill group is no source row");
+        assert_eq!(controls, ["n4", "n11", "n12"].map(NodeId::new), "its controls stay the water's");
         let vm = SceneVm::from_def(&restored).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4"].map(NodeId::new), "a placed source is its own row, not the water's");

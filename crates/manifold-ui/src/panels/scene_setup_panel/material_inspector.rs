@@ -767,6 +767,8 @@ impl ScenePanel {
             );
             let host = &mut self.properties_card.row_host;
             host.toggle_ids[slot] = Some(row.button_ids());
+            host.envelope_btn_ids[slot] = row.envelope_btn;
+            host.driver_btn_ids[slot] = row.driver_btn;
             host.audio_btn_ids[slot] = row.audio_btn;
             host.audio_configs[slot] = row.audio_config;
             host.audio_trigger_mode_badge_ids[slot] = row.mode_badge_id;

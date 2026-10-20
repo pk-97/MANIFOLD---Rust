@@ -353,6 +353,13 @@ fn water_family_recognizers_agree() {
 
     // BUG-4lfm: a water whose object leaves its group on a port named
     // "water" is still recognised by its liquid domain.
+    let (project, layer) = water_port_project();
+    agree(&project, &layer, "water port");
+}
+
+/// The shipped water with its object leaving the family group on a port
+/// named "water": not the family wiring the old walkers demanded.
+fn water_port_project() -> (Project, LayerId) {
     let (mut project, layer, _) = water_project();
     let mut def = effective_def(&project, &layer);
     let family = def.nodes.iter().position(|node| node.group.as_deref().and_then(manifold_core::scene_object_model::water_family).is_some()).unwrap();
@@ -367,7 +374,41 @@ fn water_family_recognizers_agree() {
     }
     let (_, owner) = project.timeline.find_layer_by_id_mut(&layer).unwrap();
     owner.gen_params_mut().unwrap().graph = Some(def);
-    agree(&project, &layer, "water port");
+    (project, layer)
+}
+
+/// A water the panel hid through its object's own `visible`, before it read
+/// as Water, shows hidden and comes back from its eye, undoably.
+#[test]
+fn water_family_saved_hidden_water_shows_from_its_eye() {
+    let (mut project, layer) = water_port_project();
+    let target = GraphTarget::Generator(layer.clone());
+    let water_row = |project: &Project| {
+        rows(&crate::scene_gizmo::authored_def(project, &target).unwrap())
+            .into_iter()
+            .find(|row| row.is_group && row.liquid_domain.is_some())
+            .expect("a water")
+    };
+    let water = water_row(&project);
+    assert_eq!(water.visible_addr.param_id, "parent_visible");
+    let mut editing = EditingService::new();
+    let hide = apply_scene_param_write(&project, &layer, water.visible_addr.scope_path.clone(), water.visible_addr.node_doc_id, "visible", 0.0)
+        .expect("the object's own visible flag");
+    editing.execute(hide, &mut project);
+
+    let hidden = water_row(&project);
+    assert!(!hidden.visible_value, "the eye shows the water hidden");
+    assert_eq!(hidden.visible_addr.param_id, "visible", "the eye writes the flag that hid it");
+    let show = apply_scene_param_write(&project, &layer, hidden.visible_addr.scope_path.clone(), hidden.visible_addr.node_doc_id,
+        &hidden.visible_addr.param_id, 1.0).expect("the eye shows it");
+    editing.execute(show, &mut project);
+    let shown = water_row(&project);
+    assert!(shown.visible_value && shown.visible_addr.param_id == "parent_visible", "shown, the eye is the family's again");
+
+    assert!(editing.undo(&mut project));
+    assert!(!water_row(&project).visible_value, "undo hides it again");
+    assert!(editing.redo(&mut project));
+    assert!(water_row(&project).visible_value, "redo shows it");
 }
 
 fn visibility_rename_round_trip(preset: &'static str) {

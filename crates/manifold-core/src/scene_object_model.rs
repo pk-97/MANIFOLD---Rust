@@ -145,13 +145,22 @@ pub fn scene_object_models(
     graph: &EffectGraphDef,
     scene: &SceneNodeRef,
 ) -> Result<Vec<SceneObjectModel>, SceneGraphEditError> {
+    scene_object_models_in(graph, scene, FlatSceneIndex::build(graph).ok().as_ref())
+}
+
+/// [`scene_object_models`] over a flat index the caller already built
+/// (`None` when the graph has none).
+pub fn scene_object_models_in(
+    graph: &EffectGraphDef,
+    scene: &SceneNodeRef,
+    index: Option<&FlatSceneIndex>,
+) -> Result<Vec<SceneObjectModel>, SceneGraphEditError> {
     let error = |message: &str| SceneGraphEditError { at: Some(scene.clone()), message: message.into() };
     let scene_at = Path::locate(graph, scene).ok_or_else(|| error("render scene not found"))?;
     let scene_node = scene_at.node;
     if scene_node.type_id != RENDER_SCENE_TYPE_ID {
         return Err(error("target is not a render scene"));
     }
-    let index = FlatSceneIndex::build(graph).ok();
 
     // Every wired render slot that resolves to a scene object.
     let mut slots: Vec<(u32, At<'_>)> = Vec::new();
@@ -201,14 +210,13 @@ pub fn scene_object_models(
         row.liquid = match (&row.kind, &row.family) {
             (SceneObjectRowKind::LookChild, _) => None,
             (SceneObjectRowKind::PhysicsParent, Some((owner, family))) => {
-                let surface = index.as_ref().and_then(|index| liquid_domain_of(index, &row.at.reference()).ok().flatten());
+                let surface = index.and_then(|index| liquid_domain_of(index, &row.at.reference()).ok().flatten());
                 match surface {
                     Some(domain) => row.at.path.root_locate(&domain).map(|at| (at, true)),
                     None => family_domain_at(owner, family).map(|at| (at, family.surface)),
                 }
             }
             _ => index
-                .as_ref()
                 .and_then(|index| liquid_domain_of(index, &row.at.reference()).ok().flatten())
                 .and_then(|domain| row.at.path.root_locate(&domain))
                 .map(|at| (at, true)),
@@ -254,11 +262,10 @@ pub fn scene_object_models(
             for child in rows.iter().filter(|other| other.compound.as_ref().is_some_and(|at| at.node.id == group_at.node.id
                 && at.path.doc_scope() == group_at.path.doc_scope()))
             {
-                let mut model = child.model(&rows, &[]);
+                let mut model = child.identity(&rows);
                 model.parent = Some(parent_ref.clone());
                 model.capabilities.enable_physics = false;
                 model.capabilities.fluid_role = false;
-                model.controls.clear();
                 out.push(model);
             }
             continue;
@@ -608,6 +615,14 @@ impl<'a> Row<'a> {
     }
 
     fn model(&self, rows: &[Row<'_>], placed: &[Placed<'_>]) -> SceneObjectModel {
+        let mut model = self.identity(rows);
+        model.controls = self.controls(placed);
+        model
+    }
+
+    /// The row with no controls: an imported model's part leaves them to
+    /// its model row, so it never walks for them.
+    fn identity(&self, rows: &[Row<'_>]) -> SceneObjectModel {
         let object = self.at.reference();
         let owner = match (&self.family, self.at.path.groups.last()) {
             (Some((family_owner, _)), _) => family_owner.reference(),
@@ -638,6 +653,21 @@ impl<'a> Row<'a> {
                 hide: false,
             },
         };
+        SceneObjectModel {
+            object,
+            owner,
+            parent,
+            kind: self.kind,
+            controls: Vec::new(),
+            capabilities,
+            slot: Some(self.slot),
+            liquid_domain: self.liquid.as_ref().map(|(domain, _)| domain.reference()),
+            doc_path: self.at.doc_path(),
+        }
+    }
+
+    fn controls(&self, placed: &[Placed<'_>]) -> Vec<SceneNodeRef> {
+        let liquid = self.liquid.is_some();
         let mut controls = Vec::new();
         if self.kind == SceneObjectRowKind::LookChild {
             controls.extend(look_mesh(&self.at));
@@ -670,17 +700,7 @@ impl<'a> Row<'a> {
                 }
             }
         }
-        SceneObjectModel {
-            object,
-            owner,
-            parent,
-            kind: self.kind,
-            controls,
-            capabilities,
-            slot: Some(self.slot),
-            liquid_domain: self.liquid.as_ref().map(|(domain, _)| domain.reference()),
-            doc_path: self.at.doc_path(),
-        }
+        controls
     }
 }
 
@@ -824,22 +844,29 @@ pub fn remove_placed_source(
     if role.node.type_id != FLUID_ROLE_SOURCE_TYPE_ID {
         return Err(error("not a fluid source"));
     }
-    let group = *role.path.groups.last().ok_or_else(|| error("a placed source sits in its own group"))?;
+    // The group the tree lists: the outermost one wired into a domain's role
+    // input, however deep the role node sits inside it.
+    let (depth, group) = role
+        .path
+        .groups
+        .iter()
+        .enumerate()
+        .find(|(depth, group)| {
+            let outer = role.path.levels[*depth];
+            outer.wires.iter().any(|wire| wire.from_node == group.id
+                && wire.to_port.starts_with("role_")
+                && outer.node(wire.to_node).is_some_and(|node| is_liquid_domain(&node.type_id)))
+        })
+        .map(|(depth, group)| (depth, *group))
+        .ok_or_else(|| error("the source feeds no water"))?;
     let body = group.group.as_deref().ok_or_else(|| error("source group has no body"))?;
     if body.nodes.iter().any(|node| node.type_id == SCENE_OBJECT_TYPE_ID) {
         return Err(error("a source drawn by an object is removed with that object"));
     }
-    let (outer, _) = role.path.leave().ok_or_else(|| error("a placed source sits in its own group"))?;
-    let feeds_domain = outer.level().wires.iter().any(|wire| wire.from_node == group.id
-        && wire.to_port.starts_with("role_")
-        && outer.level().node(wire.to_node).is_some_and(|node| is_liquid_domain(&node.type_id)));
-    if !feeds_domain {
-        return Err(error("the source feeds no water"));
-    }
     let mut removed_nodes = Vec::new();
     collect_node_ids(group, &mut removed_nodes);
     let mut graph = graph.clone();
-    let scope: Vec<NodeId> = outer.groups.iter().map(|group| group.node_id.clone()).collect();
+    let scope: Vec<NodeId> = role.path.groups[..depth].iter().map(|group| group.node_id.clone()).collect();
     let group_id = group.id;
     let (nodes, wires) = level_mut(&mut graph, &scope).ok_or_else(|| error("source scope not found"))?;
     nodes.retain(|node| node.id != group_id);

@@ -3658,6 +3658,43 @@ pub(super) mod tests {
         }
     }
 
+    /// A pick list on a scene-hosted card (an inspector modifier card, the
+    /// scene card) keeps the slider's T, D and A lane: each arms its
+    /// modulator, and the attached row draws as the slider whose drawer
+    /// shows it.
+    #[test]
+    fn pick_list_rows_keep_their_modulation_lane() {
+        use crate::param_surface::RowKind;
+        let mut config = gen_config_with_choice_and_float_switch();
+        let rect = Rect::new(0.0, 0.0, 340.0, 300.0);
+        let build = |config: &ParamSurface| {
+            let mut tree = UITree::new();
+            let mut panel = ParamCardPanel::new();
+            panel.configure(config);
+            panel.set_host(CardHost::SceneCard);
+            panel.build(&mut tree, rect);
+            (panel, tree)
+        };
+        let (mut panel, tree) = build(&config);
+        assert_eq!(panel.row_host.toggle_ids[0].as_ref().map(|ids| ids.kind), Some(RowKind::Choice));
+        let driver = panel.row_host.driver_btn_ids[0].expect("the pick list has a D button");
+        assert_eq!(tree.name_of(driver), Some("param_row.speed.driver_btn"));
+        match panel.handle_click(driver, &tree).as_slice() {
+            [PanelAction::Modulation(ModulationAction::DriverToggle(_, id))] => assert_eq!(id.as_ref(), "speed"),
+            other => panic!("expected DriverToggle, got {other:?}"),
+        }
+        let envelope = panel.row_host.envelope_btn_ids[0].expect("the pick list has a T button");
+        assert!(matches!(panel.handle_click(envelope, &tree).as_slice(),
+            [PanelAction::Modulation(ModulationAction::EnvelopeToggle(_, id))] if id.as_ref() == "speed"));
+        assert!(panel.row_host.audio_btn_ids[0].is_some(), "the pick list has an A button");
+        assert!(panel.row_host.driver_btn_ids[2].is_none(), "a switch keeps no lane");
+
+        config.rows[0].modulation.driver_active = true;
+        let (panel, _) = build(&config);
+        assert!(panel.row_host.slider_ids[0].is_some(), "the driven row is the slider that shows its driver");
+        assert!(config.rows[0].grows_drawer(true));
+    }
+
     /// Every Scene tab card draws by kind, through the effect body the real
     /// cards build with: an object modifier card (Bend's Axis) and a force
     /// card show the pick list and the switch, and a pick opens the shared
