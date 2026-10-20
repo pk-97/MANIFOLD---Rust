@@ -2,7 +2,7 @@ use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, MAX_BODIES};
+use crate::physics::{ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, IMPULSE_CAPACITY, MAX_BODIES};
 use manifold_node_engine::scene::transform::Transform;
 
 const DT: f64 = 1.0 / 60.0;
@@ -443,84 +443,29 @@ fn rigid_impulses_high_velocity_applies_once_across_microsteps() {
 }
 
 #[test]
-fn rigid_impulses_queue_and_receipt_budget_overflow_is_sticky() {
+fn rigid_impulses_full_history_refuses_one_hit_and_keeps_stepping() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let epoch = simulation.impulse_epoch().unwrap();
+    let targets = RigidImpulseTargets { bodies: 1, copies: false };
     for sequence in 0..256 {
-        simulation
-            .enqueue_impulse(
-                stamp(epoch, 0.0, sequence),
-                payload(
-                    [0.0; 3],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false,
-                    },
-                ),
-            )
-            .unwrap();
+        simulation.enqueue_impulse(stamp(epoch, 0.0, sequence), payload([0.0; 3], targets)).unwrap();
     }
-    assert!(simulation
-        .enqueue_impulse(
-            stamp(epoch, 0.0, 256),
-            payload(
-                [0.0; 3],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false
-                }
-            ),
-        )
-        .is_err());
-    assert!(simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
-        .is_err());
-    assert_eq!(receipts(&mut simulation).len(), 0);
-
-    let mut recovered = RigidSimulation::default();
-    initialize(&mut recovered, &bodies);
-    let epoch = recovered.impulse_epoch().unwrap();
-    for sequence in 0..256 {
-        recovered
-            .enqueue_impulse(
-                stamp(epoch, 0.0, sequence),
-                payload(
-                    [0.0; 3],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false,
-                    },
-                ),
-            )
-            .unwrap();
-    }
-    recovered
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
-        .unwrap();
-    assert_eq!(recovered.impulse_receipts.len(), 256);
-    assert!(recovered
-        .enqueue_impulse(
-            stamp(epoch, DT, 256),
-            payload(
-                [0.0; 3],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false
-                }
-            ),
-        )
-        .is_err());
-    assert_eq!(receipts(&mut recovered).len(), 256);
-    assert!(recovered
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
-        .is_err());
-    recovered
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
-        .unwrap();
-    assert_eq!(recovered.impulse_queue.as_ref().unwrap().len(), 0);
-    assert!(!recovered.impulse_overflow_latched);
+    let error = simulation.enqueue_impulse(stamp(epoch, 0.0, 256), payload([0.0; 3], targets)).unwrap_err();
+    assert!(error.contains("refused"), "{error}");
+    // One refusal latches nothing: the world keeps stepping and every
+    // admitted hit lands once.
+    simulation.advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0).unwrap();
+    assert_eq!(simulation.impulse_readiness(), Ok(true));
+    // Undrained receipts still hold their slots.
+    assert!(simulation.enqueue_impulse(stamp(epoch, DT, 257), payload([0.0; 3], targets)).is_err());
+    assert_eq!(receipts(&mut simulation).len(), 256);
+    // Drained, the history frees and the next hit is admitted and lands once.
+    simulation.enqueue_impulse(stamp(epoch, DT, 258), payload([0.0; 3], targets)).unwrap();
+    simulation.advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0).unwrap();
+    let landed: Vec<_> = receipts(&mut simulation).iter().map(|event| event.source.sequence).collect();
+    assert_eq!(landed, [258]);
 }
 
 #[test]
@@ -649,6 +594,19 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
         0,
         "held impulses pend"
     );
+    let discarded: Vec<_> = simulation.drain_discarded_impulses().map(|stamp| stamp.sequence).collect();
+    assert_eq!(discarded, [0, 1], "each held hit leaves one discard receipt");
+    // Receipts are pre-sized and bounded: a held hit never allocates, and
+    // one past the bound is counted without a stamp.
+    let capacity = simulation.impulse_discarded.capacity();
+    assert!(capacity >= IMPULSE_CAPACITY);
+    for sequence in 2..IMPULSE_CAPACITY as u64 + 7 {
+        strike(&mut simulation, 2.0 * DT, sequence);
+    }
+    assert_eq!(simulation.impulse_discarded.capacity(), capacity, "a held hit never allocates");
+    assert_eq!(simulation.drain_discarded_impulses().count(), IMPULSE_CAPACITY);
+    assert_eq!(simulation.take_discarded_beyond(), 5, "a discard past the bound is still counted");
+    assert_eq!(simulation.take_discarded_beyond(), 0, "counted once");
 
     for frame in 3..8 {
         simulation

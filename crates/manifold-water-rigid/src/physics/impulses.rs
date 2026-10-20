@@ -88,11 +88,6 @@ impl RigidSimulation {
         if let Some(error) = &self.impulse_failure {
             return Err(error.clone());
         }
-        if self.impulse_overflow_latched {
-            return Err(
-                "Physics: impulse history is full; restart the simulation or bake the scene".into(),
-            );
-        }
         let Some((accepted_transport, native_time)) = self.accepted_observation else {
             return Err("Physics: no successfully accepted observation at this transport".into());
         };
@@ -122,15 +117,17 @@ impl RigidSimulation {
         if let Some(error) = self.impulse_failure.as_ref() {
             return Err(error.clone());
         }
-        if self.impulse_overflow_latched {
-            return Err("Physics: impulse queue capacity overflow is latched until rebuild".into());
-        }
         self.validate_impulse_targets(payload.targets)?;
         // Pause and Simulation Speed 0 discard incoming events, so resume never
         // fires a saved-up pile (WATER_SIMULATION_DESIGN.md "Transport pause /
-        // water speed zero"). Admission succeeds so the producer rearms; no
-        // receipt will ever name the returned tick.
+        // water speed zero"). Admission succeeds so the producer rearms; the
+        // discard receipt is the only record, never an applied one.
         if self.held.is_held() {
+            if self.impulse_discarded.len() < IMPULSE_CAPACITY {
+                self.impulse_discarded.push(stamp);
+            } else {
+                self.impulse_discarded_beyond += 1;
+            }
             return Ok(self
                 .impulse_queue
                 .as_ref()
@@ -144,24 +141,19 @@ impl RigidSimulation {
             .len()
             + self.impulse_receipts.len()
             + self.impulse_tick_events.len();
+        // A full history refuses this hit only: receipts drain every frame,
+        // so the next hit is tried again. The check keeps the queue below its
+        // own capacity, so its overflow latch is never reached.
         if outstanding >= IMPULSE_CAPACITY {
-            self.impulse_overflow_latched = true;
-            return Err("Physics: impulse queue and receipt capacity is full".into());
+            return Err(format!(
+                "Physics: {IMPULSE_CAPACITY} hits are already in flight; this hit is refused"
+            ));
         }
-        match self
-            .impulse_queue
+        self.impulse_queue
             .as_mut()
             .expect("initialized world has an impulse queue")
             .enqueue(stamp, payload)
-        {
-            Ok(planned) => Ok(planned),
-            Err(error) => {
-                if error == manifold_physics::input::EventError::CapacityOverflow {
-                    self.impulse_overflow_latched = true;
-                }
-                Err(format!("Physics: failed to enqueue impulse: {error}"))
-            }
-        }
+            .map_err(|error| format!("Physics: failed to enqueue impulse: {error}"))
     }
 
     /// Drain receipts assigned at native tick start. The backing storage is
@@ -170,6 +162,27 @@ impl RigidSimulation {
         &mut self,
     ) -> std::vec::Drain<'_, AppliedEvent<ResolvedRigidImpulse>> {
         self.impulse_receipts.drain(..)
+    }
+
+    /// Drain the stamps of hits a held clock discarded; they never apply.
+    pub fn drain_discarded_impulses(&mut self) -> std::vec::Drain<'_, EventStamp> {
+        self.impulse_discarded.drain(..)
+    }
+
+    /// Take the count of held discards past the receipt bound; each is one
+    /// discarded hit with no stamp.
+    pub fn take_discarded_beyond(&mut self) -> u64 {
+        std::mem::take(&mut self.impulse_discarded_beyond)
+    }
+
+    /// Whether a hit fired now can be admitted: `Ok(false)` until the world
+    /// exists (the hit waits), `Err` once a native step failed.
+    pub fn impulse_readiness(&self) -> Result<bool, String> {
+        match (&self.impulse_failure, self.impulse_epoch) {
+            (Some(error), _) => Err(error.clone()),
+            (None, None) => Ok(false),
+            (None, Some(_)) => Ok(self.world.is_some()),
+        }
     }
 
     pub(super) fn validate_impulse_targets(
@@ -205,9 +218,10 @@ impl RigidSimulation {
         }
         self.impulse_receipts.clear();
         self.impulse_tick_events.clear();
+        self.impulse_discarded.clear();
+        self.impulse_discarded_beyond = 0;
         self.impulse_epoch = Some(epoch);
         self.impulse_failure = None;
-        self.impulse_overflow_latched = false;
         Ok(())
     }
 

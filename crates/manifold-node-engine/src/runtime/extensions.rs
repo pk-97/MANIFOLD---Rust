@@ -6,7 +6,7 @@ use manifold_core::{
     NodeId, PresetTypeId, effect_graph_def::EffectGraphDef, effects::PresetInstance, id::EffectId,
 };
 
-use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::SceneImpulseDiagnostics};
+use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::{ImpulseFire, SceneImpulseDiagnostics}};
 use super::{PresetRuntime, core::EffectSlot, preset_context::ProjectTempo};
 use crate::{
     exec::{
@@ -96,8 +96,8 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
         _param: &str,
         _source: FrameTime,
         _next_sequence: &mut u64,
-    ) -> Result<bool, String> {
-        Ok(false)
+    ) -> Result<ImpulseFire, String> {
+        Ok(ImpulseFire::NotImpulse)
     }
     fn drain_scene_impulse_diagnostics(
         &mut self,

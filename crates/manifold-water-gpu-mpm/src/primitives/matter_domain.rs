@@ -744,6 +744,18 @@ impl PhysicsNode for MatterDomain {
         self.impulses.epoch()
     }
 
+    /// A pending liquid (roles still preparing, clock not started) makes a
+    /// hit wait; a failed one refuses it.
+    fn physics_impulse_readiness(&self) -> Result<bool, String> {
+        if let Some(error) = self.impulses.failure() {
+            return Err(error.into());
+        }
+        if self.coupled.failed {
+            return Err("Matter impulses: the liquid failed; this hit is refused".into());
+        }
+        Ok(!self.role_pending && self.impulses.epoch().is_some())
+    }
+
     /// A hit fired this frame is stamped at the liquid's simulated time, so
     /// it lands on the first tick of the next frame (the rigid half at the
     /// start of the next settled rigid tick).
@@ -753,8 +765,8 @@ impl PhysicsNode for MatterDomain {
         sequence: u64,
         step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
-        if self.role_pending || self.coupled.failed {
-            return Err("Matter impulses: cannot capture an impulse while the liquid is pending or failed".into());
+        if !self.physics_impulse_readiness()? {
+            return Err("Matter impulses: the liquid is still preparing; fire waits for it".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
         stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
@@ -776,8 +788,8 @@ impl PhysicsNode for MatterDomain {
         self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
     }
 
-    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
-        self.impulses.drain_discarded(consume);
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) -> u64 {
+        self.impulses.drain_discarded(consume, self.coupled.owner.as_mut())
     }
 }
 
@@ -1247,6 +1259,23 @@ mod sim_rate_tests {
             assert_eq!(live.len(), rate.hz() as usize);
             assert_eq!(live, run(true));
         }
+    }
+
+    /// A pending liquid makes a hit wait for it; only a failed one refuses
+    /// (BUG-mo4oa (scene force trigger skipped)).
+    #[test]
+    fn matter_pending_liquid_makes_hits_wait() {
+        use manifold_physics::clock::{SimulationClock, TICK};
+        use manifold_water_rigid::node::PhysicsNode;
+        let mut domain = MatterDomain::new();
+        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
+        let frame = SimulationClock::default().advance(0.0, TICK, 1.0, 0.0, false, false);
+        domain.impulses.observe_frame(0.0, &frame).unwrap();
+        assert_eq!(domain.physics_impulse_readiness(), Ok(true));
+        domain.role_pending = true;
+        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role is still preparing");
+        domain.coupled.failed = true;
+        assert!(domain.physics_impulse_readiness().unwrap_err().contains("refused"));
     }
 }
 

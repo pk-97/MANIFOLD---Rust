@@ -727,6 +727,18 @@ impl PhysicsNode for GpuFlipDomain {
         self.impulses.epoch()
     }
 
+    /// A pending liquid (roles or field still preparing, clock not started)
+    /// makes a hit wait; a failed one refuses it.
+    fn physics_impulse_readiness(&self) -> Result<bool, String> {
+        if let Some(error) = self.impulses.failure() {
+            return Err(error.into());
+        }
+        if self.coupled.failed {
+            return Err("GPU FLIP impulses: the liquid failed; this hit is refused".into());
+        }
+        Ok(!self.holding && self.impulses.epoch().is_some())
+    }
+
     /// A hit fired this frame is stamped at the liquid's simulated time, so
     /// it lands on the first tick of the next frame.
     fn physics_impulse_stamp(
@@ -735,8 +747,8 @@ impl PhysicsNode for GpuFlipDomain {
         sequence: u64,
         step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
-        if self.holding {
-            return Err("GPU FLIP impulses: cannot capture an impulse while the liquid is pending or failed".into());
+        if !self.physics_impulse_readiness()? {
+            return Err("GPU FLIP impulses: the liquid is still preparing; fire waits for it".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
         stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
@@ -758,8 +770,8 @@ impl PhysicsNode for GpuFlipDomain {
         self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
     }
 
-    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
-        self.impulses.drain_discarded(consume);
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) -> u64 {
+        self.impulses.drain_discarded(consume, self.coupled.owner.as_mut())
     }
 }
 
@@ -1106,6 +1118,22 @@ mod tests {
         assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", 2.5)]);
         domain.later_obstacle_tick = Some(2);
         assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", -1.0)], "another tick's bound");
+    }
+
+    /// A pending liquid makes a hit wait for it; only a failed one refuses
+    /// (BUG-mo4oa (scene force trigger skipped)).
+    #[test]
+    fn gpu_flip_pending_liquid_makes_hits_wait() {
+        use manifold_physics::clock::{SimulationClock, TICK};
+        let mut domain = GpuFlipDomain::new();
+        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
+        let frame = SimulationClock::default().advance(0.0, TICK, 1.0, 0.0, false, false);
+        domain.impulses.observe_frame(0.0, &frame).unwrap();
+        assert_eq!(domain.physics_impulse_readiness(), Ok(true));
+        domain.holding = true;
+        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role or the field is still preparing");
+        domain.coupled.failed = true;
+        assert!(domain.physics_impulse_readiness().unwrap_err().contains("refused"));
     }
 
     #[test]

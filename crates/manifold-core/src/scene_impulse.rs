@@ -1,12 +1,37 @@
 //! Scene-space recipient selections for authored physics impulses.
 
 /// Live tick-start diagnostics. These counters are not a recorded physics take.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Counts only grow; the stage shows each increase once.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SceneImpulseDiagnostics {
     pub started: u64,
     pub late: u64,
-    /// Hits fired while the simulation was held (pause, Speed 0).
+    /// Hits fired while the simulation was held (pause, Speed 0) or by a frame
+    /// that failed; they never land, so resume never bursts.
     pub discarded: u64,
+    /// Hits that could not be admitted at all.
+    pub refused: u64,
+    /// Why the newest refused hit was refused.
+    pub last_refusal: Option<std::sync::Arc<str>>,
+}
+
+impl SceneImpulseDiagnostics {
+    pub fn refuse(&mut self, reason: &str) {
+        self.refused = self.refused.saturating_add(1);
+        self.last_refusal = Some(reason.into());
+    }
+}
+
+/// What a scene impulse runtime did with one Fire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImpulseFire {
+    /// The parameter is not a scene impulse.
+    NotImpulse,
+    /// Every recipient admitted the hit; it lands on the next tick.
+    Admitted,
+    /// The scene's changed setup has not rendered yet, or a recipient is
+    /// still preparing. Nothing was consumed; fire again after a render.
+    NotReady,
 }
 
 /// A fixed set of ordinary body slots and the reset-latched copy group.

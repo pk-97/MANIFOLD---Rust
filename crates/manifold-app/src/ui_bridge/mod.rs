@@ -34,6 +34,7 @@ mod transport;
 
 pub(crate) use context::{DispatchCtx, LocalProject, ProjectRef};
 pub(crate) use scrub::ScrubState;
+pub(crate) use state_sync::SceneImpulseToast;
 
 /// Re-exported so `Application::handle_text_input_commit`'s
 /// `SceneObjectRename` arm (main-window text-input commit, not a

@@ -181,6 +181,8 @@ pub struct UIRoot {
     /// sequence and remains stable across repeated snapshots.
     pub last_graph_edit_diagnostic_sequence: Option<u64>,
     pub last_trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
+    /// Scene impulse refusals and discards shown, coalesced into one toast.
+    pub(crate) scene_impulse_toast: crate::ui_bridge::SceneImpulseToast,
     pub last_edit_selection_sequence: Option<u64>,
     /// Queued layer reveal, taken by the project projection. Written only
     /// through [`Self::request_layer_reveal`], which moves its version.
@@ -559,6 +561,7 @@ impl UIRoot {
             panel_info_scratch: Vec::new(),
             last_graph_edit_diagnostic_sequence: None,
             last_trigger_delivery_failure: None,
+            scene_impulse_toast: Default::default(),
             last_edit_selection_sequence: None,
             pending_layer_reveal: None,
             layer_reveal_version: 0,

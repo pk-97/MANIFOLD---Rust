@@ -60,7 +60,7 @@ impl RuntimeExtension for WaterRuntimeState {
         param: &str,
         source: FrameTime,
         next_sequence: &mut u64,
-    ) -> Result<bool, String> {
+    ) -> Result<manifold_core::scene_impulse::ImpulseFire, String> {
         super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(param, source, next_sequence)
     }
 
@@ -76,9 +76,10 @@ impl RuntimeExtension for WaterRuntimeState {
                 diagnostics.late = diagnostics.late.saturating_add(1);
             }
         });
-        water.drain_discarded_scene_impulses(|_, _| {
+        let beyond = water.drain_discarded_scene_impulses(|_, _| {
             diagnostics.discarded = diagnostics.discarded.saturating_add(1);
         });
+        diagnostics.discarded = diagnostics.discarded.saturating_add(beyond);
     }
 
     fn before_frame(&mut self, runtime: &mut RuntimeContext<'_>, time: FrameTime) {
