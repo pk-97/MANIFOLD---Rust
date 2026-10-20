@@ -12,19 +12,26 @@ use crate::project::Project;
 
 /// Port of Unity IPercussionBindingResolver interface.
 pub trait PercussionBindingResolver {
-    fn try_resolve(&self, percussion_event: &PercussionEvent) -> Option<PercussionClipBinding>;
+    fn try_resolve(&self, percussion_event: &PercussionEvent) -> Option<ResolvedBinding>;
+}
+
+/// A binding plus the library clip it resolved to (`None` for generator bindings).
+#[derive(Debug, Clone)]
+pub struct ResolvedBinding {
+    pub binding: PercussionClipBinding,
+    pub video_clip_id: Option<String>,
 }
 
 // ─── ProjectPercussionBindingResolver ───
 
 /// Port of Unity ProjectPercussionBindingResolver class.
 /// Resolves trigger bindings against project library/layer state.
-/// If a binding has no explicit clip ID, it falls back to layer/library defaults.
+/// A video binding takes the first clip on its layer, else the first library clip.
 /// Clip IDs are pre-resolved at construction time (immutable borrow of Project
 /// is scoped to `new()` only) so the resolver itself carries no lifetime parameter.
 pub struct ProjectPercussionBindingResolver {
     /// Bindings with clip IDs already resolved against the project library.
-    resolved_bindings: HashMap<PercussionTriggerType, PercussionClipBinding>,
+    resolved_bindings: HashMap<PercussionTriggerType, ResolvedBinding>,
 }
 
 impl ProjectPercussionBindingResolver {
@@ -37,28 +44,20 @@ impl ProjectPercussionBindingResolver {
         Self { resolved_bindings }
     }
 
-    fn resolve_binding(
-        project: &Project,
-        binding: &PercussionClipBinding,
-    ) -> PercussionClipBinding {
-        if binding.uses_generator() {
-            return binding.clone();
-        }
-
-        let mut clip_id = binding.video_clip_id.clone().unwrap_or_default();
-        if clip_id.is_empty() || !project.video_library.has_clip(&clip_id) {
-            clip_id = Self::resolve_fallback_clip_id(project, binding.layer_index);
-        }
-
-        if clip_id.is_empty() {
-            binding.clone()
+    fn resolve_binding(project: &Project, binding: &PercussionClipBinding) -> ResolvedBinding {
+        let video_clip_id = if binding.uses_generator() {
+            None
         } else {
-            binding.with_video_clip_id(&clip_id)
+            Some(Self::resolve_clip_id(project, binding.layer_index)).filter(|id| !id.is_empty())
+        };
+        ResolvedBinding {
+            binding: binding.clone(),
+            video_clip_id,
         }
     }
 
     /// Port of Unity ProjectPercussionBindingResolver.ResolveFallbackClipId().
-    fn resolve_fallback_clip_id(project: &Project, preferred_layer_index: i32) -> String {
+    fn resolve_clip_id(project: &Project, preferred_layer_index: i32) -> String {
         let layers = &project.timeline.layers;
         let idx = preferred_layer_index as usize;
 
@@ -93,18 +92,49 @@ impl ProjectPercussionBindingResolver {
 }
 
 impl PercussionBindingResolver for ProjectPercussionBindingResolver {
-    fn try_resolve(&self, percussion_event: &PercussionEvent) -> Option<PercussionClipBinding> {
-        let binding = self.resolved_bindings.get(&percussion_event.trigger_type)?;
-
-        if binding.uses_generator() {
-            return Some(binding.clone());
-        }
-
-        let clip_id = binding.video_clip_id.clone().unwrap_or_default();
-        if clip_id.is_empty() {
+    fn try_resolve(&self, percussion_event: &PercussionEvent) -> Option<ResolvedBinding> {
+        let resolved = self.resolved_bindings.get(&percussion_event.trigger_type)?;
+        if !resolved.binding.uses_generator() && resolved.video_clip_id.is_none() {
             return None;
         }
+        Some(resolved.clone())
+    }
+}
 
-        Some(binding.clone())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::percussion_analysis::PercussionImportOptions;
+    use crate::types::LayerType;
+    use crate::preset_type_id::PresetTypeId;
+    use crate::units::Beats;
+    use crate::video::VideoClip;
+
+    fn clip(id: &str) -> VideoClip {
+        serde_json::from_str(&format!(r#"{{"id":"{id}"}}"#)).unwrap()
+    }
+
+    #[test]
+    fn video_binding_resolves_to_first_clip_on_its_layer() {
+        let mut project = Project::default();
+        let layer_idx = project
+            .timeline
+            .add_layer("Kick", LayerType::Video, PresetTypeId::NONE);
+        project.video_library.add_clip(clip("lib_first"));
+        project.video_library.add_clip(clip("on_layer"));
+        project.timeline.layers[layer_idx].source_clip_ids.push("on_layer".to_string());
+
+        let mut options = PercussionImportOptions::default();
+        options.bindings.push(PercussionClipBinding::new(
+            PercussionTriggerType::Kick,
+            layer_idx as i32,
+            PresetTypeId::NONE,
+            Beats(0.25),
+            0.0,
+        ));
+        let resolver = ProjectPercussionBindingResolver::new(&project, &options);
+        let event = PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9, 0.0);
+        let resolved = resolver.try_resolve(&event).expect("resolves");
+        assert_eq!(resolved.video_clip_id.as_deref(), Some("on_layer"));
     }
 }

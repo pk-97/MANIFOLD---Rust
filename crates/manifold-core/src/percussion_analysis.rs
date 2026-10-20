@@ -478,7 +478,6 @@ impl PercussionAnalysisData {
 pub struct PercussionClipBinding {
     pub trigger_type: PercussionTriggerType,
     pub layer_index: i32,
-    pub video_clip_id: Option<String>,
     pub generator_type: PresetTypeId,
     pub duration_beats: Beats,
     pub minimum_confidence: f32,
@@ -493,7 +492,6 @@ impl PercussionClipBinding {
     pub fn new(
         trigger_type: PercussionTriggerType,
         layer_index: i32,
-        video_clip_id: Option<String>,
         generator_type: PresetTypeId,
         duration_beats: Beats,
         minimum_confidence: f32,
@@ -501,7 +499,6 @@ impl PercussionClipBinding {
         Self {
             trigger_type,
             layer_index: layer_index.max(0),
-            video_clip_id,
             generator_type,
             duration_beats: duration_beats.max(Beats::ZERO),
             minimum_confidence: minimum_confidence.clamp(0.0, 1.0),
@@ -511,19 +508,6 @@ impl PercussionClipBinding {
 
     pub fn uses_generator(&self) -> bool {
         self.generator_type != PresetTypeId::NONE
-    }
-
-    /// Port of Unity PercussionClipBinding.WithVideoClipId().
-    pub fn with_video_clip_id(&self, resolved_video_clip_id: &str) -> Self {
-        Self {
-            trigger_type: self.trigger_type,
-            layer_index: self.layer_index,
-            video_clip_id: Some(resolved_video_clip_id.to_string()),
-            generator_type: self.generator_type.clone(),
-            duration_beats: self.duration_beats,
-            minimum_confidence: self.minimum_confidence,
-            target_layer: self.target_layer.clone(),
-        }
     }
 }
 
@@ -908,18 +892,10 @@ mod tests {
     }
 
     #[test]
-    fn test_clip_binding_with_video_clip_id() {
-        let binding = PercussionClipBinding::new(
-            PercussionTriggerType::Kick,
-            0,
-            None,
-            PresetTypeId::NONE,
-            Beats(0.5),
-            0.0,
-        );
-        let resolved = binding.with_video_clip_id("clip_123");
-        assert_eq!(resolved.video_clip_id.as_deref(), Some("clip_123"));
-        assert_eq!(resolved.trigger_type, PercussionTriggerType::Kick);
+    fn old_binding_json_with_video_clip_id_still_loads() {
+        let json = r#"{"triggerType":0,"layerIndex":2,"videoClipId":"clip_123","generatorType":"","durationBeats":0.5,"minimumConfidence":0.3}"#;
+        let binding: PercussionClipBinding = serde_json::from_str(json).expect("old file loads");
+        assert_eq!(binding.layer_index, 2);
     }
 
     #[test]
