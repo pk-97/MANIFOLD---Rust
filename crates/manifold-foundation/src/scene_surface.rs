@@ -268,6 +268,8 @@ pub enum SceneTemplateKind {
     Plane,
     Light,
     Water,
+    /// A swarm of GPU instances pushed by the scene's forces.
+    Swarm,
     /// The placed fluid sources, inserted inside their water.
     Inflow,
     Drain,

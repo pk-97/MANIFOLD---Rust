@@ -269,3 +269,129 @@ pub fn light_template(position: (f32, f32)) -> SceneTemplate {
     );
     SceneTemplate { group: light, metadata }
 }
+
+/// Add Swarm: thousands of GPU instances of a small shape, pushed by the
+/// scene's forces. The group is the `Swarm` generator preset's body (a clock
+/// and force lattice over the `bounds` box, a seeded particle loop, copies
+/// placed at the particles) ending in one scene object, so the row, its card
+/// and its box gizmo work as for any object. The card carries the swarm's
+/// Speed, Air Drag and Force Detail, its box and its look.
+pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> SceneTemplate {
+    const BOUNDS: u32 = 1;
+    const FORCES: u32 = 2;
+    const START: u32 = 3;
+    const SEED: u32 = 4;
+    const STATE: u32 = 5;
+    const MOVE: u32 = 6;
+    const COPIES: u32 = 7;
+    const SHAPE: u32 = 8;
+    const MATERIAL_NODE: u32 = 9;
+    const OBJECT_NODE: u32 = 10;
+    const OUTPUT_NODE: u32 = 11;
+    const GROUP_NODE: u32 = 12;
+    let tint = tint(slot);
+    let bounds = node(
+        BOUNDS,
+        "node.transform_3d",
+        Some(&format!("{HANDLE_TOKEN} Bounds")),
+        BTreeMap::from([
+            ("scale_x".to_owned(), float(4.0)),
+            ("scale_y".to_owned(), float(4.0)),
+            ("scale_z".to_owned(), float(4.0)),
+        ]),
+    );
+    let forces = node(FORCES, "node.swarm_forces", Some(&format!("{HANDLE_TOKEN} Forces")), BTreeMap::new());
+    let start = node(START, "node.cube_mesh", None, BTreeMap::from([("size".to_owned(), float(4.0))]));
+    let seed = node(
+        SEED,
+        "node.spawn_from_mesh",
+        None,
+        BTreeMap::from([
+            ("mode".to_owned(), SerializedParamValue::Enum { value: 1 }),
+            ("max_capacity".to_owned(), float(100_000.0)),
+            ("active_count".to_owned(), float(20_000.0)),
+        ]),
+    );
+    let state = node(STATE, "node.array_feedback", None, BTreeMap::new());
+    let movement = node(MOVE, "node.move_swarm", None, BTreeMap::from([("active_count".to_owned(), float(100_000.0))]));
+    let copies = node(COPIES, "node.swarm_to_copies", None, BTreeMap::from([("size".to_owned(), float(0.05))]));
+    let shape = node(SHAPE, "node.platonic_solid_mesh", None, BTreeMap::new());
+    let material = node(
+        MATERIAL_NODE,
+        "node.pbr_material",
+        None,
+        BTreeMap::from([
+            ("color_r".to_owned(), float(tint.r)),
+            ("color_g".to_owned(), float(tint.g)),
+            ("color_b".to_owned(), float(tint.b)),
+            ("metallic".to_owned(), float(0.1)),
+            ("roughness".to_owned(), float(0.5)),
+        ]),
+    );
+    let object = node(OBJECT_NODE, "node.scene_object", Some(HANDLE_TOKEN), BTreeMap::new());
+    let nodes = vec![
+        bounds,
+        forces,
+        start,
+        seed,
+        state,
+        movement,
+        copies,
+        shape,
+        material,
+        object,
+        node(OUTPUT_NODE, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new()),
+    ];
+    let mut metadata = empty_metadata("Swarm");
+    for (id, label) in [
+        (FORCES, format!("{HANDLE_TOKEN} — Swarm")),
+        (BOUNDS, format!("{HANDLE_TOKEN} — Box")),
+        (MATERIAL_NODE, format!("{HANDLE_TOKEN} — Material")),
+        (OBJECT_NODE, HANDLE_TOKEN.to_owned()),
+    ] {
+        let found = nodes.iter().find(|candidate| candidate.id == id).expect("template node");
+        stamp_scene_node_exposures_into(
+            &mut metadata.params,
+            &mut metadata.bindings,
+            id,
+            &found.node_id,
+            &label,
+            &metadata_for_node_type(&found.type_id),
+            &found.params,
+        );
+    }
+    // The forces node's clock and field scalars go to the mover port for
+    // port; `epoch` also restarts the seed and the particle loop.
+    const CLOCK_PORTS: [&str; 14] = [
+        "forces", "ticks", "first_tick", "force_lattices", "field_nodes_x", "field_nodes_y", "field_nodes_z",
+        "field_spacing", "field_min_x", "field_min_y", "field_min_z", "tick_seconds", "impulses", "impulse_tick",
+    ];
+    let mut wires = vec![
+        wire(BOUNDS, "transform", FORCES, "bounds"),
+        wire(START, "vertices", SEED, "vertices"),
+        wire(FORCES, "epoch", SEED, "reset_trigger"),
+        wire(FORCES, "epoch", STATE, "reset_trigger"),
+        wire(SEED, "particles", STATE, "seed"),
+        wire(STATE, "out", MOVE, "in"),
+        wire(MOVE, "out", STATE, "in"),
+        wire(MOVE, "out", COPIES, "particles"),
+        wire(COPIES, "copies", OBJECT_NODE, "instances"),
+        wire(SHAPE, "vertices", OBJECT_NODE, "vertices"),
+        wire(MATERIAL_NODE, "out", OBJECT_NODE, "material"),
+        wire(OBJECT_NODE, "object", OUTPUT_NODE, "object"),
+    ];
+    wires.extend(CLOCK_PORTS.iter().map(|port| wire(FORCES, port, MOVE, port)));
+    let mut group = node(GROUP_NODE, GROUP_TYPE_ID, Some(HANDLE_TOKEN), BTreeMap::new());
+    group.editor_pos = Some(centroid);
+    group.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: Vec::new(),
+            outputs: vec![InterfacePortDef { name: "object".into(), port_type: "Object".into() }],
+            params: Vec::new(),
+        },
+        nodes,
+        wires,
+        tint: Some([tint.r, tint.g, tint.b, 1.0]),
+    }));
+    SceneTemplate { group, metadata }
+}
