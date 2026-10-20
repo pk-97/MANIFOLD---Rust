@@ -6,7 +6,7 @@ use super::*;
 use manifold_core::change::ChangeSet;
 use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
-use manifold_core::scene_surface::{MAX_DUPLICATE_COPIES, SceneObjectRowKind};
+use manifold_core::scene_surface::{MAX_DUPLICATE_COPIES, SceneObjectRowKind, copies_shortfall};
 
 use crate::scene_transaction::SceneGraphTransaction;
 
@@ -45,7 +45,8 @@ impl DuplicateSceneObjectCommand {
                     duplicate_scene_object_edit(graph, &scope_path, render_scene_node_id, source_index, copies)?;
                 copy_maps = maps;
                 Ok(edit)
-            })?;
+            })?
+            .without_ableton_mappings();
         let refuse = |message: String| SceneGraphEditError { at: None, message };
         let owner = project
             .graph_target_owner(&target)
@@ -91,17 +92,19 @@ impl Command for DuplicateSceneObjectCommand {
 
 /// Free body slots in the Physics World that render slot `object_index` of a
 /// root-level scene simulates in; `None` when that object has no standard
-/// physics. The card reads it to say why a copy count cannot fit.
-pub fn physics_free_body_slots(graph: &EffectGraphDef, render_scene_node_id: u32, object_index: u32) -> Option<u32> {
+/// physics. The card reads it to say why a copy count cannot fit; `worlds`
+/// is read once per sync for every card.
+pub fn physics_free_body_slots(
+    graph: &EffectGraphDef,
+    worlds: &WorldBodySlots,
+    render_scene_node_id: u32,
+    object_index: u32,
+) -> Option<u32> {
     let source = object_producer_id(&graph.wires, render_scene_node_id, object_index)?;
     match physics_scene_object_match(&graph.nodes, &graph.wires, render_scene_node_id, object_index, source) {
-        PhysicsSceneObjectMatch::Valid(physics) if !physics.copies => Some(free_body_slots(&graph.wires, physics.world_id)),
+        PhysicsSceneObjectMatch::Valid(physics) if !physics.copies => worlds.get(physics.world_id).map(BodySlots::free),
         _ => None,
     }
-}
-
-fn free_body_slots(wires: &[EffectGraphWire], world_id: u32) -> u32 {
-    (0..PHYSICS_BODY_SLOTS).filter(|slot| physics_body_slot_available(wires, world_id, *slot)).count() as u32
 }
 
 /// The render scene at `scope` (document ids, root first) as a stable reference.
@@ -132,7 +135,10 @@ fn duplicate_scene_object_edit(
 ) -> Result<(SceneGraphEdit, CopyMaps), SceneGraphEditError> {
     let refuse = |message: &str| SceneGraphEditError { at: None, message: message.into() };
     if copies == 0 || copies > MAX_DUPLICATE_COPIES {
-        return Err(refuse("Duplicate Object makes 1 to 64 copies"));
+        return Err(SceneGraphEditError {
+            at: None,
+            message: format!("Duplicate Object makes 1 to {MAX_DUPLICATE_COPIES} copies"),
+        });
     }
     let scene = scene_reference(graph, scope, render_id).ok_or_else(|| refuse("Duplicate Object scene is unavailable"))?;
     // The one scene-object model decides what may be copied, so a shortcut
@@ -160,16 +166,8 @@ fn duplicate_scene_object_edit(
             if physics.copies {
                 return Err(refuse("Duplicate Object cannot duplicate a Physics World copies object"));
             }
-            let free = free_body_slots(wires, physics.world_id);
-            if free < copies {
-                return Err(SceneGraphEditError {
-                    at: None,
-                    message: format!(
-                        "The Physics World has {free} free body {}; {copies} {} need {copies}",
-                        if free == 1 { "slot" } else { "slots" },
-                        if copies == 1 { "copy" } else { "copies" },
-                    ),
-                });
+            if let Some(message) = copies_shortfall(copies, BodySlots::of(wires, physics.world_id).free()) {
+                return Err(SceneGraphEditError { at: None, message });
             }
             Some(physics)
         }

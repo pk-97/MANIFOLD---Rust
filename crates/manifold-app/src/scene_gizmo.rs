@@ -116,7 +116,7 @@ pub(crate) fn project_authored_params(
     Some(())
 }
 
-pub(crate) fn scalar_to_serialized(convert: ParamConvert, value: f32) -> Option<SerializedParamValue> {
+fn scalar_to_serialized(convert: ParamConvert, value: f32) -> Option<SerializedParamValue> {
     if !value.is_finite() {
         return None;
     }

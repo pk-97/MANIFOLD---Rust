@@ -258,9 +258,23 @@ pub struct SceneObjectCapabilities {
     pub modifiers: bool,
 }
 
-/// The most copies one Duplicate makes: one per body slot of a Physics
-/// World, so every copy of a physics object can carry its own body.
-pub const MAX_DUPLICATE_COPIES: u32 = 64;
+/// A Physics World's body slots. Core asserts at compile time that the
+/// runtime body capacity (`RigidImpulseTargets::BODY_CAPACITY`) matches.
+pub const PHYSICS_WORLD_BODY_SLOTS: u32 = 64;
+
+/// The most copies one Duplicate makes, of any object: one per body slot, so
+/// every copy of a physics object can carry its own body.
+pub const MAX_DUPLICATE_COPIES: u32 = PHYSICS_WORLD_BODY_SLOTS;
+
+/// Why `copies` copies of a physics object cannot fit a world with `free`
+/// body slots; `None` when they fit.
+pub fn copies_shortfall(copies: u32, free: u32) -> Option<String> {
+    (free < copies).then(|| {
+        let slots = if free == 1 { "slot" } else { "slots" };
+        let need = if copies == 1 { "copy needs" } else { "copies need" };
+        format!("The Physics World has {free} free body {slots}; {copies} {need} {copies}")
+    })
+}
 
 /// What the one Add menu inserts into a scene through a template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

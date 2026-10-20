@@ -207,3 +207,69 @@ fn physics_boundary_rigid_duplicate_count_refuses_a_full_world() {
     assert!(two.was_applied(), "{:?}", two.rejection_reason());
     assert_eq!(filled_slots(graph_of_generator(&project, &layer), world).len(), 64);
 }
+
+/// A copy carries its source's drivers but not its Ableton mappings: one Live
+/// knob keeps driving the one object it was mapped to, as Ableton's own
+/// duplicate leaves MIDI and key mappings behind.
+#[test]
+fn physics_boundary_rigid_duplicate_leaves_ableton_mappings_on_the_source() {
+    use manifold_core::ableton_mapping::{
+        AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
+    };
+    use manifold_core::effects::ParameterDriver;
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+    use std::borrow::Cow;
+
+    let (mut project, layer, target, graph) = enabled_photoscan();
+    let density_bindings = |project: &Project| -> Vec<String> {
+        graph_of_generator(project, &layer).preset_metadata.as_ref().unwrap().bindings.iter()
+            .filter(|binding| matches!(&binding.target, BindingTarget::Node { param, .. } if param == "density"))
+            .map(|binding| binding.id.clone())
+            .collect()
+    };
+    let [source] = density_bindings(&project).try_into().expect("one bound Density");
+    let host = project.graph_target_owner_mut(&target).unwrap();
+    host.drivers = Some(vec![ParameterDriver {
+        param_id: Cow::Owned(source.clone()),
+        beat_division: BeatDivision::Quarter,
+        waveform: DriverWaveform::Sine,
+        enabled: true,
+        phase: 0.25,
+        base_value: 0.4,
+        trim_min: 0.0,
+        trim_max: 1.0,
+        reversed: false,
+        free_period_beats: None,
+        frame_aligned: false,
+        legacy_param_index: None,
+        is_paused_by_user: false,
+    }]);
+    host.ableton_mappings = Some(vec![AbletonParamMapping {
+        param_id: Cow::Owned(source.clone()),
+        address: AbletonMacroAddress {
+            track_id: 1,
+            device_id: 2,
+            param_id: 3,
+            device_identity: AbletonDeviceIdentity { device_class_name: "Rack".into() },
+            track_name: "Track".into(),
+            device_name: "Device".into(),
+            macro_name: "Macro".into(),
+        },
+        range_min: 0.0,
+        range_max: 1.0,
+        inverted: false,
+        legacy_param_index: None,
+        last_value: 0.5,
+        status: AbletonMappingStatus::Active,
+    }]);
+
+    let mut copy = DuplicateSceneObjectCommand::new(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
+    copy.execute(&mut project);
+    assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
+    let copied = density_bindings(&project).into_iter().find(|id| *id != source).expect("the copy binds its Density");
+    let host = project.graph_target_owner(&target).unwrap();
+    let driven: Vec<&str> = host.drivers.as_ref().unwrap().iter().map(|driver| driver.param_id.as_ref()).collect();
+    assert_eq!(driven, [source.as_str(), copied.as_str()], "the copy carries the driver");
+    let mapped: Vec<&str> = host.ableton_mappings.as_ref().unwrap().iter().map(|mapping| mapping.param_id.as_ref()).collect();
+    assert_eq!(mapped, [source.as_str()], "the Ableton mapping stays on the source");
+}

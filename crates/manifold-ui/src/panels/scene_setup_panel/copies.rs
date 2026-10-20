@@ -8,7 +8,7 @@
 //! across objects and never saved.
 
 use super::*;
-use manifold_foundation::scene_surface::MAX_DUPLICATE_COPIES;
+use manifold_foundation::scene_surface::{MAX_DUPLICATE_COPIES, copies_shortfall};
 
 const OBJ_OFF_COPIES_LESS: u64 = 41;
 const OBJ_OFF_COPIES_MORE: u64 = 42;
@@ -39,9 +39,7 @@ impl CopyCount {
 
 /// Why `count` copies cannot be made, when the world is short of slots.
 fn shortfall(count: u32, free: Option<u32>) -> Option<String> {
-    let free = free.filter(|free| *free < count)?;
-    let slots = if free == 1 { "slot" } else { "slots" };
-    Some(format!("The Physics World has {free} free body {slots}; {count} copies need {count}"))
+    free.and_then(|free| copies_shortfall(count, free))
 }
 
 impl ScenePanel {
@@ -200,6 +198,7 @@ mod tests {
     fn copies_stay_within_one_and_the_world_size() {
         assert_eq!(shortfall(3, None), None);
         assert_eq!(shortfall(3, Some(3)), None);
+        assert_eq!(shortfall(1, Some(0)).as_deref(), Some("The Physics World has 0 free body slots; 1 copy needs 1"));
         let (mut panel, _) = object_card(None);
         assert!(panel.copy_count.less.is_none(), "one copy is the floor");
         panel.copy_count.count = MAX_DUPLICATE_COPIES;

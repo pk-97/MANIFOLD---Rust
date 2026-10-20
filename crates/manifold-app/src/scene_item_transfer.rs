@@ -185,6 +185,15 @@ pub(crate) enum SceneItemAction {
         scene: u32,
         index: u32,
     },
+    /// The object card's Physics switch (P6a): the body's own `enabled` once
+    /// a body exists (off keeps its settings, D6); the first switch-on adds
+    /// the body, and the shared world when there is none.
+    SetPhysics {
+        layer: LayerId,
+        scene: u32,
+        index: u32,
+        enabled: bool,
+    },
     Move {
         layer: LayerId,
         scene: u32,
@@ -200,7 +209,7 @@ impl SceneItemAction {
             Self::Paste { layer, clipboard, .. } => (layer, clipboard.kind),
             Self::DuplicateObject { layer, .. } => (layer, SceneItemKind::Object),
             Self::DuplicateLight { layer, .. } => (layer, SceneItemKind::Light),
-            Self::Move { .. } => return None,
+            Self::Move { .. } | Self::SetPhysics { .. } => return None,
         };
         Some(match kind {
             SceneItemKind::Object => crate::edit_selection::SelectAfterEdit::NewObject(layer.clone()),
@@ -454,22 +463,15 @@ fn paste(
             }
             if let Some(&world) = worlds.first() {
                 doc_ids.insert(source.id, world);
-                let mut used: HashSet<u32> = graph
-                    .wires
-                    .iter()
-                    .filter(|w| w.to_node == world)
-                    .filter_map(|w| w.to_port.strip_prefix("body_")?.parse().ok())
-                    .collect();
+                let mut slots = manifold_editing::commands::graph::BodySlots::of(&graph.wires, world);
                 for input in clipboard
                     .graph
                     .wires
                     .iter()
                     .filter(|w| w.to_node == source.id && w.to_port.starts_with("body_"))
                 {
-                    let slot = (0..16)
-                        .find(|slot| !used.contains(slot))
-                        .ok_or("Physics World has no free body slots")?;
-                    used.insert(slot);
+                    let slot = slots.first_free().ok_or("Physics World has no free body slots")?;
+                    slots.take(slot);
                     let old = input.to_port.trim_start_matches("body_");
                     for prefix in ["body_", "pose_", "instances_"] {
                         physics_ports.insert(
@@ -639,6 +641,46 @@ fn paste(
     ))
 }
 
+fn set_physics(project: &Project, layer: &LayerId, scene: u32, index: u32, enabled: bool) -> Result<Box<dyn Command>, String> {
+    use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    let mut default = crate::ui_bridge::project::generator_catalog_default(project, layer).ok_or("Scene is unavailable")?;
+    migrate_scene_exposures(&mut default);
+    let target = GraphTarget::Generator(layer.clone());
+    let physics = project
+        .graph_for_target(&target, Some(&default))
+        .and_then(SceneVm::from_def)
+        .filter(|vm| vm.scene_root_node_id == scene)
+        .and_then(|vm| vm.objects.into_iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.index == index as usize => row.physics,
+            _ => None,
+        }));
+    match physics {
+        Some(physics) => crate::ui_bridge::project::apply_scene_param_write(
+            project,
+            layer,
+            physics.body_scope_path,
+            physics.body_node_id,
+            "enabled",
+            if enabled { 1.0 } else { 0.0 },
+        )
+        .map(|command| command as Box<dyn Command>)
+        .ok_or_else(|| "The body's switch is unavailable".into()),
+        None if enabled => manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
+            project,
+            target,
+            scene,
+            index,
+            &metadata_for_node_type("node.rigid_body"),
+            &metadata_for_node_type("node.physics_world"),
+            &default,
+        )
+        .map(|command| Box::new(command) as Box<dyn Command>)
+        .map_err(|error| error.message),
+        None => Err("Selected object has no physics to switch off".into()),
+    }
+}
+
 pub(crate) fn build_action(
     project: &Project,
     action: SceneItemAction,
@@ -658,6 +700,7 @@ pub(crate) fn build_action(
             .map_err(|error| error.message)?;
             Ok(Box::new(command))
         }
+        SceneItemAction::SetPhysics { layer, scene, index, enabled } => set_physics(project, &layer, scene, index, enabled),
         SceneItemAction::DuplicateLight { layer, scene, index } => {
             let clipboard = SceneItemClipboard::capture(project, &layer, scene, SceneItemKind::Light, index)?;
             paste(project, layer, scene, clipboard, "Duplicate Scene Item", CopyNaming::Numbered)
@@ -1422,12 +1465,26 @@ mod tests {
             1,
         );
 
+        // Sixteen bodies is not a full world: the paste takes slot 16.
+        let busy_layer = add_transfer_layer(&mut source_project, "Busy physics", "physics-busy", false);
+        source_project
+            .graph_target_owner_mut(&GraphTarget::Generator(busy_layer.clone()))
+            .unwrap()
+            .graph = Some(physics_graph(16));
+        let paste = SceneItemAction::Paste { layer: busy_layer.clone(), scene: 1, clipboard: Box::new(clipboard.clone()) };
+        editing.execute(build_action(&source_project, paste).expect("sixteen bodies leave room"), &mut source_project);
+        assert!(editing.take_rejection().is_none());
+        let busy = source_project.graph_target_owner(&GraphTarget::Generator(busy_layer)).unwrap().graph.as_ref().unwrap();
+        assert!(busy.wires.iter().any(|wire| wire.to_port == "body_16"));
+
         let full_layer =
             add_transfer_layer(&mut source_project, "Full physics", "physics-full", false);
         source_project
             .graph_target_owner_mut(&GraphTarget::Generator(full_layer.clone()))
             .unwrap()
-            .graph = Some(physics_graph(16));
+            .graph = Some(physics_graph(
+                manifold_core::scene_surface::PHYSICS_WORLD_BODY_SLOTS as usize,
+            ));
         let before = serde_json::to_value(
             source_project
                 .graph_target_owner(&GraphTarget::Generator(full_layer.clone()))

@@ -828,42 +828,14 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
-            use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-            let enabled = matches!(action, ProjectAction::SceneSetupEnablePhysics(..));
-            // P6a: the switch is the body's own `enabled` param once a body
-            // exists (off keeps its settings, D6); the first switch-on adds
-            // the body, and the shared world when there is none.
-            if let Some(mut default) = generator_catalog_default(project, layer_id) {
-                use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
-                migrate_scene_exposures(&mut default);
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let physics = project.graph_for_target(&target, Some(&default))
-                    .and_then(SceneVm::from_def)
-                    .filter(|vm| vm.scene_root_node_id == *render_scene_node_id)
-                    .and_then(|vm| vm.objects.into_iter().find_map(|object| match object {
-                        SceneObjectVm::Known(row) if row.index == *object_index as usize => row.physics,
-                        _ => None,
-                    }));
-                let command = match physics {
-                    Some(physics) => apply_scene_param_write(
-                        project, layer_id, physics.body_scope_path, physics.body_node_id,
-                        "enabled", if enabled { 1.0 } else { 0.0 },
-                    ).ok_or_else(|| "The body's switch is unavailable".to_string()),
-                    None if enabled => manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
-                        project, target, *render_scene_node_id, *object_index,
-                        &metadata_for_node_type("node.rigid_body"),
-                        &metadata_for_node_type("node.physics_world"),
-                        &default,
-                    )
-                    .map(|command| Box::new(command) as Box<dyn manifold_editing::command::Command + Send>)
-                    .map_err(|error| error.message),
-                    None => return DispatchResult::handled(),
-                };
-                ContentCommand::send(content_tx, match command {
-                    Ok(command) => ContentCommand::ExecuteOnContent(command),
-                    Err(message) => ContentCommand::GraphEditRejected(message),
-                });
-            }
+            // Built on the content thread, like Duplicate: a click that lands
+            // before the last edit's snapshot returns still reads that edit.
+            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::SetPhysics {
+                layer: layer_id.clone(),
+                scene: *render_scene_node_id,
+                index: *object_index,
+                enabled: matches!(action, ProjectAction::SceneSetupEnablePhysics(..)),
+            }));
             DispatchResult::handled()
         }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
@@ -1364,6 +1336,8 @@ mod tests {
     mod water_family_draw;
     mod water_family_expansion;
     mod water_family_sources;
+    mod physics_reload;
+    mod typed_write;
 
     fn scene_layer_project() -> (Project, LayerId, u32) {
         let mut project = Project::default();
@@ -1581,9 +1555,10 @@ mod tests {
                 &mut selection, &mut active_layer, &mut prefs, Default::default());
             assert!(effective_def(&project, &layer_id) == before_dispatch,
                 "UI dispatch waits for content");
-            let crate::content_command::ContentCommand::ExecuteOnContent(mut cmd) = rx.try_recv().unwrap() else {
-                panic!("toggle must send an undoable edit to content");
+            let crate::content_command::ContentCommand::SceneItem(switch) = rx.try_recv().unwrap() else {
+                panic!("the switch builds on content");
             };
+            let mut cmd = crate::scene_item_transfer::build_action(&project, switch).expect("the switch builds");
             cmd.execute(&mut project);
             assert!(cmd.touches().contains(manifold_core::change::Part::Effects),
                 "the toggle shows or hides the body rows, so the Scene tab re-projects");
@@ -1752,9 +1727,10 @@ mod tests {
             added,
             "Physics enable waits for content"
         );
-        let ContentCommand::ExecuteOnContent(mut enable) = rx.try_recv().unwrap() else {
-            panic!("Physics enable must execute on content");
+        let ContentCommand::SceneItem(switch) = rx.try_recv().unwrap() else {
+            panic!("Physics enable builds on content");
         };
+        let mut enable = crate::scene_item_transfer::build_action(&project, switch).expect("enable builds");
         enable.execute(&mut project);
         assert!(
             enable.was_applied(),
@@ -1901,9 +1877,10 @@ mod tests {
                 Default::default(),
             );
             assert_eq!(effective_def(&project, &layer_id), before_toggle);
-            let ContentCommand::ExecuteOnContent(mut toggle) = rx.try_recv().unwrap() else {
-                panic!("Physics toggle must execute on content");
+            let ContentCommand::SceneItem(switch) = rx.try_recv().unwrap() else {
+                panic!("Physics toggle builds on content");
             };
+            let mut toggle = crate::scene_item_transfer::build_action(&project, switch).expect("the toggle builds");
             toggle.execute(&mut project);
             assert!(toggle.was_applied(), "toggle rejected: {:?}", toggle.rejection_reason());
             let toggled_vm = SceneVm::from_def(&effective_def(&project, &layer_id)).unwrap();

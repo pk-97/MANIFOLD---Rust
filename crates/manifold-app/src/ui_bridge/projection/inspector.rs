@@ -185,6 +185,8 @@ pub fn sync_inspector_data(
                                 manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm)
                             }).unwrap_or_default();
                             let fluid_domains = super::scene::fluid_domains(&vm);
+                            // Every card's free-slot count, from one pass over the wires.
+                            let world_slots = def.as_ref().map(manifold_editing::commands::graph::WorldBodySlots::of).unwrap_or_default();
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
                             // intensity [0,4] / fill [0,2]; `atmosphere`'s
@@ -575,7 +577,7 @@ pub fn sync_inspector_data(
                                                 physics_available,
                                                 physics_unavailable_reason,
                                                 physics_free_body_slots: physics.as_ref().and(def.as_ref()).and_then(|def| {
-                                                    manifold_editing::commands::graph::physics_free_body_slots(def, vm.scene_root_node_id, *index as u32)
+                                                    manifold_editing::commands::graph::physics_free_body_slots(def, &world_slots, vm.scene_root_node_id, *index as u32)
                                                 }),
                                                 physics_imported: *physics_imported,
                                                 fluid_roles: if parent_group_id.is_none() {

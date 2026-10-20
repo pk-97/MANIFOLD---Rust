@@ -746,15 +746,77 @@ pub(super) fn physics_copies_scene_object_match(
 }
 
 pub(super) fn first_free_physics_body_slot(wires: &[EffectGraphWire], world_id: u32) -> Option<u32> {
-    (0..PHYSICS_BODY_SLOTS).find(|slot| physics_body_slot_available(wires, world_id, *slot))
+    BodySlots::of(wires, world_id).first_free()
 }
 
-pub(super) fn physics_body_slot_available(wires: &[EffectGraphWire], world_id: u32, slot: u32) -> bool {
-    let body_port = format!("body_{slot}");
-    let pose_port = format!("pose_{slot}");
-    let field_port = format!("body_acceleration_{slot}");
-    !wires.iter().any(|wire| {
-        (wire.to_node == world_id && (wire.to_port == body_port || wire.to_port == field_port))
-            || (wire.from_node == world_id && wire.from_port == pose_port)
-    })
+const _: () = assert!(PHYSICS_BODY_SLOTS <= u64::BITS, "one mask bit per body slot");
+
+/// A Physics World's taken body slots, one bit each. A slot is taken when
+/// anything feeds its body or field input or reads its pose, so a body that
+/// is switched off keeps its slot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BodySlots(u64);
+
+impl BodySlots {
+    /// One pass over `wires`.
+    pub fn of(wires: &[EffectGraphWire], world_id: u32) -> Self {
+        let mut slots = Self::default();
+        for wire in wires {
+            let slot = if wire.to_node == world_id {
+                wire.to_port.strip_prefix("body_acceleration_").or_else(|| wire.to_port.strip_prefix("body_"))
+            } else if wire.from_node == world_id {
+                wire.from_port.strip_prefix("pose_")
+            } else {
+                None
+            };
+            if let Some(slot) = slot.and_then(|slot| slot.parse::<u32>().ok()) {
+                slots.take(slot);
+            }
+        }
+        slots
+    }
+
+    /// Marks `slot` taken; slots past the world's capacity are ignored.
+    pub fn take(&mut self, slot: u32) {
+        if slot < PHYSICS_BODY_SLOTS {
+            self.0 |= 1 << slot;
+        }
+    }
+
+    pub fn first_free(self) -> Option<u32> {
+        Some((!self.0).trailing_zeros()).filter(|slot| *slot < PHYSICS_BODY_SLOTS)
+    }
+
+    pub fn free(self) -> u32 {
+        PHYSICS_BODY_SLOTS - self.0.count_ones()
+    }
+}
+
+/// Every root-level Physics World's taken slots, from one pass over the
+/// wires: what a structural sync reads for every object card at once.
+#[derive(Debug, Clone, Default)]
+pub struct WorldBodySlots(Vec<(u32, BodySlots)>);
+
+impl WorldBodySlots {
+    pub fn of(graph: &EffectGraphDef) -> Self {
+        let mut worlds: Vec<(u32, BodySlots)> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.physics_world")
+            .map(|node| (node.id, BodySlots::default()))
+            .collect();
+        for wire in &graph.wires {
+            for (world, slots) in &mut worlds {
+                if wire.to_node == *world || wire.from_node == *world {
+                    let one = BodySlots::of(std::slice::from_ref(wire), *world);
+                    slots.0 |= one.0;
+                }
+            }
+        }
+        Self(worlds)
+    }
+
+    pub fn get(&self, world_id: u32) -> Option<BodySlots> {
+        self.0.iter().find(|(world, _)| *world == world_id).map(|(_, slots)| *slots)
+    }
 }

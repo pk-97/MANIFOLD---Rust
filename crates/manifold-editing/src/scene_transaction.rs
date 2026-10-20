@@ -19,11 +19,14 @@ pub(crate) enum SceneGraphRejection {
 }
 
 /// Copy every host-side value and modulation entry addressed by a source
-/// modifier macro. The graph candidate has already minted the destination
-/// metadata; this keeps duplication's runtime state in the same transaction.
+/// param. The graph candidate has already minted the destination metadata;
+/// this keeps duplication's runtime state in the same transaction. Ableton
+/// mappings follow only when `ableton` is set: a copied object leaves them on
+/// its source, as Ableton's own duplicate does.
 fn duplicate_runtime_parameter_state(
     host: &mut manifold_core::effects::PresetInstance,
     remaps: &[(String, String)],
+    ableton: bool,
 ) {
     let params: Vec<_> = remaps
         .iter()
@@ -63,7 +66,9 @@ fn duplicate_runtime_parameter_state(
     }
     duplicate_entries!(drivers);
     duplicate_entries!(envelopes);
-    duplicate_entries!(ableton_mappings);
+    if ableton {
+        duplicate_entries!(ableton_mappings);
+    }
     duplicate_entries!(audio_mods);
     duplicate_entries!(automation_lanes);
 }
@@ -80,6 +85,8 @@ pub(crate) struct SceneGraphTransaction {
     committed: Option<EffectGraphDef>,
     removed_param_ids: Vec<String>,
     parameter_id_remaps: Vec<(String, String)>,
+    /// Whether remapped params carry their Ableton mappings.
+    remaps_ableton_mappings: bool,
     previous_layer: Option<InstanceLayerSnapshot>,
     touches: ChangeSet,
     applied: bool,
@@ -133,6 +140,7 @@ impl SceneGraphTransaction {
             committed: None,
             removed_param_ids: result.removed_param_ids,
             parameter_id_remaps: result.parameter_id_remaps,
+            remaps_ableton_mappings: true,
             previous_layer: None,
             touches,
             applied: false,
@@ -148,6 +156,12 @@ impl SceneGraphTransaction {
 
     pub(crate) fn prepared_graph(&self) -> &EffectGraphDef {
         &self.candidate
+    }
+
+    /// Remapped params leave their Ableton mappings on the source.
+    pub(crate) fn without_ableton_mappings(mut self) -> Self {
+        self.remaps_ableton_mappings = false;
+        self
     }
 
     fn reject(&mut self, error: SceneGraphRejection) {
@@ -175,7 +189,7 @@ impl SceneGraphTransaction {
         if self.previous_layer.is_none() {
             self.previous_layer = Some(InstanceLayerSnapshot::capture(host));
         }
-        duplicate_runtime_parameter_state(host, &self.parameter_id_remaps);
+        duplicate_runtime_parameter_state(host, &self.parameter_id_remaps, self.remaps_ableton_mappings);
         let metadata_changed =
             self.before_resolved.preset_metadata != self.candidate.preset_metadata;
         host.graph = Some(self.candidate.clone());
