@@ -686,26 +686,8 @@ fn snapshot_level(
             }
         } else {
             let mut boxed = registry.construct(&dn.type_id)?;
-            if let Some(src) = dn.wgsl_source.as_deref() {
-                boxed.set_wgsl_source(src);
-            }
-            // Seed defaults, apply the doc's param overrides, let variadic nodes
-            // rebuild their port list, then read the resolved ports.
-            let mut params: ParamValues = ahash::AHashMap::default();
-            for pd in boxed.parameters() {
-                params.insert(pd.name.clone(), pd.default.clone());
-            }
-            let static_names: Vec<&'static str> = boxed
-                .parameters()
-                .iter()
-                .map(|p| crate::exec::effect_node::intern_name(&p.name))
-                .collect();
-            for (k, v) in &dn.params {
-                if let Some(&name) = static_names.iter().find(|n| **n == k.as_str()) {
-                    params.insert(std::borrow::Cow::Borrowed(name), v.clone().into());
-                }
-            }
-            boxed.reconfigure(&params);
+            // The node's surface as the loader builds it, then its ports.
+            let params = crate::load::graph_loader::configure_from_doc(boxed.as_mut(), dn);
             node_snapshot_from_constructed(
                 boxed.as_ref(),
                 dn.id,

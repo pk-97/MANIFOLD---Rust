@@ -12,7 +12,6 @@ mod fluid_objects;
 use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
 use manifold_core::scene_exposure::NodeParamMetadata;
 
-use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::parameters::{ParamDef, ParamType};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use crate::node_graph::material_inspector::material_param_role;
@@ -91,23 +90,13 @@ pub fn all_params_for_node_type(type_id: &str) -> Vec<NodeParamMetadata> {
     params_metadata(type_id, node.parameters())
 }
 
-/// Every param `node` declares as the graph loader builds it: its WGSL source
-/// and reconfigure params apply first, so a render scene's per-object params
-/// exist once its object count does. `None` when the type is unknown, which
-/// the loader refuses outright.
+/// Every param `node` declares as the graph loader builds it
+/// (`configure_from_doc`), so a render scene's per-object params exist once
+/// its object count does. `None` when the type is unknown, which the loader
+/// refuses outright.
 pub fn declared_params_for_node(node: &EffectGraphNode) -> Option<Vec<NodeParamMetadata>> {
     let mut built = SCENE_EXPOSURE_REGISTRY.construct(&node.type_id)?;
-    if let Some(source) = node.wgsl_source.as_deref() {
-        built.set_wgsl_source(source);
-    }
-    let mut params: ParamValues =
-        built.parameters().iter().map(|param| (param.name.clone(), param.default.clone())).collect();
-    for (key, value) in &node.params {
-        if let Some(param) = built.parameters().iter().find(|param| param.name == key.as_str()) {
-            params.insert(param.name.clone(), value.clone().into());
-        }
-    }
-    built.reconfigure(&params);
+    manifold_node_engine::load::graph_loader::configure_from_doc(built.as_mut(), node);
     Some(params_metadata(&node.type_id, built.parameters()))
 }
 
