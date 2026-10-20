@@ -93,24 +93,6 @@ mod tests {
     use super::*;
     use manifold_node_engine::exec::effect_node::EffectNode;
 
-    /// Forwards directly to ClipTriggerCycle::step — these tests
-    /// mirror the legacy ones to lock in the wrapper.
-    #[test]
-    fn sequential_trigger_counts_pass_through_unchanged() {
-        let mut prim = ClipTriggerCycleNode::new();
-        for i in 0..20u32 {
-            let out = prim.cycle.step(i, 8);
-            assert_eq!(out, i % 8);
-        }
-    }
-
-    #[test]
-    fn would_be_repeat_advances_by_one() {
-        let mut prim = ClipTriggerCycleNode::new();
-        assert_eq!(prim.cycle.step(5, 8), 5);
-        assert_eq!(prim.cycle.step(13, 8), 6);
-    }
-
     /// BUG-104 — `clear_state()`, called through the same `EffectNode`
     /// trait object `PresetRuntime::clear_trigger_state` uses, releases
     /// the idempotence cache instead of leaving it latched on the last

@@ -563,7 +563,7 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
   - Tests: INV-S6, INV-S14, INV-S15, `every_bundled_and_fixture_param_resolves`, `old_scene_copies_are_ignored_then_dropped`, `user_exposure_label_becomes_rename_once`, `calibration_wire_round_trips_as_slider_choice`.
 - **Gate:** positive:
   - The tests above.
-  - `load_liveschool_live_show_v6` and `liveschool_roundtrip_preserves_addressing_sites` green, and a Liveschool save is byte-identical.
+  - `liveschool_resave_keeps_old_ids_and_omits_empty_session` green, and a Liveschool save is byte-identical.
   - A dump of card row ids, names and ranges for physicsscene and gltfscene before and after P1. Every differing line is named in the report as a stale copy the join corrected (expected: curated and named exposures only, because pass 4 already corrected exact auto-stamps).
   - `project_tool info` on a scene project prints names.
 

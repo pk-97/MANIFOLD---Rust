@@ -520,8 +520,7 @@ invariant a fused def must respect:
   occasionally diverge (up to 6 in one run, all pass isolated/serial). Re-run
   isolated before believing a failure. Root cause not found — this is an open
   hazard, not an accepted fact of life.
-- **Known pre-existing failures** (not fusion's): DepthOfField prewarm,
-  and the Liveschool FluidSimulation Ableton param-id fixture.
+- **Known pre-existing failures** (not fusion's): DepthOfField prewarm.
 - Scope: engine freeze tests = `cargo test -p manifold-node-engine --features gpu-proofs --lib freeze::`; catalog proofs = `cargo test -p manifold-nodes --features gpu-proofs --test main freeze::`. Codegen and macro changes also need the owning families' focused GPU proofs; use `scripts/gpu_proofs_gate.py` for scope selection.
 
 ## 11. Honest edges (the bug hunt starts here)

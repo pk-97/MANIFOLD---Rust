@@ -680,12 +680,17 @@ pub fn generated_block() -> String {
 /// Replace the content between the markers in `existing` with a freshly
 /// generated block. Returns `None` if either marker is missing.
 pub fn inject(existing: &str) -> Option<String> {
+    inject_block(existing, &generated_block())
+}
+
+/// [`inject`] with a block already generated.
+fn inject_block(existing: &str, block: &str) -> Option<String> {
     let begin = existing.find(BEGIN_MARKER)?;
     let end_marker_start = existing.find(END_MARKER)?;
     let end = end_marker_start + END_MARKER.len();
     let mut out = String::with_capacity(existing.len());
     out.push_str(&existing[..begin]);
-    out.push_str(&generated_block());
+    out.push_str(block);
     out.push_str(&existing[end..]);
     Some(out)
 }
@@ -743,32 +748,6 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs")
     }
 
-    #[test]
-    fn block_is_deterministic() {
-        assert_eq!(generated_block(), generated_block());
-        assert_eq!(node_catalog_json(), node_catalog_json());
-    }
-
-    #[test]
-    fn block_carries_markers_and_every_registered_node() {
-        let block = generated_block();
-        assert!(block.starts_with(BEGIN_MARKER));
-        assert!(block.trim_end().ends_with(END_MARKER));
-        // Completeness: every registered (non-fixture) primitive's
-        // type_id appears in the block — the `node.glitch`-class drift
-        // can't recur silently.
-        for f in inventory::iter::<PrimitiveFactory> {
-            if is_test_fixture(f.type_id) {
-                continue;
-            }
-            assert!(
-                block.contains(f.type_id),
-                "registered node `{}` missing from generated index",
-                f.type_id
-            );
-        }
-    }
-
     /// docs/NODE_VOCABULARY_AUDIT.md section 8c completeness gate: every
     /// palette-visible node (Atom or Driver stratum — hidden/legacy/
     /// `system.*` nodes are `Unlisted`, from having no `picker:`, and are
@@ -805,11 +784,30 @@ mod tests {
         }
     }
 
+    /// The on-disk artifacts match a fresh regeneration, written by an
+    /// earlier process, so generation is deterministic across processes. If
+    /// this fails, a node changed without regenerating the docs: run
+    /// `cargo run -p manifold-nodes --bin gen_node_catalog`. One generation
+    /// of the block also serves the marker and completeness checks.
     #[test]
     fn regenerates_in_sync() {
-        // The on-disk artifacts must match a fresh regeneration. If this
-        // fails, a node changed without regenerating the docs — run
-        // `cargo run -p manifold-nodes --bin gen_node_catalog`.
+        let block = generated_block();
+        assert!(block.starts_with(BEGIN_MARKER));
+        assert!(block.trim_end().ends_with(END_MARKER));
+        // Completeness: every registered (non-fixture) primitive's
+        // type_id appears in the block — the `node.glitch`-class drift
+        // can't recur silently.
+        for f in inventory::iter::<PrimitiveFactory> {
+            if is_test_fixture(f.type_id) {
+                continue;
+            }
+            assert!(
+                block.contains(f.type_id),
+                "registered node `{}` missing from generated index",
+                f.type_id
+            );
+        }
+
         let docs = docs_dir();
 
         let json_path = docs.join("node_catalog.json");
@@ -824,7 +822,7 @@ mod tests {
         let md_path = docs.join("NODE_CATALOG.md");
         let on_disk_md = std::fs::read_to_string(&md_path)
             .unwrap_or_else(|e| panic!("read {}: {e}", md_path.display()));
-        let regenerated = inject(&on_disk_md)
+        let regenerated = inject_block(&on_disk_md, &block)
             .expect("NODE_CATALOG.md is missing the generated-block markers");
         assert_eq!(
             on_disk_md, regenerated,

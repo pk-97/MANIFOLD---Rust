@@ -29,7 +29,7 @@ NEXTTEST_GPU_FILTER = '''
   | (binary_id(manifold-nodes::main) & test(/^scene_loop_wrap_parity::/))
   | (binary_id(manifold-app::renderer_contracts) & test(/^ui_color_swatches::/))
   | binary_id(manifold-app::led_edge_identity)
-  | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|viewport_p5c_demo::|viewport_p6_demo::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
+  | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|viewport_p5c_demo::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
 '''
 GPU_BACKEND_ROOT = 'crates/manifold-gpu/'
 OTHER_SHADER_ROOTS = ('crates/manifold-led/', 'crates/manifold-recording/', 'crates/manifold-spectral/')
