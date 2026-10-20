@@ -134,7 +134,7 @@ The run is unattended. Each call carries the default the lead applies when Peter
 
 ## 8. Report
 
-The run ends with `docs/evidence/scene_setup_<date>/REPORT.md` in the style of the overnight reports: before and after renders for every visible change, every bead closed, every default applied under the calls above, everything parked and why. Everything lands on main, so no launch command is owed; anything left on a branch names its ref and the exact binary path to run.
+The run ends with `docs/evidence/scene_setup_<date>/REPORT.md` in the style of the overnight reports: an after render for every visible change, every bead closed, every default applied under the calls above, everything parked and why. Everything lands on main, so no launch command is owed; anything left on a branch names its ref and the exact binary path to run.
 
 ## 9. Decided — do not reopen
 
