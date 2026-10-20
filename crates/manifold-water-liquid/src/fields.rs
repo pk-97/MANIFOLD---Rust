@@ -13,7 +13,7 @@
 //!   coming ticks start at, runs the field's authored ancestry at exactly
 //!   those times, and hands each result to [`LiquidFields::observe_sample`].
 //!   [`LiquidFields::prepare`] then lays each tick's field onto a coarse
-//!   [`FieldLattice`], a quarter of the solver's resolution per axis: one
+//!   [`ForceLattice`], a quarter of the solver's resolution per axis: one
 //!   lattice while the ticks agree, one per tick otherwise, so a tick reads
 //!   the same forces at any frame rate. A tick nobody sampled is an error.
 //!   Matter impulses use one lattice per accepted interval. GPU FLIP hits
@@ -34,7 +34,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock, FIELD_RESERVE_INTERVALS};
 use crate::coupling::LiquidRigidOwner;
-use crate::lattice::LiquidLattice;
+use manifold_physics::force_lattice::ForceLattice;
 use crate::tick_samples::TickSamples;
 use manifold_water_rigid::physics::ResolvedRigidImpulse;
 use manifold_water_rigid::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
@@ -49,85 +49,13 @@ pub const LIQUID_FIELD: &str = include_str!("primitives/shaders/liquid_field.wgs
 /// receipts. Discard receipts hold no slot. A hit past it is refused on its
 /// own; the next one is tried again.
 pub const IMPULSE_CAPACITY: usize = 256;
-/// Solver cells per field cell along each axis (D13).
-pub const FIELD_STRIDE: u32 = 4;
 /// Staging slots: one per frame that writes, three frames in flight plus one.
 pub const STAGING_SLOTS: usize = 4;
-
-/// The coarse lattice forces and impulses are sampled on. It starts at the
-/// solver lattice's min corner and covers its last node, so a solver node
-/// always sits inside it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FieldLattice {
-    min: [f32; 3],
-    spacing: f32,
-    nodes: [u32; 3],
-}
-
-impl FieldLattice {
-    pub fn covering(min: [f32; 3], cell_size: f32, solver_nodes: [u32; 3]) -> Self {
-        Self {
-            min,
-            spacing: cell_size * FIELD_STRIDE as f32,
-            nodes: solver_nodes.map(|n| n.saturating_sub(1).div_ceil(FIELD_STRIDE).max(1) + 1),
-        }
-    }
-
-    pub fn of(lattice: &LiquidLattice) -> Self {
-        Self::covering(lattice.min(), lattice.cell_size(), lattice.nodes())
-    }
-
-    pub fn nodes(&self) -> [u32; 3] {
-        self.nodes
-    }
-
-    pub fn spacing(&self) -> f32 {
-        self.spacing
-    }
-
-    pub fn node_count(&self) -> usize {
-        self.nodes.iter().map(|&n| n as usize).product()
-    }
-
-    /// Bytes of one lattice: four floats per node.
-    pub fn bytes(&self) -> u64 {
-        self.node_count() as u64 * 16
-    }
-
-    fn position(&self, index: usize) -> [f32; 3] {
-        let [nx, ny, _] = self.nodes.map(|n| n as usize);
-        let coord = [index % nx, (index / nx) % ny, index / (nx * ny)];
-        std::array::from_fn(|d| self.min[d] + coord[d] as f32 * self.spacing)
-    }
-
-    /// The CPU twin of `liquid_field_corner` summed over its eight corners.
-    pub fn sample(&self, values: &[[f32; 4]], x: [f32; 3]) -> [f32; 3] {
-        let mut sum = [0.0f32; 3];
-        for k in 0..8u32 {
-            let mut index = 0usize;
-            let mut stride = 1usize;
-            let mut weight = 1.0f32;
-            for (d, ((&x, &min), &nodes)) in x.iter().zip(&self.min).zip(&self.nodes).enumerate() {
-                let g = (x - min) / self.spacing;
-                let base = g.floor().max(0.0).min((nodes - 2) as f32);
-                let f = (g - base).clamp(0.0, 1.0);
-                let o = (k >> d) & 1;
-                weight *= if o == 1 { f } else { 1.0 - f };
-                index += (base as usize + o as usize) * stride;
-                stride *= nodes as usize;
-            }
-            for (axis, total) in sum.iter_mut().enumerate() {
-                *total += values[index][axis] * weight;
-            }
-        }
-        sum
-    }
-}
 
 /// What a domain publishes for its atoms about this frame's fields.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldFrame {
-    pub lattice: FieldLattice,
+    pub lattice: ForceLattice,
     /// Force lattices in `forces`: 0 without a field, 1 while it holds still
     /// (every tick reads it), else one per tick from the frame's first tick.
     pub force_lattices: u32,
@@ -138,12 +66,12 @@ pub struct FieldFrame {
 impl FieldFrame {
     /// The scalar outputs, by name. A frame without impulses publishes −1.
     pub fn outputs(&self) -> [(&'static str, f32); 6] {
-        let [x, y, z] = self.lattice.nodes.map(|n| n as f32);
+        let [x, y, z] = self.lattice.nodes().map(|n| n as f32);
         [
             ("field_nodes_x", x),
             ("field_nodes_y", y),
             ("field_nodes_z", z),
-            ("field_spacing", self.lattice.spacing),
+            ("field_spacing", self.lattice.spacing()),
             ("force_lattices", self.force_lattices as f32),
             ("impulse_tick", self.impulse_tick.map_or(-1.0, |tick| tick as f32)),
         ]
@@ -486,7 +414,7 @@ struct StagingSlot {
 }
 
 struct FieldBuffers {
-    lattice: FieldLattice,
+    lattice: ForceLattice,
     /// Force lattices the buffers hold room for.
     force_capacity: usize,
     impulse_capacity: usize,
@@ -504,7 +432,7 @@ const NOT_FINITE: &str = "Liquid forces: the acceleration field is not finite in
 /// changes.
 #[derive(Default)]
 pub struct LiquidFields {
-    lattice: Option<FieldLattice>,
+    lattice: Option<ForceLattice>,
     /// `force_lattices` lattices back to back.
     forces: Vec<[f32; 4]>,
     force_lattices: usize,
@@ -532,7 +460,7 @@ impl LiquidFields {
     /// this frame's, which belongs to any tick starting exactly now.
     pub fn prepare(
         &mut self,
-        lattice: FieldLattice,
+        lattice: ForceLattice,
         field: Option<&FieldValue>,
         clock: &LiquidClock,
         frame: &ClockFrame,
@@ -567,7 +495,7 @@ impl LiquidFields {
         if let Some(head) = head.filter(|head| sampled.clone().all(|(_, at)| at == *head)) {
             if self.force_lattices != 1 || self.force_source.as_ref() != Some(head) {
                 self.forces.resize(count, [0.0; 4]);
-                fill(&lattice, &mut self.forces, |x| head.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
+                lattice.fill(&mut self.forces, |x| head.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
                 self.force_lattices = 1;
                 self.force_source = Some(head.clone());
                 self.forces_dirty = true;
@@ -577,7 +505,7 @@ impl LiquidFields {
             // at any frame rate.
             self.forces.resize(ticks * count, [0.0; 4]);
             for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
-                fill(&lattice, values, |x| at.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
+                lattice.fill(values, |x| at.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
             }
             self.force_lattices = ticks;
             self.force_source = None;
@@ -599,7 +527,7 @@ impl LiquidFields {
         self.tick_fields.observe(now, field);
     }
 
-    fn finish(&mut self, lattice: FieldLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
+    fn finish(&mut self, lattice: ForceLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
         let mut impulse_tick = impulses.impulse_tick();
         self.live_hits.clear();
         let events = impulses.frame_events();
@@ -620,7 +548,7 @@ impl LiquidFields {
                     }
                     let index = self.live_hits.len();
                     self.live_hits.push([relative.to_bits(), index as u32, tick as u32, 0]);
-                    fill(&lattice, &mut self.impulses[index * count..(index + 1) * count], |x| {
+                    lattice.fill(&mut self.impulses[index * count..(index + 1) * count], |x| {
                         let mut sum = [0.0; 3];
                         for event in &events[first..end] {
                             if event.value.target.affects_fluid() {
@@ -636,7 +564,7 @@ impl LiquidFields {
                 impulse_tick = Some(self.frame_first);
                 for (ordinal, values) in self.impulses.chunks_exact_mut(count).enumerate() {
                 let tick = self.frame_first + ordinal as u64;
-                fill(&lattice, values, |x| {
+                lattice.fill(values, |x| {
                     let mut sum = [0.0f32; 3];
                     for event in events.iter().filter(|event| event.applied.tick == tick && event.value.target.affects_fluid()) {
                         let v = event.value.field.sample(x);
@@ -765,18 +693,6 @@ impl LiquidFields {
         self.impulses_dirty = false;
         Ok(())
     }
-}
-
-/// Sample `field` at every lattice node; any non-finite value fails.
-fn fill(lattice: &FieldLattice, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> [f32; 3]) -> Result<(), ()> {
-    for (index, value) in values.iter_mut().enumerate() {
-        let v = field(lattice.position(index));
-        if v.iter().any(|c| !c.is_finite()) {
-            return Err(());
-        }
-        *value = [v[0], v[1], v[2], 0.0];
-    }
-    Ok(())
 }
 
 #[cfg(test)]

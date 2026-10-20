@@ -6,7 +6,6 @@ use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::clock::FIELD_RESERVE_INTERVALS;
 use manifold_water_liquid::fields::FieldFrame;
-use manifold_water_liquid::fields::FieldLattice;
 use manifold_water_liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::matter::REACTION_WORDS;
 use crate::primitives::matter_domain::matter_geometry;
@@ -26,7 +25,7 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame {
-        lattice: FieldLattice::of(&geometry.setup.lattice),
+        lattice: geometry.setup.lattice.force_lattice(),
         force_lattices: FIELD_RESERVE_INTERVALS,
         impulse_tick: Some(0),
     };

@@ -21,7 +21,8 @@ use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
 use manifold_water_liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports, unpack_supports};
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_physics::coupled_motion::{Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at};
-use manifold_water_liquid::fields::{FieldLattice, LIQUID_FIELD};
+use manifold_physics::force_lattice::ForceLattice;
+use manifold_water_liquid::fields::LIQUID_FIELD;
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_node_engine::parameters::ParamValue;
 
@@ -533,7 +534,7 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
 #[test]
 fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
     let faces = random_faces(0x5ce7, false);
-    let field = FieldLattice::covering(MIN, H, padded().map(|n| n as u32));
+    let field = ForceLattice::covering(MIN, H, padded().map(|n| n as u32));
     let nodes = field.nodes();
     let mut rng = Stream::new(0xf0c3);
     let mut lattice_values = |count: usize| -> Vec<[f32; 4]> {

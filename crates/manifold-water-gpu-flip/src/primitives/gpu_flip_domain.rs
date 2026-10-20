@@ -33,7 +33,7 @@ use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, Liqu
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
-use {manifold_water_liquid::fields, manifold_water_liquid::fields::FieldLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use {manifold_water_liquid::fields, manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_water_liquid::tick_samples::TickSamples;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
@@ -196,9 +196,9 @@ pub fn gpu_flip_geometry(
 impl GpuFlipGeometry {
     /// The field lattice over the face grid's box: from its minimum corner
     /// to its far wall faces.
-    pub(crate) fn field_lattice(&self) -> FieldLattice {
+    pub(crate) fn field_lattice(&self) -> ForceLattice {
         let solver = FlipSolverGrid::from_lattice(self.setup.lattice);
-        FieldLattice::covering(solver.min(), self.layout.cell_size as f32, solver.nodes())
+        ForceLattice::covering(solver.min(), self.layout.cell_size as f32, solver.nodes())
     }
 }
 
@@ -1141,7 +1141,7 @@ mod tests {
         let geometry = geometry(64.0, 0.16, None).unwrap();
         let grid = FlipSolverGrid::from_lattice(geometry.setup.lattice);
         let field = geometry.field_lattice();
-        let expected = FieldLattice::covering(grid.min(), geometry.setup.lattice.cell_size(), grid.nodes());
+        let expected = ForceLattice::covering(grid.min(), geometry.setup.lattice.cell_size(), grid.nodes());
         assert_eq!(field, expected);
         assert!(geometry.outputs().iter().any(|(name, value)| *name == "mesh_wall_inset" && *value == grid.wall_inset()));
     }

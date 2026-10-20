@@ -17,6 +17,7 @@ pub mod clock;
 pub mod particle_duration;
 pub mod coupled_motion;
 mod field_value;
+pub mod force_lattice;
 use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
 pub use field_value::{FieldLeaf, FieldValue};
 pub use interaction::{

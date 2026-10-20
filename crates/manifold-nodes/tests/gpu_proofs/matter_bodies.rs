@@ -9,7 +9,7 @@ use manifold_physics::sdf::signed_distance_lattice;
 use manifold_core::fluid_domain::{domain_layout};
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_water_liquid::fields::FieldLattice;
+use manifold_physics::force_lattice::ForceLattice;
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
@@ -330,7 +330,7 @@ fn matter_grid_update_projects_colliders() {
 }
 
 /// A force or impulse lattice over `lat` holding `f` at each field node.
-fn field_values(lat: &LiquidLattice, field: &FieldLattice, f: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
+fn field_values(lat: &LiquidLattice, field: &ForceLattice, f: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
     let [nx, ny, _] = field.nodes().map(|n| n as usize);
     (0..field.node_count())
         .map(|i| {
@@ -341,7 +341,7 @@ fn field_values(lat: &LiquidLattice, field: &FieldLattice, f: impl Fn([f32; 3]) 
         .collect()
 }
 
-fn set_field(bench: &mut Bench, field: &FieldLattice) {
+fn set_field(bench: &mut Bench, field: &ForceLattice) {
     for (name, value) in [
         ("field_nodes_x", field.nodes()[0] as f32), ("field_nodes_y", field.nodes()[1] as f32),
         ("field_nodes_z", field.nodes()[2] as f32), ("field_spacing", field.spacing()),
@@ -353,7 +353,7 @@ fn set_field(bench: &mut Bench, field: &FieldLattice) {
 /// Seam P8 (Forces and impulses for GPU liquids): the grid update adds
 /// dt·(g + forces(x)) every substep and impulses(x) once, on the impulse
 /// tick's first substep, each read from the domain's coarse lattices exactly
-/// as `FieldLattice::sample` reads them on the CPU.
+/// as `ForceLattice::sample` reads them on the CPU.
 #[test]
 fn matter_grid_update_applies_field_lattices() {
     let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
@@ -366,7 +366,7 @@ fn matter_grid_update_applies_field_lattices() {
     let to_raw = |v: f32| (v * m_raw as f32 / scale).round() as i32;
     let nodes = lat.node_count() as usize;
     let accum: Vec<i32> = (0..nodes).flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw]).collect();
-    let field = FieldLattice::of(&lat);
+    let field = lat.force_lattice();
     // Not linear, so the trilinear weights matter. Two lattices, one per tick
     // from tick 7, so each tick must read its own.
     let tick_forces = [
@@ -490,7 +490,7 @@ fn matter_body_reaction_counts_field_velocity() {
     let mass = 0.01f32;
     let nodes = lat.node_count();
     let grid = vec![MatterGridNode { velocity_mass: [0.0, 0.0, 0.0, mass], velocity_before: [0.0; 4] }; nodes as usize];
-    let field = FieldLattice::of(&lat);
+    let field = lat.force_lattice();
     let inward = |k: f32| move |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3]) };
     let forces = field_values(&lat, &field, inward(1000.0));
     // Tick 3 of a frame from tick 2 reads the second lattice; the first is a decoy.

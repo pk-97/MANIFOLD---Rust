@@ -29,7 +29,7 @@ use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
-use {manifold_water_liquid::fields, manifold_water_liquid::fields::FieldLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use {manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_liquid::tick_samples::TickSamples;
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
@@ -994,7 +994,7 @@ impl MatterDomain {
         self.coupled.transport = Some(ctx.time.seconds.0);
         let field = self
             .fields
-            .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
+            .prepare(lattice.force_lattice(), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
 
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),

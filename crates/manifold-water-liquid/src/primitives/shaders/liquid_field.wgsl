@@ -2,7 +2,7 @@
 // force or impulse lattice, 4 floats per node (xyz, pad), x fastest.
 // Pure math only: an atom loops k over 0..8, reads its own buffer at
 // `corner.index * 4u + axis` and weights by `corner.weight`, so the fused
-// rename of `buf_*` reaches every read. `FieldLattice::sample` is the CPU twin.
+// rename of `buf_*` reaches every read. `ForceLattice::sample` (manifold-physics) is the CPU twin.
 
 // Word offset of the force lattice tick `tick` reads: one lattice per tick
 // from `first_tick` while the field moves, one for every tick while it holds
