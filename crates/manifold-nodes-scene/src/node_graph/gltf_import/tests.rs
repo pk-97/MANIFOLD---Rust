@@ -2821,3 +2821,27 @@ fn import_has_one_environment_mode_and_an_off_by_default_hdri_background() {
         assert_eq!((placed.group, placed.role), (ControlGroup::Environment, SurfaceRole::Setup));
     }
 }
+
+/// A fresh import renders as it always has: the Ray Tracing surface row and
+/// the render_scene node agree, and both are off. The row's value re-asserts
+/// over the node every frame, so a row that disagreed would flip RT on or off.
+#[test]
+fn fresh_import_ray_tracing_row_agrees_with_the_node() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let (def, _report) = assemble_import_graph(&path).expect("assemble tiger lily");
+    let scene = def.nodes.iter().find(|n| n.type_id == "node.render_scene").expect("render_scene");
+    let node_on = matches!(scene.params.get("rt_enabled"), Some(SerializedParamValue::Bool { value: true }));
+    let meta = def.preset_metadata.as_ref().expect("import stamps metadata");
+    let row = meta
+        .bindings
+        .iter()
+        .find_map(|b| match &b.target {
+            BindingTarget::Node { node_id, param } if *node_id == scene.node_id && param == "rt_enabled" => Some(b.id.clone()),
+            _ => None,
+        })
+        .expect("the Ray Tracing row is stamped");
+    let spec = meta.params.iter().find(|p| p.id == row).expect("row spec");
+    assert_eq!(spec.default_value >= 0.5, node_on, "row default and node must agree");
+    assert!(!node_on, "a fresh import has ray tracing off, as before");
+}
