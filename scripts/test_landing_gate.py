@@ -575,6 +575,35 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(code, landing_gate.CHECKS_RED)
         self.assertLess(called.index('tests'), called.index('flow-gate'))
 
+    NEXTEST_RED = ("        FAIL [   1.0s] crate whitewater_golden_drifts\n", "")
+
+    def test_covered_red_continues_to_flows_and_gpu_proofs(self):
+        code, called, _, _, _, output, _ = self.exercise(
+            "tests", nextest_output=self.NEXTEST_RED,
+            extra=["--named-red", "BUG-x=whitewater_golden"])
+        self.assertEqual(code, landing_gate.CHECKS_RED)
+        self.assertIn("flow-gate", called)
+        self.assertIn("gpu-proofs", called)
+        self.assertIn("COVERED tests/manifold-gpu BUG-x", output)
+
+    def test_uncovered_red_still_stops_at_the_boundary(self):
+        code, called, _, _, _, output, _ = self.exercise(
+            "tests", nextest_output=self.NEXTEST_RED,
+            extra=["--named-red", "BUG-x=some_other_test"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("flow-gate", called)
+        self.assertNotIn("gpu-proofs", called)
+        self.assertNotIn("COVERED", output)
+
+    def test_unmatched_red_is_not_covered_when_another_red_is_named(self):
+        code, called, _, _, _, output, _ = self.exercise(
+            ["tests", "gpu-proofs"], nextest_output=self.NEXTEST_RED,
+            gpu_output="test other_proof ... FAILED\n",
+            extra=["--named-red", "BUG-x=whitewater_golden"])
+        self.assertIn("gpu-proofs", called)
+        self.assertIn("COVERED tests/manifold-gpu BUG-x", output)
+        self.assertNotIn("COVERED gpu-proofs", output)
+
     def test_quoted_proof_refusal_is_an_ordinary_failure(self):
         output = 'AssertionError: "GPU-PROOFS GATE: FAIL (inputs changed"\n'
         for label in ("tests", "gpu-proofs"):
@@ -2024,12 +2053,9 @@ class DeliveryTests(unittest.TestCase):
                     code = watch_land.watch(123, outer, kind='land', alive=lambda _: False)
                 self.assertEqual(code, 0, watched.getvalue())
 
-    def test_delivery_requests_complete_run_only_for_named_red(self):
-        # Ordinary landings retain the cheap-first default. A named red asks
-        # for complete coverage; missing reason/coverage still cannot land.
-        cases = [[], ["--named-red", "BUG-test", "--reason", "reviewed"],
-                 ["--named-red", "BUG-test"],
-                 ["--named-red", "BUG-test", "--reason", "reviewed", "--skip-gpu", "deferred"]]
+    def test_delivery_forwards_named_reds_and_never_keep_going(self):
+        cases = [[], ["--named-red", "BUG-test=t", "--reason", "reviewed"],
+                 ["--named-red", "BUG-test=t", "--reason", "reviewed", "--skip-gpu", "deferred"]]
         for extra in cases:
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
                 stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
@@ -2040,8 +2066,21 @@ class DeliveryTests(unittest.TestCase):
                     land_branch.main()
                 argv = gate.call_args.args[0]
                 self.assertNotIn("--fail-fast", argv)
-                self.assertEqual("--keep-going" in argv, "--named-red" in extra)
-                self.assertEqual(argv[argv.index("--repo") + 1], str(Path(d).resolve()))
+                self.assertNotIn("--keep-going", argv)
+                self.assertEqual("BUG-test=t" in argv, "--named-red" in extra)
+
+    def test_bare_named_red_is_refused_with_the_new_form(self):
+        for module_main, argv in ((land_branch.main, ["land_branch.py", "b", "--worktree", "w", "--message", "m"]),):
+            err = io.StringIO()
+            with patch.object(sys, "argv", argv + ["--named-red", "BUG-test"]), contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit):
+                    module_main()
+            self.assertIn("BUG-ID=TEST", err.getvalue())
+        err = io.StringIO()
+        with patch.object(sys, "argv", ["landing_gate.py", "--named-red", "BUG-test"]), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                landing_gate.main()
+        self.assertIn("BUG-ID=TEST", err.getvalue())
 
     def test_progress_is_forwarded_before_child_exits(self):
         # A real child cannot finish until the parent's output sink observes
