@@ -24,6 +24,13 @@ pub enum WorkspaceKind {
     GraphEditor,
 }
 
+/// The editor viewport's drawn selection and what it was built from.
+pub struct ViewportSelection {
+    pub scene: Arc<manifold_nodes_scene::node_graph::scene_vm::SceneVm>,
+    pub ids: Vec<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
+    pub selection: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoSelection,
+}
+
 /// All per-window UI state. Owns the `UIRoot`, the offscreen render
 /// target, and the CVDisplayLink that drives this window's render
 /// cadence.
@@ -127,11 +134,15 @@ pub struct Workspace {
     pub preview_navigation: crate::preview_navigation::PreviewNavigation,
     /// The gizmo layer last sent to the content thread (`SetPhysicsOverlay`).
     pub gizmo_layer_sent: Option<manifold_core::LayerId>,
-    /// The shape the gizmo is attached to this session, set by a viewport
-    /// pick and cleared when the viewport closes or the def no longer
-    /// declares it. A pick also selects the owner in the Scene Setup panel
+    /// The shapes selected in the editor viewport this session, in pick
+    /// order, set by a viewport pick (Shift adds or removes one) and cleared
+    /// by a press on empty space; a shape the def no longer declares drops
+    /// out. A pick also selects the owners in the Scene Setup panel
     /// (`window_input.rs`), so Properties follows a viewport click.
-    pub viewport_selected: Option<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
+    pub viewport_selected: Vec<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
+    /// The selection drawn over the viewport, rebuilt when its scene or
+    /// `viewport_selected` changes.
+    pub viewport_selection: Option<ViewportSelection>,
     /// The gizmo drag in progress, a knob scrub ended on release or
     /// cancellation.
     pub viewport_gizmo_drag: Option<crate::scene_gizmo::GizmoGesture>,
@@ -185,7 +196,8 @@ impl Workspace {
             preview_gizmo: Default::default(),
             preview_navigation: Default::default(),
             gizmo_layer_sent: None,
-            viewport_selected: None,
+            viewport_selected: Vec::new(),
+            viewport_selection: None,
             viewport_gizmo_drag: None,
             viewport_outline: Vec::new(),
             outline_sent: (None, None),

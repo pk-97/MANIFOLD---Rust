@@ -1823,15 +1823,21 @@ impl Runner {
 
     /// A left press through the text gate, then the tree, as the App routes it.
     fn press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
-        if !self.text_press(ui, data, pos, self.modifiers.shift) && !self.preview_gizmo(ui, data, |host, ctx, fit| host.press(ctx, fit, pos)) {
+        let extend = self.modifiers.shift;
+        if !self.text_press(ui, data, pos, extend) && !self.preview_gizmo(ui, data, |host, ctx, fit| host.press(ctx, fit, pos, extend)) {
             ui.pointer_event(pos, PointerAction::Down, self.clock);
         }
     }
 
-    /// A left release: it ends a text drag, then a preview gizmo drag
+    /// A left release: it ends a text drag, clears the selection after a
+    /// click on empty preview space, then ends a preview gizmo drag
     /// (`window_input`'s release order), else reaches the tree.
     fn release(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         crate::text_session::pointer_up(&mut self.text_input);
+        self.preview_gizmo(ui, data, |host, ctx, _| {
+            host.release_click(ctx, pos);
+            false
+        });
         if !self.preview_gizmo(ui, data, |host, ctx, _| host.release(ctx)) {
             ui.pointer_event(pos, PointerAction::Up, self.clock);
         }

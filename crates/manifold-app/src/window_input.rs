@@ -527,6 +527,7 @@ impl Application {
                                     self.cursor_pos.x, self.cursor_pos.y
                                 );
                             }
+                            self.preview_gizmo_release_click();
                             if self.preview_gizmo_release() || self.preview_navigation_release() {
                                 // A preview gizmo or navigation drag held the pointer.
                             } else if self.split_dragging {
@@ -870,6 +871,7 @@ impl Application {
     fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
         use crate::scene_gizmo::{GizmoPress, GizmoView};
         use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+        use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoSelection;
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
         };
@@ -880,33 +882,36 @@ impl Application {
             return false;
         }
         let Some(scene) = self.viewport_def_cloned().as_ref().and_then(SceneVm::from_def) else { return false };
-        let (view, mode, selected) = {
+        let (view, mode, selection) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
                 return false;
             };
             let view = GizmoView::new(config.camera.to_camera(), config.width, config.height);
-            (view, ed.viewport_gizmo_mode, ed.viewport_selected.clone())
+            (view, ed.viewport_gizmo_mode, GizmoSelection::of_ids(&scene, &ed.viewport_selected))
         };
         let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
         let Some((view, point)) = crate::viewport_input::gizmo_pointer(rect, view, (cx, cy)) else { return false };
-        let Some(pressed) = self.with_dispatch_ctx(|ctx| {
-            crate::scene_gizmo::press(ctx, &layer_id, &scene, selected.as_ref(), mode, &view, point)
-        }) else {
+        let at = crate::scene_gizmo::PressAt { view: &view, point, extend: self.modifiers.shift };
+        let Some(pressed) = self.with_dispatch_ctx(|ctx| crate::scene_gizmo::press(ctx, &layer_id, &scene, &selection, mode, at)) else {
             return false;
         };
         let Some(ed) = self.graph_editor.as_mut() else { return false };
         match pressed {
             GizmoPress::Handle(gesture) => {
                 if gesture.is_some() {
-                    ed.viewport_gizmo_drag = gesture;
+                    ed.viewport_gizmo_drag = gesture.map(|gesture| *gesture);
                 }
                 true
             }
-            GizmoPress::Picked(picked) => {
-                let hit = picked.is_some();
-                ed.viewport_selected = picked;
-                hit
+            GizmoPress::Picked(Some(ids)) => {
+                ed.viewport_selected = ids;
+                true
+            }
+            // The editor viewport clears on the press; a drag from there orbits.
+            GizmoPress::Picked(None) => {
+                ed.viewport_selected.clear();
+                false
             }
         }
     }
@@ -951,8 +956,16 @@ impl Application {
     /// core's pick and the knob scrub path the editor viewport uses. True
     /// when the preview took it; a miss falls through to the UI below.
     fn preview_gizmo_press(&mut self) -> bool {
-        let (fit, pos) = (self.preview_fit(), self.cursor_pos);
-        self.with_preview_gizmo(|host, ctx| host.press(ctx, fit, pos)).unwrap_or(false)
+        let (fit, pos, extend) = (self.preview_fit(), self.cursor_pos, self.modifiers.shift);
+        self.with_preview_gizmo(|host, ctx| host.press(ctx, fit, pos, extend)).unwrap_or(false)
+    }
+
+    /// A left release: a click on empty preview space clears the selection.
+    fn preview_gizmo_release_click(&mut self) {
+        if self.ws.preview_gizmo.missed() {
+            let pos = self.cursor_pos;
+            self.with_preview_gizmo(|host, ctx| host.release_click(ctx, pos));
+        }
     }
 
     /// Pointer motion while a preview drag holds the pointer.
