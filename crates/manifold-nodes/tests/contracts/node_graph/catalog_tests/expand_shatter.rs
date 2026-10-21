@@ -139,7 +139,7 @@ use manifold_core::effect_graph_def::*;
     }
 
     #[test]
-    fn shatter_fans_parent_acceleration_and_reserves_targeted_slots() {
+    fn shatter_fans_parent_acceleration_to_every_fragment() {
         let mut owner = fixture();
         owner.nodes.push(
             serde_json::from_value(serde_json::json!({
@@ -149,46 +149,19 @@ use manifold_core::effect_graph_def::*;
             }))
             .unwrap(),
         );
-        let mut reserved_pose_target = owner
-            .nodes
-            .iter()
-            .find(|node| node.id == 111)
-            .unwrap()
-            .clone();
-        reserved_pose_target.id = 901;
-        reserved_pose_target.node_id = NodeId::new("reserved-pose-target");
-        reserved_pose_target.handle = None;
-        owner.nodes.push(reserved_pose_target);
-        owner.wires.extend([
-            EffectGraphWire {
-                from_node: 900,
-                from_port: "out".into(),
-                to_node: 40,
-                to_port: "body_acceleration_1".into(),
-            },
-            // A dangling field target occupies slot 6 before allocation.
-            EffectGraphWire {
-                from_node: 900,
-                from_port: "out".into(),
-                to_node: 40,
-                to_port: "body_acceleration_6".into(),
-            },
-            // A pose route also reserves its target slot even when it is not
-            // paired with an authored body input.
-            EffectGraphWire {
-                from_node: 40,
-                from_port: "pose_7".into(),
-                to_node: 901,
-                to_port: "transform".into(),
-            },
-        ]);
+        owner.wires.push(EffectGraphWire {
+            from_node: 900,
+            from_port: "out".into(),
+            to_node: 111,
+            to_port: "acceleration".into(),
+        });
 
         let prepared = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
         let prepared_id = |stable: &NodeId| prepared.def.nodes.iter()
             .find(|node| &node.node_id == stable).unwrap().id;
         let world = prepared_id(&owner.nodes.iter().find(|node| node.id == 40).unwrap().node_id);
         let field = prepared_id(&NodeId::new("shatter-field"));
-        let reserved = prepared_id(&NodeId::new("reserved-pose-target"));
+        let parent = prepared_id(&owner.nodes.iter().find(|node| node.id == 111).unwrap().node_id);
         let fragment_ids: BTreeSet<_> = prepared
             .def
             .nodes
@@ -198,63 +171,48 @@ use manifold_core::effect_graph_def::*;
             })
             .map(|node| node.id)
             .collect();
-        let fragment_body_wires: Vec<_> = prepared
+        let fragment_slots: BTreeSet<_> = prepared
             .def
             .wires
             .iter()
-            .filter(|wire| {
-                fragment_ids.contains(&wire.from_node)
-                    && wire.to_node == world
-                    && wire.to_port.starts_with("body_")
-            })
-            .collect();
-        let fragment_slots: BTreeSet<_> = fragment_body_wires
-            .iter()
-            .map(|wire| {
-                wire.to_port
-                    .strip_prefix("body_")
-                    .unwrap()
-                    .parse::<usize>()
-                    .unwrap()
+            .filter(|wire| fragment_ids.contains(&wire.from_node) && wire.to_node == world)
+            .filter_map(|wire| match manifold_core::physics_members::member_input(&wire.to_port) {
+                Some((manifold_core::physics_members::Family::Body, slot)) => Some(slot),
+                _ => None,
             })
             .collect();
         assert_eq!(fragment_ids.len(), 16);
-        assert_eq!(fragment_body_wires.len(), 16);
-        assert_eq!(fragment_slots, (8..24).collect());
-        for body_wire in fragment_body_wires {
-            let slot = body_wire.to_port.strip_prefix("body_").unwrap();
-            assert!(prepared.def.wires.iter().any(|wire| {
-                wire.from_node == field
-                    && wire.from_port == "out"
-                    && wire.to_node == world
-                    && wire.to_port == format!("body_acceleration_{slot}")
-            }));
+        assert_eq!(fragment_slots, (6..22).collect(), "fragments take the world's free slots after the six authored bodies");
+        for fragment in &fragment_ids {
+            assert!(
+                prepared.def.wires.iter().any(|wire| {
+                    wire.from_node == field
+                        && wire.from_port == "out"
+                        && wire.to_node == *fragment
+                        && wire.to_port == "acceleration"
+                }),
+                "fragment {fragment} takes the parent's force on its own input"
+            );
         }
         let field_wires: Vec<_> = prepared
             .def
             .wires
             .iter()
-            .filter(|wire| wire.from_node == field && wire.from_port == "out" && wire.to_node == world)
+            .filter(|wire| wire.from_node == field && wire.from_port == "out")
             .collect();
+        assert_eq!(field_wires.len(), 17, "the parent's route and one per fragment");
         assert_eq!(
-            field_wires.len(),
-            18,
-            "parent, reserved, and fragment routes"
-        );
-        assert_eq!(
-            field_wires
-                .iter()
-                .filter(|wire| wire.to_port == "body_acceleration_1")
-                .count(),
+            field_wires.iter().filter(|wire| wire.to_node == parent).count(),
             1,
             "the parent route remains a single authored connection"
         );
-        assert!(prepared.def.wires.iter().any(|wire| {
-            wire.from_node == world
-                && wire.from_port == "pose_7"
-                && wire.to_node == reserved
-                && wire.to_port == "transform"
-        }));
+        let fragment_poses = prepared
+            .def
+            .wires
+            .iter()
+            .filter(|wire| fragment_ids.contains(&wire.from_node) && wire.from_port == "pose")
+            .count();
+        assert!(fragment_poses >= 16, "each fragment's object reads its own body's pose: {fragment_poses}");
         assert!(
             !prepared
                 .def

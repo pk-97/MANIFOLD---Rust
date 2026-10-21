@@ -539,7 +539,7 @@ impl BoxScene {
                 wire(body, "shape".into(), mesh, "shape".into()),
                 wire(mesh, "vertices".into(), object, "vertices".into()),
                 wire(material, "out".into(), object, "material".into()),
-                wire(world, format!("pose_{level}"), object, "transform".into()),
+                wire(body, "pose".into(), object, "transform".into()),
                 wire(object, "object".into(), render, format!("object_{slot}")),
             ]);
             let scene = def.nodes.iter_mut().find(|node| node.id == render).expect("the render scene");

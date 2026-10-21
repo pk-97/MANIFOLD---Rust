@@ -213,7 +213,7 @@ fn physics_scene_graph() -> EffectGraphDef {
         wire(101, "shape", 102, "shape"),
         wire(102, "vertices", 104, "vertices"),
         wire(103, "out", 104, "material"),
-        wire(40, "pose_0", 104, "transform"),
+        wire(101, "pose", 104, "transform"),
         wire(104, "object", 0, "object_0"),
     ]);
     def
@@ -773,8 +773,9 @@ fn imported_physics_reuses_legacy_input_and_roundtrips_with_extra_input() {
     let enabled = graph_of(&project, &fx).clone();
     let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
     assert_eq!(group.nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID).count(), 1);
+    let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap().id;
     assert!(group.wires.iter().any(|wire| {
-        wire.from_node == 6
+        wire.from_node == body
             && wire.from_port == "pose"
             && wire.to_node == 14
             && wire.to_port == "transform"
@@ -889,7 +890,7 @@ fn imported_physics_enable_group_roundtrips_shared_world_and_bindings() {
     let world = enabled.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("shared world");
     assert!(enabled.wires.iter().any(|wire| wire.from_node == 10 && wire.to_node == world.id && wire.to_port == "body_0"));
     let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
-    assert!(group.interface.inputs.iter().any(|port| port.name == "pose"));
+    assert!(!group.interface.inputs.iter().any(|port| port.name == "pose"), "no pose input crosses the group boundary");
     assert!(group.interface.outputs.iter().any(|port| port.name == "body"));
     let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
     assert_eq!(body.params.get("collider_parts"), Some(&SerializedParamValue::Int { value: 32 }));
@@ -1001,7 +1002,7 @@ fn imported_physics_rejects_unsupported_source_and_conflicting_group_atomically(
 
     let mut conflict = imported_group_scene_graph();
     let group = conflict.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
-    group.interface.inputs.push(InterfacePortDef { name: "pose".into(), port_type: "Transform".into() });
+    group.interface.outputs.push(InterfacePortDef { name: "body".into(), port_type: "RigidBody".into() });
     let (mut project, fx) = project_with_graph(conflict.clone());
     let mut command = enable_physics(&project, GraphTarget::Effect(fx.clone()), 0, 0, body_params(), conflict.clone());
     command.execute(&mut project);
@@ -1663,18 +1664,21 @@ fn duplicate_physics_scene_object_clones_complete_chain_and_undo_redo() {
     assert!(def.wires.iter().any(|wire| {
         wire.from_node == clone.id && wire.to_node == 0 && wire.to_port == "object_1"
     }));
-    assert!(def.wires.iter().any(|wire| {
-        wire.from_node == 40
-            && wire.from_port == "pose_1"
-            && wire.to_node != 104
-            && wire.to_port == "transform"
-    }));
     let cloned_body = def
         .wires
         .iter()
         .find(|wire| wire.to_node == 40 && wire.to_port == "body_1")
         .expect("new physics body slot");
     assert_ne!(cloned_body.from_node, 101);
+    assert!(
+        def.wires.iter().any(|wire| {
+            wire.from_node == cloned_body.from_node
+                && wire.from_port == "pose"
+                && wire.to_node == clone.id
+                && wire.to_port == "transform"
+        }),
+        "the copy's object reads its own body's pose"
+    );
     assert!(def.wires.iter().any(|wire| {
         wire.from_node == cloned_body.from_node
             && wire.from_port == "shape"
@@ -1759,8 +1763,8 @@ fn physics_scene_commands_reject_shared_pose_atomically() {
     shared.handle = Some("Shared Cube".to_string());
     graph.nodes.push(shared);
     graph.wires.push(EffectGraphWire {
-        from_node: 40,
-        from_port: "pose_0".to_string(),
+        from_node: 101,
+        from_port: "pose".to_string(),
         to_node: 200,
         to_port: "transform".to_string(),
     });
@@ -2567,7 +2571,7 @@ fn shipped_physics_copies_refuse_partial_scene_edits() {
     let mut graph = graph;
     graph
         .wires
-        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count_0"));
+        .retain(|wire| !(wire.from_node == 121 && wire.from_port == "active_count"));
     let (mut project, fx) = project_with_graph(graph.clone());
     let mut duplicate = duplicate_object(&project, 
         GraphTarget::Effect(fx.clone()),
@@ -2600,7 +2604,7 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
                 "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
             )),
             0,
-            vec![("pose_0", "transform")],
+            vec![(101, "pose", "transform")],
         ),
         (
             include_str!(concat!(
@@ -2609,19 +2613,19 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
             )),
             1,
             vec![
-                ("instances_0", "instances"),
-                ("active_count_0", "instance_count"),
-                ("", "copies_0"),
+                (121, "instances", "instances"),
+                (121, "active_count", "instance_count"),
+                (0, "", "copies_0"),
             ],
         ),
     ] {
         let mut graph: EffectGraphDef = serde_json::from_str(source).unwrap();
         graph.wires.retain(|wire| {
-            !detached_outputs.iter().any(|(from_port, to_port)| {
+            !detached_outputs.iter().any(|(from_node, from_port, to_port)| {
                 if *to_port == "copies_0" {
                     wire.to_node == 40 && wire.to_port == "copies_0"
                 } else {
-                    wire.from_node == 40 && wire.from_port == *from_port && wire.to_port == *to_port
+                    wire.from_node == *from_node && wire.from_port == *from_port && wire.to_port == *to_port
                 }
             })
         });

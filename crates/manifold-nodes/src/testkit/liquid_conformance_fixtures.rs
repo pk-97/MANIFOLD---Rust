@@ -261,7 +261,7 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
         def.wires.extend([
             wire(start_k, "transform", body_k, "transform"),
             wire(body_k, "body", world, &format!("body_{k}")),
-            wire(world, &format!("pose_{k}"), object_k, "transform"),
+            wire(body_k, "pose", object_k, "transform"),
             wire(mesh, "vertices", object_k, "vertices"),
             wire(material, "out", object_k, "material"),
             wire(object_k, "object", scene, &format!("object_{}", objects - 1 + k)),

@@ -83,8 +83,8 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
         (141, "body", 40, "body_1"),
         (161, "body", 40, "body_2"),
         (121, "body", 40, "copies_0"),
-        (40, "instances_0", 124, "instances"),
-        (40, "active_count_0", 124, "instance_count"),
+        (121, "instances", 124, "instances"),
+        (121, "active_count", 124, "instance_count"),
     ] {
         assert!(def.wires.iter().any(|w| w.from_node == from
             && w.from_port == port
@@ -374,10 +374,11 @@ fn edited_physics_boxes_keep_box_values_and_drivers_through_load() {
         nodes[transform]["params"][axis]["value"] = turn.into();
     }
     for wire in old["wires"].as_array_mut().unwrap() {
-        for (end, port) in [("toPort", "copies_0"), ("fromPort", "instances_0"), ("fromPort", "active_count_0")] {
-            if wire[end] == port {
-                wire[end] = port.trim_end_matches("_0").into();
-            }
+        if wire["toPort"] == "copies_0" {
+            wire["toPort"] = "copies".into();
+        }
+        if wire["fromNode"] == 121 && (wire["fromPort"] == "instances" || wire["fromPort"] == "active_count") {
+            wire["fromNode"] = 40.into();
         }
     }
     let nodes = old["nodes"].as_array_mut().unwrap();

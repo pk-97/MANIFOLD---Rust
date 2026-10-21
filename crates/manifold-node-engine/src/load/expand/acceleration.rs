@@ -8,7 +8,10 @@ use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::persistence::PrimitiveRegistry;
-use manifold_core::scene_impulse::RigidImpulseTargets;
+use manifold_core::physics_members::{
+    ACCELERATION_ALIAS, BODY_TYPE_ID, Family, MEMBER_OUTPUT, WORLD_TYPE_ID, is_alias_output,
+    member_side_output, world_member,
+};
 
 use super::SceneModifierExpandError;
 
@@ -114,24 +117,35 @@ fn trace(
         }
         pending.push((node.clone(), port.clone(), true));
         let def = index.node(&node)?;
-        if def.type_id == "node.physics_world" {
-            let slot = |prefix: &str, capacity: usize| {
-                port.strip_prefix(prefix)
-                    .and_then(|slot| slot.parse::<usize>().ok())
-                    .filter(|&slot| slot < capacity)
-            };
-            let input = slot("instances_", RigidImpulseTargets::GROUP_CAPACITY)
-                .map(|group| (format!("copies_{group}"), format!("copies_acceleration_{group}")))
-                .or_else(|| {
-                    slot("pose_", RigidImpulseTargets::BODY_CAPACITY)
-                        .map(|slot| (format!("body_{slot}"), format!("body_acceleration_{slot}")))
+        if def.type_id == BODY_TYPE_ID && is_alias_output(&port) {
+            // A body's pose, instances and count come from its world: forces
+            // enter at the body's acceleration input, but only once the body
+            // is wired into a world slot of the matching family.
+            let in_world = index.by_ref.get(&node).is_some_and(|flat| {
+                world_member(&index.flat.nodes, &index.flat.wires, *flat)
+                    .is_some_and(|member| member.family.world_output(&port, member.k).is_some())
+            });
+            if in_world {
+                candidates.push(Candidate {
+                    node,
+                    port: ACCELERATION_ALIAS.into(),
                 });
-            if let Some((input, port)) = input {
-                if index.input(&node, &input)?.is_some() {
-                    candidates.push(Candidate { node, port });
-                }
-                continue;
             }
+            continue;
+        }
+        // A graph already compiled to world slots reaches a body through its
+        // world's numbered output: the body wired into that slot is the source.
+        if def.type_id == WORLD_TYPE_ID
+            && let Some((family, k)) = member_side_output(&port)
+            && let Some(body) = index.flat.wires.iter().find(|wire| {
+                wire.to_node == index.by_ref.get(&node).copied().unwrap_or(u32::MAX)
+                    && wire.to_port == family.member_port(k)
+                    && wire.from_port == MEMBER_OUTPUT
+            })
+            && let Some(body) = index.by_id.get(&body.from_node)
+        {
+            candidates.push(Candidate { node: body.clone(), port: ACCELERATION_ALIAS.into() });
+            continue;
         }
         let primitive = registry.construct(&def.type_id).ok_or_else(|| {
             unsupported(
@@ -292,6 +306,33 @@ pub fn impulse_recipients_with_index(
             continue;
         };
         let node = index.node(&recipient.node)?;
+        // A body's hit goes to its world, on its own slot or copy group.
+        if node.type_id == BODY_TYPE_ID {
+            let member = index
+                .by_ref
+                .get(&recipient.node)
+                .and_then(|flat| world_member(&index.flat.nodes, &index.flat.wires, *flat))
+                .ok_or_else(|| unsupported(&recipient.port, "rigid body is not in a Physics World"))?;
+            let world = index
+                .flat
+                .nodes
+                .iter()
+                .find(|candidate| candidate.id == member.world)
+                .ok_or_else(|| unsupported(&recipient.port, "rigid body world is missing"))?;
+            let slot = member.k as usize;
+            let targets = match member.family {
+                Family::Body => RigidImpulseTargets::body(slot),
+                Family::Copies => RigidImpulseTargets::group(slot),
+            }
+            .ok_or_else(|| unsupported(&recipient.port, "invalid rigid impulse recipient"))?;
+            let previous = worlds
+                .entry(world.node_id.as_str().to_owned())
+                .or_insert(ImpulseTarget::Rigid(targets));
+            if let ImpulseTarget::Rigid(previous) = previous {
+                *previous = previous.union(targets);
+            }
+            continue;
+        }
         // A node that declares where scene forces enter (a swarm's forces
         // node) takes hits there too, on everything it moves.
         let whole = registry
@@ -303,24 +344,9 @@ pub fn impulse_recipients_with_index(
         } else if whole {
             ImpulseTarget::Swarm
         } else {
-            let index = |prefix: &str| {
-                recipient
-                    .port
-                    .strip_prefix(prefix)
-                    .and_then(|slot| slot.parse::<usize>().ok())
-            };
-            let targets = index("copies_acceleration_")
-                .and_then(RigidImpulseTargets::group)
-                .or_else(|| index("body_acceleration_").and_then(RigidImpulseTargets::body))
-                .ok_or_else(|| unsupported(&recipient.port, "invalid rigid impulse recipient"))?;
-            ImpulseTarget::Rigid(targets)
+            return Err(unsupported(&recipient.port, "invalid rigid impulse recipient"));
         };
-        let previous = worlds
-            .entry(node.node_id.as_str().to_owned())
-            .or_insert(target);
-        if let (ImpulseTarget::Rigid(previous), ImpulseTarget::Rigid(target)) = (previous, target) {
-            *previous = previous.union(target);
-        }
+        worlds.entry(node.node_id.as_str().to_owned()).or_insert(target);
     }
     Ok(worlds
         .into_iter()

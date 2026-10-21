@@ -5,6 +5,7 @@ use manifold_core::change::ChangeSet;
 use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
 
 use crate::scene_transaction::SceneGraphTransaction;
+use manifold_core::physics_members::Family;
 
 /// The source and authored-transform facts needed by standard scene-object
 /// physics authoring. Keeping this discovery local to editing is
@@ -114,35 +115,12 @@ pub(super) fn authored_transform_in_level(
     if node.type_id == "node.transform_3d" && wire.from_port == "transform" {
         return Ok(node.id);
     }
-    let body_id = if node.type_id == GROUP_INPUT_TYPE_ID && wire.from_port == "pose" {
-        let output = nodes
-            .iter()
-            .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
-            .ok_or("Missing group output")?;
-        wires
-            .iter()
-            .find(|w| w.to_node == output.id && w.to_port == "body")
-            .map(|w| w.from_node)
-    } else if node.type_id == "node.physics_world" {
-        wire.from_port.strip_prefix("pose_").and_then(|slot| {
-            wires
-                .iter()
-                .find(|w| w.to_node == node.id && w.to_port == format!("body_{slot}"))
-                .map(|w| w.from_node)
-        })
-    } else {
-        None
-    }
-    .ok_or("Enable Physics supports a direct authored transform only")?;
-    if !nodes
-        .iter()
-        .any(|n| n.id == body_id && n.type_id == "node.rigid_body")
-    {
-        return Err("Invalid physics body");
+    if node.type_id != "node.rigid_body" || wire.from_port != "pose" {
+        return Err("Enable Physics supports a direct authored transform only");
     }
     let source = wires
         .iter()
-        .find(|w| w.to_node == body_id && w.to_port == "transform")
+        .find(|w| w.to_node == node.id && w.to_port == "transform")
         .ok_or("Missing body transform")?;
     nodes
         .iter()
@@ -178,23 +156,11 @@ pub(super) fn group_authored_transform_in_level(
     if node.type_id == "node.transform_3d" && wire.from_port == "transform" {
         return Ok(node.id);
     }
-    if node.type_id == GROUP_INPUT_TYPE_ID && wire.from_port == "pose" {
-        let body_output = group
-            .nodes
-            .iter()
-            .find(|candidate| candidate.type_id == GROUP_OUTPUT_TYPE_ID)
-            .and_then(|output| {
-                group
-                    .wires
-                    .iter()
-                    .find(|candidate| candidate.to_node == output.id && candidate.to_port == "body")
-                    .map(|candidate| candidate.from_node)
-            })
-            .ok_or("Enable Physics group body output is unavailable")?;
+    if node.type_id == "node.rigid_body" && wire.from_port == "pose" {
         let body_transform = group
             .wires
             .iter()
-            .find(|candidate| candidate.to_node == body_output && candidate.to_port == "transform")
+            .find(|candidate| candidate.to_node == node.id && candidate.to_port == "transform")
             .ok_or("Enable Physics group body transform is unavailable")?;
         return group
             .nodes
@@ -474,58 +440,53 @@ pub(super) fn fresh_scene_node(
     scene_build_node(id, type_id, handle, params)
 }
 
-pub(super) fn group_pose_input_id(
-    group: &GroupDef,
-    object_id: u32,
-) -> Result<u32, &'static str> {
+/// The group's scene object reads its pose from exactly one wire, the body's
+/// `pose` output, and from nowhere else.
+pub(super) fn group_pose_source(group: &GroupDef, object_id: u32, body_id: u32) -> Result<(), &'static str> {
     let mut pose_wires = group.wires.iter().filter(|wire| {
         wire.to_node == object_id
             && (wire.to_port == "parent_transform" || wire.to_port == "transform")
             && wire.from_port == "pose"
     });
-    let pose_wire = pose_wires
-        .next()
-        .ok_or("Physics group pose input is missing")?;
+    let pose_wire = pose_wires.next().ok_or("Physics group pose is missing")?;
     if pose_wires.next().is_some() {
-        return Err("Physics group pose input is ambiguous");
+        return Err("Physics group pose is ambiguous");
     }
-    if group.wires.iter().filter(|wire| {
-        wire.to_node == object_id && wire.to_port == pose_wire.to_port
-    }).count() != 1 {
-        return Err("Physics group pose input is ambiguous");
-    }
-    let input = group
-        .nodes
+    if group
+        .wires
         .iter()
-        .find(|node| node.id == pose_wire.from_node)
-        .ok_or("Physics group pose input is unavailable")?;
-    if input.type_id != GROUP_INPUT_TYPE_ID {
+        .filter(|wire| wire.to_node == object_id && wire.to_port == pose_wire.to_port)
+        .count()
+        != 1
+    {
+        return Err("Physics group pose is ambiguous");
+    }
+    if pose_wire.from_node != body_id {
         return Err("Physics group pose source has the wrong type");
     }
-    Ok(input.id)
+    Ok(())
 }
 
+/// Add a rigid body inside an import group. The group exposes the body's
+/// membership as a `body` output, and its scene objects read `body.pose`
+/// directly, so the Physics World stays outside the group and no pose input
+/// crosses the boundary.
 pub(super) fn add_group_physics(
     group: &mut GroupDef,
     body_id: u32,
     body_params: BTreeMap<String, SerializedParamValue>,
     body_handle: String,
-    input_id: u32,
-    _output_id: u32,
     authored_transform_id: u32,
     object_id: u32,
     source_id: Option<u32>,
-) -> Result<(NodeId, NodeId), &'static str> {
-    let output_exists = group
+) -> Result<NodeId, &'static str> {
+    let output_id = group
         .nodes
         .iter()
-        .any(|node| node.type_id == GROUP_OUTPUT_TYPE_ID);
-    if !output_exists {
-        return Err("Physics group has no output boundary");
-    }
-    if group.interface.inputs.iter().any(|p| p.name == "pose")
-        || group.interface.outputs.iter().any(|p| p.name == "body")
-    {
+        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .map(|node| node.id)
+        .ok_or("Physics group has no output boundary")?;
+    if group.interface.outputs.iter().any(|p| p.name == "body") {
         return Err("Physics group already has a body interface");
     }
     let object_transform_wire = group
@@ -544,27 +505,7 @@ pub(super) fn add_group_physics(
     }
     let body = fresh_scene_node(body_id, "node.rigid_body", Some(body_handle), body_params);
     let body_node_id = body.node_id.clone();
-    let (input_node_id, input_node_actual) = if let Some(input) = group.nodes.iter()
-        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-    {
-        (input.node_id.clone(), input.id)
-    } else {
-        let input = fresh_scene_node(input_id, GROUP_INPUT_TYPE_ID, None, BTreeMap::new());
-        let identity = (input.node_id.clone(), input.id);
-        group.nodes.push(input);
-        identity
-    };
-    let output_id = group
-        .nodes
-        .iter()
-        .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
-        .unwrap()
-        .id;
     group.nodes.push(body);
-    group.interface.inputs.push(InterfacePortDef {
-        name: "pose".to_string(),
-        port_type: "Transform".to_string(),
-    });
     group.interface.outputs.push(InterfacePortDef {
         name: "body".to_string(),
         port_type: "RigidBody".to_string(),
@@ -590,7 +531,7 @@ pub(super) fn add_group_physics(
             && (wire.to_port == "parent_transform" || wire.to_port == "transform")
             && wire.from_node == authored_transform_id
         {
-            wire.from_node = input_node_actual;
+            wire.from_node = body_id;
             wire.from_port = "pose".into();
         }
     }
@@ -624,49 +565,41 @@ pub(super) fn add_group_physics(
             &format!("part_{part_index}"),
         ));
     }
-    // Preserve the existing object output boundary wire; only the new body
-    // output is added here.
-    Ok((body_node_id, input_node_id))
+    Ok(body_node_id)
 }
 
 /// Ok when the object already carries a well-formed standard physics body:
-/// a rigid body wired into a body slot of a Physics World whose matching
-/// pose drives the object.
+/// a rigid body wired into a body slot of a Physics World whose `pose`
+/// drives the object.
 pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObjectParts) -> Result<(), &'static str> {
+    use manifold_core::physics_members::{Family, world_member};
+    let in_world = |body_id: u32, malformed: &'static str| -> Result<(), &'static str> {
+        let member = world_member(&def.nodes, &def.wires, body_id).ok_or(malformed)?;
+        let world = def
+            .nodes
+            .iter()
+            .find(|node| node.id == member.world)
+            .ok_or("Physics object world is unavailable")?;
+        if member.family != Family::Body || member.k >= manifold_core::physics_body_slots::world_bodies(world) {
+            return Err(malformed);
+        }
+        Ok(())
+    };
     let Some(group_id) = parts.group_id else {
         let pose_wire = def
             .wires
             .iter()
             .find(|wire| wire.to_node == parts.object_id && wire.to_port == "transform")
             .ok_or("Physics object pose input is missing")?;
-        let world = def
-            .nodes
-            .iter()
-            .find(|node| node.id == pose_wire.from_node)
-            .ok_or("Physics object world is unavailable")?;
-        if world.type_id != "node.physics_world" {
-            return Err("Selected object does not have standard physics enabled");
-        }
-        let slot = pose_wire
-            .from_port
-            .strip_prefix("pose_")
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|slot| *slot < manifold_core::physics_body_slots::world_bodies(world))
-            .ok_or("Physics object pose slot is malformed")?;
-        let body_wire = def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == world.id && wire.to_port == format!("body_{slot}"))
-            .ok_or("Physics object body input is missing")?;
         let body = def
             .nodes
             .iter()
-            .find(|node| node.id == body_wire.from_node)
+            .find(|node| node.id == pose_wire.from_node)
             .ok_or("Physics object body is unavailable")?;
-        if body.type_id != "node.rigid_body" {
-            return Err("Physics object body has the wrong type");
+        if body.type_id != "node.rigid_body" || pose_wire.from_port != "pose" {
+            return Err("Selected object does not have standard physics enabled");
         }
-        return Ok(());
+        return in_world(body.id, "Physics object body input is missing");
     };
 
     let group = def
@@ -680,13 +613,6 @@ pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObject
         .iter()
         .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
         .ok_or("Physics object group output is unavailable")?;
-    if !group
-        .wires
-        .iter()
-        .any(|wire| wire.to_node == output.id && wire.to_port == "body")
-    {
-        return Err("Physics object group body output is missing");
-    }
     // The body output boundary is fed by the body node, so resolve that
     // direction explicitly rather than trusting a hand-authored port name.
     let body_id = group
@@ -694,7 +620,7 @@ pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObject
         .iter()
         .find(|wire| wire.to_node == output.id && wire.to_port == "body")
         .map(|wire| wire.from_node)
-        .ok_or("Physics object group body output is malformed")?;
+        .ok_or("Physics object group body output is missing")?;
     let body = group
         .nodes
         .iter()
@@ -703,41 +629,8 @@ pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObject
     if body.type_id != "node.rigid_body" {
         return Err("Physics object group body has the wrong type");
     }
-    // Top-level world pose is the producer, and the group is its consumer.
-    let (world_id, slot) = {
-        let pose_source = def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == parts.producer_id && wire.to_port == "pose")
-            .ok_or("Physics object group pose input is missing")?;
-        let world = def
-            .nodes
-            .iter()
-            .find(|node| node.id == pose_source.from_node)
-            .ok_or("Physics object group world is unavailable")?;
-        let slot = pose_source
-            .from_port
-            .strip_prefix("pose_")
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|slot| *slot < manifold_core::physics_body_slots::world_bodies(world))
-            .ok_or("Physics object group pose slot is malformed")?;
-        (world.id, slot)
-    };
-    let world = def.nodes.iter().find(|node| node.id == world_id).unwrap();
-    if world.type_id != "node.physics_world" {
-        return Err("Physics object group world has the wrong type");
-    }
-    let top_body_wire = def
-        .wires
-        .iter()
-        .find(|wire| {
-            wire.to_node == world_id
-                && wire.to_port == format!("body_{slot}")
-                && wire.from_node == parts.producer_id
-        })
-        .ok_or("Physics object group body slot is missing")?;
-    let _ = (body, top_body_wire);
-    Ok(())
+    // The group's body output is the membership wire into the world.
+    in_world(parts.producer_id, "Physics object group body slot is missing")
 }
 
 #[derive(Debug, Clone)]
@@ -901,20 +794,17 @@ pub fn enable_physics_edit(
             .find(|node| node.id == group_id)
             .and_then(|node| node.group.as_deref_mut())
             .ok_or_else(|| refuse("Enable Physics object group is unavailable"))?;
-        let (node_id, _) = add_group_physics(
+        let node_id = add_group_physics(
             group,
             body_id,
             body_params.clone(),
             body_handle,
-            body_id + 1,
-            body_id + 2,
             parts.authored_transform_id,
             parts.object_id,
             builtin_source,
         )
         .map_err(refuse)?;
-        def.wires.push(scene_build_wire(group_id, "body", world_id, &format!("body_{body_slot}")));
-        def.wires.push(scene_build_wire(world_id, &format!("pose_{body_slot}"), group_id, "pose"));
+        def.wires.push(scene_build_wire(group_id, "body", world_id, &Family::Body.member_port(body_slot)));
         node_id
     } else {
         let object_wire = def
@@ -922,8 +812,8 @@ pub fn enable_physics_edit(
             .iter_mut()
             .find(|wire| wire.to_node == parts.object_id && wire.to_port == "transform")
             .ok_or_else(|| refuse("Enable Physics requires an authored transform"))?;
-        object_wire.from_node = world_id;
-        object_wire.from_port = format!("pose_{body_slot}");
+        object_wire.from_node = body_id;
+        object_wire.from_port = "pose".into();
         let body = fresh_scene_node(body_id, "node.rigid_body", Some(body_handle), body_params.clone());
         let body_node_id = body.node_id.clone();
         def.nodes.push(body);
@@ -931,7 +821,7 @@ pub fn enable_physics_edit(
         if let Some(source_id) = builtin_source {
             def.wires.push(scene_build_wire(source_id, "source", body_id, "source"));
         }
-        def.wires.push(scene_build_wire(body_id, "body", world_id, &format!("body_{body_slot}")));
+        def.wires.push(scene_build_wire(body_id, "body", world_id, &Family::Body.member_port(body_slot)));
         body_node_id
     };
     fit_world_bodies(&mut def.nodes, &def.wires, world_id);

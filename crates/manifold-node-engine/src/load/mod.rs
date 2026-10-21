@@ -6,4 +6,5 @@ pub mod instantiation;
 pub mod loaded_preset_view;
 pub mod migration;
 pub mod expand;
+pub mod physics_members;
 pub mod preset_loader;

@@ -4,6 +4,7 @@
 
 use super::*;
 use manifold_core::change::ChangeSet;
+use manifold_core::physics_members::ACCELERATION_ALIAS;
 use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_surface::{MAX_DUPLICATE_COPIES, SceneObjectRowKind, copies_shortfall};
@@ -277,13 +278,11 @@ fn append_copy(
     let mut node_id_map = Vec::new();
     let mut cloned_group = None;
     if let Some(physics) = physics {
-        let new_slot = first_free_physics_body_slot(wires, physics.world_id).ok_or("The Physics World has no free body slot")?;
         let copy = PhysicsCopy {
             next_id: &mut next_id,
             taken: &mut taken,
             node_id_map: &mut node_id_map,
             new_index: new_k,
-            new_slot,
             offset,
         };
         append_physics_duplicate(nodes, wires, physics, render_id, copy)?;
@@ -397,14 +396,13 @@ struct PhysicsCopy<'a> {
     node_id_map: &'a mut Vec<(NodeId, NodeId)>,
     /// The copy's first render slot.
     new_index: u32,
-    /// The world body slot the copy's body takes.
-    new_slot: u32,
     /// Metres along X from the source.
     offset: f32,
 }
 
-/// Append one copy of a physics object's owned chain: its body moves to
-/// `new_slot` of the same world and the forces on the source body follow it.
+/// Append one copy of a physics object's owned chain: its body joins the
+/// same world in the next free slot, and every wire on the source body (its
+/// pose, its forces) is copied with it.
 fn append_physics_duplicate(
     nodes: &mut Vec<EffectGraphNode>,
     wires: &mut Vec<EffectGraphWire>,
@@ -412,13 +410,24 @@ fn append_physics_duplicate(
     render_id: u32,
     copy: PhysicsCopy<'_>,
 ) -> Result<(), &'static str> {
-    let PhysicsCopy { next_id, taken, node_id_map, new_index, new_slot, offset } = copy;
+    let PhysicsCopy { next_id, taken, node_id_map, new_index, offset } = copy;
     let unavailable = "Duplicate Object physics source is unavailable";
     let owned: std::collections::HashSet<u32> = physics.owned_ids.iter().copied().collect();
     let mut clones = std::collections::HashMap::<u32, EffectGraphNode>::new();
     for old_id in &physics.owned_ids {
         let source = nodes.iter().find(|node| node.id == *old_id).ok_or(unavailable)?;
         clones.insert(*old_id, deep_clone_with_fresh_ids(source, next_id, taken, node_id_map));
+    }
+    // The body's own force (what feeds its acceleration, and what feeds that)
+    // belongs to it: the copy gets its own, as Paste does, so editing the
+    // copy's wind never moves the source.
+    let forces = force_chain(nodes, wires, &owned);
+    let mut force_clones = Vec::with_capacity(forces.len());
+    for old_id in &forces {
+        let source = nodes.iter().find(|node| node.id == *old_id).ok_or(unavailable)?;
+        let clone = deep_clone_with_fresh_ids(source, next_id, taken, node_id_map);
+        clones.insert(*old_id, clone);
+        force_clones.push(*old_id);
     }
     let source_object = nodes.iter().find(|node| node.id == physics.object_id).ok_or(unavailable)?;
     let cloned_handle = source_object.handle.as_deref().map(|handle| numbered_copy_name(handle, taken));
@@ -440,52 +449,66 @@ fn append_physics_duplicate(
         offset_pos_x(clone, offset);
     }
     let node_map: std::collections::HashMap<u32, u32> = clones.iter().map(|(old, clone)| (*old, clone.id)).collect();
-    for old_id in &physics.owned_ids {
+    for old_id in physics.owned_ids.iter().chain(&force_clones) {
         nodes.push(clones.remove(old_id).ok_or(unavailable)?);
     }
-    let source_force = format!("body_acceleration_{}", physics.body_slot);
-    let copied: Vec<_> = wires
+    let forces: std::collections::HashSet<u32> = forces.into_iter().collect();
+    let copied: Vec<EffectGraphWire> = wires
         .iter()
-        .filter(|wire| {
-            owned.contains(&wire.from_node)
-                || owned.contains(&wire.to_node)
-                || (wire.to_node == physics.world_id && wire.to_port == source_force)
-        })
-        .map(|wire| remap_physics_wire(wire, &node_map, physics, new_slot, render_id, new_index))
+        .filter(|wire| owned.contains(&wire.from_node) || owned.contains(&wire.to_node) || forces.contains(&wire.to_node))
+        .cloned()
         .collect();
-    wires.extend(copied);
-    fit_world_bodies(nodes, wires, physics.world_id);
+    let doc_id = |id: u32| Some(node_map.get(&id).copied().unwrap_or(id));
+    let reused = |_: u32| false;
+    let to_port = |wire: &EffectGraphWire| render_slot_of_copy(wire, physics, render_id, new_index);
+    super::copy::copy_scene_item_wires(
+        nodes,
+        wires,
+        &copied,
+        &super::copy::WireCopy { doc_id: &doc_id, reused: &reused, to_port: &to_port },
+    )
+    .map_err(|_| "The Physics World has no free body slot")?;
     Ok(())
 }
 
-/// One source wire as the copy's: copied nodes swap in, the world's body,
-/// pose and force ports move to `new_slot`, render slots move to the copy's.
-fn remap_physics_wire(
+/// The nodes that make a body's force: what feeds its `acceleration` input
+/// and, transitively, what feeds those, in the order found. Nodes the object
+/// owns and system nodes (the generator clock) stay shared.
+fn force_chain(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    owned: &std::collections::HashSet<u32>,
+) -> Vec<u32> {
+    let shared = |id: u32| owned.contains(&id) || nodes.iter().any(|node| node.id == id && node.type_id.starts_with("system."));
+    let mut found: Vec<u32> = Vec::new();
+    let mut pending: Vec<u32> = wires
+        .iter()
+        .filter(|wire| owned.contains(&wire.to_node) && wire.to_port == ACCELERATION_ALIAS)
+        .map(|wire| wire.from_node)
+        .collect();
+    while let Some(id) = pending.pop() {
+        if shared(id) || found.contains(&id) {
+            continue;
+        }
+        found.push(id);
+        pending.extend(wires.iter().filter(|wire| wire.to_node == id).map(|wire| wire.from_node));
+    }
+    found
+}
+
+/// The copy's render slot for a source wire into the render scene, or `None`
+/// when the wire goes elsewhere. The copy's parts take the slots from
+/// `new_object_index` in the source's order.
+fn render_slot_of_copy(
     wire: &EffectGraphWire,
-    node_map: &std::collections::HashMap<u32, u32>,
     physics: &PhysicsSceneObject,
-    new_slot: u32,
     render_id: u32,
     new_object_index: u32,
-) -> EffectGraphWire {
-    let (world_id, old_slot) = (physics.world_id, physics.body_slot);
-    let map_node = |id: u32| node_map.get(&id).copied().unwrap_or(id);
-    let mut from_port = wire.from_port.clone();
-    let mut to_port = wire.to_port.clone();
-    if wire.from_node == world_id && wire.from_port == format!("pose_{old_slot}") {
-        from_port = format!("pose_{new_slot}");
+) -> Option<String> {
+    if wire.to_node != render_id {
+        return None;
     }
-    if wire.to_node == world_id && wire.to_port == format!("body_{old_slot}") {
-        to_port = format!("body_{new_slot}");
-    }
-    if wire.to_node == world_id && wire.to_port == format!("body_acceleration_{old_slot}") {
-        to_port = format!("body_acceleration_{new_slot}");
-    }
-    if wire.to_node == render_id
-        && let Some(old_index) = wire.to_port.strip_prefix("object_").and_then(|value| value.parse::<u32>().ok())
-        && let Some(part) = physics.render_indices.iter().position(|index| *index == old_index)
-    {
-        to_port = format!("object_{}", new_object_index + part as u32);
-    }
-    EffectGraphWire { from_node: map_node(wire.from_node), from_port, to_node: map_node(wire.to_node), to_port }
+    let old_index = wire.to_port.strip_prefix("object_")?.parse::<u32>().ok()?;
+    let part = physics.render_indices.iter().position(|index| *index == old_index)?;
+    Some(format!("object_{}", new_object_index + part as u32))
 }

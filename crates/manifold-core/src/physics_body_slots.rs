@@ -1,23 +1,21 @@
 //! Which body slots of a Physics World are taken: the one rule every
 //! authoring path allocates through (enable, duplicate, paste, Shatter).
-//! A world takes up to [`PHYSICS_WORLD_MAX_BODIES`] bodies. Its `bodies`
-//! count only sizes its ports, so the edit that wires a slot past the count
-//! grows the count with [`fit_world_bodies`]; a world with every slot taken
-//! refuses.
+//! A slot is taken when a body is wired into the world's `body_k` input
+//! (`crate::physics_members`); a body switched off keeps its slot. A world
+//! takes up to [`PHYSICS_WORLD_MAX_BODIES`] bodies. Its `bodies` count only
+//! sizes its ports, so the edit that wires a slot past the count grows the
+//! count with [`fit_world_bodies`]; a world with every slot taken refuses.
 
-use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use crate::scene_surface::{PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_MAX_BODIES};
+use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire};
+use crate::physics_members::{Family, member_input};
+use crate::scene_surface::PHYSICS_WORLD_MAX_BODIES;
+use crate::scene_variadic::{WORLD_BODIES, WORLD_COPY_GROUPS};
 
 const WORDS: usize = (PHYSICS_WORLD_MAX_BODIES as usize).div_ceil(64);
 
-/// The world param that sizes its body, pose and body-field ports.
-pub const WORLD_BODIES_PARAM: &str = "bodies";
-/// The world param that sizes its copy-group ports.
-pub const WORLD_COPY_GROUPS_PARAM: &str = "copy_groups";
-
-/// A Physics World's taken body slots, one bit each. A slot is taken when
-/// anything feeds its body or field input or reads its pose, so a body that
-/// is switched off keeps its slot.
+/// A Physics World's taken body slots, one bit each. A slot is taken when a
+/// body is wired into its `body_k` input, so a body that is switched off
+/// keeps its slot.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BodySlots([u64; WORDS]);
 
@@ -32,14 +30,9 @@ impl BodySlots {
     }
 
     fn take_wire(&mut self, wire: &EffectGraphWire, world_id: u32) {
-        let slot = if wire.to_node == world_id {
-            wire.to_port.strip_prefix("body_acceleration_").or_else(|| wire.to_port.strip_prefix("body_"))
-        } else if wire.from_node == world_id {
-            wire.from_port.strip_prefix("pose_")
-        } else {
-            None
-        };
-        if let Some(slot) = slot.and_then(|slot| slot.parse::<u32>().ok()) {
+        if wire.to_node == world_id
+            && let Some((Family::Body, slot)) = member_input(&wire.to_port)
+        {
             self.take(slot);
         }
     }
@@ -77,29 +70,27 @@ impl BodySlots {
 /// A world's `bodies` count: its saved value, or the count every world had
 /// before the count existed.
 pub fn world_bodies(world: &EffectGraphNode) -> u32 {
-    count_param(world, WORLD_BODIES_PARAM).unwrap_or(PHYSICS_WORLD_DEFAULT_BODIES)
+    WORLD_BODIES.count(world)
 }
 
-fn count_param(node: &EffectGraphNode, param: &str) -> Option<u32> {
-    match node.params.get(param)? {
-        SerializedParamValue::Float { value } if value.is_finite() && *value >= 0.0 => Some(value.round() as u32),
-        SerializedParamValue::Int { value } => u32::try_from(*value).ok(),
-        _ => None,
-    }
-}
-
-/// Grow world `world_id`'s `bodies` count so every slot `wires` take has
-/// its ports. Every edit that wires a body slot calls this once after
-/// wiring. A world already that big is left alone, so nothing shrinks and a
-/// saved count is written only when it must change.
+/// Grow world `world_id`'s `bodies` and `copy_groups` counts so every member
+/// number `wires` take has its ports. Every edit that wires a member calls
+/// this once after wiring. A world already that big is left alone, so
+/// nothing shrinks and a saved count is written only when it must change.
 pub fn fit_world_bodies(nodes: &mut [EffectGraphNode], wires: &[EffectGraphWire], world_id: u32) {
-    let Some(highest) = BodySlots::of(wires, world_id).highest() else { return };
     let Some(world) = nodes.iter_mut().find(|node| node.id == world_id) else { return };
-    let needed = highest + 1;
-    if world_bodies(world) < needed {
-        world
-            .params
-            .insert(WORLD_BODIES_PARAM.to_string(), SerializedParamValue::Float { value: needed as f32 });
+    let highest = |family: Family| {
+        wires
+            .iter()
+            .filter(|wire| wire.to_node == world_id)
+            .filter_map(|wire| member_input(&wire.to_port).filter(|(found, _)| *found == family).map(|(_, k)| k))
+            .max()
+    };
+    if let Some(k) = highest(Family::Body) {
+        WORLD_BODIES.grow_to_cover(world, k);
+    }
+    if let Some(k) = highest(Family::Copies) {
+        WORLD_COPY_GROUPS.grow_to_cover(world, k);
     }
 }
 
@@ -132,6 +123,7 @@ impl WorldBodySlots {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene_surface::PHYSICS_WORLD_DEFAULT_BODIES;
 
     fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
         EffectGraphWire {
@@ -143,18 +135,23 @@ mod tests {
     }
 
     #[test]
-    fn body_field_and_pose_wires_each_take_their_slot() {
+    fn only_a_body_wired_into_the_world_takes_a_slot() {
         let wires = [
             wire(10, "body", 1, "body_0"),
             wire(11, "field", 1, "body_acceleration_2"),
             wire(1, "pose_3", 12, "transform"),
             wire(13, "body", 9, "body_1"),
             wire(14, "body", 1, "body_200"),
+            wire(15, "body", 1, "copies_1"),
         ];
         let slots = BodySlots::of(&wires, 1);
-        assert_eq!(slots.free_slots().take(3).collect::<Vec<_>>(), [1, 4, 5]);
+        assert_eq!(
+            slots.free_slots().take(3).collect::<Vec<_>>(),
+            [1, 2, 3],
+            "a force or pose wire names no slot, and copies are another family"
+        );
         assert_eq!(slots.first_free(), Some(1));
-        assert_eq!(slots.free(), PHYSICS_WORLD_MAX_BODIES - 4);
+        assert_eq!(slots.free(), PHYSICS_WORLD_MAX_BODIES - 2);
     }
 
     #[test]
@@ -177,7 +174,7 @@ mod tests {
         let mut wires = vec![wire(10, "body", 1, "body_10")];
         fit_world_bodies(&mut nodes, &wires, 1);
         assert!(nodes[0].params.is_empty(), "a slot inside the count writes nothing");
-        wires.push(wire(1, "pose_64", 11, "transform"));
+        wires.push(wire(11, "body", 1, "body_64"));
         fit_world_bodies(&mut nodes, &wires, 1);
         assert_eq!(world_bodies(&nodes[0]), 65);
         wires.truncate(1);

@@ -38144,6 +38144,11 @@
           "name": "copy_turn_z",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "acceleration",
+          "required": false,
+          "type": "VectorField"
         }
       ],
       "label": "Rigid Body",
@@ -38154,6 +38159,19 @@
         },
         {
           "name": "shape",
+          "type": "f32"
+        },
+        {
+          "name": "pose",
+          "type": "Transform"
+        },
+        {
+          "capacity": "none",
+          "name": "instances",
+          "type": "Array"
+        },
+        {
+          "name": "active_count",
           "type": "f32"
         }
       ],
@@ -38433,7 +38451,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
