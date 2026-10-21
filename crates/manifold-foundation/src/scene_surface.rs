@@ -267,6 +267,11 @@ pub struct SceneObjectCapabilities {
 /// holds exactly this many.
 pub const PHYSICS_WORLD_MAX_BODIES: u32 = 256;
 
+/// The most material parts one compound rigid body takes, one per `part_k`
+/// port. The rigid body's port table is declared at this length, so the two
+/// cannot drift.
+pub const RIGID_BODY_MAX_PARTS: u32 = 64;
+
 /// The most copy groups one Physics World takes; its `copy_groups` count
 /// sizes its copy-group ports up to this.
 pub const PHYSICS_WORLD_MAX_COPY_GROUPS: u32 = 32;

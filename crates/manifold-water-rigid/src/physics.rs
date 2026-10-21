@@ -97,10 +97,17 @@ impl HeldClock {
 
 /// The most individually wired bodies one world takes, one per body port.
 pub const MAX_BODIES: usize = RigidImpulseTargets::BODY_CAPACITY;
+/// The fixed slabs a coupled liquid's own copy of the world adds past a
+/// full world's bodies: one per face of its domain box. They are never
+/// authored, wired or hit.
+pub const MAX_WALL_BODIES: usize = 6;
+/// The body slots a world's simulation holds: the authored bodies, then a
+/// coupled liquid's walls.
+pub(crate) const MAX_BODY_ROWS: usize = MAX_BODIES + MAX_WALL_BODIES;
 /// The most copy groups one world takes, one per copy-group port.
 pub const MAX_COPY_GROUPS: usize = RigidImpulseTargets::GROUP_CAPACITY;
 /// A field or hit target is a body slot, then a copy group.
-pub(crate) const MAX_TARGETS: usize = MAX_BODIES + MAX_COPY_GROUPS;
+pub(crate) const MAX_TARGETS: usize = MAX_BODY_ROWS + MAX_COPY_GROUPS;
 /// The most copies one world makes across all its groups: the measured budget.
 pub const MAX_COPIES: usize = 4_000;
 pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
@@ -642,9 +649,9 @@ impl RigidSimulation {
     ) -> Result<(), String> {
         let SceneRef { bodies, groups, gravity, targeted_fields: targeted_fields_input, .. } = scene;
         self.accepted_observation = None;
-        if bodies.len() > MAX_BODIES || groups.len() > MAX_COPY_GROUPS {
+        if bodies.len() > MAX_BODY_ROWS || groups.len() > MAX_COPY_GROUPS {
             return Err(format!(
-                "Physics: a world takes at most {MAX_BODIES} bodies and {MAX_COPY_GROUPS} copy groups"
+                "Physics: a world takes at most {MAX_BODIES} bodies, a liquid's {MAX_WALL_BODIES} walls and {MAX_COPY_GROUPS} copy groups"
             ));
         }
         let target_slots = bodies.len() + groups.len();
@@ -1456,7 +1463,7 @@ impl RigidSimulation {
             let angular = world
                 .angular_velocity(parent_handle)
                 .map_err(|e| e.to_string())?;
-            let mut velocities = [[0.0; 3]; MAX_BODIES];
+            let mut velocities = [[0.0; 3]; MAX_BODY_ROWS];
             for (index, body) in self.descriptions.iter().enumerate() {
                 if body
                     .as_ref()

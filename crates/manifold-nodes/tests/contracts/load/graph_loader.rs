@@ -566,22 +566,44 @@ mod tests {
             nodes[env]["params"][axis] = serde_json::json!({"type": "Float", "value": v});
         }
         doc["wires"].as_array_mut().unwrap().retain(|w| w["toPort"] != "sun");
+        // Saved before copy groups: the world's one group has unnumbered ports.
+        let world_id = doc["nodes"][world]["id"].clone();
+        for wire in doc["wires"].as_array_mut().unwrap() {
+            for (node, port) in [("toNode", "toPort"), ("fromNode", "fromPort")] {
+                let numbered = ["copies_0", "copies_acceleration_0", "instances_0", "active_count_0"];
+                if wire[node] == world_id && numbered.iter().any(|name| wire[port] == *name) {
+                    let old = wire[port].as_str().unwrap().trim_end_matches("_0").to_owned();
+                    wire[port] = old.into();
+                }
+            }
+        }
         for binding in doc["presetMetadata"]["bindings"].as_array_mut().unwrap() {
             if binding["id"] == "40_copy_count" {
                 binding["target"]["nodeId"] = "physics_demo_40".into();
             }
         }
         let def: EffectGraphDef = serde_json::from_value(doc).unwrap();
+        for old in ["copies", "instances", "active_count"] {
+            assert!(def.wires.iter().any(|w| w.to_port == old || w.from_port == old), "the old {old} port is saved");
+        }
         assert!(manifold_core::copies_body::carries_world_copies(&def));
         assert!(manifold_core::sky_sun::carries_world_sun(&def));
         def
     }
 
     /// The old Physics Boxes builds with the same boxes: the four controls
-    /// and their saved values on the copies body, none on the world.
+    /// and their saved values on the copies body, none on the world, and the
+    /// world's unnumbered copy ports bound as its first copy group's.
     fn assert_spawner_on_the_body(graph: &Graph) {
         let id = |handle: &str| graph.node_id_by_handle(handle).unwrap();
-        let world = graph.get_node(id(WORLD_HANDLE)).unwrap();
+        let world_id = id(WORLD_HANDLE);
+        for port in ["copies_0", "instances_0", "active_count_0"] {
+            assert!(
+                graph.wires().iter().any(|w| w.to == (world_id, port) || w.from == (world_id, port)),
+                "the world's {port} is wired"
+            );
+        }
+        let world = graph.get_node(world_id).unwrap();
         for param in manifold_core::copies_body::COPY_PARAMS {
             assert!(world.params.get(param).is_none(), "{param} left the world");
         }

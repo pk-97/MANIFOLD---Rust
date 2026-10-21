@@ -14826,7 +14826,7 @@
           "name": "body_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         },
@@ -19071,7 +19071,7 @@
           "name": "body_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         },
@@ -19616,7 +19616,7 @@
           "name": "body_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         },
@@ -22543,7 +22543,7 @@
           "name": "body_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         },
@@ -23269,7 +23269,7 @@
       "label": "Matter Move Bodies",
       "outputs": [
         {
-          "capacity": "fixed:64",
+          "capacity": "fixed:255",
           "name": "bodies_out",
           "type": "Array"
         }
@@ -23321,7 +23321,7 @@
           "name": "body_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         },
@@ -23371,7 +23371,7 @@
           "name": "dynamic_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         }
@@ -23490,7 +23490,7 @@
           "type": "Array"
         },
         {
-          "capacity": "fixed:1024",
+          "capacity": "fixed:4080",
           "name": "reaction",
           "type": "Array"
         },
@@ -50500,7 +50500,7 @@
           "name": "body_count",
           "range": [
             "0",
-            "64"
+            "255"
           ],
           "type": "int"
         },

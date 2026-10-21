@@ -14,7 +14,7 @@ use manifold_node_engine::channel_names::well_known;
 use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
 use manifold_physics::tick_samples::TickSamples;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry, scale_steps};
 use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES};
@@ -604,10 +604,10 @@ impl LiquidBodies {
         cell_size: f32,
         wait: bool,
     ) -> Result<BodiesStatus, String> {
-        let occupied = roles.iter().flatten().count();
-        if occupied + coupled.len() > MAX_FLUID_ROLES {
+        let colliders = roles.iter().flatten().filter(|role| role.kind == FluidRoleKind::Collider).count();
+        if colliders + coupled.len() > MAX_LIQUID_BODIES {
             return Err(format!(
-                "Liquid: {occupied} roles and {} coupled bodies exceed the {MAX_FLUID_ROLES} bodies a liquid holds",
+                "Liquid: {colliders} colliders and {} coupled bodies exceed the {MAX_LIQUID_BODIES} bodies a liquid holds",
                 coupled.len()
             ));
         }
@@ -1265,7 +1265,12 @@ mod tests {
         assert_eq!(rows[1].accel_shape, [0.0, -9.81, 0.0, 1.0]);
         assert_eq!(rows[2].accel_shape[3], -1.0);
         assert_eq!(rows[1].position_inv_mass, [0.0, 1.0, 0.0, 0.5]);
-        let many: Vec<_> = (0..MAX_FLUID_ROLES).map(|_| Arc::clone(&hull)).collect();
+        // The collider and the coupled bodies share the liquid's body rows,
+        // past the 64 role ports.
+        let full: Vec<_> = (1..MAX_LIQUID_BODIES).map(|_| Arc::clone(&hull)).collect();
+        ready_coupled(&mut bodies, &roles, &full);
+        assert_eq!(bodies.count(), MAX_LIQUID_BODIES);
+        let many: Vec<_> = (0..MAX_LIQUID_BODIES).map(|_| Arc::clone(&hull)).collect();
         assert!(bodies.prepare(&roles, &many, 0.0625, false).unwrap_err().contains("exceed"));
     }
 

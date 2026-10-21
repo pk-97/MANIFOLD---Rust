@@ -478,11 +478,16 @@ The caps are `PHYSICS_WORLD_MAX_BODIES` and `PHYSICS_WORLD_MAX_COPY_GROUPS` in f
 
 Enable, duplicate, paste and Shatter take body slots from core `BodySlots`, then `fit_world_bodies` grows the world's `bodies` count to cover every wired slot in the same edit. Nothing shrinks it. A world with all 256 slots taken refuses.
 
-Three lanes build this:
+On stage, a count change restarts the world: every body and copy goes back to its authored pose and the clock to zero, as any change of which bodies exist already does.
 
-- **CG0:** the reconfigurable world, the caps, the bitset and the load migration.
-- **CG1:** live layouts.
-- **CG2:** the copies card, the gizmo and Make Copies.
+A compound body is capped by its own part ports, not by the world: at most `RIGID_BODY_MAX_PARTS` (64) material parts, the length of the rigid body's `part_k` table. Enable Physics refuses a larger import by name and leaves the graph as it loaded.
+
+A coupled liquid takes the world's bodies up to its own limit:
+
+- A liquid holds at most `MAX_LIQUID_BODIES` (255) body rows: its Collider roles, then the world's bodies in slot order, then each group's copies. The limit is GPU FLIP's: each solid face names its body in one byte. Bodies past it still move in Box3D, but the water neither pushes them nor flows round them. The domain counts them in `FluidDomainSnapshot::uncoupled_bodies` for the setup check.
+- The domain's closed faces become fixed slabs in the liquid's own copy of the world. They take free body slots from the last one down, so a world with room keeps the slots every saved show ran with; a full world takes them past its own bodies (`MAX_WALL_BODIES`, six).
+
+The world's `copies_not_made` is not shown anywhere yet; the copies card shows it from CG1 (live layouts) on.
 
 ## 6. Invariants and enforcement
 

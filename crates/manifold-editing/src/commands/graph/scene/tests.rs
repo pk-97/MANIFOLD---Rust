@@ -498,6 +498,58 @@ fn compound_imported_group_scene_graph() -> EffectGraphDef {
     def
 }
 
+/// One imported group of `parts` material parts, each its own scene object.
+fn compound_imported_group_with_parts(parts: u32) -> EffectGraphDef {
+    let mut def = imported_group_scene_graph();
+    let render = def.nodes.iter_mut().find(|node| node.id == 0).unwrap();
+    render.params.insert("objects".into(), SerializedParamValue::Float { value: parts as f32 });
+    let group = def.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    let output_id = group.nodes.iter().find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().id;
+    let template = group.nodes.iter().find(|node| node.id == 14).unwrap().clone();
+    for part in 1..parts {
+        let id = 1000 + part;
+        let port = format!("object_{part}");
+        group.nodes.push(EffectGraphNode {
+            id,
+            node_id: NodeId::new(format!("import_object_{part}")),
+            handle: Some(format!("Imported Part {}", part + 1)),
+            ..template.clone()
+        });
+        group.interface.outputs.push(InterfacePortDef { name: port.clone(), port_type: "Object".into() });
+        group.wires.extend([
+            EffectGraphWire { from_node: 11, from_port: "transform".into(), to_node: id, to_port: "transform".into() },
+            EffectGraphWire { from_node: 12, from_port: "vertices".into(), to_node: id, to_port: "vertices".into() },
+            EffectGraphWire { from_node: 13, from_port: "out".into(), to_node: id, to_port: "material".into() },
+            EffectGraphWire { from_node: id, from_port: "object".into(), to_node: output_id, to_port: port.clone() },
+        ]);
+        def.wires.push(EffectGraphWire { from_node: 10, from_port: port.clone(), to_node: 0, to_port: port });
+    }
+    def
+}
+
+/// Enable Physics takes a compound with one part per rigid-body part port,
+/// and refuses one more by name, leaving the graph as it loaded: the body
+/// has no port to wire the extra part to.
+#[test]
+fn compound_physics_refuses_more_parts_than_the_rigid_body_has_ports() {
+    let fits = compound_imported_group_with_parts(super::COMPOUND_MAX_PARTS);
+    let (mut project, fx) = project_with_graph(fits.clone());
+    let mut enable = enable_physics(&project, GraphTarget::Effect(fx.clone()), 0, 0, body_params(), fits);
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "a full compound is refused: {:?}", enable.rejection_reason());
+    let group = graph_of(&project, &fx).nodes.iter().find(|node| node.id == 10).unwrap().group.as_deref().unwrap();
+    let last = format!("part_{}", super::COMPOUND_MAX_PARTS - 1);
+    assert!(group.wires.iter().any(|wire| wire.to_port == last), "the last part is wired to {last}");
+
+    let over = compound_imported_group_with_parts(super::COMPOUND_MAX_PARTS + 1);
+    let (mut project, fx) = project_with_graph(over.clone());
+    let mut enable = enable_physics(&project, GraphTarget::Effect(fx.clone()), 0, 0, body_params(), over.clone());
+    enable.execute(&mut project);
+    assert!(!enable.was_applied());
+    assert_eq!(enable.rejection_reason(), Some("Physics compound objects support at most 64 material parts"));
+    assert_eq!(graph_of(&project, &fx), &over);
+}
+
 fn compound_imported_group_with_one_boundary_per_material() -> EffectGraphDef {
     let mut def = compound_imported_group_scene_graph();
     let group = def.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();

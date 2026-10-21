@@ -29,13 +29,13 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_core::liquid_setup::{ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_water_liquid::fluid_role::FluidRole;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
-use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, coupling_capacity, decode_reaction, takes_reaction};
 use {manifold_water_liquid::fields, manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_physics::tick_samples::TickSamples;
@@ -243,6 +243,8 @@ pub struct Coupling {
     owner: Option<LiquidRigidOwner>,
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
+    /// The coupled bodies this frame's roles leave the liquid room for.
+    capacity: usize,
     /// This frame's simulation step, handed to the rigid owner.
     step: manifold_water_rigid::physics::SimStep,
     /// Rows before the pending tick's first coupled body's (its Collider
@@ -638,7 +640,7 @@ impl Primitive for GpuFlipDomain {
             // Sized for every body a liquid holds, so a pending reaction never
             // moves when roles come and go.
             let reaction = self.reaction.get_or_insert_with(|| {
-                let bytes = MAX_FLUID_ROLES * REACTION_FLOATS * 4;
+                let bytes = MAX_LIQUID_BODIES * REACTION_FLOATS * 4;
                 let buffer = gpu.device.create_buffer_shared(bytes as u64);
                 // SAFETY: new shared buffer, not yet visible to the GPU.
                 unsafe { buffer.write(0, &vec![0u8; bytes]) };
@@ -674,7 +676,14 @@ impl Primitive for GpuFlipDomain {
 impl PhysicsNode for GpuFlipDomain {
     fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
-        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch, &self.setup_report))
+        Some(manifold_water_liquid::gizmos::domain_snapshot(
+            self.layout,
+            self.coupled.failed,
+            self.role_pending,
+            epoch,
+            &self.setup_report,
+            self.coupled.owner.as_ref().map_or(0, LiquidRigidOwner::uncoupled),
+        ))
     }
 
     /// The pool under the fill height and the initial column as the fill
@@ -832,6 +841,7 @@ impl GpuFlipDomain {
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         self.coupled.walls = DomainWalls::of(&geometry.layout, closed_faces(ctx.params));
+        self.coupled.capacity = coupling_capacity(roles);
         if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
             return Ok(None);
         }
@@ -1016,7 +1026,7 @@ impl GpuFlipDomain {
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
     fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
-        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, step, .. } = &mut self.coupled;
+        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, capacity, step, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
         }
@@ -1034,9 +1044,9 @@ impl GpuFlipDomain {
             .validate()?;
         let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
         *previous_reset = Some(observation.reset);
-        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders)) {
+        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders, *capacity)) {
             *epochs += 1;
-            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?;
+            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *capacity, *epochs, owner.as_ref())?;
             built.set_step(*step);
             *owner = Some(built);
             *owner_fresh = true;
@@ -1102,7 +1112,7 @@ impl GpuFlipDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.capacity, self.coupled.epochs, self.coupled.owner.as_ref())?;
         owner.set_step(self.coupled.step);
         self.coupled.owner = Some(owner);
         Ok(())

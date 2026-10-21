@@ -125,7 +125,17 @@ pub struct FluidDomainSnapshot {
     pub column_box: Option<([f32; 3], [f32; 3])>,
     /// Why the solver refused the setup it was handed, when it did.
     pub refusal: Option<std::sync::Arc<str>>,
+    /// Bodies of the coupled world the liquid could not take: past
+    /// [`MAX_LIQUID_BODIES`] rows the water neither pushes nor flows round them.
+    pub uncoupled_bodies: u32,
 }
 
 /// Maximum number of fluid-role ports supported by a graph boundary.
 pub const MAX_FLUID_ROLES: usize = 64;
+
+/// The most body rows one GPU liquid holds per tick: its Collider roles,
+/// then the coupled Physics World's bodies. GPU FLIP marks each solid face
+/// with its body in one byte, 0 for none, three bytes in a float's exact
+/// integers. Bodies past it are not coupled, and the domain reports how many.
+pub const MAX_LIQUID_BODIES: usize = 255;
+const _: () = assert!(MAX_FLUID_ROLES <= MAX_LIQUID_BODIES);

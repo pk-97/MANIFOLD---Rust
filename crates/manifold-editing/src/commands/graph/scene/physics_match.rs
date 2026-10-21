@@ -368,9 +368,9 @@ pub(super) fn grouped_physics_scene_object_match(
         .iter()
         .filter(|node| node.type_id == "node.scene_object")
         .count();
-    if compound_count > PHYSICS_BODY_SLOTS as usize {
+    if compound_count > COMPOUND_MAX_PARTS as usize {
         static TOO_MANY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-            format!("Physics compound group has more than {PHYSICS_BODY_SLOTS} parts")
+            format!("Physics compound group has more than {COMPOUND_MAX_PARTS} parts")
         });
         return PhysicsSceneObjectMatch::Malformed(TOO_MANY.as_str());
     }
