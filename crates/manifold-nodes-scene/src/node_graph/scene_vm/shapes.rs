@@ -18,15 +18,15 @@ use manifold_core::liquid_setup::DEFAULT_FILL_HEIGHT;
 
 use super::setup_check::{SetupAnchor, SetupProblem, SetupSite, SiteLayout};
 use super::{Level, ParamAddr, SceneObjectVm, TRANSFORM_3D_TYPE_ID, TransformVm, locate_node, param_f32, resolve_producer_through_group, trace_transform};
-use crate::node_graph::scene_surface::{SWARM_FORCES_TYPE_ID, scene_shape};
+use crate::node_graph::scene_surface::{SWARM_FORCES_TYPE_ID, fluid_role_shape, scene_shape};
 
 const FLUID_ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
-/// `role` values 1 to 3). Initial Fill (0) is refused by the GPU domains
-/// and has no shape.
+/// `role` values 0 to 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FluidRole {
+    InitialFill,
     Inflow,
     Outflow,
     Collider,
@@ -207,7 +207,7 @@ fn liquid_shapes(
         }
         let declared = |via: &str| out[first..].iter().position(|shape| shape.decl.via.as_deref() == Some(via)).map(|at| first + at);
         // The setup check reads a cube's size off its layout, not a box shape.
-        let (box_shape, column) = (declared("domain").filter(|_| !cube), declared("initial_volume"));
+        let box_shape = declared("domain").filter(|_| !cube);
         let (fill, fill_value) = param("fill_height", DEFAULT_FILL_HEIGHT);
         let fill_authored = at.level.producer(at.node.id, "fill_height").is_none().then_some(fill_value);
         let (size, resolution) = (param("domain_size", 4.0), param("resolution", 24.0));
@@ -225,7 +225,7 @@ fn liquid_shapes(
             owner: owner.clone(),
             layout,
             box_shape,
-            column,
+            column: None,
             fill,
             fill_authored,
             sources: Vec::new(),
@@ -245,7 +245,9 @@ fn liquid_shapes(
             let mut role_scope = at.scope.clone();
             role_scope.extend(crossed);
             site.structure.push(ParamAddr { scope_path: role_scope, node_doc_id: role.id, param_id: "role".to_owned() });
-            let kind = match param_f32(role, "role", 1.0).round() as i32 {
+            let index = param_f32(role, "role", 1.0).round() as i32;
+            let kind = match index {
+                0 => FluidRole::InitialFill,
                 1 => FluidRole::Inflow,
                 2 => FluidRole::Outflow,
                 3 => FluidRole::Collider,
@@ -258,8 +260,13 @@ fn liquid_shapes(
             let role_at = NodeAt { level: role_level, scope, node: role, parent };
             let owner = ShapeOwner::RoleSource { node: role.node_id.clone(), role: kind };
             let first = out.len();
-            node_shapes(&role_at, owner, Some(row.object_node_id), pickable, out);
-            site.sources.extend((first..out.len()).map(|at| (kind, at)));
+            shapes_of(&role_at, fluid_role_shape(index), owner, Some(row.object_node_id), pickable, out);
+            if kind == FluidRole::InitialFill {
+                // The liquid takes one; a second is refused by name.
+                site.column = site.column.or((first < out.len()).then_some(first));
+            } else {
+                site.sources.extend((first..out.len()).map(|at| (kind, at)));
+            }
         }
         site.check(out, &|_| None, problems, anchors);
         sites.push(site);
@@ -302,7 +309,11 @@ pub(super) struct NodeAt<'a> {
 }
 
 fn node_shapes(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<u32>, pickable: bool, out: &mut Vec<SceneShapeVm>) {
-    for (index, decl) in scene_shape(&at.node.type_id).iter().enumerate() {
+    shapes_of(at, scene_shape(&at.node.type_id), owner, row, pickable, out);
+}
+
+fn shapes_of(at: &NodeAt<'_>, decls: &[SceneShapeDecl], owner: ShapeOwner, row: Option<u32>, pickable: bool, out: &mut Vec<SceneShapeVm>) {
+    for (index, decl) in decls.iter().enumerate() {
         let Some(port) = decl.via.as_deref() else { continue };
         let Some(transform) = via_transform(at, port) else { continue };
         let Some(params) = transform_params(decl, &transform) else { continue };

@@ -112,9 +112,6 @@ pub struct TimelineViewportPanel {
     /// `(layer, lane)` index of each screen's source lane, so a playhead move
     /// refreshes the title values without rebuilding the geometry.
     automation_lane_sources: Vec<(usize, usize)>,
-    /// Lane screens built or refilled, so a test can tell a one-lane update from a rebuild.
-    #[cfg(test)]
-    lane_fills: std::cell::Cell<usize>,
     /// Sizes the lane titles when the screens rebuild. The app installs the
     /// same measurer its trees draw with.
     text_measure: Box<dyn crate::text::TextMeasure>,
@@ -169,7 +166,7 @@ pub struct TimelineViewportPanel {
     ruler_label_ids: Vec<NodeId>,
     ruler_shown: usize,
     ruler_text: String,
-    // grid_line_ids: removed — grid painted into bitmap
+    // grid_line_ids: removed — the grid is GPU lines from `timeline_grid_view`
     track_bg_ids: Vec<NodeId>,
     track_bg_groups: Vec<TrackBgGroup>,
     /// The focused layer's track index — its lane background lifts one ramp step
@@ -362,8 +359,6 @@ impl TimelineViewportPanel {
             automation_lane_heights: Vec::new(),
             automation_lane_screens: Vec::new(),
             automation_lane_sources: Vec::new(),
-            #[cfg(test)]
-            lane_fills: std::cell::Cell::new(0),
             text_measure: Box::new(crate::text::HeuristicTextMeasure),
             render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: Beats::ZERO,
@@ -589,11 +584,6 @@ impl TimelineViewportPanel {
         }
     }
 
-    /// Total number of clips across all layers.
-    fn total_clip_count(&self) -> usize {
-        self.clips_by_layer.iter().map(|v| v.len()).sum()
-    }
-
     /// Replace the automation lane data, bucketed by layer index — mirrors
     /// `set_clips`'s clear-and-refill so repeated calls don't reallocate the
     /// inner `Vec`s. Called with an empty `lanes` whenever automation mode is
@@ -810,7 +800,7 @@ impl TimelineViewportPanel {
     }
 
     /// On-screen clip rectangles for the GPU clip pass (section 24 5b), rebuilt every
-    /// frame into `out`. Uses the same visibility cull as `timeline_grid_view` and the
+    /// frame into `out`. Uses the grid rows' visibility cull (`grid_row`) and the
     /// hit-tester's geometry (same `beat_to_pixel` / `track_y` + `CLIP_VERTICAL_PAD`),
     /// so the drawn body and the clickable region can't disagree. Group layers are
     /// skipped — collapsed groups draw their own summary bitmap and expanded group
@@ -819,16 +809,14 @@ impl TimelineViewportPanel {
         out.clear();
         let tx0 = self.tracks_rect.x;
         let tx1 = self.tracks_rect.x + self.tracks_rect.width;
-        let ty0 = self.tracks_rect.y;
-        let ty1 = self.tracks_rect.y + self.tracks_rect.height;
         for i in 0..self.tracks.len() {
             if self.is_group_layer(i) {
                 continue;
             }
             let track_y = self.track_y(i);
             let track_h = self.track_height(i);
-            // Same visibility cull as timeline_grid_view.
-            if track_h <= 0.0 || track_y + track_h < ty0 || track_y > ty1 {
+            // The grid rows' visibility cull.
+            if self.grid_row(i).is_none() {
                 continue;
             }
             let clip_top = track_y + CLIP_VERTICAL_PAD;
@@ -1555,7 +1543,7 @@ impl Panel for TimelineViewportPanel {
         // Build track backgrounds
         self.build_track_backgrounds(tree);
 
-        // Grid lines: painted into per-layer bitmap (not UITree nodes)
+        // Grid lines: GPU lines emitted once per frame (not UITree nodes)
         // Clips: painted into per-layer bitmap (not UITree nodes)
         // Selection region: painted into per-layer bitmap (not UITree nodes)
 

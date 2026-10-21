@@ -13,7 +13,8 @@ refusal, a crash, or a `--fail-fast` stop.
 Gate mechanics:
 
 Cheap reds are collected before flows and GPU proofs. Any cheap red stops at
-that boundary; every red prints its `rerun:` command. `--fail-fast` stops at
+that boundary unless `--named-red BUG-ID=TEST` covers it (every failing test
+name contains TEST); a covered red prints `COVERED label BUG-ID`; every red prints its `rerun:` command. `--fail-fast` stops at
 the first red; `--keep-going` is an explicit diagnostic run. A named red never
 waives an unrun leg. Fix the reds with their printed commands.
 
@@ -89,6 +90,10 @@ GATED_HEAD = contextvars.ContextVar('gated_head', default=None)
 # with an explicit named red. Refusals, crashes and --fail-fast stops exit 1.
 CHECKS_RED = 4
 RAN_EVERY_CHECK = contextvars.ContextVar('ran_every_check', default=False)
+# label -> BUG-id of reds a --named-red BUG=TEST covers; set by run_check, read by
+# expensive_blocked (covered cheap reds do not stop the run) and finish.
+COVERED_REDS = {}
+WAIVERS = []
 # Seconds this gate spent waiting for the machine-wide GPU lock; None when no
 # leg needed it. Logged per run: queue time is landing time nobody saw before.
 GPU_WAIT = contextvars.ContextVar('gpu_wait', default=None)
@@ -107,6 +112,7 @@ import gpu_scope
 import cpu_scope
 import diff_scope
 import gate_passes
+import gate_policy
 import gate_readiness
 from gate_workspace import Workspace
 
@@ -406,6 +412,12 @@ def run_check(label, cmd, cwd, timeout, passed=None):
         ACTIVE_CHECK.reset(token)
     exit_, out, err, seconds = result
     timed_out = exit_ == -1
+    if exit_ and not timed_out and WAIVERS:
+        failed_names = gate_passes.parse_failed_tests(out + '\n' + err)
+        for bug, test in WAIVERS:
+            if failed_names and all(test in name for name in failed_names):
+                COVERED_REDS[label] = bug
+                break
     proof_refusal = (exit_ == PROOF_INPUTS_CHANGED and len(cmd) > 1
                      and Path(cmd[1]).name == 'gpu_proofs_gate.py')
     # A timing-only red (every test passed, rerun done) is a check that ran.
@@ -607,6 +619,9 @@ def _main(stack):
                         help="base ref for merge-base (default: origin/main)")
     parser.add_argument("--skip-gpu", default=None, metavar="REASON",
                         help="skip gpu-proofs with a reason (does not fail gate)")
+    parser.add_argument("--named-red", action="append", default=[], metavar="BUG-ID=TEST",
+                        help="waive only reds whose failing tests all contain TEST; a covered cheap red "
+                             "does not stop the run at the cheap boundary (repeatable)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--keep-going", action="store_true",
                       help="diagnostic: run expensive legs even after cheap reds")
@@ -619,6 +634,14 @@ def _main(stack):
     parser.add_argument('--plan-only', action='store_true', help='read-only plan including working-tree changes; no build, test or receipt writes')
     parser.add_argument('--paths-json', type=Path, help='plan-only path fixture with paths/base/head')
     args = parser.parse_args()
+    WAIVERS.clear()
+    COVERED_REDS.clear()
+    for spec in args.named_red:
+        bug, sep, test = spec.partition("=")
+        if not (bug and sep and test):
+            parser.error(f"--named-red needs BUG-ID=TEST (a failing test name or substring), got {spec!r}; "
+                         "for example --named-red 'BUG-pl747=whitewater_tick_state_matches_golden'")
+        WAIVERS.append((bug, test))
 
     if args.paths_json and not args.plan_only:
         parser.error('--paths-json requires --plan-only')
@@ -671,7 +694,9 @@ def _main(stack):
         return 1
     if ignored_paths:
         print(f"[scope] excluded {len(ignored_paths)} docs/comment-only file(s)")
-    readiness = gate_readiness.plan(repo, paths, base_sha)
+    # Excluded docs still feed the repo-scan tests (gate_policy.REPO_SCAN_ROWS).
+    scan_docs = [path for path in ignored_paths if gate_policy.repo_scan_doc(path)]
+    readiness = gate_readiness.plan(repo, paths, base_sha, scan_paths=scan_docs)
     packages, dependents = readiness['packages'], readiness['dependents']
     cpu_plan = readiness['cpu'] or cpu_scope.Plan()
     plan = readiness['gpu'] or gpu_scope.Plan()
@@ -802,7 +827,7 @@ def _main(stack):
         print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
         return status
 
-    if not paths:
+    if not paths and not cpu_plan.selections():
         if args.cheap:
             return finish_cheap(results)
         if expensive_blocked(args, results):
@@ -1074,7 +1099,8 @@ def _main(stack):
 
 def expensive_blocked(args, results):
     """A red cheap leg cannot spend flow/proof time without explicit diagnosis."""
-    reds = [label for status, label, *_ in results if status == 'FAIL']
+    reds = [label for status, label, *_ in results
+            if status == 'FAIL' and label not in COVERED_REDS]
     if args.keep_going or not reds:
         return False
     RAN_EVERY_CHECK.set(False)
@@ -1140,6 +1166,8 @@ def finish(repo, base_sha, results):
             print(f"{status} {label} ({tail[0]})")
         else:
             print(f"{status} {label}")
+        if status == "FAIL" and label in COVERED_REDS:
+            print(f"COVERED {label} {COVERED_REDS[label]}")
         for line in tail:
             if line.startswith('GPU-PROOFS DEFERRED:') or (status == 'FAIL' and line.startswith('rerun: ')):
                 print(line)

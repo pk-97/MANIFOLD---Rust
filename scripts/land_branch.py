@@ -14,12 +14,12 @@ branch takes the new main and is gated again outside it, then the lock is
 retried. A waiter prints who holds it.
 
 The JUDGMENT stays with the lead: the review, the named-red call (pass
---named-red BUG-id --reason "..."), the design-doc status edits. Required
+--named-red BUG-id=TEST --reason "..."), the design-doc status edits. Required
 steps exit on failure with the step named. Push happens only after a green
 gate or an explicit named red over a gate that ran every check (exit
 CHECKS_RED). After a moved-main re-gate the named red carries over only when
 that gate also ran every check and went red on exactly the same check labels;
-anything else stops. --named-red requests the complete gate run.
+anything else stops. --named-red BUG-id=TEST waives only reds whose failing tests all contain TEST; any other red blocks.
 After verified landing, slot detachment, release and branch deletion are cleanup:
 failures are notes, not landing failures. Unlanded branches are never deleted.
 Before merging it records the gated tree as a land pass in the git common dir
@@ -33,7 +33,7 @@ appends one row to .claude/orchestration/landing-runs.jsonl in the main checkout
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
-      [--named-red BUG-xxxx --reason '<why safe>'] \
+      [--named-red BUG-xxxx=TEST --reason '<why safe>'] \
       [--close-bead BUG-xxxx ...] [--close-reason '<closing note>'] \
       [--lead 'Claude lead']
 
@@ -118,6 +118,11 @@ def gpu_wait_seconds(gate_text):
     waits = [float(m[1]) for m in re.finditer(r'^gpu-queue wait: ([0-9.]+)s', gate_text, re.M)]
     return sum(waits) if waits else None
 
+def uncovered_reds(gate_text):
+    """Red labels no --named-red covered (the gate prints COVERED label BUG-ID)."""
+    covered = frozenset(m[1] for m in re.finditer(r'^COVERED (\S+) ', gate_text, re.M))
+    return red_labels(gate_text) - covered
+
 def carry_over_allowed(named_reds, code, reds):
     """A named red covers a moved-main re-gate only when nothing new went red.
 
@@ -136,6 +141,11 @@ def gate(gate_cmd, worktree, gate_log):
     wait = gpu_wait_seconds(text)
     if wait is not None:
         ATTEMPT['gpu_wait_s'] = round((ATTEMPT['gpu_wait_s'] or 0) + wait, 1)
+    uncovered = uncovered_reds(text)
+    if code == CHECKS_RED and uncovered:
+        print(f"[land] red not covered by any --named-red BUG-ID=TEST: {', '.join(sorted(uncovered))}; "
+              "the landing is blocked.", flush=True)
+        code = 1
     return code, red_labels(text)
 
 def lock_path():
@@ -292,14 +302,21 @@ def parse_args(argv):
     p.add_argument("branch")
     p.add_argument("--worktree", required=True)
     p.add_argument("--message", required=True)
-    p.add_argument("--named-red")
+    p.add_argument("--named-red", action="append", default=[], metavar="BUG-ID=TEST",
+                   help="land over a red whose failing tests all contain TEST (repeatable)")
     p.add_argument("--reason")
     p.add_argument("--skip-gpu", metavar="REASON",
                    help="defer GPU proofs with a recorded reason; all other gates must pass")
     p.add_argument("--close-bead", action="append", default=[])
     p.add_argument("--close-reason", default="")
     p.add_argument("--lead", default="Claude lead")
-    return p.parse_args(argv)
+    a = p.parse_args(argv)
+    for spec in a.named_red:
+        bug, sep, test = spec.partition("=")
+        if not (bug and sep and test):
+            p.error(f"--named-red needs BUG-ID=TEST (a failing test name or substring), got {spec!r}; "
+                    "for example --named-red 'BUG-pl747=whitewater_tick_state_matches_golden'")
+    return a
 
 def main():
     global ATTEMPT
@@ -348,11 +365,11 @@ def _main(a):
     base = git_out("origin/main", ["git", "rev-parse", "origin/main"], MAIN)
     step("merge origin/main into branch", ["git", "merge", base, "--no-edit"], wt)
 
-    # A reviewed named red needs every leg's result, including when the known
-    # red is cheap. Completion is still enforced by CHECKS_RED below.
+    # A named red BUG-ID=TEST lets the gate run past a cheap red it covers; any
+    # uncovered red still stops the gate at the boundary.
     gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py", "--repo", str(wt.resolve())]
-    if a.named_red:
-        gate_cmd.append("--keep-going")
+    for spec in a.named_red:
+        gate_cmd += ["--named-red", spec]
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
     log_dir = wt / "target" / "landing-logs"

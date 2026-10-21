@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! project_tool info <file.manifold>
-//! project_tool json <file.manifold>
+//! project_tool json <file.manifold> [--loaded]
 //! project_tool tempo show <file.manifold>
 //! project_tool tempo set <file.manifold> <points.json> [--no-sync-bpm]
 //! project_tool tempo at <file.manifold> <beat> [<beat>...]
@@ -122,7 +122,7 @@ app's own archive writer (history + atomic rename preserved).
 
 USAGE:
   project_tool info <file.manifold>
-  project_tool json <file.manifold>
+  project_tool json <file.manifold> [--loaded]   (--loaded: as the typed loader leaves it, every load migration applied)
   project_tool tempo show <file.manifold>
   project_tool tempo set <file.manifold> <points.json> [--no-sync-bpm]
   project_tool tempo at <file.manifold> <beat> [<beat>...]
@@ -270,6 +270,21 @@ fn run_json(rest: &[String]) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
+    // `--loaded`: the project after the typed loader and its load
+    // migrations, read-only. Registry-less, so layer params the registry
+    // would resolve may be missing; graphs come through whole.
+    if rest.get(1).is_some_and(|flag| flag == "--loaded") {
+        return match load_project(Path::new(path)).map_err(|e| e.to_string()).and_then(|project| serde_json::to_string(&project).map_err(|e| e.to_string())) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: failed to load '{path}': {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     match read_raw_json(path) {
         Ok(json) => {
             println!("{json}");

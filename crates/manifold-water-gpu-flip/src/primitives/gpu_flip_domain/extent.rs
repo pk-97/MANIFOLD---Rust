@@ -2,8 +2,7 @@
 use std::mem::size_of;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use manifold_water_liquid::ROLE_PORTS;
-use manifold_water_liquid::fluid_role::FluidRoleKind;
+use manifold_water_liquid::extent::walked_roles;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
@@ -15,14 +14,11 @@ use manifold_physics::clock::TICK;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let geometry = gpu_flip_geometry(
-        |name, default| x.scalar(name, default),
-        x.transform("domain"),
-        x.transform("initial_volume"),
-    )
-    .map_err(Verdict::Refused)?
-    // The pool the allocator gets: room for an inflow when a role is one.
-    .sized_for(ROLE_PORTS.iter().filter_map(|port| x.kind(port)).filter_map(FluidRoleKind::from_index));
+    let (fill, kinds) = walked_roles(x, "GPU FLIP")?;
+    let geometry = gpu_flip_geometry(|name, default| x.scalar(name, default), x.transform("domain"), fill)
+        .map_err(Verdict::Refused)?
+        // The pool the allocator gets: room for an inflow when a role is one.
+        .sized_for(kinds);
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }

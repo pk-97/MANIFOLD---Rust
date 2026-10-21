@@ -20,9 +20,11 @@ from gate_cancellation import Cancelled
 from landing_gate import CHECKS_RED
 
 
-def gate_text(*reds, wait=None):
+def gate_text(*reds, wait=None, covered=False):
     lines = ['        FAIL [   1.0s] crate nextest_line_is_not_a_label']
     lines += [f'FAIL {label} (3s)' for label in reds]
+    if covered:
+        lines += [f'COVERED {label} BUG-red' for label in reds]
     if wait is not None:
         lines.append(f'gpu-queue wait: {wait}s')
     return '\n'.join(lines) + '\n'
@@ -142,7 +144,7 @@ class FlowTests(unittest.TestCase):
 
         argv = ['land_branch.py', 'lane/x', '--worktree', str(self.wt), '--message', 'm']
         if named_red:
-            argv += ['--named-red', 'BUG-red', '--reason', 'reviewed']
+            argv += ['--named-red', 'BUG-red=t', '--reason', 'reviewed']
         if close:
             argv += ['--close-bead', 'BUG-done']
         code = None
@@ -206,19 +208,26 @@ class FlowTests(unittest.TestCase):
 
     def test_named_red_carries_over_only_for_identical_reds(self):
         cases = [
-            (gate_text('clippy/a'), CHECKS_RED, True),
-            (gate_text('clippy/a', 'tests/1'), CHECKS_RED, False),
+            (gate_text('clippy/a', covered=True), CHECKS_RED, True),
+            (gate_text('clippy/a', 'tests/1', covered=True), CHECKS_RED, False),
             (gate_text(), CHECKS_RED, False),
-            (gate_text('clippy/a'), 1, False),
+            (gate_text('clippy/a', covered=True), 1, False),
         ]
         for regate_text, regate_code, lands in cases:
             with self.subTest(regate=regate_text, code=regate_code):
                 fake = FakeGit(self.root, ['base', 'moved', 'moved'])
-                code, row = self.land(fake, [(CHECKS_RED, gate_text('clippy/a')),
+                code, row = self.land(fake, [(CHECKS_RED, gate_text('clippy/a', covered=True)),
                                              (regate_code, regate_text)], named_red=True)
                 self.assertEqual(row['outcome'], 'landed' if lands else 'red')
                 self.assertEqual('push main' in fake.calls, lands)
                 self.assert_unlocked()
+
+    def test_named_red_does_not_cover_an_unmatched_red(self):
+        fake = FakeGit(self.root, ['base'])
+        text = gate_text('clippy/a', 'tests/1') + 'COVERED clippy/a BUG-red\n'
+        code, row = self.land(fake, [(CHECKS_RED, text)], named_red=True)
+        self.assertEqual(row['outcome'], 'red')
+        self.assertNotIn('push main', fake.calls)
 
     def test_outcome_rows(self):
         cases = [

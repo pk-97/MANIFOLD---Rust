@@ -14,8 +14,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from gate_policy import exceeds_godfile_limit, godfile_paths, godfile_table, integration_rows, PREFIX_ROWS
+from gate_policy import REPO_SCAN_ROWS
 from gate_policy import CATALOG_PATHS, CATALOG_PACKAGE
 from gate_workspace import Workspace, module_mounts
+
+def row_filter(package, module):
+    """A row names a module prefix, or `test:NAME` for one test (nextest substring match)."""
+    if module.startswith("test:"):
+        return f"(package(={package}) & test({module[5:]}))"
+    return f"(package(={package}) & test(/^{module}::/))"
+
 
 def module_parts(relative):
     parts = list(relative.with_suffix("").parts)
@@ -131,7 +139,10 @@ def testless_binary_root(source):
     return True
 
 
-def plan_for_paths(paths, repo, workspace=None, base=None):
+def plan_for_paths(paths, repo, workspace=None, base=None, scan_paths=(), repo_scan=True):
+    """scan_paths are changed docs the diff scope excludes from `paths`: they select
+    only the repo-scan rows, never a build, clippy or module filter. repo_scan=False
+    drops those rows for a caller that reads only the GPU selection."""
     repo, plan, cache = Path(repo).resolve(), Plan(), {}
     workspace = workspace or Workspace(repo)
     paths = sorted(set(paths))
@@ -141,6 +152,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             raise ValueError('; '.join(ownership))
     mounts = {}
     rows = integration_rows()
+    prefix_rows = PREFIX_ROWS if repo_scan else [row for row in PREFIX_ROWS if row not in REPO_SCAN_ROWS]
     explicit_filters = set()
 
     def check_row(package, modules, binaries):
@@ -149,13 +161,13 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             if module.endswith('::'):
                 raise ValueError(f'gate_policy row for {package}: filter {module!r} ends in "::"; '
                                  'write the module prefix without trailing colons')
-        plan.check_filters.update(f"(package(={package}) & test(/^{module}::/))" for module in modules)
+        plan.check_filters.update(row_filter(package, module) for module in modules)
         plan.check_filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
 
     def apply_row(package, modules, binaries):
         check_row(package, modules, binaries)
         plan.packages.add(package)
-        expressions = {f"(package(={package}) & test(/^{module}::/))" for module in modules}
+        expressions = {row_filter(package, module) for module in modules}
         plan.filters.update(expressions)
         explicit_filters.update(expressions)
         plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
@@ -163,10 +175,14 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
     # Rows are only resolved against a package's test list when a landing selects that
     # package, so an edit to the policy itself checks every row (BUG-k51c2).
     if 'scripts/gate_policy.py' in paths:
-        for _prefix, _suffix, package, modules, binaries in PREFIX_ROWS:
+        for _prefix, _suffix, package, modules, binaries in prefix_rows:
             check_row(package, modules, binaries)
         for package, binaries in rows.values():
             check_row(package, [], binaries)
+    for path in sorted(set(scan_paths) - set(paths)):
+        for prefix, suffix, package, modules, binaries in prefix_rows:
+            if path.startswith(prefix) and path.endswith(suffix):
+                apply_row(package, modules, binaries)
     for path in sorted(set(paths)):
         if path in rows:
             package, binaries = rows[path]
@@ -175,7 +191,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         if path not in rows and exceeds_godfile_limit(repo, path):
             plan.packages.add('manifold-app')
             plan.filters.add("(package(=manifold-app) & binary(=godfile_regrowth))")
-        for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
+        for prefix, suffix, package, modules, binaries in prefix_rows:
             if path.startswith(prefix) and path.endswith(suffix):
                 apply_row(package, modules, binaries)
         package = workspace.owner(path)

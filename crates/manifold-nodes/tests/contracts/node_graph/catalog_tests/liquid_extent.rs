@@ -388,3 +388,29 @@ fn extent_rule_inventory_preserves_the_rule_table() {
     assert_eq!(registered, expected);
     assert!(registered.windows(2).all(|pair| pair[0] < pair[1]), "duplicate extent rule");
 }
+
+/// BUG-ju9cb (the water column can't be removed): a preset saved with the
+/// old column wired into the domain's `initial_volume`, inside a group whose
+/// nodes carry handles, builds. The old shape migrates before the flatten
+/// that gives those nodes group paths for handles; migrating the flat
+/// document would add a group the next flatten refuses.
+#[test]
+fn an_old_column_inside_a_group_builds_after_the_migration() {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    use manifold_core::initial_fill::{INITIAL_FILL_NAME, INITIAL_VOLUME_PORT, TRANSFORM_3D_TYPE_ID, carries_initial_volume};
+    use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+    let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
+    let mut old = (*def).clone();
+    let body = old.nodes.iter_mut().find_map(|node| node.group.as_deref_mut().filter(|_| node.handle.as_deref() == Some("Water"))).expect("the Water group");
+    let at = body.nodes.iter().position(|node| node.handle.as_deref() == Some(INITIAL_FILL_NAME) && node.group.is_some()).expect("the Initial Fill group");
+    let fill = body.nodes.remove(at);
+    let mut column = fill.group.expect("a group").nodes.into_iter().find(|node| node.type_id == TRANSFORM_3D_TYPE_ID).expect("the column");
+    column.id = body.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+    let domain = body.nodes.iter().find(|node| node.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the domain").id;
+    body.wires.retain(|wire| wire.from_node != fill.id);
+    body.wires.push(EffectGraphWire { from_node: column.id, from_port: "transform".into(), to_node: domain, to_port: INITIAL_VOLUME_PORT.into() });
+    body.nodes.push(column);
+    assert!(carries_initial_volume(&old), "the preset is back in its old shape");
+    let mut preset = LiquidPreset::build(&old).unwrap_or_else(|error| panic!("{error}"));
+    assert!(preset.check(16).expect("the migrated preset walks").checked > 0);
+}

@@ -10,10 +10,9 @@ use manifold_ui::timing_grid::{TimelineGridView, TimingGridLineKind, timing_grid
 
 use crate::ui_renderer::UIRenderer;
 
-/// Screen x and kind of every grid line the view shows, left to right. Each
-/// line is snapped to a whole physical pixel column from the tracks edge, so
-/// the renderer's own pixel rounding cannot flip it by one at a .5 boundary.
-/// A line that starts left of the tracks is dropped whole rather than clipped
+/// Screen x and kind of every grid line the view shows, left to right. The
+/// renderer snaps each line to a whole physical pixel column (`draw_grid_line`).
+/// A line that would start left of the tracks is dropped whole rather than clipped
 /// to its second pixel: the grid has always started at the first column.
 fn grid_line_xs(view: &TimelineGridView) -> impl Iterator<Item = (f32, TimingGridLineKind)> {
     let TimelineGridView { tracks, min_beat, logical_ppb: ppb, beats_per_bar: bpb, render_scale: scale, .. } = *view;
@@ -30,8 +29,8 @@ fn grid_line_xs(view: &TimelineGridView) -> impl Iterator<Item = (f32, TimingGri
     let walk_start = if valid { min_beat } else { f32::NAN };
     let scaled_ppb = ppb * scale;
     timing_grid_lines(walk_start, visible_end, ppb, bpb)
-        .map(move |(beat, kind)| (((beat - min_beat) * scaled_ppb).round(), kind))
-        .filter(|(col, _)| *col >= 0.0)
+        .map(move |(beat, kind)| ((beat - min_beat) * scaled_ppb, kind))
+        .filter(|(col, _)| col.round() >= 0.0)
         .map(move |(col, kind)| (tracks.x + col / scale, kind))
 }
 
@@ -75,10 +74,8 @@ mod tests {
         let xs: Vec<f32> = grid_line_xs(&view()).map(|(x, _)| x).collect();
         assert!(!xs.is_empty());
         assert!(xs.iter().all(|x| *x >= 10.0));
-        // Beat 1.0 sits half a beat (50 px) in from the tracks edge, on a
-        // whole physical column.
+        // Beat 1.0 sits half a beat (50 px) in from the tracks edge.
         assert!(xs.iter().any(|x| (*x - 60.0).abs() < 0.01), "{xs:?}");
-        assert!(xs.iter().all(|x| ((x - 10.0) * 2.0).fract() == 0.0), "{xs:?}");
     }
 
     #[test]

@@ -502,9 +502,8 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
         crate::ui_bridge::sync_trigger_catalog(ui_root, project);
     }
     if project_sync {
-        let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_automation_lane_order(project, selection);
-        crate::ui_bridge::sync_project_data(ui_root, project, idx, selection);
+        crate::ui_bridge::sync_project_data(ui_root, project, selection);
     }
     if projections.contains(Projection::TrackLayout) && !project_sync {
         crate::ui_bridge::sync_track_layout(ui_root, project, selection);

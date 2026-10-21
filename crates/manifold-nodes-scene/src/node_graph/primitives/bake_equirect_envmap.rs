@@ -81,7 +81,9 @@ fn mode_index(params: &ParamValues) -> u32 {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HdriCopyUniforms {
     intensity: f32,
-    _pad: [f32; 3],
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 /// What the disc reads from the wired light: the direction toward the sun
@@ -420,7 +422,7 @@ impl Primitive for BakeEquirectEnvmap {
 
         let gpu = ctx.gpu_encoder();
         if let Some(hdri) = hdri {
-            let copy = HdriCopyUniforms { intensity, _pad: [0.0; 3] };
+            let copy = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
             let pipeline = self.hdri_pipeline.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(
                     include_str!("shaders/bake_environment_hdri.wgsl"),
@@ -1215,7 +1217,7 @@ mod hdri_gpu_tests {
             "bake-env-hdri-test",
         );
         let intensity = 2.0f32;
-        let uniforms = HdriCopyUniforms { intensity, _pad: [0.0; 3] };
+        let uniforms = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
         let mut enc = device.create_encoder("bake-env-hdri");
         enc.dispatch_compute(
             &pipeline,

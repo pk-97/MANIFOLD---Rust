@@ -1789,6 +1789,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         crate::ui_bridge::sync_project_all(
             &mut self.ws.ui_root,
             &self.local_project,
+            &self.selection,
+        );
+        crate::ui_bridge::push_selection(
+            &mut self.ws.ui_root,
+            &self.local_project,
             active_idx,
             &self.selection,
         );

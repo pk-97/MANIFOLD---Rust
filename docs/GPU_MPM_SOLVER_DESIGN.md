@@ -425,7 +425,7 @@ is prepared today (⚠ VERIFY-AT-IMPL in P2a: read (retired with CPU FLIP; in gi
 
 **D17 — `node.matter_domain` speaks the FLIP domain node's scene contract, and the scene
 layer asks one predicate.** Its scene-facing inputs and params carry `node.fluid_surface`'s
-names, types and meanings: `domain`, `initial_volume`, `resolution`, `grid_budget_mcells`,
+names, types and meanings: `domain`, `resolution`, `grid_budget_mcells`,
 six closed faces, `fill_height`, `seed`, `liquid_density`, `gravity_x`, `gravity`,
 `gravity_z`, `speed`, `reset`, `role_0..role_63`, `acceleration_field`, plus the impulse
 and coupled-scene hooks. Every scene-layer site that tests `== "node.fluid_surface"` to
@@ -1261,7 +1261,7 @@ FLIP-only.
 
 | FLIP feature | Here |
 |---|---|
-| Domain Transform, six closed faces, resolution, grid budget, fill height, legacy `initial_volume` | Ported P1 (same names, same `domain_layout`) |
+| Domain Transform, six closed faces, resolution, grid budget, fill height; the starting column is an Initial Fill role | Ported P1 (same names, same `domain_layout`) |
 | Mesh roles: Initial Fill, Inflow, Outflow, Collider; enable, velocity, inherit motion, friction | Ported P2a (colliders), P3b (fills, inflows, drains) |
 | Legacy `emitter`/`obstacle` Transform inputs | FLIP-only (legacy presets) |
 | Gravity XYZ, Simulation Speed, Reset, Seed, World sharing | Ported P1, P3a |

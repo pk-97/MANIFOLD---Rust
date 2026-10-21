@@ -30,37 +30,6 @@
       "typeId": "node.gpu_flip_domain"
     },
     {
-      "id": 1,
-      "nodeId": "initial_column",
-      "params": {
-        "pos_x": {
-          "type": "Float",
-          "value": -3.3
-        },
-        "pos_y": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "pos_z": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "scale_x": {
-          "type": "Float",
-          "value": 1.4
-        },
-        "scale_y": {
-          "type": "Float",
-          "value": 2.0
-        },
-        "scale_z": {
-          "type": "Float",
-          "value": 4.0
-        }
-      },
-      "typeId": "node.transform_3d"
-    },
-    {
       "id": 2,
       "nodeId": "obstacle_transform",
       "params": {
@@ -2872,6 +2841,95 @@
       "nodeId": "motion_blur",
       "typeId": "node.motion_blur",
       "params": {}
+    },
+    {
+      "id": 524,
+      "nodeId": "domain_initial_fill",
+      "typeId": "group",
+      "handle": "Initial Fill",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "role",
+              "portType": "FluidRole"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "initial_column",
+            "typeId": "node.transform_3d",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -3.3
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 1.4
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 4.0
+              }
+            }
+          },
+          {
+            "id": 2,
+            "nodeId": "domain_initial_fill_role",
+            "typeId": "node.fluid_role_source",
+            "handle": "Initial Fill",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 0.8660254
+              },
+              "role": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "domain_initial_fill_output",
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "transform",
+            "toNode": 2,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "role",
+            "toNode": 3,
+            "toPort": "role"
+          }
+        ]
+      }
     }
   ],
   "presetMetadata": {
@@ -3437,10 +3495,10 @@
   "version": 3,
   "wires": [
     {
-      "fromNode": 1,
-      "fromPort": "transform",
+      "fromNode": 524,
+      "fromPort": "role",
       "toNode": 0,
-      "toPort": "initial_volume"
+      "toPort": "role_1"
     },
     {
       "fromNode": 2,

@@ -57,7 +57,7 @@ pub(crate) fn open_editor_workspace(
     let mut ws = Workspace::new(WorkspaceKind::GraphEditor);
     ws.ui_offscreen = offscreen;
     ws.ui_root.setup_fits.clone_from(&content_state.setup_fits);
-    crate::ui_bridge::sync_project_all(&mut ws.ui_root, project, active_layer, selection);
+    crate::ui_bridge::sync_project_all(&mut ws.ui_root, project, selection);
     crate::ui_frame::project_editor_inspector(
         &mut ws.ui_root,
         project,

@@ -98,6 +98,10 @@ class CacheTests(unittest.TestCase):
         # This disposable workspace tests cache behavior, with its own smoke
         # selection; real repository proof ownership is covered by gpu_scope.
         self.enterContext(patch.object(gpu_scope, 'SMOKE_FILTERS', ['fixture_smoke::']))
+        # The disposable workspace has no manifold-core for the repo-scan rows.
+        import cpu_scope, gate_policy
+        self.enterContext(patch.object(cpu_scope, "PREFIX_ROWS", [
+            row for row in cpu_scope.PREFIX_ROWS if row not in gate_policy.REPO_SCAN_ROWS]))
         self.enterContext(patch.object(gpu_scope, 'learned_times_path',
                                        return_value=self.repo / '.git/gpu-test-times.json'))
         self.git('init', '-b', 'main')
@@ -1150,7 +1154,7 @@ class CacheTests(unittest.TestCase):
 
     def test_named_red_lands_only_over_a_gate_that_ran_every_check(self):
         argv = ['land_branch.py', 'work', '--worktree', str(self.repo), '--message', 'landing',
-                '--named-red', 'BUG-cache', '--reason', 'reviewed red']
+                '--named-red', 'BUG-cache=t', '--reason', 'reviewed red']
         for gate_code, lands in [(1, False), (2, False), (landing.CHECKS_RED, True)]:
             with patch.object(sys, 'argv', argv), \
                     patch.object(land_branch, 'start_checks', return_value=False), \
@@ -1168,7 +1172,7 @@ class CacheTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         land_branch.main()
             self.assertEqual(merge.called, lands, f'gate exit {gate_code}')
-            self.assertIn('--keep-going', gate.call_args.args[0])
+            self.assertIn('BUG-cache=t', gate.call_args.args[0])
 
     def test_gate_crate_edit_keeps_other_crate_and_gpu_passes(self):
         self.assertEqual(self.run_landing()[0], 0)

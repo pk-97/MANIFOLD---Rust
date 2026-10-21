@@ -107,6 +107,10 @@ const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b010));
 /// The Background switch's values: off 0, on 1.
 const BACKGROUND_ON: Gate = Gate::Only(Feature::Background, Modes(0b10));
 
+/// `node.fluid_role_source`'s roles past Initial Fill (0): an Initial Fill
+/// is the water at rest in its box, so it reads no motion.
+const MOVES_WATER: Gate = Gate::Only(Feature::SourceRole, Modes(0b1110));
+
 const AT_LEAST_ZERO: HardLimit = HardLimit::AtLeast(0.0);
 /// Field of view, 1° to 179°, in radians.
 const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
@@ -178,12 +182,19 @@ const DOMAIN_BOX: SceneShapeDecl = {
     decl.extent_limit = Some(HardLimit::Between(DOMAIN_EXTENT_METRES.0, DOMAIN_EXTENT_METRES.1));
     decl
 };
-/// The solvers take axis-aligned boxes only, so neither box rotates. The
-/// Initial Fill height is a level above the domain floor, not a world
-/// value, so it has no handle yet.
-static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] = [DOMAIN_BOX, transform_box("initial_volume", false)];
+/// The solvers take an axis-aligned box only, so it does not rotate. The
+/// fill height is a level above the domain floor, not a world value, so it
+/// has no handle yet.
+static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 1] = [DOMAIN_BOX];
 /// The `transform` input places the role's volume.
 static FLUID_ROLE_SOURCE_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
+/// The liquids fill an axis-aligned box, so an Initial Fill does not rotate.
+static INITIAL_FILL_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", false)];
+
+/// A fluid role source's shapes for its `role` (0 is Initial Fill).
+pub fn fluid_role_shape(role: i32) -> &'static [SceneShapeDecl] {
+    if role == 0 { &INITIAL_FILL_SHAPES } else { &FLUID_ROLE_SOURCE_SHAPES }
+}
 /// A swarm's forces node (manifold-nodes-physics, which this crate does not
 /// depend on).
 pub(crate) use manifold_core::scene_object_model::SWARM_FORCES_TYPE_ID;
@@ -251,11 +262,12 @@ fn fluid_role_source(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Source;
     Some(match param {
         "enabled" => card(Source, CardBand::Scene, 0),
-        "velocity_x" => card(Source, CardBand::Scene, 1).unit(Unit::MetresPerSecond),
-        "velocity_y" => card(Source, CardBand::Scene, 2).unit(Unit::MetresPerSecond),
-        "velocity_z" => card(Source, CardBand::Scene, 3).unit(Unit::MetresPerSecond),
+        "velocity_x" => card(Source, CardBand::Scene, 1).unit(Unit::MetresPerSecond).gate(MOVES_WATER),
+        "velocity_y" => card(Source, CardBand::Scene, 2).unit(Unit::MetresPerSecond).gate(MOVES_WATER),
+        "velocity_z" => card(Source, CardBand::Scene, 3).unit(Unit::MetresPerSecond).gate(MOVES_WATER),
         "role" => setup(Source).switch(Feature::SourceRole),
-        "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => setup(Source),
+        "inherit_motion" | "friction" => setup(Source).gate(MOVES_WATER),
+        "geometry" | "shape" | "collider_parts" => setup(Source),
         "radius" | "shell_thickness" => setup(Source).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "path" | "compound_materials" | "mesh_index" | "primitive_index" | "material_index"
         | "fit" | "recenter" | "translate_x" | "translate_y" | "translate_z" | "fragment_count"
