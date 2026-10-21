@@ -31,11 +31,13 @@ pub enum ParamKey<'a> {
     Modifier { recipe: &'a PresetTypeId, param: &'a str },
 }
 
-/// The node half of the lookup: every param a node type declares, unfiltered.
-/// Registered once at link time by the crate that owns `PrimitiveRegistry`
-/// (`manifold-nodes-scene`); read-only, no lock.
+/// The node half of the lookup: every param a node type declares, unfiltered,
+/// and the Physics World controls it takes. Registered once at link time by
+/// the crate that owns `PrimitiveRegistry` (`manifold-nodes-scene`);
+/// read-only, no lock.
 pub struct NodeParamSource {
     pub params_for_type: fn(&str) -> Vec<NodeParamMetadata>,
+    pub world_inputs_for_type: fn(&str) -> &'static [crate::scene_world_controls::WorldControlInput],
 }
 inventory::collect!(NodeParamSource);
 
@@ -58,6 +60,12 @@ fn node_source() -> Option<&'static NodeParamSource> {
 /// included. Empty when the type is unknown or no source is linked.
 pub fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
     node_source().map(|source| (source.params_for_type)(type_id)).unwrap_or_default()
+}
+
+/// The Physics World controls `type_id` declares it takes, each with its own
+/// input. Empty when the type takes none or no source is linked.
+pub fn world_control_inputs(type_id: &str) -> &'static [crate::scene_world_controls::WorldControlInput] {
+    node_source().map_or(&[], |source| (source.world_inputs_for_type)(type_id))
 }
 
 /// The params a scene node stamps as exposures (creation sites and the
@@ -695,7 +703,7 @@ mod tests {
         }]
     }
 
-    inventory::submit! { NodeParamSource { params_for_type: test_params } }
+    inventory::submit! { NodeParamSource { params_for_type: test_params, world_inputs_for_type: |_| &[] } }
 
     #[test]
     fn stamped_node_params_drops_only_hidden_and_keeps_order() {

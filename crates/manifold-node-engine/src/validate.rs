@@ -524,17 +524,22 @@ pub(crate) fn check_card_lints(
     }
 
     // (d) ERROR — is_trigger card param bound to a non-trigger-typed
-    // inner param.
+    // inner param. A `node.value` that is not the control's first target
+    // only carries the counter on its wire to the ports it feeds (a shared
+    // World Reset reaching a simulation, `scene_world_controls`); the first
+    // target describes the control (SCENE_SURFACES_DESIGN.md D22 (a fan-out
+    // is described by its first binding)).
     if let Some(graph) = graph {
         for param in meta.params.iter().filter(|p| p.is_trigger) {
-            for binding in meta.bindings.iter().filter(|b| b.id == param.id) {
+            for (index, binding) in meta.bindings.iter().filter(|b| b.id == param.id).enumerate() {
                 let BindingTarget::Node { node_id, param: inner } = &binding.target else {
                     continue;
                 };
                 let Some(resolved) = resolve_target_param(graph, node_id, inner) else {
                     continue; // reported by (a).
                 };
-                if resolved.param_def.ty != ParamType::Trigger {
+                let carrier = index > 0 && resolved.type_id == "node.value";
+                if resolved.param_def.ty != ParamType::Trigger && !carrier {
                     errors.push(ValidationIssue {
                         node_id: None,
                         type_id: Some(resolved.type_id.clone()),
@@ -1008,6 +1013,39 @@ mod tests {
             errors.is_empty(),
             "expected no error for a trigger-to-trigger binding, got: {errors:?}"
         );
+    }
+
+    /// (d) — a trigger whose first target is a trigger may also feed a
+    /// `node.value` that carries the counter on its wire (a shared World
+    /// Reset); a `node.value` as the first target still errs.
+    #[test]
+    fn card_lint_trigger_may_feed_a_value_carrier_after_its_trigger() {
+        let def = |first: &str, second: &str| {
+            parse(&format!(
+                r#"{{
+                  "version": 2,
+                  "presetMetadata": {{
+                    "id": "Fixture", "displayName": "Fixture", "category": "Color", "oscPrefix": "fixture",
+                    "params": [{{"id": "reset", "name": "Reset", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "isTrigger": true}}],
+                    "bindings": [
+                      {{"id": "reset", "defaultValue": 0.0, "target": {{"kind": "node", "nodeId": "{first}", "param": "{}"}}}},
+                      {{"id": "reset", "defaultValue": 0.0, "target": {{"kind": "node", "nodeId": "{second}", "param": "{}"}}}}
+                    ]
+                  }},
+                  "nodes": [
+                    {{"id": 0, "nodeId": "folder", "typeId": "node.__range_contract_fixture"}},
+                    {{"id": 1, "nodeId": "carrier", "typeId": "node.value"}}
+                  ],
+                  "wires": []
+                }}"#,
+                if first == "folder" { "next" } else { "value" },
+                if second == "folder" { "next" } else { "value" },
+            ))
+        };
+        let (errors, _) = lint(&def("folder", "carrier"));
+        assert!(errors.is_empty(), "a carrier after the trigger is clean: {errors:?}");
+        let (errors, _) = lint(&def("carrier", "folder"));
+        assert!(errors.iter().any(|e| e.message.contains("not a trigger-typed param")), "{errors:?}");
     }
 
     /// (e) ERROR — duplicate non-empty osc_suffix across one card's params.

@@ -8,7 +8,7 @@
 //! port type, and merges the exposures. The result is one candidate graph:
 //! nothing is written until the caller commits it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::NodeId;
 use crate::effect_graph_def::{
@@ -56,6 +56,19 @@ pub struct SceneTemplate {
     /// never replace the host's. Exposure ids and binding targets are in
     /// template-local ids.
     pub metadata: PresetMetadata,
+    /// What a simulation brings beside its group (D-114).
+    pub physics: TemplatePhysics,
+}
+
+/// The physics a template brings: settings for a World it creates, and the
+/// forces its object comes with.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TemplatePhysics {
+    /// Physics World params set on the World insertion creates when the
+    /// scene has none; a scene's existing World keeps its own.
+    pub new_world: BTreeMap<String, SerializedParamValue>,
+    /// Force recipes attached to the inserted object alone, in order.
+    pub forces: Vec<EffectGraphDef>,
 }
 
 fn fail(message: impl Into<String>) -> SceneGraphEditError {
@@ -290,12 +303,19 @@ pub fn insert_scene_template(
     let mut remap = Remap { docs: HashMap::new(), stable: HashMap::new() };
     renumber_group(&mut group, &mut alloc, &mut remap, &handle)?;
     let group_doc = group.id;
-    let domain = match crate::liquid_domain::liquid_domains_in(group.group.as_deref().map_or(&[][..], |body| body.nodes.as_slice())) {
-        domains if domains.len() > 1 => return Err(fail("Scene template holds more than one liquid domain")),
-        mut domains => domains.pop(),
+    let group_node_id = group.node_id.clone();
+    let body_nodes = group.group.as_deref().map_or(&[][..], |body| body.nodes.as_slice());
+    if crate::liquid_domain::liquid_domains_in(body_nodes).len() > 1 {
+        return Err(fail("Scene template holds more than one liquid domain"));
+    }
+    // The one node that follows the Physics World (a liquid's domain, a
+    // swarm's clock), found by what its type declares it takes.
+    let taker = match crate::scene_world_controls::world_control_takers(body_nodes) {
+        takers if takers.len() > 1 => return Err(fail("Scene template holds more than one simulation")),
+        mut takers => takers.pop(),
     };
-    if domain.is_some() && !scene.scope.is_empty() {
-        return Err(at("A liquid inserts into the root scene"));
+    if taker.is_some() && !scene.scope.is_empty() {
+        return Err(at("A simulation inserts into the root scene"));
     }
 
     // Outputs, routed by port type.
@@ -313,10 +333,48 @@ pub fn insert_scene_template(
         route_to_render_slots(&mut candidate, scene, group, &outputs)?;
     }
     merge_exposures(&mut candidate, template, &remap, group_doc, &handle)?;
-    if let Some(domain) = domain {
-        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &domain).map_err(fail)?;
+    if let Some(taker) = taker {
+        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &taker, &template.physics.new_world)
+            .map_err(fail)?;
+    }
+    if !template.physics.forces.is_empty() {
+        candidate = attach_forces(candidate, scene, &group_node_id, &template.physics.forces)?;
     }
     Ok(SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() })
+}
+
+/// Attach each force recipe to the one object the group `group` placed in
+/// `scene`, and to nothing else in it.
+fn attach_forces(
+    mut graph: EffectGraphDef,
+    scene: &SceneNodeRef,
+    group: &crate::NodeId,
+    forces: &[EffectGraphDef],
+) -> Result<EffectGraphDef, SceneGraphEditError> {
+    let at = |message: String| SceneGraphEditError { at: Some(scene.clone()), message };
+    let objects = crate::scene_index::FlatSceneIndex::build(&graph)
+        .and_then(|index| index.scene_objects(scene))
+        .map_err(|error| at(error.to_string()))?;
+    let placed: Vec<_> = objects.into_iter().filter(|object| object.scope.first() == Some(group)).collect();
+    let [object] = placed.as_slice() else {
+        return Err(at("A template with forces places one object".into()));
+    };
+    for (index, recipe) in forces.iter().enumerate() {
+        let id = crate::NodeId::new(format!("{group}_force_{index}"));
+        let instance = crate::scene_modifier_preset::SceneModifierInstanceDef {
+            id,
+            scene: scene.clone(),
+            targets: crate::scene_modifier_preset::SceneTargetSelection::Explicit { objects: vec![object.clone()] },
+            mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
+            graph: Box::new(recipe.clone()),
+        };
+        let end = graph.scene_modifiers.len();
+        graph = crate::scene_modifier_edit::insert_scene_modifier(&graph, end, instance)
+            .map_err(|error| at(error.to_string()))?
+            .graph;
+    }
+    Ok(graph)
 }
 
 /// The output port type a placed fluid source declares.
@@ -542,7 +600,7 @@ mod tests {
             {"id": "shared", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "leaf", "param": "pos_y"}}
         ]))
         .unwrap();
-        SceneTemplate { group, metadata }
+        SceneTemplate { group, metadata, physics: Default::default() }
     }
 
     fn scene() -> SceneNodeRef {
@@ -646,7 +704,7 @@ mod tests {
         }));
         let mut metadata = host.preset_metadata.clone().unwrap();
         metadata.display_name = "Inflow".into();
-        let template = SceneTemplate { group: source, metadata };
+        let template = SceneTemplate { group: source, metadata, physics: Default::default() };
         assert!(insert_scene_template(&host, &scene(), None, &template).is_err(), "a role source needs its water");
         let water = SceneNodeRef { scope: vec![NodeId::new("family")], node: NodeId::new("domain") };
         let edit = insert_scene_template(&host, &scene(), Some(&water), &template).unwrap();

@@ -40,6 +40,10 @@ const SWITCH_TYPE_IDS: [&str; 4] = ["node.switch_value", SWITCH_MESH_TYPE_ID, SW
 const LOOK_MESH_TYPE_ID: &str = "node.platonic_solid_mesh";
 /// A swarm's forces node: its clock and the box its forces are laid over.
 pub const SWARM_FORCES_TYPE_ID: &str = "node.swarm_forces";
+/// A swarm's copies, placing its instances: its Size.
+const SWARM_COPIES_TYPE_ID: &str = "node.swarm_to_copies";
+/// A swarm's seeder, filling its particle loop: its Count.
+const SWARM_SEEDER_TYPE_ID: &str = "node.spawn_from_mesh";
 
 /// One object row of a scene.
 #[derive(Debug, Clone, PartialEq)]
@@ -699,7 +703,7 @@ impl<'a> Row<'a> {
                 }
             }
             if let Some(swarm) = self.swarm() {
-                swarm_controls(&swarm, &mut controls);
+                swarm_controls(&self.at, &swarm, &mut controls);
             }
             if liquid {
                 for switch in chain_switches(&self.at) {
@@ -732,9 +736,22 @@ fn swarm_of<'a>(object: &At<'a>) -> Option<At<'a>> {
     Some(At { path: start.path, node })
 }
 
-/// A swarm's forces node and the transform placing its box.
-fn swarm_controls(swarm: &At<'_>, controls: &mut Vec<SceneNodeRef>) {
+/// A swarm's controls in card order: its forces node, the seeder filling its
+/// particle loop and the copies placing `object`'s instances (its Count and
+/// Size), then the transform placing its box.
+fn swarm_controls(object: &At<'_>, swarm: &At<'_>, controls: &mut Vec<SceneNodeRef>) {
     push_unique(controls, swarm.reference());
+    if let Some(copies) = object.path.producer_inward(object.node.id, "instances") {
+        let level = copies.path.level();
+        for seeder in upstream(&level, &[copies.node.id]).into_iter().filter_map(|id| level.node(id)) {
+            if seeder.type_id == SWARM_SEEDER_TYPE_ID {
+                push_unique(controls, copies.path.reference(seeder));
+            }
+        }
+        if copies.node.type_id == SWARM_COPIES_TYPE_ID {
+            push_unique(controls, copies.reference());
+        }
+    }
     if let Some(bounds) = swarm.path.producer_either(swarm.node.id, "bounds")
         && bounds.node.type_id == TRANSFORM_3D_TYPE_ID
     {

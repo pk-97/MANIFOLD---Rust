@@ -302,6 +302,7 @@ manifold_node_engine::primitive! {
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
         air_drag: ScalarF32 optional,
+        air_resistance: ScalarF32 optional,
         reset: ScalarF32 optional,
         role_0: FluidRole optional,
         role_1: FluidRole optional,
@@ -471,6 +472,11 @@ manifold_node_engine::primitive! {
 const NO_OBSTACLE_BOUND: &[(&str, f32)] = &[(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1.0)];
 
 impl Primitive for GpuFlipDomain {
+    /// A liquid follows the Physics World: its gravity and its clock.
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        &manifold_core::scene_world_controls::WORLD_INPUTS
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "bodies" | "contacts" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
                 | "clock_sources"

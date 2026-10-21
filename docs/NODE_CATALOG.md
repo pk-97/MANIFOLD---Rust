@@ -599,11 +599,11 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1335 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1996 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1336 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1997 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `RubblePile` | Rubble Pile | generator | Geometry | 1342 |
+| `RubblePile` | Rubble Pile | generator | Geometry | 1343 |
 | `Scene` | Scene | generator | Geometry | 368 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
@@ -611,7 +611,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
-| `Swarm` | Swarm | generator | Geometry | 372 |
+| `Swarm` | Swarm | generator | Geometry | 397 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
@@ -619,7 +619,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2051 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1404 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2006 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1394 |
 | `WaterInScan` | Water in a Photoscan | generator | Sim | 2051 |
 | `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2334 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |

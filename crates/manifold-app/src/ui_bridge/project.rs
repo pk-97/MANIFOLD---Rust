@@ -604,6 +604,7 @@ pub(super) fn dispatch_project(
                     }
                     Kind::Light => templates::light_template((-260.0, 50.0 + 40.0 * lights as f32)),
                     Kind::Water => manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(),
+                    Kind::Swarm => templates::swarm_template(objects, (900.0, 200.0 + 40.0 * objects as f32))?,
                     Kind::Inflow => source(templates::RoleSourceKind::Inflow)?,
                     Kind::Drain => source(templates::RoleSourceKind::Drain)?,
                     Kind::Collider => source(templates::RoleSourceKind::Collider)?,
@@ -1331,6 +1332,7 @@ mod tests {
     use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_editing::command::Command;
     use manifold_core::types::LayerType;
+    mod swarm_add;
     mod water_family;
     mod water_family_actions;
     mod water_family_draw;

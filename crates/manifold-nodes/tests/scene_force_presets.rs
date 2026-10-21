@@ -758,34 +758,25 @@ fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> Ef
     insert_scene_modifier(host, 0, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}")).graph
 }
 
-/// The Swarm template's swarm nodes grafted into `host`, its object in the
-/// render scene's next slot.
+/// `host` with the Add menu's Swarm inserted by the one template insertion,
+/// its object in the render scene's next slot.
 fn graft_swarm(host: &EffectGraphDef) -> EffectGraphDef {
-    const OFFSET: u64 = 1000;
-    let swarm: serde_json::Value = serde_json::from_str(SWARM).unwrap();
-    let mut doc = serde_json::to_value(host).unwrap();
-    let ids: Vec<u64> = (10..=19).collect();
-    let moved = |id: &serde_json::Value| id.as_u64().filter(|id| ids.contains(id));
-    for node in swarm["nodes"].as_array().unwrap().iter().filter(|node| moved(&node["id"]).is_some()) {
-        let mut node = node.clone();
-        node["id"] = (node["id"].as_u64().unwrap() + OFFSET).into();
-        doc["nodes"].as_array_mut().unwrap().push(node);
+    let template = manifold_nodes_scene::node_graph::scene_templates::swarm_template(0, (0.0, 0.0)).expect("the stock swarm reads");
+    manifold_core::scene_template::insert_scene_template(host, &render_scene(host), None, &template)
+        .expect("the swarm inserts beside water and a physics world")
+        .graph
+}
+
+/// The stable id of `def`'s swarm forces node, wherever it is grouped.
+fn swarm_forces_id(def: &EffectGraphDef) -> NodeId {
+    fn find(nodes: &[EffectGraphNode]) -> Option<NodeId> {
+        nodes.iter().find_map(|node| {
+            (node.type_id == "node.swarm_forces")
+                .then(|| node.node_id.clone())
+                .or_else(|| node.group.as_deref().and_then(|body| find(&body.nodes)))
+        })
     }
-    for wire in swarm["wires"].as_array().unwrap().iter().filter(|wire| moved(&wire["toNode"]).is_some()) {
-        let mut wire = wire.clone();
-        for end in ["fromNode", "toNode"] {
-            if let Some(id) = moved(&wire[end]) {
-                wire[end] = (id + OFFSET).into();
-            }
-        }
-        doc["wires"].as_array_mut().unwrap().push(wire);
-    }
-    let scene = doc["nodes"].as_array_mut().unwrap().iter_mut().find(|node| node["typeId"] == "node.render_scene").unwrap();
-    let slots = scene["params"]["objects"]["value"].as_u64().unwrap();
-    scene["params"]["objects"]["value"] = (slots + 1).into();
-    let scene_id = scene["id"].clone();
-    doc["wires"].as_array_mut().unwrap().push(serde_json::json!({"fromNode": 18 + OFFSET, "fromPort": "object", "toNode": scene_id, "toPort": format!("object_{slots}")}));
-    serde_json::from_value(doc).unwrap()
+    find(&def.nodes).expect("a swarm")
 }
 
 /// BUG-g5rw2: a scene force on every object reaches a swarm through its
@@ -801,13 +792,13 @@ fn a_swarm_takes_force_hits_and_builds_beside_water_and_a_physics_world() {
     let swarm: EffectGraphDef = serde_json::from_str(SWARM).unwrap();
     let pushed = with_force(&swarm, "RadialForce");
     let recipients = impulse_recipients(&pushed, &render_scene(&pushed), &SceneTargetSelection::AllObjects, &registry).expect("the swarm takes hits");
-    assert_eq!(recipients, vec![(NodeId::new("swarm_forces"), ImpulseTarget::Swarm)]);
+    assert_eq!(recipients, vec![(swarm_forces_id(&swarm), ImpulseTarget::Swarm)]);
     PresetRuntime::from_def_for_render(pushed, &registry, None, false).expect("the Swarm template with a Radial force builds");
 
     let host: EffectGraphDef = serde_json::from_str(FLOATING_BOX).unwrap();
     let mixed = with_force(&graft_swarm(&host), "RadialForce");
     let recipients = impulse_recipients(&mixed, &render_scene(&mixed), &SceneTargetSelection::AllObjects, &registry).expect("every recipient takes hits");
-    assert!(recipients.contains(&(NodeId::new("swarm_forces"), ImpulseTarget::Swarm)), "{recipients:?}");
+    assert!(recipients.contains(&(swarm_forces_id(&mixed), ImpulseTarget::Swarm)), "{recipients:?}");
     assert!(recipients.iter().any(|(_, target)| target.affects_fluid()), "{recipients:?}");
     assert!(recipients.iter().any(|(_, target)| target.rigid_targets().is_some()), "{recipients:?}");
     PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("water, a physics world and a swarm install under one force");

@@ -85,10 +85,11 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("active_count"),
-            label: "Active Count",
+            label: "Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
-            range: Some((0.0, 16_000_000.0)),
+            // A performer's slider; capacity bounds what it can reach.
+            range: Some((0.0, 100_000.0)),
             enum_values: &[],
         },
         ParamDef {
