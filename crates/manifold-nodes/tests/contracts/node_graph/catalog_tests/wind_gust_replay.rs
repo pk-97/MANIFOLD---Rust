@@ -96,7 +96,7 @@ impl EffectNode for TickedConsumer {
 }
 
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedConsumer {
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: f64, until: f64, _tempo_shift: f64, out: &mut Vec<f64>) {
         let mut tick = (from * self.rate + 1e-9).floor() + 1.0;
         while tick / self.rate <= until + 1e-12 {
             out.push(tick / self.rate);

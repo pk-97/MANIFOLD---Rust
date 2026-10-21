@@ -27,8 +27,9 @@ pub trait PhysicsNode: Send {
 
     /// Transport times in `(from, until]` the physics history replay must
     /// sample exactly before the next frame. A world that records its authored
-    /// inputs only at times no frame rate moves asks for them here.
-    fn request_physics_samples(&mut self, _from: f64, _until: f64, _out: &mut Vec<f64>) {}
+    /// inputs only at times no frame rate moves asks for them here, after it
+    /// follows `tempo_shift` (the step's sum of tempo edits).
+    fn request_physics_samples(&mut self, _from: f64, _until: f64, _tempo_shift: f64, _out: &mut Vec<f64>) {}
 
     /// Configure ownership during graph preparation, before any evaluation.
     fn set_coupled_physics(&mut self, _enabled: bool) {}

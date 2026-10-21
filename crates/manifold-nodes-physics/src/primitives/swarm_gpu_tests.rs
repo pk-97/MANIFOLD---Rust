@@ -83,7 +83,7 @@ fn fly(start: &[Particle], times: &[f64], speed: fn(f64) -> f32, step: SimStep) 
     let (mut previous, mut ran, mut costs) = (0.0, Vec::new(), Vec::new());
     for &now in times {
         let mut starts = Vec::new();
-        forces_node.request_physics_samples(previous, now, &mut starts);
+        forces_node.request_physics_samples(previous, now, 0.0, &mut starts);
         for at in starts {
             Backend::cpu_values_mut(&mut h.backend).set(field_slot, field(at));
             let knob = params(&[("speed", speed(at))]);

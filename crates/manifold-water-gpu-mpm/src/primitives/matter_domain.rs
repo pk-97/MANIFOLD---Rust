@@ -588,6 +588,7 @@ impl Primitive for MatterDomain {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
         self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
+        self.clock.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
@@ -801,7 +802,8 @@ impl PhysicsNode for MatterDomain {
 inventory::submit! { PhysicsNodeRegistration::new::<MatterDomain>() }
 
 impl TickSampled for MatterDomain {
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
+        self.clock.follow_tempo_shift(tempo_shift);
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
         if self.coupled.mode {

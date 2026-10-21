@@ -50,6 +50,33 @@ impl GeneratorRenderer {
         source: FrameTime,
         project_tempo: Option<&ProjectTempo>,
     ) -> Result<bool, String> {
+        self.fire_scene_impulse_with_step(layer, param, source, project_tempo, self.sim_step)
+    }
+
+    /// [`Self::fire_scene_impulse`] between frames: the step the next frame
+    /// will take carries the transport's pending target and its tempo shift,
+    /// peeked, so a hit after a seek in the same drain sees the seek.
+    pub fn fire_scene_impulse_between_frames(
+        &mut self,
+        layer: &Layer,
+        param: &str,
+        source: FrameTime,
+        project_tempo: Option<&ProjectTempo>,
+        pending_target: Option<manifold_core::Seconds>,
+        tempo_shift: manifold_core::Seconds,
+    ) -> Result<bool, String> {
+        let step = self.sim_step.with_transport_target(pending_target).with_tempo_shift(tempo_shift);
+        self.fire_scene_impulse_with_step(layer, param, source, project_tempo, step)
+    }
+
+    fn fire_scene_impulse_with_step(
+        &mut self,
+        layer: &Layer,
+        param: &str,
+        source: FrameTime,
+        project_tempo: Option<&ProjectTempo>,
+        step: manifold_node_engine::exec::effect_node::SimStep,
+    ) -> Result<bool, String> {
         if !Self::has_scene_impulse(layer, param) {
             return Ok(false);
         }
@@ -58,7 +85,7 @@ impl GeneratorRenderer {
             self.wait(layer, param, source)
         } else {
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo, self.sim_step) {
+            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo, step) {
                 Ok(ImpulseFire::NotReady) => self.wait(layer, param, source),
                 Ok(_) => Ok(()),
                 Err(error) => Err(error),
@@ -218,11 +245,11 @@ fn try_fire(
             .apply_manifest_reshape(&params.params, layer.generator_graph());
         state.applied_param_version = version;
     }
+    // This frame's step, so a Fire past a jump its frame has yet to render
+    // sees the jump's target, and held controls follow its tempo shift.
+    state.generator.set_sim_step(step);
     state.generator.apply_param_values(&params.params);
     state.generator.set_source_instance(Some(params));
     state.generator.set_project_tempo(project_tempo);
-    // This frame's step, so a Fire past a jump its frame has yet to render
-    // sees the jump's target.
-    state.generator.set_sim_step(step);
     state.generator.fire_scene_impulse(param, source, next_sequence)
 }

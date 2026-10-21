@@ -86,7 +86,8 @@ manifold_node_engine::primitive! {
 }
 
 impl TickSampled for SwarmForces {
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
+        self.clock.follow_tempo_shift(tempo_shift);
         self.forces.request_samples(&self.clock, from, until, out);
     }
 }
@@ -274,6 +275,7 @@ impl Primitive for SwarmForces {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(ctx.sim_step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget }));
         self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
+        self.clock.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
         // A physics sample reads the field at a tick's start; it never
         // advances time.
         if ctx.sim_step.authored_sample_only {
@@ -380,7 +382,7 @@ mod tests {
         /// start, then the frame runs.
         fn frame(&mut self, from: f64, until: f64, params: &[(&'static str, f32)]) -> Frame {
             let mut starts = Vec::new();
-            self.node.request_physics_samples(from, until, &mut starts);
+            self.node.request_physics_samples(from, until, self.step.tempo_shift.0, &mut starts);
             for start in starts {
                 assert!(self.run(start, params, self.step.authored_sample()).is_empty());
             }

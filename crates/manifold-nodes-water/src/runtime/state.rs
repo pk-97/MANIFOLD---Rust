@@ -20,6 +20,8 @@ pub(crate) struct WaterRuntimeState {
     /// a jump the last frame landed on, sampled there first.
     pub(crate) replay_from: Option<FrameTime>,
     pub(crate) project_tempo: Option<ProjectTempo>,
+    /// The engine's tempo-edit total these transport times already follow.
+    pub(crate) followed_shift: f64,
 }
 
 impl RuntimeExtension for WaterRuntimeState {
@@ -102,10 +104,11 @@ impl RuntimeExtension for WaterRuntimeState {
     }
     fn set_source_instance(
         &mut self,
-        graph: &mut Graph,
+        runtime: &mut RuntimeContext<'_>,
         instance: Option<&manifold_core::effects::PresetInstance>,
     ) {
-        Self::set_source_instance(self, graph, instance);
+        self.follow_tempo_shift(runtime.executor.sim_step().tempo_shift.0);
+        Self::set_source_instance(self, runtime.graph, instance);
     }
 
     fn prepare_modifiers(
@@ -163,7 +166,25 @@ impl WaterRuntimeState {
             last_frame_time: None,
             replay_from: None,
             project_tempo: None,
+            followed_shift: 0.0,
         })
+    }
+
+    /// A tempo edit kept the beat and moved its seconds: every transport
+    /// time held here moves with it, once, so the replay continues from the
+    /// time already simulated. `total` is the sum of every edit's move.
+    pub(crate) fn follow_tempo_shift(&mut self, total: f64) {
+        let by = total - self.followed_shift;
+        if by == 0.0 || !by.is_finite() {
+            return;
+        }
+        self.followed_shift = total;
+        for time in [&mut self.last_frame_time, &mut self.replay_from].into_iter().flatten() {
+            time.seconds.0 += by;
+        }
+        if let Some(inputs) = &mut self.input_snapshot {
+            inputs.shift_hops(by);
+        }
     }
 
     pub(crate) fn after_frame(&mut self, graph: &Graph, time: FrameTime) {

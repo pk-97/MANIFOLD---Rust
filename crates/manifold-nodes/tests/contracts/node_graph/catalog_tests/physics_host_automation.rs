@@ -82,6 +82,7 @@ impl EffectNode for TickedClock {
         let now = ctx.time.seconds.0;
         let speed = ctx.scalar_or_param("speed", 1.0);
         self.1.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
+        self.1.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
         if ctx.sim_step.authored_sample_only {
             SAMPLES.with_borrow_mut(|samples| *samples += 1);
             self.1.observe_speed(now, speed);
@@ -98,7 +99,8 @@ impl EffectNode for TickedClock {
 }
 
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedClock {
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
+        self.1.follow_tempo_shift(tempo_shift);
         self.1.tick_starts(from, until, |transport| out.push(transport));
     }
 }
@@ -270,20 +272,35 @@ fn run(case: Case, fps: u32, offline: bool) -> Vec<(u64, u64)> {
     play(case, fps, offline, frames)
 }
 
+/// One frame the host plays: its transport time, the seek's target on the
+/// frame a seek landed on, the project's BPM (one tempo throughout the
+/// map), and the sum of every tempo edit's move of the transport so far.
+#[derive(Clone, Copy)]
+struct Frame {
+    seconds: f64,
+    target: Option<f64>,
+    bpm: f64,
+    tempo_shift: f64,
+}
+
 /// Plays `frames` (each a transport time and, on the frame a seek landed
 /// on, the seek's target) and returns every tick run.
 fn play(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = (f64, Option<f64>)>) -> Vec<(u64, u64)> {
+    play_frames(case, fps, offline, frames.map(|(seconds, target)| Frame { seconds, target, bpm: BPM, tempo_shift: 0.0 }))
+}
+
+fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = Frame>) -> Vec<(u64, u64)> {
     TICKS.with_borrow_mut(Vec::clear);
     let mut runtime = runtime(case);
     let mut project = project(case);
-    let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(BPM as f32));
     let (mut latches, mut gestures) = (AutomationLatches::default(), AutomationGestures::default());
     let mode = if offline { AutomationSamplingMode::Export } else { AutomationSamplingMode::Playback };
     let mut next_hop = 1;
     let mut epoch = 1;
     let mut previous: Option<f64> = None;
-    for (frame, (seconds, target)) in frames.enumerate() {
-        let beat = Beats((seconds + 1e-7 / f64::from(fps)) * BPM / 60.0);
+    for (frame, Frame { seconds, target, bpm, tempo_shift }) in frames.enumerate() {
+        let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(bpm as f32));
+        let beat = Beats((seconds + 1e-7 / f64::from(fps)) * bpm / 60.0);
         manifold_playback::automation::evaluate_all_automation_with_mode(&mut project, beat, &mut latches, false, &mut gestures, mode);
         // Audio follows the transport: after a seek it plays on from the
         // target, its first hop ending after it.
@@ -313,7 +330,7 @@ fn play(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = (f64, 
             SAMPLES.with_borrow_mut(|samples| *samples = 0);
         }
         let step = if offline { SimStep::export(Seconds(TICK)) } else { SimStep::live(Seconds(TICK)) };
-        runtime.set_sim_step(step.with_transport_target(target.map(Seconds)));
+        runtime.set_sim_step(step.with_transport_target(target.map(Seconds)).with_tempo_shift(Seconds(tempo_shift)));
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
             beats: beat,
@@ -482,4 +499,51 @@ fn a_long_jump_reaching_a_later_frame_replays_nothing_skipped_at_30_60_120_144_f
         }
     }
     assert_same_after_jump(&reference, late);
+}
+
+/// Plays half a second at [`BPM`], drags the tempo up to 160 and down to
+/// 100 BPM over half a second, one edit a frame, then plays half a second
+/// more. Each edit keeps the beat of the last frame and moves the transport
+/// to the first frame at or after that beat's new time, as the engine does.
+fn bpm_drag(fps: u32, offline: bool) -> (Vec<(u64, u64)>, f64) {
+    let fps_f = f64::from(fps);
+    let mut frames = Vec::new();
+    let (mut seconds, mut bpm, mut tempo_shift, mut played) = (0.0, BPM, 0.0, 0.0);
+    let total = (1.5 * fps_f).round() as u32;
+    for k in 0..=total {
+        let t = f64::from(k) / fps_f;
+        let target_bpm = if t <= 0.5 { BPM } else if t <= 0.75 { BPM + (160.0 - BPM) * (t - 0.5) / 0.25 } else if t <= 1.0 { 160.0 - 60.0 * (t - 0.75) / 0.25 } else { 100.0 };
+        if k > 0 {
+            if target_bpm != bpm {
+                let beat = seconds * bpm / 60.0;
+                let moved = ((beat * 60.0 / target_bpm) * fps_f - 1e-6).ceil() / fps_f;
+                tempo_shift += moved - seconds;
+                seconds = moved;
+                bpm = target_bpm;
+            }
+            seconds += 1.0 / fps_f;
+            played += 1.0 / fps_f;
+        }
+        frames.push(Frame { seconds, target: None, bpm, tempo_shift });
+    }
+    (play_frames(Case::Lane, fps, offline, frames.into_iter()), played)
+}
+
+/// A tempo edit is no jump: dragging the BPM up and down while playing keeps
+/// the ticks continuous, never reseeds and never freezes, at every rate.
+#[test]
+fn a_bpm_drag_while_playing_keeps_ticks_continuous_at_30_60_120_144_fps_live_and_export() {
+    for fps in [30, 60, 120, 144] {
+        for offline in [false, true] {
+            let (ticks, played) = bpm_drag(fps, offline);
+            // Tick intervals are in simulated time: re-anchoring the transport
+            // by a tempo edit may round one ulp, never reseed it.
+            for pair in ticks.windows(2) {
+                let (end, start) = (f64::from_bits(pair[0].1), f64::from_bits(pair[1].0));
+                assert!((start - end).abs() < 1e-9, "{fps} fps, offline {offline}: a tick starts at {start} after one ended at {end}");
+            }
+            let expected = played * 60.0;
+            assert!((ticks.len() as f64 - expected).abs() <= 2.0, "{fps} fps, offline {offline}: {} ticks over {played} s of playing", ticks.len());
+        }
+    }
 }

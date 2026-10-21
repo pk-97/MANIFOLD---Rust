@@ -798,3 +798,41 @@ fn scene_impulse_waiting_through_a_reset_is_refused_never_landed() {
         assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{path}: {diagnostics:?}");
     }
 }
+
+/// A Fire in the same drain as a forward seek, through the real
+/// FireParameter command: the hit sees the seek's pending target, so it lands
+/// once at the latest observation instead of replaying the skipped ten
+/// minutes.
+#[test]
+fn scene_impulse_fired_after_a_forward_seek_in_the_same_drain_lands_once() {
+    use crate::content_command::ContentCommand;
+    use crate::headless_harness::headless_content_thread;
+    let (mut project, parent, _, _, fire, _) = project_fixture();
+    // The scene plays past the seek: twenty minutes at 240 BPM.
+    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    scene.clips[0].duration_beats = Beats(4_800.0);
+    let mut thread = headless_content_thread(project, WIDTH, HEIGHT);
+    thread.timer.set_frame_clocked(true);
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.handle_command(ContentCommand::Play);
+    // Past every lane hit, so only the manual Fire lands after.
+    for _ in 0..40 {
+        thread.tick_frame(&state_tx);
+    }
+    let before = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!((before.refused, before.discarded), (0, 0), "{before:?}");
+    thread.handle_command(ContentCommand::SeekTo(Seconds(600.0)));
+    thread.handle_command(ContentCommand::FireParameter {
+        target: GraphTarget::Generator(parent.clone()),
+        param_id: manifold_core::effects::ParamId::from(fire),
+    });
+    for _ in 0..4 {
+        thread.tick_frame(&state_tx);
+    }
+    let after = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!(
+        (after.started - before.started, after.refused, after.discarded),
+        (1, 0, 0),
+        "{after:?}"
+    );
+}

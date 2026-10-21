@@ -478,6 +478,7 @@ fn empty_snapshot() -> PhysicsInputSnapshot {
         tick_times: Vec::new(),
         hops: Vec::new(),
         hop_len: 0,
+        hops_fresh: false,
         hop_routes: Vec::new(),
         automation: Vec::new(),
         automation_len: 0,

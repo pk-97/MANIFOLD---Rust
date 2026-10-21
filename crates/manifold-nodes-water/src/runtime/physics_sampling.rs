@@ -141,6 +141,9 @@ pub(crate) struct PhysicsInputSnapshot {
     /// reused across frames.
     hops: Vec<ParamHops>,
     hop_len: usize,
+    /// Hops were set since the last replay: only the first `carried` of
+    /// each entry predate this frame.
+    hops_fresh: bool,
     /// `(binding, step, hop entry)` for bindings into the sampled ancestry.
     hop_routes: Vec<(usize, usize, usize)>,
     /// Host params an automation lane drives this frame, with that lane,
@@ -163,6 +166,7 @@ impl PhysicsInputSnapshot {
         self.project_tempo.clone_from(&prior.project_tempo);
         self.hops.clone_from(&prior.hops);
         self.hop_len = prior.hop_len;
+        self.hops_fresh = prior.hops_fresh;
         self.automation.clone_from(&prior.automation);
         self.automation_len = prior.automation_len;
     }
@@ -209,6 +213,20 @@ impl PhysicsInputSnapshot {
             entry.id.clone_from(&m.param_id);
             entry.values.extend_from_slice(new);
             self.hop_len += 1;
+        }
+        self.hops_fresh = true;
+    }
+
+    /// A tempo edit moved the transport by `by`: hops held from before it
+    /// move with it. Hops the host delivered since are already on the new
+    /// times.
+    pub(super) fn shift_hops(&mut self, by: f64) {
+        let fresh = self.hops_fresh;
+        for entry in &mut self.hops[..self.hop_len] {
+            let held = if fresh { entry.carried } else { entry.values.len() };
+            for hop in &mut entry.values[..held] {
+                hop.time.0 += by;
+            }
         }
     }
 
@@ -391,6 +409,7 @@ impl PhysicsInputSnapshot {
             tick_times: Vec::new(),
             hops: Vec::new(),
             hop_len: 0,
+            hops_fresh: false,
             hop_routes: Vec::new(),
             automation: Vec::new(),
             automation_len: 0,
@@ -560,17 +579,20 @@ impl super::WaterRuntime<'_> {
         if !source.seconds.0.is_finite() || !source.beats.0.is_finite() {
             return Err("Impulse: source clock must be finite".into());
         }
-        let previous = self
-            .water
-            .last_frame_time
-            .ok_or("Impulse: render the scene before capturing an event")?;
         // A producer callback observes live at the project Sim Rate and never
         // drains offline history. It carries the frame's transport target: a
         // jump no frame has rendered yet moves the clocks' grid only at its
         // frame, so a Fire past it lands at the latest observation and the
         // span it skipped is never replayed.
         let frame_step = self.executor.sim_step();
-        let step = SimStep::live(frame_step.interval).with_transport_target(frame_step.transport_target);
+        self.water.follow_tempo_shift(frame_step.tempo_shift.0);
+        let previous = self
+            .water
+            .last_frame_time
+            .ok_or("Impulse: render the scene before capturing an event")?;
+        let step = SimStep::live(frame_step.interval)
+            .with_transport_target(frame_step.transport_target)
+            .with_tempo_shift(frame_step.tempo_shift);
         let jump_pending = step.transport_target.is_some_and(|target| jumps(target.0, previous.seconds.0));
         let source = if source.seconds.0 < previous.seconds.0 || jump_pending {
             FrameTime { delta: Seconds::ZERO, ..previous }
@@ -633,12 +655,14 @@ impl super::WaterRuntimeState {
         current: FrameTime,
         step: SimStep,
     ) {
+        self.follow_tempo_shift(step.tempo_shift.0);
         let (Some(inputs), Some(steps)) = (
             self.input_snapshot.as_mut(),
             self.sample_steps.as_ref(),
         ) else {
             return;
         };
+        inputs.hops_fresh = false;
         // Automation reaches the frame at its sample beat, as it reaches every
         // sample, so a frame on a tick start agrees with the replay there.
         inputs.route_automation(bindings, plan);
@@ -752,9 +776,9 @@ impl super::WaterRuntimeState {
         inputs.tick_times.clear();
         for instance in graph.nodes_mut() {
             if let Some(ticked) = tick_sampled::get_mut(instance.node.as_mut()) {
-                ticked.request_physics_samples(request_from, current.seconds.0, &mut inputs.tick_times);
+                ticked.request_physics_samples(request_from, current.seconds.0, step.tempo_shift.0, &mut inputs.tick_times);
             } else if let Some(native) = node::get_mut(instance.node.as_mut()) {
-                native.request_physics_samples(request_from, current.seconds.0, &mut inputs.tick_times);
+                native.request_physics_samples(request_from, current.seconds.0, step.tempo_shift.0, &mut inputs.tick_times);
             }
         }
         inputs.tick_times.sort_unstable_by(f64::total_cmp);

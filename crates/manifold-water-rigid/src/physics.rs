@@ -78,6 +78,13 @@ impl HeldClock {
     pub(crate) fn is_held(self) -> bool {
         self.held
     }
+
+    /// A tempo edit moved the transport by `by`.
+    fn shift(&mut self, by: f64) {
+        if let Some(observed) = &mut self.observed {
+            *observed += by;
+        }
+    }
 }
 
 pub const MAX_BODIES: usize = RigidImpulseTargets::BODY_CAPACITY;
@@ -508,6 +515,26 @@ impl RigidSimulation {
         self.step = step;
         self.clock.set_live_load(live_load(step));
         self.clock.set_transport_target(step.transport_target.map(|target| target.0));
+        self.follow_tempo_shift(step.tempo_shift.0);
+    }
+
+    /// Follow tempo edits (`total`, the step's sum of them): a tempo edit is
+    /// no jump, so every transport time kept here moves with the clock's. A
+    /// worker keeps its owner's simulation times instead.
+    pub fn follow_tempo_shift(&mut self, total: f64) {
+        let by = self.clock.follow_tempo_shift(total);
+        if by != 0.0 && !self.advancement_policy.is_worker() {
+            if let Some(last) = &mut self.last_time {
+                last.0 += by;
+            }
+            if let Some((transport, _)) = &mut self.accepted_observation {
+                *transport += by;
+            }
+            for request in &mut self.requests {
+                *request += by;
+            }
+            self.held.shift(by);
+        }
     }
 
     /// [`Self::set_step`] for chained construction in tests and tools.

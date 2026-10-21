@@ -71,6 +71,8 @@ pub struct TransportClock {
     /// The frame the newest placement no frame has rendered yet landed on,
     /// and the time it aimed at.
     placed: Option<(i64, Seconds)>,
+    /// The sum of every tempo edit's move of the frame time.
+    tempo_shift: f64,
 }
 
 impl TransportClock {
@@ -83,6 +85,7 @@ impl TransportClock {
             hold_next: false,
             last_advance: 0,
             placed: None,
+            tempo_shift: 0.0,
         }
     }
 
@@ -147,6 +150,30 @@ impl TransportClock {
             self.reanchored(t);
             self.hold_next = true;
         }
+    }
+
+    /// Tempo edit: the same beat now sits at `t`. Move to the first frame at
+    /// or after it, no hold, and no jump: no placement target, and the move
+    /// adds to [`Self::tempo_shift`], so physics shifts the times it keeps
+    /// and continues. A placement no frame has rendered moves with it.
+    pub fn relocate(&mut self, t: Seconds) {
+        if t.0.is_finite() {
+            let before = self.time().0;
+            self.set_index(self.index_at_or_after(t));
+            self.hold_next = false;
+            self.last_advance = 0;
+            let moved = self.time().0 - before;
+            self.tempo_shift += moved;
+            if let Some((index, target)) = &mut self.placed {
+                *index = self.index;
+                target.0 += moved;
+            }
+        }
+    }
+
+    /// The sum of every tempo edit's move of the frame time so far.
+    pub fn tempo_shift(&self) -> Seconds {
+        Seconds(self.tempo_shift)
     }
 
     /// External-authority locate: nearest frame, no hold (D4).

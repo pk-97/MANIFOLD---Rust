@@ -109,7 +109,9 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
     fn after_frame(&mut self, _graph: &Graph, _time: FrameTime) {}
     fn reset(&mut self) {}
     fn set_project_tempo(&mut self, _graph: &mut Graph, _tempo: Option<&ProjectTempo>) {}
-    fn set_source_instance(&mut self, _graph: &mut Graph, _instance: Option<&PresetInstance>) {}
+    /// The executor holds this frame's step, so its tempo shift is followed
+    /// before held controls are compared with new ones.
+    fn set_source_instance(&mut self, _runtime: &mut RuntimeContext<'_>, _instance: Option<&PresetInstance>) {}
     fn prepare_modifiers(
         &mut self,
         _runtime: &mut RuntimeContext<'_>,
@@ -282,7 +284,7 @@ impl PresetRuntime {
 
     pub fn set_source_instance(&mut self, instance: Option<&PresetInstance>) {
         self.for_each_extension(|extension, context| {
-            extension.set_source_instance(context.graph, instance)
+            extension.set_source_instance(context, instance)
         });
     }
 

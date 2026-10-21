@@ -84,6 +84,11 @@ pub struct SimStep {
     /// None otherwise. A simulation restarting on this frame starts its tick
     /// grid there, so the grid after a jump is the same at any frame rate.
     pub transport_target: Option<Seconds>,
+    /// The sum of every tempo edit's move of the transport so far. A tempo
+    /// edit keeps the beat and moves its seconds; it is no jump. Physics
+    /// shifts every transport time it keeps by each new part of this sum,
+    /// once, so the simulation continues from what it has already simulated.
+    pub tempo_shift: Seconds,
 }
 
 impl SimStep {
@@ -99,6 +104,7 @@ impl SimStep {
             authored_sample_only: false,
             history_drain: false,
             transport_target: None,
+            tempo_shift: Seconds::ZERO,
         }
     }
 
@@ -129,6 +135,10 @@ impl SimStep {
 
     pub fn with_transport_target(self, target: Option<Seconds>) -> Self {
         Self { transport_target: target, ..self }
+    }
+
+    pub fn with_tempo_shift(self, shift: Seconds) -> Self {
+        Self { tempo_shift: shift, ..self }
     }
 
     pub fn offline(self) -> bool {

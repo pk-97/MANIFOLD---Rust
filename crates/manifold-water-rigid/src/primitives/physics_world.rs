@@ -648,8 +648,9 @@ impl Primitive for PhysicsWorldNode {
 
 impl PhysicsNode for PhysicsWorldNode {
     // A coupled world steps inside its liquid, on the liquid's samples.
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
         if !self.coupled_mode {
+            self.simulation.follow_tempo_shift(tempo_shift);
             self.simulation.request_samples(from, until, out);
         }
     }

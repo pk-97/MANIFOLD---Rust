@@ -127,6 +127,8 @@ pub struct SimulationClock {
     /// while the transport stays there: a restart for any reason on that
     /// frame starts its grid at the target.
     placement: Option<(f64, f64)>,
+    /// The part of the tempo-edit shift sum the clock's times already follow.
+    followed_shift: f64,
 }
 
 /// A clone advances on its own, so it never inherits the original's identity:
@@ -252,6 +254,32 @@ impl SimulationClock {
     /// to when this frame is the one the jump landed on, else None.
     pub fn set_transport_target(&mut self, target: Option<f64>) {
         self.transport_target = target;
+    }
+
+    /// Follow tempo edits: `total` is the sum of every edit's move of the
+    /// transport. Each transport time the clock keeps moves by the part not
+    /// followed yet, so ticks continue where they stood: a tempo edit is no
+    /// jump. Returns that part, zero when there is none.
+    pub fn follow_tempo_shift(&mut self, total: f64) -> f64 {
+        let by = total - self.followed_shift;
+        if by == 0.0 || !by.is_finite() {
+            return 0.0;
+        }
+        self.followed_shift = total;
+        self.last_transport += by;
+        self.last_accepted_transport += by;
+        self.transport_origin += by;
+        for anchor in &mut self.speed_history {
+            anchor.transport += by;
+        }
+        if let Some(sampled) = &mut self.sampled_at {
+            *sampled += by;
+        }
+        if let Some((target, landed)) = &mut self.placement {
+            *target += by;
+            *landed += by;
+        }
+        by
     }
 
     pub fn rate_changed(&self, interval: f64) -> bool {

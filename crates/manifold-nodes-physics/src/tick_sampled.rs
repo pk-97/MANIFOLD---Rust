@@ -13,8 +13,10 @@ use manifold_node_engine::exec::effect_node::EffectNode;
 /// A simulation whose forces are sampled per tick, whatever the display rate.
 pub trait TickSampled: Send {
     /// Transport times in `(from, until]` the physics history replay must
-    /// sample exactly before the next frame: each coming tick's start.
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>);
+    /// sample exactly before the next frame: each coming tick's start. The
+    /// frame's first call, so the simulation follows `tempo_shift` (the
+    /// step's sum of tempo edits) here before it answers.
+    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>);
 }
 
 /// The inputs a tick-sampled simulation's history replay evaluates; the rest

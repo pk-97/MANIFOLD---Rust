@@ -466,6 +466,12 @@ impl PlaybackEngine {
     pub fn take_transport_target(&mut self) -> Option<Seconds> {
         self.clock.take_placement_target()
     }
+
+    /// The sum of every tempo edit's move of the transport so far; physics
+    /// shifts what it keeps by each new part of it.
+    pub fn tempo_shift(&self) -> Seconds {
+        self.clock.tempo_shift()
+    }
     pub fn current_time_double(&self) -> f64 {
         self.clock.time().0
     }
@@ -988,7 +994,8 @@ impl PlaybackEngine {
         let beat = TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm) + beat_offset;
         let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
         self.tempo = TempoSource::Map { beat_offset: 0.0 };
-        self.place(|clock| clock.locate(Seconds(t.0.max(0.0))));
+        // The beat stays and its seconds move: no jump, so physics continues.
+        self.place(|clock| clock.relocate(Seconds(t.0.max(0.0))));
         self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
     }
@@ -4187,6 +4194,39 @@ mod tests {
             assert_eq!(engine.transport_target(), Some(TARGET), "{fps} fps: play lost the seek's target");
             assert_eq!(engine.take_transport_target(), Some(TARGET), "{fps} fps");
             assert_eq!(engine.transport_target(), None, "{fps} fps: the rendered frame took it");
+        }
+    }
+
+    /// A tempo edit while playing keeps the beat and moves its seconds; it is
+    /// no jump, so physics gets no target from it.
+    #[test]
+    fn a_tempo_edit_while_playing_gives_physics_no_target() {
+        for fps in [30.0_f32, 60.0, 120.0, 144.0] {
+            for bpm in [150.0_f32, 100.0] {
+                let mut project = Project::default();
+                project.settings.frame_rate = fps;
+                project.settings.bpm = Bpm(120.0);
+                project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), manifold_core::types::TempoPointSource::Manual, 0.001);
+                let mut engine = PlaybackEngine::new(Vec::new());
+                engine.initialize(project);
+                engine.play();
+                for _ in 0..30 {
+                    let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+                    engine.reclaim_tick_result(result);
+                    engine.take_transport_target();
+                }
+                let old_map = engine.project().unwrap().tempo_map.clone();
+                let before = engine.current_time_double();
+                let edited = engine.project_mut().unwrap();
+                edited.settings.bpm = Bpm(bpm);
+                edited.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), manifold_core::types::TempoPointSource::Manual, 0.001);
+                engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
+                assert_ne!(engine.current_time_double(), before, "{fps} fps, {bpm} BPM: the edit moves the beat's seconds");
+                assert_eq!(engine.tempo_shift().0, engine.current_time_double() - before, "{fps} fps, {bpm} BPM: physics shifts by the move");
+                let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+                engine.reclaim_tick_result(result);
+                assert_eq!(engine.take_transport_target(), None, "{fps} fps, {bpm} BPM: a tempo edit reached physics as a jump");
+            }
         }
     }
 

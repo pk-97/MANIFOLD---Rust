@@ -101,16 +101,35 @@ pub struct TurbulenceDrift {
     velocity: [f64; 3],
     /// The velocity to take effect at a grid point not yet reached.
     pending: Option<(f64, [f64; 3])>,
+    /// The part of the tempo-edit shift sum these times already follow.
+    followed_shift: f64,
 }
 
 impl TurbulenceDrift {
+    /// Follow tempo edits, as [`crate::clock::SimulationClock::follow_tempo_shift`]
+    /// does: the drift continues where it stood.
+    pub fn follow_tempo_shift(&mut self, total: f64) {
+        let by = total - self.followed_shift;
+        if by == 0.0 || !by.is_finite() {
+            return;
+        }
+        self.followed_shift = total;
+        if let Some(last) = &mut self.last {
+            *last += by;
+        }
+        self.at += by;
+        if let Some((at, _)) = &mut self.pending {
+            *at += by;
+        }
+    }
+
     /// The offset travelled by `transport`; `velocity` (m/s) takes effect at
     /// the next replay grid point at or after it.
     pub fn advance(&mut self, transport: f64, velocity: [f64; 3]) -> [f64; 3] {
         let last = match self.last {
             Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => last,
             _ => {
-                *self = Self { last: Some(transport), at: transport, travelled: [0.0; 3], velocity, pending: None };
+                *self = Self { last: Some(transport), at: transport, travelled: [0.0; 3], velocity, pending: None, followed_shift: self.followed_shift };
                 return [0.0; 3];
             }
         };
@@ -141,7 +160,7 @@ impl TurbulenceDrift {
 
     /// Start again from zero at the next evaluation.
     pub fn restart(&mut self) {
-        *self = Self::default();
+        *self = Self { followed_shift: self.followed_shift, ..Self::default() };
     }
 }
 
