@@ -104,3 +104,43 @@ fn a_saved_column_loads_as_an_initial_fill_over_the_same_box() {
     assert!(!walked.is_empty());
     assert!(walked.iter().all(|fill| *fill == Some(authored(&column.params))), "{walked:?}");
 }
+
+/// A card control stamped from the column (`{doc}_{param}`) is the node's own
+/// copy only while the node keeps that doc id, so the lookup keeps naming it.
+#[test]
+fn a_moved_column_keeps_its_cards_lookup_names() {
+    const DOC: u32 = 9001;
+    let mut saved = saved_layer();
+    let column = saved.nodes.iter().find(|node| node.node_id.as_str() == "initial_column").expect("the column").id;
+    for node in saved.nodes.iter_mut().filter(|node| node.id == column) {
+        node.id = DOC;
+    }
+    for wire in &mut saved.wires {
+        if wire.from_node == column {
+            wire.from_node = DOC;
+        }
+        if wire.to_node == column {
+            wire.to_node = DOC;
+        }
+    }
+    let meta = saved.preset_metadata.as_mut().expect("the layer's card");
+    let id = format!("{DOC}_pos_x");
+    meta.params.push(
+        serde_json::from_value(serde_json::json!({"id": id, "name": "Position X", "min": -100.0, "max": 100.0, "defaultValue": -1.25,
+            "wholeNumbers": false, "isToggle": false, "isTrigger": false, "section": "Initial Volume"}))
+        .expect("a card param"),
+    );
+    meta.bindings.push(
+        serde_json::from_value(serde_json::json!({"id": id, "label": "Position X", "defaultValue": -1.25,
+            "target": {"kind": "node", "nodeId": "initial_column", "param": "pos_x"}, "convert": {"type": "Float"},
+            "defaultMirrorsNodeParam": true}))
+        .expect("a card binding"),
+    );
+    let before = manifold_core::param_lookup::Declared::new(&saved).expect("a card").lookup_names(&id);
+    assert!(before, "the stamp is the column's own copy before the migration");
+
+    let mut loaded = saved.clone();
+    assert!(migrate_initial_volume(&mut loaded));
+    let declared = manifold_core::param_lookup::Declared::new(&loaded).expect("a card");
+    assert!(declared.lookup_names(&id), "the column keeps its doc id, so the lookup still names its card");
+}
