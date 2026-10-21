@@ -88,7 +88,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     ];
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
         vertex_offset: 0,
@@ -166,6 +166,7 @@ fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
         [0.0, 0.0, 0.0, 1.0],
     ];
     let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
         material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,

@@ -203,7 +203,7 @@ mod rt_dynamic_oracle {
         let state_b = triangle_at(STATE_B_X);
         let vertex_buffer = write_vertices(device, &state_a);
 
-        let objects = [RtObjectGeometry { material_attributes: Default::default(),
+        let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -475,7 +475,7 @@ fn cs_main() {
         index_buffer: Option<&'a GpuBuffer>,
         transform: [[f32; 4]; 4],
     ) -> RtObjectGeometry<'a> {
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -733,7 +733,7 @@ fn cs_main() {
         let local = triangle_at(0.0);
         let vertex_buffer = write_vertices(device, &local);
         let instances_buffer = device.create_buffer_shared(32);
-        let objects = [RtObjectGeometry { material_attributes: Default::default(),
+        let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -1139,15 +1139,15 @@ fn cs_main() {
             }
         };
         expect_invalid(
-            RtObjectGeometry { material_attributes: Default::default(), triangle_count: 0, ..triangle_object(&vertex_buffer, None, IDENTITY) },
+            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(), triangle_count: 0, ..triangle_object(&vertex_buffer, None, IDENTITY) },
             "zero triangles",
         );
         expect_invalid(
-            RtObjectGeometry { material_attributes: Default::default(), vertex_stride: 4, ..triangle_object(&vertex_buffer, None, IDENTITY) },
+            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(), vertex_stride: 4, ..triangle_object(&vertex_buffer, None, IDENTITY) },
             "absurd vertex stride",
         );
         expect_invalid(
-            RtObjectGeometry { material_attributes: Default::default(),
+            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
                 triangle_count: 1_000_000,
                 ..triangle_object(&vertex_buffer, None, IDENTITY)
             },
@@ -1155,7 +1155,7 @@ fn cs_main() {
         );
         let tiny_index = device.create_buffer_shared(4);
         expect_invalid(
-            RtObjectGeometry { material_attributes: Default::default(),
+            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
                 index_buffer: Some(&tiny_index),
                 triangle_count: 2,
                 ..triangle_object(&vertex_buffer, None, IDENTITY)
@@ -1272,7 +1272,7 @@ fn cs_main() {
         // re-prepare fails NeedsPreparation; both rejections leave the
         // resident set valid.
         let objects_big = [
-            RtObjectGeometry { material_attributes: Default::default(), triangle_count: 2, ..triangle_object(&verts_a, None, IDENTITY) },
+            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(), triangle_count: 2, ..triangle_object(&verts_a, None, IDENTITY) },
             triangle_object(&verts_b, None, IDENTITY),
         ];
         let mut enc4 = device.create_encoder("rt-ordering-shape-change");

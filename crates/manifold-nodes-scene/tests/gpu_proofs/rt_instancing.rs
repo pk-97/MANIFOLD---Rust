@@ -209,6 +209,17 @@ struct Probe {
 /// with `slots` wired, then one primary ray per [`Probe`] and returns the
 /// readback `out_n` rows (`.w` = object index or -1, `.xyz` = normal).
 fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
+    run_probes_with_inners(slots, &[RtObjectGeometry::NO_INNER], probes)
+}
+
+/// [`run_probes`] over one fixture-quad object per `inners` entry, every
+/// object sharing the same `slots` buffer and taking its entry as the
+/// instance-space inner matrix (slot world = T_instance · inner).
+fn run_probes_with_inners(
+    slots: &[InstanceTransform],
+    inners: &[[[f32; 4]; 4]],
+    probes: &[Probe],
+) -> Vec<[f32; 4]> {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
@@ -216,7 +227,7 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
     let vertex_buffer = write_shared_buffer(device, &QUAD);
     let instances_buffer = write_shared_buffer(device, slots);
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects: Vec<RtObjectGeometry> = inners.iter().map(|&inner| RtObjectGeometry { instance_inner: inner, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
         vertex_offset: 0,
@@ -247,7 +258,7 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
         normal_scale: 1.0,
         base_color_alpha: 1.0,
         tangent_offset: u32::MAX,
-    }];
+    }).collect();
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
     let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
@@ -267,7 +278,7 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
     );
     let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
     let gi_materials_buffer = device.create_buffer_shared(
-        ((objects.len() + slots.len()).max(1) * std::mem::size_of::<GiMaterial>()) as u64,
+        ((objects.len() * (1 + slots.len())).max(1) * std::mem::size_of::<GiMaterial>()) as u64,
     );
 
     // Depth fixture: 8 texels, one column per probe. The kernel derives
@@ -727,4 +738,52 @@ fn static_instances_trigger_no_per_frame_descriptor_dispatches() {
          static frames, got {dispatches} — static instance buffers are refitting per frame \
          (instances_generation riding the accel key wrong) or the accel is rebuilding. stderr:\n{stderr}"
     );
+}
+
+// ─── Instance space (scene groups design D10) ──────────────────────────
+
+/// Copies of a two-part group trace every part at T_instance · inner: two
+/// objects (the parts, inner = translate · turn) share one two-slot copies
+/// buffer, and each copy's hit lands where the copy places that part, with
+/// the part's turn folded into the normal. Centres come from trigonometry
+/// here, not from the descriptor kernel's matrices.
+#[test]
+fn group_space_copies_trace_every_part_at_instance_times_part() {
+    let yaw = |a: f32, v: [f32; 3]| {
+        let (s, c) = a.sin_cos();
+        [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]]
+    };
+    let inner = |t: [f32; 3], a: f32| {
+        let (s, c) = a.sin_cos();
+        [[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [t[0], t[1], t[2], 1.0]]
+    };
+    let parts = [([0.1f32, 0.0, 0.05], 0.3f32), ([-0.1, 0.0, 0.05], -0.2)];
+    let copies = [([-0.2309f32, 0.0, 0.5894], 0.4f32), ([0.2309, 0.0, 0.5894], -0.4)];
+    let slots = copies.map(|(pos, turn)| live_slot(pos, [0.0, turn, 0.0], 0));
+    let mut probes = Vec::new();
+    let mut expect_index = Vec::new();
+    for (pos, turn) in copies {
+        for (index, (offset, part_turn)) in parts.iter().enumerate() {
+            let offset = yaw(turn, *offset);
+            let target = [pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2]];
+            let normal = yaw(turn + part_turn, [0.0, 0.0, -1.0]);
+            probes.push(Probe { target, expect: Some(normal) });
+            expect_index.push(index as f32);
+        }
+    }
+    // Nothing sits at column 7.
+    probes.push(Probe { target: [0.45, 0.0, 0.5], expect: None });
+    let rows = run_probes_with_inners(&slots, &parts.map(|(t, a)| inner(t, a)), &probes);
+    for (i, probe) in probes.iter().enumerate() {
+        match probe.expect {
+            Some(n) => {
+                let row = rows[i];
+                assert_eq!(row[3], expect_index[i], "probe {i} at {:?} hits part {} (row {row:?})", probe.target, expect_index[i]);
+                for axis in 0..3 {
+                    assert!((row[axis] - n[axis]).abs() < 1e-2, "probe {i}: normal {row:?}, CPU expects {n:?}");
+                }
+            }
+            None => assert_miss(&rows[i], "empty column"),
+        }
+    }
 }

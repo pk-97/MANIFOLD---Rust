@@ -143,7 +143,7 @@ fn small_triangle(device: &GpuDevice) -> GpuBuffer {
 }
 
 fn object<'a>(buffer: &'a GpuBuffer, triangles: u32) -> RtObjectGeometry<'a> {
-    RtObjectGeometry { material_attributes: Default::default(),
+    RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: buffer,
         vertex_stride: VERTEX_STRIDE,
         vertex_offset: 0,

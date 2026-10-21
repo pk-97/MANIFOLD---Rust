@@ -105,7 +105,7 @@ fn write_instance(buffer: &GpuBuffer, x: f32) {
 }
 
 fn object<'a>(vertex: &'a GpuBuffer, instances: Option<&'a GpuBuffer>) -> RtObjectGeometry<'a> {
-    RtObjectGeometry { material_attributes: Default::default(),
+    RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: vertex,
         vertex_stride: VERTEX_STRIDE,
         vertex_offset: 0,

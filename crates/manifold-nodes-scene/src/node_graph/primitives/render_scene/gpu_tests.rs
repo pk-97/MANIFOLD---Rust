@@ -765,6 +765,7 @@
             let uniforms = ShadowUniforms {
                 light_view_proj: identity, model: identity, appearance: [1.0, 0.0, 0.0, 0.0],
                 alpha: [1.0, 0.5, alpha, 1.0], uv_m, uv_t: [uv_tx, 0.0, uv_set, 0.0],
+                instance_inner: identity,
             };
             let bindings = [
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },

@@ -78,6 +78,8 @@ mod rt_trace;
 mod rt_frame;
 mod prepasses;
 use prepasses::ShadowUniforms;
+mod instance_space;
+use instance_space::{IDENTITY_M4, instance_space_pair};
 mod pipelines;
 mod resources;
 #[cfg(feature = "gpu-proofs")]
@@ -827,6 +829,10 @@ struct RenderSceneUniforms {
     /// Closed volume flag, homogeneous scattering density, embedded particle density, reserved.
     volume_optics: [f32; 4],
     volume_scattering_color: [f32; 4],
+    /// world = `model` · T_instance · `instance_inner`; see [`instance_space_pair`].
+    instance_inner: [[f32; 4]; 4],
+    /// Last frame's `instance_inner`, the velocity pair of `prev_model`.
+    prev_instance_inner: [[f32; 4]; 4],
 }
 
 // 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -849,7 +855,8 @@ struct RenderSceneUniforms {
 // Points mode point-size slot, appended at the tail so every existing
 // field keeps its offset (appending is the byte-identical contract).
 // 848 after optional closed-volume optics and scattering colour (+32).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 848);
+// 976 after the instance-space pair `instance_inner`/`prev_instance_inner` (+128).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 976);
 
 /// Per-map sampling metadata. Core maps retain hardware anisotropic
 /// samplers; extension maps use these settings within Metal sampler limits.
@@ -1074,8 +1081,9 @@ pub struct RenderScene {
     /// first-ever velocity is exactly zero, not approximately. Resized and
     /// reset to all-`None` on every `rebuild` (an object-count change may
     /// reassign what slot `n` means, so any stale history there is
-    /// discarded rather than risked).
-    prev_model: Vec<Option<[[f32; 4]; 4]>>,
+    /// discarded rather than risked). Stored as the instance-space pair
+    /// `[model, instance_inner]`.
+    prev_model: Vec<Option<[[[f32; 4]; 4]; 2]>>,
     /// Previous frame's scene `view_proj` (GBUFFER_DESIGN.md section 2 D5, P2).
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
@@ -2436,6 +2444,9 @@ fn build_uniforms(
         render_mode: [point_size, 0.0, 0.0, 0.0],
         volume_optics: [if material.volume_geometry && material.transmission_factor > 0.0 { 1.0 } else { 0.0 }, material.volume_scattering_density, material.volume_particle_density, 0.0],
         volume_scattering_color: [material.volume_scattering_color[0], material.volume_scattering_color[1], material.volume_scattering_color[2], 0.0],
+        // Object space; frame setup writes the Group-space pair.
+        instance_inner: IDENTITY_M4,
+        prev_instance_inner: IDENTITY_M4,
     }
 }
 
@@ -2705,6 +2716,7 @@ impl RenderScene {
             diffuse_transmission_color_map: inputs.slot_of("diffuse_transmission_color_map"),
             instances: inputs.slot_of("instances"),
             instance_count,
+            instances_space: manifold_node_engine::scene::scene_object::InstanceSpace::Object,
             emission_strength: 1.0,
             gain: 1.0,
         };

@@ -197,6 +197,7 @@ fn run_fixture_on(
         extension_uv_transforms: [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 15],
     };
     let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
         material_attributes,
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,

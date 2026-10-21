@@ -170,7 +170,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     receiver_model[3][2] = RECEIVER_WP[2];
 
     let objects = [
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &emissive_buffer,
             vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
             vertex_offset: 0,
@@ -202,7 +202,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &receiver_buffer,
             vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
             vertex_offset: 0,

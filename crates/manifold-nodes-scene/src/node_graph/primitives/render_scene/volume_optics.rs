@@ -16,6 +16,7 @@ struct Uniforms {
     eye: [f32; 4],
     parameters: [f32; 4],
     appearance: [f32; 4],
+    instance_inner: [[f32; 4]; 4],
 }
 
 struct VolumeTextures {
@@ -130,6 +131,7 @@ impl VolumeOptics {
                 eye: draw.uniforms.camera_pos,
                 parameters: [1.0, 0.0, 0.0, 0.0],
                 appearance: draw.uniforms.appearance,
+                instance_inner: draw.uniforms.instance_inner,
             };
             if geometric {
                 if self.volumes[index]

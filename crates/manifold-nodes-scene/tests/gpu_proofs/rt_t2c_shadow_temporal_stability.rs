@@ -167,7 +167,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         "rt-t2c-cutout-stripe",
     );
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,

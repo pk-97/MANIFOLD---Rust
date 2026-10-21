@@ -432,6 +432,12 @@ struct RtNormalSource {
     float  model_handedness;
     RtMaterialAttributes material_attributes;
     uint extra_tex_indices[15];
+    // Instance space: upper-left 3x3 of the inner matrix, applied to local
+    // directions before the instance fold (identity in Object space).
+    packed_float3 inner_matrix_col0;
+    packed_float3 inner_matrix_col1;
+    packed_float3 inner_matrix_col2;
+    uint   _pad_inner;
 };
 
 // RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
@@ -507,6 +513,26 @@ static float rti_instance_handedness(device RtNormalSource& src) {
         (device const RtInstanceTransform*)src.instance_addr;
     uint marker = uint(inst->rot_pad.w + 0.5);
     return ((marker == 1u) || (marker == 2u) || (marker == 3u)) ? -1.0 : 1.0;
+}
+
+// Instance space: the inner matrix applies to local geometry before the
+// instance fold (world = model · T · inner). Directions take its 3x3;
+// normals take its cofactor with the determinant sign, as the raster's
+// scene_vs_body does. Identity rows (Object space) pass through exactly.
+static float3x3 rti_inner(device RtNormalSource& src) {
+    return float3x3(float3(src.inner_matrix_col0), float3(src.inner_matrix_col1),
+        float3(src.inner_matrix_col2));
+}
+
+static float3 rti_apply_inner_normal(device RtNormalSource& src, float3 n) {
+    float3x3 b = rti_inner(src);
+    float3x3 cof = float3x3(cross(b[1], b[2]), cross(b[2], b[0]), cross(b[0], b[1]));
+    return cof * n * (dot(b[0], cof[0]) < 0.0 ? -1.0 : 1.0);
+}
+
+static float rti_inner_handedness(device RtNormalSource& src) {
+    float3x3 b = rti_inner(src);
+    return dot(b[0], cross(b[1], b[2])) < 0.0 ? -1.0 : 1.0;
 }
 
 static float2 rt_apply_uv_transform(float2 uv, device const float* m) {
@@ -821,7 +847,7 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     // normal with rot·(n·msign) BEFORE the row's object-level normal_matrix.
     // Unwired rows pass through unchanged —
     // byte-identical to the pre-instancing fetch.
-    n_local = rti_apply_instance_dir(src, n_local);
+    n_local = rti_apply_instance_dir(src, rti_apply_inner_normal(src, n_local));
     float3x3 normal_matrix = float3x3(float3(src.normal_matrix_col0),
         float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
     return normal_matrix * n_local;
@@ -1020,8 +1046,9 @@ static bool tangent_frame_at_hit(
     // edges on an instanced (especially mirrored) surface is off by the
     // instance rotation/reflection. Degrades to the pre-instancing edges
     // exactly when the row is unwired.
-    float3 edge1 = model * rti_apply_instance_dir(src, float3(*p1_ptr) - float3(*p0_ptr));
-    float3 edge2 = model * rti_apply_instance_dir(src, float3(*p2_ptr) - float3(*p0_ptr));
+    float3x3 inner = rti_inner(src);
+    float3 edge1 = model * rti_apply_instance_dir(src, inner * (float3(*p1_ptr) - float3(*p0_ptr)));
+    float3 edge2 = model * rti_apply_instance_dir(src, inner * (float3(*p2_ptr) - float3(*p0_ptr)));
     uint uv_set = src.material_attributes.sampling[frame_map][0];
     float2 uv0 = fetch_uv_set(src, v0, uv_set);
     float2 uv1 = fetch_uv_set(src, v1, uv_set);
@@ -1035,8 +1062,9 @@ static bool tangent_frame_at_hit(
     float3 b;
     if (!use_derived_frame) {
         authored_tangent.w = authored_tangent.w < 0.0 ? -1.0 : 1.0;
-        t = model * rti_apply_instance_dir(src, authored_tangent.xyz);
-        float handedness = authored_tangent.w * src.model_handedness * rti_instance_handedness(src);
+        t = model * rti_apply_instance_dir(src, inner * authored_tangent.xyz);
+        float handedness = authored_tangent.w * src.model_handedness * rti_instance_handedness(src)
+            * rti_inner_handedness(src);
         t -= n * dot(n, t);
         b = cross(n, t) * handedness;
     } else {
@@ -4478,7 +4506,7 @@ kernel void debug_atrous_post(
 // provably never intersected (D2).
 
 // Field-for-field mirror of the Rust `RtInstanceBuildObj` — see its doc
-// comment for the layout (96-byte stride both sides, asserted on the Rust
+// comment for the layout (160-byte stride both sides, asserted on the Rust
 // side).
 struct RtInstanceBuildObj {
     float4x4 model;
@@ -4487,6 +4515,8 @@ struct RtInstanceBuildObj {
     uint     slot_count;
     uint     cast_shadows;
     float2   _pad;
+    // Instance space: slot world = model · T_instance · inner.
+    float4x4 inner;
 };
 
 static void rti_write_descriptor(
@@ -4526,9 +4556,10 @@ kernel void build_instance_descriptors(
         // D7: unwired object — one slot at the object's MODEL transform (an
         // identity INSTANCE: world = model·I = model, exactly where the
         // raster draws it). NOT the identity matrix — the model matrix.
+        float4x4 world = o.model * o.inner;
         rti_write_descriptor(
             out, tid.y, mask,
-            o.model[0].xyz, o.model[1].xyz, o.model[2].xyz, o.model[3].xyz
+            world[0].xyz, world[1].xyz, world[2].xyz, world[3].xyz
         );
         return;
     }
@@ -4562,9 +4593,14 @@ kernel void build_instance_descriptors(
     // world 4x3 = model_obj · (A | t): linear part model3x3·A, translation
     // model3x3·t + model's translation column. MTLPackedFloat4x3 columns
     // are [linear c0, linear c1, linear c2, translation].
+    // Instance space: the inner matrix applies first, so world =
+    // model · (A | t) · inner = model3x3·A·inner3x3 with translation
+    // model3x3·(A·inner_t + t) + model_t. An identity inner reproduces the
+    // Object-space product exactly.
     float3x3 m3 = float3x3(o.model[0].xyz, o.model[1].xyz, o.model[2].xyz);
-    float3x3 w = m3 * a;
-    float3 t = m3 * inst->pos_scale.xyz + o.model[3].xyz;
+    float3x3 b3 = float3x3(o.inner[0].xyz, o.inner[1].xyz, o.inner[2].xyz);
+    float3x3 w = m3 * (a * b3);
+    float3 t = m3 * (a * o.inner[3].xyz + inst->pos_scale.xyz) + o.model[3].xyz;
     out->t0 = packed_float3(w[0]);
     out->t1 = packed_float3(w[1]);
     out->t2 = packed_float3(w[2]);

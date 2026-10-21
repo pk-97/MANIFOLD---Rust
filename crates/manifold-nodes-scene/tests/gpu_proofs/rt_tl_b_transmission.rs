@@ -326,7 +326,7 @@ fn single_translucent_occluder_attenuates_half() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -384,7 +384,7 @@ fn factor_zero_control_stays_fully_shadowed() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -445,7 +445,7 @@ fn stacked_petals_compound_to_quarter() {
     let vertex_buffer2 = write_shared_buffer(device, &verts2);
 
     let objects = [
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer1,
             vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
             vertex_offset: 0,
@@ -477,7 +477,7 @@ fn stacked_petals_compound_to_quarter() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer2,
             vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
             vertex_offset: 0,
@@ -541,7 +541,7 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
     ];
     let base_color_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Rgba32Float, &tex_px, "rt-tlb-cutout-tex");
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -601,7 +601,7 @@ fn transmission_colour_is_independent_of_albedo() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
