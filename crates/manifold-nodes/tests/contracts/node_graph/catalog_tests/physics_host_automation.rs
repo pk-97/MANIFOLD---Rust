@@ -288,8 +288,12 @@ fn play(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = (f64, 
 }
 
 fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = Frame>) -> Vec<(u64, u64)> {
+    play_frames_on(runtime(case), case, Seconds(TICK), fps, offline, frames)
+}
+
+/// [`play_frames`] on a prepared `runtime` at the Sim Rate `interval`.
+fn play_frames_on(mut runtime: PresetRuntime, case: Case, interval: Seconds, fps: u32, offline: bool, frames: impl Iterator<Item = Frame>) -> Vec<(u64, u64)> {
     TICKS.with_borrow_mut(Vec::clear);
-    let mut runtime = runtime(case);
     let mut project = project(case);
     let (mut latches, mut gestures) = (AutomationLatches::default(), AutomationGestures::default());
     let mode = if offline { AutomationSamplingMode::Export } else { AutomationSamplingMode::Playback };
@@ -323,7 +327,7 @@ fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item =
         let generator = project.timeline.layers[0].gen_params().unwrap();
         // The frame's step first, as the host sets it: hops become played
         // time with its tempo shift. The replay origin outlives its jump frame.
-        let step = if offline { SimStep::export(Seconds(TICK)) } else { SimStep::live(Seconds(TICK)) };
+        let step = if offline { SimStep::export(interval) } else { SimStep::live(interval) };
         let target = target.map(|target| PlayedTime::from_transport(Seconds(target), Seconds(tempo_shift)));
         replay_origin = target.unwrap_or(replay_origin);
         runtime.set_sim_step(step.with_replay_origin(replay_origin).with_played_target(target).with_tempo_shift(Seconds(tempo_shift)));
@@ -550,3 +554,5 @@ fn a_bpm_drag_while_playing_keeps_ticks_continuous_at_30_60_120_144_fps_live_and
         }
     }
 }
+
+mod rigid_jump;
