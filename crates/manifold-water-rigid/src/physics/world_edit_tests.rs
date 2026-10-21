@@ -176,3 +176,45 @@ fn a_card_mass_is_the_engine_mass_whatever_the_size() {
         assert!((reported - 250.0).abs() < 0.5, "scale {scale:?} volume {volume}: {reported} kg");
     }
 }
+
+/// A Fixed body whose collider is one box of hull points, `offset` metres
+/// (before the body's scale of 4, 1, 4) along x: how an imported scan's part
+/// moves, since its offset is cooked into the hulls.
+fn slab_with_collider(offset: f32) -> RigidBody {
+    let corners = (0..8).map(|i| {
+        [
+            if i & 1 == 0 { -0.5 } else { 0.5 } + offset,
+            if i & 2 == 0 { -0.5 } else { 0.5 },
+            if i & 4 == 0 { -0.5 } else { 0.5 },
+        ]
+    });
+    RigidBody { collider: Some(Arc::new(ColliderGeometry { hulls: vec![corners.collect()] })), ..slab(0.0) }
+}
+
+/// Dragging a part of an imported scan re-cooks the Fixed body's collider.
+/// The new collider takes the old one's place in the live world: a crate
+/// falling through the world is not reset, and lands on the moved collider.
+fn a_fixed_collider_swap_keeps_the_world_running(drive: Drive) {
+    let away = scene(&[(0, slab_with_collider(7.5)), (1, crate_at([0.0, 6.0, 0.0]))]);
+    let mut simulation = start(drive, &away);
+    let epoch = simulation.impulse_epoch();
+    let falling = engine_pose(&simulation, 1);
+    let under = scene(&[(0, slab_with_collider(0.0)), (1, crate_at([0.0, 6.0, 0.0]))]);
+    frames(&mut simulation, drive, 6, 8, &under);
+    assert_eq!(simulation.impulse_epoch(), epoch, "no rebuild");
+    let resumed = engine_pose(&simulation, 1);
+    assert!(resumed[1] < falling[1] && resumed[1] > falling[1] - 0.2, "the crate keeps falling from where it was: {falling:?} {resumed:?}");
+    frames(&mut simulation, drive, 8, 150, &under);
+    let landed = engine_pose(&simulation, 1)[1];
+    assert!(landed > 0.4 && landed < 1.5, "the crate lands on the moved collider: {landed}");
+}
+
+#[test]
+fn a_fixed_collider_swap_keeps_the_world_running_in_a_plain_frame() {
+    a_fixed_collider_swap_keeps_the_world_running(plain);
+}
+
+#[test]
+fn a_fixed_collider_swap_keeps_the_world_running_in_a_replay() {
+    a_fixed_collider_swap_keeps_the_world_running(replayed);
+}

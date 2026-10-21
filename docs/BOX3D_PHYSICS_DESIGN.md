@@ -58,7 +58,7 @@ Physics Solids demo. The original larger design remains a roadmap.
   A stationary clock or zero speed holds motion. Reset, backward time, and the
   existing runtime state-clear path restore authored starting poses. A shape or scale
   change, or removing a body, rebuilds the world; a body added to a free slot joins the live world at its
-  authored pose without one. Mass/contact-property edits preserve
+  authored pose without one, and a Fixed body whose collider is re-cooked (a dragged part of an imported scan) swaps its hulls in place. Mass/contact-property edits preserve
   current motion; editing a starting position/rotation repositions that body.
 - A body is authored by mass (kg, default 600), whatever its size. Density is derived
   as mass over the installed hull volume where the engine needs it (a released fragment).

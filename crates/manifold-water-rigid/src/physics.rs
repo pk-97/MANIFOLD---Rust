@@ -311,8 +311,11 @@ fn same_authored_body(left: &RigidBody, right: &RigidBody) -> bool {
 /// Whether a body slot's edit needs a fresh native world. A body entering an
 /// empty or disabled slot is installed into the live world instead
 /// (`install_added_bodies`), so it never resets the bodies already moving;
-/// removing a body, or changing an installed body's shape, scale or collider,
-/// still rebuilds. A fragment child is always built with its parent.
+/// removing a body, or changing an installed body's shape or scale, still
+/// rebuilds, and so does a collider change on a body that can move. A Fixed
+/// body's new collider is swapped in place (`apply_authored_edits`), so
+/// dragging a part of an imported scan never resets the world. A fragment
+/// child is always built with its parent.
 fn slot_needs_rebuild(installed: bool, old: Option<&RigidBody>, new: Option<&RigidBody>) -> bool {
     let Some(new) = new.filter(|body| body.enabled) else {
         return installed;
@@ -320,7 +323,20 @@ fn slot_needs_rebuild(installed: bool, old: Option<&RigidBody>, new: Option<&Rig
     if !installed {
         return new.fragment_parent.is_some();
     }
-    !same_topology_body(old, Some(new))
+    !same_topology_body(old, Some(new)) && !is_fixed_collider_swap(old, new)
+}
+
+/// Whether `new` differs from `old` only by the collider of a Fixed body.
+fn is_fixed_collider_swap(old: Option<&RigidBody>, new: &RigidBody) -> bool {
+    old.is_some_and(|old| {
+        old.kind == 0
+            && new.kind == 0
+            && old.collider.is_some()
+            && new.collider.is_some()
+            && old.shape == new.shape
+            && old.transform.scale == new.transform.scale
+            && old.enabled == new.enabled
+    })
 }
 
 /// Whether two bodies need the same native geometry: a change in any of
@@ -1350,6 +1366,14 @@ impl RigidSimulation {
             };
             let old = self.descriptions[i].as_ref();
             if old.is_none_or(|old| !same_body(old, body)) {
+                if let (Some(old), Some(geometry)) = (old, body.collider.as_ref())
+                    && !same_collider(old, body)
+                {
+                    world
+                        .replace_hulls(handle, &scale_hulls(geometry, body.transform.scale), body.config())
+                        .map_err(|e| e.to_string())?;
+                    self.volumes[i] = installed_volume(world, handle)?;
+                }
                 let pose_changed = old.is_none_or(|old| old.transform != body.transform);
                 let animated_edit = body.kind == 2 && stationary_edit && pose_changed;
                 if animated_edit && due_steps > 0 {
