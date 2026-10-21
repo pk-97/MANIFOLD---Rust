@@ -15,6 +15,7 @@ use manifold_core::types::LayerType;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, insert_scene_template};
 
+mod clip_string_overrides;
 mod force_targets;
 mod rigid_boundary;
 

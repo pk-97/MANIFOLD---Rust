@@ -776,8 +776,9 @@ pub struct BindingDef {
     /// A MIRRORED default carries no such intent — it is a second copy of the
     /// node param, frozen once and never updated, so replanting it reverts
     /// every later writer (def edits, migrations, direct writes) at the next
-    /// rebuild (BUG-ji6q). Mirrored defaults don't plant; the node param
-    /// stands.
+    /// rebuild (BUG-ji6q). Mirrored defaults don't plant, so the def keeps
+    /// the node param; the card value still reaches the node at the next
+    /// apply, and the load repair moves a card resting on a stale default.
     ///
     /// Skipped on serialize when `false`, and absent means `false` — an old
     /// project's bindings are indistinguishable from authored ones, so they

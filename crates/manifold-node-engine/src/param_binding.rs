@@ -761,12 +761,13 @@ impl LastAppliedCache {
     /// function of card values alone, never of build history (BUG-c48e6: a
     /// mirrored scale whose node held an import fit factor rendered huge
     /// while the card said 1.0). Composite and custom targets cannot be read
-    /// back and keep `Applied(default)`. Build time only.
+    /// back and keep `Applied(default)`, and so do triggers: their storage is
+    /// a counter nobody holds, so a build must never fire one. Build time only.
     pub fn seed_from_graph(&mut self, bindings: &[ResolvedBinding], graph: &Graph) {
         self.entries.clear();
         self.entries.reserve(bindings.len());
         for b in bindings {
-            let holds_default = match &b.target {
+            let holds_default = matches!(b.convert, ParamConvert::Trigger) || match &b.target {
                 ResolvedTarget::Node { node, param } => graph
                     .get_node(*node)
                     .and_then(|inst| inst.params.get(param.as_ref()))

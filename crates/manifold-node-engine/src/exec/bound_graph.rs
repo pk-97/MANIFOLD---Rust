@@ -308,8 +308,8 @@ impl BoundGraph {
 /// Exactly the disagreements that matter, and nothing else:
 /// - only bindings whose default is AUTHORED. A `default_mirrors_node_param`
 ///   binding is a stamp-time snapshot of the node param, and
-///   [`apply_binding_defaults`] no longer plants those at all (BUG-ji6q), so the
-///   node value stands and there is nothing to report. This is the discriminator
+///   [`apply_binding_defaults`] no longer plants those at all (BUG-ji6q), so no
+///   plant overwrites the def value and there is nothing to report. This is the discriminator
 ///   that keeps the diagnostic pointed at the class that is still silent: an
 ///   AUTHORED default — a number someone chose, carrying the binding's
 ///   `scale`/`offset` fold — really does overwrite whatever the def baked.
@@ -918,7 +918,7 @@ mod tests {
     }
 
     /// The BUG-ji6q half: a MIRRORED default is a stamp-time snapshot of the node
-    /// param, `apply_binding_defaults` skips planting it, and the def value stands.
+    /// param, and `apply_binding_defaults` skips planting it over the def value.
     /// Nothing was shadowed, so nothing is reported — the same def+values that fire
     /// under an authored binding must stay silent under a mirrored one, or every
     /// imported scene exposure becomes a false finding.
@@ -973,6 +973,11 @@ mod tests {
         let mut binding = scale_binding(feedback, 0.5);
         binding.convert = ParamConvert::Trigger;
 
-        assert!(find_shadowed_def_params(&def, &[binding], &graph).is_empty());
+        assert!(find_shadowed_def_params(&def, &[binding.clone()], &graph).is_empty());
+
+        // Nor does a build ever fire one: the cache starts at the default.
+        let mut cache = LastAppliedCache::new();
+        cache.seed_from_graph(&[binding], &graph);
+        assert_eq!(cache.entries, vec![crate::param_binding::BindingCacheEntry::Applied(0.5)]);
     }
 }
