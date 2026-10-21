@@ -27,7 +27,7 @@
     "crates/manifold-node-engine/src/primitives/wgsl_compute.rs": 3626,
     "crates/manifold-node-engine/src/runtime/core.rs": 2200,
     "crates/manifold-node-engine/src/runtime/mod.rs": 200,
-    "crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs": 2836,
+    "crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs": 2847,
     "crates/manifold-nodes-scene/src/node_graph/gltf_load.rs": 6110,
     "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs": 3076,
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": 3295,
