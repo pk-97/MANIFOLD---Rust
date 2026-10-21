@@ -241,10 +241,10 @@ pub fn rubble_pile() -> Value {
     let (camera, sun, ground, chute, wall) = (k(1), k(4), k(100), k(140), k(160));
     set_floats(&mut def, &camera, &[("distance", 20.0), ("look_y", 2.2), ("orbit", -0.6), ("tilt", 0.38), ("fov_y", 0.9)]);
     set_floats(&mut def, &sun, &[("intensity", 2.2), ("pos_x", -10.0), ("pos_y", 18.0), ("pos_z", 12.0)]);
-    set_floats(&mut def, &ground, &[("scale_x", 16.0), ("scale_y", 0.25), ("scale_z", 12.0)]);
+    set_floats(&mut def, &ground, &[("scale_x", 36.0), ("scale_y", 0.25), ("scale_z", 32.0)]);
     set_floats(&mut def, &boxes, &[("copy_count", 160.0), ("copy_columns", 10.0), ("copy_size_spacing", 1.0), ("friction", 0.45), ("bounce", 0.2)]);
     set_params(&mut def, &boxes, &[("copy_layout", json!({"type": "Enum", "value": 1}))]);
-    set_floats(&mut def, &transform, &[("pos_x", -1.25), ("pos_y", 8.0), ("pos_z", 0.0), ("scale_x", 0.55), ("scale_y", 0.55), ("scale_z", 0.55)]);
+    set_floats(&mut def, &transform, &[("pos_x", -2.5), ("pos_y", 8.0), ("pos_z", 0.0), ("scale_x", 0.55), ("scale_y", 0.55), ("scale_z", 0.55)]);
     set_floats(&mut def, &chute, &[("pos_x", -2.5), ("pos_y", 1.3), ("pos_z", 0.0), ("rot_y", 0.0), ("rot_z", -0.35), ("scale_x", 7.0), ("scale_y", 0.4), ("scale_z", 7.0)]);
     set_floats(&mut def, &wall, &[("pos_x", 5.0), ("pos_y", 0.7), ("pos_z", 0.0), ("rot_x", 0.0), ("rot_y", 0.0), ("rot_z", 0.0), ("scale_x", 0.6), ("scale_y", 1.4), ("scale_z", 9.0)]);
     for (id, c) in [(123_u64, [0.78, 0.66, 0.5]), (143, [0.22, 0.24, 0.3]), (163, [0.22, 0.24, 0.3])] {

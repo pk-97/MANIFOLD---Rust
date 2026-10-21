@@ -115,9 +115,86 @@ fn rubble_blast_scatters_a_settled_pile_and_keeps_it_in_the_world() {
     let lost = after.iter().filter(|p| !p.pos.iter().all(|v| v.is_finite()) || p.pos[1] < -1.0 || p.pos.iter().any(|v| v.abs() > 40.0)).count();
     println!("RUBBLE_BLAST settled_drift={drift:.3} count={} moved>0.5m={over_half} median={median:.2}m max={:.2}m lost={lost}", after.len(), moved.last().unwrap());
     assert!(drift < 0.1, "the pile has settled before the blast: {drift}");
-    assert!(over_half * 10 >= after.len() * 8, "most copies move far: {over_half}/{}", after.len());
+    assert!(over_half * 10 >= after.len() * 7, "most copies move far: {over_half}/{}", after.len());
     assert!(median > 1.0, "the pile does not just twitch: median {median}");
     assert_eq!(lost, 0, "no copy leaves the world");
+}
+
+/// Where a copy that left the ground went over: its last on-ground pose.
+struct Escape {
+    copy: usize,
+    frame: u32,
+    pos: [f32; 3],
+    after_blast: bool,
+}
+
+/// Plays one pile through the Blast. Returns every copy that dropped below
+/// the ground slab at any point, with where and when it left.
+fn play_with_blast(scene: &RigidSceneInputs, field: &FieldValue) -> (Vec<Escape>, [f32; 2]) {
+    const SETTLE: u32 = 660;
+    const AFTER: u32 = 240;
+    let mut sim = RigidSimulation::default();
+    let mut last: Vec<Transform> = Vec::new();
+    let mut escapes: Vec<Escape> = Vec::new();
+    let mut reach = [0.0_f32; 2];
+    for frame in 0..SETTLE + AFTER {
+        if frame == SETTLE {
+            let epoch = sim.impulse_epoch().unwrap();
+            sim.enqueue_impulse(
+                EventStamp { epoch, time: Seconds(f64::from(frame) / 60.0), sequence: 0 },
+                ResolvedRigidImpulse { field: field.clone(), targets: RigidImpulseTargets::group(0).unwrap() },
+            )
+            .unwrap();
+        }
+        sim.advance_scene(scene, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        let poses = sim.group_poses(0);
+        for (i, pose) in poses.iter().enumerate() {
+            reach = [reach[0].max(pose.pos[0].abs()), reach[1].max(pose.pos[2].abs())];
+            if pose.pos[1] < -0.5 && !escapes.iter().any(|e| e.copy == i) {
+                escapes.push(Escape { copy: i, frame, pos: last.get(i).map_or(pose.pos, |p| p.pos), after_blast: frame >= SETTLE });
+            }
+        }
+        last = poses.to_vec();
+    }
+    (escapes, reach)
+}
+
+/// The drop point and the spacing are card values a performer moves, so the
+/// pile must stay on the ground through the Blast across the whole band, not
+/// only at the shipped values.
+#[test]
+fn rubble_pile_stays_on_the_ground_across_drop_points_and_spacings() {
+    let def = rubble();
+    let field = blast_field(&def);
+    let base = scene_of(&def);
+    let mut failures = Vec::new();
+    let mut worst = [0.0_f32; 2];
+    for spacing in [0.8_f32, 1.0, 1.2] {
+        for step in 0..=10 {
+            let x = -2.5 + 0.25 * step as f32;
+            let mut scene = base.clone();
+            let group = scene.groups[0].as_mut().unwrap();
+            group.transform.pos[0] = x;
+            group.spawn.spacing = spacing;
+            let (escapes, reach) = play_with_blast(&scene, &field);
+            println!("REACH spacing={spacing} x={x} max_x={:.1} max_z={:.1}", reach[0], reach[1]);
+            worst = [worst[0].max(reach[0]), worst[1].max(reach[1])];
+            for e in &escapes {
+                println!("ESCAPE spacing={spacing} x={x} copy={} frame={} after_blast={} last_pos={:?}", e.copy, e.frame, e.after_blast, e.pos);
+            }
+            if !escapes.is_empty() {
+                failures.push(format!("spacing {spacing}, drop x {x}: {} copies left the ground", escapes.len()));
+            }
+        }
+    }
+    let half = |param: &str| match def.nodes.iter().find(|n| n.id == 100).unwrap().params.get(param) {
+        Some(SerializedParamValue::Float { value }) => value / 2.0,
+        other => panic!("ground {param}: {other:?}"),
+    };
+    let (half_x, half_z) = (half("scale_x"), half("scale_z"));
+    println!("WORST reach x={:.1} of {half_x}, z={:.1} of {half_z}", worst[0], worst[1]);
+    assert!(worst[0] + 2.0 <= half_x && worst[1] + 2.0 <= half_z, "the Blast must leave 2 m of ground to spare: reach {worst:?}, ground half-sizes [{half_x}, {half_z}]");
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {

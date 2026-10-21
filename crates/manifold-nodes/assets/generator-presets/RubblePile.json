@@ -209,7 +209,7 @@
         },
         "scale_x": {
           "type": "Float",
-          "value": 16.0
+          "value": 36.0
         },
         "scale_y": {
           "type": "Float",
@@ -217,7 +217,7 @@
         },
         "scale_z": {
           "type": "Float",
-          "value": 12.0
+          "value": 32.0
         }
       },
       "typeId": "node.transform_3d"
@@ -328,7 +328,7 @@
       "params": {
         "pos_x": {
           "type": "Float",
-          "value": -1.25
+          "value": -2.5
         },
         "pos_y": {
           "type": "Float",
