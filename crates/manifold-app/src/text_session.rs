@@ -138,16 +138,18 @@ pub(crate) fn begin_for_action(
     action: &PanelAction,
 ) -> bool {
     match action {
-        PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, object_node_id, name)) => {
-            if let Some(r) = ui_root.scene_setup_panel.object_name_rect(&ui_root.tree, *object_node_id) {
+        PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, object, name)) => {
+            if let Some(r) = ui_root.scene_setup_panel.object_name_rect(&ui_root.tree, object) {
                 text_input.scene_object_layer_id = Some(layer_id.clone());
-                text_input.begin(TextInputField::SceneObjectRename(*object_node_id), name, anchor_of(r), 11.0);
+                text_input.scene_item_ref = Some(object.clone());
+                text_input.begin(TextInputField::SceneObjectRename, name, anchor_of(r), 11.0);
             }
         }
-        PanelAction::Root(RootAction::SceneSetupRenameLightClicked(layer_id, light_node_id, name)) => {
-            if let Some(r) = ui_root.scene_setup_panel.light_name_rect(&ui_root.tree, *light_node_id) {
+        PanelAction::Root(RootAction::SceneSetupRenameLightClicked(layer_id, light, name)) => {
+            if let Some(r) = ui_root.scene_setup_panel.light_name_rect(&ui_root.tree, light) {
                 text_input.scene_object_layer_id = Some(layer_id.clone());
-                text_input.begin(TextInputField::SceneLightRename(*light_node_id), name, anchor_of(r), 11.0);
+                text_input.scene_item_ref = Some(light.clone());
+                text_input.begin(TextInputField::SceneLightRename, name, anchor_of(r), 11.0);
             }
         }
         PanelAction::Params(ParamsAction::BrowserSearchClicked) => {
@@ -813,35 +815,35 @@ pub(crate) fn commit<'a>(
         }
         // The Scene tab addresses the layer directly, so it resolves its own
         // catalog default; no graph editor needs to be open.
-        TextInputField::SceneObjectRename(object_node_id) => {
+        TextInputField::SceneObjectRename => {
             // RenameSceneObjectCommand keeps the group handle and the
             // object's own handle in step (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6).
             let new_handle = text.trim().to_string();
             if !new_handle.is_empty()
                 && let Some(layer_id) = text_input.scene_object_layer_id.take()
+                && let Some(object) = text_input.scene_item_ref.take()
                 && let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id)
             {
                 let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
                     manifold_core::GraphTarget::Generator(layer_id),
-                    Vec::new(),
-                    object_node_id,
+                    object,
                     new_handle,
                     default,
                 );
                 ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
         }
-        TextInputField::SceneLightRename(light_node_id) => {
+        TextInputField::SceneLightRename => {
             // A light is never wrapped in a group: a plain handle write.
             let new_handle = text.trim().to_string();
             if !new_handle.is_empty()
                 && let Some(layer_id) = text_input.scene_object_layer_id.take()
+                && let Some(object) = text_input.scene_item_ref.take()
                 && let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id)
             {
                 let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
                     manifold_core::GraphTarget::Generator(layer_id),
-                    Vec::new(),
-                    light_node_id,
+                    object,
                     new_handle,
                     default,
                 );

@@ -193,7 +193,7 @@ fn scene_target_menu_items(
     info: &manifold_ui::param_surface::ModifierCardInfo,
     force: bool,
 ) -> Vec<DropdownItem> {
-    use manifold_ui::param_surface::ModifierObjectRef;
+    use manifold_core::SceneNodeRef;
 
     let selected_count = info.objects.iter().filter(|object| object.selected).count();
     let mut items = Vec::with_capacity(info.objects.len() + selected_count + 2);
@@ -220,7 +220,7 @@ fn scene_target_menu_items(
             if selected_count <= 1 && !force {
                 None
             } else {
-                let targets: Vec<ModifierObjectRef> = info
+                let targets: Vec<SceneNodeRef> = info
                     .objects
                     .iter()
                     .filter(|candidate| candidate.selected && candidate.object != option.object)
@@ -229,7 +229,7 @@ fn scene_target_menu_items(
                 Some(targets)
             }
         } else {
-            let mut targets: Vec<ModifierObjectRef> = info
+            let mut targets: Vec<SceneNodeRef> = info
                 .objects
                 .iter()
                 .filter(|candidate| candidate.selected)
@@ -370,7 +370,8 @@ mod tests {
     use manifold_core::types::LayerType;
     use manifold_core::{LayerId, NodeId};
     use manifold_ui::panels::{PanelAction, ProjectAction, RootAction};
-    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption, ModifierObjectRef};
+    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption};
+    use manifold_core::SceneNodeRef;
 
     #[test]
     fn scene_force_menu_can_clear_last_target_without_losing_stable_address() {
@@ -458,7 +459,7 @@ mod tests {
 
     fn object(id: &str, selected: bool) -> ModifierObjectOption {
         ModifierObjectOption {
-            object: ModifierObjectRef {
+            object: SceneNodeRef {
                 scope: vec![NodeId::new("scope")],
                 node: NodeId::new(id),
             },

@@ -23,7 +23,7 @@
 use crate::panels::GraphParamTarget;
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
 use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, AudioSendChoice};
-use manifold_foundation::{EffectId, LayerId, ParamId};
+use manifold_foundation::{EffectId, LayerId, ParamId, SceneNodeRef};
 
 /// UI-side copy of the persisted material descriptor vocabulary. The UI crate
 /// deliberately does not depend on core; the app projection performs the
@@ -253,24 +253,16 @@ pub struct SceneRowAddr {
     pub param_id: String,
 }
 
-/// Card-level facts for one APPLIED scene modifier (SCENE_MODIFIER_FRAMEWORK
-/// section 3.7) — the chrome + write addressing an ordinary effect-shell card
-/// needs to behave as a modifier card. `None` on every non-modifier surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModifierObjectRef {
-    /// Stable object scope path in the owning scene graph.
-    pub scope: Vec<manifold_foundation::NodeId>,
-    /// Stable node identity within that scope.
-    pub node: manifold_foundation::NodeId,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModifierObjectOption {
-    pub object: ModifierObjectRef,
+    pub object: SceneNodeRef,
     pub label: String,
     pub selected: bool,
 }
 
+/// Card-level facts for one APPLIED scene modifier (SCENE_MODIFIER_FRAMEWORK
+/// section 3.7) — the chrome + write addressing an ordinary effect-shell card
+/// needs to behave as a modifier card. `None` on every non-modifier surface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModifierCardInfo {
     /// Stable identity of this applied modifier instance.
@@ -302,6 +294,9 @@ pub struct ModifierCardInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectModifierCardInfo {
     pub layer_id: LayerId,
+    /// The object the card belongs to, by address.
+    pub object: SceneNodeRef,
+    /// The object's document id, for the id-addressed modifier commands.
     pub object_id: u32,
     pub group_node_id: Option<u32>,
     pub node_doc_id: u32,

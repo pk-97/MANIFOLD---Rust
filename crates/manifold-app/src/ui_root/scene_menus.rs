@@ -16,7 +16,7 @@ impl UIRoot {
             // `button_node_id` resolves the anchor directly, same
             // resolve-at-open convention as `SceneSetupEnumClicked` above.
             PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
-                layer_id, render_scene_node_id, object_index, domains, button_node_id,
+                layer_id, object, domains, button_node_id,
             }) => {
                 let anchor = self.tree.get_bounds(*button_node_id);
                 let mut items = Vec::new();
@@ -29,13 +29,13 @@ impl UIRoot {
                     for (role, label) in [(0, "Initial Fill"), (1, "Inflow"), (2, "Drain"), (3, "Collider")] {
                         let action = if domains.len() == 1 {
                             PanelAction::Project(ProjectAction::SceneSetupAssignFluidRole {
-                                layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                                object_index: *object_index, domain: domains[0].node.clone(), role,
+                                layer_id: layer_id.clone(), object: object.clone(),
+                                 domain: domains[0].node.clone(), role,
                             })
                         } else {
                             PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
-                                layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                                object_index: *object_index, role, domains: domains.clone(), anchor,
+                                layer_id: layer_id.clone(), object: object.clone(),
+                                 role, domains: domains.clone(), anchor,
                             })
                         };
                         items.push(DropdownItem::new(label).with_action(action));
@@ -45,12 +45,12 @@ impl UIRoot {
                 true
             }
             PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
-                layer_id, source_node_id, domains, button_node_id,
+                layer_id, source, domains, button_node_id,
             }) => {
                 let mut items = vec![DropdownItem::disabled("Replace fluid targets")];
                 items.extend(domains.iter().map(|domain| DropdownItem::new(&domain.name)
                     .with_action(PanelAction::Project(ProjectAction::SceneSetupRetargetFluidRole {
-                        layer_id: layer_id.clone(), source_node_id: *source_node_id,
+                        layer_id: layer_id.clone(), source: source.clone(),
                         domain: domain.node.clone(),
                     }))));
                 if domains.is_empty() { items.push(DropdownItem::disabled("Add a Fluid to this scene first")); }
@@ -58,13 +58,13 @@ impl UIRoot {
                 true
             }
             PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
-                layer_id, render_scene_node_id, object_index, role, domains, anchor,
+                layer_id, object, role, domains, anchor,
             }) => {
                 let items = domains.iter().map(|domain| {
                     DropdownItem::new(&domain.name).with_action(PanelAction::Project(
                         ProjectAction::SceneSetupAssignFluidRole {
-                            layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                            object_index: *object_index, domain: domain.node.clone(), role: *role,
+                            layer_id: layer_id.clone(), object: object.clone(),
+                             domain: domain.node.clone(), role: *role,
                         },
                     ))
                 }).collect();

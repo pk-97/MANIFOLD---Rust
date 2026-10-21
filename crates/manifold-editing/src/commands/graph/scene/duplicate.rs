@@ -32,17 +32,16 @@ impl DuplicateSceneObjectCommand {
     pub fn new(
         project: &Project,
         target: GraphTarget,
-        scope_path: Vec<u32>,
-        render_scene_node_id: u32,
-        source_index: u32,
+        object: SceneNodeRef,
         copies: u32,
         catalog_default: &EffectGraphDef,
     ) -> Result<Self, SceneGraphEditError> {
         let mut copy_maps = Vec::new();
         let transaction =
             SceneGraphTransaction::prepare(project, target.clone(), catalog_default, "Duplicate Object", |graph| {
-                let (edit, maps) =
-                    duplicate_scene_object_edit(graph, &scope_path, render_scene_node_id, source_index, copies)?;
+                let slot = manifold_core::scene_slots::object_slot(graph, &object)
+                    .map_err(|message| SceneGraphEditError { at: None, message })?;
+                let (edit, maps) = duplicate_scene_object_edit(graph, &[], slot.render_id, slot.index, copies)?;
                 copy_maps = maps;
                 Ok(edit)
             })?;
@@ -89,16 +88,17 @@ impl Command for DuplicateSceneObjectCommand {
     }
 }
 
-/// Free body slots in the Physics World that render slot `object_index` of a
-/// root-level scene simulates in; `None` when that object has no standard
+/// Free body slots in the Physics World that `object` (in a root-level scene)
+/// simulates in; `None` when that object has no standard
 /// physics. The card reads it to say why a copy count cannot fit; `worlds`
 /// is read once per sync for every card.
 pub fn physics_free_body_slots(
     graph: &EffectGraphDef,
     worlds: &WorldBodySlots,
-    render_scene_node_id: u32,
-    object_index: u32,
+    object: &SceneNodeRef,
 ) -> Option<u32> {
+    let slot = manifold_core::scene_slots::object_slot(graph, object).ok()?;
+    let (render_scene_node_id, object_index) = (slot.render_id, slot.index);
     let source = object_producer_id(&graph.wires, render_scene_node_id, object_index)?;
     match physics_scene_object_match(&graph.nodes, &graph.wires, render_scene_node_id, object_index, source) {
         PhysicsSceneObjectMatch::Valid(physics) if !physics.copies => worlds.get(physics.world_id).map(BodySlots::free),

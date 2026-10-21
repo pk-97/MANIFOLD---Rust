@@ -62,8 +62,8 @@ fn rows(project: &Project, layer: &LayerId) -> Vec<manifold_nodes_scene::node_gr
         .collect()
 }
 
-fn rename_scene_object(project: &mut Project, layer: &LayerId, object_node_id: u32, name: &str) {
-    let command = panel_rename_command(project, layer, object_node_id, name);
+fn rename_scene_object(project: &mut Project, layer: &LayerId, object: &manifold_core::SceneNodeRef, name: &str) {
+    let command = panel_rename_command(project, layer, object, name);
     let mut editing = EditingService::new();
     editing.execute(command, project);
     assert_eq!(editing.take_rejection(), None);
@@ -71,12 +71,12 @@ fn rename_scene_object(project: &mut Project, layer: &LayerId, object_node_id: u
 
 /// Exercise the panel's header and keyboard/context rename action addresses.
 /// Text entry/commit gesture coverage is deferred to BUG-ajyri.
-pub(super) fn panel_rename_command(project: &Project, layer: &LayerId, object_node_id: u32, name: &str)
+pub(super) fn panel_rename_command(project: &Project, layer: &LayerId, object: &manifold_core::SceneNodeRef, name: &str)
     -> Box<dyn manifold_editing::command::Command + Send>
 {
     let mut ui = sync_water_ui(project, layer);
     ui.scene_setup_panel.set_selection(layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id));
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object.clone()));
     build_scene_tree(&mut ui);
     let header = ui.tree.all_nodes().find(|node|
         ui.tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap().id;
@@ -86,15 +86,14 @@ pub(super) fn panel_rename_command(project: &Project, layer: &LayerId, object_no
     let [manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(
         action_layer, action_object, current_name))] = actions.as_slice() else { panic!("panel rename action"); };
     assert_eq!(action_layer, layer);
-    assert_eq!(*action_object, object_node_id);
+    assert_eq!(action_object, object);
     assert!(matches!(ui.scene_setup_panel.rename_selection_action(),
         Some(manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(l, id, n)))
         if l == *action_layer && id == *action_object && n == *current_name));
     let default = effective_def(project, layer);
     Box::new(manifold_editing::commands::graph::RenameSceneObjectCommand::new(
             manifold_core::GraphTarget::Generator(action_layer.clone()),
-            Vec::new(),
-            *action_object,
+            action_object.clone(),
             name.to_string(),
             default,
         ))
@@ -111,14 +110,14 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
         .expect("Water parent");
     let foam = family
         .iter()
-        .find(|row| row.parent_group_id == Some(water.object_node_id))
+        .find(|row| row.parent.as_ref() == Some(&water.address))
         .expect("Foam child");
     assert!(foam.look_node().is_some());
 
     let mut ui = sync_water_ui(&project, &layer);
     ui.scene_setup_panel.set_selection(
         layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(water.object_node_id),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(water.address.clone()),
     );
     build_scene_tree(&mut ui);
     assert!(!tree_has_name(&ui.tree, "scene_setup.properties.duplicate"));
@@ -153,7 +152,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
         &mut ui.tree,
     );
     ui.scene_setup_panel
-        .set_selection(layer.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
+        .set_selection(layer.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.address.clone()));
     build_scene_tree(&mut ui);
     assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some("Size")),
         "Foam retains its recipe-owned Size row");
@@ -249,7 +248,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     EditingService::new().execute(command, &mut project);
     let mut hidden_ui = sync_water_ui(&project, &layer);
     hidden_ui.scene_setup_panel.set_selection(layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.address.clone()));
     build_scene_tree(&mut hidden_ui);
     assert!(tree_has_name(&hidden_ui.tree, "scene_setup.properties.hide"), "Hide remains present when hidden");
     assert!(matches!(hidden_ui.scene_setup_panel.remove_selection_action(),
@@ -274,7 +273,7 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     assert!(rows(&project, &layer).iter().find(|row| row.object == foam.object).unwrap().visible_driven);
     let mut driven_ui = sync_water_ui(&project, &layer);
     driven_ui.scene_setup_panel.set_selection(layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.address.clone()));
     build_scene_tree(&mut driven_ui);
     let button = driven_ui.tree.all_nodes().find(|node|
         driven_ui.tree.name_of(node.id) == Some("scene_setup.properties.hide")).unwrap().id;
@@ -309,9 +308,8 @@ fn water_family_clipboard_rejects_every_group_output() {
         let error = crate::scene_item_transfer::SceneItemClipboard::capture(
             &project,
             &layer,
-            render,
             crate::scene_item_transfer::SceneItemKind::Object,
-            row.index as u32,
+            &row.address,
         )
         .expect_err("Water-family group output must not enter the clipboard");
         assert!(error.contains("Groups with several objects cannot be copied"), "unexpected rejection: {error}");
@@ -333,18 +331,18 @@ fn water_and_imported_compound_rename_use_object_node_id() {
     let mut ui = sync_water_ui(&project, &layer);
     ui.scene_setup_panel.set_selection(
         layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(water.object_node_id),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(water.address.clone()),
     );
     build_scene_tree(&mut ui);
     let action = ui.scene_setup_panel.rename_selection_action().expect("Water rename");
     assert!(matches!(action,
         manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(_, id, _))
-            if id == water.object_node_id));
-    rename_scene_object(&mut project, &layer, water.object_node_id, "Renamed Water");
+            if id == water.address));
+    rename_scene_object(&mut project, &layer, &water.address, "Renamed Water");
     assert_eq!(
         rows(&project, &layer)
             .into_iter()
-            .find(|row| row.object_node_id == water.object_node_id)
+            .find(|row| row.address == water.address)
             .expect("renamed Water row")
             .name,
         "Renamed Water"
@@ -379,14 +377,14 @@ fn water_and_imported_compound_rename_use_object_node_id() {
     let mut ui = sync_water_ui(&project, &layer);
     ui.scene_setup_panel.set_selection(
         layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(imported.object_node_id),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(imported.address.clone()),
     );
     build_scene_tree(&mut ui);
     let action = ui.scene_setup_panel.rename_selection_action().expect("import rename");
     assert!(matches!(action,
         manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(_, id, _))
-            if id == imported.object_node_id));
-    rename_scene_object(&mut project, &layer, imported.object_node_id, "Renamed Import");
+            if id == imported.address));
+    rename_scene_object(&mut project, &layer, &imported.address, "Renamed Import");
     assert_eq!(
         rows(&project, &layer)
             .into_iter()

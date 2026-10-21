@@ -6,7 +6,7 @@ use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::scene_modifier_edit::insert_scene_modifier;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneNodeRefExt as _, SceneTargetSelection};
 use std::collections::{BTreeMap, BTreeSet};
 
 const PHYSICS_SOLIDS: &str = include_str!(concat!(

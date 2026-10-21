@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
-use manifold_core::NodeId;
+use manifold_core::{NodeId, SceneNodeRef, SceneNodeRefExt};
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
@@ -74,16 +74,6 @@ fn restore_scene_owner_graph(
     if let Some(owner) = target.host_target() {
         install_target_graph(project, owner, graph);
     }
-}
-
-fn scene_object_source_matches(
-    def: Option<&EffectGraphDef>, scope: &[u32], render: u32, index: u32, expected: Option<&NodeId>,
-) -> bool {
-    expected.is_none_or(|expected| def.and_then(|def| {
-        let (nodes, wires) = graph_level(def, scope)?;
-        let producer = object_producer_id(wires, render, index)?;
-        nodes.iter().find(|node| node.id == producer).map(|node| &node.node_id)
-    }) == Some(expected))
 }
 
 /// Modifier-local ids are mapped to owner ids by `refresh_target_manifest`.
@@ -191,17 +181,14 @@ fn shift_indexed_ports_down(
 /// a group) use the same exclusive upstream ownership walk as duplication,
 /// retaining shared producers and their dependencies.
 ///
-/// `object_index` (`k`, the 0-based slot in `object_k`) is resolved by the
-/// caller from the live Vm's own `ObjectKnownRow::index`. This is a delete
-/// target for an existing physical slot; append commands resolve their next
-/// slot from the content-owned render-scene count at execution time.
+/// The object is named by its address; the render slot it fills is resolved
+/// against the live graph when the edit runs, and a missing object refuses
+/// with a reason. Append commands resolve their next slot from the
+/// content-owned render-scene count at execution time.
 #[derive(Debug)]
 pub struct RemoveSceneObjectCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    render_scene_node_id: u32,
-    object_index: u32,
-    expected_source: Option<NodeId>,
+    object: SceneNodeRef,
     catalog_default: EffectGraphDef,
     rejection: Option<String>,
     /// The level and metadata before this edit, plus the host instance state
@@ -227,24 +214,10 @@ struct RemovedObjectSnapshot {
 }
 
 impl RemoveSceneObjectCommand {
-    pub fn with_expected_source(mut self, source: NodeId) -> Self {
-        self.expected_source = Some(source);
-        self
-    }
-
-    pub fn new(
-        target: GraphTarget,
-        scope_path: Vec<u32>,
-        render_scene_node_id: u32,
-        object_index: u32,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
+    pub fn new(target: GraphTarget, object: SceneNodeRef, catalog_default: EffectGraphDef) -> Self {
         Self {
             target,
-            scope_path,
-            render_scene_node_id,
-            object_index,
-            expected_source: None,
+            object,
             catalog_default,
             rejection: None,
             prev: None,
@@ -293,18 +266,14 @@ impl Command for RemoveSceneObjectCommand {
         else {
             return;
         };
-        if !scene_object_source_matches(Some(&def), &self.scope_path, self.render_scene_node_id,
-            self.object_index, self.expected_source.as_ref())
-        {
-            self.rejection = Some("Remove Object rejected: selected object changed".into());
-            return;
-        }
-        let aimed = scene_object_modifiers(
-            &def,
-            &self.scope_path,
-            self.render_scene_node_id,
-            self.object_index,
-        );
+        let slot = match manifold_core::scene_slots::object_slot(&def, &self.object) {
+            Ok(slot) => slot,
+            Err(reason) => {
+                self.rejection = Some(reason);
+                return;
+            }
+        };
+        let aimed = scene_object_modifiers(&def, &[], slot.render_id, slot.index);
         if !aimed.shared.is_empty() {
             self.rejection = Some(
                 "A scene modifier aims at this object and others; retarget or remove that modifier first".into(),
@@ -317,9 +286,9 @@ impl Command for RemoveSceneObjectCommand {
         else {
             return;
         };
-        let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let k = self.object_index;
+        let scope: Vec<u32> = Vec::new();
+        let render_id = slot.render_id;
+        let k = slot.index;
         let physics_match = project
             .graph_for_target(&self.target, Some(&self.catalog_default))
             .and_then(|def| {
@@ -780,21 +749,15 @@ fn preserve_shared_parent_visible_binding(
 #[derive(Debug)]
 pub struct RemoveSceneSubmeshCommand {
     target: GraphTarget,
-    render_scene_node_id: u32,
-    physical_index: u32,
+    part: SceneNodeRef,
     catalog_default: EffectGraphDef,
     prev: Option<RemovedObjectSnapshot>,
     rejection: Option<String>,
 }
 
 impl RemoveSceneSubmeshCommand {
-    pub fn new(
-        target: GraphTarget,
-        render_scene_node_id: u32,
-        physical_index: u32,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
-        Self { target, render_scene_node_id, physical_index, catalog_default, prev: None, rejection: None }
+    pub fn new(target: GraphTarget, part: SceneNodeRef, catalog_default: EffectGraphDef) -> Self {
+        Self { target, part, catalog_default, prev: None, rejection: None }
     }
 }
 
@@ -806,18 +769,22 @@ impl Command for RemoveSceneSubmeshCommand {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
-        let aimed = scene_object_modifiers(def, &[], self.render_scene_node_id, self.physical_index);
+        let slot = match manifold_core::scene_slots::object_slot(def, &self.part) {
+            Ok(slot) => slot,
+            Err(reason) => { self.rejection = Some(reason); return; }
+        };
+        let aimed = scene_object_modifiers(def, &[], slot.render_id, slot.index);
         if !aimed.owned.is_empty() || !aimed.shared.is_empty() {
             self.rejection = Some("Submesh is explicitly targeted by a scene modifier; retarget or remove that modifier first".into());
             return;
         }
-        let info = match compound_child_info(def, self.render_scene_node_id, self.physical_index) {
+        let info = match compound_child_info(def, slot.render_id, slot.index) {
             Ok(info) => info,
             Err(reason) => { self.rejection = Some(reason.into()); return; }
         };
         let Some(instance) = resolve_target_instance(&self.target, project).map(|instance| InstanceLayerSnapshot::capture(instance)) else { return; };
-        let render_id = self.render_scene_node_id;
-        let physical_index = self.physical_index;
+        let render_id = slot.render_id;
+        let physical_index = slot.index;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let previous_metadata = def.preset_metadata.clone();
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &[])?;
@@ -901,16 +868,15 @@ fn shift_indexed_port(wire: &mut EffectGraphWire, prefix: &str, removed: u32) {
 #[derive(Debug)]
 pub struct DuplicateSceneSubmeshCommand {
     target: GraphTarget,
-    render_scene_node_id: u32,
-    physical_index: u32,
+    part: SceneNodeRef,
     catalog_default: EffectGraphDef,
     prev: Option<RemovedObjectSnapshot>,
     rejection: Option<String>,
 }
 
 impl DuplicateSceneSubmeshCommand {
-    pub fn new(target: GraphTarget, render_scene_node_id: u32, physical_index: u32, catalog_default: EffectGraphDef) -> Self {
-        Self { target, render_scene_node_id, physical_index, catalog_default, prev: None, rejection: None }
+    pub fn new(target: GraphTarget, part: SceneNodeRef, catalog_default: EffectGraphDef) -> Self {
+        Self { target, part, catalog_default, prev: None, rejection: None }
     }
 }
 
@@ -922,12 +888,16 @@ impl Command for DuplicateSceneSubmeshCommand {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
-        let info = match compound_child_info(def, self.render_scene_node_id, self.physical_index) {
+        let slot = match manifold_core::scene_slots::object_slot(def, &self.part) {
+            Ok(slot) => slot,
+            Err(reason) => { self.rejection = Some(reason); return; }
+        };
+        let info = match compound_child_info(def, slot.render_id, slot.index) {
             Ok(info) => info,
             Err(reason) => { self.rejection = Some(reason.into()); return; }
         };
         let Some(instance) = resolve_target_instance(&self.target, project).map(|instance| InstanceLayerSnapshot::capture(instance)) else { return; };
-        let render_id = self.render_scene_node_id;
+        let render_id = slot.render_id;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let previous_metadata = def.preset_metadata.clone();
             let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
@@ -1060,28 +1030,20 @@ fn scene_object_modifiers(
 #[derive(Debug)]
 pub struct RemoveSceneLightCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    render_scene_node_id: u32,
-    light_index: u32,
+    light: SceneNodeRef,
     catalog_default: EffectGraphDef,
     prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    rejection: Option<String>,
 }
 
 impl RemoveSceneLightCommand {
-    pub fn new(
-        target: GraphTarget,
-        scope_path: Vec<u32>,
-        render_scene_node_id: u32,
-        light_index: u32,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
+    pub fn new(target: GraphTarget, light: SceneNodeRef, catalog_default: EffectGraphDef) -> Self {
         Self {
             target,
-            scope_path,
-            render_scene_node_id,
-            light_index,
+            light,
             catalog_default,
             prev: None,
+            rejection: None,
         }
     }
 }
@@ -1093,9 +1055,18 @@ impl Command for RemoveSceneLightCommand {
     }
 
     fn do_execute(&mut self, project: &mut Project) {
-        let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let k = self.light_index;
+        self.rejection = None;
+        let Some(current) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return };
+        let slot = match manifold_core::scene_slots::light_slot(current, &self.light) {
+            Ok(slot) => slot,
+            Err(reason) => {
+                self.rejection = Some(reason);
+                return;
+            }
+        };
+        let scope: Vec<u32> = Vec::new();
+        let render_id = slot.render_id;
+        let k = slot.index;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
@@ -1141,7 +1112,7 @@ impl Command for RemoveSceneLightCommand {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
-        let scope = self.scope_path.clone();
+        let scope: Vec<u32> = Vec::new();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
@@ -1152,6 +1123,14 @@ impl Command for RemoveSceneLightCommand {
 
     fn description(&self) -> &str {
         "Remove Light"
+    }
+
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
     }
 }
 
@@ -1735,30 +1714,30 @@ pub(crate) fn fog_density_range(scene_bounds: Option<([f32; 3], [f32; 3])>) -> O
 #[derive(Debug)]
 pub struct AddObjectTransformCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    scene_object_node_id: u32,
+    object: SceneNodeRef,
     pos: (f32, f32),
     catalog_default: EffectGraphDef,
     prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
     created_node_id: Option<u32>,
+    /// Where the object sat when the edit ran, for undo.
+    scope_path: Vec<u32>,
 }
 
 impl AddObjectTransformCommand {
     pub fn new(
         target: GraphTarget,
-        scope_path: Vec<u32>,
-        scene_object_node_id: u32,
+        object: SceneNodeRef,
         pos: (f32, f32),
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
             target,
-            scope_path,
-            scene_object_node_id,
+            object,
             pos,
             catalog_default,
             prev: None,
             created_node_id: None,
+            scope_path: Vec::new(),
         }
     }
 
@@ -1777,8 +1756,15 @@ impl Command for AddObjectTransformCommand {
     }
 
     fn do_execute(&mut self, project: &mut Project) {
-        let scope = self.scope_path.clone();
-        let object_id = self.scene_object_node_id;
+        let resolved = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .and_then(|def| self.object.resolve_doc_path(def));
+        let Some((scope, object_id)) = resolved else {
+            self.prev = None;
+            self.created_node_id = None;
+            return;
+        };
+        self.scope_path = scope.clone();
         let pos = self.pos;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
@@ -2021,39 +2007,13 @@ impl Command for ImportModelIntoSceneCommand {
 /// prev group handle)>)` — [`RenameSceneObjectCommand`]'s undo snapshot.
 type RenameSceneObjectPrev = (Option<u32>, Option<String>, Option<(u32, Option<String>)>);
 
-fn find_scene_object_scope(
-    nodes: &[EffectGraphNode],
-    target_id: u32,
-    scope: &mut Vec<u32>,
-) -> Option<Vec<u32>> {
-    for node in nodes {
-        if node.id == target_id && node.type_id == "node.scene_object" {
-            return Some(scope.clone());
-        }
-        if let Some(group) = node.group.as_deref() {
-            scope.push(node.id);
-            if let Some(found) = find_scene_object_scope(&group.nodes, target_id, scope) {
-                return Some(found);
-            }
-            scope.pop();
-        }
-    }
-    None
-}
-
 #[derive(Debug)]
 pub struct RenameSceneObjectCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    /// The `object_k` wire's producer at `scope_path` — the group when the
-    /// object is grouped (Add/importer/merge shape), else the bare
-    /// `node.scene_object` itself. Same value `SceneVm`'s
-    /// `SceneObjectVm::Known::group_node_id` already resolves to (P1/P2
-    /// re-anchored it onto the Object-wire producer, D12), so the panel can
-    /// address this command with the exact id it already has — no
-    /// render_scene/object-index re-derivation needed. Matches
-    /// `RenameGroupCommand::group_node_id`'s addressing shape exactly.
-    object_node_id: u32,
+    /// The object row: the scene object (the group, for a compound model's
+    /// parent row). Resolved against the live graph when the edit runs.
+    object: SceneNodeRef,
+    rejection: Option<String>,
     new_handle: String,
     catalog_default: EffectGraphDef,
     /// Captured on first successful execute.
@@ -2073,15 +2033,14 @@ pub struct RenameSceneObjectCommand {
 impl RenameSceneObjectCommand {
     pub fn new(
         target: GraphTarget,
-        scope_path: Vec<u32>,
-        object_node_id: u32,
+        object: SceneNodeRef,
         new_handle: String,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
             target,
-            scope_path,
-            object_node_id,
+            object,
+            rejection: None,
             new_handle,
             catalog_default,
             prev: None,
@@ -2096,8 +2055,15 @@ impl RenameSceneObjectCommand {
 impl Command for RenameSceneObjectCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn do_execute(&mut self, project: &mut Project) {
-        let scope = self.scope_path.clone();
-        let producer_id = self.object_node_id;
+        self.rejection = None;
+        let resolved = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .and_then(|def| self.object.resolve_doc_path(def));
+        let Some((object_scope, producer_id)) = resolved else {
+            self.rejection = Some("That object is no longer in this scene".into());
+            return;
+        };
+        let scope: Vec<u32> = Vec::new();
         let new_handle = self.new_handle.clone();
         let first_time = self.prev.is_none();
         let mut family_section_name = None;
@@ -2115,12 +2081,13 @@ impl Command for RenameSceneObjectCommand {
                 }) {
                     return None;
                 }
-                let Some(producer_index) = nodes.iter().position(|n| n.id == producer_id) else {
-                    if !scope.is_empty() {
-                        return None;
-                    }
-                    let mut nested = Vec::new();
-                    let nested_scope = find_scene_object_scope(&def.nodes, producer_id, &mut nested)?;
+                let producer_index = if object_scope.is_empty() {
+                    nodes.iter().position(|n| n.id == producer_id)
+                } else {
+                    None
+                };
+                let Some(producer_index) = producer_index else {
+                    let nested_scope = object_scope.clone();
                     if nested_scope.is_empty() {
                         return None;
                     }
@@ -2323,7 +2290,7 @@ impl Command for RenameSceneObjectCommand {
         let Some((scene_object_id, prev_object_handle, prev_group)) = self.prev.clone() else {
             return;
         };
-        let scope = self.nested_scope.clone().unwrap_or_else(|| self.scope_path.clone());
+        let scope = self.nested_scope.clone().unwrap_or_default();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
             else {
@@ -2351,6 +2318,14 @@ impl Command for RenameSceneObjectCommand {
     fn description(&self) -> &str {
         "Rename Object"
     }
+
+    fn was_applied(&self) -> bool {
+        self.rejection.is_none() && self.prev.is_some()
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
 }
 
 /// Plain rename of a node's `handle` — no card-section sweep (D6: nothing
@@ -2360,28 +2335,25 @@ impl Command for RenameSceneObjectCommand {
 #[derive(Debug)]
 pub struct SetNodeHandleCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    node_doc_id: u32,
+    node: SceneNodeRef,
     new_handle: String,
     catalog_default: EffectGraphDef,
     prev: Option<Option<String>>,
+    /// Where the node sat when the edit ran, for undo.
+    resolved: Option<(Vec<u32>, u32)>,
+    rejection: Option<String>,
 }
 
 impl SetNodeHandleCommand {
-    pub fn new(
-        target: GraphTarget,
-        scope_path: Vec<u32>,
-        node_doc_id: u32,
-        new_handle: String,
-        catalog_default: EffectGraphDef,
-    ) -> Self {
+    pub fn new(target: GraphTarget, node: SceneNodeRef, new_handle: String, catalog_default: EffectGraphDef) -> Self {
         Self {
             target,
-            scope_path,
-            node_doc_id,
+            node,
             new_handle,
             catalog_default,
             prev: None,
+            resolved: None,
+            rejection: None,
         }
     }
 }
@@ -2389,8 +2361,15 @@ impl SetNodeHandleCommand {
 impl Command for SetNodeHandleCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn do_execute(&mut self, project: &mut Project) {
-        let scope = self.scope_path.clone();
-        let id = self.node_doc_id;
+        self.rejection = None;
+        let resolved = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .and_then(|def| self.node.resolve_doc_path(def));
+        let Some((scope, id)) = resolved else {
+            self.rejection = Some("That node is no longer in this scene".into());
+            return;
+        };
+        self.resolved = Some((scope.clone(), id));
         let new_handle = self.new_handle.clone();
         let first_time = self.prev.is_none();
         let captured =
@@ -2419,8 +2398,7 @@ impl Command for SetNodeHandleCommand {
         let Some(prev) = self.prev.clone() else {
             return;
         };
-        let scope = self.scope_path.clone();
-        let id = self.node_doc_id;
+        let Some((scope, id)) = self.resolved.clone() else { return };
         let _ = with_existing_target_graph_mut(project, &self.target, false, |def| {
             if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
                 && let Some(node) = nodes.iter_mut().find(|n| n.id == id)
@@ -2432,6 +2410,14 @@ impl Command for SetNodeHandleCommand {
 
     fn description(&self) -> &str {
         "Rename Light"
+    }
+
+    fn was_applied(&self) -> bool {
+        self.rejection.is_none() && self.prev.is_some()
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
     }
 }
 

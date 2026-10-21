@@ -579,8 +579,8 @@ impl ScenePanel {
 
     pub(super) fn material_action_context(
         &self,
-        object: &ModifierObjectRef,
-        material: &ModifierObjectRef,
+        object: &SceneNodeRef,
+        material: &SceneNodeRef,
         require_shared_scope: bool,
     ) -> bool {
         !object.node.is_empty()
@@ -863,7 +863,7 @@ impl ScenePanel {
         match selected {
             SceneSelection::Object(id) => {
                 let Some(row) = vm.objects.iter().find_map(|o| match o {
-                    ObjectRowVm::Known(r) if r.object_node_id == id => Some(r.as_ref()),
+                    ObjectRowVm::Known(r) if r.node == id => Some(r.as_ref()),
                     _ => None,
                 }) else {
                     return cy;
@@ -896,7 +896,7 @@ impl ScenePanel {
         row: &ObjectKnownRow,
     ) -> f32 {
         if (row.physics_available || row.physics_unavailable_reason.is_some())
-            && (row.parent_group_id.is_none() || row.is_group)
+            && (row.parent.is_none() || row.is_group)
         {
             let toggle_w = crate::slider::VALUE_BOX_W.max(64.0);
             tree.add_label(
@@ -908,13 +908,13 @@ impl ScenePanel {
                     Some(self.content_parent), inner_x + inner_w - toggle_w, cy,
                     toggle_w, ROW_H, toggle_btn_style(row.physics_enabled),
                     if row.physics_enabled { "Disable" } else { "Enable" },
-                    obj_key(row.object_node_id as usize, OBJ_OFF_PHYSICS),
+                    obj_key(self.row_key(&row.node), OBJ_OFF_PHYSICS),
                 );
                 tree.set_name(physics_id, "scene_setup.properties.physics");
                 if row.physics_enabled {
-                    self.object_disable_physics_ids.push((physics_id, row.index));
+                    self.object_disable_physics_ids.push((physics_id, row.node.clone()));
                 } else {
-                    self.object_enable_physics_ids.push((physics_id, row.index));
+                    self.object_enable_physics_ids.push((physics_id, row.node.clone()));
                 }
                 cy += ROW_H;
             } else if let Some(reason) = row.physics_unavailable_reason.as_deref() {
@@ -996,14 +996,14 @@ impl ScenePanel {
             // there is no material drawer to host it.
             cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
         }
-        cy = self.build_object_modifier_cards(tree, inner_x, inner_w, cy, row.object_node_id);
+        cy = self.build_object_modifier_cards(tree, inner_x, inner_w, cy, &row.node);
         if row.modifiers_addable {
             cy = self.build_add_modifier_button(
                 tree,
                 inner_x,
                 inner_w,
                 cy,
-                row.object_node_id as usize,
+                self.row_key(&row.node),
                 row.group_node_id.unwrap_or(row.object_node_id),
             );
         } else if row.capabilities.modifiers {
@@ -1141,7 +1141,7 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             &format!("Source: {source_label}"),
-            obj_key(row.object_node_id as usize, OBJ_OFF_SKIN_SOURCE),
+            obj_key(self.row_key(&row.node), OBJ_OFF_SKIN_SOURCE),
         );
         tree.set_name(source_btn, "scene_setup.skin.source");
         self.skin_source_ids
@@ -1154,7 +1154,7 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             &format!("Map: {}", skin.target_map.label()),
-            obj_key(row.object_node_id as usize, OBJ_OFF_SKIN_TARGET),
+            obj_key(self.row_key(&row.node), OBJ_OFF_SKIN_TARGET),
         );
         tree.set_name(target_btn, "scene_setup.skin.target");
         self.skin_target_ids
@@ -1342,11 +1342,11 @@ mod tests {
         panel.properties_card.rows = vec![mode];
         panel.active_material_info = Some(MaterialInspectorInfo {
             object_gain: None,
-            object: ModifierObjectRef {
+            object: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("object"),
             },
-            material: ModifierObjectRef {
+            material: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("material"),
             },
@@ -1411,11 +1411,11 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.material_feature_context = Some((
             LayerId::new("layer"),
-            ModifierObjectRef {
+            SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("object"),
             },
-            ModifierObjectRef {
+            SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("material"),
             },
@@ -1700,11 +1700,11 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.active_material_info = Some(MaterialInspectorInfo {
             object_gain: None,
-            object: ModifierObjectRef {
+            object: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("object"),
             },
-            material: ModifierObjectRef {
+            material: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("material"),
             },
@@ -1747,11 +1747,11 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.active_material_info = Some(MaterialInspectorInfo {
             object_gain: None,
-            object: ModifierObjectRef {
+            object: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("object"),
             },
-            material: ModifierObjectRef {
+            material: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("material"),
             },
@@ -1927,11 +1927,11 @@ mod tests {
         panel.properties_card.rows = vec![mode_51.clone(), seed_51.clone(), mode_52, seed_52];
         panel.active_material_info = Some(MaterialInspectorInfo {
             object_gain: None,
-            object: ModifierObjectRef {
+            object: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("object"),
             },
-            material: ModifierObjectRef {
+            material: SceneNodeRef {
                 scope: Vec::new(),
                 node: manifold_foundation::NodeId::new("material"),
             },

@@ -125,7 +125,8 @@ fn physics_catalog_host() -> EffectGraphDef {
         owner.preset_metadata.as_ref().unwrap().id.clone());
     project.timeline.layers[layer].gen_params_mut().unwrap().graph = Some(owner.clone());
     let target = GraphTarget::Generator(project.timeline.layers[layer].layer_id.clone());
-    let mut enable = EnableSceneObjectPhysicsCommand::new(&project, target, scene_id, 0,
+    let first = manifold_core::scene_slots::object_at_slot(&owner, scene_id, 0).expect("the import has an object");
+    let mut enable = EnableSceneObjectPhysicsCommand::new(&project, target, first,
         &metadata_for_node_type("node.rigid_body"), &metadata_for_node_type("node.physics_world"), &owner)
         .expect("catalog Physics source takes physics");
     enable.execute(&mut project);

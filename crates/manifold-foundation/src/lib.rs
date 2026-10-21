@@ -31,6 +31,7 @@ pub mod work_count;
 pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_cold_touch_counts, set_transport_playing, thread_cold_touch_count, total_cold_touches};
 
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
+pub use scene_surface::SceneNodeRef;
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use units::{Beats, Bpm, Seconds};
 

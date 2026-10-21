@@ -411,6 +411,36 @@ pub struct SceneShapeDecl {
     pub extent_limit: Option<crate::param_range::HardLimit>,
 }
 
+
+/// The one address of a scene thing: the group path to it, then its stable
+/// node id. UI selections, gizmo owners, scene actions, commands and saved
+/// scene-modifier targets all name a scene node this way. A document id or a
+/// render-slot number is only resolved from it, on the content thread, when
+/// an edit runs against the live graph.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneNodeRef {
+    #[serde(default)]
+    pub scope: Vec<crate::NodeId>,
+    pub node: crate::NodeId,
+}
+
+impl Ord for SceneNodeRef {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.scope
+            .iter()
+            .map(crate::NodeId::as_str)
+            .cmp(other.scope.iter().map(crate::NodeId::as_str))
+            .then_with(|| self.node.as_str().cmp(other.node.as_str()))
+    }
+}
+
+impl PartialOrd for SceneNodeRef {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[cfg(test)]
 mod shape_tests {
     use super::*;

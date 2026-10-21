@@ -72,7 +72,7 @@ impl ScenePanel {
         match &item.selection {
             SceneSelection::Object(id) => {
                 let Some(row) = vm.objects.iter().find_map(|object| match object {
-                    ObjectRowVm::Known(row) if row.object_node_id == *id => Some(row.as_ref()),
+                    ObjectRowVm::Known(row) if row.node == *id => Some(row.as_ref()),
                     _ => None,
                 }) else {
                     return cy;
@@ -81,12 +81,12 @@ impl ScenePanel {
             }
             SceneSelection::Light(id) => {
                 let Some(row) = vm.lights.iter().find_map(|light| match light {
-                    LightRowVm::Known(row) if row.node_doc_id == *id => Some(row.as_ref()),
+                    LightRowVm::Known(row) if row.node == *id => Some(row.as_ref()),
                     _ => None,
                 }) else {
                     return cy;
                 };
-                self.build_light_header(tree, (inner_x, inner_w), cy, (row.node_doc_id, row.index, &row.name))
+                self.build_light_header(tree, (inner_x, inner_w), cy, (&row.node, row.index, &row.name))
             }
             SceneSelection::Lighting => {
                 let name = tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &item.name, header_label_style());
@@ -137,7 +137,7 @@ impl ScenePanel {
         tree: &mut UITree,
         (inner_x, inner_w): (f32, f32),
         cy: f32,
-        (doc_id, index, name): (u32, usize, &str),
+        (light, index, name): (&SceneNodeRef, usize, &str),
     ) -> f32 {
         let name_w = inner_w - STEP_W - 4.0;
         let name_id = self.build_name_and_kind(
@@ -147,7 +147,7 @@ impl ScenePanel {
             SceneItemKind::Light,
             Some(light_key(index, LIGHT_OFF_NAME)),
         );
-        self.light_name_ids.push((doc_id, name_id, name.to_string()));
+        self.light_name_ids.push((light.clone(), name_id, name.to_string()));
         let remove_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x + name_w + 4.0,
@@ -159,7 +159,7 @@ impl ScenePanel {
             light_key(index, LIGHT_OFF_REMOVE),
         );
         tree.set_name(remove_id, "scene_setup.properties.remove");
-        self.light_remove_ids.push((remove_id, index));
+        self.light_remove_ids.push((remove_id, light.clone()));
         cy + ROW_H + ROW_GAP
     }
 
@@ -221,9 +221,9 @@ impl ScenePanel {
             Rect::new(inner_x, cy, name_w, ROW_H),
             &row.name,
             kind,
-            Some(obj_key(row.object_node_id as usize, OBJ_OFF_NAME)),
+            Some(obj_key(self.row_key(&row.node), OBJ_OFF_NAME)),
         );
-        self.object_name_ids.push((row.object_node_id, name_id, row.name.clone()));
+        self.object_name_ids.push((row.node.clone(), name_id, row.name.clone()));
 
         let frame_id = tree.add_button_keyed(
             Some(self.content_parent),
@@ -233,9 +233,9 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             "Frame",
-            obj_key(row.object_node_id as usize, OBJ_OFF_FRAME),
+            obj_key(self.row_key(&row.node), OBJ_OFF_FRAME),
         );
-        self.object_frame_ids.push((frame_id, row.object_node_id));
+        self.object_frame_ids.push((frame_id, row.node.clone()));
         tree.set_name(frame_id, "scene_setup.properties.frame");
 
         let mut action_x = inner_x + name_w + 4.0 + frame_w;
@@ -248,7 +248,7 @@ impl ScenePanel {
                 ROW_H,
                 if row.visible.driven { driven_label_style() } else { btn_style() },
                 "Hide",
-                obj_key(row.object_node_id as usize, OBJ_OFF_HIDE),
+                obj_key(self.row_key(&row.node), OBJ_OFF_HIDE),
             );
             tree.set_name(hide_id, "scene_setup.properties.hide");
             if !row.visible.driven {
@@ -256,7 +256,7 @@ impl ScenePanel {
             }
             action_x += frame_w;
         }
-        let submesh = row.parent_group_id.is_some() && !row.is_group;
+        let submesh = row.parent.is_some() && !row.is_group;
         if show_duplicate {
             let dup_id = tree.add_button_keyed(
                 Some(self.content_parent),
@@ -266,13 +266,13 @@ impl ScenePanel {
                 ROW_H,
                 btn_style(),
                 "\u{29C9}",
-                obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE) + 1,
+                obj_key(self.row_key(&row.node), OBJ_OFF_REMOVE) + 1,
             );
             tree.set_name(dup_id, "scene_setup.properties.duplicate");
             if submesh {
-                self.submesh_duplicate_ids.push((dup_id, row.index));
+                self.submesh_duplicate_ids.push((dup_id, row.node.clone()));
             } else {
-                self.object_duplicate_ids.push((dup_id, row.index));
+                self.object_duplicate_ids.push((dup_id, row.node.clone()));
             }
             action_x += STEP_W;
         }
@@ -285,13 +285,13 @@ impl ScenePanel {
                 ROW_H,
                 btn_style(),
                 "\u{2715}",
-                obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE),
+                obj_key(self.row_key(&row.node), OBJ_OFF_REMOVE),
             );
             tree.set_name(remove_id, "scene_setup.properties.remove");
             if submesh {
-                self.submesh_remove_ids.push((remove_id, row.index));
+                self.submesh_remove_ids.push((remove_id, row.node.clone()));
             } else {
-                self.object_remove_ids.push((remove_id, row.index));
+                self.object_remove_ids.push((remove_id, row.node.clone()));
             }
         }
         cy + ROW_H + ROW_GAP

@@ -245,7 +245,7 @@ mod gpu {
         let children: Vec<_> = rows
             .iter()
             .filter(|row| {
-                row.parent_group_id == Some(water.object_node_id)
+                row.parent.as_ref() == Some(&water.address)
                     && (initial_objects..initial_objects + 4).contains(&row.index)
             })
             .cloned()

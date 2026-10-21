@@ -9,7 +9,7 @@
 //! is the force's scene modifier. Controls no item owns (composite macros,
 //! authored controls on other nodes) are the scene's authored group.
 
-use manifold_core::NodeId;
+use manifold_core::{NodeId, SceneNodeRef};
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, PresetMetadata};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, is_force_recipe};
 use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind};
@@ -36,8 +36,8 @@ pub enum SceneItemId {
     /// A physics world, by its node.
     Physics(NodeId),
     /// A placed fluid source, by its role node, under the water row
-    /// (`object_node_id`) it feeds.
-    Source { node: NodeId, water: u32 },
+    /// (its address) it feeds.
+    Source { node: NodeId, water: SceneNodeRef },
 }
 
 /// Every item of the scene, in display order: Camera, lights, objects,
@@ -80,7 +80,7 @@ pub fn scene_items(def: &EffectGraphDef, vm: &SceneVm) -> Vec<SceneItem> {
             listed.push(&source.node);
             items.push(SceneItem {
                 kind: SceneItemKind::Source(source.role),
-                id: SceneItemId::Source { node: source.node.clone(), water: row.object_node_id },
+                id: SceneItemId::Source { node: source.node.clone(), water: row.address.clone() },
                 name: source.name.clone(),
                 owned_nodes: source.owned.clone(),
             });

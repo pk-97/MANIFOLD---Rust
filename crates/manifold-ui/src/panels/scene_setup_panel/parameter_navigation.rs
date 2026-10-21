@@ -21,7 +21,7 @@ impl ScenePanel {
             object.material_inspector.as_ref().is_some_and(|material| {
                 material.object_gain.as_ref().is_some_and(|owned| owned.as_ref() == id)
                     || material.params.iter().any(|(_, owned)| owned.as_ref() == id)
-            }).then_some(object.object_node_id)
+            }).then_some(object.node.clone())
         }) {
             return Some(SceneSelection::Object(object));
         }
@@ -74,7 +74,7 @@ impl ScenePanel {
             };
             self.set_selection(
                 info.layer_id.clone(),
-                SceneSelection::Object(info.object_id),
+                SceneSelection::Object(info.object.clone()),
             );
             self.selected_object_modifier = Some(info);
             self.pending_parameter_reveal = Some((target.clone(), param.clone()));
@@ -239,14 +239,16 @@ mod tests {
             .expect("fixture object");
         let mut object_a = first.clone();
         object_a.object_node_id = 40;
+        object_a.node = super::super::tests::object_ref(40);
         let mut object_b = object_a.clone();
         object_b.object_node_id = 41;
+        object_b.node = super::super::tests::object_ref(41);
         vm.objects = vec![
             ObjectRowVm::Known(Box::new(object_a)),
             ObjectRowVm::Known(Box::new(object_b)),
         ];
-        super::super::tests::set_item_ids(&mut vm, SceneSelection::Object(40), &["shared_a"]);
-        super::super::tests::set_item_ids(&mut vm, SceneSelection::Object(41), &["shared_b"]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Object(super::super::tests::object_ref(40)), &["shared_a"]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Object(super::super::tests::object_ref(41)), &["shared_b"]);
 
         let mut row_a = surface.rows[0].clone();
         row_a.id = "shared_a".into();
@@ -267,7 +269,7 @@ mod tests {
         assert!(panel.reveal_param(&target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-1")),
-            Some(&SceneSelection::Object(41))
+            Some(&SceneSelection::Object(super::super::tests::object_ref(41)))
         );
         assert_eq!(panel.full_params.as_ref().unwrap().rows[1].value.base, 0.75);
         let mut tree = UITree::new();
@@ -280,7 +282,7 @@ mod tests {
         tree.clear();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
         assert!(panel.properties_card.row_id_index.contains_key("shared_b"), "response must remain reachable after the reveal frame");
-        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Object(40));
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Object(super::super::tests::object_ref(40)));
         assert!(panel.revealed_property.is_none());
         assert!(panel.reveal_param(&target, &param));
         panel.configure_params(None);
@@ -298,7 +300,7 @@ mod tests {
             .objects
             .iter()
             .find_map(|object| match object {
-                ObjectRowVm::Known(row) => Some(row.object_node_id),
+                ObjectRowVm::Known(row) => Some(row.node.clone()),
                 ObjectRowVm::Custom { .. } => None,
             })
             .expect("fixture object");
@@ -307,8 +309,8 @@ mod tests {
         let physics = SceneSelection::Physics(manifold_foundation::NodeId::new("world"));
         for (selection, ids) in [
             (SceneSelection::Camera, &["camera_param"][..]),
-            (SceneSelection::Light(60), &["light_param"]),
-            (SceneSelection::Object(object), &["object_param"]),
+            (SceneSelection::Light(super::super::tests::light_ref(60)), &["light_param"]),
+            (SceneSelection::Object(object.clone()), &["object_param"]),
             (SceneSelection::World, &["world_param", "ray_tracing_param"]),
             (physics.clone(), &["physics_param"]),
         ] {
@@ -346,7 +348,7 @@ mod tests {
         for (id, expected) in [
             ("camera_param", SceneSelection::Camera),
             ("light_param", SceneSelection::Lighting),
-            ("object_param", SceneSelection::Object(object)),
+            ("object_param", SceneSelection::Object(object.clone())),
             ("world_param", SceneSelection::World),
             ("ray_tracing_param", SceneSelection::World),
             ("physics_param", physics.clone()),
@@ -369,7 +371,7 @@ mod tests {
         let layer = vm.layer_id.clone();
         let target = UiGraphTarget::Generator(layer.clone());
         super::super::tests::set_item_ids(&mut vm, SceneSelection::Camera, &["exposure", "orbit"]);
-        super::super::tests::set_item_ids(&mut vm, SceneSelection::Light(60), &["sun_intensity"]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Light(super::super::tests::light_ref(60)), &["sun_intensity"]);
         let mut surface = template.clone();
         surface.rows = ["exposure", "orbit", "sun_intensity"]
             .iter()

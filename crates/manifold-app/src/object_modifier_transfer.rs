@@ -935,8 +935,7 @@ mod tests {
             &project,
             crate::scene_item_transfer::SceneItemAction::DuplicateObject {
                 layer: destination_layer.clone(),
-                scene,
-                index: 0,
+                object: manifold_core::scene_slots::object_at_slot(&destination_graph, scene, 0).expect("the destination has an object"),
                 copies: 1,
             },
         )

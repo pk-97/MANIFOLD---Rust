@@ -62,11 +62,11 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0)),
     );
     let target = GraphTarget::Generator(project.timeline.layers[layer_index].layer_id.clone());
+    let first = manifold_core::scene_slots::object_at_slot(&imported, render.id, 0).expect("the import has an object");
     let mut enable = EnableSceneObjectPhysicsCommand::new(
         &project,
         target.clone(),
-        render.id,
-        0,
+        first,
         &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
         &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
         &imported,
@@ -455,7 +455,7 @@ fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
     let (imported, _) = assemble_import_graph(&fixture).unwrap();
     let vm = SceneVm::from_def(&imported).unwrap();
     let SceneObjectVm::Known(child) = &vm.objects[1] else { panic!("flower child") };
-    let group = imported.nodes.iter().find(|n| Some(n.id) == child.parent_group_id).unwrap().group.as_ref().unwrap();
+    let group = imported.nodes.iter().find(|n| child.parent.as_ref().is_some_and(|parent| parent.node == n.node_id)).unwrap().group.as_ref().unwrap();
     let object = group.nodes.iter().find(|n| n.id == child.object_node_id).unwrap();
     let transform = group.nodes.iter().find(|n| n.id == child.transform.as_ref().unwrap().node_doc_id).unwrap();
     let metadata = imported.preset_metadata.as_ref().unwrap();
@@ -532,11 +532,11 @@ fn imported_flower_physics_off_renders_authored_transform() {
             Beats(16.0),
         ));
     let target = GraphTarget::Generator(layer.layer_id.clone());
+    let first = manifold_core::scene_slots::object_at_slot(&imported, render_id, 0).expect("the import has an object");
     let mut enable = EnableSceneObjectPhysicsCommand::new(
         &project,
         target.clone(),
-        render_id,
-        0,
+        first,
         &metadata_for_node_type("node.rigid_body"),
         &metadata_for_node_type("node.physics_world"),
         &imported,

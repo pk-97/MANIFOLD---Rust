@@ -835,7 +835,8 @@ pub(crate) fn modifier_surfaces(
     timing: (manifold_core::Bpm, f32),
 ) -> Vec<ParamSurface> {
     use manifold_core::effect_graph_def::BindingTarget;
-    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption, ModifierObjectRef};
+    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption};
+    use manifold_core::SceneNodeRef;
     use manifold_core::scene_modifier_preset::SceneTargetSelection;
     let full = gen_params_to_surface(gp, layer_id, None, automation_latched,
         SurfaceVisibility::All, timing);
@@ -905,7 +906,7 @@ pub(crate) fn modifier_surfaces(
                             label: if force_objects.as_ref().is_some_and(|eligible| !eligible.contains(&object)) {
                                 format!("{} (no physics)", modifier_object_label(def, &object))
                             } else { modifier_object_label(def, &object) },
-                            object: ModifierObjectRef { scope: object.scope, node: object.node },
+                            object: SceneNodeRef { scope: object.scope, node: object.node },
                             selected,
                         }
                     }).collect() } else { Vec::new() },

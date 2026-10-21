@@ -34,8 +34,7 @@ const MAX_FLUID_ROLES: u32 = 64;
 #[derive(Debug)]
 pub struct AssignSceneFluidRoleCommand {
     target: GraphTarget,
-    render_scene_node_id: u32,
-    object_index: u32,
+    object: SceneNodeRef,
     domain: SceneNodeRef,
     role: u32,
     role_metadata: Vec<NodeParamMetadata>,
@@ -52,8 +51,7 @@ pub struct AssignSceneFluidRoleCommand {
 impl AssignSceneFluidRoleCommand {
     pub fn new(
         target: GraphTarget,
-        render_scene_node_id: u32,
-        object_index: u32,
+        object: SceneNodeRef,
         domain: SceneNodeRef,
         role: u32,
         role_metadata: Vec<NodeParamMetadata>,
@@ -61,8 +59,7 @@ impl AssignSceneFluidRoleCommand {
     ) -> Self {
         Self {
             target,
-            render_scene_node_id,
-            object_index,
+            object,
             domain,
             role,
             role_metadata,
@@ -146,12 +143,19 @@ impl Command for AssignSceneFluidRoleCommand {
             return;
         };
 
+        let slot = match manifold_core::scene_slots::object_slot(&baseline, &self.object) {
+            Ok(slot) => slot,
+            Err(reason) => {
+                self.rejection = Some(reason);
+                return;
+            }
+        };
         let mut candidate = baseline.clone();
         let role_metadata = self.role_metadata.clone();
         let result = build_assignment(
             &mut candidate,
-            self.render_scene_node_id,
-            self.object_index,
+            slot.render_id,
+            slot.index,
             &self.domain,
             self.role,
             &role_metadata,
@@ -210,12 +214,9 @@ impl Command for AssignSceneFluidRoleCommand {
 /// Pure eligibility used by the scene projection. It intentionally excludes
 /// domain and destination-slot checks, which belong to the command's full
 /// preflight because they depend on the selected fluid and current wires.
-pub fn scene_fluid_role_eligibility(
-    def: &EffectGraphDef,
-    render_scene_node_id: u32,
-    object_index: u32,
-) -> Result<(), String> {
-    discover_role_object(def, render_scene_node_id, object_index).map(|_| ())
+pub fn scene_fluid_role_eligibility(def: &EffectGraphDef, object: &SceneNodeRef) -> Result<(), String> {
+    let slot = manifold_core::scene_slots::object_slot(def, object)?;
+    discover_role_object(def, slot.render_id, slot.index).map(|_| ())
 }
 
 fn build_assignment(

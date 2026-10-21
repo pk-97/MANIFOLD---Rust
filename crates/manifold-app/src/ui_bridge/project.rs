@@ -2,6 +2,7 @@
 //! MIDI note/channel, generator type, waveform/stem actions.
 
 use manifold_core::LayerId;
+use manifold_core::SceneNodeRefExt as _;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_ui::ProjectAction;
@@ -40,16 +41,6 @@ pub(crate) fn insert_template_action(
         .expect("a scene")
         .id;
     insert_template_action_at(layer_id, render, kind)
-}
-
-fn scene_object_source_identity(
-    project: &Project, target: &manifold_core::GraphTarget,
-    default: &manifold_core::effect_graph_def::EffectGraphDef, render: u32, index: u32,
-) -> Option<manifold_core::NodeId> {
-    let def = project.graph_for_target(target, Some(default))?;
-    let port = format!("object_{index}");
-    let wire = def.wires.iter().find(|wire| wire.to_node == render && wire.to_port == port)?;
-    def.nodes.iter().find(|node| node.id == wire.from_node).map(|node| node.node_id.clone())
 }
 
 pub(super) fn dispatch_project(
@@ -639,7 +630,7 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         ProjectAction::SceneSetupAssignFluidRole {
-            layer_id, render_scene_node_id, object_index, domain, role,
+            layer_id, object, domain, role,
         } => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -647,7 +638,7 @@ pub(super) fn dispatch_project(
                     .and_then(|def| manifold_core::SceneNodeRef::locate(def, domain));
                 if let Some(domain) = domain {
                     let command = manifold_editing::commands::graph::AssignSceneFluidRoleCommand::new(
-                        target, *render_scene_node_id, *object_index, domain, *role,
+                        target, object.clone(), domain, *role,
                         manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"),
                         default,
                     );
@@ -660,27 +651,24 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupRemoveFluidRole { layer_id, source_node_id }
-        | ProjectAction::SceneSetupRetargetFluidRole { layer_id, source_node_id, .. } => {
+        ProjectAction::SceneSetupRemoveFluidRole { layer_id, source }
+        | ProjectAction::SceneSetupRetargetFluidRole { layer_id, source, .. } => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let def = project.graph_for_target(&target, Some(&default));
-                let source = def.and_then(|def| {
-                    super::projection::scene::scene_node_ref_for_doc_id(def, *source_node_id)
-                });
                 let domain = match action {
                     ProjectAction::SceneSetupRetargetFluidRole { domain, .. } => {
                         def.and_then(|def| manifold_core::SceneNodeRef::locate(def, domain))
                     }
                     _ => None,
                 };
-                let command: Option<Box<dyn manifold_editing::command::Command>> = match (action, source) {
-                    (ProjectAction::SceneSetupRemoveFluidRole { .. }, Some(source)) => Some(Box::new(
-                        manifold_editing::commands::graph::RemoveSceneFluidRoleCommand::new(target, source, default),
+                let command: Option<Box<dyn manifold_editing::command::Command>> = match action {
+                    ProjectAction::SceneSetupRemoveFluidRole { .. } => Some(Box::new(
+                        manifold_editing::commands::graph::RemoveSceneFluidRoleCommand::new(target, source.clone(), default),
                     )),
-                    (ProjectAction::SceneSetupRetargetFluidRole { .. }, Some(source)) => {
+                    ProjectAction::SceneSetupRetargetFluidRole { .. } => {
                         domain.map(|domain| Box::new(manifold_editing::commands::graph::RetargetSceneFluidRoleCommand::new(
-                                target, source, domain, default,
+                                target, source.clone(), domain, default,
                             )) as Box<dyn manifold_editing::command::Command>)
                     }
                     _ => None,
@@ -716,49 +704,29 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
-        // BUG-193 per-row "✕": the inverse of the Add Object entry/
-        // the Add Light entry above — `object_index`/`light_index` ride on
-        // the action exactly as `next_index` does for the Add commands (the
-        // panel's own live Vm row index, not re-derived here).
-        ProjectAction::SceneSetupRemoveObject(layer_id, render_scene_node_id, object_index) => {
+        // BUG-193 per-row "✕": the inverse of the Add Object and Add Light
+        // entries above. The row rides on the action by address; the command
+        // finds its render slot when it runs.
+        ProjectAction::SceneSetupRemoveObject(layer_id, object) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let Some(source) = scene_object_source_identity(project, &target, &default, *render_scene_node_id, *object_index)
-                else { return DispatchResult::handled(); };
-                let cmd = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(
-                    target,
-                    Vec::new(),
-                    *render_scene_node_id,
-                    *object_index,
-                    default,
-                ).with_expected_source(source);
+                let cmd = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(target, object.clone(), default);
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupRemoveSubmesh(layer_id, render_scene_node_id, physical_index) => {
+        ProjectAction::SceneSetupRemoveSubmesh(layer_id, part) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let cmd = manifold_editing::commands::graph::RemoveSceneSubmeshCommand::new(
-                    target,
-                    *render_scene_node_id,
-                    *physical_index,
-                    default,
-                );
+                let cmd = manifold_editing::commands::graph::RemoveSceneSubmeshCommand::new(target, part.clone(), default);
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
+        ProjectAction::SceneSetupRemoveLight(layer_id, light) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let cmd = manifold_editing::commands::graph::RemoveSceneLightCommand::new(
-                    target,
-                    Vec::new(),
-                    *render_scene_node_id,
-                    *light_index,
-                    default,
-                );
+                let cmd = manifold_editing::commands::graph::RemoveSceneLightCommand::new(target, light.clone(), default);
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::handled()
@@ -815,34 +783,28 @@ pub(super) fn dispatch_project(
         }
 
         // Buttons and keyboard duplication build on the content thread.
-        ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index, copies) => {
+        ProjectAction::SceneSetupDuplicateObject(layer_id, object, copies) => {
             ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::DuplicateObject {
-                layer: layer_id.clone(), scene: *render_scene_node_id, index: *source_index, copies: *copies,
+                layer: layer_id.clone(), object: object.clone(), copies: *copies,
             }));
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
+        ProjectAction::SceneSetupDuplicateSubmesh(layer_id, part) => {
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
                 manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let cmd = manifold_editing::commands::graph::DuplicateSceneSubmeshCommand::new(
-                    target,
-                    *render_scene_node_id,
-                    *physical_index,
-                    default,
-                );
+                let cmd = manifold_editing::commands::graph::DuplicateSceneSubmeshCommand::new(target, part.clone(), default);
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
-        | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
+        ProjectAction::SceneSetupEnablePhysics(layer_id, object)
+        | ProjectAction::SceneSetupDisablePhysics(layer_id, object) => {
             // Built on the content thread, like Duplicate: a click that lands
             // before the last edit's snapshot returns still reads that edit.
             ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::SetPhysics {
                 layer: layer_id.clone(),
-                scene: *render_scene_node_id,
-                index: *object_index,
+                object: object.clone(),
                 enabled: matches!(action, ProjectAction::SceneSetupEnablePhysics(..)),
             }));
             DispatchResult::handled()
@@ -853,7 +815,7 @@ pub(super) fn dispatch_project(
         // params through `apply_scene_param_write` — the one write path every
         // scene-panel control shares (bound → binding slot, else def write).
         // All writes land as ONE CompositeCommand so a frame is one undo.
-        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_node_id) => {
+        ProjectAction::SceneSetupFrameSelected(layer_id, object) => {
             use manifold_nodes_scene::node_graph::scene_vm::{CameraVm, SceneVm};
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
@@ -873,9 +835,9 @@ pub(super) fn dispatch_project(
             // The row's first declared shape: its object box, or its liquid
             // domain's box.
             let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(&vm)
-                .find(|target| target.row == Some(*object_node_id))
+                .find(|target| target.row.as_ref() == Some(object))
             else {
-                eprintln!("[Scene] frame-selected: object {object_node_id} has no transform target");
+                eprintln!("[Scene] frame-selected: object has no transform target");
                 return DispatchResult::handled();
             };
             let pos = (target.origin[0], target.origin[1], target.origin[2]);
@@ -1252,8 +1214,8 @@ fn dispatch_material_batch(
     project: &Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     target: &manifold_ui::GraphParamTarget,
-    object: &manifold_ui::param_surface::ModifierObjectRef,
-    material: &manifold_ui::param_surface::ModifierObjectRef,
+    object: &manifold_core::SceneNodeRef,
+    material: &manifold_core::SceneNodeRef,
     kind: manifold_ui::panels::actions::MaterialEditKind,
     writes: &[manifold_ui::panels::actions::MaterialParamWrite],
     description: &str,
@@ -1396,7 +1358,7 @@ mod tests {
     fn scene_row_role_nodes(def: &manifold_core::effect_graph_def::EffectGraphDef, group_id: Option<u32>) -> Vec<manifold_core::NodeId> {
         let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).expect("a scene");
         vm.objects.iter().filter_map(|object| match object {
-            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) if row.group_node_id == group_id && row.parent_group_id.is_none() => Some(row),
+            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) if row.group_node_id == group_id && row.parent.is_none() => Some(row),
             _ => None,
         }).flat_map(|row| row.controls.iter().filter(|control: &&manifold_core::SceneNodeRef| control.resolve(def).is_some_and(|node| node.type_id == "node.fluid_role_source"))
             .map(|control| control.node.clone()).collect::<Vec<_>>()).collect()
@@ -1416,6 +1378,19 @@ mod tests {
             manifold_nodes::bundled_presets::bundled_preset_def(&layer.generator_type().clone()).map(|def| (*def).clone())
                 .expect("Scene is a bundled preset")
         })
+    }
+
+    /// The object filling render slot `index` of scene `render`, as the
+    /// address every scene action carries.
+    fn object_ref(project: &Project, layer_id: &LayerId, render: u32, index: u32) -> manifold_core::SceneNodeRef {
+        manifold_core::scene_slots::object_at_slot(&effective_def(project, layer_id), render, index)
+            .unwrap_or_else(|| panic!("scene {render} has an object in slot {index}"))
+    }
+
+    /// The light wired to render slot `index` of scene `render`.
+    fn light_ref(project: &Project, layer_id: &LayerId, render: u32, index: u32) -> manifold_core::SceneNodeRef {
+        manifold_core::scene_slots::light_at_slot(&effective_def(project, layer_id), render, index)
+            .unwrap_or_else(|| panic!("scene {render} has a light in slot {index}"))
     }
 
     /// Read the value that the scene panel and renderer actually consume.
@@ -1558,9 +1533,9 @@ mod tests {
         for enabled in [false, true] {
             let before_dispatch = effective_def(&project, &layer_id);
             let action = if enabled {
-                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), scene_id, 0)
+                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), object_ref(&project, &layer_id, scene_id, 0))
             } else {
-                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), scene_id, 0)
+                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), object_ref(&project, &layer_id, scene_id, 0))
             };
             dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                 &mut selection, &mut active_layer, &mut prefs, Default::default());
@@ -1616,7 +1591,7 @@ mod tests {
                 .count(),
             1
         );
-        let object_index = objects_param(&project, &layer_id, render_scene_id) as u32;
+        let new_slot = objects_param(&project, &layer_id, render_scene_id) as u32;
         let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
 
@@ -1653,7 +1628,7 @@ mod tests {
             .objects
             .iter()
             .find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                SceneObjectVm::Known(row) if row.index == new_slot as usize => {
                     Some((row.object_node_id, row.group_node_id))
                 }
                 _ => None,
@@ -1663,7 +1638,7 @@ mod tests {
             added_vm.objects.iter().any(|object| matches!(
                 object,
                 SceneObjectVm::Known(row)
-                    if row.index == object_index as usize && row.physics.is_none()
+                    if row.index == new_slot as usize && row.physics.is_none()
             )),
             "fresh Add Object remains an ordinary mesh"
         );
@@ -1701,7 +1676,7 @@ mod tests {
         );
         ui.scene_setup_panel.set_selection(
             layer_id.clone(),
-            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id),
+            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_ref(&project, &layer_id, render_scene_id, new_slot)),
         );
         let mut tree = manifold_ui::UITree::new();
         let rect = manifold_ui::Rect::new(0.0, 0.0, 400.0, 1200.0);
@@ -1721,8 +1696,7 @@ mod tests {
         dispatch_project(
             &ProjectAction::SceneSetupEnablePhysics(
                 layer_id.clone(),
-                render_scene_id,
-                object_index,
+                object_ref(&project, &layer_id, render_scene_id, new_slot),
             ),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
@@ -1765,7 +1739,7 @@ mod tests {
             .objects
             .iter()
             .find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.index == object_index as usize => row.physics.clone(),
+                SceneObjectVm::Known(row) if row.index == new_slot as usize => row.physics.clone(),
                 _ => None,
             })
             .expect("enabled cube exposes a Physics body");
@@ -1817,7 +1791,7 @@ mod tests {
         assert!(undone_vm.objects.iter().any(|object| matches!(
             object,
             SceneObjectVm::Known(row)
-                if row.index == object_index as usize && row.physics.is_none()
+                if row.index == new_slot as usize && row.physics.is_none()
         )));
         enable.execute(&mut project);
         assert!(enable.was_applied(), "redo of Physics enable was rejected");
@@ -1827,7 +1801,7 @@ mod tests {
             .objects
             .iter()
             .find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                SceneObjectVm::Known(row) if row.index == new_slot as usize => {
                     row.physics.as_ref().map(|body| body.body_node_id)
                 }
                 _ => None,
@@ -1856,7 +1830,7 @@ mod tests {
                 .objects
                 .iter()
                 .find_map(|object| match object {
-                    SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                    SceneObjectVm::Known(row) if row.index == new_slot as usize => {
                         row.physics.as_ref().map(|body| body.body_node_id)
                     }
                     _ => None,
@@ -1871,9 +1845,9 @@ mod tests {
 
         for enabled in [false, true] {
             let action = if enabled {
-                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), render_scene_id, object_index)
+                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), object_ref(&project, &layer_id, render_scene_id, new_slot))
             } else {
-                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), render_scene_id, object_index)
+                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), object_ref(&project, &layer_id, render_scene_id, new_slot))
             };
             let before_toggle = effective_def(&project, &layer_id);
             dispatch_project(
@@ -1899,7 +1873,7 @@ mod tests {
                 .objects
                 .iter()
                 .find_map(|object| match object {
-                    SceneObjectVm::Known(row) if row.index == object_index as usize => row.physics.clone(),
+                    SceneObjectVm::Known(row) if row.index == new_slot as usize => row.physics.clone(),
                     _ => None,
                 })
                 .expect("toggle preserves the body");
@@ -2147,7 +2121,7 @@ mod tests {
         use manifold_core::effect_graph_def::BindingTarget;
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let (mut project, layer_id, _) = scene_layer_project();
         let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut insertions = Vec::new();
@@ -2176,8 +2150,8 @@ mod tests {
         }).max_by_key(|row| row.index).unwrap();
         let group_id = object.group_node_id;
         dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
-            layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
-            object_index: object.index as u32, domain: domains[0].node.clone(), role: 1,
+            layer_id: layer_id.clone(), object: object.address.clone(),
+            domain: domains[0].node.clone(), role: 1,
         }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
         let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
@@ -2231,7 +2205,9 @@ mod tests {
         assert_eq!(domains.len(), 2);
         let new_domain = manifold_core::SceneNodeRef::locate(&with_second, &domains[1].node).unwrap();
         dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
-            layer_id: layer_id.clone(), source_node_id: role.id, domain: domains[1].node.clone(),
+            layer_id: layer_id.clone(),
+            source: manifold_core::SceneNodeRef::locate(&with_second, &role.node_id).unwrap(),
+            domain: domains[1].node.clone(),
         }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
         let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
@@ -2244,7 +2220,8 @@ mod tests {
         let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
         assert_eq!(effective_def(&reloaded, &layer_id), retargeted);
         dispatch_project(&ProjectAction::SceneSetupRemoveFluidRole {
-            layer_id: layer_id.clone(), source_node_id: role.id,
+            layer_id: layer_id.clone(),
+            source: manifold_core::SceneNodeRef::locate(&retargeted, &role.node_id).unwrap(),
         }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), retargeted, "removal waits for content");
         let ContentCommand::ExecuteOnContent(mut remove) = rx.try_recv().unwrap()
@@ -2416,12 +2393,12 @@ mod tests {
             CameraVm::Orbit(r) => r.node_doc_id,
             other => panic!("Scene camera should be orbit, got {other:?}"),
         };
-        let (object_node_id, obj_pos) = vm
+        let obj_pos = vm
             .objects
             .iter()
             .find_map(|o| match o {
                 SceneObjectVm::Known(r) if r.index == 0 => {
-                    r.transform.as_ref().map(|t| (r.object_node_id, t.pos_value))
+                    r.transform.as_ref().map(|t| t.pos_value)
                 }
                 _ => None,
             })
@@ -2434,7 +2411,7 @@ mod tests {
             dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
-        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
+        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), object_ref(&project, &layer_id, render_scene_id, 0));
         dispatch_project(
             &action,
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
@@ -2525,9 +2502,8 @@ mod tests {
         let before_duplicate = serde_json::to_value(&project).unwrap();
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
-            render_scene_id,
-            source_index,
-            1,
+            object_ref(&project, &layer_id, render_scene_id, source_index as u32),
+              1,
         );
         dispatch_project(
             &duplicate,
@@ -2650,9 +2626,8 @@ mod tests {
 
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
-            render_scene_id,
-            source_index,
-            1,
+            object_ref(&project, &layer_id, render_scene_id, source_index as u32),
+              1,
         );
         dispatch_project(
             &duplicate,
@@ -3012,7 +2987,7 @@ mod tests {
     struct SceneDispatchCase {
         name: &'static str,
         /// (layer, render_scene node, count before) -> the panel's action.
-        action: fn(LayerId, u32, u32) -> ProjectAction,
+        action: fn(&Project, LayerId, u32, u32) -> ProjectAction,
         /// The render_scene count the action changes (objects or lights).
         count: fn(&Project, &LayerId, u32) -> f32,
         delta: f32,
@@ -3030,7 +3005,7 @@ mod tests {
         let cases = [
             SceneDispatchCase {
                 name: "add object",
-                action: |l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Object),
+                action: |_, l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Object),
                 count: objects_param,
                 delta: 1.0,
                 selects_object: true,
@@ -3039,7 +3014,7 @@ mod tests {
             SceneDispatchCase {
                 // BUG-hlw8: "+ Plane" takes the next object slot.
                 name: "add layer plane",
-                action: |l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Plane),
+                action: |_, l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Plane),
                 count: objects_param,
                 delta: 1.0,
                 selects_object: true,
@@ -3047,7 +3022,7 @@ mod tests {
             },
             SceneDispatchCase {
                 name: "add light",
-                action: |l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Light),
+                action: |_, l, r, _n| crate::ui_bridge::project::insert_template_action_at(l, r, manifold_core::scene_surface::SceneTemplateKind::Light),
                 count: lights_param,
                 delta: 1.0,
                 selects_object: false,
@@ -3056,7 +3031,7 @@ mod tests {
             SceneDispatchCase {
                 // BUG-193: the removed count is what state_sync re-derives for the panel.
                 name: "remove object",
-                action: |l, r, n| ProjectAction::SceneSetupRemoveObject(l, r, n - 1),
+                action: |p, l, r, n| ProjectAction::SceneSetupRemoveObject(l.clone(), object_ref(p, &l, r, n - 1)),
                 count: objects_param,
                 delta: -1.0,
                 selects_object: false,
@@ -3064,7 +3039,7 @@ mod tests {
             },
             SceneDispatchCase {
                 name: "remove light",
-                action: |l, r, n| ProjectAction::SceneSetupRemoveLight(l, r, n - 1),
+                action: |p, l, r, n| ProjectAction::SceneSetupRemoveLight(l.clone(), light_ref(p, &l, r, n - 1)),
                 count: lights_param,
                 delta: -1.0,
                 selects_object: false,
@@ -3078,7 +3053,7 @@ mod tests {
             let before = (case.count)(&project, &layer_id, render_scene_id);
             assert!(before >= 1.0, "{name}: Scene ships with at least one");
 
-            let action = (case.action)(layer_id.clone(), render_scene_id, before as u32);
+            let action = (case.action)(&project, layer_id.clone(), render_scene_id, before as u32);
             let (_, content_rx) = dispatch_once(&action, &mut project);
             assert_eq!(
                 (case.count)(&project, &layer_id, render_scene_id),

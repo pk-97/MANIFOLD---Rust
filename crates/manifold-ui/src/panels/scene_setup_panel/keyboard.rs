@@ -6,7 +6,8 @@ use manifold_foundation::scene_surface::SceneObjectCapabilities;
 pub struct SceneItemAddress {
     pub layer_id: LayerId,
     pub scene: u32,
-    pub index: u32,
+    /// The selected object or light, by address.
+    pub item: SceneNodeRef,
     pub is_light: bool,
     /// What the selected row's commands accept (the scene object model's
     /// capabilities): a Water look hides instead of being removed, and a
@@ -44,17 +45,17 @@ impl ScenePanel {
             .get(&vm.layer_id)
             .cloned()
             .unwrap_or_else(|| Self::default_selection(vm));
-        let (index, is_light, capabilities) = match selection {
+        let (item, is_light, capabilities) = match selection {
             SceneSelection::Object(id) => {
                 let row = vm.objects.iter().find_map(|o| match o {
-                    ObjectRowVm::Known(row) if row.object_node_id == id => Some(row),
+                    ObjectRowVm::Known(row) if row.node == id => Some(row),
                     _ => None,
                 })?;
-                (row.index, false, row.capabilities)
+                (row.node.clone(), false, row.capabilities)
             }
             SceneSelection::Light(id) => (
                 vm.lights.iter().find_map(|l| match l {
-                    LightRowVm::Known(row) if row.node_doc_id == id => Some(row.index),
+                    LightRowVm::Known(row) if row.node == id => Some(row.node.clone()),
                     _ => None,
                 })?,
                 true,
@@ -65,7 +66,7 @@ impl ScenePanel {
         Some(SceneItemAddress {
             layer_id: vm.layer_id.clone(),
             scene: vm.scene_root_node_id,
-            index: index as u32,
+            item,
             is_light,
             capabilities,
         })
@@ -104,23 +105,23 @@ impl ScenePanel {
         let item = self.selected_scene_item()?;
         if item.is_light {
             let row = vm.lights.iter().find_map(|l| match l {
-                LightRowVm::Known(r) if r.index == item.index as usize => Some(r),
+                LightRowVm::Known(r) if r.node == item.item => Some(r),
                 _ => None,
             })?;
             Some(PanelAction::Root(RootAction::SceneSetupRenameLightClicked(
                 item.layer_id,
-                row.node_doc_id,
+                row.node.clone(),
                 row.name.clone(),
             )))
         } else {
             let row = vm.objects.iter().find_map(|o| match o {
-                ObjectRowVm::Known(r) if r.index == item.index as usize => Some(r),
+                ObjectRowVm::Known(r) if r.node == item.item => Some(r),
                 _ => None,
             })?;
             Some(PanelAction::Root(
                 RootAction::SceneSetupRenameObjectClicked(
                     item.layer_id,
-                    row.object_node_id,
+                    row.node.clone(),
                     row.name.clone(),
                 ),
             ))
@@ -138,9 +139,9 @@ impl ScenePanel {
             return self.hide_selection_action();
         }
         Some(PanelAction::Project(if item.is_light {
-            ProjectAction::SceneSetupRemoveLight(item.layer_id, item.scene, item.index)
+            ProjectAction::SceneSetupRemoveLight(item.layer_id, item.item)
         } else {
-            ProjectAction::SceneSetupRemoveObject(item.layer_id, item.scene, item.index)
+            ProjectAction::SceneSetupRemoveObject(item.layer_id, item.item)
         }))
     }
 
@@ -153,13 +154,13 @@ impl ScenePanel {
         if !item.capabilities.hide {
             return None;
         }
-        let object_node_id = match self.selection.get(&vm.layer_id)? {
-            SceneSelection::Object(id) => *id,
+        let object = match self.selection.get(&vm.layer_id)? {
+            SceneSelection::Object(id) => id,
             _ => return None,
         };
-        let row = vm.objects.iter().find_map(|object| match object {
+        let row = vm.objects.iter().find_map(|candidate| match candidate {
             ObjectRowVm::Known(row)
-                if row.object_node_id == object_node_id && row.capabilities.hide => Some(row),
+                if &row.node == object && row.capabilities.hide => Some(row),
             _ => None,
         })?;
         if row.visible.driven {
@@ -175,19 +176,10 @@ impl ScenePanel {
     }
 
     pub fn frame_selection_action(&self) -> Option<PanelAction> {
-        let vm = self.state.as_live()?;
         let item = self.selected_scene_item()?;
         if item.is_light {
             return None;
         }
-        let object_node_id = vm.objects.iter().find_map(|object| match object {
-            ObjectRowVm::Known(row) if row.index == item.index as usize => Some(row.object_node_id),
-            _ => None,
-        })?;
-        Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(
-            item.layer_id,
-            item.scene,
-            object_node_id,
-        )))
+        Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(item.layer_id, item.item)))
     }
 }

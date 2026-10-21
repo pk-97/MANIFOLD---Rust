@@ -535,10 +535,10 @@ pub(crate) fn selected_targets(scene: &SceneVm, items: &[SceneSelection], picked
 /// drag creates the atom (one undo unit) and the target is read again over
 /// it. Only a scene object row places its own transform.
 fn place(ctx: &mut DispatchCtx, layer: &LayerId, target: &GizmoTarget) -> Option<GizmoTarget> {
-    let ShapeOwner::Object(obj_id) = target.id.owner else { return None };
+    let ShapeOwner::Object(object) = &target.id.owner else { return None };
     let graph = GraphTarget::Generator(layer.clone());
     let catalog = crate::ui_bridge::generator_catalog_default(&ctx.project, layer)?;
-    let mut cmd = manifold_editing::commands::graph::AddObjectTransformCommand::new(graph.clone(), Vec::new(), obj_id, (0.0, 0.0), catalog);
+    let mut cmd = manifold_editing::commands::graph::AddObjectTransformCommand::new(graph.clone(), object.clone(), (0.0, 0.0), catalog);
     ctx.project.executed_by(|project| {
         cmd.execute(project);
         cmd.created_node_id()?;
@@ -570,7 +570,7 @@ pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<S
         | GizmoTargetKind::Inflow
         | GizmoTargetKind::Drain
         | GizmoTargetKind::Collider
-        | GizmoTargetKind::Swarm => target.row.map(SceneSelection::Object),
+        | GizmoTargetKind::Swarm => target.row.clone().map(SceneSelection::Object),
     }
 }
 
@@ -1255,18 +1255,18 @@ mod tests {
 
         let (fluid, fluid_layer) = fluid_project(false);
         let domain = target(&fluid, &fluid_layer, GizmoTargetKind::FluidDomain);
-        let row = domain.row.expect("a domain belongs to its water object");
+        let row = domain.row.clone().expect("a domain belongs to its water object");
         let scene = self::scene(&fluid, &fluid_layer);
-        assert_eq!(scene_selection(&scene, &domain), Some(SceneSelection::Object(row)));
+        assert_eq!(scene_selection(&scene, &domain), Some(SceneSelection::Object(row.clone())));
         let column = gizmo_targets(&scene)
             .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
             .expect("the GPU FLIP family wires an Initial Fill column");
         assert_eq!(
-            selected_targets(&scene, &[SceneSelection::Object(row)], std::slice::from_ref(&column.id)).pop().map(|t| t.id),
+            selected_targets(&scene, &[SceneSelection::Object(row.clone())], std::slice::from_ref(&column.id)).pop().map(|t| t.id),
             Some(column.id.clone()),
             "a picked shape of the selected item keeps its handles"
         );
-        assert_eq!(selected_targets(&scene, &[SceneSelection::Object(row)], &[]).pop().map(|t| t.id), gizmo_targets(&scene).find(|t| t.row == Some(row)).map(|t| t.id));
+        assert_eq!(selected_targets(&scene, &[SceneSelection::Object(row.clone())], &[]).pop().map(|t| t.id), gizmo_targets(&scene).find(|t| t.row.as_ref() == Some(&row)).map(|t| t.id));
     }
 
     /// The Swarm template on a generator layer, its box moved off the scene
@@ -1303,13 +1303,14 @@ mod tests {
         assert_eq!(place("pos_x"), (3.0, ShapeWrite::Node(ParamAddr { scope_path: vec![group], node_doc_id: bounds, param_id: "pos_x".into() })));
         assert_eq!(place("pos_y").0, 2.0);
         assert_eq!(place("scale_x").0, 6.0);
-        let row = swarm.row.expect("the swarm box belongs to the swarm's object row");
+        let row = swarm.row.clone().expect("the swarm box belongs to the swarm's object row");
         let (_, object, _) = swarm_node(&project, &layer, "node.scene_object");
-        assert_eq!(row, object, "the row is the scene object the swarm's copies feed");
-        let modelled = scene.objects.iter().find_map(|object| match object {
-            SceneObjectVm::Known(known) if known.object_node_id == row => known.swarm.as_ref().map(|swarm| swarm.node.clone()),
+        let known = scene.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(known) if known.address == row => Some(known),
             _ => None,
-        });
+        }).expect("the row is a scene object row");
+        assert_eq!(known.object_node_id, object, "the row is the scene object the swarm's copies feed");
+        let modelled = known.swarm.as_ref().map(|swarm| swarm.node.clone());
         assert_eq!(modelled, Some(forces), "the scene object model gives the row its swarm");
 
         let view = GizmoView::new(camera(), W, H);
@@ -1319,8 +1320,8 @@ mod tests {
         let id = ids.pop().unwrap();
         assert_eq!(id, swarm.id);
         let picked = gizmo_target_for(&scene, &id).expect("the picked target");
-        assert_eq!(scene_selection(&scene, &picked), Some(SceneSelection::Object(row)));
-        assert_eq!(selected_targets(&scene, &[SceneSelection::Object(row)], std::slice::from_ref(&id)).pop().map(|t| t.id), Some(id));
+        assert_eq!(scene_selection(&scene, &picked), Some(SceneSelection::Object(row.clone())));
+        assert_eq!(selected_targets(&scene, &[SceneSelection::Object(row.clone())], std::slice::from_ref(&id)).pop().map(|t| t.id), Some(id));
     }
 
     /// The authored doc id of the root node named `node_id`.

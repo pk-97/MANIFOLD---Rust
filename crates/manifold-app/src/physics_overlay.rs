@@ -209,7 +209,7 @@ impl PreviewGizmo {
                 let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items, &self.picked));
                 let fade = effect_follows(project, &layer);
                 let objects = items.iter().filter(|_| !fade).filter_map(|item| match item {
-                    SceneSelection::Object(object) => Some(*object),
+                    SceneSelection::Object(object) => Some(object),
                     _ => None,
                 });
                 crate::selection_outline::outline_slots(&key.0, objects, &mut self.outline);

@@ -29,10 +29,10 @@ impl ViewportSelection {
 
     /// The outline slots of every selected scene object.
     pub fn outline(&self, out: &mut Vec<u32>) {
-        let objects = self.selection.selected.iter().filter_map(|target| match crate::scene_gizmo::scene_selection(&self.scene, target) {
+        let objects: Vec<_> = self.selection.selected.iter().filter_map(|target| match crate::scene_gizmo::scene_selection(&self.scene, target) {
             Some(SceneSelection::Object(object)) => Some(object),
             _ => None,
-        });
-        crate::selection_outline::outline_slots(&self.scene, objects, out);
+        }).collect();
+        crate::selection_outline::outline_slots(&self.scene, &objects, out);
     }
 }

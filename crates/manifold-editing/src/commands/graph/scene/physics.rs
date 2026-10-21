@@ -859,12 +859,9 @@ pub(super) fn scene_object_physics_plan(
 
 /// Pure eligibility shared with the scene projection.  It deliberately runs
 /// the same source, fluid-role, world, and body-slot checks as Enable.
-pub fn scene_object_physics_eligibility(
-    def: &EffectGraphDef,
-    render_scene_node_id: u32,
-    object_index: u32,
-) -> Result<(), String> {
-    scene_object_physics_plan(def, render_scene_node_id, object_index).map(|_| ())
+pub fn scene_object_physics_eligibility(def: &EffectGraphDef, object: &SceneNodeRef) -> Result<(), String> {
+    let slot = manifold_core::scene_slots::object_slot(def, object)?;
+    scene_object_physics_plan(def, slot.render_id, slot.index).map(|_| ())
 }
 
 /// The graph with standard physics enabled on one scene object: a rigid body
@@ -875,14 +872,14 @@ pub fn scene_object_physics_eligibility(
 /// flattener folds that boundary into the wiring a bare object has.
 pub fn enable_physics_edit(
     graph: &EffectGraphDef,
-    render_scene_node_id: u32,
-    object_index: u32,
+    object: &SceneNodeRef,
     body_metadata: &[NodeParamMetadata],
     world_metadata: &[NodeParamMetadata],
 ) -> Result<SceneGraphEdit, SceneGraphEditError> {
     let refuse = |message: &str| SceneGraphEditError { at: None, message: message.into() };
+    let slot = manifold_core::scene_slots::object_slot(graph, object).map_err(|message| refuse(&message))?;
     let ScenePhysicsPlan { parts, body_params, world_id, body_slot, world_exists } =
-        scene_object_physics_plan(graph, render_scene_node_id, object_index).map_err(|message| refuse(&message))?;
+        scene_object_physics_plan(graph, slot.render_id, slot.index).map_err(|message| refuse(&message))?;
     let mut def = graph.clone();
     let mut next_id = max_node_id_over(&def.nodes)
         .checked_add(1)
@@ -980,15 +977,14 @@ impl EnableSceneObjectPhysicsCommand {
     pub fn new(
         project: &Project,
         target: GraphTarget,
-        render_scene_node_id: u32,
-        object_index: u32,
+        object: SceneNodeRef,
         body_metadata: &[NodeParamMetadata],
         world_metadata: &[NodeParamMetadata],
         catalog_default: &EffectGraphDef,
     ) -> Result<Self, SceneGraphEditError> {
         Ok(Self {
             transaction: SceneGraphTransaction::prepare(project, target, catalog_default, "Enable Physics", |graph| {
-                enable_physics_edit(graph, render_scene_node_id, object_index, body_metadata, world_metadata)
+                enable_physics_edit(graph, &object, body_metadata, world_metadata)
             })?,
         })
     }

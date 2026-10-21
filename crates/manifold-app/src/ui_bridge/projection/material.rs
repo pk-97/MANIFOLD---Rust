@@ -112,13 +112,14 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::effects::PresetInstance;
 use manifold_core::{GraphTarget, NodeId};
-use manifold_ui::param_surface::{ModifierObjectRef, ParamSurface};
+use manifold_core::SceneNodeRef;
+use manifold_ui::param_surface::ParamSurface;
 
 fn node_at<'a>(
     def: &'a EffectGraphDef,
     scope: &[u32],
     id: u32,
-) -> Option<(&'a EffectGraphNode, ModifierObjectRef)> {
+) -> Option<(&'a EffectGraphNode, SceneNodeRef)> {
     let mut nodes = def.nodes.as_slice();
     let mut stable_scope = Vec::with_capacity(scope.len());
     for group_id in scope {
@@ -129,7 +130,7 @@ fn node_at<'a>(
     let node = nodes.iter().find(|n| n.id == id)?;
     Some((
         node,
-        ModifierObjectRef {
+        SceneNodeRef {
             scope: stable_scope,
             node: node.node_id.clone(),
         },

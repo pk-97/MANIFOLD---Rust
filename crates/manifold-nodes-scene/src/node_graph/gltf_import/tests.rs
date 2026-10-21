@@ -596,7 +596,7 @@ fn tiger_lily_compound_import_preserves_material_sources_and_totals() {
     let parent_transform = parent.transform.as_ref().unwrap().node_doc_id;
     for row in &vm.objects[1..] {
         let crate::node_graph::scene_vm::SceneObjectVm::Known(child) = row else { panic!("child") };
-        assert_eq!(child.parent_group_id, Some(parent.object_node_id));
+        assert_eq!(child.parent.as_ref(), Some(&parent.address));
         assert_ne!(child.transform.as_ref().unwrap().node_doc_id, parent_transform);
         assert_eq!(child.visible_addr.param_id, "visible");
         assert!(child.physics.is_none());

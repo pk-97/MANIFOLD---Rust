@@ -60,6 +60,7 @@ impl ScenePanel {
                 };
                 let address = ObjectModifierCardInfo {
                     layer_id: vm.layer_id.clone(),
+                    object: object.node.clone(),
                     object_id: object.object_node_id,
                     group_node_id: object.group_node_id,
                     node_doc_id: modifier.node_doc_id,
@@ -120,11 +121,11 @@ impl ScenePanel {
         &self,
     ) -> Option<ObjectModifierCardInfo> {
         let SceneSetupState::Live(vm) = &self.state else { return None };
-        let SceneSelection::Object(object_id) = self.resolve_selection_readonly(vm) else {
+        let SceneSelection::Object(object) = self.resolve_selection_readonly(vm) else {
             return None;
         };
         let selected = self.selected_object_modifier.as_ref()?;
-        (selected.object_id == object_id
+        (selected.object == object
             && self.object_modifier_cards.iter().any(|card| {
                 card.object_modifier_info() == Some(selected)
             }))
@@ -136,11 +137,11 @@ impl ScenePanel {
     /// use this owner address rather than inferring it from a visible card.
     pub fn object_modifier_destination(&self) -> Option<(LayerId, u32)> {
         let SceneSetupState::Live(vm) = &self.state else { return None };
-        let SceneSelection::Object(object_id) = self.resolve_selection_readonly(vm) else {
+        let SceneSelection::Object(selected) = self.resolve_selection_readonly(vm) else {
             return None;
         };
         let object = vm.objects.iter().find_map(|object| match object {
-            ObjectRowVm::Known(row) if row.object_node_id == object_id => Some(row.as_ref()),
+            ObjectRowVm::Known(row) if row.node == selected => Some(row.as_ref()),
             _ => None,
         })?;
         Some((vm.layer_id.clone(), object.group_node_id.unwrap_or(object.object_node_id)))
@@ -157,13 +158,13 @@ impl ScenePanel {
         tree: &mut UITree,
     ) -> bool {
         let SceneSetupState::Live(vm) = &self.state else { return false };
-        let SceneSelection::Object(object_id) = self.resolve_selection_readonly(vm) else {
+        let SceneSelection::Object(object) = self.resolve_selection_readonly(vm) else {
             return false;
         };
         let Some(index) = self.object_modifier_cards.iter().position(|card| {
             let Some(address) = card.object_modifier_info() else { return false };
             address.layer_id == *layer_id
-                && address.object_id == object_id
+                && address.object == object
                 && address.group_node_id.unwrap_or(address.object_id) == owner_id
                 && address.node_doc_id == node_doc_id
         }) else {
@@ -217,12 +218,12 @@ impl ScenePanel {
         inner_x: f32,
         inner_w: f32,
         mut cy: f32,
-        object_id: u32,
+        object: &SceneNodeRef,
     ) -> f32 {
         for card in &mut self.object_modifier_cards {
             card.clear_nodes();
             let Some(address) = card.object_modifier_info() else { continue };
-            if address.object_id != object_id {
+            if address.object != *object {
                 continue;
             }
             let h = card.compute_height().max(1.0);
@@ -336,7 +337,7 @@ impl ScenePanel {
         };
         self.object_modifier_pressed_card = None;
         self.object_modifier_cards[source].set_drag_dimmed(tree, true);
-        let source_local = self.local_card_index(address.object_id, source);
+        let source_local = self.local_card_index(&address.object, source);
         self.object_modifier_drag = Some(ObjectModifierDrag {
             target: source_local,
             valid: true,
@@ -375,7 +376,7 @@ impl ScenePanel {
         bounds: Rect,
     ) {
         let Some(drag) = self.object_modifier_drag.as_mut() else { return; };
-        let object_id = drag.identity.object_id;
+        let object = drag.identity.object.clone();
         drag.pointer = Some(pos);
         let mut top = f32::INFINITY;
         let mut bottom = f32::NEG_INFINITY;
@@ -383,7 +384,7 @@ impl ScenePanel {
         let mut indicator_y = bounds.y;
         let mut found = false;
         for card in &self.object_modifier_cards {
-            if card.object_modifier_info().is_none_or(|address| address.object_id != object_id) { continue; }
+            if card.object_modifier_info().is_none_or(|address| address.object != object) { continue; }
             let Some(rect) = card.live_bounds(tree) else { continue; };
             top = top.min(rect.y);
             bottom = bottom.max(rect.y + rect.height);
@@ -418,8 +419,8 @@ impl ScenePanel {
         if !drag.valid {
             return Vec::new();
         }
-        let source_local = self.local_card_index(drag.identity.object_id, source);
-        let target = drag.target.min(self.owner_card_indices(drag.identity.object_id).len());
+        let source_local = self.local_card_index(&drag.identity.object, source);
+        let target = drag.target.min(self.owner_card_indices(&drag.identity.object).len());
         if target == source_local || target == source_local + 1 {
             let _ = self.object_modifier_cards[source].handle_drag_end(tree);
             return Vec::new();
@@ -615,18 +616,18 @@ impl ScenePanel {
             .unwrap_or(action)
     }
 
-    fn owner_card_indices(&self, object_id: u32) -> Vec<usize> {
+    fn owner_card_indices(&self, object: &SceneNodeRef) -> Vec<usize> {
         self.object_modifier_cards
             .iter()
             .enumerate()
             .filter_map(|(index, card)| {
-                (card.object_modifier_info()?.object_id == object_id).then_some(index)
+                (&card.object_modifier_info()?.object == object).then_some(index)
             })
             .collect()
     }
 
-    fn local_card_index(&self, object_id: u32, card_index: usize) -> usize {
-        self.owner_card_indices(object_id)
+    fn local_card_index(&self, object: &SceneNodeRef, card_index: usize) -> usize {
+        self.owner_card_indices(object)
             .iter()
             .position(|index| *index == card_index)
             .unwrap_or_default()
@@ -697,6 +698,7 @@ mod tests {
     fn address(object_id: u32, node_doc_id: u32) -> ObjectModifierCardInfo {
         ObjectModifierCardInfo {
             layer_id: LayerId::new("layer-1"),
+            object: SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new(format!("object{object_id}")) },
             object_id,
             group_node_id: Some(42),
             node_doc_id,

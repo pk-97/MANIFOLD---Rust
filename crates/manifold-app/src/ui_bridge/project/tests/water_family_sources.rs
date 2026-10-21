@@ -130,7 +130,7 @@ fn water_family_inflow_inserts_inside_its_water() {
         .unwrap()
         .objects
         .iter()
-        .filter(|object| matches!(object, SceneObjectVm::Known(child) if child.parent_group_id == Some(water.object_node_id)))
+        .filter(|object| matches!(object, SceneObjectVm::Known(child) if child.parent.as_ref() == Some(&water.address)))
         .count();
     assert_eq!(rows.get(at + children + 1).map(String::as_str), Some("Inflow 1"), "the Inflow lists after the water's children: {rows:?}");
 
@@ -274,7 +274,7 @@ fn physics_boundary_insert_keeps_imported_rows() {
     project.timeline.layers.push(imported);
     let rows = |project: &Project| -> Vec<String> {
         SceneVm::from_def(&effective_def(project, &layer)).unwrap().objects.iter().map(|object| match object {
-            SceneObjectVm::Known(row) => format!("{}:{:?}:{:?}", row.name, row.kind, row.parent_group_id),
+            SceneObjectVm::Known(row) => format!("{}:{:?}:{:?}", row.name, row.kind, row.parent.is_some()),
             SceneObjectVm::Custom { index } => format!("custom {index}"),
         }).collect()
     };

@@ -466,7 +466,6 @@ pub fn sync_inspector_data(
                                             object_node_id,
                                             group_node_id,
                                             is_group,
-                                            parent_group_id,
                                             name,
                                             visible_addr,
                                             visible_value,
@@ -490,7 +489,7 @@ pub fn sync_inspector_data(
                                             } else {
                                                 match def.as_ref().map(|def| {
                                                     manifold_editing::commands::graph::scene_object_physics_eligibility(
-                                                        def, vm.scene_root_node_id, *index as u32,
+                                                        def, &known.address,
                                                     )
                                                 }) {
                                                     Some(Ok(())) => (true, None),
@@ -553,10 +552,11 @@ pub fn sync_inspector_data(
                                                 kind: known.kind,
                                                 capabilities: known.capabilities,
                                                 index: *index,
+                                                node: known.address.clone(),
                                                 object_node_id: *object_node_id,
                                                 group_node_id: *group_node_id,
                                                 is_group: *is_group,
-                                                parent_group_id: *parent_group_id,
+                                                parent: known.parent.clone(),
                                                 name: name.clone(),
                                                 visible: scoped_row(
                                                     visible_addr.scope_path.clone(),
@@ -577,16 +577,16 @@ pub fn sync_inspector_data(
                                                 physics_available,
                                                 physics_unavailable_reason,
                                                 physics_free_body_slots: physics.as_ref().and(def.as_ref()).and_then(|def| {
-                                                    manifold_editing::commands::graph::physics_free_body_slots(def, &world_slots, vm.scene_root_node_id, *index as u32)
+                                                    manifold_editing::commands::graph::physics_free_body_slots(def, &world_slots, &known.address)
                                                 }),
                                                 physics_imported: *physics_imported,
-                                                fluid_roles: if parent_group_id.is_none() {
+                                                fluid_roles: if known.parent.is_none() {
                                                     def.as_ref().map(|def| super::scene::fluid_role_rows(def, *group_node_id, &fluid_domains))
                                                         .unwrap_or_else(|| Ok(Vec::new()))
                                                 } else { Ok(Vec::new()) },
-                                                fluid_role_available: parent_group_id.is_none() && def.as_ref().is_some_and(|def| {
+                                                fluid_role_available: known.parent.is_none() && def.as_ref().is_some_and(|def| {
                                                     manifold_editing::commands::graph::scene_fluid_role_eligibility(
-                                                        def, vm.scene_root_node_id, *index as u32,
+                                                        def, &known.address,
                                                     ).is_ok()
                                                 }),
                                                 lattice: known.fluid_domain.map(|layout| {
@@ -611,6 +611,7 @@ pub fn sync_inspector_data(
                                         manifold_ui::panels::scene_setup_panel::LightRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::LightKnownRow {
                                                 index: r.index,
+                                                node: r.address.clone(),
                                                 node_doc_id: r.node_doc_id,
                                                 name: r.name.clone(),
                                             },

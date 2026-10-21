@@ -122,8 +122,12 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     let device = std::sync::Arc::new(GpuDevice::new_queued("d102 after render"));
     let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
     let scene = SceneVm::from_def(&def).expect("a scene");
+    let panel_ref = manifold_foundation::SceneNodeRef {
+        scope: Vec::new(),
+        node: def.nodes.iter().find(|node| node.id == 41).expect("the panel").node_id.clone(),
+    };
     let mut slots = Vec::new();
-    outline_slots(&scene, [41], &mut slots);
+    outline_slots(&scene, [&panel_ref], &mut slots);
     assert_eq!(slots, [1], "the panel draws in render slot 1");
 
     let mut runtime = build(&device);
@@ -138,7 +142,7 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
 
     // The preview's chrome over the picture: outline, then the handles.
     let view = GizmoView::new(camera, W, H);
-    let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(41)).expect("the panel's target");
+    let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(panel_ref.clone())).expect("the panel's target");
     let selection = GizmoSelection::new(&scene, vec![panel.clone()]);
     let mut lines = Vec::new();
     compose_lines(

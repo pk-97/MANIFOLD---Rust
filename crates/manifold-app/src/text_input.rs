@@ -93,19 +93,19 @@ pub enum TextInputField {
     /// `RenameEmbeddedPresetCommand` (Project).
     RenamePreset,
     /// Scene tab object rename (SCENE_SETUP_PANEL_DESIGN.md P2).
-    /// Carries the object's group node id; the target layer rides on
+    /// The object's address rides on `TextInputState::scene_item_ref` and the target layer on
     /// `TextInputState::scene_object_layer_id` (`LayerId` not `Copy`). Commit
     /// routes to `RenameGroupCommand`, addressed at the layer directly (no
     /// graph editor needs to be open — the panel is a fourth surface).
-    SceneObjectRename(u32),
+    SceneObjectRename,
     /// Scene tab light rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
-    /// P5). Carries the light node's own doc id; the target layer rides on
+    /// P5). The light's address rides on `TextInputState::scene_item_ref` and the target layer on
     /// `TextInputState::scene_object_layer_id` (shared with
     /// `SceneObjectRename` — the two sessions are mutually exclusive, only
     /// one text edit is ever in flight at a time). Commit dispatches the
     /// plain `SetNodeHandleCommand` (no group sweep — a light is never
     /// wrapped in a group).
-    SceneLightRename(u32),
+    SceneLightRename,
     /// Scene tab numeric value-cell type-in
     /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8's `EditValue` target).
     /// Carries the target node's doc id (mirrors `GraphNumericParam`'s
@@ -368,6 +368,8 @@ pub struct TextInputState {
     /// LayerId for the `SceneObjectRename` field (not `Copy`, so stored
     /// separately — mirrors `layer_id`/`audio_send_id`).
     pub scene_object_layer_id: Option<manifold_core::LayerId>,
+    /// The object or light the open rename edits, by address.
+    pub scene_item_ref: Option<manifold_core::SceneNodeRef>,
     /// Param name for `GraphStringParam` (String not `Copy`, so stored here).
     pub graph_param_name: Option<String>,
     /// Cell context for `GraphTableCell` (carries the full table, so stored
@@ -428,6 +430,7 @@ impl TextInputState {
             marker_id: None,
             audio_send_id: None,
             scene_object_layer_id: None,
+            scene_item_ref: None,
             graph_param_name: None,
             graph_table_edit: None,
             inspector_param: None,

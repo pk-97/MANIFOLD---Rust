@@ -60,7 +60,7 @@ fn scene_force_targets_duplicate_preserves_shared_source_and_roundtrips() {
     duplicate.execute(&mut project);
     assert_eq!(graph_of(&project, &fx), &duplicated);
 
-    let mut remove = RemoveSceneObjectCommand::new(
+    let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -110,7 +110,7 @@ fn scene_force_targets_group_rename_preserves_identity() {
     let (graph, world, field) = imported_with_force();
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
-    let mut rename = RenameSceneObjectCommand::new(
+    let mut rename = rename_object(&project, 
         target.clone(),
         vec![],
         10,
@@ -161,7 +161,7 @@ fn scene_force_targets_copies_remove_only_their_field_and_undoes() {
     let field = connect_field(&mut graph, world, "copies_acceleration");
     let global = connect_field(&mut graph, world, "acceleration_field");
     let (mut project, fx) = project_with_graph(graph.clone());
-    let mut remove = RemoveSceneObjectCommand::new(
+    let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         30,

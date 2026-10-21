@@ -11,7 +11,7 @@ const KEY_HDRI_FILE: u64 = 80_014;
 /// One light's sub-section in the current Lighting pass.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PropertyLight {
-    pub(super) doc_id: u32,
+    pub(super) node: SceneNodeRef,
     pub(super) index: usize,
     pub(super) name: String,
     ids: Vec<String>,
@@ -41,10 +41,10 @@ impl ScenePanel {
             .items
             .iter()
             .filter_map(|item| {
-                let SceneSelection::Light(doc_id) = item.selection else { return None };
+                let SceneSelection::Light(node) = &item.selection else { return None };
                 vm.lights.iter().find_map(|light| match light {
-                    LightRowVm::Known(row) if row.node_doc_id == doc_id => Some(PropertyLight {
-                        doc_id,
+                    LightRowVm::Known(row) if row.node == *node => Some(PropertyLight {
+                        node: node.clone(),
                         index: row.index,
                         name: row.name.clone(),
                         ids: item.parameter_ids.clone(),
@@ -147,8 +147,8 @@ impl ScenePanel {
         last: usize,
     ) -> f32 {
         while self.property_lights_drawn <= last && self.property_lights_drawn < self.property_lights.len() {
-            let PropertyLight { doc_id, index, name, .. } = self.property_lights[self.property_lights_drawn].clone();
-            cy = self.build_light_header(tree, (inner_x, inner_w), cy, (doc_id, index, &name));
+            let PropertyLight { node, index, name, .. } = self.property_lights[self.property_lights_drawn].clone();
+            cy = self.build_light_header(tree, (inner_x, inner_w), cy, (&node, index, &name));
             self.property_lights_drawn += 1;
         }
         cy

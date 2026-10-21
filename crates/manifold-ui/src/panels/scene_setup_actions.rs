@@ -88,9 +88,9 @@ pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSel
 /// selection is or sits under, else the only water, else why there is none.
 fn source_water(vm: &SceneSetupVm, selected: Option<&SceneSelection>) -> Result<NodeId, &'static str> {
     let row = match selected {
-        Some(SceneSelection::Object(id)) => Some(*id),
+        Some(SceneSelection::Object(id)) => Some(id.clone()),
         Some(selection @ SceneSelection::Source(_)) => {
-            vm.items.iter().find(|item| &item.selection == selection).and_then(|item| item.parent)
+            vm.items.iter().find(|item| &item.selection == selection).and_then(|item| item.parent.clone())
         }
         _ => None,
     };

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::command::Command;
-use crate::commands::graph::test_support::{duplicate_object, graph_of, mirror_catalog_default, project_with_graph};
+use crate::commands::graph::test_support::*;
 use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID,
     GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
@@ -107,7 +107,7 @@ fn scene_physics_object_fluid_duplicate_remove_preserves_independent_routes() {
     let graph = assigned_object_graph();
     let (mut project, effect) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(effect.clone());
-    let mut assign = AssignSceneFluidRoleCommand::new(
+    let mut assign = assign_role(&project, 
         target.clone(),
         0,
         0,
@@ -155,7 +155,7 @@ fn scene_physics_object_fluid_duplicate_remove_preserves_independent_routes() {
     duplicate.execute(&mut project);
     assert_eq!(graph_of(&project, &effect), &duplicated);
 
-    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 0, mirror_catalog_default());
+    let mut remove = remove_object(&project, target, vec![], 0, 0, mirror_catalog_default());
     remove.execute(&mut project);
     assert!(
         remove.was_applied(),
@@ -206,7 +206,7 @@ fn scene_physics_object_fluid_duplicate_rejects_missing_source_atomically() {
 fn with_assigned_role() -> EffectGraphDef {
     let graph = assigned_object_graph();
     let (mut project, effect) = project_with_graph(graph.clone());
-    let mut assign = AssignSceneFluidRoleCommand::new(
+    let mut assign = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -275,7 +275,7 @@ fn scene_physics_object_fluid_tracking_undo_redo_and_stale_edits() {
             .unwrap()
             .graph = None;
         let mut command: Box<dyn Command> = if remove {
-            Box::new(RemoveSceneObjectCommand::new(
+            Box::new(remove_object(&project, 
                 target.clone(),
                 vec![],
                 0,
@@ -367,7 +367,7 @@ fn scene_physics_object_fluid_modifier_local_undo_restores_owner() {
     assert!(!duplicate.was_applied());
     assert_eq!(project.graph_target_owner(&target).unwrap().graph, before);
     let mut remove =
-        RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, before.clone().unwrap());
+        remove_object(&project, target.clone(), vec![], 0, 0, before.clone().unwrap());
     remove.execute(&mut project);
     assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
     remove.undo(&mut project);
@@ -424,11 +424,11 @@ fn scene_physics_object_fluid_queued_edits_reject_replaced_source() {
             duplicate_object(&project, target.clone(), vec![], 0, 0, graph.clone()),
         ),
         Box::new(
-            RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone())
-                .with_expected_source(NodeId::new("object_group")),
+            // Names the object by address; the remove below takes it away.
+            remove_object(&project, target.clone(), vec![], 0, 0, graph.clone()),
         ),
     ];
-    let mut remove = RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph);
+    let mut remove = remove_object(&project, target.clone(), vec![], 0, 0, graph);
     remove.execute(&mut project);
     assert!(remove.was_applied());
     let before = serde_json::to_value(&project).unwrap();
@@ -440,7 +440,7 @@ fn scene_physics_object_fluid_queued_edits_reject_replaced_source() {
             command
                 .rejection_reason()
                 .unwrap()
-                .contains("changed")
+                .contains("changed") || command.rejection_reason().unwrap().contains("no longer")
         );
         command.undo(&mut project);
         assert_eq!(serde_json::to_value(&project).unwrap(), before);

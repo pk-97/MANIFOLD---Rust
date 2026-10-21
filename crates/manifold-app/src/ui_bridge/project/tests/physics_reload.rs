@@ -18,7 +18,8 @@ fn body(project: &Project, layer_id: &LayerId) -> PhysicsVm {
 }
 
 fn switch(project: &mut Project, layer_id: &LayerId, scene: u32, enabled: bool) {
-    let action = crate::scene_item_transfer::SceneItemAction::SetPhysics { layer: layer_id.clone(), scene, index: 0, enabled };
+    let object = object_ref(project, layer_id, scene, 0);
+    let action = crate::scene_item_transfer::SceneItemAction::SetPhysics { layer: layer_id.clone(), object, enabled };
     let mut command = crate::scene_item_transfer::build_action(project, action).expect("the switch builds");
     command.execute(project);
     assert!(command.was_applied(), "{:?}", command.rejection_reason());
@@ -60,7 +61,8 @@ fn physics_boundary_rigid_reload_keeps_the_switch_and_card_controls() {
 fn physics_switch_refuses_a_click_that_changes_nothing() {
     let (mut project, layer_id, scene) = physics_solids_layer_project();
     let again = |project: &Project, enabled| {
-        let action = crate::scene_item_transfer::SceneItemAction::SetPhysics { layer: layer_id.clone(), scene, index: 0, enabled };
+        let object = object_ref(project, &layer_id, scene, 0);
+        let action = crate::scene_item_transfer::SceneItemAction::SetPhysics { layer: layer_id.clone(), object, enabled };
         crate::scene_item_transfer::build_action(project, action).map(|_| ())
     };
     assert_eq!(again(&project, true), Err("Physics is already on".to_string()));

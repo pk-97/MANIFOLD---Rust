@@ -175,6 +175,7 @@ fn scene_tab_cards_draw_choices_as_pick_lists() {
         &object_config,
         crate::param_surface::ObjectModifierCardInfo {
             layer_id: LayerId::new("layer-1"),
+            object: manifold_foundation::SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new("object7") },
             object_id: 7,
             group_node_id: Some(42),
             node_doc_id: 70,

@@ -4,6 +4,14 @@
     /// C-P1a: wrap a plain `RowValue` in an idle (no active modulation)
     /// `ModulatedRow` — the shape `EnvironmentRowVm`/`AtmosphereRowVm` now
     /// carry for every converted row.
+    pub(super) fn object_ref(id: u32) -> SceneNodeRef {
+        SceneNodeRef { scope: Vec::new(), node: FoundationNodeId::new(format!("object{id}")) }
+    }
+
+    pub(super) fn light_ref(id: u32) -> SceneNodeRef {
+        SceneNodeRef { scope: Vec::new(), node: FoundationNodeId::new(format!("light{id}")) }
+    }
+
     fn mrow(value: RowValue) -> ModulatedRow {
         ModulatedRow { value, modulation: Box::new(RowModulation::default()) }
     }
@@ -37,7 +45,7 @@
     pub(super) fn sync_items(vm: &mut SceneSetupVm) {
         use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind};
         let old = std::mem::take(&mut vm.items);
-        let item = |kind: SceneItemKind, selection: SceneSelection, name: &str, parent: Option<u32>| {
+        let item = |kind: SceneItemKind, selection: SceneSelection, name: &str, parent: Option<SceneNodeRef>| {
             let prior = old.iter().find(|item| item.selection == selection);
             SceneItemVm {
                 kind: prior.map_or(kind, |item| item.kind),
@@ -52,15 +60,15 @@
             item(SceneItemKind::Light, SceneSelection::Lighting, "Lighting", None),
         ];
         items.extend(vm.lights.iter().filter_map(|light| match light {
-            LightRowVm::Known(row) => Some(item(SceneItemKind::Light, SceneSelection::Light(row.node_doc_id), &row.name, None)),
+            LightRowVm::Known(row) => Some(item(SceneItemKind::Light, SceneSelection::Light(row.node.clone()), &row.name, None)),
             LightRowVm::Custom { .. } => None,
         }));
         items.extend(vm.objects.iter().filter_map(|object| match object {
             ObjectRowVm::Known(row) => Some(item(
                 SceneItemKind::Object(ObjectKind::Mesh),
-                SceneSelection::Object(row.object_node_id),
+                SceneSelection::Object(row.node.clone()),
                 &row.name,
-                row.parent_group_id,
+                row.parent.clone(),
             )),
             ObjectRowVm::Custom { .. } => None,
         }));
@@ -194,10 +202,11 @@
                     kind: Default::default(),
                     capabilities: manifold_foundation::scene_surface::SceneObjectCapabilities { rename: true, delete: true, duplicate: true, transform: true, enable_physics: true, fluid_role: true, modifiers: true, hide: false },
                     index: 0,
+                    node: object_ref(40),
                     object_node_id: 40,
                     group_node_id: Some(42),
                     is_group: false,
-                    parent_group_id: None,
+                    parent: None,
                     name: "Azalea".to_string(),
                     visible: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 40, param_id: "visible".to_string() }, value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
                     transform: Some(Box::new(TransformRowVm {
@@ -234,6 +243,7 @@
             lights: vec![
                 LightRowVm::Known(Box::new(LightKnownRow {
                     index: 0,
+                    node: light_ref(60),
                     node_doc_id: 60,
                     name: "Sun".to_string(),
                 })),
@@ -262,7 +272,7 @@
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
-        assert_eq!(panel.object_name_ids[0].0, 40, "resolves to the selected object's node id (the rename address)");
+        assert_eq!(panel.object_name_ids[0].0, object_ref(40), "resolves to the selected object's address (the rename address)");
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
@@ -278,7 +288,8 @@
         parent.object_node_id = 42;
         parent.group_node_id = Some(42);
         parent.is_group = true;
-        parent.parent_group_id = None;
+        parent.parent = None;
+        parent.node = object_ref(42);
         parent.name = "Imported Group".to_string();
         parent.material = ObjectMaterialVm::None;
         parent.material_inspector = None;
@@ -292,7 +303,8 @@
         child.object_node_id = 43;
         child.group_node_id = Some(42);
         child.is_group = false;
-        child.parent_group_id = Some(42);
+        child.parent = Some(object_ref(42));
+        child.node = object_ref(43);
         child.name = "Blue Material".to_string();
         vm.object_count = 1;
         vm.objects = vec![
@@ -327,7 +339,7 @@
         let child_row = panel
             .outliner_row_ids
             .iter()
-            .find(|(_, sel)| sel == &SceneSelection::Object(43))
+            .find(|(_, sel)| sel == &SceneSelection::Object(object_ref(43)))
             .map(|(id, _)| *id)
             .expect("expanded child is selectable");
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
@@ -337,7 +349,7 @@
         }, &mut tree);
         assert!(consumed);
         assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupSelectionChanged(_))]));
-        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Object(43)));
+        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Object(object_ref(43))));
     }
 
     /// A placed source folds with its water's other children and sits after
@@ -350,7 +362,7 @@
             kind: manifold_foundation::scene_surface::SceneItemKind::Source(manifold_foundation::scene_surface::SourceRole::Inflow),
             selection: SceneSelection::Source(FoundationNodeId::new("inflow")),
             name: "Inflow".into(),
-            parent: Some(42),
+            parent: Some(object_ref(42)),
             parameter_ids: Vec::new(),
         });
         let mut panel = ScenePanel::new();
@@ -366,7 +378,7 @@
         tree.clear();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let source = source_row(&panel).expect("an open water lists its sources");
-        let child = panel.outliner_row_ids.iter().position(|(_, sel)| sel == &SceneSelection::Object(43)).unwrap();
+        let child = panel.outliner_row_ids.iter().position(|(_, sel)| sel == &SceneSelection::Object(object_ref(43))).unwrap();
         assert_eq!(source, child + 1, "sources follow the water's other children");
         let x = |at: usize| tree.get_bounds(panel.outliner_row_ids[at].0).x;
         assert_eq!(x(source), x(child), "sources share the children's indent");
@@ -377,7 +389,7 @@
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(live(compound_shaped_vm()));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(43));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(object_ref(43)));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert_eq!(panel.submesh_duplicate_ids.len(), 1);
@@ -389,7 +401,7 @@
             pos: Vec2::ZERO,
             modifiers: Modifiers::default(),
         }, &mut tree);
-        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupDuplicateSubmesh(layer, 99, 0))] if *layer == LayerId::new("layer-1")));
+        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupDuplicateSubmesh(layer, part))] if *layer == LayerId::new("layer-1") && *part == object_ref(43)));
 
         let remove_id = panel.submesh_remove_ids[0].0;
         let (_, actions) = panel.handle_event(&UIEvent::Click {
@@ -397,7 +409,7 @@
             pos: Vec2::ZERO,
             modifiers: Modifiers::default(),
         }, &mut tree);
-        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupRemoveSubmesh(layer, 99, 0))] if *layer == LayerId::new("layer-1")));
+        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupRemoveSubmesh(layer, part))] if *layer == LayerId::new("layer-1") && *part == object_ref(43)));
     }
 
     /// W2-A gap fill: the outliner eye toggle (D3's on/off convention) had
@@ -469,7 +481,6 @@
         let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
         row.physics_available = true;
         let expected_layer = vm.layer_id.clone();
-        let expected_scene = vm.scene_root_node_id;
 
         let mut panel = ScenePanel::new();
         panel.open();
@@ -490,8 +501,8 @@
         }, &mut tree);
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(layer_id, scene_root, index))]
-                if layer_id == &expected_layer && *scene_root == expected_scene && *index == 0
+            [PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(layer_id, object))]
+                if layer_id == &expected_layer && *object == object_ref(40)
         ));
     }
 
@@ -537,8 +548,7 @@
         let mut vm = azalea_shaped_vm();
         let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
         row.fluid_role_available = true;
-        let expected_index = row.index as u32;
-        let expected_scene = vm.scene_root_node_id;
+        let expected_object = row.node.clone();
         let domains = vec![FluidDomainOption { node: FoundationNodeId::new("liquid_b"), name: "Liquid B".into(), rows: Vec::new() }];
         vm.fluid_domains = domains.clone();
         let mut panel = ScenePanel::new();
@@ -551,13 +561,12 @@
             node_id: button, pos: Vec2::ZERO, modifiers: Modifiers::default(),
         }, &mut tree);
         assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
-            layer_id, render_scene_node_id, object_index, domains: choices, ..
-        })] if layer_id == &vm.layer_id && *render_scene_node_id == expected_scene
-            && *object_index == expected_index && choices == &domains));
+            layer_id, object, domains: choices, ..
+        })] if layer_id == &vm.layer_id && *object == expected_object && choices == &domains));
         let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
         row.fluid_role_available = false;
         row.fluid_roles = Ok(vec![FluidRoleRow {
-            source_node_id: 74, name: "Pour".into(), target_label: "Target: Liquid B".into(),
+            source: object_ref(74), name: "Pour".into(), target_label: "Target: Liquid B".into(),
         }]);
         panel.configure(live(vm));
         tree.clear();
@@ -567,14 +576,14 @@
             node_id: panel.fluid_role_target_ids[0].0, pos: Vec2::ZERO, modifiers: Modifiers::default(),
         }, &mut tree);
         assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
-            source_node_id: 74, domains: choices, ..
-        })] if choices == &domains));
+            source, domains: choices, ..
+        })] if *source == object_ref(74) && choices == &domains));
         let (_, actions) = panel.handle_event(&UIEvent::Click {
             node_id: panel.fluid_role_remove_ids[0].0, pos: Vec2::ZERO, modifiers: Modifiers::default(),
         }, &mut tree);
         assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupRemoveFluidRole {
-            source_node_id: 74, ..
-        })]));
+            source, ..
+        })] if *source == object_ref(74)));
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary
@@ -611,12 +620,13 @@
         let mut copied = first.as_ref().clone();
         copied.index = 1;
         copied.object_node_id = 41;
+        copied.node = object_ref(41);
         copied.group_node_id = Some(43);
         copied.name = "Object 2".to_string();
         copied.modifiers[0].node_doc_id = 71;
         copied.modifiers[0].parameter_ids = vec!["71_amount".to_string()];
         vm.objects.push(ObjectRowVm::Known(Box::new(copied)));
-        set_item_ids(&mut vm, SceneSelection::Object(40), &["70_amount"]);
+        set_item_ids(&mut vm, SceneSelection::Object(object_ref(40)), &["70_amount"]);
         surface.rows.push({
             let mut row = surface.rows[0].clone();
             row.id = "71_amount".into();
@@ -646,6 +656,7 @@
         let mut second = first.as_ref().clone();
         second.index = 1;
         second.object_node_id = 41;
+        second.node = object_ref(41);
         second.group_node_id = Some(43);
         second.name = "Object 2".to_string();
         vm.objects = vec![
@@ -653,8 +664,8 @@
             ObjectRowVm::Known(Box::new(second)),
         ];
         vm.object_count = 2;
-        set_item_ids(&mut vm, SceneSelection::Object(40), &["40_velocity_y"]);
-        set_item_ids(&mut vm, SceneSelection::Object(41), &["41_velocity_y"]);
+        set_item_ids(&mut vm, SceneSelection::Object(object_ref(40)), &["40_velocity_y"]);
+        set_item_ids(&mut vm, SceneSelection::Object(object_ref(41)), &["41_velocity_y"]);
 
         surface.rows[0].id = "40_velocity_y".into();
         surface.rows[0].spec.name = "Velocity Y (Object 1)".into();
@@ -668,7 +679,7 @@
         panel.open();
         panel.configure(live(vm));
         panel.configure_params(Some(surface));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(40));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(object_ref(40)));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
@@ -750,12 +761,12 @@
         use manifold_foundation::scene_surface::{SceneItemKind, SceneTemplateKind};
         let mut vm = azalea_shaped_vm();
         let water = |node: &str, row| FluidDomainOption { node: FoundationNodeId::new(node), name: node.into(), rows: vec![row] };
-        vm.fluid_domains = vec![water("lake", 40), water("pool", 50)];
+        vm.fluid_domains = vec![water("lake", object_ref(40)), water("pool", object_ref(50))];
         vm.items.push(SceneItemVm {
             kind: SceneItemKind::Source(manifold_foundation::scene_surface::SourceRole::Inflow),
             selection: SceneSelection::Source(FoundationNodeId::new("pool_inflow")),
             name: "Inflow 1".into(),
-            parent: Some(50),
+            parent: Some(object_ref(50)),
             parameter_ids: Vec::new(),
         });
         let mut panel = ScenePanel::new();
@@ -773,7 +784,7 @@
         };
         panel.set_selection(vm.layer_id.clone(), SceneSelection::Camera);
         assert_eq!(target(&panel), Err("Select the water this goes into".into()));
-        panel.set_selection(vm.layer_id.clone(), SceneSelection::Object(40));
+        panel.set_selection(vm.layer_id.clone(), SceneSelection::Object(object_ref(40)));
         assert_eq!(target(&panel), Ok("lake".into()));
         panel.set_selection(vm.layer_id.clone(), SceneSelection::Source(FoundationNodeId::new("pool_inflow")));
         assert_eq!(target(&panel), Ok("pool".into()), "a selected source targets its own water");
@@ -821,12 +832,12 @@
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.tree_groups().contains(&SceneGroup::Physics));
-        let (button, index) = panel.physics_enable_id.expect("enable action");
-        assert_eq!(index, 0);
+        let (button, object) = panel.physics_enable_id.clone().expect("enable action");
+        assert_eq!(object, object_ref(40));
         assert_eq!(tree.get_node(button).unwrap().text.as_deref(), Some("Enable Physics on Azalea"));
         let (_, actions) = panel.handle_event(&UIEvent::Click { node_id: button, pos: Vec2::ZERO, modifiers: Modifiers::default() }, &mut tree);
         assert!(matches!(actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(l, 99, 0))] if layer_1(l)));
+            [PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(l, object))] if layer_1(l) && *object == object_ref(40)));
     }
 
     /// UX-P3b-i's own deliverable: the per-row key-range collision audit the
@@ -906,16 +917,46 @@
         let mut vm = azalea_shaped_vm();
         let ObjectRowVm::Known(mut second) = vm.objects[0].clone() else { panic!("known fixture"); };
         second.object_node_id = 200;
+        second.node = object_ref(200);
         second.group_node_id = Some(201);
         vm.objects.push(ObjectRowVm::Known(second));
         panel.configure(live(vm));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let (node, _) = panel.outliner_row_ids.iter()
-            .find(|(_, selection)| selection == &SceneSelection::Object(200)).unwrap();
+            .find(|(_, selection)| selection == &SceneSelection::Object(object_ref(200))).unwrap();
         assert!(panel.select_outliner_node(*node));
         assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), 201)));
         assert!(panel.selected_object_modifier().is_none());
+    }
+
+    /// Two import groups hold scene objects with the same document id. The
+    /// panel names each row by its address, so selecting, renaming and removing
+    /// the second row acts on the second.
+    #[test]
+    fn rows_sharing_a_doc_id_are_selected_renamed_and_removed_separately() {
+        let mut vm = azalea_shaped_vm();
+        let Some(ObjectRowVm::Known(first)) = vm.objects.first().cloned() else { panic!("a known first row") };
+        let mut second = first.clone();
+        second.node = SceneNodeRef { scope: vec![FoundationNodeId::new("second-import")], node: first.node.node.clone() };
+        second.index = first.index + 1;
+        second.name = "Azalea 2".into();
+        assert_eq!(first.object_node_id, second.object_node_id, "both rows carry document id 40");
+        let second_ref = second.node.clone();
+        vm.objects.insert(1, ObjectRowVm::Known(second));
+        vm.object_count += 1;
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (row, _) = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Object(second_ref.clone())).unwrap();
+        assert!(panel.select_outliner_node(*row));
+        let selected = panel.selected_scene_item().unwrap();
+        assert_eq!(selected.item, second_ref, "the second row is the selected one");
+        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, object, name))) if object == second_ref && name == "Azalea 2"));
+        assert!(matches!(panel.remove_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupRemoveObject(_, object))) if object == second_ref));
+        assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, object))) if object == second_ref));
     }
 
     #[test]
@@ -925,10 +966,10 @@
         panel.configure(live(azalea_shaped_vm()));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let object = panel.selected_scene_item().unwrap();
-        assert!(!object.is_light);
-        assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, 99, 40)))));
-        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 40, _)))));
+        let selected = panel.selected_scene_item().unwrap();
+        assert!(!selected.is_light);
+        assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, object))) if object == object_ref(40)));
+        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, object, _))) if object == object_ref(40)));
         // Lighting is many items, so the single-item shortcuts do nothing;
         // each light keeps rename and delete on its own header.
         let lighting = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Lighting).unwrap().0;
@@ -994,7 +1035,7 @@
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-1")),
-            Some(&SceneSelection::Object(40)),
+            Some(&SceneSelection::Object(object_ref(40))),
             "default selection resolves to Azalea's own scene_object doc id"
         );
 
@@ -1098,7 +1139,7 @@
             SceneSelection::Camera,
             SceneSelection::Lighting,
             SceneSelection::OutlinerFold(SceneGroup::Objects),
-            SceneSelection::Object(40),
+            SceneSelection::Object(object_ref(40)),
             SceneSelection::OutlinerFold(SceneGroup::Physics),
             SceneSelection::World,
         ]);
@@ -1183,12 +1224,13 @@
         let mut fill = sun.clone();
         fill.index = 1;
         fill.node_doc_id = 61;
+        fill.node = light_ref(61);
         fill.name = "Fill Light".into();
         vm.lights.push(LightRowVm::Known(fill));
         vm.light_count = 2;
         set_item_ids(&mut vm, SceneSelection::Lighting, &["exposure", "env"]);
-        set_item_ids(&mut vm, SceneSelection::Light(60), &["sun", "sun_shadow"]);
-        set_item_ids(&mut vm, SceneSelection::Light(61), &["fill"]);
+        set_item_ids(&mut vm, SceneSelection::Light(light_ref(60)), &["sun", "sun_shadow"]);
+        set_item_ids(&mut vm, SceneSelection::Light(light_ref(61)), &["fill"]);
         let template = surface.rows[0].clone();
         surface.rows = vec![
             scene_row(&template, "fill", ControlGroup::Light),
@@ -1201,7 +1243,7 @@
         panel.open();
         panel.configure(live(vm));
         panel.configure_params(Some(surface));
-        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Light(61));
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Light(light_ref(61)));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1200.0));
         assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Lighting));
@@ -1237,7 +1279,7 @@
         row.physics_imported = true;
         row.physics_enabled = true;
         row.physics_available = true;
-        set_item_ids(&mut vm, SceneSelection::Object(40), &["41_shape", "41_collider_parts"]);
+        set_item_ids(&mut vm, SceneSelection::Object(object_ref(40)), &["41_shape", "41_collider_parts"]);
         let template = surface.rows[0].clone();
         let mut shape = scene_row(&template, "41_shape", ControlGroup::Body);
         shape.spec.name = "Shape".into();
@@ -1248,7 +1290,7 @@
         panel.open();
         panel.configure(live(vm));
         panel.configure_params(Some(surface));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(40));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(object_ref(40)));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
         assert_eq!(panel.properties_card.rows.iter().map(|row| row.id.as_ref()).collect::<Vec<_>>(), vec!["41_collider_parts"]);
@@ -1315,7 +1357,7 @@
         panel.open();
         panel.configure(live(azalea_shaped_vm()));
         for (selection, name, kind) in [
-            (SceneSelection::Object(40), "Azalea", Some("Object")),
+            (SceneSelection::Object(object_ref(40)), "Azalea", Some("Object")),
             (SceneSelection::Camera, "Camera", None),
             (SceneSelection::World, "World", None),
         ] {
@@ -1744,25 +1786,25 @@
                 select: |_| {},
                 locate: |p, t| {
                     assert_eq!(p.object_remove_ids.len(), 1, "one remove button, the properties header's");
-                    let (id, index) = p.object_remove_ids[0];
-                    assert_eq!(index, 0);
+                    let (id, object) = p.object_remove_ids[0].clone();
+                    assert_eq!(object, object_ref(40));
                     assert_eq!(t.name_of(id), Some("scene_setup.properties.remove"));
                     id
                 },
                 expect: |_, _, a| matches!(a,
-                    [PanelAction::Project(ProjectAction::SceneSetupRemoveObject(l, 99, 0))] if layer_1(l)),
+                    [PanelAction::Project(ProjectAction::SceneSetupRemoveObject(l, object))] if layer_1(l) && *object == object_ref(40)),
             },
             ButtonCase {
                 name: "duplicate object",
                 select: |_| {},
                 locate: |p, _| {
                     assert_eq!(p.object_duplicate_ids.len(), 1);
-                    let (id, index) = p.object_duplicate_ids[0];
-                    assert_eq!(index, 0);
+                    let (id, object) = p.object_duplicate_ids[0].clone();
+                    assert_eq!(object, object_ref(40));
                     id
                 },
                 expect: |_, _, a| matches!(a,
-                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0, 1))] if layer_1(l)),
+                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, object, 1))] if layer_1(l) && *object == object_ref(40)),
             },
             ButtonCase {
                 name: "remove light",
@@ -1771,19 +1813,19 @@
                 },
                 locate: |p, _| {
                     assert_eq!(p.light_remove_ids.len(), 1, "one remove button, the light's header in Lighting");
-                    let (id, index) = p.light_remove_ids[0];
-                    assert_eq!(index, 0);
+                    let (id, light) = p.light_remove_ids[0].clone();
+                    assert_eq!(light, light_ref(60));
                     id
                 },
                 expect: |_, _, a| matches!(a,
-                    [PanelAction::Project(ProjectAction::SceneSetupRemoveLight(l, 99, 0))] if layer_1(l)),
+                    [PanelAction::Project(ProjectAction::SceneSetupRemoveLight(l, light))] if layer_1(l) && *light == light_ref(60)),
             },
             ButtonCase {
                 name: "rename object",
                 select: |_| {},
                 locate: |p, _| p.object_name_ids[0].1,
                 expect: |_, _, a| matches!(a,
-                    [PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 40, n))] if layer_1(l) && n == "Azalea"),
+                    [PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, object, n))] if layer_1(l) && *object == object_ref(40) && n == "Azalea"),
             },
         ];
         for case in &cases {
@@ -1835,7 +1877,7 @@
                 .map(|(_, sel)| sel.clone())
                 .collect()
         };
-        let (azalea, world) = (SceneSelection::Object(40), SceneSelection::World);
+        let (azalea, world) = (SceneSelection::Object(object_ref(40)), SceneSelection::World);
         assert_eq!(panel.live_selected(), std::slice::from_ref(&azalea), "the active item alone is selected");
 
         click(&mut panel, &mut tree, world.clone(), true);

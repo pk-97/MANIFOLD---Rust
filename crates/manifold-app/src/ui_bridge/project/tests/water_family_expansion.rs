@@ -114,7 +114,7 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
         .expect("parent selection survives expansion");
     assert_eq!(selected_before.layer_id, selected_after.layer_id);
     assert_eq!(selected_before.scene, selected_after.scene);
-    assert_eq!(selected_before.index, selected_after.index);
+    assert_eq!(selected_before.item, selected_after.item);
     assert_eq!(selected_before.is_light, selected_after.is_light);
 
     // Expansion changes only the outliner. The parent's own section and gate

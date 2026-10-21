@@ -66,9 +66,10 @@ use super::param_slider_shared::{
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowKind, RowMapping,
+    ModifierPickerEntry, ParamRow, ParamSurface, RowKind, RowMapping,
     RowRole, RowSpec,
 };
+use manifold_foundation::SceneNodeRef;
 use crate::slider::GAP;
 use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, SurfaceRole};
 
@@ -87,8 +88,6 @@ const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
 const OBJ_OFF_PHYSICS: u64 = 36;
 const OBJ_OFF_FLUID_ROLE: u64 = 37;
-const OBJ_OFF_FLUID_ROLE_TARGET: u64 = 38;
-const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
 /// Water-family child Hide button; unlike the outliner eye this is a
 /// one-way local write and is always present, including for hidden rows.
 const OBJ_OFF_HIDE: u64 = 40;
@@ -112,6 +111,17 @@ const OBJ_OFF_REMOVE: u64 = 20;
 
 const fn obj_key(index: usize, offset: u64) -> u64 {
     OBJ_KEY_BASE + index as u64 * OBJ_KEY_STRIDE + offset
+}
+
+/// A scene address as plain text, for widget keys and widget names.
+pub(crate) fn ref_text(node: &SceneNodeRef) -> String {
+    let mut text = String::new();
+    for group in &node.scope {
+        text.push_str(group.as_str());
+        text.push('/');
+    }
+    text.push_str(node.node.as_str());
+    text
 }
 /// Per-light dynamic keys (P3), same convention as `obj_key`: Lights is a
 /// variable-length list, so every light gets a private key range.
@@ -169,8 +179,8 @@ const MODIFIER_OBJ_STRIDE: u64 = 480;
 /// modifier stack (never more than a handful of rows).
 const MODIFIER_ADD_BUTTON_OFFSET: u64 = 400;
 
-const fn modifier_add_button_key(object_index: usize) -> u64 {
-    MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_BUTTON_OFFSET
+const fn modifier_add_button_key(ordinal: usize) -> u64 {
+    MODIFIER_KEY_BASE + ordinal as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_BUTTON_OFFSET
 }
 
 const PANEL_W_MIN: f32 = 320.0;
@@ -336,9 +346,9 @@ pub struct MaterialTextureInfo {
 /// Assignment remains object-owned while placement rows remain material-owned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterialInspectorInfo {
-    pub object: ModifierObjectRef,
+    pub object: SceneNodeRef,
     pub object_gain: Option<manifold_foundation::ParamId>,
-    pub material: ModifierObjectRef,
+    pub material: SceneNodeRef,
     pub shared_object_count: Option<usize>,
     /// The starter look the material currently matches; `None` is Custom.
     pub look: Option<MaterialLook>,
@@ -381,9 +391,12 @@ pub struct ObjectKnownRow {
     /// What the row's header, shortcuts and commands accept.
     pub capabilities: manifold_foundation::scene_surface::SceneObjectCapabilities,
     pub index: usize,
-    /// The `node.scene_object`'s own doc id — the address the eye toggle
-    /// writes `visible` at and the selection/rename address used by the
-    /// scene-object command (D12).
+    /// The row's stable address: the scene object (the group, for a virtual
+    /// parent). Selection, keys, rename, remove, duplicate and physics all
+    /// name the row by it; document ids repeat across import groups.
+    pub node: SceneNodeRef,
+    /// The `node.scene_object`'s own doc id, for the id-addressed modifier
+    /// and skin writes. Never an identity.
     pub object_node_id: u32,
     /// `Some` when wrapped in a group (the importer/Add Object's template
     /// shape) — the rename sweep's group target. `None` for a bare
@@ -395,7 +408,7 @@ pub struct ObjectKnownRow {
     pub is_group: bool,
     /// The compound parent for a child row. `None` means a top-level object
     /// (including a virtual group parent).
-    pub parent_group_id: Option<u32>,
+    pub parent: Option<SceneNodeRef>,
     pub name: String,
     pub visible: RowValue,
     pub transform: Option<Box<TransformRowVm>>,
@@ -462,6 +475,8 @@ pub enum ObjectRowVm {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightKnownRow {
     pub index: usize,
+    /// The light's stable address.
+    pub node: SceneNodeRef,
     pub node_doc_id: u32,
     /// P5: the light's editable display name (NEW — lights didn't have one
     /// before this design). Double-click opens the same rename UX as an
@@ -499,12 +514,13 @@ pub struct FluidDomainOption {
     pub name: String,
     /// The tree rows drawing this water and their parent rows: selecting
     /// any of them makes it the Add menu's target for a fluid source.
-    pub rows: Vec<u32>,
+    pub rows: Vec<SceneNodeRef>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FluidRoleRow {
-    pub source_node_id: u32,
+    /// The role's stable address.
+    pub source: SceneNodeRef,
     pub name: String,
     pub target_label: String,
 }
@@ -528,7 +544,7 @@ pub struct SceneItemVm {
     pub selection: SceneSelection,
     pub name: String,
     /// The compound parent object a child object row sits under.
-    pub parent: Option<u32>,
+    pub parent: Option<SceneNodeRef>,
     /// The controls this item owns, in manifest order: every exposed control
     /// whose primary binding targets one of the item's nodes.
     pub parameter_ids: Vec<String>,
@@ -594,15 +610,15 @@ pub struct SceneSetupVm {
 /// P5's outliner selection (D7): the one scene item whose controls the
 /// properties region shows. UI-local workspace state — like fold state,
 /// NEVER serialized (`rg -n "SceneSelection" crates/manifold-io
-/// crates/manifold-core` must stay 0 hits). Object/light `u32` payloads and
-/// force and physics `NodeId` payloads are stable graph identities, unlike
-/// indices.
+/// crates/manifold-core` must stay 0 hits). Object and light payloads
+/// are `SceneNodeRef`s and force and physics payloads are `NodeId`s: stable
+/// graph identities, unlike indices or document ids.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneSelection {
-    Object(u32),
-    /// One light, by its doc id. It names the light's item; the tree and the
+    Object(SceneNodeRef),
+    /// One light, by its address. It names the light's item; the tree and the
     /// properties show every light under [`SceneSelection::Lighting`].
-    Light(u32),
+    Light(SceneNodeRef),
     Force(FoundationNodeId),
     Camera,
     /// All lighting in one place: the environment and its HDRI, exposure,
@@ -967,7 +983,7 @@ pub struct ScenePanel {
     add_light_id: Option<NodeId>,
     add_force_id: Option<NodeId>,
     /// The empty Physics group's action: Enable Physics on this object index.
-    physics_enable_id: Option<(NodeId, usize)>,
+    physics_enable_id: Option<(NodeId, SceneNodeRef)>,
     /// The groups the tree drew this frame, in order.
     tree_groups: Vec<SceneGroup>,
     header_buttons: item_header::HeaderButtons,
@@ -1017,30 +1033,30 @@ pub struct ScenePanel {
     /// rename action, and backs
     /// `object_name_rect` (the app's text-input anchor lookup). At most one
     /// entry per frame (P5: one selection, one properties header).
-    object_name_ids: Vec<(u32, NodeId, String)>,
+    object_name_ids: Vec<(SceneNodeRef, NodeId, String)>,
     /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
     /// header's "Remove" button, when a Known object is selected this frame
     /// — resolves to `PanelAction::SceneSetupRemoveObject`. At most one
     /// entry per frame.
-    object_remove_ids: Vec<(NodeId, usize)>,
+    object_remove_ids: Vec<(NodeId, SceneNodeRef)>,
     /// P5 (D11): `(duplicate_button_node_id, index)` for the properties
     /// header's "Duplicate" button, when a Known object is selected this
     /// frame — resolves to `PanelAction::SceneSetupDuplicateObject`.
-    object_duplicate_ids: Vec<(NodeId, usize)>,
+    object_duplicate_ids: Vec<(NodeId, SceneNodeRef)>,
     /// Child-only remove/duplicate targets. Physical indices are not unique
     /// across a virtual group parent and its first child, so these have their
     /// own routing tables and stable widget keys use the object node id.
-    submesh_remove_ids: Vec<(NodeId, usize)>,
-    submesh_duplicate_ids: Vec<(NodeId, usize)>,
-    /// scene-panel-ux lane: `(frame_button_node_id, object_index)` for the properties
+    submesh_remove_ids: Vec<(NodeId, SceneNodeRef)>,
+    submesh_duplicate_ids: Vec<(NodeId, SceneNodeRef)>,
+    /// scene-panel-ux lane: `(frame_button_node_id, object)` for the properties
     /// header's "Frame" button, when a Known object is selected this frame
     /// — resolves to `PanelAction::SceneSetupFrameSelected`.
-    object_frame_ids: Vec<(NodeId, u32)>,
-    object_enable_physics_ids: Vec<(NodeId, usize)>,
-    object_disable_physics_ids: Vec<(NodeId, usize)>,
-    object_fluid_role_ids: Vec<(NodeId, usize)>,
-    fluid_role_target_ids: Vec<(NodeId, u32)>,
-    fluid_role_remove_ids: Vec<(NodeId, u32)>,
+    object_frame_ids: Vec<(NodeId, SceneNodeRef)>,
+    object_enable_physics_ids: Vec<(NodeId, SceneNodeRef)>,
+    object_disable_physics_ids: Vec<(NodeId, SceneNodeRef)>,
+    object_fluid_role_ids: Vec<(NodeId, SceneNodeRef)>,
+    fluid_role_target_ids: Vec<(NodeId, SceneNodeRef)>,
+    fluid_role_remove_ids: Vec<(NodeId, SceneNodeRef)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -1049,8 +1065,11 @@ pub struct ScenePanel {
     /// expanded.
     outliner_folded: ahash::AHashMap<SceneGroup, bool>,
     /// Expanded compound groups, keyed per bound layer and kept in UI state.
-    expanded_groups: std::collections::HashMap<LayerId, ahash::AHashSet<u32>>,
-    group_toggle_ids: Vec<(NodeId, u32)>,
+    /// Widget-key ordinal of each object row, so two rows never share a key
+    /// range. Ordinals are the lowest free numbers, kept while the row lives.
+    object_key_ordinals: ahash::AHashMap<SceneNodeRef, usize>,
+    expanded_groups: std::collections::HashMap<LayerId, ahash::AHashSet<SceneNodeRef>>,
+    group_toggle_ids: Vec<(NodeId, SceneNodeRef)>,
     /// UX-P2 (D6): `(button_node_id, group_node_id)` for the single "+ Add
     /// Modifier" button built this frame, when the selected object's chain
     /// is addable (was `modifier_add_ids: Vec<(NodeId, u32, String)>`, one
@@ -1068,15 +1087,15 @@ pub struct ScenePanel {
     /// header's "Remove" button, when a Known light is selected this frame —
     /// resolves to `PanelAction::SceneSetupRemoveLight`. At most one entry
     /// per frame.
-    light_remove_ids: Vec<(NodeId, usize)>,
+    light_remove_ids: Vec<(NodeId, SceneNodeRef)>,
     /// P5: `(light_node_doc_id, name_label_node_id, current_name)` for the
     /// properties header's editable light name row, when a Known light is
     /// selected this frame — mirrors `object_name_ids`, backs
     /// `light_name_rect`.
-    light_name_ids: Vec<(u32, NodeId, String)>,
+    light_name_ids: Vec<(SceneNodeRef, NodeId, String)>,
     /// Feature presence is captured on selection, never inferred during a drag.
     material_mode_ids: Vec<(NodeId, usize)>,
-    material_feature_context: Option<(LayerId, ModifierObjectRef, ModifierObjectRef)>,
+    material_feature_context: Option<(LayerId, SceneNodeRef, SceneNodeRef)>,
     material_visible_features: ahash::AHashSet<crate::param_surface::MaterialFeature>,
     material_feature_order: Vec<crate::param_surface::MaterialFeature>,
     material_remove_ids: Vec<(NodeId, crate::param_surface::MaterialFeature, manifold_foundation::ParamId)>,
@@ -1166,6 +1185,7 @@ impl Default for ScenePanel {
             fluid_role_remove_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
+            object_key_ordinals: ahash::AHashMap::new(),
             expanded_groups: std::collections::HashMap::new(),
             group_toggle_ids: Vec::new(),
             add_modifier_button_id: None,
@@ -1244,9 +1264,43 @@ impl ScenePanel {
     /// staleness").
     pub fn configure(&mut self, state: SceneSetupState) {
         self.state = state;
+        self.assign_object_key_ordinals();
         self.clear_stale_parameter_reveal();
         if !matches!(self.state, SceneSetupState::Live(_)) { self.clear_force_cards(); }
         self.rebuild_object_modifier_cards_from_projection();
+    }
+
+    /// Give every live object row its widget-key ordinal: rows keep theirs
+    /// while they live, new rows take the lowest free number, and rows that
+    /// left free theirs. Document ids repeat across import groups, so the
+    /// key ranges cannot come from them.
+    fn assign_object_key_ordinals(&mut self) {
+        let SceneSetupState::Live(vm) = &self.state else {
+            self.object_key_ordinals.clear();
+            return;
+        };
+        let live: Vec<&SceneNodeRef> = vm
+            .objects
+            .iter()
+            .filter_map(|object| match object {
+                ObjectRowVm::Known(row) => Some(&row.node),
+                ObjectRowVm::Custom { .. } => None,
+            })
+            .collect();
+        self.object_key_ordinals.retain(|node, _| live.contains(&node));
+        for node in live {
+            if self.object_key_ordinals.contains_key(node) {
+                continue;
+            }
+            let taken: ahash::AHashSet<usize> = self.object_key_ordinals.values().copied().collect();
+            let ordinal = (0..).find(|candidate| !taken.contains(candidate)).unwrap_or(0);
+            self.object_key_ordinals.insert(node.clone(), ordinal);
+        }
+    }
+
+    /// The key-range number of `node`'s widgets.
+    pub(crate) fn row_key(&self, node: &SceneNodeRef) -> usize {
+        self.object_key_ordinals.get(node).copied().unwrap_or(0)
     }
 
     /// P2 slice 2a: hand the panel the layer's FULL generator
@@ -1518,9 +1572,9 @@ impl ScenePanel {
         self.select_items(layer_id.clone(), items);
     }
 
-    /// Unfold the tree group `parent` (its row's object id), so a selected
+    /// Unfold the tree group `parent` (its row's address), so a selected
     /// item under it shows.
-    pub fn unfold(&mut self, layer_id: LayerId, parent: u32) {
+    pub fn unfold(&mut self, layer_id: LayerId, parent: SceneNodeRef) {
         self.expanded_groups.entry(layer_id).or_default().insert(parent);
     }
 
@@ -1870,7 +1924,7 @@ impl ScenePanel {
         inner_x: f32,
         inner_w: f32,
         cy: f32,
-        object_index: usize,
+        ordinal: usize,
         group_node_id: u32,
     ) -> f32 {
         let btn_id = tree.add_button_keyed(
@@ -1881,7 +1935,7 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             "+ Add Modifier",
-            modifier_add_button_key(object_index),
+            modifier_add_button_key(ordinal),
         );
         self.add_modifier_button_id = Some((btn_id, group_node_id));
         cy + ROW_H
@@ -1927,13 +1981,13 @@ impl ScenePanel {
                     self.view_version += 1;
                     return (true, Vec::new());
                 }
-                if let Some((_, group_id)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id) {
+                if let Some((_, group)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id).cloned() {
                     let Some(vm) = self.state.as_live() else {
                         return (true, Vec::new());
                     };
                     let groups = self.expanded_groups.entry(vm.layer_id.clone()).or_default();
-                    if !groups.insert(*group_id) {
-                        groups.remove(group_id);
+                    if !groups.insert(group.clone()) {
+                        groups.remove(&group);
                     }
                     return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
                 }
@@ -2019,63 +2073,59 @@ impl ScenePanel {
                             row_value.addr.param_id.clone(),
                             0.0,
                         )));
-                    } else if let Some((_, index)) =
+                    } else if let Some((_, object)) =
                         self.object_frame_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         // scene-panel-ux lane: handle Frame button click
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(
                             vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            *index,
+                            object.clone(),
                         )));
-                    } else if let Some((_, index)) =
+                    } else if let Some((_, object)) =
                         self.object_duplicate_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(
                             vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            *index as u32,
+                            object.clone(),
                             1,
                         )));
-                    } else if let Some((_, index)) =
+                    } else if let Some((_, part)) =
                         self.submesh_duplicate_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupDuplicateSubmesh(
                             vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            *index as u32,
+                            part.clone(),
                         )));
-                    } else if let Some((_, index)) = self.object_enable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                    } else if let Some((_, object)) = self.object_enable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
-                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                            vm.layer_id.clone(), object.clone(),
                         )));
-                    } else if let Some((_, index)) = self.object_fluid_role_ids.iter().find(|(id, _)| *id == *node_id) {
+                    } else if let Some((_, object)) = self.object_fluid_role_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
                             layer_id: vm.layer_id.clone(),
-                            render_scene_node_id: vm.scene_root_node_id,
-                            object_index: *index as u32,
+                            object: object.clone(),
                             domains: vm.fluid_domains.clone(),
                             button_node_id: *node_id,
                         }));
-                    } else if let Some((_, source_node_id)) = self.fluid_role_target_ids.iter().find(|(id, _)| *id == *node_id) {
+                    } else if let Some((_, source)) = self.fluid_role_target_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
-                            layer_id: vm.layer_id.clone(), source_node_id: *source_node_id,
+                            layer_id: vm.layer_id.clone(), source: source.clone(),
                             domains: vm.fluid_domains.clone(), button_node_id: *node_id,
                         }));
-                    } else if let Some((_, source_node_id)) = self.fluid_role_remove_ids.iter().find(|(id, _)| *id == *node_id) {
+                    } else if let Some((_, source)) = self.fluid_role_remove_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveFluidRole {
-                            layer_id: vm.layer_id.clone(), source_node_id: *source_node_id,
+                            layer_id: vm.layer_id.clone(), source: source.clone(),
                         }));
-                    } else if let Some((_, index)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                    } else if let Some((_, object)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
-                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                            vm.layer_id.clone(), object.clone(),
                         )));
-                    } else if let Some((light_node_id, _, current_name)) =
+                    } else if let Some((light, _, current_name)) =
                         self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Root(RootAction::SceneSetupRenameLightClicked(
                             vm.layer_id.clone(),
-                            *light_node_id,
+                            light.clone(),
                             current_name.clone(),
                         )));
                     }
@@ -2094,12 +2144,12 @@ impl ScenePanel {
                         .or_else(|| self.item_header_click(*node_id, vm))
                     {
                         actions.push(act);
-                    } else if let Some((group_node_id, _, current_name)) =
+                    } else if let Some((object, _, current_name)) =
                         self.object_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(
                             vm.layer_id.clone(),
-                            *group_node_id,
+                            object.clone(),
                             current_name.clone(),
                         )));
                     } else if let Some((_, group_node_id)) =
@@ -2138,29 +2188,26 @@ impl ScenePanel {
                             current_target_map: skin.target_map,
                             button_node_id: *node_id,
                         }));
-                    } else if let Some((_, index)) =
+                    } else if let Some((_, object)) =
                         self.object_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveObject(
                             vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            *index as u32,
+                            object.clone(),
                         )));
-                    } else if let Some((_, index)) =
+                    } else if let Some((_, part)) =
                         self.submesh_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveSubmesh(
                             vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            *index as u32,
+                            part.clone(),
                         )));
-                    } else if let Some((_, index)) =
+                    } else if let Some((_, light)) =
                         self.light_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveLight(
                             vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            *index as u32,
+                            light.clone(),
                         )));
                     } else if let Some((row, role)) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {
                         // P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` section 4/section 5b):
@@ -2315,18 +2362,18 @@ impl ScenePanel {
         node_id == self.bg_id
     }
 
-    /// The name label's rect for `group_node_id`, if a row for it was built
+    /// The name label's rect for `object`, if a row for it was built
     /// this frame — the app's text-input anchor lookup (mirrors
     /// `AudioSetupPanel::send_label_rect`).
-    pub fn object_name_rect(&self, tree: &UITree, group_node_id: u32) -> Option<Rect> {
-        let (_, node_id, _) = self.object_name_ids.iter().find(|(gid, _, _)| *gid == group_node_id)?;
+    pub fn object_name_rect(&self, tree: &UITree, object: &SceneNodeRef) -> Option<Rect> {
+        let (_, node_id, _) = self.object_name_ids.iter().find(|(row, _, _)| row == object)?;
         Some(tree.get_bounds(*node_id))
     }
 
-    /// The light name label's rect for `light_node_id`, if the properties
+    /// The light name label's rect for `light`, if the properties
     /// header was built for it this frame — mirrors `object_name_rect`.
-    pub fn light_name_rect(&self, tree: &UITree, light_node_id: u32) -> Option<Rect> {
-        let (_, node_id, _) = self.light_name_ids.iter().find(|(id, _, _)| *id == light_node_id)?;
+    pub fn light_name_rect(&self, tree: &UITree, light: &SceneNodeRef) -> Option<Rect> {
+        let (_, node_id, _) = self.light_name_ids.iter().find(|(row, _, _)| row == light)?;
         Some(tree.get_bounds(*node_id))
     }
 }

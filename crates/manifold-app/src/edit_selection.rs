@@ -1,5 +1,5 @@
 //! Selection receipts for successful content-owned insertions.
-use manifold_core::{EffectId, LayerId, project::Project};
+use manifold_core::{EffectId, LayerId, SceneNodeRef, project::Project};
 use manifold_editing::commands::effect_target::{EffectTarget, with_effects};
 
 #[derive(Clone, Debug)]
@@ -11,17 +11,17 @@ pub(crate) enum EditSelection {
     Layer(LayerId),
     Light {
         layer_id: LayerId,
-        light_id: u32,
+        light: SceneNodeRef,
     },
     Object {
         layer_id: LayerId,
-        object_id: u32,
+        object: SceneNodeRef,
     },
     /// A placed fluid source, by its role node.
     Source {
         layer_id: LayerId,
         /// The water row it lists under, unfolded so the row shows.
-        water: u32,
+        water: SceneNodeRef,
         node: manifold_core::NodeId,
     },
 }
@@ -46,19 +46,19 @@ pub(crate) enum PendingSelection {
     Layer(Vec<LayerId>),
     Light {
         layer_id: LayerId,
-        previous: Vec<u32>,
+        previous: Vec<SceneNodeRef>,
     },
     Object {
         layer_id: LayerId,
-        previous: Vec<u32>,
+        previous: Vec<SceneNodeRef>,
     },
     Source {
         layer_id: LayerId,
-        previous: Vec<(u32, manifold_core::NodeId)>,
+        previous: Vec<(SceneNodeRef, manifold_core::NodeId)>,
     },
 }
 
-fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
+fn object_ids(project: &Project, layer: &LayerId) -> Vec<SceneNodeRef> {
     let target = manifold_core::GraphTarget::Generator(layer.clone());
     let Some(def) = crate::graph_target::resolve(project, &target) else {
         return Vec::new();
@@ -69,7 +69,7 @@ fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
                 .into_iter()
                 .filter_map(|object| match object {
                     manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) => {
-                        Some(row.object_node_id)
+                        Some(row.address)
                     }
                     _ => None,
                 })
@@ -79,7 +79,7 @@ fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
 }
 
 /// Each placed source, by its role node, with the object id of the water it lists under.
-fn source_nodes(project: &Project, layer: &LayerId) -> Vec<(u32, manifold_core::NodeId)> {
+fn source_nodes(project: &Project, layer: &LayerId) -> Vec<(SceneNodeRef, manifold_core::NodeId)> {
     let target = manifold_core::GraphTarget::Generator(layer.clone());
     crate::graph_target::resolve(project, &target)
         .and_then(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def))
@@ -88,8 +88,9 @@ fn source_nodes(project: &Project, layer: &LayerId) -> Vec<(u32, manifold_core::
                 .into_iter()
                 .filter_map(|object| match object {
                     manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) => {
-                        let water = row.object_node_id;
-                        Some(row.placed_sources.into_iter().map(move |source| (water, source.node)))
+                        let water = row.address.clone();
+                        let placed = row.placed_sources;
+                        Some(placed.into_iter().map(move |source| (water.clone(), source.node)))
                     }
                     _ => None,
                 })
@@ -99,7 +100,7 @@ fn source_nodes(project: &Project, layer: &LayerId) -> Vec<(u32, manifold_core::
         .unwrap_or_default()
 }
 
-fn light_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
+fn light_ids(project: &Project, layer: &LayerId) -> Vec<SceneNodeRef> {
     let target = manifold_core::GraphTarget::Generator(layer.clone());
     crate::graph_target::resolve(project, &target)
     .and_then(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def))
@@ -108,7 +109,7 @@ fn light_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
             .into_iter()
             .filter_map(|light| match light {
                 manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) => {
-                    Some(row.node_doc_id)
+                    Some(row.address)
                 }
                 _ => None,
             })
@@ -166,13 +167,13 @@ impl PendingSelection {
             Self::Light { layer_id, previous } => light_ids(project, &layer_id)
                 .into_iter()
                 .find(|id| !previous.contains(id))
-                .map(|light_id| EditSelection::Light { layer_id, light_id }),
+                .map(|light| EditSelection::Light { layer_id, light }),
             Self::Object { layer_id, previous } => object_ids(project, &layer_id)
                 .into_iter()
                 .find(|id| !previous.contains(id))
-                .map(|object_id| EditSelection::Object {
+                .map(|object| EditSelection::Object {
                     layer_id,
-                    object_id,
+                    object,
                 }),
             Self::Source { layer_id, previous } => source_nodes(project, &layer_id)
                 .into_iter()
@@ -239,8 +240,8 @@ pub(crate) fn apply_update(
             *active_layer = Some(id.clone());
             ui.request_layer_reveal(id.clone());
         }
-        EditSelection::Light { layer_id, light_id } => {
-            if !light_ids(project, layer_id).contains(light_id) {
+        EditSelection::Light { layer_id, light } => {
+            if !light_ids(project, layer_id).contains(light) {
                 return false;
             }
             focus_scene_tab(selection, active_layer, layer_id);
@@ -251,15 +252,15 @@ pub(crate) fn apply_update(
         }
         EditSelection::Object {
             layer_id,
-            object_id,
+            object,
         } => {
-            if !object_ids(project, layer_id).contains(object_id) {
+            if !object_ids(project, layer_id).contains(object) {
                 return false;
             }
             focus_scene_tab(selection, active_layer, layer_id);
             ui.scene_setup_panel.set_selection(
                 layer_id.clone(),
-                manifold_ui::panels::scene_setup_panel::SceneSelection::Object(*object_id),
+                manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object.clone()),
             );
         }
         EditSelection::Source { layer_id, water, node } => {
@@ -271,7 +272,7 @@ pub(crate) fn apply_update(
                 layer_id.clone(),
                 manifold_ui::panels::scene_setup_panel::SceneSelection::Source(node.clone()),
             );
-            ui.scene_setup_panel.unfold(layer_id.clone(), *water);
+            ui.scene_setup_panel.unfold(layer_id.clone(), water.clone());
         }
     }
     true
