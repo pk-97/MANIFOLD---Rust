@@ -343,15 +343,16 @@ class PathTriggerTests(unittest.TestCase):
         ):
             self.assertEqual(self.select(path), [], path)
 
-    def test_scene_setup_panel_selects_exactly_the_ten(self):
-        ten = sorted([
+    def test_scene_setup_panel_selects_exactly_the_eleven(self):
+        eleven = sorted([
             "scene-setup-add-object", "scene-setup-light-intensity-drag",
             "scene-setup-add-fog-drag", "scene-setup-modifier-stack",
             "scene-setup-heldout-merge-snapshot", "scene-setup-empty-states",
             "scene-skin", "material-inspector-colour", "scene-fluid-role-lifecycle",
-            "scene-forces-controls"])
-        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel.rs"), ten)
-        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel/x.rs"), ten)
+            "scene-forces-controls", "scene-two-panes"])
+        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel.rs"), eleven)
+        # The panel directory also runs the swarm add flow.
+        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel/x.rs"), sorted(eleven + ["scene-swarm-add"]))
 
     def test_shared_surfaces_select_exactly_the_four_sentinels(self):
         four = sorted([
