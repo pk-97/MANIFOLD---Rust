@@ -839,14 +839,13 @@ mod value_fit_tests {
         assert_eq!(fit(4.0, false, metres), "4.00 m", "a short value keeps everything");
         assert_eq!(fit(12345.5, false, metres), "12345.5 m", "one decimal fits where two do not");
         assert_eq!(fit(123_456_792.0, false, metres), "123.5M m", "compact form keeps the unit");
-        assert_eq!(fit(600.0, true, Some(Unit::KilogramsPerCubicMetre)), "600 kg/m³");
+        assert_eq!(fit(600.0, true, Some(Unit::Kilograms)), "600 kg");
     }
 
     /// Only when nothing with the unit fits does the unit go; the leading
     /// digit never does.
     #[test]
     fn a_value_that_cannot_hold_its_unit_drops_it_last() {
-        assert_eq!(fit(1000.0, true, Some(Unit::KilogramsPerCubicMetre)), "1000");
         assert_eq!(fit(100_000_000.0, true, Some(Unit::MillionCells)), "100000000");
     }
 }

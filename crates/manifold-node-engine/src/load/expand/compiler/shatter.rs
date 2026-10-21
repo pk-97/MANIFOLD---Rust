@@ -189,17 +189,17 @@ pub(super) fn prepare(
             let parent_acceleration =
                 input(def, world, &format!("body_acceleration_{parent_slot}"));
             let parent = node(def, parent_input.0)?.clone();
-            let density = number(parent.params.get("density"))
+            let mass = number(parent.params.get("mass"))
                 .or_else(|| {
                     registry
                         .construct(&parent.type_id)?
                         .parameters()
                         .iter()
-                        .find(|param| param.name == "density")?
+                        .find(|param| param.name == "mass")?
                         .default
                         .as_scalar()
                 })
-                .ok_or_else(|| invalid("shatter", "parent body has no numeric density default"))?;
+                .ok_or_else(|| invalid("shatter", "parent body has no numeric mass default"))?;
             wire(def, release.clone(), parent.id, "release_count");
             let authored_pose = input(def, parent.id, "transform")
                 .ok_or_else(|| invalid("shatter", "parent authored transform is missing"))?;
@@ -331,9 +331,9 @@ pub(super) fn prepare(
                     body.params
                         .insert("fragment_parent".into(), float(parent_slot as f32));
                     body.params.insert("collider_parts".into(), float(1.0));
-                    // A piece is the parent's material; its mass follows
-                    // its own hull.
-                    body.params.insert("density".into(), float(density));
+                    // A piece is the parent's material: on release the world gives
+                    // it the parent's density over its own hull; this is the placeholder.
+                    body.params.insert("mass".into(), float(mass));
                     wire(def, authored_pose.clone(), body_copy, "transform");
                     if let Some(local) = &local {
                         wire(def, local.clone(), body_copy, "source_transform");

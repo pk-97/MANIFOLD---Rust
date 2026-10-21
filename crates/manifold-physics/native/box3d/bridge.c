@@ -507,6 +507,72 @@ int manifold_box3d_body_update(
 	return BOX3D_BRIDGE_OK;
 }
 
+// Swap a static body's collision hulls for `hull_count` new ones in place:
+// the body, its pose and the rest of the world are untouched. The new hulls
+// are cooked before any old shape is destroyed, so a failure leaves the body
+// as it was. The caller frees the old hulls after this returns.
+int manifold_box3d_body_replace_hulls(
+	uint64_t body_value,
+	const float* points,
+	const int32_t* point_counts,
+	int hull_count,
+	int max_vertex_count,
+	float friction,
+	float restitution,
+	uintptr_t* hull_out )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 || hull_count > BOX3D_MAX_BODY_SHAPES ||
+		 max_vertex_count < 4 || b3Body_GetType( body_id ) != b3_staticBody )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	size_t point_offset = 0;
+	for ( int i = 0; i < hull_count; ++i )
+	{
+		b3HullData* hull = point_counts[i] < 4 ? NULL : b3CreateHull( (const b3Vec3*)( points + 3 * point_offset ), point_counts[i], max_vertex_count );
+		if ( hull == NULL )
+		{
+			for ( int j = 0; j < i; ++j )
+			{
+				b3DestroyHull( (b3HullData*)hull_out[j] );
+			}
+			return BOX3D_BRIDGE_ERROR;
+		}
+		hull_out[i] = (uintptr_t)hull;
+		point_offset += (size_t)point_counts[i];
+	}
+
+	b3ShapeId old_shapes[BOX3D_MAX_BODY_SHAPES];
+	int old_count = b3Body_GetShapeCount( body_id );
+	if ( old_count > BOX3D_MAX_BODY_SHAPES || b3Body_GetShapes( body_id, old_shapes, old_count ) != old_count )
+	{
+		for ( int i = 0; i < hull_count; ++i )
+		{
+			b3DestroyHull( (b3HullData*)hull_out[i] );
+		}
+		return BOX3D_BRIDGE_TOO_MANY_SHAPES;
+	}
+	for ( int i = 0; i < old_count; ++i )
+	{
+		b3DestroyShape( old_shapes[i], false );
+	}
+
+	b3ShapeDef shape_definition = b3DefaultShapeDef();
+	shape_definition.density = 1.0f;
+	shape_definition.baseMaterial.friction = friction;
+	shape_definition.baseMaterial.restitution = restitution;
+	for ( int i = 0; i < hull_count; ++i )
+	{
+		if ( b3CreateHullShape( body_id, &shape_definition, (b3HullData*)hull_out[i] ).index1 == 0 )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+	return BOX3D_BRIDGE_OK;
+}
+
 int manifold_box3d_body_set_bullet( uint64_t body_value, int enabled )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );

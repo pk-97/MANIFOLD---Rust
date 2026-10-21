@@ -495,7 +495,7 @@ The caps are `PHYSICS_WORLD_MAX_BODIES` and `PHYSICS_WORLD_MAX_COPY_GROUPS` in f
 
 Enable, duplicate, paste and Shatter take body slots from core `BodySlots`, then `fit_world_bodies` grows the world's `bodies` count to cover every wired slot in the same edit. Nothing shrinks it. A world with all 256 slots taken refuses.
 
-On stage, a change to `bodies` or `copy_groups` restarts the world: every body and copy goes back to its authored pose and the clock to zero, as any change of which bodies exist already does.
+On stage, a change to `bodies` or `copy_groups` restarts the world: every body and copy goes back to its authored pose and the clock to zero. A body added to a free slot (Enable Physics, Duplicate, Paste) joins the running world at its authored pose instead, and the rebuild the edit causes carries the world over (`physics_carry`); removing a body or changing an installed body's shape, scale or collider still restarts it. A liquid-coupled world restarts on any of these.
 
 A compound body is capped by its own part ports, not by the world: at most `RIGID_BODY_MAX_PARTS` (64) material parts, the length of the rigid body's `part_k` table. Enable Physics refuses a larger import by name and leaves the graph as it loaded.
 

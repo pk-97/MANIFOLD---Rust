@@ -162,7 +162,7 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 | Mode · Aim X/Y/Z · Colour R/G/B · Light Size (light) | Type · Target X/Y/Z · one colour swatch · Size | `light.rs` |
 | Uniform (White Furnace) · RT Denoise Feed · Parent Visible | hidden (role) · hidden (role) · already hidden | table |
 | Copy Count / Spacing / Columns · Copy Layout · Simulation Speed | Count / Spacing / Columns · Arrangement · Speed | `physics_world.rs:350-355`, `matter_domain.rs:317` |
-| Physics · Motion · Density (kg/m³) (rigid body) | Enabled · Body Type · Density + unit kg/m³ | `rigid_body.rs:155-158` |
+| Physics · Motion · Mass (kg) (rigid body) | Enabled · Body Type · Mass + unit kg | `rigid_body.rs:155-158` |
 | Closed −X/+X · Bottom/Top · −Z/+Z | Left/Right Wall · Floor/Ceiling · Back/Front Wall | `matter_domain.rs:307-312` and the FLIP domain twins |
 | Initial Fill Height · Particle Capacity · Matter Points per Cell · Grid Budget (M cells) | Fill Height · Max Particles · Particles per Cell · Grid Budget + unit M cells | `matter_domain.rs:305,313`, `liquid_fill.rs:163` (the GPU FLIP domain no longer declares Max Particles) |
 | RT Enabled · RT Reflections · RT Shadows · RT Ambient Occlusion · RT Global Illumination | Ray Tracing · Reflections · Shadows · Ambient Occlusion · Global Illumination (inside the Ray Tracing group) | `render_scene.rs:6771-6832` (no clash with other `render_scene` labels, checked) |

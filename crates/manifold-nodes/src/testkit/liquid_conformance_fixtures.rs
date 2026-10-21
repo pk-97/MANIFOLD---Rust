@@ -278,7 +278,7 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
             set_node_param(&mut def, &format!("box_start{suffix}"), &format!("rot_{axis}"), float(0.0));
             set_node_param(&mut def, &format!("box_start{suffix}"), &format!("scale_{axis}"), float(edge / manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE));
         }
-        set_node_param(&mut def, &format!("box_body{suffix}"), "density", float(0.5 * FIXTURE_DENSITY));
+        set_node_param(&mut def, &format!("box_body{suffix}"), "mass", float(0.5 * FIXTURE_DENSITY * edge.powi(3)));
     }
     // The water's surface wraps every cube; sized up front, the first frame
     // draws it rather than growing the buffer.

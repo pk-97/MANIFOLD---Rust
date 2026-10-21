@@ -159,7 +159,7 @@
           "type": "Float",
           "value": 0.10000000149011612
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -302,7 +302,7 @@
           "type": "Float",
           "value": 0.03999999910593033
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -458,7 +458,7 @@
           "type": "Float",
           "value": 0.2800000011920929
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -570,7 +570,7 @@
           "type": "Float",
           "value": 0.2800000011920929
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },

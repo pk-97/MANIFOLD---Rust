@@ -114,26 +114,26 @@ use manifold_core::effect_graph_def::*;
     }
 
     #[test]
-    fn shatter_inherits_parent_density_or_registered_default() {
+    fn shatter_inherits_parent_mass_or_registered_default() {
         let registry = PrimitiveRegistry::with_builtin();
         let body = registry.construct("node.rigid_body").unwrap();
         let default = body.parameters().iter()
-            .find(|param| param.name == "density")
+            .find(|param| param.name == "mass")
             .unwrap().default.as_scalar().unwrap();
         assert_eq!(default, 600.0);
         for (authored, expected) in [(None, default), (Some(float(1234.0)), 1234.0)] {
             let mut owner = fixture();
             let parent = owner.nodes.iter_mut().find(|node| node.id == 111).unwrap();
-            parent.params.remove("density");
+            parent.params.remove("mass");
             if let Some(value) = authored {
-                parent.params.insert("density".into(), value);
+                parent.params.insert("mass".into(), value);
             }
             let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
             let fragments: Vec<_> = prepared.def.nodes.iter()
                 .filter(|node| node.params.contains_key("fragment_parent")).collect();
             assert_eq!(fragments.len(), 16);
             for fragment in fragments {
-                assert_eq!(number(fragment.params.get("density")), Some(expected));
+                assert_eq!(number(fragment.params.get("mass")), Some(expected));
             }
         }
     }

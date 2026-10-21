@@ -623,6 +623,8 @@ mod tests {
         GizmoAxis, GizmoMode, GizmoTarget, GizmoTargetKind, gizmo_targets,
     };
 
+    mod body_drag;
+
     const GPU_FLIP_WATER: &str =
         manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON;
     const W: u32 = 640;
