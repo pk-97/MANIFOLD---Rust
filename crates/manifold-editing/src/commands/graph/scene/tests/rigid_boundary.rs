@@ -79,7 +79,7 @@ fn physics_boundary_rigid_enable() {
 #[test]
 fn physics_boundary_rigid_shared_world() {
     let (mut project, layer, target, graph) = enabled_photoscan();
-    let copy = duplicate_copies(&project, target.clone(), vec![], 0, 0, 1, &graph);
+    let copy = duplicate_one(&project, target.clone(), vec![], 0, 0, &graph);
     let mut copy = copy.expect("a physics object copies");
     copy.execute(&mut project);
     assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
@@ -132,7 +132,7 @@ fn physics_boundary_rigid_duplicate_paused() {
     let paused = graph_of_generator(&project, &layer).clone();
     let world_before = paused.nodes.iter().find(|node| node.id == world_id).unwrap().clone();
 
-    let mut copy = duplicate_copies(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
+    let mut copy = duplicate_one(&project, target.clone(), vec![], 0, 0, &graph).unwrap();
     copy.execute(&mut project);
     assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
     let copied = graph_of_generator(&project, &layer).clone();
@@ -152,70 +152,19 @@ fn physics_boundary_rigid_duplicate_paused() {
 }
 
 #[test]
-fn physics_boundary_rigid_duplicate_count() {
+fn physics_boundary_rigid_duplicate_refuses_a_full_world() {
     let (mut project, layer, target, graph) = enabled_photoscan();
-    let before = project.graph_target_owner(&target).unwrap().clone();
-    let mut copies = duplicate_copies(&project, target.clone(), vec![], 0, 0, 3, &graph).unwrap();
-    copies.execute(&mut project);
-    assert!(copies.was_applied(), "{:?}", copies.rejection_reason());
-    let def = graph_of_generator(&project, &layer).clone();
-    let world = worlds(&def);
-    assert_eq!(world.len(), 1, "N copies share one world");
-    assert_eq!(filled_slots(&def, world[0]), vec![0, 1, 2, 3], "one new body per copy, next free slots");
-    assert_eq!(bodies(&def).len(), 4);
-    assert_eq!(
-        def.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"),
-        Some(&SerializedParamValue::Float { value: 4.0 })
-    );
-    let groups: Vec<_> = def.nodes.iter().filter(|node| node.type_id == GROUP_TYPE_ID).collect();
-    let names: Vec<_> = groups.iter().map(|group| group.handle.as_deref().unwrap()).collect();
-    assert_eq!(names, ["Imported", "Imported 2", "Imported 3", "Imported 4"]);
-    for (copy, group) in groups.iter().enumerate().skip(1) {
-        let body = group.group.as_ref().unwrap();
-        let x = body.nodes.iter().find(|node| node.type_id == "node.transform_3d").unwrap().params.get("pos_x");
-        assert_eq!(x, Some(&SerializedParamValue::Float { value: 0.5 * copy as f32 }), "each copy sits 0.5 m on from the last");
-        let source = body.nodes.iter().find(|node| node.type_id == "node.gltf_mesh_source").unwrap();
-        assert!(
-            def.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target,
-                BindingTarget::Node { node_id, .. } if *node_id == source.node_id)),
-            "every copy keeps the Model File"
-        );
-    }
-
-    copies.undo(&mut project);
-    let undone = project.graph_target_owner(&target).unwrap();
-    assert_eq!(undone.graph, before.graph, "one undo removes every copy");
-    assert_eq!(undone.params, before.params);
-    copies.execute(&mut project);
-    assert_eq!(graph_of_generator(&project, &layer), &def, "redo reuses the prepared ids");
-}
-
-#[test]
-fn physics_boundary_rigid_duplicate_count_refuses_a_full_world() {
-    let (mut project, layer, target, graph) = enabled_photoscan();
-    // Fill every body slot but two with bodies from elsewhere.
+    // Every body slot but the source's own is taken by bodies from elsewhere.
     let world = worlds(graph_of_generator(&project, &layer))[0];
     let host = project.graph_target_owner_mut(&target).unwrap();
     let def = host.graph.as_mut().unwrap();
-    for slot in 3..manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES {
+    for slot in 1..manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES {
         def.wires.push(super::super::scene_build_wire(999, "body", world, &format!("body_{slot}")));
     }
     let full = def.clone();
-    let refused = duplicate_copies(&project, target.clone(), vec![], 0, 0, 3, &graph)
-        .expect_err("three copies cannot fit in two free slots");
-    assert_eq!(refused.message, "The Physics World has 2 free body slots; 3 copies need 3");
-    assert_eq!(graph_of_generator(&project, &layer), &full);
-    let mut two = duplicate_copies(&project, target, vec![], 0, 0, 2, &graph).unwrap();
-    two.execute(&mut project);
-    assert!(two.was_applied(), "{:?}", two.rejection_reason());
-    let result = graph_of_generator(&project, &layer);
-    assert_eq!(filled_slots(result, world).len(), manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES as usize);
-    let world_node = result.nodes.iter().find(|node| node.id == world).unwrap();
-    assert_eq!(
-        manifold_core::physics_body_slots::world_bodies(world_node),
-        manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES,
-        "the copies grew the world to its last slot"
-    );
+    let refused = duplicate_one(&project, target.clone(), vec![], 0, 0, &graph).expect_err("no free body slot");
+    assert_eq!(refused.message, "The Physics World has no free body slot");
+    assert_eq!(graph_of_generator(&project, &layer), &full, "a refused duplicate changes nothing");
 }
 
 /// A copy carries its source's drivers but not its Ableton mappings: one Live
@@ -273,7 +222,7 @@ fn physics_boundary_rigid_duplicate_leaves_ableton_mappings_on_the_source() {
         status: AbletonMappingStatus::Active,
     }]);
 
-    let mut copy = duplicate_copies(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
+    let mut copy = duplicate_one(&project, target.clone(), vec![], 0, 0, &graph).unwrap();
     copy.execute(&mut project);
     assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
     let copied = density_bindings(&project).into_iter().find(|id| *id != source).expect("the copy binds its Density");

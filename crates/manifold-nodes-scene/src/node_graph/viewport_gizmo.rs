@@ -185,6 +185,11 @@ pub enum HandleWrite {
     /// handle's axis. `normalize` writes a unit vector; otherwise the
     /// length is kept.
     Direction { params: [ShapeParamVm; 3], normalize: bool },
+    /// One scale handle of a box whose three size params are one uniform
+    /// scale (`SceneShapeDecl::uniform_scale`): the drag's ratio multiplies
+    /// the first param's value and writes the result to all three, so the
+    /// three never differ.
+    Uniform { params: [ShapeParamVm; 3], limit: HardLimit },
     /// A handle of the selection's set ([`GizmoTarget::selection`]): one
     /// amount (a distance, a factor or an angle) that [`selection_writes`]
     /// turns into each member's params. `locked` when no member can take it.
@@ -195,7 +200,7 @@ impl HandleWrite {
     pub fn params(&self) -> &[ShapeParamVm] {
         match self {
             HandleWrite::Linear { param, .. } | HandleWrite::Angle(param) => std::slice::from_ref(param),
-            HandleWrite::Direction { params, .. } => params,
+            HandleWrite::Direction { params, .. } | HandleWrite::Uniform { params, .. } => params,
             HandleWrite::Selection { .. } => &[],
         }
     }
@@ -204,7 +209,7 @@ impl HandleWrite {
     pub fn locked(&self) -> bool {
         match self {
             HandleWrite::Selection { locked } => *locked,
-            HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. } => {
+            HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. } | HandleWrite::Uniform { .. } => {
                 self.params().iter().any(|param| param.wired)
             }
         }
@@ -342,6 +347,11 @@ impl GizmoTarget {
                     }
                 }
                 match triple(size) {
+                    // Three params that are one scale: one handle writes all three.
+                    Some(params) if shape.decl.uniform_scale && params.iter().all(|param| param.write != ShapeWrite::Unplaced) => {
+                        let write = HandleWrite::Uniform { params, limit: extent_limit };
+                        handles.push(GizmoHandle { mode: GizmoMode::Scale, axis: GizmoAxis::Uniform, write });
+                    }
                     // A cube's sides are one param: it scales uniformly.
                     Some([side, y, z]) if side.write != ShapeWrite::Unplaced && side.write == y.write && side.write == z.write => {
                         let write = HandleWrite::Linear { param: side, limit: extent_limit };
@@ -917,7 +927,7 @@ impl GizmoDrag {
             return None;
         }
         let held_linearly = match (&handle.write, mode) {
-            (HandleWrite::Linear { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Move | GizmoMode::Scale) => true,
+            (HandleWrite::Linear { .. } | HandleWrite::Uniform { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Move | GizmoMode::Scale) => true,
             (HandleWrite::Angle(_) | HandleWrite::Direction { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Rotate) => false,
         };
         let grab = if held_linearly {
@@ -955,6 +965,11 @@ impl GizmoDrag {
                 };
                 // A handle has no slider range: only the declared limit stops it.
                 HandleValues::One(limit.clamp_input(value, (f32::NEG_INFINITY, f32::INFINITY)))
+            }
+            HandleWrite::Uniform { params, limit } => {
+                let (grab, held) = (self.grab?, self.target.axis_param(self.axis, view, cur)?);
+                let value = limit.clamp_input(params[0].value * held / grab, (f32::NEG_INFINITY, f32::INFINITY));
+                HandleValues::Three([value; 3])
             }
             HandleWrite::Angle(param) => {
                 self.angle += turned?;

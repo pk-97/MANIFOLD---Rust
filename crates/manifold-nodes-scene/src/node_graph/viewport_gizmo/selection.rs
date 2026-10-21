@@ -162,9 +162,19 @@ pub fn selection_writes(members: &[GizmoTarget], mode: GizmoMode, axis: GizmoAxi
             GizmoMode::Rotate => turn_with(target, unit, amount, &mut write),
             GizmoMode::Scale => {
                 for handle in target.handles.iter().filter(|handle| handle.mode == GizmoMode::Scale) {
-                    let HandleWrite::Linear { param, limit } = &handle.write else { continue };
-                    if axis == GizmoAxis::Uniform || handle.axis == axis {
-                        write(param, limit.clamp_input(param.value * amount, (f32::NEG_INFINITY, f32::INFINITY)));
+                    match &handle.write {
+                        HandleWrite::Linear { param, limit } if axis == GizmoAxis::Uniform || handle.axis == axis => {
+                            write(param, limit.clamp_input(param.value * amount, (f32::NEG_INFINITY, f32::INFINITY)));
+                        }
+                        // A uniform scale takes only the uniform handle, and
+                        // all three params move to one value.
+                        HandleWrite::Uniform { params, limit } if axis == GizmoAxis::Uniform => {
+                            let value = limit.clamp_input(params[0].value * amount, (f32::NEG_INFINITY, f32::INFINITY));
+                            for param in params {
+                                write(param, value);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -224,7 +234,7 @@ fn turn_with(target: &GizmoTarget, unit: [f32; 3], angle: f32, write: &mut impl 
     }
     let direction = target.handles.iter().find_map(|handle| match &handle.write {
         HandleWrite::Direction { params, normalize } => Some((params, *normalize)),
-        HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Selection { .. } => None,
+        HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Uniform { .. } | HandleWrite::Selection { .. } => None,
     });
     if let Some((params, normalize)) = direction {
         let turned = rotate_about(params.each_ref().map(|param| param.value), unit, angle);

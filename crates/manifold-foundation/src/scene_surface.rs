@@ -68,6 +68,7 @@ pub enum ControlGroup {
     Transform,
     Material,
     Body,
+    Copies,
     Simulation,
     Whitewater,
     WhitewaterAdvanced,
@@ -98,6 +99,7 @@ impl ControlGroup {
             Self::Transform => "Transform",
             Self::Material => "Material",
             Self::Body => "Body",
+            Self::Copies => "Copies",
             Self::Simulation => "Simulation",
             Self::Whitewater => "Whitewater",
             Self::WhitewaterAdvanced => "Advanced · Whitewater",
@@ -212,6 +214,8 @@ pub enum Unit {
     Beats,
     /// A rate, such as a drag rate: how much changes per second.
     PerSecond,
+    /// A multiple of the copy's own size: a copy group's spacing.
+    SizeMultiple,
 }
 
 impl Unit {
@@ -228,6 +232,7 @@ impl Unit {
             Self::Nanometres => " nm",
             Self::Beats => " beats",
             Self::PerSecond => " /s",
+            Self::SizeMultiple => "× size",
         }
     }
 }
@@ -294,6 +299,10 @@ pub struct SceneObjectCapabilities {
     /// The row has its own placement transform.
     pub transform: bool,
     pub enable_physics: bool,
+    /// The row can become a copy group (Make Copies): an ordinary
+    /// single-mesh object. False on Water, a look, a part of a compound
+    /// import and a row that already is a copy group.
+    pub make_copies: bool,
     /// The row can feed a liquid as a fluid role.
     pub fluid_role: bool,
     /// The row takes mesh modifiers.
@@ -321,19 +330,6 @@ pub const PHYSICS_WORLD_DEFAULT_BODIES: u32 = 64;
 
 /// A Physics World's `copy_groups` when none is saved.
 pub const PHYSICS_WORLD_DEFAULT_COPY_GROUPS: u32 = 1;
-
-/// The most copies one Duplicate makes, of any object.
-pub const MAX_DUPLICATE_COPIES: u32 = 64;
-
-/// Why `copies` copies of a physics object cannot fit a world with `free`
-/// body slots; `None` when they fit.
-pub fn copies_shortfall(copies: u32, free: u32) -> Option<String> {
-    (free < copies).then(|| {
-        let slots = if free == 1 { "slot" } else { "slots" };
-        let need = if copies == 1 { "copy needs" } else { "copies need" };
-        format!("The Physics World has {free} free body {slots}; {copies} {need} {copies}")
-    })
-}
 
 /// What the one Add menu inserts into a scene through a template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -466,6 +462,12 @@ pub struct SceneShapeDecl {
     /// param's limit. `None` keeps only the gizmo's smallest extent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extent_limit: Option<crate::param_range::HardLimit>,
+    /// A `Box` whose three size params are one uniform scale: its scale
+    /// handle writes all three together, so a non-uniform scale never
+    /// reaches the node (a copy group's transform, which the physics world
+    /// reads as one scale).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uniform_scale: bool,
 }
 
 
@@ -517,6 +519,7 @@ mod shape_tests {
                 },
                 via: None,
                 extent_limit: None,
+                uniform_scale: false,
             }
         );
         let axis: SceneShapeDecl =

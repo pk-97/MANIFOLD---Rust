@@ -204,7 +204,7 @@
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
                     kind: Default::default(),
-                    capabilities: manifold_foundation::scene_surface::SceneObjectCapabilities { rename: true, delete: true, duplicate: true, transform: true, enable_physics: true, fluid_role: true, modifiers: true, hide: false },
+                    capabilities: manifold_foundation::scene_surface::SceneObjectCapabilities { rename: true, delete: true, duplicate: true, transform: true, enable_physics: true, make_copies: true, fluid_role: true, modifiers: true, hide: false },
                     index: 0,
                     node: object_ref(40),
                     object_node_id: 40,
@@ -235,7 +235,9 @@
                     physics_enabled: false,
                     physics_available: false,
                     physics_unavailable_reason: None,
-                    physics_free_body_slots: None,
+                    copy_group: false,
+                    copies_available: false,
+                    copies_unavailable_reason: None,
                     physics_imported: false,
                     fluid_role_available: false,
                     fluid_roles: Ok(Vec::new()),
@@ -1849,7 +1851,7 @@
                     id
                 },
                 expect: |_, _, a| matches!(a,
-                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, object, 1))] if layer_1(l) && *object == object_ref(40)),
+                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, object))] if layer_1(l) && *object == object_ref(40)),
             },
             ButtonCase {
                 name: "remove light",

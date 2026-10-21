@@ -927,7 +927,7 @@ impl ScenePanel {
                 }
             }
         }
-        cy = self.build_copy_count(tree, (inner_x, inner_w), cy, row);
+        cy = self.build_make_copies(tree, (inner_x, inner_w), cy, row);
         if let Some(lattice) = &row.lattice {
             tree.add_label(Some(self.content_parent), inner_x, cy,
                 inner_w, ROW_H, &lattice.line(), label_style());

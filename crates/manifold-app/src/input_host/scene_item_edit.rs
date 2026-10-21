@@ -58,7 +58,7 @@ impl AppInputHost<'_> {
                     ContentCommand::SceneItem(if item.is_light {
                         SceneItemAction::DuplicateLight { layer: item.layer_id, light: item.item }
                     } else {
-                        SceneItemAction::DuplicateObject { layer: item.layer_id, object: item.item, copies: 1 }
+                        SceneItemAction::DuplicateObject { layer: item.layer_id, object: item.item }
                     }),
                 );
             }

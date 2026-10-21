@@ -18,7 +18,8 @@ use manifold_core::liquid_setup::DEFAULT_FILL_HEIGHT;
 
 use super::setup_check::{SetupAnchor, SetupProblem, SetupSite, SiteLayout};
 use super::{Level, ParamAddr, SceneObjectVm, TRANSFORM_3D_TYPE_ID, TransformVm, locate_node, param_f32, resolve_producer_through_group, trace_transform};
-use crate::node_graph::scene_surface::{SWARM_FORCES_TYPE_ID, fluid_role_shape, scene_shape};
+use crate::node_graph::scene_surface::{COPY_GROUP_SHAPES, SWARM_FORCES_TYPE_ID, fluid_role_shape, scene_shape};
+use manifold_core::scene_object_model::InstancerKind;
 
 const FLUID_ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 
@@ -153,7 +154,9 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
                 [t.scale_value.0, t.scale_value.1, t.scale_value.2],
             )
         });
-        for (index, decl) in scene_shape(super::SCENE_OBJECT_TYPE_ID).iter().enumerate() {
+        let copy_group = row.instancer.as_ref().is_some_and(|instancer| instancer.kind == InstancerKind::CopyGroup);
+        let decls = if copy_group { &COPY_GROUP_SHAPES[..] } else { scene_shape(super::SCENE_OBJECT_TYPE_ID) };
+        for (index, decl) in decls.iter().enumerate() {
             let params = match row.transform.as_ref() {
                 Some(transform) => {
                     let Some(params) = transform_params(decl, transform) else { continue };
@@ -291,7 +294,7 @@ fn swarm_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &mu
         }
         for node in level.nodes.iter().filter(|node| node.type_id == SWARM_FORCES_TYPE_ID) {
             let row = rows.iter().find(|row| {
-                row.swarm.as_ref().and_then(|swarm| locate_node(root, swarm)).is_some_and(|at| at.node.id == node.id && at.scope == scope)
+                row.swarm().and_then(|swarm| locate_node(root, swarm)).is_some_and(|at| at.node.id == node.id && at.scope == scope)
             });
             let pickable = row.is_none_or(|row| row.visible_value && row.parent.is_none());
             let parent = parent.as_ref().map(|(outer, group): &(Level<'_>, u32)| (Level { nodes: outer.nodes, wires: outer.wires }, *group));

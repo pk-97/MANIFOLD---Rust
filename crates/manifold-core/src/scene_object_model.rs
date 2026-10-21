@@ -45,6 +45,36 @@ const SWARM_COPIES_TYPE_ID: &str = "node.swarm_to_copies";
 /// A swarm's seeder, filling its particle loop: its Count.
 const SWARM_SEEDER_TYPE_ID: &str = "node.spawn_from_mesh";
 
+/// What places a row's copies from its `instances` input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstancerKind {
+    /// A swarm of GPU instances pushed by the scene's forces.
+    Swarm,
+    /// A copy group: one body copied N times in a Physics World.
+    CopyGroup,
+}
+
+/// The upstream node a row draws instances from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneInstancer {
+    pub kind: InstancerKind,
+    /// A swarm's forces node; a copy group's copies body (the node whose
+    /// `body` output is the group's membership in its Physics World).
+    pub node: SceneNodeRef,
+}
+
+impl SceneObjectModel {
+    /// The swarm forces node this row places copies of.
+    pub fn swarm(&self) -> Option<&SceneNodeRef> {
+        self.instancer.as_ref().filter(|i| i.kind == InstancerKind::Swarm).map(|i| &i.node)
+    }
+
+    /// The copies body of the copy group this row draws.
+    pub fn copy_group(&self) -> Option<&SceneNodeRef> {
+        self.instancer.as_ref().filter(|i| i.kind == InstancerKind::CopyGroup).map(|i| &i.node)
+    }
+}
+
 /// One object row of a scene.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneObjectModel {
@@ -68,9 +98,9 @@ pub struct SceneObjectModel {
     /// The liquid domain this row simulates: Water's real object, or an
     /// object whose surface a domain builds.
     pub liquid_domain: Option<SceneNodeRef>,
-    /// The swarm whose copies this row places: the forces node behind its
-    /// `instances`.
-    pub swarm: Option<SceneNodeRef>,
+    /// The instancer whose copies this row places: the swarm forces node or
+    /// the copy group's copies body behind its `instances`.
+    pub instancer: Option<SceneInstancer>,
     /// The same row addressed by document ids, root first, ending with the
     /// object's own id: the form panel rows and editing commands use.
     pub doc_path: Vec<u32>,
@@ -266,7 +296,7 @@ pub fn scene_object_models_in(
                 },
                 slot: None,
                 liquid_domain: None,
-                swarm: None,
+                instancer: None,
                 doc_path: parent_at.doc_path(),
             });
             for child in rows.iter().filter(|other| other.compound.as_ref().is_some_and(|at| at.node.id == group_at.node.id
@@ -275,6 +305,7 @@ pub fn scene_object_models_in(
                 let mut model = child.identity(&rows);
                 model.parent = Some(parent_ref.clone());
                 model.capabilities.enable_physics = false;
+                model.capabilities.make_copies = false;
                 model.capabilities.fluid_role = false;
                 out.push(model);
             }
@@ -321,7 +352,7 @@ pub fn scene_object_models_in(
                 },
                 slot: None,
                 liquid_domain: None,
-                swarm: None,
+                instancer: None,
                 doc_path: source.role.doc_path(),
             });
         }
@@ -648,6 +679,7 @@ impl<'a> Row<'a> {
             _ => None,
         };
         let liquid = self.liquid.is_some();
+        let instancer = self.instancer();
         let capabilities = match self.kind {
             SceneObjectRowKind::LookChild => SceneObjectCapabilities { rename: true, hide: true, ..SceneObjectCapabilities::default() },
             SceneObjectRowKind::PhysicsParent => SceneObjectCapabilities {
@@ -663,6 +695,7 @@ impl<'a> Row<'a> {
                 transform: !liquid,
                 enable_physics: !liquid,
                 fluid_role: !liquid,
+                make_copies: !liquid && instancer.is_none(),
                 modifiers: true,
                 hide: false,
             },
@@ -676,14 +709,19 @@ impl<'a> Row<'a> {
             capabilities,
             slot: Some(self.slot),
             liquid_domain: self.liquid.as_ref().map(|(domain, _)| domain.reference()),
-            swarm: self.swarm().map(|swarm| swarm.reference()),
+            instancer: instancer.map(|(kind, at)| SceneInstancer { kind, node: at.reference() }),
             doc_path: self.at.doc_path(),
         }
     }
 
-    /// The swarm an ordinary object places copies of.
-    fn swarm(&self) -> Option<At<'a>> {
-        (self.kind == SceneObjectRowKind::Object && self.liquid.is_none()).then(|| swarm_of(&self.at)).flatten()
+    /// What an ordinary object draws copies from: a swarm, or a copy group.
+    fn instancer(&self) -> Option<(InstancerKind, At<'a>)> {
+        if self.kind != SceneObjectRowKind::Object || self.liquid.is_some() {
+            return None;
+        }
+        swarm_of(&self.at)
+            .map(|swarm| (InstancerKind::Swarm, swarm))
+            .or_else(|| copy_body_of(&self.at).map(|body| (InstancerKind::CopyGroup, body)))
     }
 
     fn controls(&self, placed: &[Placed<'_>]) -> Vec<SceneNodeRef> {
@@ -705,8 +743,10 @@ impl<'a> Row<'a> {
                     push_unique(&mut controls, self.at.path.reference(node));
                 }
             }
-            if let Some(swarm) = self.swarm() {
-                swarm_controls(&self.at, &swarm, &mut controls);
+            match self.instancer() {
+                Some((InstancerKind::Swarm, swarm)) => swarm_controls(&self.at, &swarm, &mut controls),
+                Some((InstancerKind::CopyGroup, body)) => copy_group_controls(&body, &mut controls),
+                None => {}
             }
             if liquid {
                 for switch in chain_switches(&self.at) {
@@ -737,6 +777,27 @@ fn swarm_of<'a>(object: &At<'a>) -> Option<At<'a>> {
         .filter_map(|id| level.node(id))
         .find(|node| node.type_id == SWARM_FORCES_TYPE_ID)?;
     Some(At { path: start.path, node })
+}
+
+/// The copies body behind the object's `instances`, on the object's own
+/// level: the node a copy group is made of. Only a copies body publishes
+/// `instances` as a body alias, so the port names it.
+fn copy_body_of<'a>(object: &At<'a>) -> Option<At<'a>> {
+    let level = object.path.level();
+    let (from, port) = level.producer(object.node.id, "instances")?;
+    let body = level.node(from).filter(|node| node.type_id == crate::physics_members::BODY_TYPE_ID)?;
+    (port == "instances").then(|| At { path: object.path.clone(), node: body })
+}
+
+/// A copy group's controls in card order: its copies body (Count, Layout,
+/// Spacing and the rest of the spawner), then the transform placing the group.
+fn copy_group_controls(body: &At<'_>, controls: &mut Vec<SceneNodeRef>) {
+    push_unique(controls, body.reference());
+    if let Some(transform) = body.path.producer_inward(body.node.id, "transform")
+        && transform.node.type_id == TRANSFORM_3D_TYPE_ID
+    {
+        push_unique(controls, transform.reference());
+    }
 }
 
 /// A swarm's controls in card order: its forces node, the seeder filling its

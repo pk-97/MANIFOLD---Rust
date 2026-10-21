@@ -225,7 +225,7 @@ pub(super) fn duplicate_object(
     index: u32,
     default: EffectGraphDef,
 ) -> Prepared<DuplicateSceneObjectCommand> {
-    duplicate_copies(project, target, scope, render, index, 1, &default).into()
+    duplicate_one(project, target, scope, render, index, &default).into()
 }
 
 pub(super) fn project_with_graph(def: EffectGraphDef) -> (Project, EffectId) {
@@ -629,11 +629,11 @@ pub(super) fn enable_cmd(
     EnableSceneObjectPhysicsCommand::new(project, target, object, body, world, default)
 }
 
-pub(super) fn duplicate_copies(
-    project: &Project, target: GraphTarget, _scope: Vec<u32>, render: u32, index: u32, copies: u32, default: &EffectGraphDef,
+pub(super) fn duplicate_one(
+    project: &Project, target: GraphTarget, _scope: Vec<u32>, render: u32, index: u32, default: &EffectGraphDef,
 ) -> Result<DuplicateSceneObjectCommand, manifold_core::scene_graph_edit::SceneGraphEditError> {
     let object = object_at(live_graph(project, &target, default), render, index);
-    DuplicateSceneObjectCommand::new(project, target, object, copies, default)
+    DuplicateSceneObjectCommand::new(project, target, object, default)
 }
 
 pub(super) fn assign_role(

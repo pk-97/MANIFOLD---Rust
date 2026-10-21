@@ -57,7 +57,7 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
         physics: None,
         physics_imported: false,
         liquid_domain: None,
-        swarm: None,
+        instancer: None,
         fluid_domain: None,
         fluid_domain_error: None,
         fluid_domain_transform: None,
@@ -354,6 +354,7 @@ fn plane_rotate_writes_a_unit_normal() {
         },
         via: None,
         extent_limit: None,
+        uniform_scale: false,
     };
     let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Object(object_ref(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
     let o = px(target.origin);
@@ -1141,4 +1142,25 @@ fn the_selection_moves_turns_and_scales_about_its_centre() {
     assert_eq!((value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y")), (Some(2.0), None));
     selection_writes(&members, GizmoMode::Scale, GizmoAxis::Uniform, 0.5, &mut writes);
     assert_eq!((value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y"), value(&writes, 0, "scale_z")), (Some(0.5), Some(0.5), Some(0.5)));
+}
+
+/// A copy group's gizmo sits at its group transform and scales as one
+/// number: one handle writes all three scale params, never three that differ.
+#[test]
+fn a_copy_group_gizmo_is_at_the_group_transform_and_scales_uniformly() {
+    let decl = &crate::node_graph::scene_surface::COPY_GROUP_SHAPES[0];
+    let owner = ShapeOwner::Object(object_ref(7));
+    let shape = node_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_y", 2.0), ("pos_z", -3.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let target = GizmoTarget::from_shape(&shape);
+    assert_eq!(target.origin, [1.0, 2.0, -3.0], "the gizmo is the group transform");
+    assert_eq!(
+        written(&target, GizmoMode::Scale, GizmoAxis::Uniform),
+        vec![node_write("scale_x"), node_write("scale_y"), node_write("scale_z")]
+    );
+    assert!(target.handle(GizmoMode::Scale, GizmoAxis::X).is_none(), "no per-axis scale");
+    let along = |d: f32| px(offset(target.origin, GizmoAxis::Uniform.unit(), d));
+    let HandleValues::Three(scales) = drag(&target, GizmoMode::Scale, GizmoAxis::Uniform, along(1.0), along(1.5)) else {
+        panic!("a uniform scale writes three values")
+    };
+    assert!(scales[0] > 2.0 && scales[0] == scales[1] && scales[1] == scales[2], "{scales:?}");
 }

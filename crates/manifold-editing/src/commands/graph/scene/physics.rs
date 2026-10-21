@@ -467,6 +467,25 @@ pub(super) fn group_pose_source(group: &GroupDef, object_id: u32, body_id: u32) 
     Ok(())
 }
 
+/// A copy group's scene object reads its instances and its count from one
+/// wire each, the body's `instances` and `active_count` outputs, and no pose.
+pub(super) fn group_instances_source(group: &GroupDef, object_id: u32, body_id: u32) -> Result<(), &'static str> {
+    let fed_by_body = |to_port: &str, from_port: &str| {
+        let mut feeding = group.wires.iter().filter(|wire| wire.to_node == object_id && wire.to_port == to_port);
+        matches!((feeding.next(), feeding.next()), (Some(wire), None) if wire.from_node == body_id && wire.from_port == from_port)
+    };
+    if !fed_by_body("instances", "instances") {
+        return Err("Physics copy group instances are missing or ambiguous");
+    }
+    if !fed_by_body("instance_count", "active_count") {
+        return Err("Physics copy group count is missing or ambiguous");
+    }
+    if group.wires.iter().any(|wire| wire.from_node == body_id && wire.from_port == "pose" && wire.to_node == object_id) {
+        return Err("Physics copy group object also takes a pose");
+    }
+    Ok(())
+}
+
 /// Add a rigid body inside an import group. The group exposes the body's
 /// membership as a `body` output, and its scene objects read `body.pose`
 /// directly, so the Physics World stays outside the group and no pose input
@@ -580,12 +599,18 @@ pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObject
             .iter()
             .find(|node| node.id == member.world)
             .ok_or("Physics object world is unavailable")?;
-        if member.family != Family::Body || member.k >= manifold_core::physics_body_slots::world_bodies(world) {
+        if member.family == Family::Body && member.k >= manifold_core::physics_body_slots::world_bodies(world) {
             return Err(malformed);
         }
         Ok(())
     };
     let Some(group_id) = parts.group_id else {
+        // A loose copy group: the body feeds the object its instances.
+        if let Some(instances) = def.wires.iter().find(|wire| {
+            wire.to_node == parts.object_id && wire.to_port == "instances" && wire.from_port == "instances"
+        }) {
+            return in_world(instances.from_node, "Physics object body input is missing");
+        }
         let pose_wire = def
             .wires
             .iter()

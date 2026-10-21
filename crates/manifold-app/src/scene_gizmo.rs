@@ -241,6 +241,11 @@ impl GizmoGesture {
                     return Err("This direction cannot be turned here".into());
                 }
             }
+            (HandleWrite::Uniform { .. }, [Knob::Card { id: x, .. }, Knob::Card { id: y, .. }, Knob::Card { id: z, .. }]) => {
+                if !begin_param_group(ctx, target, vec![x.clone(), y.clone(), z.clone()], Vec::new(), "Scale copies") {
+                    return Err("This scale cannot be changed here".into());
+                }
+            }
             (HandleWrite::Linear { .. } | HandleWrite::Angle(_), [Knob::Card { id, .. }]) => {
                 dispatch_scrub(&card_ref(&layer, id), &ScrubPhase::Begin, ctx);
                 if !matches!(&ctx.scrub.active, Some(ResolvedScrub::Param { param_id, .. }) if param_id == id) {
@@ -252,8 +257,8 @@ impl GizmoGesture {
                 ctx.scrub.check_single_active_on_begin("gizmo-node-param");
                 ctx.scrub.active = Some(ResolvedScrub::UnboundNodeParam(Box::new(drag)));
             }
-            (HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. }, _) => {
-                return Err("A direction turns only through its card controls".into());
+            (HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. } | HandleWrite::Uniform { .. }, _) => {
+                return Err("A direction or a uniform scale moves only through its card controls".into());
             }
             (HandleWrite::Selection { .. }, _) => return Err("The selection's handle moves through its members".into()),
         }
@@ -1322,7 +1327,7 @@ mod tests {
             _ => None,
         }).expect("the row is a scene object row");
         assert_eq!(known.object_node_id, object, "the row is the scene object the swarm's copies feed");
-        let modelled = known.swarm.as_ref().map(|swarm| swarm.node.clone());
+        let modelled = known.swarm().map(|swarm| swarm.node.clone());
         assert_eq!(modelled, Some(forces), "the scene object model gives the row its swarm");
 
         let view = GizmoView::new(camera(), W, H);

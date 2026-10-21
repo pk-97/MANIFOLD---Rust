@@ -1,31 +1,31 @@
-//! Duplicate one scene object N times as one undo step (SCENE_OBJECT_AND_PANEL_V2_DESIGN
-//! D11, PHYSICS_ENGINE_BOUNDARY_DESIGN.md P6a). The copies are one pure graph
-//! edit committed through the shared scene transaction.
+//! Duplicate one scene object as one undo step (SCENE_OBJECT_AND_PANEL_V2_DESIGN
+//! D11). The copy is one pure graph edit committed through the shared scene
+//! transaction. N copies of one object are a copy group (Make Copies), not N
+//! duplicates.
 
 use super::*;
 use manifold_core::change::ChangeSet;
 use manifold_core::physics_members::ACCELERATION_ALIAS;
 use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
-use manifold_core::scene_surface::{MAX_DUPLICATE_COPIES, SceneObjectRowKind, copies_shortfall};
+use manifold_core::scene_surface::SceneObjectRowKind;
 
 use crate::scene_transaction::SceneGraphTransaction;
 
 /// How far each copy sits along X from the one before it (D11).
 const COPY_OFFSET_X: f32 = 0.5;
 
-/// Duplicate one scene object `copies` times. Each copy is a deep clone with
-/// fresh document ids and NodeIds, named "<name> N" (the first free N from 2),
-/// wired into the next free render slot and placed 0.5 m along X from the
-/// copy before it. A physics object's copy takes the next free body slot of
-/// the same Physics World and the forces on the source body; when the world
-/// has fewer free slots than copies, nothing changes. Water and a Physics
-/// World's copies object refuse.
+/// Duplicate one scene object. The copy is a deep clone with fresh document
+/// ids and NodeIds, named "<name> N" (the first free N from 2), wired into
+/// the next free render slot and placed 0.5 m along X. A physics object's copy
+/// takes the next free body slot of the same Physics World (a copy group's,
+/// the next free copy-group input) and its own forces; when the world has no
+/// free slot, nothing changes. Water refuses.
 #[derive(Debug)]
 pub struct DuplicateSceneObjectCommand {
     transaction: SceneGraphTransaction,
-    /// The copies' card values, with a moved transform's offset applied;
-    /// written after each commit and undone with the instance snapshot.
+    /// The copy's card values, with a moved transform's offset applied;
+    /// written after the commit and undone with the instance snapshot.
     values: Vec<(String, f32)>,
 }
 
@@ -34,26 +34,22 @@ impl DuplicateSceneObjectCommand {
         project: &Project,
         target: GraphTarget,
         object: SceneNodeRef,
-        copies: u32,
         catalog_default: &EffectGraphDef,
     ) -> Result<Self, SceneGraphEditError> {
-        let mut copy_maps = Vec::new();
+        let mut copy_map = Vec::new();
         let transaction =
             SceneGraphTransaction::prepare(project, target.clone(), catalog_default, "Duplicate Object", |graph| {
                 let slot = manifold_core::scene_slots::object_slot(graph, &object)
                     .map_err(|message| SceneGraphEditError { at: None, message })?;
-                let (edit, maps) = duplicate_scene_object_edit(graph, &[], slot.render_id, slot.index, copies)?;
-                copy_maps = maps;
+                let (edit, map) = duplicate_scene_object_edit(graph, &[], slot.render_id, slot.index)?;
+                copy_map = map;
                 Ok(edit)
             })?;
         let refuse = |message: String| SceneGraphEditError { at: None, message };
         let owner = project
             .graph_target_owner(&target)
             .ok_or_else(|| refuse("Duplicate Object parameter owner is unavailable".into()))?;
-        let mut values = Vec::new();
-        for map in &copy_maps {
-            values.extend(clone_values::prepare(owner, transaction.prepared_graph(), map).map_err(refuse)?);
-        }
+        let values = clone_values::prepare(owner, transaction.prepared_graph(), &copy_map).map_err(refuse)?;
         Ok(Self { transaction, values })
     }
 }
@@ -89,23 +85,6 @@ impl Command for DuplicateSceneObjectCommand {
     }
 }
 
-/// Free body slots in the Physics World that the object at `slot`
-/// simulates in; `None` when that object has no standard
-/// physics. The card reads it to say why a copy count cannot fit; `worlds`
-/// is read once per sync for every card.
-pub fn physics_free_body_slots(
-    graph: &EffectGraphDef,
-    worlds: &WorldBodySlots,
-    slot: manifold_core::scene_slots::SceneSlot,
-) -> Option<u32> {
-    let (render_scene_node_id, object_index) = (slot.render_id, slot.index);
-    let source = object_producer_id(&graph.wires, render_scene_node_id, object_index)?;
-    match physics_scene_object_match(&graph.nodes, &graph.wires, render_scene_node_id, object_index, source) {
-        PhysicsSceneObjectMatch::Valid(physics) if physics.copy_group.is_none() => worlds.get(physics.world_id).map(BodySlots::free),
-        _ => None,
-    }
-}
-
 /// The render scene at `scope` (document ids, root first) as a stable reference.
 fn scene_reference(graph: &EffectGraphDef, scope: &[u32], render_id: u32) -> Option<SceneNodeRef> {
     let mut nodes = graph.nodes.as_slice();
@@ -119,26 +98,17 @@ fn scene_reference(graph: &EffectGraphDef, scope: &[u32], render_id: u32) -> Opt
     Some(SceneNodeRef { scope: stable, node: scene.node_id.clone() })
 }
 
-/// Source node id to copy node id, for one copy.
+/// Source node id to copy node id.
 type NodeIdMap = Vec<(NodeId, NodeId)>;
-/// Each copy's map from source NodeIds to its fresh ones, in copy order.
-type CopyMaps = Vec<NodeIdMap>;
 
-/// The pure duplicate edit and its copies' NodeId maps.
+/// The pure duplicate edit and the copy's NodeId map.
 fn duplicate_scene_object_edit(
     graph: &EffectGraphDef,
     scope: &[u32],
     render_id: u32,
     source_index: u32,
-    copies: u32,
-) -> Result<(SceneGraphEdit, CopyMaps), SceneGraphEditError> {
+) -> Result<(SceneGraphEdit, NodeIdMap), SceneGraphEditError> {
     let refuse = |message: &str| SceneGraphEditError { at: None, message: message.into() };
-    if copies == 0 || copies > MAX_DUPLICATE_COPIES {
-        return Err(SceneGraphEditError {
-            at: None,
-            message: format!("Duplicate Object makes 1 to {MAX_DUPLICATE_COPIES} copies"),
-        });
-    }
     let scene = scene_reference(graph, scope, render_id).ok_or_else(|| refuse("Duplicate Object scene is unavailable"))?;
     // The one scene-object model decides what may be copied, so a shortcut
     // cannot copy what the card hides: Water and its looks refuse.
@@ -162,19 +132,12 @@ fn duplicate_scene_object_edit(
             if !scope.is_empty() {
                 return Err(refuse("Duplicate Object physics ownership requires a root-level scene"));
             }
-            if physics.copy_group.is_some() {
-                return Err(refuse("Duplicate Object cannot duplicate a Physics World copies object"));
-            }
-            if let Some(message) = copies_shortfall(copies, BodySlots::of(wires, physics.world_id).free()) {
-                return Err(SceneGraphEditError { at: None, message });
-            }
             Some(physics)
         }
     };
-    // Every copy brings the source's forces: refuse the whole request up front, naming the total.
+    // The copy brings the source's forces: refuse up front, naming the total.
     if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
-        let per_copy = manifold_core::scene_modifier_edit::object_force_slots(graph, &source);
-        let needed = per_copy * copies as usize;
+        let needed = manifold_core::scene_modifier_edit::object_force_slots(graph, &source);
         let limit = manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
         let free = limit.saturating_sub(manifold_core::scene_modifier_preset::force_slots_used(&graph.scene_modifiers));
         if needed > free {
@@ -184,27 +147,22 @@ fn duplicate_scene_object_edit(
     let source_group = nodes.iter().any(|node| node.id == source_id && node.type_id == GROUP_TYPE_ID);
 
     let mut candidate = graph.clone();
-    let mut maps = Vec::with_capacity(copies as usize);
     let mut remaps = Vec::new();
-    for copy in 1..=copies {
-        let offset = COPY_OFFSET_X * copy as f32;
-        let (map, cloned_group) =
-            append_copy(&mut candidate, scope, render_id, source_index, physics.as_ref(), offset).map_err(refuse)?;
-        if let Some(cloned_group) = cloned_group.filter(|_| source_group && scope.is_empty()) {
-            fluid::duplicate_scene_object_fluid_roles(&mut candidate, source_id, cloned_group, &map)
-                .map_err(|message| SceneGraphEditError { at: None, message })?;
-        }
-        remaps.extend(clone_sections::clone_scene_bindings(&mut candidate, &map));
-        // Modifiers aimed only at the source belong to it; the copy gets its own.
-        if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
-            let edit = manifold_core::scene_modifier_edit::copy_object_modifiers(&candidate, &source, &map)
-                .map_err(|error| refuse(&format!("Duplicate Object: {error}")))?;
-            candidate = edit.graph;
-            remaps.extend(edit.parameter_id_remaps);
-        }
-        maps.push(map);
+    let (map, cloned_group) =
+        append_copy(&mut candidate, scope, render_id, source_index, physics.as_ref(), COPY_OFFSET_X).map_err(refuse)?;
+    if let Some(cloned_group) = cloned_group.filter(|_| source_group && scope.is_empty()) {
+        fluid::duplicate_scene_object_fluid_roles(&mut candidate, source_id, cloned_group, &map)
+            .map_err(|message| SceneGraphEditError { at: None, message })?;
     }
-    Ok((SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: remaps }, maps))
+    remaps.extend(clone_sections::clone_scene_bindings(&mut candidate, &map));
+    // Modifiers aimed only at the source belong to it; the copy gets its own.
+    if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
+        let edit = manifold_core::scene_modifier_edit::copy_object_modifiers(&candidate, &source, &map)
+            .map_err(|error| refuse(&format!("Duplicate Object: {error}")))?;
+        candidate = edit.graph;
+        remaps.extend(edit.parameter_id_remaps);
+    }
+    Ok((SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: remaps }, map))
 }
 
 /// The first "<base> N" from 2 no node uses yet.

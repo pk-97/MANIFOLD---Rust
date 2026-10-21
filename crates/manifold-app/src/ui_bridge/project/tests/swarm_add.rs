@@ -57,11 +57,11 @@ fn add_swarm_inserts_one_row_with_its_forces_and_box_and_undoes_in_one_step() {
         .objects
         .iter()
         .find_map(|object| match object {
-            SceneObjectVm::Known(row) if row.swarm.is_some() => Some(row),
+            SceneObjectVm::Known(row) if row.swarm().is_some() => Some(row),
             _ => None,
         })
         .expect("the new row owns a swarm");
-    let forces = row.swarm.clone().unwrap().node;
+    let forces = row.swarm().unwrap().node.clone();
     let types: Vec<&str> = row
         .controls
         .iter()
@@ -81,7 +81,7 @@ fn add_swarm_inserts_one_row_with_its_forces_and_box_and_undoes_in_one_step() {
     let undone = SceneVm::from_def(&effective_def(&project, &layer)).unwrap();
     assert_eq!(undone.objects.len(), objects_before, "one undo removes the swarm");
     assert!(
-        undone.objects.iter().all(|object| !matches!(object, SceneObjectVm::Known(row) if row.swarm.is_some())),
+        undone.objects.iter().all(|object| !matches!(object, SceneObjectVm::Known(row) if row.swarm().is_some())),
         "no swarm row is left"
     );
     assert_eq!(effective_def(&project, &layer).scene_modifiers, before.scene_modifiers, "and none of its forces");
@@ -106,11 +106,11 @@ fn add_swarm_takes_scene_forces_like_the_preset() {
             .objects
             .iter()
             .find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.swarm.is_some() => Some(row.clone()),
+                SceneObjectVm::Known(row) if row.swarm().is_some() => Some(row.clone()),
                 _ => None,
             })
             .expect("a swarm row");
-        let swarm = row.swarm.unwrap();
+        let swarm = row.swarm().unwrap().clone();
         let body = def.nodes.iter().find(|node| node.node_id == swarm.scope[0]).and_then(|node| node.group.as_deref()).expect("the swarm group");
         let object = body.nodes.iter().find(|node| node.type_id == "node.scene_object").expect("the swarm's object");
         let object = SceneNodeRef { scope: swarm.scope.clone(), node: object.node_id.clone() };
@@ -251,7 +251,7 @@ fn swarm_forces_on_its_object(def: &EffectGraphDef) -> Vec<String> {
 }
 
 /// The content command the UI action `action` queues.
-fn dispatched(project: &mut Project, action: ProjectAction) -> ContentCommand {
+pub(super) fn dispatched(project: &mut Project, action: ProjectAction) -> ContentCommand {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let (tx, rx) = crossbeam_channel::unbounded();
     dispatch_project(
@@ -275,7 +275,7 @@ fn swarm_row(def: &EffectGraphDef) -> manifold_core::SceneNodeRef {
         .objects
         .iter()
         .find_map(|object| match object {
-            SceneObjectVm::Known(row) if row.swarm.is_some() => Some(row.address.clone()),
+            SceneObjectVm::Known(row) if row.swarm().is_some() => Some(row.address.clone()),
             _ => None,
         })
         .expect("a swarm row")
@@ -285,7 +285,7 @@ fn swarm_row(def: &EffectGraphDef) -> manifold_core::SceneNodeRef {
 fn duplicate_swarm(project: &mut Project, editing: &mut EditingService, layer: &LayerId) {
     let index = swarm_row(&effective_def(project, layer));
     let ContentCommand::SceneItem(action) =
-        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), index, 1))
+        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), index))
     else { panic!("duplicate is a content-owned scene item edit") };
     let command = crate::scene_item_transfer::build_action(project, action).expect("the duplicate builds");
     editing.execute(command, project);
@@ -471,26 +471,29 @@ fn duplicate_swarm_through_the_transaction_carries_the_sources_values_and_undoes
     );
 }
 
-/// Duplicate the first swarm `copies` times in one step; `Err` carries the
-/// refusal, from the build or from the edit.
-fn duplicate_swarm_copies(project: &mut Project, editing: &mut EditingService, layer: &LayerId, copies: u32) -> Result<(), String> {
-    let index = swarm_row(&effective_def(project, layer));
-    let ContentCommand::SceneItem(action) =
-        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), index, copies))
-    else { panic!("duplicate is a content-owned scene item edit") };
-    let command = crate::scene_item_transfer::build_action(project, action)?;
-    editing.execute(command, project);
-    editing.take_rejection().map_or(Ok(()), Err)
+/// Duplicate the first swarm `times` times, one step each; `Err` carries the
+/// first refusal, from the build or from the edit.
+fn duplicate_swarm_times(project: &mut Project, editing: &mut EditingService, layer: &LayerId, times: u32) -> Result<(), String> {
+    for _ in 0..times {
+        let index = swarm_row(&effective_def(project, layer));
+        let ContentCommand::SceneItem(action) =
+            dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), index))
+        else { panic!("duplicate is a content-owned scene item edit") };
+        let command = crate::scene_item_transfer::build_action(&*project, action)?;
+        editing.execute(command, &mut *project);
+        editing.take_rejection().map_or(Ok(()), Err)?;
+    }
+    Ok(())
 }
 
-/// Three copies make four swarms and twelve forces, each set aimed at its own
-/// swarm alone, and one undo takes every copy and force away.
+/// Three duplicates make four swarms and twelve forces, each set aimed at its
+/// own swarm alone, and each undo takes one copy and its forces away.
 #[test]
-fn duplicate_swarm_three_copies_gives_each_its_own_forces_and_undoes_in_one_step() {
+fn duplicate_swarm_three_times_gives_each_its_own_forces_and_undoes_one_step_each() {
     let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
     let before = effective_def(&project, &layer);
-    duplicate_swarm_copies(&mut project, &mut editing, &layer, 3).expect("three copies fit");
+    duplicate_swarm_times(&mut project, &mut editing, &layer, 3).expect("three copies fit");
     let def = effective_def(&project, &layer);
     let groups = swarm_groups(&def);
     assert_eq!(groups.len(), 4, "the source and three copies");
@@ -498,24 +501,25 @@ fn duplicate_swarm_three_copies_gives_each_its_own_forces_and_undoes_in_one_step
     for group in &groups {
         assert_eq!(forces_on(&def, group), SWARM_FORCES, "{:?} has its own set", group.handle);
     }
-    assert!(editing.undo(&mut project));
+    for _ in 0..3 {
+        assert!(editing.undo(&mut project));
+    }
     let undone = effective_def(&project, &layer);
-    assert_eq!(undone.scene_modifiers, before.scene_modifiers, "one undo removes every copy's forces");
+    assert_eq!(undone.scene_modifiers, before.scene_modifiers, "the undos remove every copy's forces");
     assert_eq!(swarm_groups(&undone).len(), 1);
 }
 
-/// Five copies would need 18 of the scene's 16 force slots: refused whole, the
-/// graph untouched.
+/// A fifth duplicate would need 18 of the scene's 16 force slots: refused
+/// whole, the graph untouched.
 #[test]
-fn duplicate_swarm_five_copies_is_refused_whole_on_the_force_slot_limit() {
+fn duplicate_swarm_past_the_force_slot_limit_is_refused_whole() {
     let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
+    duplicate_swarm_times(&mut project, &mut editing, &layer, 4).expect("four copies fit");
     let before = effective_def(&project, &layer);
-    let refusal = duplicate_swarm_copies(&mut project, &mut editing, &layer, 5).expect_err("five copies do not fit");
+    let refusal = duplicate_swarm_times(&mut project, &mut editing, &layer, 1).expect_err("a fifth does not fit");
     assert_eq!(effective_def(&project, &layer), before, "the graph is unchanged");
-    assert!(refusal.contains("Duplicating needs 15 force slots and this scene has 13 free: a scene holds at most 16 forces"), "{refusal}");
-    assert!(editing.undo(&mut project), "the swarm insert is still the last step");
-    assert!(swarm_groups(&effective_def(&project, &layer)).is_empty(), "undo takes the insert, not a half duplicate");
+    assert!(refusal.contains("Duplicating needs 3 force slots and this scene has 1 free: a scene holds at most 16 forces"), "{refusal}");
 }
 
 /// Every card value of `layer` after half a second of playback, with a

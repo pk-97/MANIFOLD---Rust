@@ -178,12 +178,18 @@ pub(crate) enum SceneItemAction {
         scene: u32,
         clipboard: Box<SceneItemClipboard>,
     },
-    /// N copies of an object in one undo step, each with its own body when
-    /// the source has physics (PHYSICS_ENGINE_BOUNDARY_DESIGN.md P6a).
+    /// One copy of an object in one undo step, with its own body when the
+    /// source has physics.
     DuplicateObject {
         layer: LayerId,
         object: SceneNodeRef,
-        copies: u32,
+    },
+    /// The object becomes a copy group (copy_group_design.md section 5):
+    /// physics on, its body a copy-group prototype in the Physics World, one
+    /// undo step.
+    MakeCopies {
+        layer: LayerId,
+        object: SceneNodeRef,
     },
     DuplicateLight {
         layer: LayerId,
@@ -211,7 +217,7 @@ impl SceneItemAction {
             Self::Paste { layer, clipboard, .. } => (layer, clipboard.kind),
             Self::DuplicateObject { layer, .. } => (layer, SceneItemKind::Object),
             Self::DuplicateLight { layer, .. } => (layer, SceneItemKind::Light),
-            Self::Move { .. } | Self::SetPhysics { .. } => return None,
+            Self::Move { .. } | Self::SetPhysics { .. } | Self::MakeCopies { .. } => return None,
         };
         Some(match kind {
             SceneItemKind::Object => crate::edit_selection::SelectAfterEdit::NewObject(layer.clone()),
@@ -595,6 +601,29 @@ fn set_physics(project: &Project, layer: &LayerId, object: &SceneNodeRef, enable
     }
 }
 
+/// Make Copies: the object becomes a copy group. The card rows it stamps are
+/// the copies body's spawner controls.
+fn make_copies(project: &Project, layer: &LayerId, object: &SceneNodeRef) -> Result<Box<dyn Command>, String> {
+    use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
+    let mut default = crate::ui_bridge::project::generator_catalog_default(project, layer).ok_or("Scene is unavailable")?;
+    migrate_scene_exposures(&mut default);
+    let copies: Vec<_> = manifold_core::param_lookup::stamped_params_for("node.rigid_body", true)
+        .into_iter()
+        .filter(|meta| manifold_core::copies_body::is_copies_body_param("node.rigid_body", &meta.name))
+        .collect();
+    manifold_editing::commands::graph::MakeCopyGroupCommand::new(
+        project,
+        GraphTarget::Generator(layer.clone()),
+        object.clone(),
+        &metadata_for_node_type("node.rigid_body"),
+        &metadata_for_node_type("node.physics_world"),
+        &copies,
+        &default,
+    )
+    .map(|command| Box::new(command) as Box<dyn Command>)
+    .map_err(|error| error.message)
+}
+
 /// Attach a copy of each force the copied item owns, aimed at the copy alone
 /// in the scene with doc id `scene`. Each copy's rows take the source rows'
 /// presentation, and `remaps` gains them so their values and routes follow.
@@ -678,16 +707,17 @@ pub(crate) fn build_action(
             scene,
             clipboard,
         } => paste(project, layer, scene, *clipboard, "Paste Scene Item", CopyNaming::Deduped),
-        SceneItemAction::DuplicateObject { layer, object, copies } => {
+        SceneItemAction::DuplicateObject { layer, object } => {
             let target = GraphTarget::Generator(layer);
             let default = crate::graph_target::resolve(project, &target).ok_or("Scene graph is unavailable")?;
             let command = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
-                project, target.clone(), object, copies, &default,
+                project, target.clone(), object, &default,
             )
             .map_err(|error| error.message)?;
             Ok(Box::new(command))
         }
         SceneItemAction::SetPhysics { layer, object, enabled } => set_physics(project, &layer, &object, enabled),
+        SceneItemAction::MakeCopies { layer, object } => make_copies(project, &layer, &object),
         SceneItemAction::DuplicateLight { layer, light } => {
             let clipboard = SceneItemClipboard::capture(project, &layer, SceneItemKind::Light, &light)?;
             let target = GraphTarget::Generator(layer.clone());
@@ -1116,7 +1146,7 @@ mod tests {
         let layer = add_transfer_layer(&mut project, "Scene", "dup", false);
         let mut editing = EditingService::new();
         for _ in 0..2 {
-            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), object: item_at(&project, &layer, SceneItemKind::Object, 0), copies: 1 };
+            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), object: item_at(&project, &layer, SceneItemKind::Object, 0) };
             editing.execute(build_action(&project, action).unwrap(), &mut project);
             assert!(editing.take_rejection().is_none());
         }
@@ -1474,7 +1504,7 @@ mod tests {
         for with_force in [false, true] {
             let (mut duplicated, dup_layer) = project_with_graph(physics_object_scene(with_force));
             let mut editing = EditingService::new();
-            let action = SceneItemAction::DuplicateObject { layer: dup_layer.clone(), object: item_at(&duplicated, &dup_layer, SceneItemKind::Object, 0), copies: 1 };
+            let action = SceneItemAction::DuplicateObject { layer: dup_layer.clone(), object: item_at(&duplicated, &dup_layer, SceneItemKind::Object, 0) };
             editing.execute(build_action(&duplicated, action).unwrap(), &mut duplicated);
             assert!(editing.take_rejection().is_none());
 
@@ -1637,7 +1667,7 @@ mod tests {
         let mut editing = EditingService::new();
         for _ in 0..2 {
             let first = item_at(&project, &layer, SceneItemKind::Object, 0);
-            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), object: first, copies: 1 };
+            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), object: first };
             editing.execute(build_action(&project, action).unwrap(), &mut project);
             assert!(editing.take_rejection().is_none());
         }
@@ -1652,8 +1682,8 @@ mod tests {
         assert_eq!(handles(&project), ["Object 0", "Object 0 2", "Object 0 3"]);
         let first = item_at(&project, &layer, SceneItemKind::Object, 0);
         let last = item_at(&project, &layer, SceneItemKind::Object, 2);
-        let queued = SceneItemAction::DuplicateObject { layer: layer.clone(), object: last, copies: 1 };
-        let queued_for_removed = SceneItemAction::DuplicateObject { layer: layer.clone(), object: first.clone(), copies: 1 };
+        let queued = SceneItemAction::DuplicateObject { layer: layer.clone(), object: last };
+        let queued_for_removed = SceneItemAction::DuplicateObject { layer: layer.clone(), object: first.clone() };
 
         let target = GraphTarget::Generator(layer.clone());
         let default = (*crate::graph_target::resolve(&project, &target).unwrap()).clone();

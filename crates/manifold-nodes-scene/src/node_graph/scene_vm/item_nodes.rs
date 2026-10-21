@@ -59,10 +59,9 @@ pub(super) fn world_nodes(
     stable_ids(level, ids)
 }
 
-/// Each physics world with the bodies its copy groups copy (wired into
-/// `copies_k`) and their transforms: a copies body draws no object of its
-/// own, so its controls are the world's (Physics Boxes' box shape and spawn
-/// transform).
+/// Each physics world with the values wired into it. A copy group's body is
+/// not the world's: the object that draws it owns its Count, Layout and
+/// Spacing.
 /// A shared value wired into the world is the world's control too: Add Fluid
 /// routes gravity, speed and reset through values that also drive the water.
 pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
@@ -72,12 +71,6 @@ pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
         .filter(|node| node.type_id == "node.physics_world")
         .map(|world| {
             let mut ids = vec![world.id];
-            for wire in level.wires.iter().filter(|wire| {
-                wire.to_node == world.id && manifold_core::copies_body::copy_group_of_input(&wire.to_port).is_some()
-            }) {
-                ids.push(wire.from_node);
-                ids.extend(level.producer(wire.from_node, "transform").map(|(transform, _)| transform));
-            }
             ids.extend(
                 level
                     .wires
