@@ -173,6 +173,7 @@ mod window_input;
 #[cfg(all(feature = "ui-automation", unix))]
 mod live_ui;
 mod viewport_input;
+mod viewport_selection;
 mod scene_viewport;
 mod physics_overlay;
 mod preview_navigation;

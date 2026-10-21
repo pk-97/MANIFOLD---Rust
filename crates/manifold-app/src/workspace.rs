@@ -24,13 +24,6 @@ pub enum WorkspaceKind {
     GraphEditor,
 }
 
-/// The editor viewport's drawn selection and what it was built from.
-pub struct ViewportSelection {
-    pub scene: Arc<manifold_nodes_scene::node_graph::scene_vm::SceneVm>,
-    pub ids: Vec<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
-    pub selection: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoSelection,
-}
-
 /// All per-window UI state. Owns the `UIRoot`, the offscreen render
 /// target, and the CVDisplayLink that drives this window's render
 /// cadence.
@@ -142,7 +135,7 @@ pub struct Workspace {
     pub viewport_selected: Vec<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
     /// The selection drawn over the viewport, rebuilt when its scene or
     /// `viewport_selected` changes.
-    pub viewport_selection: Option<ViewportSelection>,
+    pub viewport_selection: Option<crate::viewport_selection::ViewportSelection>,
     /// The gizmo drag in progress, a knob scrub ended on release or
     /// cancellation.
     pub viewport_gizmo_drag: Option<crate::scene_gizmo::GizmoGesture>,

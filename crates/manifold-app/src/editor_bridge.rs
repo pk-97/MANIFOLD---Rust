@@ -1715,23 +1715,10 @@ impl Application {
             // the one composition entry the main preview also calls; mid-drag
             // they follow the live knob values the drag writes. Domain boxes
             // are the ones the solver accepted for the displayed frame.
-            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoSelection, compose_lines};
-            let stale = match (&ws.viewport_selection, &viewport_def.scene) {
-                (Some(shown), Some(scene)) => !std::sync::Arc::ptr_eq(&shown.scene, scene) || shown.ids != ws.viewport_selected,
-                (None, Some(_)) => true,
-                (_, None) => false,
-            };
-            if stale && let Some(scene) = viewport_def.scene.clone() {
-                let selection = GizmoSelection::of_ids(&scene, &ws.viewport_selected);
-                ws.viewport_selection = Some(crate::workspace::ViewportSelection { scene, ids: ws.viewport_selected.clone(), selection });
-            }
-            let drawn = ws.viewport_selection.as_ref().filter(|_| viewport_def.scene.is_some());
+            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, compose_lines};
+            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), &ws.viewport_selected);
             if let Some(drawn) = drawn {
-                let objects = drawn.selection.selected.iter().filter_map(|target| match crate::scene_gizmo::scene_selection(&drawn.scene, target) {
-                    Some(manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object)) => Some(object),
-                    _ => None,
-                });
-                crate::selection_outline::outline_slots(&drawn.scene, objects, &mut ws.viewport_outline);
+                drawn.outline(&mut ws.viewport_outline);
             }
             let displayed = session.displayed.as_ref().filter(|frame| frame.has_image());
             let shown = displayed.map(|frame| &frame.domains);
