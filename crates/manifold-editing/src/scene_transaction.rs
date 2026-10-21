@@ -1,7 +1,5 @@
 //! Prepared whole-owner graph edits with reversible instance parameter state.
 
-use std::borrow::Cow;
-
 use manifold_core::change::ChangeSet;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
@@ -18,9 +16,10 @@ pub(crate) enum SceneGraphRejection {
     Noop,
 }
 
-/// Copy every host-side value and modulation entry addressed by a source
-/// modifier macro. The graph candidate has already minted the destination
-/// metadata; this keeps duplication's runtime state in the same transaction.
+/// Copy every host-side value and modulation route addressed by a source
+/// param. The graph candidate has already minted the destination metadata;
+/// this keeps duplication's runtime state in the same transaction. Every
+/// remap is a duplicate, so Ableton mappings stay on the source.
 fn duplicate_runtime_parameter_state(
     host: &mut manifold_core::effects::PresetInstance,
     remaps: &[(String, String)],
@@ -41,31 +40,8 @@ fn duplicate_runtime_parameter_state(
         }
     }
 
-    macro_rules! duplicate_entries {
-        ($field:ident) => {
-            if let Some(entries) = host.$field.as_mut() {
-                let copies: Vec<_> = remaps
-                    .iter()
-                    .filter_map(|(source, destination)| {
-                        entries
-                            .iter()
-                            .find(|entry| entry.param_id.as_ref() == source)
-                            .map(|entry| {
-                                let mut copy = entry.clone();
-                                copy.param_id = Cow::Owned(destination.clone());
-                                copy
-                            })
-                    })
-                    .collect();
-                entries.extend(copies);
-            }
-        };
-    }
-    duplicate_entries!(drivers);
-    duplicate_entries!(envelopes);
-    duplicate_entries!(ableton_mappings);
-    duplicate_entries!(audio_mods);
-    duplicate_entries!(automation_lanes);
+    let source = host.clone();
+    crate::param_routes::copy_param_routes(&source, host, remaps, crate::param_routes::RouteTransfer::Copy);
 }
 
 #[derive(Debug)]
@@ -217,6 +193,16 @@ impl SceneGraphTransaction {
 
     pub(crate) fn error(&self) -> Option<&SceneGraphRejection> {
         self.last_error.as_ref()
+    }
+
+    /// What the user reads when the last execute or undo was refused.
+    pub(crate) fn rejection_reason(&self) -> Option<&'static str> {
+        match self.error()? {
+            SceneGraphRejection::MissingOwner => Some("Scene owner is no longer present"),
+            SceneGraphRejection::PresetTypeChanged => Some("Scene type changed while preparing this edit"),
+            SceneGraphRejection::StaleOwner => Some("Scene graph changed while preparing this edit"),
+            SceneGraphRejection::Noop => None,
+        }
     }
 }
 #[cfg(test)]

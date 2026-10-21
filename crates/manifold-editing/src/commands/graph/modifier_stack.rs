@@ -1256,13 +1256,9 @@ mod tests {
                 .iter()
                 .any(|envelope| envelope.param_id.as_ref() == new_id)
         );
-        assert!(
-            host.ableton_mappings
-                .as_ref()
-                .unwrap()
-                .iter()
-                .any(|mapping| mapping.param_id.as_ref() == new_id)
-        );
+        let mapped: Vec<&str> = host.ableton_mappings.as_ref().unwrap().iter().map(|mapping| mapping.param_id.as_ref()).collect();
+        assert!(mapped.contains(&old_id), "the source keeps its Ableton mapping");
+        assert!(!mapped.contains(&new_id.as_str()), "a copy never takes the source's Ableton mapping");
         assert!(
             host.audio_mods
                 .as_ref()

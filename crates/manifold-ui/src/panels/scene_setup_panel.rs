@@ -16,6 +16,8 @@ mod outliner;
 pub use outliner::SceneGroup;
 #[path = "scene_setup_panel/item_header.rs"]
 mod item_header;
+#[path = "scene_setup_panel/copies.rs"]
+mod copies;
 #[path = "scene_setup_panel/keyboard.rs"]
 mod keyboard;
 pub use keyboard::SceneItemAddress;
@@ -417,6 +419,9 @@ pub struct ObjectKnownRow {
     pub physics_enabled: bool,
     pub physics_available: bool,
     pub physics_unavailable_reason: Option<String>,
+    /// Free body slots in the Physics World this object's body sits in;
+    /// `None` without physics. A copy count above it cannot fit.
+    pub physics_free_body_slots: Option<u32>,
     pub physics_imported: bool,
     pub fluid_role_available: bool,
     pub fluid_roles: Result<Vec<FluidRoleRow>, String>,
@@ -962,6 +967,7 @@ pub struct ScenePanel {
     /// The groups the tree drew this frame, in order.
     tree_groups: Vec<SceneGroup>,
     header_buttons: item_header::HeaderButtons,
+    copy_count: copies::CopyCount,
     /// P5 (D7): the outliner selection, per layer — UI-local workspace
     /// state, like fold state, NEVER serialized. Missing entry = the
     /// default (first object, else World) — resolved by
@@ -1127,6 +1133,7 @@ impl Default for ScenePanel {
             physics_enable_id: None,
             tree_groups: Vec::new(),
             header_buttons: Default::default(),
+            copy_count: Default::default(),
             selection: std::collections::HashMap::new(),
             selection_version: 0,
             noted_selection: None,
@@ -1329,6 +1336,7 @@ impl ScenePanel {
         self.physics_enable_id = None;
         self.tree_groups.clear();
         self.header_buttons.clear();
+        self.copy_count.clear();
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
@@ -1857,6 +1865,9 @@ impl ScenePanel {
                 if let Some(actions) = self.force_card_click(*node_id, tree) {
                     return (true, actions);
                 }
+                if let Some(actions) = self.copy_count_click(*node_id) {
+                    return (true, actions);
+                }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
                 // exists. D1 of SCENE_PANEL_UX_DESIGN.md: the noted
@@ -1940,6 +1951,7 @@ impl ScenePanel {
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             *index as u32,
+                            1,
                         )));
                     } else if let Some((_, index)) =
                         self.submesh_duplicate_ids.iter().find(|(id, _)| *id == *node_id)

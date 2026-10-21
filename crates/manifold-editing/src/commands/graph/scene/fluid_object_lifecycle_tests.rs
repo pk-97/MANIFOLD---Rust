@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::command::Command;
-use crate::commands::graph::test_support::{graph_of, mirror_catalog_default, project_with_graph};
+use crate::commands::graph::test_support::{duplicate_object, graph_of, mirror_catalog_default, project_with_graph};
 use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID,
     GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
@@ -128,7 +128,7 @@ fn scene_physics_object_fluid_duplicate_remove_preserves_independent_routes() {
     let assigned = graph_of(&project, &effect).clone();
 
     let mut duplicate =
-        DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, mirror_catalog_default());
+        duplicate_object(&project, target.clone(), vec![], 0, 0, mirror_catalog_default());
     duplicate.execute(&mut project);
     assert!(
         duplicate.was_applied(),
@@ -190,7 +190,7 @@ fn scene_physics_object_fluid_duplicate_rejects_missing_source_atomically() {
         .unwrap()
         .graph_structure_version;
     let mut duplicate =
-        DuplicateSceneObjectCommand::new(target, vec![], 0, 7, mirror_catalog_default());
+        duplicate_object(&project, target, vec![], 0, 7, mirror_catalog_default());
     duplicate.execute(&mut project);
     assert!(!duplicate.was_applied());
     assert_eq!(graph_of(&project, &effect), &graph);
@@ -251,7 +251,7 @@ fn scene_physics_object_fluid_full_domain_rejects_without_materializing() {
         .unwrap()
         .graph = None;
     let before = serde_json::to_value(&project).unwrap();
-    let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph);
+    let mut duplicate = duplicate_object(&project, target.clone(), vec![], 0, 0, graph);
     duplicate.execute(&mut project);
     assert!(!duplicate.was_applied());
     assert!(
@@ -283,7 +283,7 @@ fn scene_physics_object_fluid_tracking_undo_redo_and_stale_edits() {
                 graph.clone(),
             ))
         } else {
-            Box::new(DuplicateSceneObjectCommand::new(
+            Box::new(duplicate_object(&project, 
                 target.clone(),
                 vec![],
                 0,
@@ -311,12 +311,7 @@ fn scene_physics_object_fluid_tracking_undo_redo_and_stale_edits() {
         let version = project.graph_target_owner(&target).unwrap().graph_version;
         command.execute(&mut project);
         assert!(!command.was_applied());
-        assert!(
-            command
-                .rejection_reason()
-                .unwrap()
-                .contains("changed since undo")
-        );
+        assert!(command.rejection_reason().unwrap().contains("changed"));
         command.undo(&mut project);
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
         assert_eq!(
@@ -364,36 +359,18 @@ fn scene_physics_object_fluid_modifier_local_undo_restores_owner() {
     let source_slot = binding.id.clone();
     owner.set_base_param(&source_slot, 1.5);
     let before = project.graph_target_owner(&target).unwrap().graph.clone();
+    // Duplicate commits through the scene transaction, which takes whole
+    // effect or generator owners only: a modifier-local scene refuses.
     let mut duplicate =
-        DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, before.clone().unwrap());
+        duplicate_object(&project, target.clone(), vec![], 0, 0, before.clone().unwrap());
     duplicate.execute(&mut project);
-    assert!(
-        duplicate.was_applied(),
-        "{:?}",
-        duplicate.rejection_reason()
-    );
-    let duplicated = project.graph_target_owner(&target).unwrap().graph.clone();
-    let duplicate_slot = duplicated.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings.iter()
-        .find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { param_id, .. } if param_id == "11_pos_y_duplicate"))
-        .unwrap().id.clone();
-    assert_eq!(
-        project
-            .graph_target_owner(&target)
-            .unwrap()
-            .get_base_param(&duplicate_slot),
-        3.5,
-        "a modifier copy preserves the resolved authored value through its new control"
-    );
+    assert!(!duplicate.was_applied());
+    assert_eq!(project.graph_target_owner(&target).unwrap().graph, before);
     let mut remove =
         RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, before.clone().unwrap());
     remove.execute(&mut project);
     assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
     remove.undo(&mut project);
-    assert_eq!(
-        project.graph_target_owner(&target).unwrap().graph,
-        duplicated
-    );
-    duplicate.undo(&mut project);
     assert_eq!(project.graph_target_owner(&target).unwrap().graph, before);
     let local = project.graph_for_target(&target, None).unwrap();
     let source = scene_fluid_role_assignments(local, 10).unwrap()[0]
@@ -438,13 +415,13 @@ fn scene_physics_object_fluid_queued_edits_reject_replaced_source() {
     let (mut project, effect) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(effect);
     let mut duplicate =
-        DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
+        duplicate_object(&project, target.clone(), vec![], 0, 0, graph.clone());
     duplicate.execute(&mut project);
     assert!(duplicate.was_applied());
     let mut queued: Vec<Box<dyn Command>> = vec![
         Box::new(
-            DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone())
-                .with_expected_source(NodeId::new("object_group")),
+            // Prepared before the remove below, so its owner check refuses it.
+            duplicate_object(&project, target.clone(), vec![], 0, 0, graph.clone()),
         ),
         Box::new(
             RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone())
@@ -463,7 +440,7 @@ fn scene_physics_object_fluid_queued_edits_reject_replaced_source() {
             command
                 .rejection_reason()
                 .unwrap()
-                .contains("selected object changed")
+                .contains("changed")
         );
         command.undo(&mut project);
         assert_eq!(serde_json::to_value(&project).unwrap(), before);

@@ -368,7 +368,10 @@ pub(super) fn grouped_physics_scene_object_match(
         .filter(|node| node.type_id == "node.scene_object")
         .count();
     if compound_count > PHYSICS_BODY_SLOTS as usize {
-        return PhysicsSceneObjectMatch::Malformed("Physics compound group has more than 64 parts");
+        static TOO_MANY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            format!("Physics compound group has more than {PHYSICS_BODY_SLOTS} parts")
+        });
+        return PhysicsSceneObjectMatch::Malformed(TOO_MANY.as_str());
     }
     for part in 0..compound_count {
         if !group.wires.iter().any(|wire| {
@@ -746,15 +749,6 @@ pub(super) fn physics_copies_scene_object_match(
 }
 
 pub(super) fn first_free_physics_body_slot(wires: &[EffectGraphWire], world_id: u32) -> Option<u32> {
-    (0..PHYSICS_BODY_SLOTS).find(|slot| physics_body_slot_available(wires, world_id, *slot))
+    BodySlots::of(wires, world_id).first_free()
 }
 
-pub(super) fn physics_body_slot_available(wires: &[EffectGraphWire], world_id: u32, slot: u32) -> bool {
-    let body_port = format!("body_{slot}");
-    let pose_port = format!("pose_{slot}");
-    let field_port = format!("body_acceleration_{slot}");
-    !wires.iter().any(|wire| {
-        (wire.to_node == world_id && (wire.to_port == body_port || wire.to_port == field_port))
-            || (wire.from_node == world_id && wire.from_port == pose_port)
-    })
-}

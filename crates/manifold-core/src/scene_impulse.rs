@@ -42,6 +42,11 @@ pub struct RigidImpulseTargets {
     pub copies: bool,
 }
 
+const _: () = assert!(
+    RigidImpulseTargets::BODY_CAPACITY == crate::scene_surface::PHYSICS_WORLD_BODY_SLOTS as usize,
+    "the authored Physics World and the runtime body mask hold the same body count",
+);
+
 impl RigidImpulseTargets {
     /// Number of ordinary body slots represented by the selection mask.
     pub const BODY_CAPACITY: usize = u64::BITS as usize;

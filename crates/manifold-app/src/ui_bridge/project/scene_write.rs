@@ -55,8 +55,10 @@ pub(crate) fn scene_binding_id(
 /// the command for the content thread — sent singly by
 /// `SceneSetupParamChanged`, or batched under one `CompositeCommand` by
 /// frame-selected so a camera frame is one undo unit.
-/// `None` when the layer has no generator default or the bound value is
-/// unchanged (the epsilon no-change guard).
+/// `None` when the layer has no generator default, the value is not finite
+/// (a NaN or infinity is never written), an unbound param is one its node
+/// does not declare, or the bound value is unchanged (the epsilon no-change
+/// guard).
 pub(crate) fn apply_scene_param_write(
     project: &Project,
     layer_id: &LayerId,
@@ -129,6 +131,9 @@ fn scene_param_write(
     param_id: &str,
     value: f32,
 ) -> Option<Box<dyn manifold_editing::command::Command + Send>> {
+    if !value.is_finite() {
+        return None;
+    }
     let default = generator_catalog_default(project, layer_id)?;
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
     let effective = project.graph_target_owner(&target)
@@ -152,12 +157,21 @@ fn scene_param_write(
             ),
         ));
     }
+    // The def keeps the param's declared shape: a toggle such as a body's
+    // `enabled` stays a Bool, which the graph loader and the readers that
+    // match on it require. A param the node does not declare, as the loader
+    // builds it, is refused: the loader would reject the layer's graph.
+    let node = find_node_by_scope(effective, &scope_path, node_doc_id)?;
+    let declared = manifold_nodes_scene::node_graph::scene_exposure::declared_params_for_node(node)?
+        .into_iter()
+        .find(|meta| meta.name == param_id)?;
+    let serialized = manifold_editing::commands::graph::effective_value_to_serialized(declared.convert, value);
     let cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
         manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
             target,
             node_doc_id,
             param_id.to_string(),
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+            serialized,
             default,
         )
         .with_scope(scope_path),

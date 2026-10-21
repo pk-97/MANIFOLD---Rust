@@ -4,13 +4,14 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraph
 /// Copy the scene-panel numeric bindings whose targets belong to a duplicated
 /// object. Both root-level physics nodes and grouped scene nodes store these
 /// exposures in the shared preset metadata. Each copied binding gets a fresh
-/// id while fanout bindings retain one id for all cloned targets.
-pub(super) fn clone_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) {
+/// id while fanout bindings retain one id for all cloned targets. Returns
+/// each copied control as `(source id, copy id)`.
+pub(super) fn clone_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) -> Vec<(String, String)> {
     // The cloned nodes are already in the graph when this metadata pass runs.
     // Snapshot handles before borrowing preset metadata mutably.
     let node_handles = collect_node_handles(&def.nodes);
     let Some(meta) = def.preset_metadata.as_mut() else {
-        return;
+        return Vec::new();
     };
     let mut binding_ids = meta
         .bindings
@@ -81,6 +82,9 @@ pub(super) fn clone_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(Nod
     }
     meta.params.extend(cloned_params);
     meta.bindings.extend(cloned_bindings);
+    let mut copied: Vec<(String, String)> = cloned_id_by_source.into_iter().collect();
+    copied.sort();
+    copied
 }
 
 struct SectionOwner {

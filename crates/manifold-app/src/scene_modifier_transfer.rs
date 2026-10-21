@@ -1,63 +1,17 @@
 //! Clipboard and generator replacement share one atomic modifier transfer.
-use std::borrow::Cow;
-
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode};
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_editing::command::Command;
+use manifold_editing::param_routes::RouteTransfer;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModifierClipboard {
     host: Box<PresetInstance>,
     graph: Box<EffectGraphDef>,
     selected: Vec<NodeId>,
-}
-
-/// Copy modulation routes for a set of remapped host parameters. Both scene
-/// and object-card clipboard transfers use the same route state shape.
-pub(crate) fn copy_host_routes(
-    source: &PresetInstance,
-    destination: &mut PresetInstance,
-    remaps: &[(String, String)],
-    include_ableton: bool,
-) {
-    macro_rules! copy_routes {
-        ($field:ident) => {
-            if let Some(entries) = &source.$field {
-                let copies: Vec<_> = entries
-                    .iter()
-                    .flat_map(|entry| {
-                        remaps
-                            .iter()
-                            .filter(move |(source_id, _)| entry.param_id.as_ref() == source_id)
-                            .map(move |(_, destination_id)| {
-                                let mut copy = entry.clone();
-                                copy.param_id = Cow::Owned(destination_id.clone());
-                                copy
-                            })
-                    })
-                    .collect();
-                if !copies.is_empty() {
-                    let destination_entries = destination.$field.get_or_insert_with(Vec::new);
-                    destination_entries.retain(|entry| {
-                        !remaps
-                            .iter()
-                            .any(|(_, destination_id)| entry.param_id.as_ref() == destination_id)
-                    });
-                    destination_entries.extend(copies);
-                }
-            }
-        };
-    }
-    copy_routes!(drivers);
-    copy_routes!(envelopes);
-    copy_routes!(audio_mods);
-    copy_routes!(automation_lanes);
-    if include_ableton {
-        copy_routes!(ableton_mappings);
-    }
 }
 
 impl ModifierClipboard {
@@ -369,9 +323,10 @@ pub(crate) fn transfer(
             }
         }
     }
-    copy_host_routes(source_host, &mut host, &remaps, preserve_ids);
     // Hardware mappings stay attached when changing the same generator owner;
     // a clipboard paste must not duplicate external control bindings.
+    let transfer = if preserve_ids { RouteTransfer::Move } else { RouteTransfer::Copy };
+    manifold_editing::param_routes::copy_param_routes(source_host, &mut host, &remaps, transfer);
     host.bump_graph_structure_version();
     *destination_host = host;
     Ok(())
