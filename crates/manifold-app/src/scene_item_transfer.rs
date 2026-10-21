@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, SerializedParamValue,
+    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, SerializedParamValue,
 };
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
