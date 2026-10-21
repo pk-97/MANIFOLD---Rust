@@ -693,6 +693,7 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_physics::PlayedTime;
 
     const OPEN: DomainWalls = DomainWalls { min: [0.0; 3], size: [0.0; 3], closed: 0 };
 
@@ -1004,17 +1005,21 @@ mod tests {
                 let transport = index as f64 / fps;
                 if let Some(last) = last {
                     times.clear();
-                    scenes.request(&clock, last, transport, &mut times);
-                    for &time in times.iter().filter(|&&time| time < transport) {
-                        scenes.observe(time, Some(&scene_at(time)));
+                    {
+                        let mut played = Vec::new();
+                        scenes.request(&clock, PlayedTime::from_played(last), PlayedTime::from_played(transport), &mut played);
+                        times.extend(played.into_iter().map(PlayedTime::seconds));
                     }
-                    scenes.observe(transport, Some(&scene_at(transport)));
+                    for &time in times.iter().filter(|&&time| time < transport) {
+                        scenes.observe(&clock, PlayedTime::from_played(time), Some(&scene_at(time)));
+                    }
+                    scenes.observe(&clock, PlayedTime::from_played(transport), Some(&scene_at(transport)));
                 }
                 last = Some(transport);
                 // The previous display frame leaves its accepted interval
                 // pending; it is exchanged once its end sample is present.
                 owner.settle_ready(scenes.endpoint(owner.completed() + 1), |_| true, no_reaction).unwrap();
-                let frame = clock.advance(transport, 1.0 / fps, 1.0, 0.0, false, false);
+                let frame = clock.advance(PlayedTime::from_played(transport), 1.0 / fps, 1.0, 0.0, false, false);
                 assert_eq!(frame.dropped_seconds, 0.0, "{fps} fps dropped time");
                 if index > 0 {
                     assert_eq!(frame.ticks, 1, "{fps} fps accepted one live interval");
@@ -1041,6 +1046,92 @@ mod tests {
         owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds(0.0), manifold_core::Seconds(TICK)), offline: true });
         assert!(owner.settle_ready(None, |_| true, no_reaction).unwrap_err().contains("never sampled"));
         assert_eq!((owner.completed(), owner.pending().map(|p| p.tick)), (0, Some(0)));
+    }
+
+    /// Two seconds of a coupled pair driven as the domain drives it: in each
+    /// replay sample the pair hands over the scene before the liquid observes
+    /// Speed, and the liquid settles each tick once its end is sampled.
+    /// Returns each tick's rows as bits, or the pair's error.
+    fn coupled_rows_under_speed(fps: u32, offline: bool, speed: impl Fn(f64) -> f32) -> Result<Vec<(u64, [u32; 3])>, String> {
+        use crate::clock::LiquidClock;
+        use manifold_physics::tick_samples::TickSamples;
+
+        let scene_at = |t: f64| {
+            let mut scene = scene();
+            let body = scene.bodies[0].as_mut().unwrap();
+            body.kind = 2;
+            let angle = (1.7 * t) as f32;
+            body.transform.pos = [angle.cos(), 1.0 + 0.5 * angle.sin(), 0.1 * angle];
+            scene
+        };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
+        let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, MAX_LIQUID_BODIES, 1, None)?;
+        let (mut clock, mut scenes) = (LiquidClock::default(), TickSamples::default());
+        let frame = clock.advance(PlayedTime::from_played(0.0), TICK, speed(0.0), 0.0, false, offline);
+        scenes.settle(&clock, &frame, Some(&scene_at(0.0)));
+        let (mut times, mut rows, mut previous) = (Vec::new(), Vec::new(), 0.0);
+        let settle = |owner: &mut LiquidRigidOwner, scenes: &TickSamples<RigidSceneInputs>| -> Result<(), String> {
+            owner.settle_ready(scenes.endpoint(owner.completed() + 1), |_| true, no_reaction)?;
+            if let Some(start) = scenes.reanchored_start(owner.completed()) {
+                owner.reanchor_start(start)?;
+            }
+            Ok(())
+        };
+        for index in 1..=2 * fps {
+            let now = f64::from(index) / f64::from(fps);
+            times.clear();
+            {
+                let mut played = Vec::new();
+                scenes.request(&clock, PlayedTime::from_played(previous), PlayedTime::from_played(now), &mut played);
+                times.extend(played.into_iter().map(PlayedTime::seconds));
+            }
+            let mut grid = (previous * 240.0).floor() + 1.0;
+            while grid / 240.0 < now {
+                times.push(grid / 240.0);
+                grid += 1.0;
+            }
+            times.retain(|&time| time < now);
+            times.sort_by(f64::total_cmp);
+            times.dedup();
+            times.push(now);
+            for &time in &times {
+                scenes.stage(Some(&scene_at(time)));
+                clock.observe_speed(PlayedTime::from_played(time), speed(time));
+                scenes.observe_staged(&clock, PlayedTime::from_played(time));
+            }
+            settle(&mut owner, &scenes)?;
+            let frame = clock.advance(PlayedTime::from_played(now), TICK, speed(now), 0.0, false, offline);
+            scenes.settle(&clock, &frame, Some(&scene_at(now)));
+            for ordinal in 0..u64::from(frame.ticks) {
+                if ordinal > 0 {
+                    settle(&mut owner, &scenes)?;
+                }
+                let interval = frame.interval(ordinal).unwrap();
+                rows.push((owner.completed(), [0, 1, 2].map(|axis| owner.rows()[0].position_inv_mass[axis].to_bits())));
+                owner.set_pending(PendingTick { tick: owner.completed(), stamp: u64::from(index), interval, offline });
+            }
+            scenes.prune_before(owner.completed());
+            previous = now;
+        }
+        Ok(rows)
+    }
+
+    /// Speed crossing 0 between frames in a coupled liquid and rigid pair:
+    /// each tick's scene is recorded under the tick named once Speed at its
+    /// start is known, each tick that stops on a Speed 0 boundary keeps the
+    /// scene there as its end, and the pair never restarts. The rows match
+    /// bit for bit at 30, 60, 120 and 144 fps, live and exported.
+    #[test]
+    fn coupled_pair_speed_crossing_zero_matches_at_30_60_120_144_fps_live_and_export() {
+        let speed = |t: f64| (2.0 * (std::f64::consts::TAU * 1.3 * t).cos()).max(0.0) as f32;
+        let reference = coupled_rows_under_speed(60, true, speed).unwrap();
+        assert!(reference.len() > 40 && reference.len() < 100, "Speed 0 stretches run no tick: {} ran", reference.len());
+        for fps in [30, 60, 120, 144] {
+            for offline in [false, true] {
+                let rows = coupled_rows_under_speed(fps, offline, speed).unwrap_or_else(|error| panic!("{fps} fps, offline {offline}: {error}"));
+                assert!(rows == reference, "{fps} fps, offline {offline}: rows differ");
+            }
+        }
     }
 
     /// Three ticks in one frame consume three different reactions, and each

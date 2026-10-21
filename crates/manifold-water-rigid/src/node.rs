@@ -31,6 +31,17 @@ pub trait PhysicsNode: Send {
         None
     }
 
+    /// Transport times in `(from, until]` the physics history replay must
+    /// sample exactly before the next frame. A world that records its authored
+    /// inputs only at times no frame rate moves asks for them here.
+    fn request_physics_samples(
+        &mut self,
+        _from: manifold_core::PlayedTime,
+        _until: manifold_core::PlayedTime,
+        _out: &mut Vec<manifold_core::PlayedTime>,
+    ) {
+    }
+
     /// Configure ownership during graph preparation, before any evaluation.
     fn set_coupled_physics(&mut self, _enabled: bool) {}
 
@@ -86,11 +97,11 @@ pub trait PhysicsNode: Send {
     }
 
     /// Timestamp an impulse against the exact native observation accepted at
-    /// the supplied transport value, if this node owns such a clock. `step`
-    /// is the frame's step, so the stamp never depends on node order.
+    /// the supplied played time, if this node owns such a clock. `step` is
+    /// the frame's step, so the stamp never depends on node order.
     fn physics_impulse_stamp(
         &self,
-        _transport: manifold_core::Seconds,
+        _played: manifold_core::PlayedTime,
         _sequence: u64,
         _step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {

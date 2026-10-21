@@ -23,8 +23,14 @@ import cpu_scope
 import diff_scope
 import bridge_probe_gate
 import gate_readiness
+import gate_policy
 import gpu_scope
 from gate_workspace import Workspace
+
+
+def without_repo_scan_rows():
+    """The ordinary selection tests assert exact plans; the repo-scan rows have their own class."""
+    return [row for row in cpu_scope.PREFIX_ROWS if row not in gate_policy.REPO_SCAN_ROWS]
 
 
 def synthetic_workspace(root, paths):
@@ -245,6 +251,7 @@ class SlowTestParsingTests(unittest.TestCase):
 
 class LandingTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(cpu_scope, "PREFIX_ROWS", without_repo_scan_rows()))
         self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.dict(
             os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
@@ -350,7 +357,7 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "argv", ["landing_gate.py", "--repo", d, *extra]))
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
-            def readiness(_repo, selected_paths, _base):
+            def readiness(_repo, selected_paths, _base, scan_paths=()):
                 from codex_checks import tooling_checks
                 tooling = tooling_checks(root, selected_paths) + list(extra_tooling)
                 if not selected_paths:
@@ -1220,6 +1227,9 @@ class BridgeProbeQueueTests(unittest.TestCase):
 
 
 class DiffScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(cpu_scope, "PREFIX_ROWS", without_repo_scan_rows()))
+
     def test_manifests_select_workspace_layering_contract(self):
         for path in ("Cargo.toml", "crates/manifold-ui-paint/Cargo.toml"):
             with self.subTest(path=path):
@@ -1685,6 +1695,91 @@ class DiffScopeTests(unittest.TestCase):
                 patch.object(diff_scope, "effective_paths", return_value=([], ["crates/manifold-ui/src/lib.rs"])) as scope:
             self.assertEqual(run_ui_flows.filters_for_touched("origin/main...HEAD", manifest), ([], {}))
             scope.assert_called_once_with(run_ui_flows.ROOT, "base", "HEAD")
+
+
+class RepoScanSelectionTests(unittest.TestCase):
+    """Tests that read the whole repo run on every landing that changes what they read."""
+
+    CORE = "manifold-core"
+    CITED = "(package(=manifold-core) & binary(=docs_cited_paths))"
+    INDEX = "(package(=manifold-core) & binary(=docs_index_sync))"
+    LIFECYCLE = "(package(=manifold-core) & binary(=docs_lifecycle))"
+    CRATES_WIDE = {
+        "(package(=manifold-core) & binary(=bug080_project_deserialize_single_door))",
+        "(package(=manifold-core) & test(liquid_type_ids_live_in_one_place))",
+        "(package(=manifold-editing) & test(command_runs_only_through_the_audit))",
+        "(package(=manifold-gpu) & binary(=queued_device_audit))",
+        "(package(=manifold-foundation) & binary(=device_guard_contract))",
+        "(package(=manifold-ui-paint) & test(/^contracts::inv7_one_text_measurer::/))",
+    }
+
+    def plan(self, paths, scan_paths=()):
+        with tempfile.TemporaryDirectory() as d:
+            workspace = synthetic_workspace(d, [*paths, *scan_paths])
+            return cpu_scope.plan_for_paths(paths, d, workspace=workspace, scan_paths=scan_paths)
+
+    def test_docs_only_change_selects_the_doc_scans_and_nothing_else(self):
+        for doc in ("docs/NEW_DESIGN.md", "CLAUDE.md", "docs/sub/NOTE.md"):
+            with self.subTest(doc=doc):
+                self.assertTrue(gate_policy.repo_scan_doc(doc))
+                plan = self.plan([], scan_paths=[doc])
+                expected = {self.CITED, self.LIFECYCLE}
+                if doc.startswith("docs/"):
+                    expected.add(self.INDEX)
+                self.assertEqual(plan.filters, expected)
+                self.assertEqual(plan.packages, {self.CORE})
+                self.assertEqual(plan.whole, set())
+
+    def test_renamed_rs_file_in_another_crate_selects_every_crates_wide_scan(self):
+        old, new = "crates/manifold-nodes-water/src/old_name.rs", "crates/manifold-nodes-water/src/new_name.rs"
+        plan = self.plan([old, new])
+        self.assertLessEqual({self.CITED} | self.CRATES_WIDE, plan.filters)
+        self.assertNotIn(self.INDEX, plan.filters)
+        self.assertEqual(plan.whole, set())
+        for package in ("manifold-core", "manifold-gpu", "manifold-editing",
+                        "manifold-foundation", "manifold-ui-paint"):
+            self.assertIn(package, plan.packages)
+
+    def test_new_rs_file_in_another_crate_selects_every_crates_wide_scan(self):
+        plan = self.plan(["crates/manifold-nodes-water/src/brand_new.rs"])
+        self.assertLessEqual({self.CITED} | self.CRATES_WIDE, plan.filters)
+        self.assertEqual(plan.whole, set())
+
+    def test_file_that_no_scan_reads_stays_narrow(self):
+        plan = self.plan(["crates/manifold-nodes-water/assets/blob.png"])
+        self.assertEqual(plan.filters, {self.CITED})
+
+    def test_named_source_files_select_the_tests_that_read_them(self):
+        cases = {
+            "crates/manifold-core/src/layer.rs":
+                "(package(=manifold-io) & test(every_model_path_field_is_inventory_covered))",
+            "crates/manifold-app/src/content_thread.rs":
+                "(package(=manifold-core) & test(no_reader_goes_around_the_join))",
+            "crates/manifold-water-rigid/src/lib.rs": "(package(=manifold-app) & binary(=crate_layering))",
+        }
+        for path, expression in cases.items():
+            with self.subTest(path=path):
+                self.assertIn(expression, self.plan([path]).filters)
+
+    def test_every_row_names_a_real_binary_or_test(self):
+        root = Path(__file__).resolve().parent.parent
+        for _prefix, _suffix, package, modules, binaries in gate_policy.REPO_SCAN_ROWS:
+            crate = root / "crates" / package
+            for binary in binaries:
+                with self.subTest(package=package, binary=binary):
+                    self.assertTrue(any((crate / "tests").glob(f"{binary}.rs")), f"no tests/{binary}.rs")
+            for module in modules:
+                with self.subTest(package=package, module=module):
+                    if module.startswith("test:"):
+                        needle = f"fn {module[5:]}("
+                    else:
+                        needle = None
+                        self.assertTrue(any(crate.glob("tests/" + module.replace("::", "/") + ".rs")),
+                                        f"no tests/{module}")
+                    if needle:
+                        self.assertTrue(any(needle in path.read_text()
+                                            for path in (*crate.glob("src/**/*.rs"), *crate.glob("tests/**/*.rs"))),
+                                        f"no {needle} in {package}")
 
 
 class CancellationTests(unittest.TestCase):

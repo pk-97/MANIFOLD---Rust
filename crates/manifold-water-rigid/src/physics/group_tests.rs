@@ -29,11 +29,11 @@ fn a_256_body_world_takes_every_body_and_a_hit_lands_on_body_200_only() {
         .map(|index| Some(at([(index % 16) as f32 * 2.0, 0.0, (index / 16) as f32 * 2.0])))
         .collect();
     let mut simulation = RigidSimulation::default();
-    simulation.advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
     assert!(simulation.native_handles().iter().all(Option::is_some), "every one of 256 bodies is installed");
     let before = simulation.poses.clone();
     hit(&mut simulation, 1, RigidImpulseTargets::body(200).unwrap());
-    simulation.advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
     for (index, (now, then)) in simulation.poses.iter().zip(&before).enumerate() {
         if index == 200 {
             assert!(now.pos[0] - then.pos[0] > 0.04, "body 200 takes the hit");
@@ -53,12 +53,12 @@ fn two_copy_groups_share_one_world_and_a_hit_on_group_one_moves_only_its_copies(
         targeted_fields: Vec::new(),
     };
     let mut simulation = RigidSimulation::default();
-    simulation.advance_scene(&scene, Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (8, 5));
     assert_eq!(simulation.total_active_copies(), 13);
     let before = [simulation.group_poses(0).to_vec(), simulation.group_poses(1).to_vec()];
     hit(&mut simulation, 1, RigidImpulseTargets::group(1).unwrap());
-    simulation.advance_scene(&scene, Seconds(DT), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
     assert_eq!(simulation.group_poses(0), &before[0][..], "group 0 is untouched");
     for (now, then) in simulation.group_poses(1).iter().zip(&before[1]) {
         assert!(now.pos[0] - then.pos[0] > 0.04, "every copy of group 1 takes the hit");
@@ -88,7 +88,7 @@ fn copies_of_two_groups_collide_with_each_other() {
     };
     let mut simulation = RigidSimulation::default();
     for frame in 0..=120 {
-        simulation.advance_scene(&scene, Seconds(f64::from(frame) * DT), 1.0, 0.0).unwrap();
+        simulation.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) * DT), 1.0, 0.0).unwrap();
     }
     for copy in simulation.group_poses(1) {
         assert!(copy.pos[1] > 1.0, "a falling copy rests on the other group: {:?}", copy.pos);
@@ -109,7 +109,7 @@ fn the_world_copy_budget_is_shared_and_later_groups_make_what_fits() {
         targeted_fields: Vec::new(),
     };
     let mut simulation = RigidSimulation::default();
-    simulation.advance_scene(&scene, Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     assert_eq!(
         (simulation.active_copies(0), simulation.active_copies(1), simulation.active_copies(2)),
         (3_000, MAX_COPIES - 3_000, 0)
@@ -132,8 +132,8 @@ fn steady_ticks_never_regrow_the_world_storage() {
         targeted_fields: targeted,
     };
     let mut simulation = RigidSimulation::default();
-    simulation.advance_scene(&scene, Seconds::ZERO, 1.0, 0.0).unwrap();
-    simulation.advance_scene(&scene, Seconds(DT), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
     let storage = (
         simulation.authored_bodies.storage_ptr(),
         simulation.targeted_fields.storage_ptr(),
@@ -142,7 +142,7 @@ fn steady_ticks_never_regrow_the_world_storage() {
         simulation.field_handles.capacity(),
     );
     for frame in 2..240 {
-        simulation.advance_scene(&scene, Seconds(f64::from(frame) * DT), 1.0, 0.0).unwrap();
+        simulation.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) * DT), 1.0, 0.0).unwrap();
         assert_eq!(
             storage,
             (
@@ -163,12 +163,12 @@ fn a_new_body_count_rebuilds_the_world_with_the_same_wired_bodies() {
     let mut small = vec![None; 64];
     small[3] = Some(at([1.0, 2.0, 3.0]));
     let mut simulation = RigidSimulation::default();
-    simulation.advance(&small, [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&small, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
     let epoch = simulation.impulse_epoch();
     let mut large = small.clone();
     large.resize(200, None);
     large[150] = Some(at([5.0, 2.0, 3.0]));
-    simulation.advance(&large, [0.0; 3], Seconds(DT), 1.0, 0.0).unwrap();
+    simulation.advance(&large, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
     assert_ne!(simulation.impulse_epoch(), epoch, "a count change is a new world");
     assert_eq!(simulation.native_handles().len(), 200);
     assert_eq!(simulation.poses[3].pos, [1.0, 2.0, 3.0]);

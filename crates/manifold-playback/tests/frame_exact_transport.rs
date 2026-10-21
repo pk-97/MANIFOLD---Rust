@@ -915,3 +915,45 @@ fn settings_write(engine: &mut PlaybackEngine, f: impl FnOnce(&mut manifold_core
     let edit = engine.project_edit().expect("project");
     manifold_editing::service::EditingService::new().mutate(settings, edit, f);
 }
+
+/// Export plays its own clock from a zero tempo shift: an export, a BPM edit
+/// and back while playing, then the same export again give every frame the
+/// same physics clock (played time, placement target and replay origin), so
+/// the two exports render the same physics.
+#[test]
+fn an_export_after_a_bpm_edit_and_back_matches_the_export_before_it() {
+    fn physics_clock(engine: &mut PlaybackEngine) -> Vec<[u64; 5]> {
+        let mut frames = Vec::new();
+        export(engine, FPS, Seconds(2.01), 120, |engine, _| {
+            frames.push([
+                engine.current_time_double().to_bits(),
+                engine.played_time().seconds().to_bits(),
+                engine.played_target().map_or(u64::MAX, |target| target.seconds().to_bits()),
+                engine.replay_origin().seconds().to_bits(),
+                engine.tempo_shift().0.to_bits(),
+            ]);
+        });
+        frames
+    }
+    fn set_bpm(engine: &mut PlaybackEngine, bpm: f32) {
+        let old_map = engine.project().unwrap().tempo_map.clone();
+        let old_bpm = engine.project().unwrap().settings.bpm;
+        settings_write(engine, |project| {
+            project.settings.bpm = Bpm(bpm);
+            project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), TempoPointSource::Manual, 0.001);
+        });
+        engine.reconcile_tempo_edit(&old_map, old_bpm);
+    }
+    let mut engine = engine_with(constant_tempo(128.0, FPS, &[]));
+    let before = physics_clock(&mut engine);
+    engine.play();
+    tick(&mut engine, 30);
+    set_bpm(&mut engine, 150.0);
+    tick(&mut engine, 10);
+    set_bpm(&mut engine, 128.0);
+    tick(&mut engine, 10);
+    assert_ne!(engine.tempo_shift(), Seconds::ZERO, "the edits moved the transport");
+    let after = physics_clock(&mut engine);
+    assert_eq!(before.len(), 120);
+    assert!(before == after, "the export after the edits differs from the one before them");
+}

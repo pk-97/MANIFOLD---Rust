@@ -350,3 +350,27 @@ fn non_finite_and_absurd_input_is_safe() {
     clock.advance(u32::MAX);
     assert!(clock.time().0.is_finite());
 }
+
+// ── Placement target ─────────────────────────────────────────────────────────
+
+/// A seek reports the time it aimed at until a frame takes it, however far
+/// the clock moved since, at every rate; Play re-anchoring on the frame the
+/// seek landed on keeps it, and the frame after the taking one gets none.
+#[test]
+fn placement_target_stands_until_a_frame_takes_it() {
+    for fps in [30.0_f32, 60.0, 120.0, 144.0] {
+        let mut clock = playing_clock(fps);
+        clock.advance(20);
+        clock.seek_playing(Seconds(0.2137));
+        assert!(clock.time().0 >= 0.2137);
+        clock.advance(1);
+        assert_eq!(clock.played_target(), Some(PlayedTime::from_played(0.2137)), "{fps} fps");
+        assert_eq!(clock.take_played_target(), Some(PlayedTime::from_played(0.2137)), "{fps} fps");
+        clock.advance(1);
+        assert_eq!(clock.take_played_target(), None, "{fps} fps: one frame takes it");
+        clock.locate(Seconds(0.9137));
+        clock.locate(clock.time());
+        clock.advance(1);
+        assert_eq!(clock.take_played_target(), Some(PlayedTime::from_played(0.9137)), "{fps} fps: play after a seek keeps its target");
+    }
+}

@@ -124,6 +124,20 @@ impl TargetedFieldHistory {
             .map_err(|error| format!("Physics: targeted field history {error}"))
     }
 
+    /// Drop the newest `count` entries, matching
+    /// [`manifold_physics::input::InputHistory::drop_after`].
+    pub fn drop_back(&mut self, count: usize) -> Result<(), String> {
+        if !self.connected {
+            return Ok(());
+        }
+        if count > self.samples.len() {
+            return Err("Physics: targeted field history lost alignment".into());
+        }
+        self.samples
+            .drop_back(count)
+            .map_err(|error| format!("Physics: targeted field history {error}"))
+    }
+
     pub fn span(
         &self,
         before_index: usize,

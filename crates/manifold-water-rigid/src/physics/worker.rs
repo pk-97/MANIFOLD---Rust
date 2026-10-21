@@ -58,7 +58,7 @@ impl Clone for RigidSceneInputs {
 #[derive(Debug, PartialEq)]
 pub struct RigidSceneObservation {
     pub inputs: RigidSceneInputs,
-    pub transport: Seconds,
+    pub transport: manifold_core::PlayedTime,
     pub speed: f32,
     pub reset: f32,
 }
@@ -155,7 +155,7 @@ impl RigidSimulation {
 
         let previous_policy = self.advancement_policy;
         self.advancement_policy = AdvancementPolicy::Worker { max_ticks };
-        let result = self.advance_with_coupling(inputs, now, 1.0, 0.0, coupling);
+        let result = self.advance_inner(SceneRef::of(inputs), now, 1.0, 0.0, None, None, coupling);
         self.advancement_policy = previous_policy;
         result
     }
@@ -387,6 +387,7 @@ impl RigidSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PlayedTime;
     use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::{ResolvedRigidImpulse, SimStep};
     use manifold_physics::input::{AppliedEvent, EventStamp};
@@ -603,7 +604,7 @@ mod tests {
         });
         assert!(left.same_topology(&right), "layout, spacing, columns and turn keep the bodies");
         right.groups[0].as_mut().unwrap().spawn.count = 20.0;
-        assert!(!left.same_topology(&right), "a liquid binds a new copy set per epoch");
+        assert!(!left.same_topology(&right), "a coupled solver binds a new copy set per epoch");
         right.groups.push(None);
         assert!(!left.same_topology(&right), "a new copy group is new topology");
     }
@@ -638,13 +639,13 @@ mod tests {
         };
         let mut ordinary_coupling = Uncoupled;
         ordinary
-            .advance_scene(&inputs, Seconds::ZERO, 1.0, 0.0)
+            .advance_scene(&inputs, PlayedTime::ZERO, 1.0, 0.0)
             .unwrap();
         let ordinary_epoch = ordinary.impulse_epoch().unwrap();
         ordinary
             .enqueue_impulse(
                 ordinary
-                    .impulse_stamp(Seconds::ZERO, 1)
+                    .impulse_stamp(PlayedTime::ZERO, 1)
                     .expect("ordinary observation accepted"),
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
@@ -653,7 +654,7 @@ mod tests {
             )
             .unwrap();
         ordinary
-            .advance_with_coupling(&inputs, Seconds(total_time), 1.0, 0.0, &mut ordinary_coupling)
+            .advance_with_coupling(&inputs, PlayedTime::from_played(total_time), 1.0, 0.0, &mut ordinary_coupling)
             .unwrap();
 
         let mut worker = RigidSimulation::with_worker_epoch(ordinary_epoch).unwrap();
@@ -665,7 +666,7 @@ mod tests {
         worker
             .enqueue_impulse(
                 worker
-                    .impulse_stamp(Seconds::ZERO, 1)
+                    .impulse_stamp(PlayedTime::ZERO, 1)
                     .expect("worker observation accepted"),
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),

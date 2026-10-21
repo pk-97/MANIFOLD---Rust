@@ -98,7 +98,7 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
 
 #[test]
 fn physics_boxes_contacts_deflect_the_pile_sideways() {
-    use manifold_core::Seconds;
+    use manifold_core::PlayedTime;
     use manifold_water_rigid::physics::{CopySpawn, RigidBody, RigidSceneInputs, RigidSimulation};
     use manifold_node_engine::scene::transform::Transform;
 
@@ -144,7 +144,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
     });
     let mut sim = RigidSimulation::default();
     let advance = |sim: &mut RigidSimulation, frame| {
-        sim.advance_scene(&scene, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        sim.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
     };
     advance(&mut sim, 0);
     let initial = sim.group_poses(0).to_vec();

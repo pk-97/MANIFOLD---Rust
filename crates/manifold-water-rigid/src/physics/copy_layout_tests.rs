@@ -187,7 +187,7 @@ fn spacing_edit_run(fps: u32, export: bool) -> Vec<Vec<Transform>> {
         let spacing = if time >= 1.0 { 1.6 } else { 1.1 };
         let layout = if time >= 1.0 { 3.0 } else { 0.0 };
         let scene = copies_scene(&bodies, Some(cube([0.0, 2.0, 0.0], 0.5)), 16.0, spacing, 4.0, layout, GRAVITY, None, &[]);
-        simulation.advance_scene(&scene, Seconds(time), 1.0, 0.0).unwrap();
+        simulation.advance_scene(&scene, PlayedTime::from_played(time), 1.0, 0.0).unwrap();
         if frame * 6 % fps == 0 {
             let mut poses = simulation.group_poses(0).to_vec();
             poses.push(simulation.poses[1]);
@@ -227,7 +227,7 @@ fn laid_out_copies_rest_and_other_bodies_keep_their_motion() {
             let time = f64::from(frame) / 60.0;
             let count = if edit && frame >= 30 { 10.0 } else { 20.0 };
             let scene = copies_scene(&bodies, Some(cube([0.0, 3.0, 0.0], 0.5)), count, 1.1, 4.0, 0.0, GRAVITY, None, &[]);
-            simulation.advance_scene(&scene, Seconds(time), 1.0, 0.0).unwrap();
+            simulation.advance_scene(&scene, PlayedTime::from_played(time), 1.0, 0.0).unwrap();
             if edit && frame == 30 {
                 let world = simulation.native_world().unwrap();
                 for handle in simulation.native_copy_handles(0).iter().flatten() {
@@ -250,12 +250,12 @@ fn count_edits_below_the_high_water_mark_allocate_nothing() {
     let bodies = vec![None; 1];
     let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
     let scene = |count: f32| copies_scene(&bodies, Some(cube([0.0, 3.0, 0.0], 0.5)), count, 1.1, 4.0, 1.0, [0.0; 3], None, &[]);
-    simulation.advance_scene(&scene(40.0), Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(40.0), PlayedTime::ZERO, 1.0, 0.0).unwrap();
     let state = &simulation.groups[0];
     let capacities = (state.handles.capacity(), state.poses.capacity(), simulation.field_handles.capacity(), simulation.authored_bodies.stride());
     let epoch = simulation.impulse_epoch;
     for (frame, count) in [(1, 12.0), (2, 1.0), (3, 39.0), (4, 40.0), (5, 7.0)] {
-        simulation.advance_scene(&scene(count), Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        simulation.advance_scene(&scene(count), PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.active_copies(0), count as usize);
         assert_eq!(simulation.group_poses(0).len(), count as usize);
         let state = &simulation.groups[0];
@@ -268,7 +268,7 @@ fn count_edits_below_the_high_water_mark_allocate_nothing() {
     assert_eq!(simulation.impulse_epoch, epoch, "no rebuild");
     assert_eq!(simulation.groups[0].handles.len(), 40, "tail bodies stay installed, disabled");
     // A new high installs only the bodies past the mark.
-    simulation.advance_scene(&scene(64.0), Seconds(6.0 / 60.0), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(64.0), PlayedTime::from_played(6.0 / 60.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.active_copies(0), 64);
     assert_eq!(simulation.impulse_epoch, epoch);
 }
@@ -279,13 +279,13 @@ fn reset_returns_the_copies_to_their_layout() {
     bodies[0] = Some(RigidBody { kind: 0, transform: Transform { scale: [30.0, 1.0, 30.0], pos: [0.0, -0.5, 0.0], ..Transform::default() }, ..RigidBody::default() });
     let scene = copies_scene(&bodies, Some(cube([0.0, 2.0, 0.0], 0.5)), 24.0, 1.3, 4.0, 1.0, GRAVITY, None, &[]);
     let mut simulation = RigidSimulation::default();
-    simulation.advance_scene(&scene, Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     let formation = simulation.group_poses(0).to_vec();
     for frame in 1..=90 {
-        simulation.advance_scene(&scene, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        simulation.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
     }
     assert_ne!(simulation.group_poses(0), formation.as_slice(), "the copies fell");
-    simulation.advance_scene(&scene, Seconds(1.5), 1.0, 1.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::from_played(1.5), 1.0, 1.0).unwrap();
     assert_eq!(simulation.group_poses(0), formation.as_slice());
 }
 
@@ -295,7 +295,7 @@ fn a_group_with_physics_off_is_drawn_at_rest_with_no_bodies() {
     let scene = |spacing: f32| copies_scene(&[None], Some(prototype.clone()), 9.0, spacing, 3.0, 2.0, GRAVITY, None, &[]);
     let mut simulation = RigidSimulation::default();
     for frame in 0..30 {
-        simulation.advance_scene(&scene(1.1), Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        simulation.advance_scene(&scene(1.1), PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
     }
     assert!(simulation.native_copy_handles(0).is_empty());
     assert_eq!(simulation.copies_not_made(), 0);
@@ -305,7 +305,7 @@ fn a_group_with_physics_off_is_drawn_at_rest_with_no_bodies() {
     for (index, pose) in simulation.group_poses(0).iter().enumerate() {
         assert_eq!(pose.pos, line.rest(width, index).position, "still at rest after half a second");
     }
-    simulation.advance_scene(&scene(2.0), Seconds(0.5), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(2.0), PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     let wider = Arrangement { spacing: 2.0, ..line };
     assert_eq!(simulation.group_poses(0)[8].pos, wider.rest(width, 8).position, "edits show at once");
 }
@@ -316,12 +316,12 @@ fn the_shared_pool_reports_its_shortfall_and_rebalances_on_a_count_edit() {
     let mut scene = RigidSceneInputs { bodies: vec![None], groups: vec![Some(group(3_000.0)), Some(group(2_000.0))], gravity: [0.0; 3], ..RigidSceneInputs::default() };
     scene.targeted_fields = vec![None; 3];
     let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
-    simulation.advance_scene(&scene, Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (3_000, 1_000));
     assert_eq!(simulation.copies_not_made(), 1_000);
     let epoch = simulation.impulse_epoch;
     scene.groups[0] = Some(group(1_000.0));
-    simulation.advance_scene(&scene, Seconds(1.0 / 60.0), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene, PlayedTime::from_played(1.0 / 60.0), 1.0, 0.0).unwrap();
     assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (1_000, 2_000));
     assert_eq!(simulation.copies_not_made(), 0);
     assert_eq!(simulation.impulse_epoch, epoch);
@@ -332,16 +332,16 @@ fn a_held_edit_between_ticks_shows_its_formation_and_lands_on_the_next_tick() {
     let bodies = vec![None; 1];
     let scene = |spacing: f32| copies_scene(&bodies, Some(cube([0.0, 2.0, 0.0], 0.5)), 6.0, spacing, 3.0, 2.0, [0.0; 3], None, &[]);
     let mut simulation = RigidSimulation::default().with_step(SimStep::live(FIXED_TICK));
-    simulation.advance_scene(&scene(1.1), Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(1.1), PlayedTime::ZERO, 1.0, 0.0).unwrap();
     // Paused between ticks: transport stands at 1.5 ticks.
-    simulation.advance_scene(&scene(1.1), Seconds(1.5 / 60.0), 1.0, 0.0).unwrap();
-    simulation.advance_scene(&scene(3.0), Seconds(1.5 / 60.0), 0.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(1.1), PlayedTime::from_played(1.5 / 60.0), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(3.0), PlayedTime::from_played(1.5 / 60.0), 0.0, 0.0).unwrap();
     let width = platonic_width(1, 0.5);
     let wide = Arrangement::of(&scene(3.0).groups[0].clone().unwrap(), 6);
     assert_eq!(simulation.group_poses(0)[5].pos, wide.rest(width, 5).position, "shown at once");
     let tight = Arrangement::of(&scene(1.1).groups[0].clone().unwrap(), 6);
     assert_eq!(simulation.groups[0].arrangement, Some(tight), "the bodies wait for the next tick start");
-    simulation.advance_scene(&scene(3.0), Seconds(2.5 / 60.0), 1.0, 0.0).unwrap();
+    simulation.advance_scene(&scene(3.0), PlayedTime::from_played(2.5 / 60.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.groups[0].arrangement, Some(wide));
 }
 

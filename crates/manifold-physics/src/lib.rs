@@ -5,7 +5,7 @@
 //! mutex. `PhysicsWorld` owns its world and handles exclusively, and carries a
 //! non-`Sync` marker so it may move between threads but cannot be shared there.
 
-pub use manifold_foundation::Seconds;
+pub use manifold_foundation::{PlayedTime, Seconds};
 pub use manifold_foundation::settings::{PhysicsSettings, SimRate};
 /// Identity of the compiled native solver and Rust adapter sources.
 pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_PHYSICS_SOURCE_IDENTITY");

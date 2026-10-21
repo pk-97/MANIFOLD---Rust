@@ -77,6 +77,7 @@ impl Rig {
             cursor: self.selection.cursor_version(),
             active_layer: self.planner.active_layer_version(&self.active_layer),
             automation_view: self.selection.automation_view(),
+            automation_point_lane: self.selection.automation_point_lane(),
             inspector_view: self.ui.inspector.view_version(),
             scene_selection: self.ui.scene_setup_panel.selection_version(),
             ..Default::default()

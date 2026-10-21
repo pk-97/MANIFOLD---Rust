@@ -89,7 +89,7 @@ fn physics_boxes_and_a_sixty_four_body_world_match_main_at_tick_120() {
     };
     let mut boxes = RigidSimulation::default();
     for frame in 0..=120 {
-        boxes.advance_scene(&scene, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        boxes.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
     }
     assert_eq!(boxes.active_copies(0), 256);
     let boxes_digest = digest(boxes.poses.iter().chain(boxes.group_poses(0)).copied());
@@ -98,7 +98,7 @@ fn physics_boxes_and_a_sixty_four_body_world_match_main_at_tick_120() {
     let wired = sixty_four_bodies();
     let mut world = RigidSimulation::default();
     for frame in 0..=120 {
-        world.advance(&wired, GRAVITY, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        world.advance(&wired, GRAVITY, PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
     }
     assert_eq!(digest(world.poses.iter().copied()), 0xfed1_7989_d710_3655, "a 64-body world left main's trajectory");
 }

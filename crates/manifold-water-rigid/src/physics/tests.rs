@@ -1,5 +1,7 @@
 use super::*;
 
+mod live_clock;
+
 const GRAVITY: [f32; 3] = [0.0, -9.8, 0.0];
 const FRAME: f64 = 1.0 / 60.0;
 
@@ -68,20 +70,20 @@ fn fixed_tick_results_are_frame_partition_invariant() {
     let mut per_frame = RigidSimulation::default();
     let mut partitioned = RigidSimulation::default();
     per_frame
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     partitioned
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
 
     for frame in 1..=60 {
         per_frame
-            .advance(&bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+            .advance(&bodies, GRAVITY, PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0)
             .unwrap();
     }
     for half_frame in 1..=120 {
         partitioned
-            .advance(&bodies, GRAVITY, Seconds(half_frame as f64 * FRAME / 2.0), 1.0, 0.0)
+            .advance(&bodies, GRAVITY, PlayedTime::from_played(half_frame as f64 * FRAME / 2.0), 1.0, 0.0)
             .unwrap();
     }
 
@@ -98,16 +100,16 @@ fn uniform_field_is_mass_independent() {
     let mut light = RigidSimulation::default();
     let mut heavy = RigidSimulation::default();
     light
-        .advance_scene(&copies_scene(&light_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&light_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     heavy
-        .advance_scene(&copies_scene(&heavy_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&heavy_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     light
-        .advance_scene(&copies_scene(&light_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), Seconds(1.0), 1.0, 0.0)
+        .advance_scene(&copies_scene(&light_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
     heavy
-        .advance_scene(&copies_scene(&heavy_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field), &[]), Seconds(1.0), 1.0, 0.0)
+        .advance_scene(&copies_scene(&heavy_body, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field), &[]), PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
 
     assert!((light.poses[0].pos[1] - heavy.poses[0].pos[1]).abs() < 1.0e-5);
@@ -144,10 +146,10 @@ fn fixed_bodies_ignore_field_while_copies_receive_it() {
     let field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 1.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 1.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance_scene(&copies_scene(&bodies, Some(prototype), 1.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field), &[]), Seconds(1.0), 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, Some(prototype), 1.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field), &[]), PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
 
     assert_eq!(simulation.poses[0].pos, [0.0, -100.0, 0.0]);
@@ -159,11 +161,11 @@ fn run_uniform_field_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
     let field = FieldValue::uniform([1.0, -4.0, 0.5]).unwrap();
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     for frame in 1..=fps {
         simulation
-            .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), Seconds(frame as f64 / fps as f64), 1.0, 0.0)
+            .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(field.clone()), &[]), PlayedTime::from_played(frame as f64 / fps as f64), 1.0, 0.0)
             .unwrap();
     }
     let velocity = simulation
@@ -195,22 +197,22 @@ fn changed_field_applies_at_the_next_accepted_interval() {
     let new_field = FieldValue::uniform([0.0, 8.0, 0.0]).unwrap();
     let mut simulation = RigidSimulation::default().with_step(live_step());
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(old_field.clone()), &[]), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(old_field.clone()), &[]), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(old_field), &[]), Seconds(0.5), 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(old_field), &[]), PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     let pose_before_edit = simulation.poses[0];
     let time_before_edit = simulation.physics_time;
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(new_field.clone()), &[]), Seconds(0.5), 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(new_field.clone()), &[]), PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert_eq!(simulation.physics_time, time_before_edit);
     assert_eq!(simulation.poses[0], pose_before_edit);
 
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(new_field), &[]), Seconds(1.0), 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], Some(new_field), &[]), PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
@@ -232,7 +234,7 @@ fn advance_targeted(
     targeted_fields: &[Option<FieldValue>],
 ) {
     simulation
-        .advance_scene(&copies_scene(&bodies, prototype, 1.0, 1.25, 16.0, 0.0, gravity, None, targeted_fields), Seconds(now), 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, prototype, 1.0, 1.25, 16.0, 0.0, gravity, None, targeted_fields), PlayedTime::from_played(now), 1.0, 0.0)
         .unwrap();
 }
 
@@ -273,10 +275,10 @@ fn targeted_field_adds_to_global_acceleration() {
     let fields = target_slots(0, FieldValue::uniform([0.0, -2.0, 0.0]).unwrap());
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -3.0, 0.0], Some(FieldValue::uniform([0.0, -1.0, 0.0]).unwrap()), &fields), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -3.0, 0.0], Some(FieldValue::uniform([0.0, -1.0, 0.0]).unwrap()), &fields), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -3.0, 0.0], Some(FieldValue::uniform([0.0, -1.0, 0.0]).unwrap()), &fields), Seconds(1.0), 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -3.0, 0.0], Some(FieldValue::uniform([0.0, -1.0, 0.0]).unwrap()), &fields), PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
     let velocity = simulation
         .world
@@ -294,7 +296,7 @@ fn targeted_copy_field_maps_to_all_active_copies() {
     let mut simulation = RigidSimulation::default();
     for time in [0.0, 1.0] {
         simulation
-            .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 4.0, 2.0, 2.0, 0.0, [0.0; 3], None, &fields), Seconds(time), 1.0, 0.0)
+            .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 4.0, 2.0, 2.0, 0.0, [0.0; 3], None, &fields), PlayedTime::from_played(time), 1.0, 0.0)
             .unwrap();
     }
     assert_eq!(simulation.active_copies(0), 4);
@@ -357,7 +359,7 @@ fn all_none_target_input_stays_unallocated_and_connected_storage_is_reused() {
         &fields,
     );
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &fields), Seconds(0.5), 1.0, 1.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &fields), PlayedTime::from_played(0.5), 1.0, 1.0)
         .unwrap();
     assert_eq!(simulation.targeted_fields.columns(), capacity);
     assert_eq!(simulation.targeted_fields.storage_ptr(), storage_ptr);
@@ -463,7 +465,7 @@ fn run_varying_gravity_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, varying_gravity(0), Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, varying_gravity(0), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     let samples_per_frame = 240 / fps;
     for frame in 1..=fps {
@@ -473,13 +475,13 @@ fn run_varying_gravity_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
             simulation.set_step(frame_step.authored_sample());
             for sample in ((frame - 1) * samples_per_frame + 1)..=end_sample {
                 simulation
-                    .advance(&bodies, varying_gravity(sample), Seconds(sample as f64 / 240.0), 1.0, 0.0)
+                    .advance(&bodies, varying_gravity(sample), PlayedTime::from_played(sample as f64 / 240.0), 1.0, 0.0)
                     .unwrap();
             }
             simulation.set_step(frame_step);
         }
         simulation
-            .advance(&bodies, varying_gravity(end_sample), Seconds(end_sample as f64 / 240.0), 1.0, 0.0)
+            .advance(&bodies, varying_gravity(end_sample), PlayedTime::from_played(end_sample as f64 / 240.0), 1.0, 0.0)
             .unwrap();
     }
     let velocity = simulation
@@ -510,13 +512,13 @@ fn changed_gravity_applies_at_the_next_accepted_interval() {
     let old_gravity = [0.0, -9.8, 0.0];
     let new_gravity = [0.0, 8.0, 0.0];
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&bodies, old_gravity, Seconds::ZERO, 1.0, 0.0).unwrap();
-    simulation.advance(&bodies, old_gravity, Seconds(0.5), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, old_gravity, PlayedTime::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, old_gravity, PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     let pose_before_edit = simulation.poses[0];
-    simulation.advance(&bodies, new_gravity, Seconds(0.5), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, new_gravity, PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert_eq!(simulation.poses[0], pose_before_edit);
-    simulation.advance(&bodies, new_gravity, Seconds(1.0), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, new_gravity, PlayedTime::from_played(1.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
     assert_ne!(simulation.poses[0], pose_before_edit);
@@ -528,7 +530,7 @@ fn exhausted_authored_history_preserves_state_until_reset() {
     let gravity = [0.0, -9.8, 0.0];
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, gravity, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, gravity, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation.authored_samples = InputHistory::with_capacity(2).unwrap();
     simulation.authored_bodies.clear();
@@ -544,7 +546,7 @@ fn exhausted_authored_history_preserves_state_until_reset() {
     let accepted_debt = simulation.pending_time;
 
     let error = simulation
-        .advance(&bodies, gravity, Seconds(2.0 * FRAME), 1.0, 0.0)
+        .advance(&bodies, gravity, PlayedTime::from_played(2.0 * FRAME), 1.0, 0.0)
         .unwrap_err();
     assert!(error.contains("exhausted") || error.contains("full"));
     assert!(simulation.authored_samples.is_exhausted());
@@ -560,7 +562,7 @@ fn exhausted_authored_history_preserves_state_until_reset() {
     assert_eq!(simulation.authored_samples.len(), accepted_len);
 
     simulation
-        .advance(&bodies, gravity, Seconds(2.0 * FRAME), 1.0, 1.0)
+        .advance(&bodies, gravity, PlayedTime::from_played(2.0 * FRAME), 1.0, 1.0)
         .unwrap();
     assert!(!simulation.authored_samples.is_exhausted());
     assert_eq!(simulation.authored_samples.len(), 1);
@@ -571,22 +573,22 @@ fn zero_speed_finishes_preceding_interval_and_holds_until_resume() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     let authored = simulation.poses[0].pos;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 0.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 0.0, 0.0)
         .unwrap();
     let held = simulation.poses[0].pos;
     assert!(held[1] < authored[1] - 0.1);
     assert_eq!(simulation.physics_time, 0.5);
     simulation
-        .advance(&bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
     assert_eq!(simulation.poses[0].pos, held);
     assert_eq!(simulation.physics_time, 0.5);
     simulation
-        .advance(&bodies, GRAVITY, Seconds(1.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(1.5), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[1] < held[1] - 0.1);
     assert_eq!(simulation.physics_time, 1.0);
@@ -607,10 +609,10 @@ fn disabled_body_keeps_authored_pose_and_restores_contacts_when_enabled() {
     bodies[1] = Some(body([0.0, 1.5, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
 
     assert_eq!(simulation.poses[0].pos, [0.0, 0.0, 0.0]);
@@ -618,10 +620,10 @@ fn disabled_body_keeps_authored_pose_and_restores_contacts_when_enabled() {
 
     bodies[0].as_mut().unwrap().enabled = true;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(2.0), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(2.0), 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(3.0), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(3.0), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[1].abs() < 1.0e-5);
     assert!(simulation.poses[1].pos[1] > 0.5);
@@ -648,10 +650,10 @@ fn prepared_fragments_follow_parent_then_inherit_motion_on_release() {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     assert!(!simulation.fragment_parent_released[0]);
     assert!(!simulation.fragment_active[1]);
@@ -660,10 +662,10 @@ fn prepared_fragments_follow_parent_then_inherit_motion_on_release() {
 
     bodies[0].as_mut().unwrap().release_count = 1.0;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(1.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(1.5), 1.0, 0.0)
         .unwrap();
     assert!(simulation.fragment_parent_released[0]);
     assert!(simulation.fragment_active[1]);
@@ -694,10 +696,10 @@ fn disabled_parent_does_not_release_prepared_fragments() {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(1.0), 1.0, 0.0)
         .unwrap();
     assert!(!simulation.fragment_parent_released[0]);
     assert!(!simulation.fragment_active[1]);
@@ -725,17 +727,17 @@ fn fragment_release_reset_restores_intact_state_and_allows_retrigger() {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     bodies[0].as_mut().unwrap().release_count = 1.0;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     assert!(simulation.fragment_parent_released[0]);
 
     bodies[0].as_mut().unwrap().release_count = 0.0;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 1.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 1.0)
         .unwrap();
     assert!(!simulation.fragment_parent_released[0]);
     assert!(!simulation.fragment_active[1]);
@@ -744,7 +746,7 @@ fn fragment_release_reset_restores_intact_state_and_allows_retrigger() {
 
     bodies[0].as_mut().unwrap().release_count = 1.0;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 1.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 1.0)
         .unwrap();
     assert!(simulation.fragment_parent_released[0]);
     assert!(simulation.fragment_active[1]);
@@ -781,7 +783,7 @@ fn fragment_release_inherits_spinning_parent_pose_and_point_velocity() {
 
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     let parent_handle = simulation.handles[0].unwrap();
     let child_handle = simulation.handles[1].unwrap();
@@ -817,7 +819,7 @@ fn fragment_release_inherits_spinning_parent_pose_and_point_velocity() {
 
     bodies[0].as_mut().unwrap().release_count = 1.0;
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 0.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 0.0, 0.0)
         .unwrap();
 
     let world = simulation.world.as_ref().unwrap();
@@ -862,15 +864,15 @@ fn live_fragment_release_occurs_at_the_authored_boundary() {
     let mut released = bodies.clone();
     released[0].as_mut().unwrap().release_count = 1.0;
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     let boundary = 0.5;
     simulation
-        .advance(&bodies, GRAVITY, Seconds(boundary - FRAME), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(boundary - FRAME), 1.0, 0.0)
         .unwrap();
     assert!(!simulation.fragment_parent_released[0]);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     simulation
-        .advance(&released, GRAVITY, Seconds(boundary), 1.0, 0.0)
+        .advance(&released, GRAVITY, PlayedTime::from_played(boundary), 1.0, 0.0)
         .unwrap();
     assert!(simulation.fragment_parent_released[0]);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
@@ -878,7 +880,7 @@ fn live_fragment_release_occurs_at_the_authored_boundary() {
     // release boundary closes the third, without replaying discarded time.
     assert!((simulation.physics_time - 3.0 * FRAME).abs() < 1e-12);
     simulation
-        .advance(&released, GRAVITY, Seconds(boundary + FRAME), 1.0, 0.0)
+        .advance(&released, GRAVITY, PlayedTime::from_played(boundary + FRAME), 1.0, 0.0)
         .unwrap();
     assert!(simulation.fragment_parent_released[0]);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
@@ -899,13 +901,13 @@ fn animated_body_pushes_a_dynamic_body_instead_of_teleporting_through_it() {
     bodies[1] = Some(body([0.4, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
 
     for frame in 1..=30 {
         bodies[0].as_mut().unwrap().transform.pos[0] = -1.3 + frame as f32 * 0.05;
         simulation
-            .advance(&bodies, [0.0; 3], Seconds(frame as f64 * FRAME), 1.0, 0.0)
+            .advance(&bodies, [0.0; 3], PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0)
             .unwrap();
     }
 
@@ -931,14 +933,14 @@ fn rotating_animated_body_contacts_a_dynamic_body() {
     bodies[1] = Some(body(start));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
 
     for frame in 1..=60 {
         bodies[0].as_mut().unwrap().transform.rot_euler[1] =
             frame as f32 * std::f32::consts::FRAC_PI_2 / 60.0;
         simulation
-            .advance(&bodies, [0.0; 3], Seconds(frame as f64 * FRAME), 1.0, 0.0)
+            .advance(&bodies, [0.0; 3], PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0)
             .unwrap();
     }
 
@@ -954,19 +956,19 @@ fn reset_or_backward_time_restores_authored_pose() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.75), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.75), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[1] < 4.0);
 
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.75), 1.0, 1.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.75), 1.0, 1.0)
         .unwrap();
     assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 1.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 1.0)
         .unwrap();
     assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
 }
@@ -976,10 +978,10 @@ fn material_edit_preserves_the_current_falling_pose() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     let falling_pose = simulation.poses[0].pos;
 
@@ -990,12 +992,12 @@ fn material_edit_preserves_the_current_falling_pose() {
     edited_body.bounce = 0.4;
     edited[0] = Some(edited_body);
     simulation
-        .advance(&edited, GRAVITY, Seconds(0.5), 1.0, 0.0)
+        .advance(&edited, GRAVITY, PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     assert!((simulation.poses[0].pos[1] - falling_pose[1]).abs() < 1.0e-5);
 
     simulation
-        .advance(&edited, GRAVITY, Seconds(0.75), 1.0, 0.0)
+        .advance(&edited, GRAVITY, PlayedTime::from_played(0.75), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[1] < falling_pose[1] - 0.05);
 }
@@ -1029,10 +1031,10 @@ fn multi_hull_geometry_rebuilds_on_reset_and_material_edits_keep_pose() {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(0.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     let falling_pose = simulation.poses[0].pos;
 
@@ -1043,12 +1045,12 @@ fn multi_hull_geometry_rebuilds_on_reset_and_material_edits_keep_pose() {
     edited_body.collider = Some(geometry.clone());
     edited[0] = Some(edited_body);
     simulation
-        .advance(&edited, GRAVITY, Seconds(0.5), 1.0, 0.0)
+        .advance(&edited, GRAVITY, PlayedTime::from_played(0.5), 1.0, 0.0)
         .unwrap();
     assert!((simulation.poses[0].pos[1] - falling_pose[1]).abs() < 1.0e-5);
 
     simulation
-        .advance(&edited, GRAVITY, Seconds(0.5), 1.0, 1.0)
+        .advance(&edited, GRAVITY, PlayedTime::from_played(0.5), 1.0, 1.0)
         .unwrap();
     assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
 }
@@ -1080,18 +1082,18 @@ fn all_scaled_platonic_hulls_settle_on_the_ground() {
 
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     // A dodecahedron can still roll between faces at four seconds.
     // Give every shape time to sleep before measuring stable contact.
     for frame in 1..=720 {
         simulation
-            .advance(&bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+            .advance(&bodies, GRAVITY, PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0)
             .unwrap();
     }
     let settled = simulation.poses.clone();
     simulation
-        .advance(&bodies, GRAVITY, Seconds(12.5), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(12.5), 1.0, 0.0)
         .unwrap();
     for (index, before) in settled.iter().enumerate().take(6).skip(1) {
         assert!(
@@ -1111,22 +1113,22 @@ fn long_catch_up_matches_regular_ticks_and_keeps_running() {
     let mut caught_up = RigidSimulation::default();
     let mut regular = RigidSimulation::default();
     caught_up
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     for frame in 0..=181 {
         regular
-            .advance(&bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+            .advance(&bodies, GRAVITY, PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0)
             .unwrap();
     }
     caught_up
-        .advance(&bodies, GRAVITY, Seconds(180.0 * FRAME), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(180.0 * FRAME), 1.0, 0.0)
         .unwrap();
     caught_up
-        .advance(&bodies, GRAVITY, Seconds(181.0 * FRAME), 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(181.0 * FRAME), 1.0, 0.0)
         .unwrap();
     assert_eq!(caught_up.poses, regular.poses);
     caught_up
-        .advance(&bodies, GRAVITY, Seconds(181.0 * FRAME), 1.0, 1.0)
+        .advance(&bodies, GRAVITY, PlayedTime::from_played(181.0 * FRAME), 1.0, 1.0)
         .unwrap();
     assert_eq!(caught_up.poses[0].pos, [0.0, 4.0, 0.0]);
 }
@@ -1135,24 +1137,24 @@ fn long_catch_up_matches_regular_ticks_and_keeps_running() {
 fn live_accepts_two_fixed_intervals_then_reanchors_without_backlog() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     // Discard the overload, including its fractional remainder.
     let now = Seconds(3.0 + FRAME / 2.0);
-    simulation.advance(&bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played((now).0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
     let accepted_pose = simulation.poses.clone();
-    simulation.advance(&bodies, GRAVITY, now, 0.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played((now).0), 0.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
     assert_eq!(simulation.poses, accepted_pose);
     // The reanchored interval ran at Speed 0 and adds nothing. Resume
     // takes effect from this new observation onward.
     let next = Seconds(now.0 + FRAME);
-    simulation.advance(&bodies, GRAVITY, next, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played((next).0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
-    simulation.advance(&bodies, GRAVITY, Seconds(next.0 + FRAME), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(next.0 + FRAME), 1.0, 0.0).unwrap();
     assert!((simulation.physics_time - 3.0 * FRAME).abs() < 1e-12);
 }
 
@@ -1166,13 +1168,13 @@ fn animated_pose_timeline_covers_each_live_endpoint() {
     });
     moving[1] = Some(body([0.4, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&moving, [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&moving, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
     moving[0].as_mut().unwrap().transform.pos[0] = -0.55;
-    simulation.advance(&moving, [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
+    simulation.advance(&moving, [0.0; 3], PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
     moving[0].as_mut().unwrap().transform.pos[0] = 0.2;
-    simulation.advance(&moving, [0.0; 3], Seconds(1.0), 1.0, 0.0).unwrap();
+    simulation.advance(&moving, [0.0; 3], PlayedTime::from_played(1.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
 
@@ -1184,11 +1186,11 @@ fn animated_pose_timeline_covers_each_live_endpoint() {
     });
     rotating[1] = Some(body([1.0, 0.0, -1.0]));
     let mut rotation_simulation = RigidSimulation::default().with_step(live_step());
-    rotation_simulation.advance(&rotating, [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+    rotation_simulation.advance(&rotating, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
     rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_4;
-    rotation_simulation.advance(&rotating, [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
+    rotation_simulation.advance(&rotating, [0.0; 3], PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_2;
-    rotation_simulation.advance(&rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0).unwrap();
+    rotation_simulation.advance(&rotating, [0.0; 3], PlayedTime::from_played(1.0), 1.0, 0.0).unwrap();
     assert_eq!(rotation_simulation.pending_time, Seconds::ZERO);
     assert!((rotation_simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
 }
@@ -1200,11 +1202,11 @@ fn paused_authored_edit_is_visible_without_pending_backlog() {
     animated.kind = 2;
     bodies[0] = Some(animated);
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
     bodies[0].as_mut().unwrap().transform.pos[0] = -0.5;
-    simulation.advance(&bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     bodies[0].as_mut().unwrap().transform.pos[0] = 2.0;
-    simulation.advance(&bodies, [0.0; 3], Seconds(0.5), 0.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(0.5), 0.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.poses[0].pos[0] - 2.0).abs() < 1e-5);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
@@ -1219,14 +1221,14 @@ fn paused_animated_pose_edit_and_undo_move_only_the_authored_body() {
     bodies[1] = Some(body([10.0, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     let dynamic_before = simulation.poses[1];
 
     bodies[0].as_mut().unwrap().transform.pos[0] = 5.0;
     bodies[0].as_mut().unwrap().transform.rot_euler[2] = 0.4;
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
     assert!((simulation.poses[0].rot_euler[2] - 0.4).abs() < 1.0e-5);
@@ -1235,7 +1237,7 @@ fn paused_animated_pose_edit_and_undo_move_only_the_authored_body() {
 
     bodies[0] = Some(animated);
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[0].abs() < 1.0e-5);
     assert!(simulation.poses[0].rot_euler[2].abs() < 1.0e-5);
@@ -1249,7 +1251,7 @@ fn paused_animated_copy_edit_and_undo_update_every_copy_without_ticks() {
     let mut simulation = RigidSimulation::default();
     let mut advance = |prototype: RigidBody| {
         simulation
-            .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]), Seconds::ZERO, 1.0, 0.0)
+            .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]), PlayedTime::ZERO, 1.0, 0.0)
             .unwrap();
         simulation.group_poses(0)[..2].to_vec()
     };
@@ -1281,15 +1283,15 @@ fn paused_edit_stays_visible_without_sweeping_a_dynamic_body() {
     bodies[0] = Some(animated);
     bodies[1] = Some(body([2.0, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
     bodies[0].as_mut().unwrap().transform.pos[0] = -1.0;
-    simulation.advance(&bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(0.5), 1.0, 0.0).unwrap();
     bodies[0].as_mut().unwrap().transform.pos[0] = 5.0;
-    simulation.advance(&bodies, [0.0; 3], Seconds(0.5), 0.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(0.5), 0.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1e-5);
     assert!((simulation.poses[1].pos[0] - 2.0).abs() < 1e-3);
-    simulation.advance(&bodies, [0.0; 3], Seconds(1.0), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(1.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
 }
 
@@ -1302,11 +1304,11 @@ fn fast_animated_sweep_uses_outer_steps_to_reach_dynamic_body() {
     bodies[1] = Some(body([0.0, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     bodies[0].as_mut().unwrap().transform.pos[0] = 2.0;
     simulation
-        .advance(&bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::from_played(FRAME), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[1]
@@ -1326,7 +1328,7 @@ fn nonlinear_animated_round_trip_is_sampled_inside_one_render_frame() {
     bodies[1] = Some(body([0.0, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
 
     // The authored curve returns to its starting position by the next
@@ -1337,14 +1339,14 @@ fn nonlinear_animated_round_trip_is_sampled_inside_one_render_frame() {
             -2.0 * (std::f32::consts::TAU * quarter as f32 / 4.0).cos();
         simulation.set_step(SimStep::default().authored_sample());
         simulation
-            .advance(&bodies, [0.0; 3], Seconds(t), 1.0, 0.0)
+            .advance(&bodies, [0.0; 3], PlayedTime::from_played(t), 1.0, 0.0)
             .unwrap();
     }
     simulation.set_step(SimStep::default());
     bodies[0].as_mut().unwrap().transform.pos[0] = -2.0;
     assert!(simulation.animated_microsteps(&bodies, &[], FRAME).0 > 1);
     simulation
-        .advance(&bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::from_played(FRAME), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[1]
@@ -1374,15 +1376,15 @@ fn nonlinear_contacts_accept_regular_and_irregular_live_spans() {
 
     fn run(irregular: bool) -> ([f32; 3], f64, Seconds) {
         let mut simulation = RigidSimulation::default().with_step(live_step());
-        simulation.advance(&trajectory(0), [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
+        simulation.advance(&trajectory(0), [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
         for sample in 1..=32 {
             let time = Seconds(sample as f64 / 240.0);
             if irregular && sample != 32 {
                 simulation.set_step(live_step().authored_sample());
-                simulation.advance(&trajectory(sample), [0.0; 3], time, 1.0, 0.0).unwrap();
+                simulation.advance(&trajectory(sample), [0.0; 3], PlayedTime::from_played((time).0), 1.0, 0.0).unwrap();
                 simulation.set_step(live_step());
             } else {
-                simulation.advance(&trajectory(sample), [0.0; 3], time, 1.0, 0.0).unwrap();
+                simulation.advance(&trajectory(sample), [0.0; 3], PlayedTime::from_played((time).0), 1.0, 0.0).unwrap();
             }
         }
         assert_eq!(simulation.pending_time, Seconds::ZERO);
@@ -1410,10 +1412,10 @@ fn fast_dynamic_body_uses_bullet_collision_against_animated_body() {
     bodies[1] = Some(animated);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0, -20_000.0, 0.0], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0, -20_000.0, 0.0], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, [0.0, -20_000.0, 0.0], Seconds(FRAME), 1.0, 0.0)
+        .advance(&bodies, [0.0, -20_000.0, 0.0], PlayedTime::from_played(FRAME), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[0].pos[1] > 0.9,
@@ -1432,10 +1434,10 @@ fn two_fast_dynamics_collide_without_bullet_target_skip() {
     bodies[2] = Some(body([0.0, 3.0, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0, -20_000.0, 0.0], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0, -20_000.0, 0.0], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     simulation
-        .advance(&bodies, [0.0, -20_000.0, 0.0], Seconds(FRAME), 1.0, 0.0)
+        .advance(&bodies, [0.0, -20_000.0, 0.0], PlayedTime::from_played(FRAME), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[2].pos[1] > 0.0,
@@ -1453,11 +1455,11 @@ fn extreme_animated_translation_uses_automatic_outer_steps() {
     bodies[1] = Some(body([0.0, 0.0, 0.0]));
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     bodies[0].as_mut().unwrap().transform.pos[0] = 100.0;
     simulation
-        .advance(&bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], PlayedTime::from_played(FRAME), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[1]
@@ -1475,10 +1477,10 @@ fn ordinary_live_caps_progress_at_two_intervals_per_display_frame() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     for fps in [20, 24, 30, 60] {
         let mut simulation = RigidSimulation::default().with_step(live_step());
-        simulation.advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
+        simulation.advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0).unwrap();
         for frame in 1..=fps {
             simulation
-                .advance(&bodies, GRAVITY, Seconds(frame as f64 / fps as f64), 1.0, 0.0)
+                .advance(&bodies, GRAVITY, PlayedTime::from_played(frame as f64 / fps as f64), 1.0, 0.0)
                 .unwrap();
         }
         assert_eq!(simulation.pending_time, Seconds::ZERO, "fps={fps}");
@@ -1497,7 +1499,7 @@ fn sim_rate_rigid_export_matches_live() {
             let mut simulation = RigidSimulation::default().with_step(step);
             let bodies = one_body([0.0, 4.0, 0.0]);
             for frame in 0..=fps {
-                simulation.advance(&bodies, GRAVITY, Seconds(frame as f64 * (1.0 / fps as f64)), 1.0, 0.0).unwrap();
+                simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(frame as f64 * (1.0 / fps as f64)), 1.0, 0.0).unwrap();
             }
             (simulation.physics_time, simulation.poses)
         };
@@ -1512,18 +1514,18 @@ fn sim_rate_rigid_export_matches_live() {
 fn live_endpoint_has_no_backlog_and_reset_clears_state() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default().with_step(live_step());
-    simulation.advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
-    simulation.advance(&bodies, GRAVITY, Seconds(3.0), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(3.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
     let accepted_pose = simulation.poses.clone();
-    simulation.advance(&bodies, GRAVITY, Seconds(3.0), 0.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(3.0), 0.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert_eq!(simulation.poses, accepted_pose);
-    simulation.advance(&bodies, GRAVITY, Seconds(6.0), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(6.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
-    simulation.advance(&bodies, GRAVITY, Seconds(6.0), 1.0, 1.0).unwrap();
+    simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(6.0), 1.0, 1.0).unwrap();
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
 }
@@ -1549,7 +1551,7 @@ fn offline_history_drain_keeps_authored_history_bounded() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(&bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
 
     let authored = SimStep::default().authored_sample();
@@ -1559,11 +1561,11 @@ fn offline_history_drain_keeps_authored_history_bounded() {
         if sample % 64 == 0 {
             simulation.set_step(authored.draining_history());
             simulation
-                .advance(&bodies, GRAVITY, time, 1.0, 0.0)
+                .advance(&bodies, GRAVITY, PlayedTime::from_played((time).0), 1.0, 0.0)
                 .unwrap();
         } else {
             simulation
-                .advance(&bodies, GRAVITY, time, 1.0, 0.0)
+                .advance(&bodies, GRAVITY, PlayedTime::from_played((time).0), 1.0, 0.0)
                 .unwrap();
         }
         assert!(simulation.authored_samples.len() <= AUTHORED_HISTORY_CAPACITY);
@@ -1584,7 +1586,7 @@ fn bulk_boxes_share_floor_contacts_and_reset_after_catch_up() {
     prototype.transform.scale = [0.5; 3];
     let mut sim = RigidSimulation::default();
     for frame in 0..=240 {
-        sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 32.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(frame as f64 * FRAME), 1.0, 0.0)
+        sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 32.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0)
         .unwrap();
     }
     assert_eq!(sim.active_copies(0), 32);
@@ -1594,14 +1596,14 @@ fn bulk_boxes_share_floor_contacts_and_reset_after_catch_up() {
             "box must settle on floor/another box: {pose:?}"
         );
     }
-    sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(5.0), 0.0, 0.0)
+    sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), PlayedTime::from_played(5.0), 0.0, 0.0)
     .unwrap();
     // Held on a tick boundary, the next tick starts where time stands.
     assert_eq!(sim.active_copies(0), 64, "a held Count edit lays out at once, with no reset");
     assert_eq!(sim.group_poses(0).len(), 64);
-    sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(8.0), 1.0, 0.0)
+    sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), PlayedTime::from_played(8.0), 1.0, 0.0)
     .unwrap();
-    sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(8.0), 1.0, 1.0)
+    sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), PlayedTime::from_played(8.0), 1.0, 1.0)
     .unwrap();
     assert_eq!(sim.active_copies(0), 64);
     assert_eq!(sim.group_poses(0)[0].pos[1], 3.0);
@@ -1614,7 +1616,7 @@ fn bulk_fixed_ticks_match_across_frame_partitions() {
     for (simulation, frames, dt) in [(&mut full, 60, FRAME), (&mut half, 120, FRAME / 2.0)] {
         for frame in 0..=frames {
             simulation
-                .advance_scene(&copies_scene(&vec![None; 64], Some(body([0.0, 8.0, 0.0])), 20.0, 2.0, 4.0, 0.0, GRAVITY, None, &[]), Seconds(frame as f64 * dt), 1.0, 0.0)
+                .advance_scene(&copies_scene(&vec![None; 64], Some(body([0.0, 8.0, 0.0])), 20.0, 2.0, 4.0, 0.0, GRAVITY, None, &[]), PlayedTime::from_played(frame as f64 * dt), 1.0, 0.0)
                 .unwrap();
         }
     }

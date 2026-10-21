@@ -29,7 +29,7 @@ mod param_defs;
 #[cfg(test)]
 mod test_support;
 
-pub use automation::{AutomationLane, AutomationPoint, RemovedAutomation, SegmentShape};
+pub use automation::{automated_base, AutomationLane, AutomationPoint, RemovedAutomation, SegmentShape};
 pub use bindings::{CardSlotWrite, apply_card_reshape, binding_id_for_node_param_in, card_slot_for_node_param, invert_card_reshape, serialized_value_as_f32, ParamConvert, RemovedExposure, UserParamBinding};
 pub use driver::{hash_to_float, hash_u32, ParameterDriver};
 pub use envelope::{ParamEnvelope, DEFAULT_ENVELOPE_DECAY_BEATS};

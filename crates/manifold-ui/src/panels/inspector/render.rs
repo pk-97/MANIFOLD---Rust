@@ -522,7 +522,7 @@ impl InspectorCompositePanel {
     }
 
     /// Non-consuming read of the band bitmap — the headless harness re-uploads
-    /// into its per-render `LayerBitmapGpu` (see `ParamCardPanel::
+    /// into its per-render `PanelBitmapGpu` (see `ParamCardPanel::
     /// led_band_bitmap_peek`).
     pub fn led_preview_bitmap_peek(&self) -> Option<(&[Color32], usize, usize)> {
         self.gen_params.as_ref().and_then(|card| card.led_band_bitmap_peek())

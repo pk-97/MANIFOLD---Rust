@@ -15,7 +15,7 @@ fn advance<C: StepCoupling>(
 ) -> Result<(), String> {
     let mut targeted: Vec<Option<FieldValue>> = vec![None; 65];
     targeted[0] = Some(FieldValue::uniform([0.0, 0.0, 4.0]).unwrap());
-    simulation.advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -2.0, 0.0], Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()), &targeted), Seconds(time), 1.0, 0.0, coupling)
+    simulation.advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -2.0, 0.0], Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()), &targeted), PlayedTime::from_played(time), 1.0, 0.0, coupling)
 }
 
 struct Probe {
@@ -159,7 +159,7 @@ fn advance_capture<C: StepCoupling>(
     speed: f32,
     coupling: &mut C,
 ) -> Result<(), String> {
-    simulation.advance_with_coupling(&copies_scene(&bodies, prototype, 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]), Seconds(time), speed, 0.0, coupling)
+    simulation.advance_with_coupling(&copies_scene(&bodies, prototype, 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]), PlayedTime::from_played(time), speed, 0.0, coupling)
 }
 
 fn fixture() -> (RigidSimulation, Probe) {
@@ -511,7 +511,7 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     let handle = simulation.handles[0].unwrap();
     let world = simulation.world.as_ref().unwrap();
@@ -579,7 +579,7 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
         .unwrap();
     for &time in times {
         simulation
-            .advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), Seconds(time), 1.0, 0.0, &mut companion)
+            .advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), PlayedTime::from_played(time), 1.0, 0.0, &mut companion)
             .unwrap();
     }
     assert_eq!(companion.stamps.len(), 3);

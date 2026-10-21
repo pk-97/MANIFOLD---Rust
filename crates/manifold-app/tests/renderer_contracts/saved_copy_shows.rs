@@ -15,7 +15,6 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraph
 use manifold_core::effects::{ParamConvert, PresetInstance};
 use manifold_core::project::{EmbeddedPreset, Project};
 use manifold_core::preset_def::PresetKind;
-use manifold_core::Seconds;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_water_rigid::physics::{CopySpawn, DEFAULT_DENSITY, RigidBody, RigidSceneInputs, RigidSimulation};
 
@@ -219,7 +218,7 @@ fn play(name: &str) -> Played {
     let reset = values.world_input(world, "reset", 0.0);
     let mut simulation = RigidSimulation::default();
     for frame in 0..=120 {
-        simulation.advance_scene(&scene, Seconds(f64::from(frame) / 60.0), speed, reset).unwrap();
+        simulation.advance_scene(&scene, manifold_core::PlayedTime::from_played(f64::from(frame) / 60.0), speed, reset).unwrap();
     }
     let digest = digest(simulation.poses.iter().chain(simulation.group_poses(0)).copied());
     let played = Played { digest, made: simulation.active_copies(0), not_made: simulation.copies_not_made() };

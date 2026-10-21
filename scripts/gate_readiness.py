@@ -298,7 +298,7 @@ def selected_tooling(repo, paths):
     return tooling_checks(repo, paths) + analyzer_tooling(repo, paths)
 
 
-def plan(repo, paths, base=None):
+def plan(repo, paths, base=None, scan_paths=()):
     result = {'packages': [], 'dependents': [], 'cpu': None, 'gpu': None,
               'workspace': None, 'errors': [],
               'flows': [], 'tooling': [],
@@ -331,7 +331,8 @@ def plan(repo, paths, base=None):
                                      lambda: sorted({workspace.owner(p) for p in paths} - {None})) or []
         result['dependents'] = attempt('reverse-dependencies',
                                        lambda: workspace.reverse_dependencies(result['packages'])) or []
-        result['cpu'] = attempt('cpu-ownership', lambda: cpu_scope.plan_for_paths(paths, repo, workspace, base))
+        result['cpu'] = attempt('cpu-ownership', lambda: cpu_scope.plan_for_paths(
+            paths, repo, workspace, base, scan_paths=scan_paths))
         if result['cpu']:
             for package in result['cpu'].packages:
                 if package not in workspace.packages:

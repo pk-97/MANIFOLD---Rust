@@ -643,7 +643,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         # Nested CPU ownership must use the same base as GPU deletion scope.
         # Metadata-only fixtures have no Git history to consult.
         cpu_plan = cpu_scope.plan_for_paths(
-            paths, repo, workspace, base=base if (Path(repo) / '.git').exists() else None)
+            paths, repo, workspace, base=base if (Path(repo) / '.git').exists() else None,
+            repo_scan=False)
     if cpu_plan is not None:
         plan.required_binaries.update(cpu_plan.gpu_binaries)
         plan.filters.update(cpu_plan.gpu_filters)

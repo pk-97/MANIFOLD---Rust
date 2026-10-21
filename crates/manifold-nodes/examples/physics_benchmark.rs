@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use manifold_core::Seconds;
+use manifold_core::PlayedTime;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_water_rigid::physics::{CopySpawn, MAX_BODIES, RigidBody, RigidSceneInputs, RigidSimulation, SimStep};
 use manifold_node_engine::scene::transform::Transform;
@@ -96,7 +96,7 @@ fn wide_world() -> RigidSceneInputs {
 }
 
 fn advance(sim: &mut RigidSimulation, scene: &RigidSceneInputs, frame: f64) {
-    sim.advance_scene(scene, Seconds(frame), 1.0, 0.0)
+    sim.advance_scene(scene, PlayedTime::from_played(frame), 1.0, 0.0)
         .expect("benchmark simulation must advance");
 }
 

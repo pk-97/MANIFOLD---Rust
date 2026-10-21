@@ -24,7 +24,7 @@ mod thumbs;
 
 use std::path::{Path, PathBuf};
 
-use crate::ui_bridge::{push_state, sync_inspector_data, sync_project_data, TransportDisplayCache};
+use crate::ui_bridge::{push_state, sync_inspector_data, sync_project_all, TransportDisplayCache};
 use crate::ui_root::UIRoot;
 
 // Logical UI size = texture size (rendered 1:1; `UIRenderer::prepare`'s scale is
@@ -969,7 +969,7 @@ fn run_group_demo(want_dump: bool) {
 /// `render_ui_scene` overrides it per scene name — see the `hairlineclips`
 /// far-zoom case).
 fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
-    sync_project_data(ui, &data.project, data.active, &data.selection);
+    sync_project_all(ui, &data.project, data.active, &data.selection);
     // Configure the inspector (tabs + the active layer's effect/gen cards) from
     // the selection — the live app calls this whenever the active layer changes.
     // Without it the inspector stays on its default Master view, so the selected
@@ -1659,7 +1659,7 @@ mod editor_window_harness {
             }
             _ => None,
         };
-        sync_project_data(&mut ui_root, &project, active_idx, &selection);
+        sync_project_all(&mut ui_root, &project, active_idx, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);
         crate::ui_bridge::sync_audio_dock(&mut ui_root, &project);
         ui_root.build_inspector_in(EditorRegion::CardLane.id(), layout.card_viewport);
@@ -1840,7 +1840,7 @@ mod overlay_fidelity_proof {
         frame_timer: &'a crate::frame_timer::FrameTimer,
     ) -> MainUiPassInputs<'a> {
         MainUiPassInputs {
-            layer_bitmap_gpu: None,
+            panel_bitmap_gpu: None,
             clip_bodies: &[],
             clip_rects: &[],
             clip_content_gpu: None,

@@ -104,15 +104,23 @@ fn physics_boxes_render_motion_and_a_live_count() {
         manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(&initial, &dropped) > 0.0005,
         "falling boxes must visibly move"
     );
+    // A Count edit made on a frame reaches the world through the next
+    // replay (LIVE_SIM_CLOCK_DESIGN D4 (preserve control semantics)), so it
+    // lands at the first tick start after the frame, at any frame rate.
     params.get_mut("40_copy_count").unwrap().value = 32.0;
     assert_eq!(
         render(181, &params).body_count,
+        259,
+        "a Count edit waits for the replay to sample it"
+    );
+    assert_eq!(
+        render(182, &params).body_count,
         35,
-        "a Count edit lands at the next tick, with no Reset"
+        "a Count edit lands at the next tick start, with no Reset"
     );
     params.get_mut("40_reset").unwrap().value = 1.0;
     assert_eq!(
-        render(182, &params).body_count,
+        render(183, &params).body_count,
         35,
         "Reset keeps the count and returns the boxes to their layout"
     );
@@ -120,7 +128,7 @@ fn physics_boxes_render_motion_and_a_live_count() {
     params.get_mut("40_copy_count").unwrap().value = 0.0;
     params.get_mut("40_reset").unwrap().value = 2.0;
     assert_eq!(
-        render(183, &params).body_count,
+        render(184, &params).body_count,
         3,
         "zero leaves the floor and ramps only"
     );
@@ -138,8 +146,8 @@ fn physics_boxes_render_motion_and_a_live_count() {
     }
     params.get_mut("40_copy_count").unwrap().value = 4_000.0;
     params.get_mut("40_reset").unwrap().value = 3.0;
-    assert_eq!(render(184, &params).body_count, 4_003);
     assert_eq!(render(185, &params).body_count, 4_003);
+    assert_eq!(render(186, &params).body_count, 4_003);
     let full = readback_raw_halves(device, &target.texture, width, height);
     assert!(manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(&full, &floor) > 0.001);
     for bytes in full.chunks_exact(2) {
@@ -158,7 +166,7 @@ fn physics_boxes_render_motion_and_a_live_count() {
         step.set(live.with_preview_budget(std::time::Duration::ZERO));
         // Thirty owed intervals accept two; the other twenty-eight are dropped.
         let before_stall = native_ticks_on_this_thread();
-        let stalled = render(215, &params);
+        let stalled = render(216, &params);
         assert_eq!(stalled.body_count, 4_003);
         assert_eq!(native_ticks_on_this_thread() - before_stall, 2);
         assert!(
@@ -167,7 +175,7 @@ fn physics_boxes_render_motion_and_a_live_count() {
         );
         assert!(stalled.sim_step_cap_hit && !stalled.sim_nonfinite);
         let before_next = native_ticks_on_this_thread();
-        let next = render(216, &params);
+        let next = render(217, &params);
         assert_eq!(next.body_count, 4_003);
         assert_eq!(native_ticks_on_this_thread() - before_next, 1);
         assert!(

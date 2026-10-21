@@ -1047,9 +1047,9 @@ mod tests {
             let interval = 1.0 / f64::from(rate);
             for fps in [20u32, 24, 30, 60] {
                 let mut clock = crate::clock::SimulationClock::default();
-                clock.advance(0.0, interval, speed, 0.0, false, false);
+                clock.advance(crate::PlayedTime::ZERO, interval, speed, 0.0, false, false);
                 for frame in 1..=fps {
-                    let accepted = clock.advance(f64::from(frame) / f64::from(fps), interval, speed, 0.0, false, false);
+                    let accepted = clock.advance(crate::PlayedTime::from_played(f64::from(frame) / f64::from(fps)), interval, speed, 0.0, false, false);
                     for ordinal in 0..u64::from(accepted.ticks) {
                         let duration = accepted.interval(ordinal).unwrap().duration();
                         assert_eq!(duration.0 as f32, (interval * f64::from(speed)) as f32,

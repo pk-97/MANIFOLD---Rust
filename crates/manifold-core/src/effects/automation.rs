@@ -142,6 +142,17 @@ impl AutomationLane {
     }
 }
 
+/// The base `param`'s automation lane gives it at `beat`, when that lane
+/// drives it now ([`crate::params::Param::automated`]); None otherwise.
+/// Simulations ticking between frames read it at their own sample times.
+pub fn automated_base(param: &crate::params::Param, lanes: &[AutomationLane], beat: Beats) -> Option<f32> {
+    if !param.automated {
+        return None;
+    }
+    let lane = lanes.iter().find(|lane| lane.enabled && lane.param_id.as_ref() == param.id())?;
+    Some(param.driven_value(lane.value_at(beat)))
+}
+
 /// Power-curve bend for a `Curved` segment's interpolation parameter `t`
 /// (already `[0, 1]`). `bend` in `-1..1`: `0` is identity (linear); positive
 /// bends convex (`t^exponent`, exponent > 1, slow start / fast finish);

@@ -131,6 +131,19 @@ impl<T: Clone> PackedRows<T> {
         Ok(())
     }
 
+    /// Drop the newest `count` rows, as the history dropped them.
+    pub fn drop_back(&mut self, count: usize) -> Result<(), &'static str> {
+        if count > self.len {
+            return Err("lost alignment");
+        }
+        for _ in 0..count {
+            let row = self.physical(self.len - 1);
+            self.cells[row..row + self.stride].fill(self.filler.clone());
+            self.len -= 1;
+        }
+        Ok(())
+    }
+
     pub fn row(&self, index: usize) -> Option<&[T]> {
         (index < self.len).then(|| {
             let row = self.physical(index);

@@ -1,5 +1,5 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
-use manifold_core::Seconds;
+use manifold_core::{PlayedTime, Seconds};
 use manifold_physics::stepping::{
     box3d_substep_count, StepCoupling, StepInterval, SubstepExchange, Uncoupled,
 };
@@ -96,6 +96,7 @@ impl HeldClock {
     pub(crate) fn is_held(self) -> bool {
         self.held
     }
+
 }
 
 /// The most individually wired bodies one world takes, one per body port.
@@ -501,6 +502,17 @@ pub struct RigidSimulation {
     advancement_policy: AdvancementPolicy,
     /// The owner's simulation step for the next advance; see [`Self::set_step`].
     step: SimStep,
+    /// Transport times the history replay samples before the next frame, from
+    /// [`Self::request_samples`]: authored inputs are recorded only there.
+    requests: Vec<f64>,
+    /// A history replay drives this world's inputs. Without one (a direct
+    /// caller), each frame records its own inputs.
+    replay_driven: bool,
+    /// The origin of a grid a frame started before its own time (a placement
+    /// it landed past): nothing past it is simulated, and the replay samples
+    /// from there, so every knot goes at the origin until a replay records
+    /// at or past it or a frame moves transport on.
+    owed_origin: Option<PlayedTime>,
 }
 
 impl Default for RigidSimulation {
@@ -546,6 +558,9 @@ impl Default for RigidSimulation {
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
             step: SimStep::default(),
+            requests: Vec::new(),
+            replay_driven: false,
+            owed_origin: None,
         }
     }
 }
@@ -556,6 +571,7 @@ impl RigidSimulation {
     pub fn set_step(&mut self, step: SimStep) {
         self.step = step;
         self.clock.set_live_load(live_load(step));
+        self.clock.set_played_target(step.played_target);
     }
 
     /// [`Self::set_step`] for chained construction in tests and tools.
@@ -598,10 +614,10 @@ impl RigidSimulation {
     /// Hold the transport clock while an upstream collider is still being
     /// prepared. The next ready frame starts from its current authored time
     /// instead of replaying time that elapsed with incomplete geometry.
-    pub fn hold_pending(&mut self, now: Seconds) {
+    pub fn hold_pending(&mut self, now: PlayedTime) {
         self.accepted_observation = None;
-        if now.0.is_finite() {
-            self.last_time = Some(now);
+        if now.is_finite() {
+            self.last_time = Some(Seconds(now.seconds()));
         }
         self.pending_time = Seconds::ZERO;
     }
@@ -613,12 +629,12 @@ impl RigidSimulation {
         &mut self,
         bodies: &[Option<RigidBody>],
         gravity: [f32; 3],
-        now: Seconds,
+        now: PlayedTime,
         speed: f32,
         reset_count: f32,
     ) -> Result<(), String> {
         let scene = SceneRef { bodies, groups: &[], gravity, acceleration_field: None, targeted_fields: &[] };
-        self.advance_inner(scene, now, speed, reset_count, None, None, &mut Uncoupled)
+        self.advance_inner(scene, Seconds(now.seconds()), speed, reset_count, None, None, &mut Uncoupled)
     }
 
     /// Advance the shared world with every authored input: bodies, copy
@@ -628,25 +644,26 @@ impl RigidSimulation {
     pub fn advance_scene(
         &mut self,
         scene: &RigidSceneInputs,
-        now: Seconds,
+        now: PlayedTime,
         speed: f32,
         reset_count: f32,
     ) -> Result<(), String> {
-        self.advance_inner(SceneRef::of(scene), now, speed, reset_count, None, None, &mut Uncoupled)
+        self.advance_inner(SceneRef::of(scene), Seconds(now.seconds()), speed, reset_count, None, None, &mut Uncoupled)
     }
 
     /// Run another native solver inside the existing rigid tick owner. Its
     /// prepared body bindings must belong to this world and epoch. Authored
     /// histories, edge events, contacts and publication retain their usual path.
+    /// `now` is the owner's played time.
     pub fn advance_with_coupling<C: StepCoupling>(
         &mut self,
         scene: &RigidSceneInputs,
-        now: Seconds,
+        now: PlayedTime,
         speed: f32,
         reset_count: f32,
         coupling: &mut C,
     ) -> Result<(), String> {
-        self.advance_inner(SceneRef::of(scene), now, speed, reset_count, None, None, coupling)
+        self.advance_inner(SceneRef::of(scene), Seconds(now.seconds()), speed, reset_count, None, None, coupling)
     }
 
     /// Size every per-body and per-group vector for a world of `bodies`
@@ -688,7 +705,7 @@ impl RigidSimulation {
         self.accepted_observation = None;
         if bodies.len() > MAX_BODY_ROWS || groups.len() > MAX_COPY_GROUPS {
             return Err(format!(
-                "Physics: a world takes at most {MAX_BODIES} bodies, a liquid's {MAX_WALL_BODIES} walls and {MAX_COPY_GROUPS} copy groups"
+                "Physics: a world takes at most {MAX_BODIES} bodies, {MAX_WALL_BODIES} domain walls and {MAX_COPY_GROUPS} copy groups"
             ));
         }
         let target_slots = bodies.len() + groups.len();
@@ -766,8 +783,14 @@ impl RigidSimulation {
                 .iter()
                 .zip(self.descriptions.iter())
                 .any(|(a, b)| !same_topology_body(a.as_ref(), b.as_ref()));
+        // A sample behind the last frame is a seek back, except the replay
+        // opening at an owed origin: the frame that started that grid landed
+        // past it, and the opening samples the span it skipped, Speed at its
+        // tick starts included.
+        let opening = self.step.authored_sample_only
+            && self.owed_origin.is_some_and(|origin| now.0 >= origin.seconds() - 1e-9);
         let reset = self.reset_count.is_some_and(|old| old != reset_count)
-            || self.last_time.is_some_and(|last| now.0 < last.0);
+            || (self.last_time.is_some_and(|last| now.0 < last.0) && !opening);
         let copy_topology_changed = groups.len() != self.groups.len()
             || groups
                 .iter()
@@ -785,14 +808,17 @@ impl RigidSimulation {
                 return Ok(());
             }
             if !self.step.history_drain_active() {
-                let authored_time = self.clock.observe_speed(now.0, speed);
+                let authored_time = self.clock.observe_speed(PlayedTime::from_played(now.0), speed);
                 let elapsed_simulation = authored_time - self.authored_time;
                 self.ensure_targeted_history(targeted_fields)?;
-                self.record_authored_sample(
-                    authored_time,
-                    &scene,
-                    targeted_fields,
-                )?;
+                // A world no replay asks for samples keeps every observation,
+                // as the full frame does.
+                if self.replay_driven {
+                    self.record_requested_samples(now.0, &scene, targeted_fields)?;
+                } else {
+                    let knot_time = self.owed_origin.map_or(authored_time, |origin| self.clock.simulation_at(origin, live_load(self.step)));
+                    self.record_authored_sample(knot_time, &scene, targeted_fields)?;
+                }
                 self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
                 self.last_time = Some(now);
@@ -826,7 +852,7 @@ impl RigidSimulation {
         // Applying the display-frame cap again would truncate retained input
         // history, including a zero-step pose edit after coupled intervals.
         let clock_frame = if !self.advancement_policy.is_worker() {
-            Some(self.clock.advance(now.0, self.step.interval.0, speed, reset_count, rebuild,
+            Some(self.clock.advance(PlayedTime::from_played(now.0), self.step.interval.0, speed, reset_count, rebuild,
                 self.step.offline()))
         } else {
             None
@@ -834,16 +860,39 @@ impl RigidSimulation {
         let authored_time = if self.advancement_policy.is_worker() {
             now.0
         } else {
-            self.clock.simulation_at(now.0, live_load(self.step))
+            self.clock.simulation_at(PlayedTime::from_played(now.0), live_load(self.step))
         };
         let elapsed_simulation = authored_time - self.authored_time;
         let stationary_edit = elapsed_simulation == 0.0;
         self.ensure_targeted_history(targeted_fields)?;
-        self.record_authored_sample(
-            authored_time,
-            &scene,
-            targeted_fields,
-        )?;
+        self.record_requested_samples(now.0, &scene, targeted_fields)?;
+        // Under a replay, inputs are knotted only at the times it was asked to
+        // sample, which no frame rate moves; a held frame still records an
+        // edit made while time stands still, and a frame that started a new
+        // grid (a restart, a seek, an overload reanchor) starts its first tick
+        // from its own inputs. That knot goes at the grid's origin, and every
+        // knot past the origin's simulated time goes: it was recorded for
+        // transport the new grid abandoned. A frame that landed past its
+        // placement's target has simulated nothing past the target, so until
+        // a replay samples from there, or transport moves on, every knot goes
+        // at the origin, held frames included.
+        let held_frame = clock_frame.as_ref().is_some_and(|frame| frame.held);
+        let new_origin = clock_frame
+            .as_ref()
+            .filter(|frame| frame.restarted || frame.reanchored)
+            .and_then(|_| self.clock.tick_start(self.clock.ticks_done()))
+            .filter(|start| start.seconds() <= now.0 + 1e-9);
+        if let Some(start) = new_origin {
+            self.drop_authored_samples_after(self.clock.simulation_at(start, live_load(self.step)))?;
+            self.owed_origin = (start.seconds() < now.0 - 1e-9).then_some(start);
+        } else if clock_frame.is_some() && !held_frame {
+            self.owed_origin = None;
+        }
+        if self.advancement_policy.is_worker() || !self.replay_driven || held_frame || new_origin.is_some() {
+            let origin = new_origin.or(self.owed_origin);
+            let knot_time = origin.map_or(authored_time, |start| self.clock.simulation_at(start, live_load(self.step)));
+            self.record_authored_sample(knot_time, &scene, targeted_fields)?;
+        }
         self.authored_time = authored_time;
         self.held.observe(now.0, speed, self.step.authored_sample_only);
         let accumulated = self.accumulator + elapsed_simulation;
@@ -1793,6 +1842,54 @@ impl RigidSimulation {
         Ok(())
     }
 
+    /// Transport times in `(from, until]` the physics history replay must
+    /// sample before the next frame: every Sim Rate boundary a tick may start
+    /// or end at and every replay grid point, so inputs are recorded only at
+    /// times no frame rate moves. Each boundary goes to one frame's window.
+    pub fn request_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+        self.replay_driven = true;
+        self.requests.clear();
+        let requests = &mut self.requests;
+        self.clock.tick_starts(from, until, |played| requests.push(played.seconds()));
+        let origin = self.step.replay_origin;
+        let rate = manifold_physics::clock::REPLAY_RATE;
+        let last = ((until.seconds() - origin.seconds()) * rate + 1e-6).floor();
+        let mut point = ((from.seconds() - origin.seconds()) * rate + 1e-6).floor() + 1.0;
+        while point <= last {
+            requests.push(manifold_physics::clock::replay_point(origin, point).seconds());
+            point += 1.0;
+        }
+        requests.sort_unstable_by(f64::total_cmp);
+        requests.dedup();
+        out.extend(requests.iter().map(|&played| PlayedTime::from_played(played)));
+    }
+
+    /// Record the inputs a sample at transport `now` reached for each pending
+    /// request, at the simulated time of the request itself.
+    fn record_requested_samples(
+        &mut self,
+        now: f64,
+        scene: &SceneRef<'_>,
+        targeted_fields: Option<TargetedFields<'_>>,
+    ) -> Result<(), String> {
+        let reached = self.requests.partition_point(|&transport| transport <= now + 1e-9);
+        if let Some(origin) = self.owed_origin
+            && self.requests[..reached].iter().any(|&request| request >= origin.seconds() - 1e-9)
+        {
+            self.owed_origin = None;
+        }
+        for index in 0..reached {
+            // A request a rounding past `now` is the same instant spelled by
+            // another formula (grid point 4k/240 against frame k/60): it takes
+            // the frame's spelling, so a knot at the frame never lands behind it.
+            let request = self.requests[index].min(now);
+            let time = self.clock.simulation_at(PlayedTime::from_played(request), live_load(self.step));
+            self.record_authored_sample(time, scene, targeted_fields)?;
+        }
+        self.requests.drain(..reached);
+        Ok(())
+    }
+
     fn record_authored_sample(
         &mut self,
         time: f64,
@@ -2236,6 +2333,19 @@ impl RigidSimulation {
             .map_err(|error| format!("Physics: authored body history {error}"))?;
         self.targeted_fields.prune(removed)?;
         Ok(())
+    }
+
+    /// Drop every knot later than `time`, keeping the parallel targeted
+    /// storage aligned.
+    fn drop_authored_samples_after(&mut self, time: f64) -> Result<(), String> {
+        let removed = self
+            .authored_samples
+            .drop_after(Seconds(time))
+            .map_err(|error| format!("Physics: failed to trim input history: {error}"))?;
+        self.authored_bodies
+            .drop_back(removed)
+            .map_err(|error| format!("Physics: authored body history {error}"))?;
+        self.targeted_fields.drop_back(removed)
     }
 }
 

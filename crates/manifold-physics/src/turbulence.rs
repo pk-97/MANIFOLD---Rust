@@ -81,41 +81,64 @@ impl VectorField for TurbulenceField {
 }
 
 /// How far drifting turbulence has travelled: its drift velocity (direction
-/// times Drift Speed, which a card may automate) integrated over transport
+/// times Drift Speed, which a card may automate) integrated over played
 /// time, so a Speed change bends the drift instead of jumping the swirls.
-/// Each evaluation holds the velocity it sees until the next one. The host
-/// evaluates at the same transport times at any display rate (the physics
-/// history replay's fixed grid and tick starts, with frame ends on that grid
-/// at the usual rates), so live and export travel the same way. Time going
-/// back (a seek or loop) starts again from zero, by the simulation clock's
-/// own rule, so the drift restarts exactly when the solvers it feeds do.
+/// A velocity seen between two points of the physics replay's grid
+/// ([`crate::clock::REPLAY_RATE`]) takes effect at the next one, and the
+/// latest seen for a point wins, as Simulation Speed does on tick starts
+/// (LIVE_SIM_CLOCK_DESIGN.md D4 (preserve control semantics)). The replay
+/// evaluates every grid point exactly at any display rate, so the travel at
+/// any time, a tick start or a frame end, never depends on when frames land.
+/// Time going back (a seek or loop) starts again from zero, by the
+/// simulation clock's own rule, so the drift restarts exactly when the
+/// solvers it feeds do.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TurbulenceDrift {
     last: Option<f64>,
+    /// Where the held velocity took effect, and the travel there.
+    at: f64,
     travelled: [f64; 3],
     velocity: [f64; 3],
+    /// The velocity to take effect at a grid point not yet reached.
+    pending: Option<(f64, [f64; 3])>,
 }
 
 impl TurbulenceDrift {
-    /// The offset travelled by `transport`, then hold `velocity` (m/s) from
-    /// here on.
-    pub fn advance(&mut self, transport: f64, velocity: [f64; 3]) -> [f64; 3] {
-        self.last = Some(match self.last {
-            Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => {
-                // A step back inside the tolerance holds still.
-                let elapsed = (transport - last).max(0.0);
-                for (travelled, velocity) in self.travelled.iter_mut().zip(self.velocity) {
-                    *travelled += velocity * elapsed;
-                }
-                last.max(transport)
-            }
+    /// The offset travelled by `played`; `velocity` (m/s) takes effect at
+    /// the next point at or after it of the replay grid counting from
+    /// `origin`.
+    pub fn advance(&mut self, played: crate::PlayedTime, origin: crate::PlayedTime, velocity: [f64; 3]) -> [f64; 3] {
+        let transport = played.seconds();
+        let last = match self.last {
+            Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => last,
             _ => {
-                self.travelled = [0.0; 3];
-                transport
+                *self = Self { last: Some(transport), at: transport, travelled: [0.0; 3], velocity, pending: None };
+                return [0.0; 3];
             }
-        });
+        };
+        // A step back inside the tolerance holds still.
+        let transport = transport.max(last);
+        self.last = Some(transport);
+        let next = crate::clock::next_replay_point(crate::PlayedTime::from_played(transport), origin).seconds();
+        if let Some((at, held)) = self.pending.take_if(|(at, _)| *at < next) {
+            self.commit(at, held);
+        }
+        self.pending = (velocity != self.velocity).then_some((next, velocity));
+        if transport >= next
+            && let Some((at, held)) = self.pending.take()
+        {
+            self.commit(at, held);
+        }
+        std::array::from_fn(|axis| self.travelled[axis] + self.velocity[axis] * (transport - self.at))
+    }
+
+    /// Travel at the held velocity up to `at`, then hold `velocity`.
+    fn commit(&mut self, at: f64, velocity: [f64; 3]) {
+        for (travelled, held) in self.travelled.iter_mut().zip(self.velocity) {
+            *travelled += held * (at - self.at);
+        }
+        self.at = at;
         self.velocity = velocity;
-        self.travelled
     }
 
     /// Start again from zero at the next evaluation.
@@ -263,57 +286,101 @@ mod tests {
         assert!(wrapped.iter().all(|c| (0.0..period).contains(c)));
     }
 
-    /// The replay's evaluation times for frames at `fps` over one second: a
-    /// 240 Hz grid strictly inside each frame, then the frame's end.
-    fn evaluations(fps: f64) -> Vec<f64> {
+    /// The replay's evaluation times for frames at `fps` over one second, in
+    /// order: the 240 Hz grid and a 90 Hz consumer's tick starts strictly
+    /// inside each frame, then the frame's end twice (the replay's closing
+    /// sample and the frame itself). Each time says whether it is a tick
+    /// start.
+    fn evaluations(fps: f64) -> Vec<(f64, bool)> {
         let mut times = Vec::new();
         for frame in 1..=fps as u32 {
             let (previous, now) = (f64::from(frame - 1) / fps, f64::from(frame) / fps);
+            let start = times.len();
             let mut grid = (previous * 240.0).floor() + 1.0;
             while grid / 240.0 < now {
-                times.push(grid / 240.0);
+                times.push((grid / 240.0, false));
                 grid += 1.0;
             }
-            times.push(now);
+            let mut tick = (previous * 90.0 + 1e-9).floor() + 1.0;
+            while tick / 90.0 < now {
+                times.push((tick / 90.0, true));
+                tick += 1.0;
+            }
+            times[start..].sort_by(|a, b| a.0.total_cmp(&b.0));
+            times.extend([(now, false), (now, false)]);
         }
         times
     }
 
-    /// Speed stepping from 2 to 6 m/s at 0.5 s, then easing up: the drift
-    /// bends without a jump, and 30 and 120 fps travel bit for bit the same
-    /// at every 30 fps frame end. A loop back starts again from zero.
+    /// Drift Speed steps from 2 to 6 m/s at 0.5 s, then eases up: the drift
+    /// bends without a jump, and at 30, 60, 120 and 144 fps it travels bit
+    /// for bit the same at every 90 Hz tick start the replay samples and at
+    /// every grid point. A
+    /// loop back starts again from zero.
     #[test]
     fn drift_integrates_speed_the_same_at_any_frame_rate() {
         let speed = |t: f64| if t < 0.5 { 2.0 } else { 6.0 + 4.0 * (t - 0.5) };
         let fly = |fps: f64| {
             let mut drift = TurbulenceDrift::default();
-            let mut previous: Option<(f64, f64)> = None;
-            let mut at = Vec::new();
-            for t in evaluations(fps) {
-                let offset = drift.advance(t, [speed(t), 0.0, 0.0])[0];
-                if let Some((before, was)) = previous {
-                    let step = offset - was;
-                    assert!((0.0..=8.0 * (t - before) + 1e-12).contains(&step), "no jump at {t}: {step}");
-                }
-                previous = Some((t, offset));
-                if (t * 30.0 - (t * 30.0).round()).abs() < 1e-9 {
-                    at.push((t.to_bits(), offset.to_bits()));
+            drift.advance(crate::PlayedTime::from_played(0.0), crate::PlayedTime::ZERO, [speed(0.0), 0.0, 0.0]);
+            let mut previous = (0.0, 0.0);
+            let (mut ticks, mut grid) = (Vec::new(), Vec::new());
+            for (t, tick) in evaluations(fps) {
+                let offset = drift.advance(crate::PlayedTime::from_played(t), crate::PlayedTime::ZERO, [speed(t), 0.0, 0.0])[0];
+                let step = offset - previous.1;
+                assert!((0.0..=8.0 * (t - previous.0) + 1e-12).contains(&step), "no jump at {t}: {step}");
+                previous = (t, offset);
+                if tick {
+                    ticks.push(((t * 90.0).round() as u32, offset.to_bits()));
+                } else if (t * 240.0 - (t * 240.0).round()).abs() < 1e-9 {
+                    grid.push(((t * 240.0).round() as u32, offset.to_bits()));
                 }
             }
-            at
+            grid.dedup();
+            (ticks, grid)
         };
-        let (slow, fast) = (fly(30.0), fly(120.0));
-        assert_eq!(slow.len(), 30);
-        assert_eq!(slow, fast);
+        let reference = fly(30.0);
+        for fps in [60.0, 120.0, 144.0] {
+            let (ticks, grid) = fly(fps);
+            // A tick start on a frame end is read by the closing sample; compare
+            // the ones both runs evaluate at the tick start itself.
+            let shared: Vec<_> = ticks.iter().filter(|tick| reference.0.iter().any(|other| other.0 == tick.0)).collect();
+            assert!(shared.len() >= 40, "{fps} fps shares {} tick starts", shared.len());
+            for tick in shared {
+                assert!(reference.0.contains(tick), "{fps} fps at tick start {}", tick.0);
+            }
+            assert_eq!(grid, reference.1, "{fps} fps at the grid points");
+        }
         // About 2 m by 0.5 s, then faster.
-        let half = f64::from_bits(slow[14].1);
+        let half = f64::from_bits(reference.1[119].1);
         assert!((half - 1.0).abs() < 0.01, "{half}");
         let mut drift = TurbulenceDrift::default();
-        drift.advance(0.0, [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(1.0, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(0.25, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
+        drift.advance(crate::PlayedTime::from_played(0.0), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(1.0), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
         // Rounding below the clock's seek tolerance holds, as the clock does.
-        assert_eq!(drift.advance(0.25 - 1e-12, [5.0, 0.0, 0.0]), [0.0; 3]);
-        assert_eq!(drift.advance(0.75, [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25 - 1e-12), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [0.0; 3]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.75), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
+    }
+
+    /// The drift's grid counts from the replay origin: a cue played after a
+    /// tempo edit, whose played time the edit's shift moved off the 240 Hz
+    /// grid, drifts the same distances from the cue as one played without.
+    #[test]
+    fn drift_grid_counts_from_the_replay_origin() {
+        let fly = |origin: f64| {
+            let at = crate::PlayedTime::from_played(origin);
+            let mut drift = TurbulenceDrift::default();
+            (0..=40)
+                .map(|k| {
+                    let since = f64::from(k) * 0.0037;
+                    let velocity = if since < 0.05 { 2.0 } else { 6.0 };
+                    drift.advance(crate::PlayedTime::from_played(origin + since), at, [velocity, 0.0, 0.0])[0]
+                })
+                .collect::<Vec<_>>()
+        };
+        for (k, (fresh, shifted)) in fly(2.0).iter().zip(&fly(2.0 - 0.0123)).enumerate() {
+            assert!((fresh - shifted).abs() < 1e-9, "sample {k}: {fresh} against {shifted}");
+        }
     }
 }

@@ -26,8 +26,8 @@ pub struct CursorFrame {
     pub epoch: u32,
     /// The domain's `display_time`.
     pub requested: f64,
-    /// Transport seconds.
-    pub transport: f64,
+    /// Played time, which a tempo edit never moves.
+    pub transport: manifold_physics::PlayedTime,
     /// The domain's `dropped_seconds`; a rise marks a clock reanchor.
     pub dropped: f64,
 }
@@ -94,15 +94,15 @@ impl DisplayCursor {
             self.c = None;
             self.window = [EMPTY; BUCKETS];
             self.r_prev = frame.requested;
-            self.t_prev = frame.transport;
+            self.t_prev = frame.transport.seconds();
             self.d_prev = frame.dropped;
         }
         let r = frame.requested;
         let delta = (r - self.r_prev).max(0.0);
-        let advanced = (frame.transport - self.t_prev).max(0.0);
+        let advanced = (frame.transport.seconds() - self.t_prev).max(0.0);
         let reanchored = frame.dropped > self.d_prev;
         self.r_prev = r;
-        self.t_prev = frame.transport;
+        self.t_prev = frame.transport.seconds();
         self.d_prev = frame.dropped;
 
         let Some(bounds) = core.retired_bounds() else {
@@ -246,7 +246,7 @@ mod tests {
         /// One frame at transport `t`.
         fn at(&mut self, t: f64) -> Shown {
             self.transport = t;
-            let frame = self.clock.advance(t, 1.0 / self.hz, self.speed, self.reset, false, self.offline);
+            let frame = self.clock.advance(manifold_physics::PlayedTime::from_played(t), 1.0 / self.hz, self.speed, self.reset, false, self.offline);
             self.frame += 1;
             let now = self.frame;
             let delay = &self.delay;
@@ -262,7 +262,7 @@ mod tests {
                 self.cursor.present(&mut self.core, CursorFrame {
                     epoch: frame.epoch,
                     requested,
-                    transport: t,
+                    transport: manifold_physics::PlayedTime::from_played(t),
                     dropped: f64::from(frame.dropped_seconds as f32),
                 })
             } else {

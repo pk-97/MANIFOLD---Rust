@@ -188,7 +188,7 @@ impl PhysicsWorldNode {
             uploads: Vec::new(),
             observation: RigidSceneObservation {
                 inputs: RigidSceneInputs::with_counts(0, 0),
-                transport: manifold_core::Seconds::ZERO,
+                transport: manifold_core::PlayedTime::ZERO,
                 speed: 1.0,
                 reset: 0.0,
             },
@@ -316,7 +316,7 @@ impl PhysicsWorldNode {
         let speed = ctx.scalar_or_param("speed", 1.0);
         let reset = ctx.scalar_or_param("reset", 0.0);
         if validate_controls {
-            if !ctx.time.seconds.0.is_finite()
+            if !ctx.played().is_finite()
                 || !speed.is_finite()
                 || !(0.0..=4.0).contains(&speed)
                 || !reset.is_finite()
@@ -328,7 +328,7 @@ impl PhysicsWorldNode {
                 crate::physics::validate_spawn(prototype.spawn)?;
             }
         }
-        self.observation.transport = ctx.time.seconds;
+        self.observation.transport = ctx.played();
         self.observation.speed = speed;
         self.observation.reset = reset;
         Ok(true)
@@ -478,13 +478,13 @@ impl EffectNode for PhysicsWorldNode {
         match self.resolve_rigid_scene_observation(ctx, false) {
             Ok(true) => {}
             Ok(false) => {
-                self.simulation.hold_pending(ctx.time.seconds);
+                self.simulation.hold_pending(ctx.played());
                 ctx.mark_outputs_pending();
                 return;
             }
             Err(error) => {
                 ctx.error(error);
-                self.simulation.hold_pending(ctx.time.seconds);
+                self.simulation.hold_pending(ctx.played());
                 ctx.mark_outputs_pending();
                 return;
             }
@@ -536,6 +536,13 @@ impl EffectNode for PhysicsWorldNode {
 }
 
 impl PhysicsNode for PhysicsWorldNode {
+    // A coupled world steps inside its liquid, on the liquid's samples.
+    fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
+        if !self.coupled_mode {
+            self.simulation.request_samples(from, until, out);
+        }
+    }
+
     fn set_coupled_physics(&mut self, enabled: bool) {
         if self.coupled_mode == enabled {
             return;
@@ -580,14 +587,14 @@ impl PhysicsNode for PhysicsWorldNode {
 
     fn physics_impulse_stamp(
         &self,
-        transport: manifold_core::Seconds,
+        played: manifold_core::PlayedTime,
         sequence: u64,
         _step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.coupled_mode {
             return Err("Physics World coupled mode has no private impulse clock".into());
         }
-        self.simulation.impulse_stamp(transport, sequence)
+        self.simulation.impulse_stamp(played, sequence)
     }
 
     fn enqueue_physics_impulse(
@@ -698,6 +705,7 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PlayedTime;
     use manifold_node_engine::exec::backend::{Backend, MockBackend};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
     use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, ParamValues};
@@ -952,7 +960,7 @@ mod tests {
                 targeted_fields: vec![Some(FieldValue::uniform([1.0, 2.0, 3.0]).expect("finite test field"))],
                 ..RigidSceneInputs::default()
             },
-            transport: Seconds::ZERO,
+            transport: PlayedTime::ZERO,
             speed: 1.0,
             reset: 0.0,
         };
@@ -993,14 +1001,14 @@ mod tests {
         assert_eq!(first.inputs.acceleration_field, Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()));
         assert_eq!(first.inputs.targeted_fields[0], Some(FieldValue::uniform([2.0, 0.0, 0.0]).unwrap()));
         assert_eq!(first.inputs.targeted_fields[node.body_count()], Some(FieldValue::uniform([0.5, 0.0, 0.0]).unwrap()));
-        assert_eq!(second.transport, Seconds(1.0 / 60.0));
+        assert_eq!(second.transport, PlayedTime::from_played(1.0 / 60.0));
         assert_eq!(second.speed, 1.0);
         assert_eq!(second.reset, 0.0);
 
         let mut expected = RigidSimulation::default();
         for (observation, now) in [(&first, Seconds::ZERO), (&second, Seconds(1.0 / 60.0))] {
             expected
-                .advance_scene(&observation.inputs, now, observation.speed, observation.reset)
+                .advance_scene(&observation.inputs, PlayedTime::from_played(now.0), observation.speed, observation.reset)
                 .expect("ordinary rigid advancement baseline");
         }
         let position = node.simulation.poses[0].pos[0];
@@ -1092,14 +1100,14 @@ mod tests {
             true,
         )
         .expect("coupled capture observation");
-        assert_eq!(observation.transport, Seconds::ZERO);
+        assert_eq!(observation.transport, PlayedTime::ZERO);
         assert!(node.simulation.native_world().is_none());
         let graph_node: &mut dyn EffectNode = &mut node;
         let native = crate::node::get(graph_node)
             .expect("PhysicsWorldNode has a native PhysicsNode registration");
         assert!(native.physics_impulse_epoch().is_none());
         assert!(native
-            .physics_impulse_stamp(Seconds::ZERO, 0, Default::default())
+            .physics_impulse_stamp(PlayedTime::ZERO, 0, Default::default())
             .is_err());
 
         assert!(evaluate_mock_world(
@@ -1219,7 +1227,7 @@ mod tests {
         let mut bodies = vec![None; 64];
         bodies[0] = Some(RigidBody::default());
         node.simulation
-            .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
             .expect("native rigid world initialization");
         let epoch = PhysicsNode::physics_impulse_epoch(&node).expect("native impulse epoch");
         let stamp = EventStamp {
@@ -1254,7 +1262,7 @@ mod tests {
         }
 
         node.simulation
-            .advance(&bodies, [0.0; 3], Seconds(1.0 / 60.0), 1.0, 0.0)
+            .advance(&bodies, [0.0; 3], PlayedTime::from_played(1.0 / 60.0), 1.0, 0.0)
             .expect("native rigid tick");
 
         let mut receipts = Vec::new();

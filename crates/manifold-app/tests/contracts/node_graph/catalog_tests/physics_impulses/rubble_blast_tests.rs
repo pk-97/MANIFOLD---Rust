@@ -91,7 +91,7 @@ fn rubble_blast_scatters_a_settled_pile_and_keeps_it_in_the_world() {
     let frame = std::cell::Cell::new(0_u32);
     let advance = |sim: &mut RigidSimulation, frames: u32| {
         for _ in 0..frames {
-            sim.advance_scene(&scene, Seconds(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
+            sim.advance_scene(&scene, manifold_core::PlayedTime::from_played(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
             frame.set(frame.get() + 1);
         }
     };
@@ -146,7 +146,7 @@ fn play_with_blast(scene: &RigidSceneInputs, field: &FieldValue) -> (Vec<Escape>
             )
             .unwrap();
         }
-        sim.advance_scene(scene, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        sim.advance_scene(scene, manifold_core::PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
         let poses = sim.group_poses(0);
         for (i, pose) in poses.iter().enumerate() {
             reach = [reach[0].max(pose.pos[0].abs()), reach[1].max(pose.pos[2].abs())];

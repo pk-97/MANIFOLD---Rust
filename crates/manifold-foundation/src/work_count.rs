@@ -27,6 +27,8 @@ pub enum WorkKind {
     SlotInvalidate,
     /// `sync_project_data`.
     ProjectSync,
+    /// `sync_trigger_catalog`: the trigger source and target choices.
+    TriggerCatalogProjection,
     /// `sync_inspector_data`.
     InspectorSync,
     /// `sync_clip_positions`.
@@ -45,8 +47,6 @@ pub enum WorkKind {
     PerformHudBuild,
     /// One overview strip repaint.
     OverviewRepaint,
-    /// One per-layer grid bitmap repaint.
-    GridBitmapRepaint,
     /// Chrome (transport, header, footer) view build and layout.
     ChromeLayout,
     /// One text measure that missed every cache (today: every uncached measure).
@@ -97,6 +97,7 @@ impl WorkKind {
         WorkKind::InPlaceUpdate,
         WorkKind::SlotInvalidate,
         WorkKind::ProjectSync,
+        WorkKind::TriggerCatalogProjection,
         WorkKind::InspectorSync,
         WorkKind::ClipProjection,
         WorkKind::LaneProjection,
@@ -106,7 +107,6 @@ impl WorkKind {
         WorkKind::EditorTreeBuild,
         WorkKind::PerformHudBuild,
         WorkKind::OverviewRepaint,
-        WorkKind::GridBitmapRepaint,
         WorkKind::ChromeLayout,
         WorkKind::TextMeasureMiss,
         WorkKind::DriverScan,
@@ -141,6 +141,7 @@ impl WorkKind {
             WorkKind::InPlaceUpdate => "InPlaceUpdate",
             WorkKind::SlotInvalidate => "SlotInvalidate",
             WorkKind::ProjectSync => "ProjectSync",
+            WorkKind::TriggerCatalogProjection => "TriggerCatalogProjection",
             WorkKind::InspectorSync => "InspectorSync",
             WorkKind::ClipProjection => "ClipProjection",
             WorkKind::LaneProjection => "LaneProjection",
@@ -150,7 +151,6 @@ impl WorkKind {
             WorkKind::EditorTreeBuild => "EditorTreeBuild",
             WorkKind::PerformHudBuild => "PerformHudBuild",
             WorkKind::OverviewRepaint => "OverviewRepaint",
-            WorkKind::GridBitmapRepaint => "GridBitmapRepaint",
             WorkKind::ChromeLayout => "ChromeLayout",
             WorkKind::TextMeasureMiss => "TextMeasureMiss",
             WorkKind::DriverScan => "DriverScan",

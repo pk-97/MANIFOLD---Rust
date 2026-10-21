@@ -83,6 +83,7 @@ impl super::WaterRuntime<'_> {
             inputs.carry_from(old_inputs, &steps);
         }
         self.water.last_frame_time = prior.water.last_frame_time;
+        self.water.replay_from = prior.water.replay_from;
         self.water.project_tempo.clone_from(&prior.water.project_tempo);
 
         // Setup and event wires are intentionally outside historical sampling.
