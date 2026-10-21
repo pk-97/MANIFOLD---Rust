@@ -1,6 +1,6 @@
 # UI Invalidation — work runs only when its inputs change
 
-**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P6 built. Owed: P7a (section 7 (Phasing), drag previews touch only the dragged items); the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
+**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P6 built. Owed: P7a–P7c (section 7 (Phasing): drag previews, the GPU grid, commit and zoom cost); the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -774,6 +774,59 @@ New CPU tests: a clip drag on a 500-clip project updates one entry and leaves
 the other 499 bit-identical; a lane drag with three lanes rebuilds one screen.
 Negative: `rg 'ClipPreview\)' crates/manifold-app/src/ui_frame.rs` shows no
 call into `sync_clip_positions`.
+
+### P7b — The timeline grid is drawn once, on the GPU
+
+Measured 2026-10-21 on the Liveschool show (52 layers, 706 px tracks, 2x). On a
+zoom or horizontal scroll frame, `repaint_dirty_layers` (`viewport.rs` :767)
+repaints the grid bitmap of all 52 layers, off-screen layers included, and
+`app_render.rs` :2503 uploads all of them. That is 42.9 MB and about 85% of a
+4.8 ms frame, and it grows with layer height times width, not with clips. The
+grid is a pure function of the viewport and is the same for every layer
+(`bitmap_renderer.rs` module doc), so 52 CPU copies of it are the bug.
+
+- **Rule:** the layer grid is GPU lines from `timing_grid_lines`, the walker
+  the ruler and the automation lanes already share. They are emitted once per
+  frame for the visible tracks rect, under the clip bodies, in the pass that
+  already draws the lane grids. The layer-0 top separator goes in the same
+  pass. No CPU pixel buffer, no texture upload, no per-layer copy.
+- **Deleted:** `LayerBitmapRenderer`, `paint_grid_lines`, `shift_buffer`,
+  `repaint_dirty_layers`, `dirty_layer_iter`, `layer_bitmap_gpu.rs` and the
+  upload loop. `timing_grid_policy`, `timing_grid_lines` and
+  `TimingGridLineKind` stay and move to a module named for the grid.
+- **Forbidden:** a shader change. If the existing rect or line instances can't
+  draw a 1- or 2-physical-pixel line, stop and report. A cache of the grid in
+  any form.
+- **Gate:** a scripted pixel diff of a headless timeline render, before and
+  after, at three zoom levels, with zero differing pixels outside clip bodies
+  (or a stated threshold if line antialiasing differs). `work-zoom` and
+  `work-follow-scroll` show no `GridBitmapRepaint` and fall in `FrameAlloc`;
+  re-record their ceilings down. Negative:
+  `rg 'LayerBitmapRenderer|layer_bitmap_gpu|repaint_dirty_layers' crates/`
+  returns zero hits.
+
+### P7c — Commit and zoom pay only for what moved
+
+Same measurement. The press and release frames of every drag run
+`sync_project_data`. Each takes about 7 ms, nearly all in
+`TriggerRoutingCatalog::project` (`projection/trigger_routing.rs`), which is
+the 12 to 18 ms spike at the start and end of a drag. On each zoom and scroll
+frame, all three chrome bars relayout (about 4%) because the zoom label sits in
+the chrome push. The overview walks every clip for the max beat (5 to 8% of a
+zoom frame). A clip drag move inserts into a hash map in
+`Timeline::resolve_clip_location`.
+
+- **Rule:** each of these keys on its own inputs. The trigger catalog runs
+  only when the parts it reads move: instances, their manifests and trigger
+  sources, never `Clips`. The press frame of a drag stamps nothing that
+  reaches it. The zoom label is its own keyed in-place push, the way
+  `ClockPush` is, and a zoom or scroll runs no chrome layout. The overview's
+  max beat is cached on clip data and read on scroll and zoom.
+  `resolve_clip_location` stops allocating on a hit.
+- **Gate:** `work-clip-drag` and `work-automation-point-drag` show the trigger
+  catalog only where the gesture changed trigger inputs (never), and no
+  `ProjectSync` on press. `work-zoom` shows zero chrome layouts. Ceilings are
+  re-recorded down.
 
 After P6: the structural-sharing design (section 9, BUG-qzea6 (design structural sharing of project parts)).
 
