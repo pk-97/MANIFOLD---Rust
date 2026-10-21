@@ -164,7 +164,7 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 | Copy Count / Spacing / Columns · Copy Layout · Simulation Speed | Count / Spacing / Columns · Arrangement · Speed | `physics_world.rs:350-355`, `matter_domain.rs:317` |
 | Physics · Motion · Density (kg/m³) (rigid body) | Enabled · Body Type · Density + unit kg/m³ | `rigid_body.rs:155-158` |
 | Closed −X/+X · Bottom/Top · −Z/+Z | Left/Right Wall · Floor/Ceiling · Back/Front Wall | `matter_domain.rs:307-312` and the FLIP domain twins |
-| Initial Fill Height · Particle Capacity · Matter Points per Cell · Grid Budget (M cells) | Fill Height · Max Particles · Particles per Cell · Grid Budget + unit M cells | `matter_domain.rs:305,313`, `gpu_flip_domain.rs:415`, `liquid_fill.rs:163` |
+| Initial Fill Height · Particle Capacity · Matter Points per Cell · Grid Budget (M cells) | Fill Height · Max Particles · Particles per Cell · Grid Budget + unit M cells | `matter_domain.rs:305,313`, `liquid_fill.rs:163` (the GPU FLIP domain no longer declares Max Particles) |
 | RT Enabled · RT Reflections · RT Shadows · RT Ambient Occlusion · RT Global Illumination | Ray Tracing · Reflections · Shadows · Ambient Occlusion · Global Illumination (inside the Ray Tracing group) | `render_scene.rs:6771-6832` (no clash with other `render_scene` labels, checked) |
 | Base Colour R/G/B · Emission R/G/B · Normal Scale · Cel Bands | swatches (already, material inspector) · Normal Strength · Bands | material primitives, `cel_material.rs:80` |
 | Vector X/Y/Z · Strength (m/s²) · Impulse (m/s) · Fire · Center (forces) | Direction X/Y/Z · Strength + unit m/s² · Impulse Size + unit m/s · Impulse · Centre | recipe JSON |
@@ -616,7 +616,7 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
   - The water preset builder (`manifold-nodes-water/src/presets/gpu_flip.rs`) gives its mesher controls an authored Setup `scene` field, and the water presets are regenerated.
   - Matter's stiffness, cohesion and liveliness become Performance in the scene table (asserted by `matter_card_bands`).
   - Bokeh `max_radius` gets a role so D4's depth of field Max Blur row builds (the table marks it Hidden, after the stamp filter).
-  - Open question, decided before rows are built: the GPU FLIP card controls the table marks Hidden (`solve_level`, `max_iterations`, `sheet_fill_rate`, `particle_capacity`). Under D5 they would also build no row in the Scene tab.
+  - Open question, decided before rows are built: the GPU FLIP card controls the table marks Hidden (`solve_level`, `max_iterations`, `sheet_fill_rate`). Under D5 they would also build no row in the Scene tab.
   - Ruling: those four are Setup, not Hidden. They show in the Scene tab and stay off the card.
   - The physics-world item owns its copy body and that body's transform (PhysicsBoxes), and Matter's `initial_column` transform gets an owner, emptying `OWNERLESS_UNTIL_P4` in `projection/scene.rs`.
   - `oceanscene` fixture (`physics_scene("Ocean", "Ocean")` in `fixtures.rs`).

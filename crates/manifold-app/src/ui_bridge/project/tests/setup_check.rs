@@ -121,7 +121,7 @@ impl Rig {
     }
 }
 
-const CAPPED_FIT: SetupFit = SetupFit { fill_capped: true, column: ColumnOutcome::Fits };
+const CAPPED_FIT: SetupFit = SetupFit { fill_capped: true, column: ColumnOutcome::Fits, pool_full: false };
 
 #[test]
 fn a_fresh_water_has_no_problems() {
@@ -387,7 +387,7 @@ fn a_steady_gizmo_frame_rebuilds_nothing() {
         column_box,
         refusal: None,
     };
-    let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped };
+    let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped, pool_full: false };
     let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
     let domains: crate::physics_overlay::SharedDomains = Arc::from([(domain.clone(), snapshot(clipped, at(1.5)))]);
     let mut host = GizmoProblems::default();
@@ -434,10 +434,10 @@ fn the_fit_report_is_reallocated_only_on_change() {
     assert_eq!(first.len(), 2, "one entry per capped domain, none for a fitting one");
     assert!(Arc::ptr_eq(&first, &record(&rig, &[capped(&other), capped(&water)])), "order is not a change");
     assert!(Arc::ptr_eq(&first, &record(&rig, &[(water.clone(), snapshot(SetupFit::default()))])), "a latched cap holds");
-    let column = SetupFit { fill_capped: false, column: ColumnOutcome::Outside };
+    let column = SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false };
     let both = record(&rig, &[(water.clone(), snapshot(column))]);
     assert!(!Arc::ptr_eq(&first, &both), "a new kind joins the latch");
-    let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped };
+    let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped, pool_full: false };
     let swept = record(&rig, &[(water.clone(), snapshot(clipped))]);
     assert_eq!(swept.iter().find(|entry| entry.node == water).unwrap().fit.column, ColumnOutcome::Clipped, "outside then clipped latches as clipped");
     assert!(Arc::ptr_eq(&swept, &record(&rig, &[(water.clone(), snapshot(column))])), "clipped and outside share one latched line");

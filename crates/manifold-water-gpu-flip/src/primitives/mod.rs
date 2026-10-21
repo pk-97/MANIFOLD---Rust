@@ -33,6 +33,7 @@ pub mod gpu_flip_volume;
 pub(crate) mod liquid_fill;
 manifold_core::testkit_visible! { pub(crate) mod liquid_solid_distance; }
 pub(crate) mod liquid_state;
+pub use liquid_state::inflow_held_back;
 manifold_core::testkit_visible! { pub(crate) mod push_out_of_solid; }
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;

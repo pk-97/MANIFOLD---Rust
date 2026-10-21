@@ -163,6 +163,7 @@ impl SetupFitObservations {
                     Some(entry) => {
                         let mut fit = entry.fit;
                         fit.fill_capped |= snapshot.fit.fill_capped;
+                        fit.pool_full |= snapshot.fit.pool_full;
                         fit.column = match (fit.column, snapshot.fit.column) {
                             (ColumnOutcome::Fits, ran) => ran,
                             // A column that was outside also crossed the wall.

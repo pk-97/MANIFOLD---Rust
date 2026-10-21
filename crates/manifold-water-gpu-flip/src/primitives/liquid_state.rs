@@ -96,6 +96,13 @@ fn usable_speed(stats: &LiquidTickStats) -> Option<f32> {
         .then_some(stats.max_speed)
 }
 
+/// Whether `node` is a liquid state whose last read tick had an inflow
+/// wanting a slot the pool did not have: the pool is full and the inflow is
+/// held back. The water runtime puts it on the domain's setup report.
+pub fn inflow_held_back(node: &dyn manifold_node_engine::exec::effect_node::EffectNode) -> bool {
+    node.as_any().downcast_ref::<LiquidState>().and_then(|state| state.last_stats).is_some_and(|stats| stats.inflow_refused > 0)
+}
+
 fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
     manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
         .map_err(|error| error.to_string())

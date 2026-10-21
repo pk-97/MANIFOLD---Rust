@@ -400,6 +400,7 @@ struct Pipelines {
     pose_bodies: GpuComputePipeline,
     emit_flags: GpuComputePipeline,
     emit_write: GpuComputePipeline,
+    emit_tally: GpuComputePipeline,
     tiles_classify: GpuComputePipeline,
     tiles_rings: GpuComputePipeline,
     tiles_lists: GpuComputePipeline,
@@ -464,6 +465,7 @@ impl Pipelines {
             remove_crowded: pipe("remove_crowded_markers"),
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
+            emit_tally: pipe("emit_tally"),
             tiles_classify: pipe("tiles_classify"),
             tiles_rings: pipe("tiles_rings"),
             tiles_lists: pipe("tiles_lists"),
@@ -2105,6 +2107,11 @@ impl StepState {
                 buffer(16, step.atlas), buffer(36, step.regions), buffer(46, step.clock_plan),
                 buffer(37, &scan), buffer(38, step.out), buffer(47, step.identity),
             ], groups(sites), "gpu_flip.step.emit_write");
+            enc.dispatch_compute(&pipes.emit_tally, &[
+                uniform(&emission), buffer(1, ranges), buffer(37, &scan), buffer(46, step.clock_plan),
+                buffer(47, step.identity),
+                GpuBinding::Buffer { binding: 22, buffer: step.capped, offset: step.tally },
+            ], [1, 1, 1], "gpu_flip.step.emit_tally");
         }
         enc.compute_memory_barrier_buffers();
         // A failure is sticky across narrow enable toggles and is cleared only

@@ -120,7 +120,7 @@ pub(crate) fn fill_region(
     // The lattice's f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
     let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?;
-    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits };
+    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits, pool_full: false };
     let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
     let mut column = [[0u32; 2]; 3];

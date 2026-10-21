@@ -26,6 +26,7 @@ impl RuntimeExtension for WaterRuntimeState {
         slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
         output: &mut Vec<(manifold_core::NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)>,
     ) {
+        let first = output.len();
         for (node_id, instance) in slot.node_map {
             if let Some(snapshot) = graph
                 .get_node(*instance)
@@ -33,6 +34,19 @@ impl RuntimeExtension for WaterRuntimeState {
                 .and_then(|node| node.fluid_domain_snapshot())
             {
                 output.push((node_id.clone(), snapshot));
+            }
+        }
+        // A full pool is seen by the liquid's state, downstream of its
+        // domain; it joins the snapshot of the domain whose clock feeds it.
+        for (_, instance) in slot.node_map {
+            let held_back = graph.get_node(*instance).is_some_and(|node| manifold_water_gpu_flip::primitives::inflow_held_back(node.node.as_ref()));
+            if !held_back {
+                continue;
+            }
+            let Some(domain) = graph.wires_into(*instance).find(|wire| wire.to.1 == "ticks").map(|wire| wire.from.0) else { continue };
+            let Some((domain_id, _)) = slot.node_map.iter().find(|(_, id)| *id == domain) else { continue };
+            if let Some((_, snapshot)) = output[first..].iter_mut().find(|(id, _)| id == domain_id) {
+                snapshot.fit.pool_full = true;
             }
         }
     }
