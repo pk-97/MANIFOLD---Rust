@@ -122,6 +122,19 @@ pub enum SceneTargetSelection {
 /// [`crate::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`].
 pub const MAX_STAGE_CARRYING_MODIFIERS: usize = 16;
 
+/// The one wording for a refusal on force slots: what needs them, how many,
+/// and how many are free.
+pub fn force_slots_message(subject: &str, needed: usize, free: usize, limit: usize) -> String {
+    let slots = if needed == 1 { "slot" } else { "slots" };
+    format!("{subject} needs {needed} force {slots} and this scene has {free} free: a scene holds at most {limit} forces")
+}
+
+/// How many of an owner's force slots `modifiers` take: every modifier but a
+/// Math View.
+pub fn force_slots_used(modifiers: &[SceneModifierInstanceDef]) -> usize {
+    modifiers.iter().filter(|m| !crate::scene_modifier_math_view::is_math_view_recipe(&m.graph)).count()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneModifierInstanceDef {

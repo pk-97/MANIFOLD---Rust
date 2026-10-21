@@ -733,7 +733,7 @@ fn merged_def_flattens_and_compiles_through_registry() {
     if let Some(meta) = merged.preset_metadata.as_mut() {
         meta.params.extend(plan.new_card_params.clone());
         meta.bindings.extend(plan.new_card_bindings.clone());
-        meta.string_bindings.extend(plan.new_string_bindings.clone());
+        meta.string_params.extend(plan.new_string_params.clone()); meta.string_bindings.extend(plan.new_string_bindings.clone());
     }
 
     let flat = manifold_core::flatten::flatten_groups(&merged)
@@ -804,7 +804,7 @@ fn merges_a_real_asset_and_writes_merged_def_for_graph_tool() {
     if let Some(meta) = merged.preset_metadata.as_mut() {
         meta.params.extend(plan.new_card_params.clone());
         meta.bindings.extend(plan.new_card_bindings.clone());
-        meta.string_bindings.extend(plan.new_string_bindings.clone());
+        meta.string_params.extend(plan.new_string_params.clone()); meta.string_bindings.extend(plan.new_string_bindings.clone());
     }
 
     // Structural proof, same as the synthetic test above.
@@ -1218,7 +1218,7 @@ fn hostile_fixtures_merge_into_existing_scene() {
         if let Some(meta) = merged.preset_metadata.as_mut() {
             meta.params.extend(plan.new_card_params.clone());
             meta.bindings.extend(plan.new_card_bindings.clone());
-            meta.string_bindings.extend(plan.new_string_bindings.clone());
+            meta.string_params.extend(plan.new_string_params.clone()); meta.string_bindings.extend(plan.new_string_bindings.clone());
         }
 
         let registry = PrimitiveRegistry::with_builtin();
@@ -1294,7 +1294,7 @@ fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() 
     if let Some(meta) = merged.preset_metadata.as_mut() {
         meta.params.extend(plan.new_card_params.clone());
         meta.bindings.extend(plan.new_card_bindings.clone());
-        meta.string_bindings.extend(plan.new_string_bindings.clone());
+        meta.string_params.extend(plan.new_string_params.clone()); meta.string_bindings.extend(plan.new_string_bindings.clone());
     }
 
     let registry = PrimitiveRegistry::with_builtin();

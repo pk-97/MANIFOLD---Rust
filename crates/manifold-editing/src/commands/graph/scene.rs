@@ -15,6 +15,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     InterfacePortDef, ParamSpecDef, PresetMetadata, SerializedParamValue, StringBindingDef,
+    StringParamSpecDef,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
@@ -298,14 +299,15 @@ impl Command for RemoveSceneObjectCommand {
             self.rejection = Some("Remove Object rejected: selected object changed".into());
             return;
         }
-        if deletion_breaks_explicit_modifier_target(
+        let aimed = scene_object_modifiers(
             &def,
             &self.scope_path,
             self.render_scene_node_id,
             self.object_index,
-        ) {
+        );
+        if !aimed.shared.is_empty() {
             self.rejection = Some(
-                "Object is explicitly targeted by a scene modifier; retarget or remove that modifier first".into(),
+                "A scene modifier aims at this object and others; retarget or remove that modifier first".into(),
             );
             return;
         }
@@ -479,9 +481,22 @@ impl Command for RemoveSceneObjectCommand {
             let removed_params = prune_scene_object_metadata(def, &removed_ids);
             Some(removed_params)
         })();
-        let Some(removed_param_ids) = result else {
+        let Some(mut removed_param_ids) = result else {
             return;
         };
+        // Modifiers aimed only at this object go with it, in this undo step.
+        if !aimed.owned.is_empty() {
+            match manifold_core::scene_modifier_edit::remove_scene_modifiers(&candidate, &aimed.owned) {
+                Ok(edit) => {
+                    candidate = edit.graph;
+                    removed_param_ids.extend(edit.removed_param_ids);
+                }
+                Err(error) => {
+                    self.rejection = Some(format!("Remove Object: {error}"));
+                    return;
+                }
+            }
+        }
         if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             *def = candidate.clone();
         })
@@ -791,7 +806,8 @@ impl Command for RemoveSceneSubmeshCommand {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
-        if deletion_breaks_explicit_modifier_target(def, &[], self.render_scene_node_id, self.physical_index) {
+        let aimed = scene_object_modifiers(def, &[], self.render_scene_node_id, self.physical_index);
+        if !aimed.owned.is_empty() || !aimed.shared.is_empty() {
             self.rejection = Some("Submesh is explicitly targeted by a scene modifier; retarget or remove that modifier first".into());
             return;
         }
@@ -965,22 +981,6 @@ impl Command for DuplicateSceneSubmeshCommand {
             wires.push(scene_build_wire(info.group_id, &new_output_port, render_id, &format!("object_{current_objects}")));
             let render = nodes.iter_mut().find(|node| node.id == render_id)?;
             render.params.insert("objects".into(), SerializedParamValue::Float { value: current_objects as f32 + 1.0 });
-            if let Some(meta) = def.preset_metadata.as_mut() {
-                let source_bindings = meta.string_bindings.clone();
-                for binding in source_bindings {
-                    let target = match &binding.target {
-                        BindingTarget::Node { node_id, param } => Some((node_id.clone(), param.clone())),
-                        _ => None,
-                    };
-                    if let Some((node_id, param)) = target
-                        && let Some((_, new_id)) = id_map.iter().find(|(old, _)| *old == node_id)
-                    {
-                        let mut cloned = binding;
-                        cloned.target = BindingTarget::Node { node_id: new_id.clone(), param: param.clone() };
-                        meta.string_bindings.push(cloned);
-                    }
-                }
-            }
             clone_sections::clone_scene_bindings(def, &id_map);
             let cloned_child_node_id = id_map
                 .iter()
@@ -1008,54 +1008,47 @@ impl Command for DuplicateSceneSubmeshCommand {
     fn rejection_reason(&self) -> Option<&str> { self.rejection.as_deref() }
 }
 
-fn deletion_breaks_explicit_modifier_target(
+/// The object wired to `object_{object_index}`, as scene modifiers name it.
+fn scene_object_ref(
     def: &EffectGraphDef,
     scope: &[u32],
     render_id: u32,
     object_index: u32,
-) -> bool {
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-    if def.scene_modifiers.is_empty() {
-        return false;
-    }
+) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
     let mut nodes = def.nodes.as_slice();
     let mut wires = def.wires.as_slice();
     let mut path = Vec::with_capacity(scope.len());
     for id in scope {
-        let Some(node) = nodes.iter().find(|node| node.id == *id) else {
-            return false;
-        };
-        let Some(group) = node.group.as_deref() else {
-            return false;
-        };
+        let node = nodes.iter().find(|node| node.id == *id)?;
+        let group = node.group.as_deref()?;
         path.push(node.node_id.clone());
         nodes = &group.nodes;
         wires = &group.wires;
     }
     let port = format!("object_{object_index}");
-    let Some(wire) = wires
+    let wire = wires
         .iter()
-        .find(|wire| wire.to_node == render_id && wire.to_port == port)
-    else {
-        return false;
-    };
-    let Some(producer) = nodes.iter().find(|node| node.id == wire.from_node) else {
-        return false;
-    };
-    let removed = SceneNodeRef {
+        .find(|wire| wire.to_node == render_id && wire.to_port == port)?;
+    let producer = nodes.iter().find(|node| node.id == wire.from_node)?;
+    Some(manifold_core::scene_modifier_preset::SceneNodeRef {
         scope: path,
         node: producer.node_id.clone(),
-    };
-    def.scene_modifiers
-        .iter()
-        .any(|modifier| match &modifier.targets {
-            SceneTargetSelection::AllObjects => false,
-            SceneTargetSelection::Explicit { objects } => objects.iter().any(|object| {
-                object == &removed
-                    || (object.scope.starts_with(&removed.scope)
-                        && object.scope.get(removed.scope.len()) == Some(&removed.node))
-            }),
-        })
+    })
+}
+
+/// The modifiers explicitly aimed at the object wired to `object_index`.
+fn scene_object_modifiers(
+    def: &EffectGraphDef,
+    scope: &[u32],
+    render_id: u32,
+    object_index: u32,
+) -> manifold_core::scene_modifier_edit::ObjectModifiers {
+    if def.scene_modifiers.is_empty() {
+        return Default::default();
+    }
+    scene_object_ref(def, scope, render_id, object_index)
+        .map(|object| manifold_core::scene_modifier_edit::object_modifiers(def, &object))
+        .unwrap_or_default()
 }
 
 /// The remove-light gesture (BUG-193): the inverse of
@@ -1863,6 +1856,7 @@ pub struct ImportModelIntoSceneCommand {
     new_objects_count: u32,
     new_card_params: Vec<ParamSpecDef>,
     new_card_bindings: Vec<BindingDef>,
+    new_string_params: Vec<StringParamSpecDef>,
     new_string_bindings: Vec<StringBindingDef>,
     /// The scene's bounds the merged card ranges were scaled by, written to
     /// `meta.scene_bounds` when the graph has none so the live param lookup
@@ -1890,6 +1884,7 @@ impl ImportModelIntoSceneCommand {
         new_objects_count: u32,
         new_card_params: Vec<ParamSpecDef>,
         new_card_bindings: Vec<BindingDef>,
+        new_string_params: Vec<StringParamSpecDef>,
         new_string_bindings: Vec<StringBindingDef>,
         catalog_default: EffectGraphDef,
     ) -> Self {
@@ -1902,6 +1897,7 @@ impl ImportModelIntoSceneCommand {
             new_objects_count,
             new_card_params,
             new_card_bindings,
+            new_string_params,
             new_string_bindings,
             scene_bounds: None,
             catalog_default,
@@ -1929,6 +1925,7 @@ impl Command for ImportModelIntoSceneCommand {
         let objects = self.new_objects_count;
         let new_card_params = self.new_card_params.clone();
         let new_card_bindings = self.new_card_bindings.clone();
+        let new_string_params = self.new_string_params.clone();
         let new_string_bindings = self.new_string_bindings.clone();
         let scene_bounds = self.scene_bounds;
         let result =
@@ -1946,15 +1943,24 @@ impl Command for ImportModelIntoSceneCommand {
                 // never overlap.
                 if !new_card_params.is_empty()
                     || !new_card_bindings.is_empty()
+                    || !new_string_params.is_empty()
                     || !new_string_bindings.is_empty()
                 {
                     // Safety net only: every real generator's catalog default
                     // carries a `preset_metadata` (D9), so a hand-built def with
                     // none still keeps the new card entries.
-                    let meta = def.preset_metadata.get_or_insert_with(unnamed_scene_metadata);
+                    let mut meta = def.preset_metadata.clone().unwrap_or_else(unnamed_scene_metadata);
                     meta.params.extend(new_card_params);
                     meta.bindings.extend(new_card_bindings);
+                    meta.string_params.extend(new_string_params);
                     meta.string_bindings.extend(new_string_bindings);
+                    let added = manifold_core::binding_identity::added_errors(prev_metadata.as_ref(), Some(&meta));
+                    if let Some(error) = added.first() {
+                        eprintln!("[manifold-editing] Import Model refused: {error}");
+                        def.preset_metadata = prev_metadata;
+                        return None;
+                    }
+                    def.preset_metadata = Some(meta);
                 }
 
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;

@@ -331,11 +331,11 @@ pub(crate) fn parse_value(
     }
     // Angles are shown and typed in degrees, stored in radians.
     let parsed = if display.is_angle { parsed.to_radians() } else { parsed };
-    let mut value = parsed.clamp(min, max);
-    if whole_numbers {
-        value = value.round().clamp(min, max);
-    }
-    Ok(value)
+    Ok(if whole_numbers {
+        manifold_ui::automation_drag::quantise_whole_number(parsed, min, max)
+    } else {
+        parsed.clamp(min, max)
+    })
 }
 
 fn invalid(ui: &mut UIRoot, message: impl Into<String>) {

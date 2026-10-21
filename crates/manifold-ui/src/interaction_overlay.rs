@@ -13,6 +13,10 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::anim::{AnimF32, Transient};
+use crate::automation_drag::{
+    DragResolver, ResolveInput, apply_value, clamp_group_beat_delta, clamp_single_beat,
+    quantise_whole_number, room_to_unselected,
+};
 use crate::automation_hit_tester::{self, AutomationFeedback, AutomationHit, AutomationOperation};
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
 use crate::color;
@@ -192,24 +196,14 @@ struct AutomationDragState {
     /// preview call must search by.
     last_beat: Beats,
     last_value: f32,
-    grab_x: f32,
-    grab_y: f32,
-    grab_offset_beats: Beats,
-    /// Latches once the pointer leaves the `AUTOMATION_AXIS_LOCK_PX` dead
-    /// zone around the press X; until then the point keeps its exact beat.
-    x_unlocked: bool,
-    /// A tail drag moves the end point up and down only: the beat never moves.
-    beat_locked: bool,
+    /// The drag's one resolver; a tail drag's is beat-locked.
+    resolver: DragResolver,
     /// Neighbour beats at press time: the point may not cross them.
     prev_beat: Beats,
     next_beat: Option<Beats>,
     original_points: Vec<(Beats, f32, UiSegmentShape)>,
     working: Vec<(Beats, f32, UiSegmentShape)>,
 }
-
-/// Horizontal travel (UI px) before an automation point drag starts moving in
-/// time. Below it the drag is vertical-only, so an off-grid point keeps its beat.
-const AUTOMATION_AXIS_LOCK_PX: f32 = 4.0;
 
 // ── AutomationSegmentBendState / AutomationSegmentDragState ────────
 // P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` section 7): grabbed-segment geometry
@@ -251,8 +245,8 @@ struct AutomationSegmentDragState {
     right_beat: Beats,
     right_original_value: f32,
     right_shape: UiSegmentShape,
-    /// Normalized (0..1) Y within the strip at press time.
-    grab_norm: f32,
+    /// Beat-locked: a segment moves in value only.
+    resolver: DragResolver,
     last_left_value: f32,
     last_right_value: f32,
 }
@@ -309,13 +303,14 @@ struct AutomationGroupLaneState {
 struct AutomationGroupDragState {
     grab_target: UiGraphTarget,
     grab_param_id: ParamId,
-    grab_norm: f32,
     grabbed_original_beat: Beats,
     grabbed_original_value: f32,
-    grab_x: f32,
-    grab_offset_beats: Beats,
-    /// Latches once the pointer leaves the `AUTOMATION_AXIS_LOCK_PX` dead zone.
-    x_unlocked: bool,
+    resolver: DragResolver,
+    /// Earliest selected beat, and the room to the nearest unselected point on
+    /// each side across every lane, both captured at press.
+    min_beat: f64,
+    room_left: f64,
+    room_right: f64,
     points: Vec<AutomationGroupPointState>,
     lanes: Vec<AutomationGroupLaneState>,
 }
@@ -436,12 +431,6 @@ fn line_value_at_beat(
     let (first, last) = (lane.dots.first()?, lane.dots.last()?);
     let end = if beat <= first.beat { first } else if beat >= last.beat { last } else { return None };
     Some((lane.param_min + end.value_norm * (lane.param_max - lane.param_min), 0.0, None))
-}
-
-/// Stepped (whole-number) parameters step from their minimum, so a range such
-/// as 0.5..4.5 lands on 0.5, 1.5, ... and never outside `[min, max]`.
-fn snap_to_whole_steps(value: f32, param_min: f32, param_max: f32) -> f32 {
-    (param_min + (value - param_min).round()).clamp(param_min, param_max)
 }
 
 /// Split a preview lane at `beat`, preserving the curve on both outer tails.
@@ -1357,15 +1346,13 @@ impl InteractionOverlay {
     }
 
     /// Whether the running drag has moved (or at this pointer will move) along
-    /// the beat axis. Point and group drags are vertical-only inside the
-    /// `AUTOMATION_AXIS_LOCK_PX` dead zone and must not scroll the view then.
+    /// the beat axis. Point and group drags do not move in time before the drag
+    /// threshold, or at all when beat-locked, and must not scroll the view then.
     fn drag_moves_in_time(&self, mode: DragMode, pos: Vec2) -> bool {
         match (mode, self.drag.payload()) {
-            (DragMode::AutomationPoint, Some(TimelineDrag::AutomationPoint(d))) => {
-                d.x_unlocked || (pos.x - d.grab_x).abs() > AUTOMATION_AXIS_LOCK_PX
-            }
+            (DragMode::AutomationPoint, Some(TimelineDrag::AutomationPoint(d))) => d.resolver.moves_in_time(pos),
             (DragMode::AutomationGroupMove, Some(TimelineDrag::AutomationGroupMove(s))) => {
-                s.x_unlocked || (pos.x - s.grab_x).abs() > AUTOMATION_AXIS_LOCK_PX
+                s.resolver.moves_in_time(pos)
             }
             _ => true,
         }
@@ -1842,11 +1829,7 @@ impl InteractionOverlay {
                     original,
                     last_beat: dot.beat,
                     last_value: value,
-                    grab_x: press_pos.x,
-                    grab_y: press_pos.y,
-                    grab_offset_beats: dot.beat - viewport.pixel_to_beat(press_pos.x),
-                    x_unlocked: false,
-                    beat_locked,
+                    resolver: DragResolver::new(press_pos, viewport.pixel_to_beat(press_pos.x), beat_locked),
                     prev_beat,
                     next_beat,
                     working: original_points.clone(),
@@ -1954,10 +1937,6 @@ impl InteractionOverlay {
             return;
         };
         let grab_lane = &lanes[grab_lane_index];
-        let grab_norm = (1.0
-            - (press_pos.y - grab_lane.curve_rect().y) / grab_lane.curve_rect().height.max(f32::EPSILON))
-        .clamp(0.0, 1.0);
-
         let mut points = Vec::with_capacity(ui_state.selected_automation_points.len());
         let mut group_lanes: Vec<AutomationGroupLaneState> = Vec::new();
         for r in &ui_state.selected_automation_points {
@@ -2032,15 +2011,41 @@ impl InteractionOverlay {
             self.automation_lane_snapshots.clear();
             return;
         };
+        // The group stops at beat zero and at the nearest unselected point on
+        // any lane, as the arrow-key nudge does (`room_to_unselected`).
+        let (mut room_left, mut room_right) = (f64::INFINITY, f64::INFINITY);
+        for p in &points {
+            let Some(lane_points) = self.automation_lane_snapshots[group_lanes[p.lane_index].snapshot_index].points.as_ref()
+            else {
+                continue;
+            };
+            let Some(index) = lane_points.iter().position(|q| q.0 == p.original_beat && q.1 == p.original_value)
+            else {
+                continue;
+            };
+            let (left, right) = room_to_unselected(
+                index,
+                p.original_beat.0,
+                lane_points.iter().enumerate().map(|(j, q)| {
+                    let selected = points
+                        .iter()
+                        .any(|s| s.lane_index == p.lane_index && s.original_beat == q.0 && s.original_value == q.1);
+                    (j, q.0.0, selected)
+                }),
+            );
+            room_left = room_left.min(left);
+            room_right = room_right.min(right);
+        }
+        let min_beat = points.iter().map(|p| p.original_beat.0).fold(f64::INFINITY, f64::min);
         let state = AutomationGroupDragState {
             grab_target: grab_lane.target.clone(),
             grab_param_id: grab_lane.param_id.clone(),
-            grab_norm,
             grabbed_original_beat,
             grabbed_original_value,
-            grab_x: press_pos.x,
-            grab_offset_beats: grabbed_original_beat - viewport.pixel_to_beat(press_pos.x),
-            x_unlocked: false,
+            resolver: DragResolver::new(press_pos, viewport.pixel_to_beat(press_pos.x), false),
+            min_beat,
+            room_left,
+            room_right,
             points,
             lanes: group_lanes,
         };
@@ -2189,8 +2194,6 @@ impl InteractionOverlay {
             };
             self.drag.start(TimelineDrag::AutomationSegmentBend(state), press_pos);
         } else {
-            let grab_norm = (1.0 - (press_pos.y - lane.curve_rect().y) / lane.curve_rect().height.max(f32::EPSILON))
-                .clamp(0.0, 1.0);
             let state = AutomationSegmentDragState {
                 target: lane.target.clone(),
                 param_id: lane.param_id.clone(),
@@ -2200,7 +2203,7 @@ impl InteractionOverlay {
                 right_beat: right.beat,
                 right_original_value: right_value,
                 right_shape: right.shape,
-                grab_norm,
+                resolver: DragResolver::new(press_pos, Beats::ZERO, true),
                 last_left_value: left_value,
                 last_right_value: right_value,
             };
@@ -2231,40 +2234,31 @@ impl InteractionOverlay {
             return;
         };
 
-        let x_unlocked = !d.beat_locked && (d.x_unlocked || (pos.x - d.grab_x).abs() > AUTOMATION_AXIS_LOCK_PX);
-        let to_beat = if !x_unlocked {
-            d.original.0
-        } else {
-            let raw_beat = viewport.pixel_to_beat(pos.x) + d.grab_offset_beats;
-            let beat = if self.modifiers.command {
-                raw_beat
-            } else {
-                viewport.snap_to_grid(raw_beat)
-            }
-            .max(Beats::ZERO);
-            // Neighbours as they were at press time: a dragged point never
-            // crosses them (equal beats allowed, that makes a vertical step).
-            let beat = beat.max(d.prev_beat);
-            d.next_beat.map_or(beat, |next| beat.min(next))
+        let input = ResolveInput {
+            pos,
+            pointer_beat: viewport.pixel_to_beat(pos.x),
+            grid_step: viewport.grid_step(),
+            command: self.modifiers.command,
+            shift: self.modifiers.shift,
+            curve_height: lane.curve_rect().height,
         };
-        let fine = if self.modifiers.shift { 0.25 } else { 1.0 };
-        let delta = (d.grab_y - pos.y) / lane.curve_rect().height.max(f32::EPSILON);
-        let mut to_value = (d.original.1 + delta * fine * (lane.param_max - lane.param_min))
-            .clamp(lane.param_min, lane.param_max);
-        if lane.whole_numbers {
-            to_value = snap_to_whole_steps(to_value, lane.param_min, lane.param_max);
+        let Some(TimelineDrag::AutomationPoint(drag)) = self.drag.payload_mut() else {
+            return;
+        };
+        let resolved = drag.resolver.resolve(&input);
+        let to_beat = clamp_single_beat(
+            drag.original.0 + Beats(resolved.beat_delta),
+            drag.prev_beat,
+            drag.next_beat,
+        );
+        let to_value = apply_value(drag.original.1, resolved.norm_delta, lane.param_min, lane.param_max, lane.whole_numbers);
+        drag.working.clone_from(&drag.original_points);
+        if to_beat != drag.original.0 || to_value != drag.original.1 {
+            insert_moved_point(&mut drag.working, drag.original.0, drag.original.1, to_beat, to_value, drag.original.2);
         }
-
-        if let Some(TimelineDrag::AutomationPoint(drag)) = self.drag.payload_mut() {
-            drag.x_unlocked = x_unlocked;
-            drag.working.clone_from(&drag.original_points);
-            if to_beat != drag.original.0 || to_value != drag.original.1 {
-                insert_moved_point(&mut drag.working, drag.original.0, drag.original.1, to_beat, to_value, drag.original.2);
-            }
-            host.set_automation_lane_preview(&target, &param_id, &drag.working);
-            drag.last_beat = to_beat;
-            drag.last_value = to_value;
-        }
+        host.set_automation_lane_preview(&target, &param_id, &drag.working);
+        drag.last_beat = to_beat;
+        drag.last_value = to_value;
         if let Some(selected) = ui_state.selected_automation_point.as_mut() {
             selected.beat = to_beat;
             selected.value_norm = ((to_value - lane.param_min) / (lane.param_max - lane.param_min).max(f32::EPSILON)).clamp(0.0, 1.0);
@@ -2365,35 +2359,42 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &TimelineViewportPanel,
     ) {
-        let Some(TimelineDrag::AutomationSegmentDrag(state)) = self.drag.payload().cloned() else {
+        let Some(TimelineDrag::AutomationSegmentDrag(state)) = self.drag.payload() else {
             return;
         };
+        let (target, param_id) = (state.target.clone(), state.param_id.clone());
         let lanes = viewport.automation_lane_screens();
-        let Some(lane) = lanes
-            .iter()
-            .find(|l| l.target == state.target && l.param_id == state.param_id)
-        else {
+        let Some(lane) = lanes.iter().find(|l| l.target == target && l.param_id == param_id) else {
             return;
         };
-        let norm = (1.0 - (pos.y - lane.curve_rect().y) / lane.curve_rect().height.max(f32::EPSILON))
-            .clamp(0.0, 1.0);
-        let mut delta_norm = norm - state.grab_norm;
-        if self.modifiers.shift {
-            delta_norm *= 0.25;
-        }
+        let input = ResolveInput {
+            pos,
+            pointer_beat: viewport.pixel_to_beat(pos.x),
+            grid_step: viewport.grid_step(),
+            command: self.modifiers.command,
+            shift: self.modifiers.shift,
+            curve_height: lane.curve_rect().height,
+        };
+        let Some(TimelineDrag::AutomationSegmentDrag(state)) = self.drag.payload_mut() else {
+            return;
+        };
+        let resolved = state.resolver.resolve(&input);
+        let state = state.clone();
         let range = (lane.param_max - lane.param_min).max(f32::EPSILON);
         let left_original_norm = (state.left_original_value - lane.param_min) / range;
         let right_original_norm = (state.right_original_value - lane.param_min) / range;
+        // A shared clamp keeps the value delta identical at both ends when
+        // either endpoint reaches its parameter boundary.
         let min_delta = -left_original_norm.min(right_original_norm);
         let max_delta = (1.0 - left_original_norm).min(1.0 - right_original_norm);
-        let delta_norm = delta_norm.clamp(min_delta, max_delta);
+        let delta_norm = resolved.norm_delta.clamp(min_delta, max_delta);
         let left_norm = (left_original_norm + delta_norm).clamp(0.0, 1.0);
         let right_norm = (right_original_norm + delta_norm).clamp(0.0, 1.0);
         let mut left_value = lane.param_min + left_norm * range;
         let mut right_value = lane.param_min + right_norm * range;
         if lane.whole_numbers && delta_norm != 0.0 {
-            left_value = snap_to_whole_steps(left_value, lane.param_min, lane.param_max);
-            right_value = snap_to_whole_steps(right_value, lane.param_min, lane.param_max);
+            left_value = quantise_whole_number(left_value, lane.param_min, lane.param_max);
+            right_value = quantise_whole_number(right_value, lane.param_min, lane.param_max);
         }
 
         host.set_automation_segment_drag_preview(
@@ -2581,46 +2582,37 @@ impl InteractionOverlay {
         let Some(TimelineDrag::AutomationGroupMove(s)) = self.drag.payload() else {
             return;
         };
-        let (grab_target, grab_param_id, grab_norm, grabbed_original_beat, grab_offset_beats) =
-            (s.grab_target.clone(), s.grab_param_id.clone(), s.grab_norm, s.grabbed_original_beat, s.grab_offset_beats);
+        let (grab_target, grab_param_id) = (s.grab_target.clone(), s.grab_param_id.clone());
         let lanes = viewport.automation_lane_screens();
         let Some(grab_lane) = lanes.iter().find(|l| l.target == grab_target && l.param_id == grab_param_id)
         else {
             return;
         };
-        let x_unlocked = s.x_unlocked || (pos.x - s.grab_x).abs() > AUTOMATION_AXIS_LOCK_PX;
-        let snapped_beat = if !x_unlocked {
-            grabbed_original_beat
-        } else {
-            let raw_beat = viewport.pixel_to_beat(pos.x) + grab_offset_beats;
-            if self.modifiers.command {
-                raw_beat
-            } else {
-                viewport.snap_to_grid(raw_beat)
-            }
+        let input = ResolveInput {
+            pos,
+            pointer_beat: viewport.pixel_to_beat(pos.x),
+            grid_step: viewport.grid_step(),
+            command: self.modifiers.command,
+            shift: self.modifiers.shift,
+            curve_height: grab_lane.curve_rect().height,
         };
-        let requested_delta = snapped_beat - grabbed_original_beat;
-        let earliest = s
-            .points
-            .iter()
-            .map(|point| point.original_beat)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .unwrap_or(Beats::ZERO);
-        // One shared delta preserves all inter-point spacing and keeps the
-        // earliest selected point at or after beat zero.
-        let beat_delta = requested_delta.max(-earliest);
-        let norm = (1.0
-            - (pos.y - grab_lane.curve_rect().y) / grab_lane.curve_rect().height.max(f32::EPSILON))
-        .clamp(0.0, 1.0);
-        let mut requested_norm_delta = norm - grab_norm;
-        if self.modifiers.shift {
-            requested_norm_delta *= 0.25;
-        }
+        let Some(TimelineDrag::AutomationGroupMove(state)) = self.drag.payload_mut() else {
+            return;
+        };
+        let resolved = state.resolver.resolve(&input);
+        // One shared delta preserves all inter-point spacing; it stops at beat
+        // zero and at the nearest unselected point, the arrow-key nudge's clamp.
+        let beat_delta = Beats(clamp_group_beat_delta(
+            resolved.beat_delta,
+            state.min_beat,
+            state.room_left,
+            state.room_right,
+        ));
         // Clamp the shared normalized delta against the whole selection, so
         // one endpoint reaching a bound does not squash the selected shape.
         let mut min_delta = f32::NEG_INFINITY;
         let mut max_delta = f32::INFINITY;
-        for point in &s.points {
+        for point in &state.points {
             let range = (point.param_max - point.param_min).max(f32::EPSILON);
             let original_norm = (point.original_value - point.param_min) / range;
             // Display/runtime snapshots can contain periodic or otherwise
@@ -2631,13 +2623,9 @@ impl InteractionOverlay {
             min_delta = min_delta.max(-bounded_norm);
             max_delta = max_delta.min(1.0 - bounded_norm);
         }
-        let delta_norm = requested_norm_delta.clamp(min_delta, max_delta);
+        let delta_norm = resolved.norm_delta.clamp(min_delta, max_delta);
         let unchanged = beat_delta.0 == 0.0 && delta_norm == 0.0;
 
-        let Some(TimelineDrag::AutomationGroupMove(state)) = self.drag.payload_mut() else {
-            return;
-        };
-        state.x_unlocked = x_unlocked;
         for point in &mut state.points {
             let range = (point.param_max - point.param_min).max(f32::EPSILON);
             let orig_norm = (point.original_value - point.param_min) / range;
@@ -2650,7 +2638,7 @@ impl InteractionOverlay {
                 point.param_min + (orig_norm + delta_norm) * range
             };
             if point.whole_numbers && !unchanged && delta_norm != 0.0 {
-                new_value = snap_to_whole_steps(new_value, point.param_min, point.param_max);
+                new_value = quantise_whole_number(new_value, point.param_min, point.param_max);
             }
             point.last_beat = point.original_beat + beat_delta;
             point.last_value = new_value;
@@ -2671,26 +2659,21 @@ impl InteractionOverlay {
                 continue;
             }
 
-            // Transform selected source tuples in their original positions,
-            // then remove only exact destination collisions. Stable sorting
-            // preserves equal-beat order: a point moved right stays before a
-            // stationary endpoint, and a point moved left stays after it.
-            lane.working.retain_mut(|point| {
+            // Transform selected source tuples in their original positions.
+            // Unselected points are never removed: a drop onto an exact twin
+            // keeps both, as the commit does (`for_group_keeping_twins`).
+            // Stable ordering preserves equal-beat order: a point moved right
+            // stays before a stationary endpoint, and a point moved left
+            // stays after it.
+            for point in lane.working.iter_mut() {
                 if let Some(selected) = state.points.iter().find(|selected| {
                     selected.lane_index == lane_index
                         && point.0 == selected.original_beat
                         && point.1 == selected.original_value
                 }) {
                     *point = (selected.last_beat, selected.last_value, selected.shape);
-                    true
-                } else {
-                    !state.points.iter().any(|selected| {
-                        selected.lane_index == lane_index
-                            && point.0 == selected.last_beat
-                            && point.1 == selected.last_value
-                    })
                 }
-            });
+            }
             // Keep equal-beat order without allocating stable-sort scratch
             // on every pointer frame. Most frames retain the original order.
             for index in 1..lane.working.len() {

@@ -46,6 +46,8 @@ use std::sync::OnceLock;
 use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::parameters::ParamDef;
 use crate::ports::{NodeInput, NodeOutput};
+/// What a primitive declares it takes from the Physics World.
+pub use manifold_core::scene_world_controls::{WORLD_INPUTS, WorldControlInput};
 
 /// Const-data half of the authoring layer.
 ///
@@ -704,6 +706,12 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::world_control_inputs`](crate::exec::effect_node::EffectNode::world_control_inputs).
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        &[]
+    }
+
+    /// Mirror of
     /// [`EffectNode::physical_sources`](crate::exec::effect_node::EffectNode::physical_sources).
     fn physical_sources(&self, _output: &str) -> Option<&'static [&'static str]> {
         None
@@ -919,6 +927,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn acceleration_input(&self) -> Option<&'static str> {
         Primitive::acceleration_input(self)
+    }
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        Primitive::world_control_inputs(self)
     }
     fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
         Primitive::physical_sources(self, output)

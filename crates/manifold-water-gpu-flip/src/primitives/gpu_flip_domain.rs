@@ -31,7 +31,7 @@ use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
-use manifold_water_liquid::fluid_role::FluidRole;
+use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind};
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
@@ -57,8 +57,10 @@ pub struct GpuFlipSetup {
     pub lattice: LiquidLattice,
     pub pool_sites: u32,
     pub box_sites: [[u32; 2]; 3],
-    /// Particle slots the pool holds; 0 means the fill's count. Sources
-    /// emit into the slots past the live particles.
+    /// Slots past the fill's count the pool holds: 0 keeps the fill's count;
+    /// an Inflow gets room for the whole domain up to a memory budget
+    /// ([`GpuFlipGeometry::with_inflow`]). Sources emit into the slots past
+    /// the live particles.
     pub(crate) particle_capacity: u32,
 }
 }
@@ -132,7 +134,7 @@ fn fill_sites(
     initial_volume: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
     let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("GPU FLIP: {reason}"))?;
-    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits };
+    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits, pool_full: false };
     let fill_height = filled.height();
     let min = layout.min.map(f64::from);
     let h = layout.cell_size;
@@ -174,28 +176,50 @@ pub fn gpu_flip_geometry(
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0), false).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let (pool_sites, box_sites, fit) = fill_sites(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_volume)?;
-    let capacity = read("particle_capacity", 0.0);
-    if !capacity.is_finite() || capacity < 0.0 {
-        return Err("GPU FLIP: Max Particles must be 0 (the fill's count) or a positive count".into());
-    }
-    let particle_capacity = capacity.round() as u64;
-    let particles = filled_sites(layout.cells, pool_sites, box_sites).max(particle_capacity);
+    let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
-            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution, Fill Height or Max Particles."
+            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution or Fill Height."
         ));
     }
-    let setup = GpuFlipSetup {
-        lattice: LiquidLattice::from_layout(&layout),
-        pool_sites,
-        box_sites,
-        particle_capacity: particle_capacity as u32,
-    };
+    let setup = GpuFlipSetup { lattice: LiquidLattice::from_layout(&layout), pool_sites, box_sites, particle_capacity: 0 };
     Ok(GpuFlipGeometry { layout, setup, particles, solve_level, max_iterations, sheet_fill_rate, fit })
 }
 }
 
+/// The most slots the pool gives an inflow: about 1 GB of device memory,
+/// since a slot costs the rendered water about 1 kB across its particle
+/// buffers (the extent walk's count at 64³). It holds half a 64³ domain.
+pub const AUTO_INFLOW_SLOTS: u32 = 1 << 20;
+
+/// The kinds of the roles a frame read. Presence, not Enabled, so switching
+/// an inflow on and off live never resizes the pool, which would restart the
+/// water.
+fn role_kinds(roles: &[Option<FluidRole>]) -> impl Iterator<Item = FluidRoleKind> + '_ {
+    roles.iter().flatten().map(|role| role.kind)
+}
+
 impl GpuFlipGeometry {
+    /// A domain with an Inflow holds one slot per half-cell site of the
+    /// domain, the sites the fill and an inflow seed at, up to
+    /// [`AUTO_INFLOW_SLOTS`]. An inflow fills only empty sites, so in a
+    /// domain within that it flows until the domain is full of water, as FLIP
+    /// Fluids' unbounded particle list does; a Drain or an open face frees
+    /// slots for it again. A pool that still fills is reported, never silent
+    /// (stats word 29 into the setup check).
+    pub fn with_inflow(mut self) -> Self {
+        let sites = self.layout.cells.iter().map(|&n| 2 * u64::from(n)).product::<u64>().min(u64::from(AUTO_INFLOW_SLOTS));
+        self.setup.particle_capacity = sites as u32;
+        self.particles = self.particles.max(sites);
+        self
+    }
+
+    /// The pool the wired role kinds need: room for an inflow when any is
+    /// one. The node and its extent rule both size through here.
+    pub(crate) fn sized_for(self, kinds: impl IntoIterator<Item = FluidRoleKind>) -> Self {
+        if kinds.into_iter().any(|kind| kind == FluidRoleKind::Inflow) { self.with_inflow() } else { self }
+    }
+
     /// The field lattice over the face grid's box: from its minimum corner
     /// to its far wall faces.
     pub(crate) fn field_lattice(&self) -> ForceLattice {
@@ -302,6 +326,7 @@ manifold_node_engine::primitive! {
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
         air_drag: ScalarF32 optional,
+        air_resistance: ScalarF32 optional,
         reset: ScalarF32 optional,
         role_0: FluidRole optional,
         role_1: FluidRole optional,
@@ -431,7 +456,6 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("closed_pos_y"), label: "Ceiling", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Back Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Front Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("particle_capacity"), label: "Max Particles", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most two fixed Sim Rate intervals per display frame and reports dropped time; export runs every interval.",
@@ -474,6 +498,11 @@ manifold_node_engine::primitive! {
 const NO_OBSTACLE_BOUND: &[(&str, f32)] = &[(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1.0)];
 
 impl Primitive for GpuFlipDomain {
+    /// A liquid follows the Physics World: its gravity and its clock.
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        &manifold_core::scene_world_controls::WORLD_INPUTS
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "bodies" | "contacts" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
                 | "clock_sources"
@@ -807,7 +836,7 @@ impl GpuFlipDomain {
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
         let column = ctx.inputs.transform("initial_volume");
         let geometry = match gpu_flip_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.inputs.transform("domain"), column) {
-            Ok(geometry) => geometry,
+            Ok(geometry) => geometry.sized_for(role_kinds(roles)),
             Err(reason) => {
                 self.setup_report.refuse(&reason);
                 return Err(reason);
@@ -1302,6 +1331,73 @@ mod tests {
         let column = Transform { pos: [-2.83, 1.0, 0.0], scale: [0.41, 1.0, 1.0], ..Transform::default() };
         let setup = gpu_flip_geometry(read, None, Some(column)).expect("fills").setup;
         assert_eq!(setup.box_sites[0], [27, 39]);
+    }
+
+    /// BUG-3zq4r (inflow runs out): the pool used to be the fill's count, so
+    /// an inflow only had the sites the fill left dead inside solids and
+    /// stopped within seconds, silently. With an Inflow the pool holds every
+    /// half-cell site of the domain up to about 1 GB of slots: an inflow
+    /// emits only at empty sites, so it is never short of a slot while any
+    /// site is empty, and runs as long as the clip does. A domain without an
+    /// inflow keeps the fill's count, and an old show's Max Particles changes
+    /// nothing.
+    #[test]
+    fn gpu_flip_domain_makes_room_for_an_inflow() {
+        let at_resolution = |resolution: f32, saved_capacity: f32| {
+            let read = |name: &str, default: f32| match name {
+                "resolution" => resolution,
+                "fill_height" => 0.16,
+                "particle_capacity" => saved_capacity,
+                _ => default,
+            };
+            gpu_flip_geometry(read, None, None).expect("fills")
+        };
+        let at = |saved_capacity: f32| at_resolution(32.0, saved_capacity);
+        let still = at(0.0);
+        assert_eq!(u64::from(still.setup.particle_capacity), 0, "no inflow: the fill's count");
+        let flowing = at(0.0).with_inflow();
+        let sites: u64 = still.layout.cells.iter().map(|&n| 2 * u64::from(n)).product();
+        assert_eq!(sites, 64 * 64 * 64, "the 4 m cube at 32 cells a side");
+        assert_eq!(u64::from(flowing.setup.particle_capacity), sites);
+        assert_eq!(flowing.particles, sites);
+        assert!(flowing.particles > still.particles * 10, "room for the domain, not the 0.16 m pool");
+        assert_ne!(flowing.setup, still.setup, "adding an inflow restarts the water at the new size");
+        let output = |g: &GpuFlipGeometry| g.outputs().into_iter().find(|(name, _)| *name == "particle_capacity").map(|(_, v)| v);
+        assert_eq!(output(&flowing), Some(sites as f32), "the fill's slots follow the wire");
+        assert_eq!(at(5000.0), still, "a saved Max Particles is not read");
+        assert_eq!(at(5000.0).with_inflow(), flowing, "nor with an inflow");
+        // 64 cells a side hold 2 097 152 sites: the budget, about 1 GB.
+        for resolution in [64.0, 128.0, 256.0] {
+            let big = at_resolution(resolution, 0.0).with_inflow();
+            assert_eq!(big.setup.particle_capacity, AUTO_INFLOW_SLOTS, "resolution {resolution}");
+        }
+    }
+
+    fn role(kind: FluidRoleKind, enabled: bool) -> Option<FluidRole> {
+        Some(FluidRole {
+            geometry: std::sync::Arc::new(manifold_water_liquid::fluid_role::PreparedFluidGeometry::default()),
+            kind,
+            transform: Transform::default(),
+            enabled,
+            velocity: [0.0; 3],
+            inherit_motion: 0.0,
+            friction: 0.0,
+        })
+    }
+
+    /// An Inflow sizes the pool by being there, not by being on: switching
+    /// it on live keeps the setup, so the water does not restart (the domain
+    /// restarts exactly when its setup changes). A Collider or Drain alone
+    /// keeps the fill's count.
+    #[test]
+    fn gpu_flip_domain_inflow_switched_on_keeps_the_pool() {
+        let geometry = || gpu_flip_geometry(|name, default| if name == "fill_height" { 0.16 } else { default }, None, None).expect("fills");
+        let off = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Collider, true), role(FluidRoleKind::Inflow, false)]));
+        let on = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Collider, true), role(FluidRoleKind::Inflow, true)]));
+        assert_eq!(on.setup, off.setup, "switching the inflow on restarts nothing");
+        assert_eq!(off.setup, geometry().with_inflow().setup, "a disabled inflow already has its room");
+        let none = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Collider, true), role(FluidRoleKind::Outflow, true), None]));
+        assert_eq!(none.setup, geometry().setup, "no inflow, the fill's count");
     }
 
     /// Max Iterations defaults to the engine's 900, rides the geometry to the

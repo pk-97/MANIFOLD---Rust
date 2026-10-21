@@ -256,7 +256,7 @@ fn merged_model_layer() -> PresetInstance {
             manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
                 GraphTarget::Generator(layer), vec![], plan.render_scene_node_id, plan.new_nodes,
                 plan.new_wires, plan.new_objects_count, plan.new_card_params.clone(), plan.new_card_bindings,
-                plan.new_string_bindings, default,
+                plan.new_string_params, plan.new_string_bindings, default,
             )
             .with_scene_bounds(plan.scene_bounds),
         ),

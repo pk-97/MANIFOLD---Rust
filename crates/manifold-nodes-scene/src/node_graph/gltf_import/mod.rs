@@ -55,7 +55,7 @@ pub use bounds_probe::repair_project_embedded_scene_bounds;
 pub use merge::{MergePlan, assemble_merge_plan};
 pub use report::ImportReport;
 pub use upgrade::{MaterialUpgradeCache, upgrade_material_graph};
-pub use upgrade::project::{MaterialUpgradeReport, upgrade_project_materials};
+pub use upgrade::project::{MaterialUpgradeReport, move_repaired_card_values, upgrade_project_materials};
 
 
 use scene::build_import_graph;
@@ -72,6 +72,20 @@ pub(super) const MODEL_FILE_PARAM_ID: &str = "model_file";
 /// .glb's path). Empty by default; `node.hdri_source` reads an empty path
 /// as "nothing decoded" and clears its output to black.
 pub(super) const HDRI_FILE_PARAM_ID: &str = "hdri_file";
+
+/// The card's Model File field for one imported file. The imported file is
+/// a project asset, collected by the io asset-path inventory
+/// (PROJECT_FOLDERS_DESIGN D5).
+pub(super) fn model_file_spec(path: &str) -> manifold_core::effect_graph_def::StringParamSpecDef {
+    manifold_core::effect_graph_def::StringParamSpecDef {
+        id: MODEL_FILE_PARAM_ID.to_string(),
+        name: "Model File".to_string(),
+        default_value: path.to_string(),
+        is_file_picker: true,
+        use_dropdown: false,
+        is_file_path: true,
+    }
+}
 
 /// Parse `path` and assemble a generator [`EffectGraphDef`] that renders it
 /// faithfully: one `node.render_scene` object per distinct material — 1:1,

@@ -2491,6 +2491,28 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), birth_identity[2] + before);
 }
 
+// One thread, after emit_write: the substep's inflow births and the ones the
+// pool had no free slot for, summed over the tick into the solver tail
+// (stats words 28 and 29). A refusal is how a full pool reaches the setup
+// check; the tick's first substep starts both at zero.
+@compute @workgroup_size(1)
+fn emit_tally() {
+    if u.step_in_tick == 0 {
+        capped[INFLOW_BIRTHS_TAIL] = 0u;
+        capped[INFLOW_BIRTHS_TAIL + 1u] = 0u;
+    }
+    if !clock_active() || birth_identity[3] != 0u { return; }
+    let s = emit_sites();
+    let requested = emit_scan[s.x * s.y * s.z - 1u];
+    let n = lattice();
+    let last = ranges[flatten(n - vec3<i32>(1), n)];
+    let live = last.start + last.count;
+    let room = select(0u, u.capacity - live, u.capacity > live);
+    let births = min(requested, room);
+    capped[INFLOW_BIRTHS_TAIL] += births;
+    capped[INFLOW_BIRTHS_TAIL + 1u] += requested - births;
+}
+
 @group(0) @binding(47) var<storage, read> birth_identity: array<u32>;
 
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
@@ -2836,6 +2858,11 @@ fn narrow_tally() {
     if u.narrow_band != 0u { capped[6] = bitcast<u32>(1.0); }
     if u.step_in_tick == 0 { capped[NARROW_BAND_SHORTAGE_TAIL] = 0u; }
     capped[NARROW_BAND_SHORTAGE_TAIL] += narrow_status[0];
+    // Without regions no emit_tally runs: no births, none refused.
+    if u.region_count == 0 {
+        capped[INFLOW_BIRTHS_TAIL] = 0u;
+        capped[INFLOW_BIRTHS_TAIL + 1u] = 0u;
+    }
 }
 @compute @workgroup_size(256)
 fn narrow_disabled(@builtin(global_invocation_id) gid: vec3<u32>) {

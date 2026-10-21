@@ -189,7 +189,7 @@ body_61: RigidBody optional,
 body_62: RigidBody optional,
 body_63: RigidBody optional,
 copies: RigidBody optional,
-gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional, air_drag: ScalarF32 optional,
+gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional, air_drag: ScalarF32 optional, air_resistance: ScalarF32 optional,
 acceleration_field: VectorField optional,
 body_acceleration_0: VectorField optional,
 body_acceleration_1: VectorField optional,
@@ -333,6 +333,7 @@ ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::
 ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("air_resistance"), label: "Air Resistance", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
  ],
  depth_rule: Terminal,
  composition_notes: "Connect body_N to its matching pose_N consumer and body_acceleration_N to that body's optional acceleration field. The global acceleration_field is added to every body, then the matching targeted field is added to body_N; copies_acceleration is added to every reset-latched copy. A targeted field without its matching body or copies prototype is an error and holds outputs pending. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; the copies body carries its own box spawner (count, spacing, columns, arrangement), read on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Preview batches use the project frame interval as a CPU work budget and retain all unprocessed ticks. Preview may lag under overload; the Physics Lag HUD shows remaining work. Export/offline renders process every pending tick. Both paths use identical fixed steps. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
@@ -404,10 +405,13 @@ impl PhysicsWorldNode {
             return Ok(None);
         }
         // Every field as the bodies feel it: the air it carries scaled by Air
-        // Drag (0 ignores the air).
+        // Drag (0 ignores the air). The World's still air reaches every body
+        // once, through the global field (D-114).
         let air_drag = ctx.scalar_or_param("air_drag", 1.0);
+        let air_resistance = ctx.scalar_or_param("air_resistance", 0.0);
         let felt = |field: FieldValue| field.with_air_drag(air_drag).map_err(|error| format!("Physics World: {error}"));
-        let acceleration_field = acceleration_field.map(felt).transpose()?;
+        let acceleration_field = FieldValue::felt_in_still_air(acceleration_field.as_ref(), air_resistance, air_drag)
+            .map_err(|error| format!("Physics World: {error}"))?;
         for field in &mut targeted_fields {
             if let Some(value) = field.take() {
                 *field = Some(felt(value)?);

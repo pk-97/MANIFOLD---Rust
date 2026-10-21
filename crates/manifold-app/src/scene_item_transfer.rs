@@ -152,7 +152,13 @@ impl SceneItemClipboard {
         let mut graph = (*source).clone();
         graph.nodes.retain(|node| ids.contains(&node.id));
         graph.wires = captured_wires;
-        graph.scene_modifiers.clear();
+        // Forces aimed only at this item belong to it and travel with it.
+        let item = manifold_core::SceneNodeRef {
+            scope: Vec::new(),
+            node: source.nodes.iter().find(|node| node.id == output.from_node).ok_or("Selected scene item is missing")?.node_id.clone(),
+        };
+        let owned = manifold_core::scene_modifier_edit::object_modifiers(&source, &item).owned;
+        graph.scene_modifiers.retain(|modifier| owned.contains(&modifier.id));
         Ok(Self {
             host: Box::new(host.clone()),
             graph: Box::new(graph),
@@ -218,26 +224,6 @@ impl SceneItemAction {
     }
 }
 
-fn remapped_target(target: &BindingTarget, ids: &HashMap<NodeId, NodeId>) -> Option<BindingTarget> {
-    let BindingTarget::Node { node_id, param } = target else {
-        return None;
-    };
-    Some(BindingTarget::Node {
-        node_id: ids.get(node_id)?.clone(),
-        param: param.clone(),
-    })
-}
-
-fn unique(existing: &mut HashSet<String>, base: &str) -> String {
-    let mut value = base.to_string();
-    let mut suffix = 2;
-    while !existing.insert(value.clone()) {
-        value = format!("{base}_{suffix}");
-        suffix += 1;
-    }
-    value
-}
-
 fn node_by_stable_id<'a>(nodes: &'a [EffectGraphNode], id: &NodeId) -> Option<&'a EffectGraphNode> {
     for node in nodes {
         if node.node_id == *id {
@@ -293,6 +279,9 @@ fn rewrite_label(label: String, rewrites: &[(String, String)]) -> String {
     label
 }
 
+/// Paste's half of the one metadata copier
+/// ([`manifold_editing::binding_transfer::transfer_bindings`]): the copy's
+/// card rows get fresh ids, sections and labels renamed after its handles.
 fn transfer_metadata(
     source: &EffectGraphDef,
     destination: &mut EffectGraphDef,
@@ -306,60 +295,9 @@ fn transfer_metadata(
         .preset_metadata
         .as_mut()
         .ok_or("Destination scene has no parameter metadata")?;
-    let mut taken: HashSet<String> = dest
-        .params
-        .iter()
-        .map(|p| p.id.clone())
-        .chain(dest.string_params.iter().map(|p| p.id.clone()))
-        .collect();
-    // The shared scene projection resolves cloned bindings by stable target
-    // when their IDs carry the existing `_duplicate` suffix convention.
-    let mut remaps = HashMap::new();
-    for binding in &source.bindings {
-        if let Some(target) = remapped_target(&binding.target, ids) {
-            let id = remaps
-                .entry(binding.id.clone())
-                .or_insert_with(|| unique(&mut taken, &format!("{}_duplicate", binding.id)))
-                .clone();
-            let mut copy = binding.clone();
-            copy.id = id;
-            copy.target = target;
-            copy.label = rewrite_label(copy.label, handle_rewrites);
-            dest.bindings.push(copy);
-        }
-    }
-    for binding in &source.string_bindings {
-        if let Some(target) = remapped_target(&binding.target, ids) {
-            let id = remaps
-                .entry(binding.id.clone())
-                .or_insert_with(|| unique(&mut taken, &format!("{}_duplicate", binding.id)))
-                .clone();
-            let mut copy = binding.clone();
-            copy.id = id;
-            copy.target = target;
-            copy.label = rewrite_label(copy.label, handle_rewrites);
-            dest.string_bindings.push(copy);
-        }
-    }
-    for spec in &source.params {
-        if let Some(id) = remaps.get(&spec.id) {
-            let mut copy = spec.clone();
-            copy.id = id.clone();
-            copy.section = copy
-                .section
-                .map(|section| rewrite_label(section, handle_rewrites));
-            dest.params.push(copy);
-        }
-    }
-    for spec in &source.string_params {
-        if let Some(id) = remaps.get(&spec.id) {
-            let mut copy = spec.clone();
-            copy.id = id.clone();
-            copy.name = rewrite_label(copy.name, handle_rewrites);
-            dest.string_params.push(copy);
-        }
-    }
-    Ok(remaps.into_iter().collect())
+    let node_map: Vec<(NodeId, NodeId)> = ids.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+    let relabel = |text: &str, _: &NodeId| rewrite_label(text.to_string(), handle_rewrites);
+    Ok(manifold_editing::binding_transfer::transfer_bindings(source, dest, &node_map, &relabel))
 }
 
 /// How the copied item is named.
@@ -584,7 +522,7 @@ fn paste(
         from_node: *doc_ids
             .get(&clipboard.root)
             .ok_or("Copied scene item is missing")?,
-        from_port: clipboard.port,
+        from_port: clipboard.port.clone(),
         to_node: scene,
         to_port: format!("{}{count}", clipboard.kind.prefix()),
     });
@@ -603,7 +541,8 @@ fn paste(
         )?;
     }
     let handle_rewrites = cloned_handle_rewrites(&clipboard.graph, &graph, &stable);
-    let remaps = transfer_metadata(&clipboard.graph, &mut graph, &stable, &handle_rewrites)?;
+    let mut remaps = transfer_metadata(&clipboard.graph, &mut graph, &stable, &handle_rewrites)?;
+    graph = attach_copied_forces(&clipboard, graph, scene, &stable, &node_id_map, &mut remaps)?;
     manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut graph);
     let mut after = before.clone();
     after.graph = Some(graph);
@@ -686,6 +625,79 @@ fn set_physics(project: &Project, layer: &LayerId, scene: u32, index: u32, enabl
     }
 }
 
+/// Attach a copy of each force the copied item owns, aimed at the copy alone
+/// in the scene with doc id `scene`. Each copy's rows take the source rows'
+/// presentation, and `remaps` gains them so their values and routes follow.
+fn attach_copied_forces(
+    clipboard: &SceneItemClipboard,
+    mut graph: EffectGraphDef,
+    scene: u32,
+    stable: &HashMap<NodeId, NodeId>,
+    node_id_map: &[(NodeId, NodeId)],
+    remaps: &mut Vec<(String, String)>,
+) -> Result<EffectGraphDef, String> {
+    use manifold_core::scene_modifier_edit::{aim_at_copy, insert_scene_modifier};
+    if clipboard.graph.scene_modifiers.is_empty() {
+        return Ok(graph);
+    }
+    let item = manifold_core::SceneNodeRef {
+        scope: Vec::new(),
+        node: clipboard.graph.nodes.iter().find(|node| node.id == clipboard.root).ok_or("Copied scene item is missing")?.node_id.clone(),
+    };
+    let scene = manifold_core::SceneNodeRef {
+        scope: Vec::new(),
+        node: graph.nodes.iter().find(|node| node.id == scene).ok_or("Scene is unavailable")?.node_id.clone(),
+    };
+    let source_rows = clipboard.graph.preset_metadata.as_ref();
+    for modifier in &clipboard.graph.scene_modifiers {
+        let (targets, mesh_frames) = aim_at_copy(modifier, &item, node_id_map).map_err(|error| error.to_string())?;
+        let legacy_math_view_carrier = match &modifier.legacy_math_view_carrier {
+            Some(carrier) => Some(stable.get(carrier).cloned().ok_or("A copied force's carrier was not copied")?),
+            None => None,
+        };
+        let id = loop {
+            let candidate = NodeId::new(manifold_core::short_id());
+            if !graph.scene_modifiers.iter().any(|existing| existing.id == candidate) {
+                break candidate;
+            }
+        };
+        let instance = manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
+            id: id.clone(),
+            scene: scene.clone(),
+            targets,
+            mesh_frames,
+            legacy_math_view_carrier,
+            graph: modifier.graph.clone(),
+        };
+        let end = graph.scene_modifiers.len();
+        graph = insert_scene_modifier(&graph, end, instance).map_err(|error| error.to_string())?.graph;
+        let Some(source_rows) = source_rows else { continue };
+        let rows = graph.preset_metadata.as_mut().ok_or("Destination scene has no parameter metadata")?;
+        for binding in &source_rows.bindings {
+            let BindingTarget::SceneModifier { modifier_id, param_id } = &binding.target else { continue };
+            if *modifier_id != modifier.id {
+                continue;
+            }
+            let Some(copy) = rows.bindings.iter().find(|copy| {
+                matches!(&copy.target, BindingTarget::SceneModifier { modifier_id, param_id: copied } if *modifier_id == id && copied == param_id)
+            }) else {
+                continue;
+            };
+            let copy_id = copy.id.clone();
+            if let (Some(spec), Some(slot)) = (
+                source_rows.params.iter().find(|spec| spec.id == binding.id),
+                rows.params.iter_mut().find(|spec| spec.id == copy_id),
+            ) {
+                *slot = manifold_core::effect_graph_def::ParamSpecDef { id: copy_id.clone(), ..spec.clone() };
+            }
+            if !remaps.iter().any(|(old, _)| *old == binding.id) {
+                remaps.push((binding.id.clone(), copy_id));
+            }
+        }
+    }
+    Ok(graph)
+}
+
 pub(crate) fn build_action(
     project: &Project,
     action: SceneItemAction,
@@ -766,6 +778,7 @@ pub(crate) fn build_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::effect_graph_def::BindingTarget;
     use std::collections::{BTreeMap, BTreeSet};
 
     use manifold_core::effect_graph_def::{

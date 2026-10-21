@@ -994,6 +994,27 @@ fn automation_point_drag_begin_track_commit() {
 }
 
 #[test]
+fn automation_drag_commits_exactly_the_last_previewed_point() {
+    let (mut panel, mut host) = three_point_lane([0.5, 0.8, 0.3]);
+    let mut state = UIState::new();
+    let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+    let press = dot_pos(&panel, 0);
+    overlay.on_begin_drag(press, &mut host, &mut state, &panel);
+    overlay.on_drag(press + Vec2::new(37.0, -41.3), &mut host, &mut state, &mut panel);
+    overlay.modifiers.shift = true;
+    overlay.on_drag(press + Vec2::new(61.0, -77.7), &mut host, &mut state, &mut panel);
+    let previewed = host
+        .automation_lane_preview
+        .iter()
+        .copied()
+        .find(|p| (p.0, p.1) != (Beats(8.0), 0.8) && (p.0, p.1) != (Beats(12.0), 0.3))
+        .expect("the dragged point is in the preview");
+    overlay.on_end_drag(&mut host);
+    let new = host.automation_point_moves[0].3;
+    assert_eq!((new.0.0.to_bits(), new.1.to_bits()), (previewed.0.0.to_bits(), previewed.1.to_bits()));
+}
+
+#[test]
 fn automation_point_cancel_restores_full_lane_and_clears_once() {
     let mut panel = build_viewport_with_automation();
     let mut host = GestureTestHost::new(&["layer-0"]);
@@ -1169,7 +1190,7 @@ fn automation_point_dropped_on_exact_twin_deletes_nothing() {
 }
 
 #[test]
-fn automation_point_vertical_drag_keeps_off_grid_beat_until_horizontal_travel() {
+fn automation_point_vertical_drag_keeps_off_grid_beat_until_it_moves_a_whole_step() {
     use crate::view::UiAutomationPoint;
     let off_grid = Beats(4.3);
     let build = || {
@@ -1184,27 +1205,29 @@ fn automation_point_vertical_drag_keeps_off_grid_beat_until_horizontal_travel() 
         (panel, host)
     };
 
-    // Inside the 4 px dead zone: only the value moves, the beat is exact.
+    // A wobble under half a grid cell: only the value moves, the beat is exact.
     let (mut panel, mut host) = build();
     let mut state = UIState::new();
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
     let press = dot_pos(&panel, 0);
     overlay.on_begin_drag(press, &mut host, &mut state, &panel);
-    overlay.on_drag(press + Vec2::new(2.0, -30.0), &mut host, &mut state, &mut panel);
+    let cell_px = panel.grid_step() * panel.pixels_per_beat();
+    assert!(cell_px > 6.0, "setup: a 3 px wobble is under half a cell");
+    overlay.on_drag(press + Vec2::new(3.0, -30.0), &mut host, &mut state, &mut panel);
     overlay.on_end_drag(&mut host);
     let (_, _, old, new) = &host.automation_point_moves[0];
     assert_eq!(new.0, off_grid);
     assert!(new.1 > old.1);
 
-    // Past the dead zone the beat snaps as before.
+    // One whole grid step right: the point moves one step and keeps its offset.
     let (mut panel, mut host) = build();
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
     overlay.on_begin_drag(press, &mut host, &mut state, &panel);
-    overlay.on_drag(press + Vec2::new(12.0, -30.0), &mut host, &mut state, &mut panel);
+    overlay.on_drag(press + Vec2::new(cell_px, -30.0), &mut host, &mut state, &mut panel);
     overlay.on_end_drag(&mut host);
     let new = host.automation_point_moves[0].3;
-    assert_ne!(new.0, off_grid);
-    assert_eq!(new.0, panel.snap_to_grid(new.0));
+    assert!((new.0.0 - (off_grid.0 + f64::from(panel.grid_step()))).abs() < 1e-5, "{:?}", new.0);
+    assert_ne!(new.0, panel.snap_to_grid(new.0), "the off-grid offset is kept");
 }
 
 #[test]
@@ -1988,7 +2011,7 @@ fn automation_phrase_snap_bypass_and_shared_zero_boundary() {
 }
 
 #[test]
-fn automation_phrase_moves_offscreen_selection_and_restores_crossed_points() {
+fn automation_phrase_moves_offscreen_selection_and_stops_at_the_unselected_point() {
     let mut panel = build_viewport_with_automation();
     let mut host = GestureTestHost::new(&["layer-0"]);
     let original = vec![
@@ -2007,17 +2030,19 @@ fn automation_phrase_moves_offscreen_selection_and_restores_crossed_points() {
         value_norm: BitmapSlider::value_to_normalized(value, 0.0, 1.0),
     }).collect();
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
-    overlay.set_modifiers(Modifiers { command: true, ..Modifiers::NONE });
+    overlay.set_modifiers(Modifiers { command: false, ..Modifiers::NONE });
     let press = dot_pos(&panel, 0);
     overlay.on_begin_drag(press, &mut host, &mut state, &panel);
-    for (destination, expected) in [(8.0, vec![8.0, 12.0, 12.0, 244.0]), (9.0, vec![9.0, 12.0, 13.0, 245.0])] {
+    // The second destination is past the unselected point at 12: the group
+    // stops against it (equal beat) instead of crossing it.
+    for (destination, expected) in [(8.0, vec![8.0, 12.0, 12.0, 244.0]), (9.0, vec![8.0, 12.0, 12.0, 244.0])] {
         let pos = Vec2::new(panel.beat_to_pixel(Beats(destination)), press.y);
         overlay.on_drag(pos, &mut host, &mut state, &mut panel);
         assert_eq!(host.automation_lane_preview.iter().map(|p| p.0.0).collect::<Vec<_>>(), expected);
         assert_eq!(host.automation_lane_preview.last().unwrap().1, 1.2);
         assert_eq!(state.selected_automation_points.len(), 3);
     }
-    assert_eq!(host.automation_lane_preview[1], original[2]);
+    assert_eq!(host.automation_lane_preview[2], original[2], "the unselected point is untouched");
     overlay.cancel_drag(&mut host);
     assert_eq!(host.automation_lane_restores[0].points.as_ref().unwrap(), &original);
     assert!(host.automation_group_move_commits.is_empty());

@@ -20,7 +20,7 @@ pub(crate) enum SceneGraphRejection {
 /// param. The graph candidate has already minted the destination metadata;
 /// this keeps duplication's runtime state in the same transaction. Every
 /// remap is a duplicate, so Ableton mappings stay on the source.
-fn duplicate_runtime_parameter_state(
+pub(crate) fn duplicate_runtime_parameter_state(
     host: &mut manifold_core::effects::PresetInstance,
     remaps: &[(String, String)],
 ) {
@@ -44,6 +44,46 @@ fn duplicate_runtime_parameter_state(
     crate::param_routes::copy_param_routes(&source, host, remaps, crate::param_routes::RouteTransfer::Copy);
 }
 
+/// The remaps whose copy is a string control (a Model File), named by the
+/// candidate graph's string specs or bindings.
+fn string_remaps(graph: &EffectGraphDef, remaps: &[(String, String)]) -> Vec<(String, String)> {
+    let Some(meta) = graph.preset_metadata.as_ref() else { return Vec::new() };
+    let is_string = |id: &str| {
+        meta.string_params.iter().any(|spec| spec.id == id)
+            || meta.string_bindings.iter().any(|binding| binding.id == id)
+    };
+    remaps.iter().filter(|(_, copy)| is_string(copy)).cloned().collect()
+}
+
+/// A clip's string overrides as they were before a duplicate wrote them.
+type ClipStringsBefore = Vec<(manifold_core::ClipId, Option<std::collections::BTreeMap<String, String>>)>;
+
+/// Copy each clip's string override (the card's Model File choice lives per
+/// clip) from a source id to its copy's id, so a duplicate starts at the file
+/// its source shows on that clip. Returns every touched clip's prior map.
+fn duplicate_clip_string_overrides(
+    project: &mut Project,
+    owner: &GraphTarget,
+    remaps: &[(String, String)],
+) -> ClipStringsBefore {
+    let mut before = Vec::new();
+    let Some(GraphTarget::Generator(layer_id)) = owner.host_target() else { return before };
+    let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else { return before };
+    for clip in &mut layer.clips {
+        let Some(values) = clip.string_params.as_ref() else { continue };
+        let copies: Vec<(String, String)> = remaps
+            .iter()
+            .filter_map(|(source, copy)| values.get(source).map(|value| (copy.clone(), value.clone())))
+            .collect();
+        if copies.is_empty() {
+            continue;
+        }
+        before.push((clip.id.clone(), clip.string_params.clone()));
+        clip.string_params.get_or_insert_with(Default::default).extend(copies);
+    }
+    before
+}
+
 #[derive(Debug)]
 pub(crate) struct SceneGraphTransaction {
     pub(crate) owner: GraphTarget,
@@ -56,6 +96,9 @@ pub(crate) struct SceneGraphTransaction {
     committed: Option<EffectGraphDef>,
     removed_param_ids: Vec<String>,
     parameter_id_remaps: Vec<(String, String)>,
+    /// The string-control remaps, whose per-clip overrides the copy carries.
+    string_remaps: Vec<(String, String)>,
+    clip_strings_before: ClipStringsBefore,
     previous_layer: Option<InstanceLayerSnapshot>,
     touches: ChangeSet,
     applied: bool,
@@ -91,6 +134,16 @@ impl SceneGraphTransaction {
             .ok_or_else(|| error("Owner graph does not resolve"))?
             .clone();
         let result = edit(&before_resolved)?;
+        // A binding id names one value: an edit that would bind two values
+        // under one id is refused, never saved (typed identity D5).
+        if let Some(identity) = manifold_core::binding_identity::added_errors(
+            before_resolved.preset_metadata.as_ref(),
+            result.graph.preset_metadata.as_ref(),
+        )
+        .first()
+        {
+            return Err(error(&identity.to_string()));
+        }
         // Removed or remapped params carry their controls, lanes included; a
         // metadata change alone rebuilds the card manifest.
         let touches = if !result.removed_param_ids.is_empty() || !result.parameter_id_remaps.is_empty() {
@@ -99,6 +152,12 @@ impl SceneGraphTransaction {
             crate::commands::GRAPH_AND_MANIFEST
         } else {
             crate::commands::GRAPH_EDIT
+        };
+        let string_remaps = string_remaps(&result.graph, &result.parameter_id_remaps);
+        let touches = if string_remaps.is_empty() {
+            touches
+        } else {
+            touches.union(ChangeSet::of(&[manifold_core::change::Part::Clips]))
         };
         Ok(Self {
             owner,
@@ -109,6 +168,8 @@ impl SceneGraphTransaction {
             committed: None,
             removed_param_ids: result.removed_param_ids,
             parameter_id_remaps: result.parameter_id_remaps,
+            string_remaps,
+            clip_strings_before: Vec::new(),
             previous_layer: None,
             touches,
             applied: false,
@@ -161,6 +222,7 @@ impl SceneGraphTransaction {
         }
         host.bump_graph_structure_version();
         self.committed = host.graph.clone();
+        self.clip_strings_before = duplicate_clip_string_overrides(project, &self.owner, &self.string_remaps);
         self.last_error = None;
         self.applied = true;
     }
@@ -184,6 +246,11 @@ impl SceneGraphTransaction {
             snapshot.restore(host);
         }
         host.bump_graph_structure_version();
+        for (clip_id, before) in self.clip_strings_before.drain(..) {
+            if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id.as_str()) {
+                clip.string_params = before;
+            }
+        }
         self.applied = false;
     }
 

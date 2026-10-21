@@ -171,6 +171,16 @@ fn duplicate_scene_object_edit(
             Some(physics)
         }
     };
+    // Every copy brings the source's forces: refuse the whole request up front, naming the total.
+    if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
+        let per_copy = manifold_core::scene_modifier_edit::object_force_slots(graph, &source);
+        let needed = per_copy * copies as usize;
+        let limit = manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+        let free = limit.saturating_sub(manifold_core::scene_modifier_preset::force_slots_used(&graph.scene_modifiers));
+        if needed > free {
+            return Err(refuse(&manifold_core::scene_modifier_preset::force_slots_message("Duplicating", needed, free, limit)));
+        }
+    }
     let source_group = nodes.iter().any(|node| node.id == source_id && node.type_id == GROUP_TYPE_ID);
 
     let mut candidate = graph.clone();
@@ -184,8 +194,14 @@ fn duplicate_scene_object_edit(
             fluid::duplicate_scene_object_fluid_roles(&mut candidate, source_id, cloned_group, &map)
                 .map_err(|message| SceneGraphEditError { at: None, message })?;
         }
-        clone_string_bindings(&mut candidate, &map);
         remaps.extend(clone_sections::clone_scene_bindings(&mut candidate, &map));
+        // Modifiers aimed only at the source belong to it; the copy gets its own.
+        if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
+            let edit = manifold_core::scene_modifier_edit::copy_object_modifiers(&candidate, &source, &map)
+                .map_err(|error| refuse(&format!("Duplicate Object: {error}")))?;
+            candidate = edit.graph;
+            remaps.extend(edit.parameter_id_remaps);
+        }
         maps.push(map);
     }
     Ok((SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: remaps }, maps))
@@ -373,29 +389,6 @@ fn source_render_outputs(wires: &[EffectGraphWire], source_id: u32, render_id: u
     outputs.sort_unstable();
     outputs.dedup_by_key(|(index, _)| *index);
     outputs
-}
-
-/// Clone every string binding (the importer's Model File path, one entry
-/// per file-dependent node) whose target the copy cloned, retargeted at the
-/// copy (BUG-212 (duplicate drops the model file)). Same id, label and
-/// default, so one Model File still drives every copy.
-fn clone_string_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) {
-    let Some(meta) = def.preset_metadata.as_mut() else { return };
-    let copies: Vec<StringBindingDef> = meta
-        .string_bindings
-        .iter()
-        .filter_map(|binding| {
-            let BindingTarget::Node { node_id, param } = &binding.target else { return None };
-            let (_, new_id) = node_id_map.iter().find(|(old, _)| old == node_id)?;
-            Some(StringBindingDef {
-                id: binding.id.clone(),
-                label: binding.label.clone(),
-                default_value: binding.default_value.clone(),
-                target: BindingTarget::Node { node_id: new_id.clone(), param: param.clone() },
-            })
-        })
-        .collect();
-    meta.string_bindings.extend(copies);
 }
 
 /// One physics copy: the id allocators it draws from and where it goes.

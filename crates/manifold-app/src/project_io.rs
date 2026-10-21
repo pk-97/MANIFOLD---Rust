@@ -542,6 +542,7 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         let layer_id = layer.layer_id.clone();
         let Some(host) = layer.gen_params_mut() else { continue; };
         if host.graph.is_none() { continue; }
+        let mut default_moves = Vec::new();
         {
             let graph = host.graph.as_mut().expect("graph checked above");
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
@@ -550,7 +551,12 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
                 Ok(false) => {}
                 Err(error) => notices.push(error),
             }
-            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(graph);
+            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures_moving(graph, &mut default_moves);
+            // A binding id names one value: a saved id that binds several
+            // files splits into one id per file (typed identity D5).
+            if let Some(meta) = graph.preset_metadata.as_mut() {
+                notices.extend(manifold_core::binding_identity::repair(meta));
+            }
             let report = manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
             notices.extend(report.diagnostics);
         }
@@ -565,6 +571,9 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
             manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         }
         host.refresh_manifest_from_graph();
+        // A card value that sat on a default the repair moved rendered the
+        // node's value; it moves too, so the card shows what renders.
+        manifold_nodes_scene::node_graph::gltf_import::move_repaired_card_values(host, &default_moves);
         // Carried embedded values become host base values now that the
         // minted view bindings exist in the manifest.
         for (macro_id, value) in pending_base_values {
@@ -1407,6 +1416,38 @@ mod tests {
         assert_eq!(pinned(&resaved, CardPin::Shown), shown, "a second load changes nothing");
         let new = saved_at(&project, manifold_core::project::CURRENT_PROJECT_VERSION);
         assert!(pinned(&new, CardPin::Shown).is_empty(), "a show saved now keeps an empty card (D-72)");
+    }
+
+    /// D-103: the World's Air Resistance (D-114), new since 1.22.0, is stamped
+    /// into an old show on load as a setup row, so its card gains no row.
+    #[test]
+    fn old_show_gains_no_air_resistance_row() {
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator(
+            "PhysicsSolids".into(),
+            PresetTypeId::from_string("PhysicsSolids".to_string()),
+            0,
+        ));
+        project.reconcile_param_manifests();
+        let mut json: serde_json::Value = serde_json::to_value(&project).unwrap();
+        json["projectVersion"] = serde_json::Value::String("1.21.0".into());
+        let mut old = manifold_io::loader::load_project_from_json(&json.to_string()).expect("load");
+        migrate_project_scene_graphs(&mut old);
+        let host = old.timeline.layers[0].gen_params().unwrap();
+        let target = manifold_core::GraphTarget::Generator(old.timeline.layers[0].layer_id.clone());
+        let def = crate::graph_target::resolve(&old, &target)
+            .expect("the show's graph");
+        let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("a Physics World").node_id.clone();
+        let meta = def.preset_metadata.as_ref().expect("metadata");
+        let row = meta
+            .bindings
+            .iter()
+            .find(|binding| matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if *node_id == world && param == "air_resistance"))
+            .map(|binding| binding.id.clone())
+            .expect("the World's Air Resistance is stamped on load");
+        let param = host.params.get(&row).expect("the Air Resistance row");
+        assert!(param.exposed, "the row is offered on the scene tab");
+        assert_eq!(param.choices.pin, None, "an old show's card gains no Air Resistance row");
     }
 
     /// PhysicsSolids' exposed Performance rows its items own, less the two the

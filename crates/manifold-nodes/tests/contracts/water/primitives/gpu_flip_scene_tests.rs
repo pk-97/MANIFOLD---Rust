@@ -1870,3 +1870,90 @@ fn gpu_flip_sheeting_replay_matches_direct() {
 }
 
 use manifold_node_engine::testkit::atom::{node_named, output_of};
+
+/// Peter's cliff inflow (BUG-3zq4r, inflow runs out): a slab near the top of
+/// the 4 m tank, pouring toward +z, with no column and no pool; with `drain`
+/// a Drain on the floor where the water lands. `fill_slots` cuts
+/// the domain's pool wire into the fill and holds the pool at that many
+/// slots; `None` keeps the pool the domain sizes. Per tick: live particles and
+/// the tick's inflow births and refusals (stats words 1, 28 and 29).
+#[cfg(test)]
+fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u32; 3]> {
+    let scene = WaterScene { obstacle: false, fill_height: 0.0, column: [[0.0; 2]; 3], ..WaterScene::dam_break(24) };
+    let mut def = water_def(scene);
+    let domain = def.nodes.iter().find(|node| node.node_id.as_str() == "domain").expect("domain").id;
+    let first = def.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+    let float = |v: f64| serde_json::json!({"type": "Float", "value": v});
+    let mut sources = vec![(1, [0.0, 3.38, -1.59], [3.94, 0.2, 0.6], [0.0, 0.0, 1.0])];
+    if drain {
+        sources.push((2, [0.0, 0.25, 1.0], [3.9, 0.5, 1.8], [0.0; 3]));
+    }
+    for (k, (role, pos, scale, velocity)) in sources.into_iter().enumerate() {
+        let (transform, source) = (first + 2 * k as u32, first + 2 * k as u32 + 1);
+        let node = |id: u32, name: String, type_id: &str, params: serde_json::Value| -> manifold_core::effect_graph_def::EffectGraphNode {
+            serde_json::from_value(serde_json::json!({"id": id, "nodeId": name, "typeId": type_id, "params": params})).expect("source node")
+        };
+        def.nodes.push(node(transform, format!("source_transform_{k}"), "node.transform_3d", serde_json::json!({
+            "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
+            "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
+        })));
+        def.nodes.push(node(source, format!("source_{k}"), "node.fluid_role_source", serde_json::json!({
+            "role": {"type": "Enum", "value": role}, "shape": {"type": "Enum", "value": 1}, "radius": float(0.866_025_4),
+            "velocity_x": float(velocity[0]), "velocity_y": float(velocity[1]), "velocity_z": float(velocity[2]),
+        })));
+        let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: String| manifold_core::effect_graph_def::EffectGraphWire {
+            from_node, from_port: from_port.into(), to_node, to_port,
+        };
+        def.wires.push(wire(transform, "transform", source, "transform".into()));
+        def.wires.push(wire(source, "role", domain, format!("role_{k}")));
+    }
+    if let Some(slots) = fill_slots {
+        let fill = def.nodes.iter_mut().find(|node| node.type_id == "node.liquid_fill").expect("fill");
+        fill.params.insert("particle_capacity".into(), serde_json::from_value(serde_json::json!({"type": "Int", "value": slots})).expect("slots"));
+        let fill = fill.id;
+        def.wires.retain(|wire| !(wire.to_node == fill && wire.to_port == "particle_capacity"));
+    }
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    let graph = def.into_graph(&registry, &Default::default()).expect("inflow scene builds");
+    let mut run = Run::with_graph(scene, graph);
+    (0..seconds * 60)
+        .map(|_| {
+            run.frame();
+            let stats = run.liquid_stats();
+            [stats.live, stats.inflow_births, stats.inflow_refused]
+        })
+        .collect()
+}
+
+/// The inflow flows for the whole clip, with or without a drain, and never
+/// runs short of a slot: with an Inflow the pool has room for the whole
+/// domain. Before the fix the pool was the fill's count, so an inflow only had
+/// the slots the fill left dead and stopped, silently. A pool that is too
+/// small still stops it, but now every held-back tick counts its refusals,
+/// which the setup check shows on the card.
+#[test]
+fn gpu_flip_inflow_flows_for_the_whole_clip() {
+    const SECONDS: usize = 3;
+    let mut end = [0u32; 2];
+    for drain in [false, true] {
+        let ticks = inflow_ticks(drain, None, SECONDS);
+        for (second, ticks) in ticks.chunks(60).enumerate() {
+            let born: u32 = ticks.iter().map(|tick| tick[1]).sum();
+            let refused: u32 = ticks.iter().map(|tick| tick[2]).sum();
+            eprintln!("INFLOW drain={drain} second {second}: live {} births {born} refused {refused}", ticks[59][0]);
+            assert!(second == 0 || born > 0, "drain={drain}: second {second} emitted nothing");
+            assert_eq!(refused, 0, "drain={drain}: second {second} ran short of slots");
+        }
+        end[usize::from(drain)] = ticks.last().expect("ticks")[0];
+    }
+    assert!(end[1] < end[0], "the drain takes water away: {} live with it, {} without", end[1], end[0]);
+    // The pool as small as it was: the inflow fills it, then every tick it is
+    // held back reports what it could not add.
+    let ticks = inflow_ticks(false, Some(5_000), 2);
+    let last = ticks.last().expect("ticks");
+    eprintln!("INFLOW small pool: last tick live {} births {} refused {}", last[0], last[1], last[2]);
+    assert_eq!(last[0], 5_000, "the pool filled");
+    assert_eq!(last[1], 0, "no births past a full pool");
+    assert!(last[2] > 0, "a full pool reports the births it refused");
+}

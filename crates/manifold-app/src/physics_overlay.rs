@@ -583,7 +583,7 @@ mod tests {
     fn a_moving_clipped_column_shares_the_domain_snapshots() {
         use manifold_core::fluid_domain::FluidDomainState;
         use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
-        let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped };
+        let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped, pool_full: false };
         let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
         let snapshot = |column_box, fit| FluidDomainSnapshot {
             epoch: 1,

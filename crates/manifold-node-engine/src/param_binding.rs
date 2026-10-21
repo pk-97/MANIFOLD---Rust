@@ -753,6 +753,34 @@ impl LastAppliedCache {
                 .push(BindingCacheEntry::Applied(b.default_value));
         }
     }
+
+    /// Seed from what the built graph really holds: `Applied(default)` only
+    /// where a node target already holds what the default writes, `Unset`
+    /// where it holds anything else, so the first apply writes the card
+    /// value even when that value equals the default. What renders is then a
+    /// function of card values alone, never of build history (BUG-c48e6: a
+    /// mirrored scale whose node held an import fit factor rendered huge
+    /// while the card said 1.0). Composite and custom targets cannot be read
+    /// back and keep `Applied(default)`, and so do triggers: their storage is
+    /// a counter nobody holds, so a build must never fire one. Build time only.
+    pub fn seed_from_graph(&mut self, bindings: &[ResolvedBinding], graph: &Graph) {
+        self.entries.clear();
+        self.entries.reserve(bindings.len());
+        for b in bindings {
+            let holds_default = matches!(b.convert, ParamConvert::Trigger) || match &b.target {
+                ResolvedTarget::Node { node, param } => graph
+                    .get_node(*node)
+                    .and_then(|inst| inst.params.get(param.as_ref()))
+                    .is_some_and(|held| *held == b.write_value(b.default_value)),
+                ResolvedTarget::Composite { .. } | ResolvedTarget::Custom(_) => true,
+            };
+            self.entries.push(if holds_default {
+                BindingCacheEntry::Applied(b.default_value)
+            } else {
+                BindingCacheEntry::Unset
+            });
+        }
+    }
 }
 
 // ─── Lookups + editor projections ────────────────────────────────────

@@ -4,8 +4,8 @@
 //!
 //! - a MIRRORED default (`default_mirrors_node_param`, set only by
 //!   `stamp_scene_node_exposures_into`) is a stamp-time snapshot of the node
-//!   param, so `apply_binding_defaults` skips planting it and the node value
-//!   stands — BUG-ji6q, an imported scene keeping the values you set;
+//!   param, so `apply_binding_defaults` skips planting it over the def value
+//!   — BUG-ji6q; the card value still reaches the node at the first apply;
 //! - an AUTHORED default is a number someone chose, and the plant is where its
 //!   `scale`/`offset` fold is applied, so it still overwrites whatever the def
 //!   baked — silently, which is BUG-1l7f.
@@ -27,7 +27,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 /// BUG-1l7f, the part of the imported-def footgun BUG-ji6q did NOT close.
 ///
 /// A scene-vocabulary param (`transform_0.pos_x` and friends) is stamped with a
-/// MIRRORED default, so the plant is skipped and a node write now stands — that
+/// MIRRORED default, so the plant is skipped and the def keeps a node write — that
 /// is BUG-ji6q, covered by `bound_param_survives_rebuild`. But an import also
 /// carries AUTHORED bindings for the nodes that are not scene vocabulary: the
 /// `env_mode` enum over `env_select.selector`, `ssao_intensity`, the sun fan-outs
