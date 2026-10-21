@@ -352,6 +352,9 @@ pub fn swarm_cloud() -> Value {
         (force.scene.clone(), force.targets.clone())
     };
     let mut def = serde_json::to_value(swarm).expect("serialise");
+    // Aim at the held cloud's steady centre (about y = -0.75 m, 1.5 m across) so the
+    // whole cloud and the Burst spray stay in frame.
+    set_floats(&mut def, "camera", &[("look_y", -1.6), ("distance", 10.0)]);
     let meta = &mut def["presetMetadata"];
     meta["id"] = json!(SWARM_PRESET);
     meta["displayName"] = json!("Swarm Cloud");

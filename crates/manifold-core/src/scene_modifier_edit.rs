@@ -1062,6 +1062,12 @@ pub fn copy_object_modifiers(
             parameter_id_remaps: Vec::new(),
         });
     }
+    // Refused whole, like an insert: a copy never saves forces the scene cannot expand.
+    let needed = owner.scene_modifiers.iter().filter(|item| owned.contains(&item.id) && !crate::scene_modifier_math_view::is_math_view_recipe(&item.graph)).count();
+    let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+    if crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers) + needed > limit {
+        return Err(SceneModifierEditError::ForceSlotsFull { limit });
+    }
     let duplicated = duplicate_scene_modifiers(owner, &owned)?;
     let before: HashSet<&NodeId> = owner.scene_modifiers.iter().map(|item| &item.id).collect();
     let copies: Vec<SceneModifierInstanceDef> = duplicated

@@ -417,6 +417,110 @@ fn duplicate_swarm_brings_its_own_forces() {
     assert_eq!(effective_def(&project, &layer).scene_modifiers, before.scene_modifiers);
 }
 
+/// Duplicate Object on a swarm, through the scene transaction, gives the copy
+/// its own three forces aimed at it alone with the source's values (a Strength
+/// the performer changed travels), and one undo takes the copy, its forces and
+/// their card rows away.
+#[test]
+fn duplicate_swarm_through_the_transaction_carries_the_sources_values_and_undoes_whole() {
+    let (mut project, layer, render) = scene_layer_project();
+    let mut editing = insert_swarm(&mut project, &layer);
+    let before = effective_def(&project, &layer);
+    let strength_row = |def: &EffectGraphDef, nth: usize| {
+        let attractor = def
+            .scene_modifiers
+            .iter()
+            .filter(|instance| instance.graph.preset_metadata.as_ref().unwrap().id.as_str() == "Attractor")
+            .nth(nth)
+            .expect("an Attractor")
+            .id
+            .clone();
+        def.preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id } if *modifier_id == attractor && param_id == "strength"))
+            .expect("the Attractor's Strength row")
+            .id
+            .clone()
+    };
+    let source_row = strength_row(&before, 0);
+    let index = project.timeline.layers.iter().position(|candidate| candidate.layer_id == layer).unwrap();
+    let param = project.timeline.layers[index].gen_params_mut().unwrap().params.get_mut(&source_row).unwrap();
+    param.value = 33.0;
+    param.base = 33.0;
+
+    duplicate_swarm(&mut project, &mut editing, &layer, render);
+    let def = effective_def(&project, &layer);
+    let groups = swarm_groups(&def);
+    assert_eq!(groups.len(), 2, "a second swarm");
+    assert_eq!(forces_on(&def, groups[1]), SWARM_FORCES, "the copy has its own three forces, aimed at it alone");
+    assert_eq!(forces_on(&def, groups[0]), SWARM_FORCES, "the source keeps its own");
+    assert_eq!(def.scene_modifiers.len(), 2 * SWARM_FORCES.len());
+    let (_, host) = project.timeline.find_layer_by_id(&layer).unwrap();
+    let params = &host.gen_params().unwrap().params;
+    assert_eq!(params.get(&strength_row(&def, 1)).unwrap().value, 33.0, "the copy's Attractor keeps the source's Strength");
+    assert_eq!(params.get(&source_row).unwrap().value, 33.0, "the source keeps it too");
+
+    assert!(editing.undo(&mut project));
+    let undone = effective_def(&project, &layer);
+    assert_eq!(undone.scene_modifiers, before.scene_modifiers, "one undo takes the copy's forces away");
+    assert_eq!(swarm_groups(&undone).len(), 1);
+    assert_eq!(
+        undone.preset_metadata.as_ref().unwrap().bindings.iter().filter(|b| matches!(b.target, BindingTarget::SceneModifier { .. })).count(),
+        before.preset_metadata.as_ref().unwrap().bindings.iter().filter(|b| matches!(b.target, BindingTarget::SceneModifier { .. })).count(),
+        "and their card rows"
+    );
+}
+
+/// Duplicate the first swarm `copies` times in one step; `Err` carries the
+/// refusal, from the build or from the edit.
+fn duplicate_swarm_copies(project: &mut Project, editing: &mut EditingService, layer: &LayerId, render: u32, copies: u32) -> Result<(), String> {
+    let index = swarm_row(&effective_def(project, layer));
+    let ContentCommand::SceneItem(action) =
+        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), render, index, copies))
+    else { panic!("duplicate is a content-owned scene item edit") };
+    let command = crate::scene_item_transfer::build_action(project, action)?;
+    editing.execute(command, project);
+    editing.take_rejection().map_or(Ok(()), Err)
+}
+
+/// Three copies make four swarms and twelve forces, each set aimed at its own
+/// swarm alone, and one undo takes every copy and force away.
+#[test]
+fn duplicate_swarm_three_copies_gives_each_its_own_forces_and_undoes_in_one_step() {
+    let (mut project, layer, render) = scene_layer_project();
+    let mut editing = insert_swarm(&mut project, &layer);
+    let before = effective_def(&project, &layer);
+    duplicate_swarm_copies(&mut project, &mut editing, &layer, render, 3).expect("three copies fit");
+    let def = effective_def(&project, &layer);
+    let groups = swarm_groups(&def);
+    assert_eq!(groups.len(), 4, "the source and three copies");
+    assert_eq!(def.scene_modifiers.len(), 4 * SWARM_FORCES.len(), "twelve forces");
+    for group in &groups {
+        assert_eq!(forces_on(&def, group), SWARM_FORCES, "{:?} has its own set", group.handle);
+    }
+    assert!(editing.undo(&mut project));
+    let undone = effective_def(&project, &layer);
+    assert_eq!(undone.scene_modifiers, before.scene_modifiers, "one undo removes every copy's forces");
+    assert_eq!(swarm_groups(&undone).len(), 1);
+}
+
+/// Five copies would need 18 of the scene's 16 force slots: refused whole, the
+/// graph untouched.
+#[test]
+fn duplicate_swarm_five_copies_is_refused_whole_on_the_force_slot_limit() {
+    let (mut project, layer, render) = scene_layer_project();
+    let mut editing = insert_swarm(&mut project, &layer);
+    let before = effective_def(&project, &layer);
+    let refusal = duplicate_swarm_copies(&mut project, &mut editing, &layer, render, 5).expect_err("five copies do not fit");
+    assert_eq!(effective_def(&project, &layer), before, "the graph is unchanged");
+    assert!(refusal.contains("16 forces"), "the refusal names the limit: {refusal}");
+    assert!(editing.undo(&mut project), "the swarm insert is still the last step");
+    assert!(swarm_groups(&effective_def(&project, &layer)).is_empty(), "undo takes the insert, not a half duplicate");
+}
+
 /// Every card value of `layer` after half a second of playback, with a
 /// mapping on each of `mapped` set to fire on clip launches, and one clip
 /// launched at the start when `launch`.
