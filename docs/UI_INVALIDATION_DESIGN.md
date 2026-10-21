@@ -1,6 +1,6 @@
 # UI Invalidation — work runs only when its inputs change
 
-**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P7b built. Owed: P7c (section 7 (Phasing): commit and zoom cost); the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
+**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P7c built. Owed: the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
