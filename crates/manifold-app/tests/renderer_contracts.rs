@@ -4,6 +4,8 @@ mod contracts;
 mod led_preset_value_tests;
 #[path = "renderer_contracts/led_utility_value_tests.rs"]
 mod led_utility_value_tests;
+#[path = "renderer_contracts/saved_copy_shows.rs"]
+mod saved_copy_shows;
 #[path = "renderer_contracts/scene_loop_roundtrip_gate.rs"]
 mod scene_loop_roundtrip_gate;
 #[path = "renderer_contracts/scene_setup_round_trip.rs"]

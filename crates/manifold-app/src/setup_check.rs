@@ -32,13 +32,20 @@ use manifold_ui::param_surface::{ParamRow, ParamSurface};
 use crate::physics_overlay::SharedDomains;
 
 /// One liquid domain whose solver capped, clipped or refused the setup it
-/// ran on the last rendered frame.
+/// ran on the last rendered frame, or one Physics World whose copy pool left
+/// copies unmade.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SetupFitEntry {
     pub layer: LayerId,
     pub node: NodeId,
     pub fit: SetupFit,
     pub refusal: Option<Arc<str>>,
+    /// Copies asked for that the world's pool could not make: the most seen
+    /// while latched.
+    pub copies_not_made: u32,
+    /// Coupled-world bodies the liquid could not take: the most seen while
+    /// latched.
+    pub uncoupled_bodies: u32,
 }
 
 /// Every such domain the cards warn about: the content thread's report,
@@ -55,6 +62,7 @@ pub(crate) type SetupFitReport = Arc<[SetupFitEntry]>;
 /// only when the latched set changes.
 pub(crate) struct SetupFitObservations {
     domains: Vec<(NodeId, FluidDomainSnapshot)>,
+    not_made: Vec<(NodeId, u32)>,
     /// The latched entries; `report` is a copy taken when they change.
     scratch: Vec<SetupFitEntry>,
     latched_layers: Vec<LatchedLayer>,
@@ -65,7 +73,7 @@ pub(crate) struct SetupFitObservations {
 
 impl Default for SetupFitObservations {
     fn default() -> Self {
-        Self { domains: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
+        Self { domains: Vec::new(), not_made: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
     }
 }
 
@@ -121,9 +129,9 @@ impl LatchedLayer {
     }
 }
 
-/// Hands each rendered layer's domain snapshots to the callback, refilling
-/// the buffer it is given.
-pub(crate) type EachRenderedDomains<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)]);
+/// Hands each rendered layer's domain snapshots and its worlds' unmade
+/// copies to the callback, refilling the buffers it is given.
+pub(crate) type EachRenderedSetup<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)]);
 
 /// A card param's authored value, as `PresetInstance::get_base_param` reads
 /// it, from the param in hand rather than a lookup by id.
@@ -131,15 +139,55 @@ fn authored_value(inst: &PresetInstance, param: &manifold_core::params::Param) -
     if inst.base_tracked { param.base } else { param.value }
 }
 
+/// What one node reported this frame, folded into its latched entry.
+struct Seen<'a> {
+    fit: SetupFit,
+    refusal: Option<&'a Arc<str>>,
+    copies_not_made: u32,
+    uncoupled_bodies: u32,
+}
+
+impl Seen<'_> {
+    /// Fold into `entry`; true when it changed.
+    fn fold_into(self, entry: &mut SetupFitEntry) -> bool {
+        let mut fit = entry.fit;
+        fit.fill_capped |= self.fit.fill_capped;
+        fit.column = match (fit.column, self.fit.column) {
+            (ColumnOutcome::Fits, ran) => ran,
+            // A column that was outside also crossed the wall.
+            (held, ran) if ran != ColumnOutcome::Fits && ran != held => ColumnOutcome::Clipped,
+            (held, _) => held,
+        };
+        let mut changed = false;
+        if fit != entry.fit {
+            entry.fit = fit;
+            changed = true;
+        }
+        if entry.refusal.is_none() && self.refusal.is_some() {
+            entry.refusal = self.refusal.cloned();
+            changed = true;
+        }
+        if self.copies_not_made > entry.copies_not_made {
+            entry.copies_not_made = self.copies_not_made;
+            changed = true;
+        }
+        if self.uncoupled_bodies > entry.uncoupled_bodies {
+            entry.uncoupled_bodies = self.uncoupled_bodies;
+            changed = true;
+        }
+        changed
+    }
+}
+
 impl SetupFitObservations {
     /// Take this frame's report from `observe`, which walks the layers that
-    /// rendered (`GeneratorRenderer::each_rendered_fluid_domains`), into the
-    /// latch. `project` and the editing service's `stamps` release it.
+    /// rendered (`GeneratorRenderer::each_rendered_setup`), into the latch.
+    /// `project` and the editing service's `stamps` release it.
     pub fn record(
         &mut self,
         project: Option<&Project>,
         stamps: PartStamps,
-        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, EachRenderedDomains<'_>),
+        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, EachRenderedSetup<'_>),
     ) {
         let find = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| layer);
         let edits = stamps.key(LATCH_PARTS);
@@ -150,9 +198,11 @@ impl SetupFitObservations {
         self.scratch.retain(|entry| latched_layers.iter().any(|latched| latched.layer == entry.layer));
         let mut changed = self.scratch.len() != before;
         let (scratch, latched_layers) = (&mut self.scratch, &mut self.latched_layers);
-        observe(&mut self.domains, &mut |layer, domains| {
-            for (node, snapshot) in domains {
-                if snapshot.fit.is_clean() && snapshot.refusal.is_none() {
+        observe(&mut self.domains, &mut self.not_made, &mut |layer, domains, not_made| {
+            let domains = domains.iter().map(|(node, snapshot)| (node, Seen { fit: snapshot.fit, refusal: snapshot.refusal.as_ref(), copies_not_made: 0, uncoupled_bodies: snapshot.uncoupled_bodies }));
+            let worlds = not_made.iter().map(|(node, count)| (node, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: *count, uncoupled_bodies: 0 }));
+            for (node, seen) in domains.chain(worlds) {
+                if seen.fit.is_clean() && seen.refusal.is_none() && seen.copies_not_made == 0 && seen.uncoupled_bodies == 0 {
                     continue;
                 }
                 if !latched_layers.iter().any(|latched| &latched.layer == layer) {
@@ -160,26 +210,16 @@ impl SetupFitObservations {
                     latched_layers.push(LatchedLayer::new(found));
                 }
                 match scratch.iter_mut().find(|entry| &entry.layer == layer && &entry.node == node) {
-                    Some(entry) => {
-                        let mut fit = entry.fit;
-                        fit.fill_capped |= snapshot.fit.fill_capped;
-                        fit.column = match (fit.column, snapshot.fit.column) {
-                            (ColumnOutcome::Fits, ran) => ran,
-                            // A column that was outside also crossed the wall.
-                            (held, ran) if ran != ColumnOutcome::Fits && ran != held => ColumnOutcome::Clipped,
-                            (held, _) => held,
-                        };
-                        if fit != entry.fit {
-                            entry.fit = fit;
-                            changed = true;
-                        }
-                        if entry.refusal.is_none() && snapshot.refusal.is_some() {
-                            entry.refusal = snapshot.refusal.clone();
-                            changed = true;
-                        }
-                    }
+                    Some(entry) => changed |= seen.fold_into(entry),
                     None => {
-                        scratch.push(SetupFitEntry { layer: layer.clone(), node: node.clone(), fit: snapshot.fit, refusal: snapshot.refusal.clone() });
+                        scratch.push(SetupFitEntry {
+                            layer: layer.clone(),
+                            node: node.clone(),
+                            fit: seen.fit,
+                            refusal: seen.refusal.cloned(),
+                            copies_not_made: seen.copies_not_made,
+                            uncoupled_bodies: seen.uncoupled_bodies,
+                        });
                         changed = true;
                     }
                 }
@@ -202,6 +242,7 @@ pub(crate) fn runtime_fits<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) 
         refusal: entry.refusal.as_deref(),
         layout: None,
         column_box: None,
+        uncoupled_bodies: entry.uncoupled_bodies,
     })
 }
 

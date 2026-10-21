@@ -218,7 +218,10 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
         // (`copies_body::is_copies_body_param`), and the copies body belongs
         // to its physics world's item, so they sit with the world's controls.
         "copy_count" => card(ControlGroup::PhysicsWorld, CardBand::Scene, 0),
-        "copy_spacing" => setup(ControlGroup::PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+        // Counted in copy sizes along the layout's axis, not metres.
+        "copy_size_spacing" => setup(ControlGroup::PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Each copy's own turn inside the layout, like a transform's rotation.
+        "copy_turn_x" | "copy_turn_y" | "copy_turn_z" => setup(ControlGroup::PhysicsWorld).limit(HardLimit::Unlimited),
         "copy_columns" | "copy_layout" => setup(ControlGroup::PhysicsWorld),
         _ => return None,
     })

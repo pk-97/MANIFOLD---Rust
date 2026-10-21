@@ -1,4 +1,4 @@
-//! Production box demo: motion, reset-latched count, and zero-count rendering.
+//! Production box demo: motion, a live Count, and zero-count rendering.
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
@@ -13,7 +13,7 @@ use manifold_node_engine::gpu::render_target::RenderTarget;
 const JSON: &str = include_str!("../../assets/generator-presets/PhysicsBoxes.json");
 
 #[test]
-fn physics_boxes_render_motion_and_latch_count_until_reset() {
+fn physics_boxes_render_motion_and_a_live_count() {
     // Authored history must use the live clock from its first observation.
     let live = SimStep::live(manifold_core::Seconds(1.0 / 60.0));
     let step = std::cell::Cell::new(live);
@@ -107,14 +107,14 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     params.get_mut("40_copy_count").unwrap().value = 32.0;
     assert_eq!(
         render(181, &params).body_count,
-        259,
-        "slider edit does not rebuild"
+        35,
+        "a Count edit lands at the next tick, with no Reset"
     );
     params.get_mut("40_reset").unwrap().value = 1.0;
     assert_eq!(
         render(182, &params).body_count,
         35,
-        "Reset applies requested count"
+        "Reset keeps the count and returns the boxes to their layout"
     );
     let sparse = readback_raw_halves(device, &target.texture, width, height);
     params.get_mut("40_copy_count").unwrap().value = 0.0;

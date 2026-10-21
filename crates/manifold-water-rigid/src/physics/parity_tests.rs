@@ -3,6 +3,7 @@
 //! counts.
 
 use super::*;
+use manifold_core::copies_body::{platonic_width, size_multiple, spacing_unit};
 use manifold_node_engine::scene::transform::Transform;
 
 const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
@@ -43,12 +44,16 @@ fn physics_boxes() -> (Vec<Option<RigidBody>>, RigidBody) {
             ..placed([4.0 * side, 3.0, 0.0], [0.0, 0.12 * side, 0.45 * side], [6.0, 0.5, 10.0], 0)
         });
     }
+    // As the load migration leaves it: the old rotation is each box's own
+    // turn, the group is unturned, and 1.85 m is a multiple of the box size.
+    let unit = spacing_unit(true, platonic_width(1, 0.8))[0];
     let prototype = RigidBody {
         friction: 0.25,
         bounce: 0.38,
-        spawn: CopySpawn { count: 256.0, spacing: 1.85, columns: 24.0, layout: 1.0 },
-        ..placed([0.0, 9.0, 0.0], [0.08, 0.12, 0.04], [0.8; 3], 1)
+        spawn: CopySpawn { count: 256.0, spacing: size_multiple(1.85, unit), columns: 24.0, layout: 1.0, turn: [0.08, 0.12, 0.04] },
+        ..placed([0.0, 9.0, 0.0], [0.0; 3], [0.8; 3], 1)
     };
+    assert_eq!(size_multiple(1.85, unit) * unit, 1.85, "the migrated spacing is exact");
     (bodies, prototype)
 }
 

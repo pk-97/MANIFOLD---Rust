@@ -56,6 +56,15 @@ impl PresetRuntime {
         }
     }
 
+    /// Append the same slot's worlds that left copies unmade. The caller
+    /// reuses the buffer.
+    pub fn write_copies_not_made_watched(&self, output: &mut Vec<(NodeId, u32)>) {
+        let Some(slot) = self.extension_slots().first() else { return };
+        for extension in &self.extensions {
+            extension.write_copies_not_made(&self.graph, slot, output);
+        }
+    }
+
     /// Translate the selected generated modifier copy back to authored node IDs.
     pub fn write_modifier_fluid_domains(
         &self,

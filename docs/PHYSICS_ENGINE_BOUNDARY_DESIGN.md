@@ -470,9 +470,19 @@ A Physics World is a reconfigurable node, like Render Scene. Two params size its
 - `bodies` (1–256, default 64): `body_k`, `body_acceleration_k` and `pose_k`.
 - `copy_groups` (0–32, default 1): `copies_k`, `copies_acceleration_k`, `instances_k` and `active_count_k`.
 
-Copy group k copies the body wired into `copies_k`. That body's spawner (count, spacing, columns, arrangement) sets the group's layout, read at first build, reset and backwards seek. Every body and every group's copies share one Box3D world, one solver and one clock, so they all collide. The world makes at most 4000 copies across its groups (`MAX_COPIES`, the measured budget); groups fill in port order, a later group makes what fits, and `copies_not_made` reports the rest.
+Copy group k copies the body wired into `copies_k`. Every body and every group's copies share one Box3D world, one solver and one clock, so they all collide. The world makes at most 4000 copies across its groups (`MAX_COPIES`, the measured budget); groups fill in port order, a later group makes what fits, and the rest is reported as not made: `copies_not_made` on the engine, and per world on the setup check's report (`ContentState::setup_fits`, latched like the liquid warnings) for the copies card to show.
 
-A hit or a coupled liquid selects its recipients with `RigidImpulseTargets`, a fixed bitset of 256 bodies and 32 groups. The engine sizes its per-body and per-group storage from the input lengths: a count change is a topology change and rebuilds the world, and a steady tick never allocates.
+That body's spawner sets the group's layout, live (`physics::copy_layout`):
+
+- **Count**, **Layout** (Grid 0, Scatter 1, Line 2, Ring 3; Scatter is the old Pile and keeps its value), **Columns** and **Spacing**. Spacing is a multiple of the copy's own size along each layout axis, measured from the hulls the world installs (Scatter steps by the box diagonal so its jitter still clears).
+- **Copy Turn** (`copy_turn_x/y/z`): each copy's own turn inside the layout.
+- The layout is centred on the body's transform, which places the whole group, rotation included; its scale is uniform.
+
+A layout edit while playing snaps the copies into formation, at rest, at the next tick start: each fixed tick reads the newest authored sample at or before its start, so the edit lands on the same tick at any frame rate, live or in export. Until then the group draws its pending formation. Reset returns the copies to the layout, and a world with physics off draws them at rest. A Count change enables or disables tail bodies in place: it never rebuilds the world, and it allocates only past the highest count the group has reached. A liquid-coupled world is the one exception: its count is part of the coupled topology, so the liquid's owner rebinds.
+
+A hit or a coupled liquid selects its recipients with `RigidImpulseTargets`, a fixed bitset of 256 bodies and 32 groups. The engine sizes its per-body and per-group storage from the input lengths: a change to the world's `bodies` or `copy_groups` count is a topology change and rebuilds the world, and a steady tick never allocates.
+
+A copies body saved before live layouts becomes a live copy group resting exactly where its old copies did (`copies_body::migrate_world_copies`, proven on two real saved shows by `saved_copy_shows`): its transform's rotation, stored, wired or on a card, moves into Copy Turn and the group is unturned; a transform that also feeds other nodes is split so they keep it; metres Spacing becomes the size multiple that gives the same metres, and each show's saved card converts with that show's own Scale and Shape. A layer that tracked a stock preset takes the converted copy its file saved as its own graph, since the stock preset now reads its cards differently. Five shapes are left as they were and named in the load report, because their old look cannot be rebuilt at load: a copies body whose transform is not a Transform node, one that copies an imported mesh, one with Spacing wired in metres, one with Shape wired, and one whose Scale is wired or differs between axes.
 
 The caps are `PHYSICS_WORLD_MAX_BODIES` and `PHYSICS_WORLD_MAX_COPY_GROUPS` in foundation `scene_surface`, asserted against the bitset in core. A saved world with no count loads as 64 bodies and one group, and its old `copies`, `copies_acceleration`, `instances` and `active_count` ports load as group 0's (`copies_body::migrate_world_copies`), so an old show plays bit-identically (`physics::parity_tests`).
 
@@ -484,7 +494,7 @@ A compound body is capped by its own part ports, not by the world: at most `RIGI
 
 A coupled liquid takes the world's bodies up to its own limit:
 
-- A liquid holds at most `MAX_LIQUID_BODIES` (255) body rows: its Collider roles, then the world's bodies in slot order, then each group's copies. The limit is GPU FLIP's: each solid face names its body in one byte. Bodies past it still move in Box3D, but the water neither pushes them nor flows round them. The domain counts them in `FluidDomainSnapshot::uncoupled_bodies` for the setup check.
+- A liquid holds at most `MAX_LIQUID_BODIES` (255) body rows: its Collider roles, then the world's bodies in slot order, then each group's copies. The limit is GPU FLIP's: each solid face names its body in one byte. Bodies past it still move in Box3D, but the water neither pushes them nor flows round them. The domain counts them in `FluidDomainSnapshot::uncoupled_bodies`, and the setup check warns on the water's card: "N bodies not coupled" (`SetupProblemKind::BodiesNotCoupled`, latched in `ContentState::setup_fits` like the fill and column).
 - The domain's closed faces become fixed slabs in the liquid's own copy of the world. They take free body slots from the last one down, so a world with room keeps the slots every saved show ran with; a full world takes them past its own bodies (`MAX_WALL_BODIES`, six).
 
 The world's `copies_not_made` is not shown anywhere yet; the copies card shows it from CG1 (live layouts) on.

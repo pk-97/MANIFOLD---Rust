@@ -50,6 +50,23 @@ impl RuntimeExtension for WaterRuntimeState {
         }
     }
 
+    fn write_copies_not_made(
+        &self,
+        graph: &Graph,
+        slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
+        output: &mut Vec<(manifold_core::NodeId, u32)>,
+    ) {
+        for (node_id, instance) in slot.node_map {
+            let not_made = graph
+                .get_node(*instance)
+                .and_then(|node| manifold_water_rigid::node::get(node.node.as_ref()))
+                .map_or(0, |node| node.copies_not_made());
+            if not_made > 0 {
+                output.push((node_id.clone(), not_made));
+            }
+        }
+    }
+
     fn is_scene_impulse_param(&self, param: &str) -> bool {
         Self::is_scene_impulse_param(self, param)
     }

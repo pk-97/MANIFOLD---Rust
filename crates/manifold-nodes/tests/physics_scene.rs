@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
 };
+use manifold_core::copies_body;
 use manifold_core::effects::ParamConvert;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures;
@@ -41,25 +42,34 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
         (0.0, 4000.0, 256.0)
     );
     assert!(count.whole_numbers && count.card_visible);
-    // The box spawner is the copies body's: all four stamp there, none on
-    // the world or on the bodies that are not copied.
+    // The box spawner is the copies body's: all its controls stamp there,
+    // none on the world or on the bodies that are not copied.
     let targets = binding_targets(&def);
-    for param in ["copy_count", "copy_spacing", "copy_columns", "copy_layout"] {
+    for param in copies_body::COPY_PARAMS {
         assert!(targets.contains(&(121, param.to_string())), "copies body 121.{param} must be exposed");
     }
     assert_eq!(
         targets.iter().filter(|(_, param)| param.starts_with("copy_")).count(),
-        4,
+        copies_body::COPY_PARAMS.len(),
         "{targets:?}"
     );
     // One id plan: the controls keep the ids they had on the world, so a
     // saved value and anything attached to it still land, and the stamp adds
-    // no duplicate under the body's own doc id.
+    // no duplicate under the body's own doc id. Copy Turn is new, so its
+    // cards carry the body's id.
     for id in ["40_copy_count", "40_copy_spacing", "40_copy_columns", "40_copy_layout"] {
         assert!(metadata.params.iter().any(|p| p.id == id), "{id}");
     }
-    assert!(!metadata.params.iter().any(|p| p.id.starts_with("121_copy_")));
+    assert!(!metadata.params.iter().any(|p| p.id.starts_with("121_copy_") && !p.id.starts_with("121_copy_turn_")));
     assert!(metadata.param_aliases.is_empty(), "no renames: {:?}", metadata.param_aliases);
+    // Spacing counts box sizes: the stored multiple is exactly the 1.85 m the
+    // pile has always had.
+    let spacing = match &def.nodes.iter().find(|n| n.id == 121).unwrap().params["copy_size_spacing"] {
+        SerializedParamValue::Float { value } => *value,
+        other => panic!("{other:?}"),
+    };
+    let unit = copies_body::spacing_unit(true, copies_body::platonic_width(1, 0.8))[0];
+    assert_eq!(spacing * unit, 1.85);
     assert!(
         metadata
             .params
@@ -125,9 +135,10 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
     scene.groups[0] = Some(RigidBody {
         spawn: CopySpawn {
             count: scalar(121, "copy_count"),
-            spacing: scalar(121, "copy_spacing"),
+            spacing: scalar(121, "copy_size_spacing"),
             columns: scalar(121, "copy_columns"),
             layout: scalar(121, "copy_layout"),
+            turn: ["copy_turn_x", "copy_turn_y", "copy_turn_z"].map(|p| scalar(121, p)),
         },
         ..body(121)
     });
@@ -327,13 +338,15 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
     assert_eq!(nodes[&40].type_id, "node.physics_world");
 }
 
-/// An edited Physics Boxes saved before the box spawner moved: its own
-/// graph (not the catalog's) with the four controls and their cards on the
-/// world, a Spacing value of 3 and an LFO on Spacing. After load the value
-/// drives the copies body under the same id and the LFO still resolves, so
-/// the boxes come back laid out the same. The Physics Boxes rename table
-/// applies to every instance of the preset before any migration, so a
-/// rename there would drop the value and orphan the LFO.
+/// An edited Physics Boxes saved before copy groups: its own graph (not the
+/// catalog's) with the four controls and their cards on the world, Spacing
+/// in metres at 3 with an LFO on it, and the boxes' turn on their transform.
+/// After load the card drives the copies body's size-relative spacing under
+/// the same id at the same 3 m, the LFO still resolves, and the turn is each
+/// copy's own with the group unturned, so the boxes come back laid out the
+/// same. The Physics Boxes rename table applies to every instance of the
+/// preset before any migration, so a rename there would drop the value and
+/// orphan the LFO.
 #[test]
 fn edited_physics_boxes_keep_box_values_and_drivers_through_load() {
     use manifold_core::effects::ParameterDriver;
@@ -343,15 +356,31 @@ fn edited_physics_boxes_keep_box_values_and_drivers_through_load() {
     use manifold_core::types::{BeatDivision, DriverWaveform};
 
     // The old shape, rebuilt from the bundled file: values and cards on the
-    // world (doc id 40), none on the box body.
+    // world (doc id 40), none on the box body, the turn on its transform and
+    // the world's one-group port names.
     let mut old: serde_json::Value = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
     let nodes = old["nodes"].as_array_mut().unwrap();
     let body = nodes.iter().position(|n| n["nodeId"] == "physics_demo_121").unwrap();
     let world = nodes.iter().position(|n| n["nodeId"] == "physics_demo_40").unwrap();
-    for param in manifold_core::copies_body::COPY_PARAMS {
-        let value = nodes[body]["params"].as_object_mut().unwrap().remove(param).unwrap();
-        nodes[world]["params"][param] = value;
+    let transform = nodes.iter().position(|n| n["nodeId"] == "physics_demo_120").unwrap();
+    for param in copies_body::COPY_PARAMS {
+        nodes[body]["params"].as_object_mut().unwrap().remove(param).unwrap();
     }
+    for (param, value) in [("copy_count", 256.0), ("copy_spacing", 1.85), ("copy_columns", 24.0)] {
+        nodes[world]["params"][param] = serde_json::json!({"type": "Float", "value": value});
+    }
+    nodes[world]["params"]["copy_layout"] = serde_json::json!({"type": "Enum", "value": 1});
+    for (axis, turn) in [("rot_x", 0.08), ("rot_y", 0.12), ("rot_z", 0.04)] {
+        nodes[transform]["params"][axis]["value"] = turn.into();
+    }
+    for wire in old["wires"].as_array_mut().unwrap() {
+        for (end, port) in [("toPort", "copies_0"), ("fromPort", "instances_0"), ("fromPort", "active_count_0")] {
+            if wire[end] == port {
+                wire[end] = port.trim_end_matches("_0").into();
+            }
+        }
+    }
+    let nodes = old["nodes"].as_array_mut().unwrap();
     nodes[body].as_object_mut().unwrap().remove("exposedParams");
     nodes[world]["exposedParams"] = serde_json::json!(["copy_count", "reset"]);
     // The cards a saved show carries: the authored Count plus the stamped
@@ -397,7 +426,10 @@ fn edited_physics_boxes_keep_box_values_and_drivers_through_load() {
     loaded.on_after_deserialize();
 
     let fx = loaded.timeline.layers[0].gen_params().unwrap();
-    assert!((fx.get_base_param("40_copy_spacing") - 3.0).abs() < 1e-6, "the saved Spacing survives");
+    let unit = copies_body::spacing_unit(true, copies_body::platonic_width(1, 0.8))[0];
+    let spacing = fx.get_base_param("40_copy_spacing");
+    assert_eq!(spacing, copies_body::size_multiple(3.0, unit), "the saved Spacing is counted in box sizes");
+    assert!((spacing * unit - 3.0).abs() < 1e-6, "and is still 3 m: {}", spacing * unit);
     let driver = &fx.drivers.as_ref().unwrap()[0];
     assert_eq!(driver.param_id, "40_copy_spacing", "the LFO still points at Spacing");
     assert!(fx.params.iter().any(|p| p.id() == "40_copy_spacing"), "and Spacing exists");
@@ -405,7 +437,13 @@ fn edited_physics_boxes_keep_box_values_and_drivers_through_load() {
     let binding = def.preset_metadata.as_ref().unwrap().bindings.iter().find(|b| b.id == "40_copy_spacing").unwrap();
     assert!(
         matches!(&binding.target, BindingTarget::Node { node_id, param }
-            if node_id.as_str() == "physics_demo_121" && param == "copy_spacing"),
+            if node_id.as_str() == "physics_demo_121" && param == "copy_size_spacing"),
         "Spacing drives the copies body"
     );
+    let param = |doc: u32, name: &str| match def.nodes.iter().find(|n| n.id == doc).unwrap().params.get(name) {
+        Some(SerializedParamValue::Float { value }) => *value,
+        other => panic!("{doc}.{name}: {other:?}"),
+    };
+    assert_eq!(["copy_turn_x", "copy_turn_y", "copy_turn_z"].map(|p| param(121, p)), [0.08, 0.12, 0.04], "each box keeps its turn");
+    assert_eq!(["rot_x", "rot_y", "rot_z"].map(|p| param(120, p)), [0.0; 3], "and the group is unturned");
 }

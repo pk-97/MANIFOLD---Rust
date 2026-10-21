@@ -19,6 +19,12 @@ pub trait PhysicsNode: Send {
     /// the gizmo overlay. Read-only; the caller reuses the buffer.
     fn write_physics_gizmos(&self, _out: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {}
 
+    /// Copies the world's pool could not make on its last evaluation, so a
+    /// shortfall always reaches the card.
+    fn copies_not_made(&self) -> u32 {
+        0
+    }
+
     /// Resolved rigid inputs from the latest successful graph evaluation.
     /// Pending or invalid inputs must clear the previous observation.
     fn rigid_scene_observation(&self) -> Option<&crate::physics::RigidSceneObservation> {

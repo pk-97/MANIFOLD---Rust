@@ -87,6 +87,9 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
         _output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
     ) {
     }
+    /// Append each world whose copy pool left copies unmade on its last
+    /// frame, with how many, for the setup check.
+    fn write_copies_not_made(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, u32)>) {}
     fn is_scene_impulse_param(&self, _param: &str) -> bool {
         false
     }

@@ -53,9 +53,10 @@ fn physics_boxes(count: usize) -> RigidSceneInputs {
     scene.groups[0] = Some(RigidBody {
         spawn: CopySpawn {
             count: count as f32,
-            spacing: scalar(&nodes, 121, "copy_spacing"),
+            spacing: scalar(&nodes, 121, "copy_size_spacing"),
             columns: scalar(&nodes, 121, "copy_columns"),
             layout: scalar(&nodes, 121, "copy_layout"),
+            turn: ["copy_turn_x", "copy_turn_y", "copy_turn_z"].map(|p| scalar(&nodes, 121, p)),
         },
         ..body(121)
     });
@@ -82,7 +83,7 @@ fn wide_world() -> RigidSceneInputs {
         *body = Some(boxed(pos, 0.5, 1));
     }
     let pile = |x: f32| RigidBody {
-        spawn: CopySpawn { count: 122.0, spacing: 1.2, columns: 8.0, layout: 1.0 },
+        spawn: CopySpawn { count: 122.0, spacing: 1.2, columns: 8.0, layout: 1.0, turn: [0.0; 3] },
         ..boxed([x, 8.0, 0.0], 0.45, 1)
     };
     RigidSceneInputs {

@@ -21,7 +21,7 @@ pub(crate) fn copies_scene(
     acceleration_field: Option<FieldValue>,
     targeted: &[Option<FieldValue>],
 ) -> RigidSceneInputs {
-    let spawn = CopySpawn { count, spacing, columns, layout };
+    let spawn = CopySpawn { count, spacing, columns, layout, turn: [0.0; 3] };
     RigidSceneInputs {
         bodies: bodies.to_vec(),
         groups: vec![prototype.map(|body| RigidBody { spawn, ..body })],

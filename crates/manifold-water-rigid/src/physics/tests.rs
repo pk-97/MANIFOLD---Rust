@@ -8,18 +8,6 @@ pub(super) fn live_step() -> SimStep {
     SimStep::live(FIXED_TICK)
 }
 
-#[test]
-fn full_copy_grid_stays_over_floor_and_stacks_in_layers() {
-    let first = copy_position([0.0, 4.0, 0.0], 0, MAX_COPIES, 16, 1.5);
-    let next_layer = copy_position([0.0, 4.0, 0.0], 256, MAX_COPIES, 16, 1.5);
-    assert_eq!(next_layer, [first[0], 5.5, first[2]]);
-    for index in 0..MAX_COPIES {
-        let p = copy_position([0.0, 4.0, 0.0], index, MAX_COPIES, 16, 1.5);
-        assert!(p[0].abs() <= 11.25 && p[2].abs() <= 11.25);
-        assert!((4.0..=26.5).contains(&p[1]));
-    }
-}
-
 fn body(position: [f32; 3]) -> RigidBody {
     RigidBody {
         transform: Transform {
@@ -1269,10 +1257,16 @@ fn paused_animated_copy_edit_and_undo_update_every_copy_without_ticks() {
     prototype.transform.pos[0] = 5.0;
     prototype.transform.rot_euler[1] = 0.25;
     let edited = advance(prototype.clone());
+    // The group moves and turns as one: its centre moves 5 m, every copy turns.
+    let centre = |poses: &[Transform]| (poses[0].pos[0] + poses[1].pos[0]) * 0.5;
+    assert!((centre(&edited) - centre(&before) - 5.0).abs() < 1.0e-5);
     for (old, new) in before.iter().zip(&edited) {
-        assert!((new.pos[0] - old.pos[0] - 5.0).abs() < 1.0e-5);
         assert!((new.rot_euler[1] - old.rot_euler[1] - 0.25).abs() < 1.0e-5);
     }
+    let span = |poses: &[Transform]| [poses[1].pos[0] - poses[0].pos[0], poses[1].pos[2] - poses[0].pos[2]];
+    let [dx, dz] = span(&edited);
+    let [bx, _] = span(&before);
+    assert!((dx - bx * 0.25f32.cos()).abs() < 1.0e-4 && (dz + bx * 0.25f32.sin()).abs() < 1.0e-4, "the row turns with the group");
     prototype.transform.pos[0] = 0.0;
     prototype.transform.rot_euler[1] = 0.0;
     let undone = advance(prototype.clone());
@@ -1580,127 +1574,6 @@ fn offline_history_drain_keeps_authored_history_bounded() {
 }
 
 #[test]
-fn copies_are_reset_latched_and_shrink_tail_is_inactive() {
-    let bodies = vec![None; 64];
-    let prototype = body([0.0, 4.0, 0.0]);
-    let mut simulation = RigidSimulation::default();
-    simulation
-        .advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 130.0, 1.25, 16.0, 0.0, GRAVITY, None, &[]), Seconds::ZERO, 1.0, 0.0)
-        .unwrap();
-    assert_eq!(simulation.active_copies(0), 130);
-    assert_ne!(simulation.group_poses(0)[129], Transform::default());
-
-    simulation
-        .advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 3.0, 2.0, 1.0, 0.0, GRAVITY, None, &[]), Seconds(FRAME), 1.0, 0.0)
-        .unwrap();
-    assert_eq!(simulation.active_copies(0), 130);
-
-    simulation
-        .advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 3.0, 2.0, 1.0, 0.0, GRAVITY, None, &[]), Seconds(FRAME), 1.0, 1.0)
-        .unwrap();
-    assert_eq!(simulation.active_copies(0), 3);
-    assert_eq!(simulation.group_poses(0).len(), 3, "the shrunk tail is not published");
-}
-
-#[test]
-fn pile_layout_is_reset_deterministic_and_property_latched() {
-    let prototype = body([0.0, 9.0, 0.0]);
-    let mut simulation = RigidSimulation::default();
-    simulation
-        .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 32.0, 1.85, 16.0, 1.0, GRAVITY, None, &[]), Seconds::ZERO, 0.0, 0.0)
-        .unwrap();
-    let initial = simulation.group_poses(0)[..32].to_vec();
-
-    simulation
-        .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 3.0, 0.5, 1.0, 0.0, GRAVITY, None, &[]), Seconds(FRAME), 0.0, 0.0)
-        .unwrap();
-    assert_eq!(simulation.active_copies(0), 32);
-    assert_eq!(&simulation.group_poses(0)[..32], initial.as_slice());
-
-    simulation
-        .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 3.0, 0.5, 1.0, 0.0, GRAVITY, None, &[]), Seconds(FRAME), 0.0, 1.0)
-        .unwrap();
-    assert_eq!(simulation.active_copies(0), 3);
-
-    simulation
-        .advance_scene(&copies_scene(&vec![None; 64], Some(prototype.clone()), 32.0, 1.85, 16.0, 1.0, GRAVITY, None, &[]), Seconds(FRAME), 0.0, 2.0)
-        .unwrap();
-    assert_eq!(&simulation.group_poses(0)[..32], initial.as_slice());
-}
-
-#[test]
-fn pile_layout_has_bounded_jitter_distinct_rotations_and_clearance() {
-    let prototype = body([0.0, 9.0, 0.0]);
-    let first = copy_transform_for_layout(
-        prototype.clone(),
-        prototype.transform.pos,
-        0,
-        256,
-        16,
-        1.85,
-        CopyLayout::Pile,
-    );
-    let second = copy_transform_for_layout(
-        prototype.clone(),
-        prototype.transform.pos,
-        1,
-        256,
-        16,
-        1.85,
-        CopyLayout::Pile,
-    );
-    assert_ne!(first.transform.rot_euler, second.transform.rot_euler);
-    assert_eq!(
-        first.transform,
-        copy_transform_for_layout(
-            prototype.clone(),
-            prototype.transform.pos,
-            0,
-            256,
-            16,
-            1.85,
-            CopyLayout::Pile,
-        )
-        .transform
-    );
-
-    for count in [256, MAX_COPIES] {
-        let columns = ceil_cuberoot(count).min(16);
-        let mut positions = vec![[0.0; 3]; count];
-        for (index, position) in positions.iter_mut().enumerate() {
-            *position = pile_position(prototype.transform.pos, index, count, 16, 1.85);
-            let column = index % columns;
-            let row = (index / columns) % columns;
-            let layer = index / (columns * columns);
-            let center = (columns as f32 - 1.0) * 0.5;
-            let lattice = [
-                prototype.transform.pos[0] + (column as f32 - center) * 1.85,
-                prototype.transform.pos[1] + layer as f32 * 1.85,
-                prototype.transform.pos[2] + (row as f32 - center) * 1.85,
-            ];
-            for axis in 0..3 {
-                assert!((position[axis] - lattice[axis]).abs() <= 0.04 * 1.85 + 1.0e-6);
-            }
-        }
-
-        let mut closest_squared = f32::MAX;
-        for (index, left) in positions.iter().enumerate() {
-            for right in positions.iter().skip(index + 1) {
-                let distance_squared = (0..3)
-                    .map(|axis| (left[axis] - right[axis]).powi(2))
-                    .sum::<f32>();
-                closest_squared = closest_squared.min(distance_squared);
-            }
-        }
-        let sphere_diameter: f32 = 1.6;
-        assert!(
-            closest_squared > sphere_diameter * sphere_diameter,
-            "count={count} closest_squared={closest_squared}"
-        );
-    }
-}
-
-#[test]
 fn bulk_boxes_share_floor_contacts_and_reset_after_catch_up() {
     let mut bodies = vec![None; 64];
     let mut ground = body([0.0, -0.28867513, 0.0]);
@@ -1721,13 +1594,11 @@ fn bulk_boxes_share_floor_contacts_and_reset_after_catch_up() {
             "box must settle on floor/another box: {pose:?}"
         );
     }
-    let held = sim.group_poses(0).to_vec();
     sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(5.0), 0.0, 0.0)
     .unwrap();
-    assert_eq!(
-        sim.group_poses(0), held,
-        "zero speed holds and count edit stays pending"
-    );
+    // Held on a tick boundary, the next tick starts where time stands.
+    assert_eq!(sim.active_copies(0), 64, "a held Count edit lays out at once, with no reset");
+    assert_eq!(sim.group_poses(0).len(), 64);
     sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(8.0), 1.0, 0.0)
     .unwrap();
     sim.advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 64.0, 1.25, 4.0, 0.0, GRAVITY, None, &[]), Seconds(8.0), 1.0, 1.0)

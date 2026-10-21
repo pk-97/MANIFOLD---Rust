@@ -31,6 +31,9 @@ pub enum SetupProblemKind {
     SourceClipped(FluidRole),
     /// A source or collider is wholly outside; it does nothing.
     SourceOutside(FluidRole),
+    /// The coupled world has more bodies than the liquid holds; the water
+    /// neither pushes nor flows round this many.
+    BodiesNotCoupled(u32),
 }
 
 impl SetupProblemKind {
@@ -43,6 +46,8 @@ impl SetupProblemKind {
             Self::ColumnOutside => "Column is outside the domain; no water".to_owned(),
             Self::SourceClipped(role) => format!("{} leaves the domain; the rest is unused", role.title()),
             Self::SourceOutside(role) => format!("{} is outside the domain; it does nothing", role.title()),
+            Self::BodiesNotCoupled(1) => "1 body not coupled; the water passes through it".to_owned(),
+            Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; the water passes through them"),
         }
     }
 }
@@ -298,6 +303,8 @@ pub struct RuntimeFit<'a> {
     pub layout: Option<&'a FluidDomainLayout>,
     /// The initial column as it ran, when it did not fit.
     pub column_box: Option<([f32; 3], [f32; 3])>,
+    /// Coupled-world bodies past what the liquid holds.
+    pub uncoupled_bodies: u32,
 }
 
 impl<'a> RuntimeFit<'a> {
@@ -308,15 +315,19 @@ impl<'a> RuntimeFit<'a> {
             refusal: snapshot.refusal.as_deref(),
             layout: snapshot.accepted_layout.as_ref(),
             column_box: snapshot.column_box,
+            uncoupled_bodies: snapshot.uncoupled_bodies,
         }
     }
 }
 
 /// Two problems a card shows in one place: the fill, the column (clipped or
-/// outside), or one refusal reason.
+/// outside), the uncoupled bodies whatever their count, or one refusal reason.
 fn same_slot(a: &SetupProblemKind, b: &SetupProblemKind) -> bool {
-    use SetupProblemKind::{ColumnClipped, ColumnOutside};
-    matches!((a, b), (ColumnClipped | ColumnOutside, ColumnClipped | ColumnOutside)) || a == b
+    use SetupProblemKind::{BodiesNotCoupled, ColumnClipped, ColumnOutside};
+    matches!(
+        (a, b),
+        (ColumnClipped | ColumnOutside, ColumnClipped | ColumnOutside) | (BodiesNotCoupled(_), BodiesNotCoupled(_))
+    ) || a == b
 }
 
 /// The scene's authored problems, then what each domain's solver reported
@@ -360,6 +371,11 @@ pub fn problems_with_runtime<'a>(
             let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
             let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
             add(SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
+        }
+        if report.uncoupled_bodies > 0 {
+            // On the water's own rows; the bodies it skips are not one shape.
+            let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
+            add(SetupProblemKind::BodiesNotCoupled(report.uncoupled_bodies), params, None);
         }
     }
 }
@@ -603,6 +619,32 @@ mod tests {
         out
     }
 
+    /// Bodies the liquid could not take warn on the water's rows with their
+    /// count, one line however the count moves.
+    #[test]
+    fn uncoupled_bodies_warn_on_the_water_with_their_count() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        let report = |count| RuntimeFit {
+            node: &node,
+            fit: SetupFit::default(),
+            refusal: None,
+            layout: None,
+            column_box: None,
+            uncoupled_bodies: count,
+        };
+        assert!(runtime(&anchors, &[], report(0)).is_empty());
+        let problems = runtime(&anchors, &[], report(12));
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].kind, SetupProblemKind::BodiesNotCoupled(12));
+        assert_eq!(problems[0].kind.message(), "12 bodies not coupled; the water passes through them");
+        assert_eq!(problems[0].params, vec![anchors[0].fill.clone()], "on the water's own rows");
+        assert_eq!(SetupProblemKind::BodiesNotCoupled(1).message(), "1 body not coupled; the water passes through it");
+        let mut out = Vec::new();
+        problems_with_runtime(&anchors, &[], [report(12), report(3)], &mut out);
+        assert_eq!(out.iter().map(|p| p.kind.clone()).collect::<Vec<_>>(), [SetupProblemKind::BodiesNotCoupled(3)], "one line");
+    }
+
     #[test]
     fn a_wired_column_outlines_where_it_ran() {
         let anchors = [anchor()];
@@ -614,6 +656,7 @@ mod tests {
             refusal: None,
             layout: Some(&layout()),
             column_box: Some(ran),
+            uncoupled_bodies: 0,
         };
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
@@ -625,7 +668,7 @@ mod tests {
     fn a_refusal_with_nothing_to_outline_still_warns_the_card() {
         let anchors = [anchor()];
         let node = NodeId::new("water");
-        let report = RuntimeFit { node: &node, fit: SetupFit::default(), refusal: Some("Fluid: too big"), layout: None, column_box: None };
+        let report = RuntimeFit { node: &node, fit: SetupFit::default(), refusal: Some("Fluid: too big"), layout: None, column_box: None, uncoupled_bodies: 0 };
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::DomainRefused("Fluid: too big".to_owned()));
@@ -646,7 +689,7 @@ mod tests {
         };
         let ran = ([4.0; 3], [5.0; 3]);
         let report =
-            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran) };
+            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran), uncoupled_bodies: 0 };
         let problems = runtime(&anchors, std::slice::from_ref(&authored), report);
         assert_eq!(problems.len(), 1, "one column, one warning: {problems:?}");
         assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);

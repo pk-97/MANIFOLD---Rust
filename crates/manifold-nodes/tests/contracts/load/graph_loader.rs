@@ -541,8 +541,9 @@ mod tests {
 
     /// The bundled Physics Boxes as it was saved before the box spawner
     /// moved onto the copies body and before the sky's sun followed the Sun
-    /// light: Count, Spacing, Columns and Arrangement on the world, Count's
-    /// card driving the world, and the bake with its own sun position and
+    /// light: Count, Spacing in metres, Columns and Arrangement on the world
+    /// with the cards driving them, the turn on the box transform, the
+    /// world's one-group port names, and the bake with its own sun position and
     /// no `sun` wire.
     fn old_physics_boxes() -> EffectGraphDef {
         let mut doc: serde_json::Value =
@@ -552,14 +553,21 @@ mod tests {
             nodes.iter().position(|n| n["handle"] == handle).unwrap()
         };
         let body = index(nodes, BOX_BODY_HANDLE);
-        let mut spawner = serde_json::Map::new();
         for param in manifold_core::copies_body::COPY_PARAMS {
-            spawner.insert(param.into(), nodes[body]["params"][param].take());
             nodes[body]["params"].as_object_mut().unwrap().remove(param);
         }
         nodes[body].as_object_mut().unwrap().remove("exposedParams");
+        let transform = nodes.iter().position(|n| n["nodeId"] == "physics_demo_120").unwrap();
+        for (axis, turn) in [("rot_x", 0.08), ("rot_y", 0.12), ("rot_z", 0.04)] {
+            nodes[transform]["params"][axis]["value"] = turn.into();
+        }
         let world = index(nodes, WORLD_HANDLE);
-        nodes[world]["params"] = serde_json::Value::Object(spawner);
+        nodes[world]["params"] = serde_json::json!({
+            "copy_count": {"type": "Float", "value": 256},
+            "copy_spacing": {"type": "Float", "value": 1.85},
+            "copy_columns": {"type": "Float", "value": 24},
+            "copy_layout": {"type": "Enum", "value": 1},
+        });
         nodes[world]["exposedParams"] = serde_json::json!(["copy_count", "reset"]);
         let env = index(nodes, "environment");
         for (axis, v) in [("sun_x", -0.4), ("sun_y", 0.8), ("sun_z", 0.5)] {
@@ -578,8 +586,17 @@ mod tests {
             }
         }
         for binding in doc["presetMetadata"]["bindings"].as_array_mut().unwrap() {
-            if binding["id"] == "40_copy_count" {
+            if binding["id"].as_str().is_some_and(|id| id.starts_with("40_copy_")) {
                 binding["target"]["nodeId"] = "physics_demo_40".into();
+            }
+            if binding["id"] == "40_copy_spacing" {
+                binding["target"]["param"] = "copy_spacing".into();
+                binding["defaultValue"] = 1.85.into();
+            }
+        }
+        for param in doc["presetMetadata"]["params"].as_array_mut().unwrap() {
+            if param["id"] == "40_copy_spacing" {
+                param["defaultValue"] = 1.85.into();
             }
         }
         let def: EffectGraphDef = serde_json::from_value(doc).unwrap();
@@ -592,7 +609,8 @@ mod tests {
     }
 
     /// The old Physics Boxes builds with the same boxes: the four controls
-    /// and their saved values on the copies body, none on the world, and the
+    /// and their saved values on the copies body, none on the world, Spacing
+    /// counted in box sizes, the transform's turn moved to Copy Turn, and the
     /// world's unnumbered copy ports bound as its first copy group's.
     fn assert_spawner_on_the_body(graph: &Graph) {
         let id = |handle: &str| graph.node_id_by_handle(handle).unwrap();
@@ -604,7 +622,7 @@ mod tests {
             );
         }
         let world = graph.get_node(world_id).unwrap();
-        for param in manifold_core::copies_body::COPY_PARAMS {
+        for param in ["copy_count", "copy_spacing", "copy_columns", "copy_layout"] {
             assert!(world.params.get(param).is_none(), "{param} left the world");
         }
         let body = graph.get_node(id(BOX_BODY_HANDLE)).unwrap();
@@ -614,9 +632,9 @@ mod tests {
             other => panic!("{param}: {other:?}"),
         };
         assert_eq!(
-            ["copy_count", "copy_spacing", "copy_columns", "copy_layout"].map(number),
-            [256.0, 1.85, 24.0, 1.0],
-            "the same boxes"
+            ["copy_count", "copy_size_spacing", "copy_columns", "copy_layout", "copy_turn_x", "copy_turn_y", "copy_turn_z"].map(number),
+            [256.0, 1.06375, 24.0, 1.0, 0.08, 0.12, 0.04],
+            "the same boxes: 1.85 m is 1.06375 box sizes, and each box keeps its turn"
         );
     }
 

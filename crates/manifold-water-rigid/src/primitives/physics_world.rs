@@ -10,8 +10,8 @@
 //! targeted field; copies_acceleration_k is added to every copy of group k.
 //! A targeted field without its matching body or copies body is an error and
 //! holds outputs pending. Output transforms already include authored scale.
-//! Each copies body carries its own spawner (count, spacing, columns,
-//! arrangement), read on first build, reset or backwards transport; its
+//! Each copies body carries its own spawner (count, layout, spacing,
+//! columns, turn); an edit lays its copies out at the next tick start. Its
 //! group writes a fixed-capacity instances array plus active_count. The
 //! groups share the world's copy budget: later groups make what fits.
 
@@ -322,15 +322,7 @@ impl PhysicsWorldNode {
                 return Err("Physics: non-finite clock/control or speed outside 0–4".into());
             }
             for prototype in inputs.groups.iter().flatten() {
-                let spawn = prototype.spawn;
-                if !spawn.count.is_finite()
-                    || !spawn.spacing.is_finite()
-                    || spawn.spacing <= 0.0
-                    || !spawn.columns.is_finite()
-                    || !spawn.layout.is_finite()
-                {
-                    return Err("Physics: copy count, spacing, columns, and layout must be finite; spacing must be positive".into());
-                }
+                crate::physics::validate_spawn(prototype.spawn)?;
             }
         }
         self.observation.transport = ctx.time.seconds;
@@ -559,6 +551,16 @@ impl PhysicsNode for PhysicsWorldNode {
         self.observation_valid.then_some(&self.observation)
     }
 
+    // From the groups the world was handed, so a liquid-coupled world, whose
+    // bodies live in the liquid's solver, reports the same shortfall.
+    fn copies_not_made(&self) -> u32 {
+        if !self.observation_valid {
+            return 0;
+        }
+        let (_, not_made) = crate::physics::copy_pool(self.observation.inputs.groups.iter().map(Option::as_ref));
+        u32::try_from(not_made).unwrap_or(u32::MAX)
+    }
+
     fn physics_impulse_epoch(&self) -> Option<u64> {
         if self.coupled_mode {
             return None;
@@ -681,7 +683,7 @@ inventory::submit! {
 inventory::submit! {
     manifold_node_engine::descriptor::NodeDescriptor {
         type_id: PHYSICS_WORLD_TYPE_ID,
-        purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. The bodies param (1–256, default 64) sets how many individually wired body descriptions it takes; the copy_groups param (0–32, default 1) sets how many copies bodies it lays out as reset-latched copies, all sharing contacts and one budget of 4000 copies. Gravity and simulation speed are live controls; an optional continuous acceleration field contributes m/s² at each native microstep. Reset restores the authored starting poses and copy layouts.",
+        purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. The bodies param (1–256, default 64) sets how many individually wired body descriptions it takes; the copy_groups param (0–32, default 1) sets how many copies bodies it lays out as live copy groups, all sharing contacts and one budget of 4000 copies. Gravity and simulation speed are live controls; an optional continuous acceleration field contributes m/s² at each native microstep. Reset restores the authored starting poses and copy layouts.",
         summary: "Simulate colliding objects together under gravity, global and per-body acceleration fields, with speed and reset controls.",
         category: manifold_node_engine::descriptor::Category::Geometry3D,
         role: manifold_node_engine::descriptor::Role::Filter,
@@ -762,7 +764,7 @@ mod tests {
         backend.cpu_values_mut().set(body_slot, body.clone());
         let mut prototype = body.clone();
         prototype.transform.pos = [4.0, 8.0, 0.0];
-        prototype.spawn = crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0 };
+        prototype.spawn = crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0, turn: [0.0; 3] };
         let prototype_slot = acquire_mock_wire(
             &mut backend,
             &mut wire_slots,
@@ -981,7 +983,7 @@ mod tests {
         assert_eq!(first.inputs.groups[0].as_ref().unwrap().shape, 1);
         assert_eq!(
             first.inputs.groups[0].as_ref().unwrap().spawn,
-            crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0 },
+            crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0, turn: [0.0; 3] },
             "the copies body carries its spawner to the world"
         );
         assert_eq!(first.inputs.gravity, [0.0; 3]);

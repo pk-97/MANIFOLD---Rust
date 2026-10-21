@@ -13,7 +13,7 @@ fn at(position: [f32; 3]) -> RigidBody {
 }
 
 fn spawner(position: [f32; 3], count: f32) -> RigidBody {
-    RigidBody { spawn: CopySpawn { count, spacing: 1.0, columns: 4.0, layout: 0.0 }, ..at(position) }
+    RigidBody { spawn: CopySpawn { count, spacing: 1.0, columns: 4.0, layout: 0.0, turn: [0.0; 3] }, ..at(position) }
 }
 
 fn hit(simulation: &mut RigidSimulation, sequence: u64, targets: RigidImpulseTargets) {
@@ -75,7 +75,7 @@ fn copies_of_two_groups_collide_with_each_other() {
     let floor = RigidBody {
         kind: 0,
         transform: Transform { pos: [0.0, 0.0, 0.0], scale: [4.0; 3], ..Transform::default() },
-        spawn: CopySpawn { count: 1.0, spacing: 1.0, columns: 1.0, layout: 0.0 },
+        spawn: CopySpawn { count: 1.0, spacing: 1.0, columns: 1.0, layout: 0.0, turn: [0.0; 3] },
         ..RigidBody::default()
     };
     let falling = spawner([0.0, 8.0, 0.0], 4.0);

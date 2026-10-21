@@ -19,7 +19,7 @@ use super::{
 pub struct RigidSceneInputs {
     pub bodies: Vec<Option<RigidBody>>,
     /// Each copy group's copies body. Its spawner sets the group's count and
-    /// layout, latched by [`RigidSimulation`] at its reset points.
+    /// layout; an edit lays the copies out at the next tick start.
     pub groups: Vec<Option<RigidBody>>,
     pub gravity: [f32; 3],
     pub acceleration_field: Option<FieldValue>,
@@ -102,10 +102,10 @@ impl RigidSceneInputs {
         self.targeted_fields.resize(bodies + groups, None);
     }
 
-    /// Compare the parts that require native geometry to be rebuilt.
-    ///
-    /// A copies body's spawner intentionally does not participate: count,
-    /// spacing, columns and layout keep their reset-latched semantics.
+    /// Whether a coupled owner keeps the same native bodies: same geometry
+    /// and, for copy groups, the same count. A liquid binds each copy's body
+    /// once per epoch, so a Count change starts a new one there; a world
+    /// without a liquid changes Count in place.
     pub fn same_topology(&self, other: &Self) -> bool {
         self.bodies.len() == other.bodies.len()
             && self.groups.len() == other.groups.len()
@@ -115,6 +115,10 @@ impl RigidSceneInputs {
                 .chain(&self.groups)
                 .zip(other.bodies.iter().chain(&other.groups))
                 .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+            && self.groups.iter().zip(&other.groups).all(|(left, right)| {
+                left.as_ref().map(|body| super::requested_count(body.spawn))
+                    == right.as_ref().map(|body| super::requested_count(body.spawn))
+            })
     }
 }
 
@@ -589,15 +593,17 @@ mod tests {
     }
 
     #[test]
-    fn topology_ignores_reset_latched_copy_controls() {
+    fn a_coupled_owner_keeps_its_bodies_through_layout_edits_but_not_count() {
         let mut left = scene();
         let mut right = left.clone();
         left.groups[0] = Some(RigidBody::default());
         right.groups[0] = Some(RigidBody {
-            spawn: crate::physics::CopySpawn { count: 20.0, spacing: 3.0, columns: 4.0, layout: 1.0 },
+            spawn: crate::physics::CopySpawn { spacing: 3.0, columns: 4.0, layout: 1.0, turn: [0.1; 3], ..Default::default() },
             ..RigidBody::default()
         });
-        assert!(left.same_topology(&right));
+        assert!(left.same_topology(&right), "layout, spacing, columns and turn keep the bodies");
+        right.groups[0].as_mut().unwrap().spawn.count = 20.0;
+        assert!(!left.same_topology(&right), "a liquid binds a new copy set per epoch");
         right.groups.push(None);
         assert!(!left.same_topology(&right), "a new copy group is new topology");
     }
