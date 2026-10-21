@@ -1444,21 +1444,34 @@ mod tests {
 
     #[test]
     fn duplicate_and_paste_of_a_physics_object_make_the_same_graph() {
-        let (mut duplicated, dup_layer) = project_with_graph(physics_object_scene(false));
-        let mut editing = EditingService::new();
-        let action = SceneItemAction::DuplicateObject { layer: dup_layer.clone(), scene: 1, index: 0, copies: 1 };
-        editing.execute(build_action(&duplicated, action).unwrap(), &mut duplicated);
-        assert!(editing.take_rejection().is_none());
+        for with_force in [false, true] {
+            let (mut duplicated, dup_layer) = project_with_graph(physics_object_scene(with_force));
+            let mut editing = EditingService::new();
+            let action = SceneItemAction::DuplicateObject { layer: dup_layer.clone(), scene: 1, index: 0, copies: 1 };
+            editing.execute(build_action(&duplicated, action).unwrap(), &mut duplicated);
+            assert!(editing.take_rejection().is_none());
 
-        let (mut pasted, paste_layer) = project_with_graph(physics_object_scene(false));
-        let clipboard = SceneItemClipboard::capture(&pasted, &paste_layer, 1, SceneItemKind::Object, 0).unwrap();
-        let action = SceneItemAction::Paste { layer: paste_layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
-        editing.execute(build_action(&pasted, action).unwrap(), &mut pasted);
-        assert!(editing.take_rejection().is_none());
+            let (mut pasted, paste_layer) = project_with_graph(physics_object_scene(with_force));
+            let clipboard = SceneItemClipboard::capture(&pasted, &paste_layer, 1, SceneItemKind::Object, 0).unwrap();
+            let action = SceneItemAction::Paste { layer: paste_layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
+            editing.execute(build_action(&pasted, action).unwrap(), &mut pasted);
+            assert!(editing.take_rejection().is_none());
 
-        let (from_duplicate, from_paste) = (graph_in(&duplicated, &dup_layer), graph_in(&pasted, &paste_layer));
-        assert_eq!(shape_of(&from_duplicate), shape_of(&from_paste));
-        assert!(from_paste.wires.iter().any(|w| w.to_node == 7 && w.to_port == "body_1"));
+            let (from_duplicate, from_paste) = (graph_in(&duplicated, &dup_layer), graph_in(&pasted, &paste_layer));
+            assert_eq!(shape_of(&from_duplicate), shape_of(&from_paste), "with_force {with_force}");
+            assert!(from_paste.wires.iter().any(|w| w.to_node == 7 && w.to_port == "body_1"));
+            if with_force {
+                // Each body has a force of its own: editing the copy's wind
+                // never moves the original.
+                let sources: BTreeSet<u32> = from_duplicate
+                    .wires
+                    .iter()
+                    .filter(|w| w.to_port == "acceleration")
+                    .map(|w| w.from_node)
+                    .collect();
+                assert_eq!(sources.len(), 2, "the duplicate has its own force node");
+            }
+        }
     }
 
     #[test]

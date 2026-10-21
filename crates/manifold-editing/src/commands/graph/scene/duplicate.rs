@@ -4,6 +4,7 @@
 
 use super::*;
 use manifold_core::change::ChangeSet;
+use manifold_core::physics_members::ACCELERATION_ALIAS;
 use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_surface::{MAX_DUPLICATE_COPIES, SceneObjectRowKind, copies_shortfall};
@@ -418,6 +419,17 @@ fn append_physics_duplicate(
         let source = nodes.iter().find(|node| node.id == *old_id).ok_or(unavailable)?;
         clones.insert(*old_id, deep_clone_with_fresh_ids(source, next_id, taken, node_id_map));
     }
+    // The body's own force (what feeds its acceleration, and what feeds that)
+    // belongs to it: the copy gets its own, as Paste does, so editing the
+    // copy's wind never moves the source.
+    let forces = force_chain(nodes, wires, &owned);
+    let mut force_clones = Vec::with_capacity(forces.len());
+    for old_id in &forces {
+        let source = nodes.iter().find(|node| node.id == *old_id).ok_or(unavailable)?;
+        let clone = deep_clone_with_fresh_ids(source, next_id, taken, node_id_map);
+        clones.insert(*old_id, clone);
+        force_clones.push(*old_id);
+    }
     let source_object = nodes.iter().find(|node| node.id == physics.object_id).ok_or(unavailable)?;
     let cloned_handle = source_object.handle.as_deref().map(|handle| numbered_copy_name(handle, taken));
     if let Some(clone) = clones.get_mut(&physics.object_id) {
@@ -438,12 +450,13 @@ fn append_physics_duplicate(
         offset_pos_x(clone, offset);
     }
     let node_map: std::collections::HashMap<u32, u32> = clones.iter().map(|(old, clone)| (*old, clone.id)).collect();
-    for old_id in &physics.owned_ids {
+    for old_id in physics.owned_ids.iter().chain(&force_clones) {
         nodes.push(clones.remove(old_id).ok_or(unavailable)?);
     }
+    let forces: std::collections::HashSet<u32> = forces.into_iter().collect();
     let copied: Vec<EffectGraphWire> = wires
         .iter()
-        .filter(|wire| owned.contains(&wire.from_node) || owned.contains(&wire.to_node))
+        .filter(|wire| owned.contains(&wire.from_node) || owned.contains(&wire.to_node) || forces.contains(&wire.to_node))
         .cloned()
         .collect();
     let doc_id = |id: u32| Some(node_map.get(&id).copied().unwrap_or(id));
@@ -457,6 +470,31 @@ fn append_physics_duplicate(
     )
     .map_err(|_| "The Physics World has no free body slot")?;
     Ok(())
+}
+
+/// The nodes that make a body's force: what feeds its `acceleration` input
+/// and, transitively, what feeds those, in the order found. Nodes the object
+/// owns and system nodes (the generator clock) stay shared.
+fn force_chain(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    owned: &std::collections::HashSet<u32>,
+) -> Vec<u32> {
+    let shared = |id: u32| owned.contains(&id) || nodes.iter().any(|node| node.id == id && node.type_id.starts_with("system."));
+    let mut found: Vec<u32> = Vec::new();
+    let mut pending: Vec<u32> = wires
+        .iter()
+        .filter(|wire| owned.contains(&wire.to_node) && wire.to_port == ACCELERATION_ALIAS)
+        .map(|wire| wire.from_node)
+        .collect();
+    while let Some(id) = pending.pop() {
+        if shared(id) || found.contains(&id) {
+            continue;
+        }
+        found.push(id);
+        pending.extend(wires.iter().filter(|wire| wire.to_node == id).map(|wire| wire.from_node));
+    }
+    found
 }
 
 /// The copy's render slot for a source wire into the render scene, or `None`

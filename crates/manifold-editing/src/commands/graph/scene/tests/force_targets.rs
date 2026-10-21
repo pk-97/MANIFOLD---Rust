@@ -22,7 +22,7 @@ fn has_target(graph: &EffectGraphDef, source: u32, world: u32, port: &str) -> bo
 }
 
 #[test]
-fn scene_force_targets_duplicate_preserves_shared_source_and_roundtrips() {
+fn scene_force_targets_duplicate_gives_the_copy_its_own_force_and_roundtrips() {
     let mut graph = physics_scene_graph();
     let field = connect_field(&mut graph, 101, "acceleration");
     let global = connect_field(&mut graph, 40, "acceleration_field");
@@ -48,10 +48,16 @@ fn scene_force_targets_duplicate_preserves_shared_source_and_roundtrips() {
         .map(|n| n.id)
         .collect();
     assert_eq!(bodies.len(), 2);
-    assert!(
-        bodies.iter().all(|body| has_target(&duplicated, field, *body, "acceleration")),
-        "the copy's body takes the source body's force on its own acceleration input"
-    );
+    assert!(has_target(&duplicated, field, 101, "acceleration"));
+    let copy_body = *bodies.iter().find(|body| **body != 101).unwrap();
+    let copy_field = duplicated
+        .wires
+        .iter()
+        .find(|w| w.to_node == copy_body && w.to_port == "acceleration")
+        .map(|w| w.from_node)
+        .expect("the copy's body takes a force on its own acceleration input");
+    assert_ne!(copy_field, field, "the copy's force is its own node, so editing it never moves the source");
+    assert!(!has_target(&duplicated, copy_field, 101, "acceleration"));
     assert!(has_target(&duplicated, global, 40, "acceleration_field"));
     assert_eq!(
         duplicated
@@ -59,7 +65,7 @@ fn scene_force_targets_duplicate_preserves_shared_source_and_roundtrips() {
             .iter()
             .filter(|n| n.type_id == "node.uniform_vector_field")
             .count(),
-        2
+        3
     );
     let loaded: EffectGraphDef =
         serde_json::from_str(&serde_json::to_string(&duplicated).unwrap()).unwrap();
@@ -79,11 +85,10 @@ fn scene_force_targets_duplicate_preserves_shared_source_and_roundtrips() {
     remove.execute(&mut project);
     assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
     let remaining = graph_of(&project, &fx);
-    let copy_body = *bodies.iter().find(|body| **body != 101).unwrap();
     assert!(!has_target(remaining, field, 101, "acceleration"));
-    assert!(has_target(remaining, field, copy_body, "acceleration"));
+    assert!(has_target(remaining, copy_field, copy_body, "acceleration"));
     assert!(has_target(remaining, global, 40, "acceleration_field"));
-    assert!(remaining.nodes.iter().any(|n| n.id == field));
+    assert!(remaining.nodes.iter().any(|n| n.id == copy_field));
     assert_eq!(
         super::super::first_free_physics_body_slot(&remaining.wires, 40),
         Some(0)
