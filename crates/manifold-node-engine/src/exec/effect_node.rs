@@ -92,6 +92,11 @@ pub struct SimStep {
     /// transport stamp at a seam (a frame's seconds, a hop, a Fire) and a
     /// played time back for a tempo-map lookup.
     pub tempo_shift: Seconds,
+    /// The played time the newest placement aimed at, kept after its frame
+    /// renders: the physics replay grid and the drift grid count from it, so
+    /// the samples after a cue sit at the same distances from the cue
+    /// whatever tempo edits came earlier in the session.
+    pub replay_origin: PlayedTime,
 }
 
 impl SimStep {
@@ -109,6 +114,7 @@ impl SimStep {
             played_target: None,
             played: None,
             tempo_shift: Seconds::ZERO,
+            replay_origin: PlayedTime::ZERO,
         }
     }
 
@@ -137,8 +143,13 @@ impl SimStep {
         Self { history_drain: true, ..self }
     }
 
+    /// A placement's target is also the new [`Self::replay_origin`].
     pub fn with_played_target(self, target: Option<PlayedTime>) -> Self {
-        Self { played_target: target, ..self }
+        Self { played_target: target, replay_origin: target.unwrap_or(self.replay_origin), ..self }
+    }
+
+    pub fn with_replay_origin(self, origin: PlayedTime) -> Self {
+        Self { replay_origin: origin, ..self }
     }
 
     /// A replay sample at played time `played`.

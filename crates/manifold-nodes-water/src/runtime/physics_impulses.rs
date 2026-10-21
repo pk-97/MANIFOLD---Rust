@@ -412,6 +412,7 @@ impl WaterRuntime<'_> {
             &binding.params,
             manifold_water_rigid::physics::SimStep::live(frame_step.interval)
                 .with_tempo_shift(frame_step.tempo_shift)
+                .with_replay_origin(frame_step.replay_origin)
                 .at_played(source.played),
         );
         if self.executor.mesh_pending_of(binding.field) {

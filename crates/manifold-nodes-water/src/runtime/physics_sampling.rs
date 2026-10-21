@@ -583,6 +583,7 @@ impl super::WaterRuntime<'_> {
             .last_frame_time
             .ok_or("Impulse: render the scene before capturing an event")?;
         let step = SimStep::live(frame_step.interval)
+            .with_replay_origin(frame_step.replay_origin)
             .with_played_target(frame_step.played_target)
             .with_tempo_shift(frame_step.tempo_shift);
         let jump_pending = step.played_target.is_some_and(|target| jumps(target.seconds(), previous.played.seconds()));
@@ -792,7 +793,11 @@ impl super::WaterRuntimeState {
             execute_physics_sample_frame(executor, graph, plan, sample, steps, &inputs.values, step.at_played(previous.played));
         }
         let mut tick_index = 0;
-        let mut grid = (previous.played.seconds() * SAMPLE_RATE).floor() + 1.0;
+        // The grid counts from the newest placement's target, as the clocks'
+        // tick grids do, so its samples sit at the same distances from a cue
+        // whatever tempo edits came before.
+        let origin = step.replay_origin.seconds();
+        let mut grid = ((previous.played.seconds() - origin) * SAMPLE_RATE).floor() + 1.0;
         let mut last_time = previous.played.seconds();
         loop {
             let boundary = boundaries
@@ -800,7 +805,7 @@ impl super::WaterRuntimeState {
                 .and_then(|values| values.peek().copied())
                 .unwrap_or(f64::INFINITY);
             let tick_time = inputs.tick_times.get(tick_index).map_or(f64::INFINITY, |tick| tick.seconds());
-            let grid_time = grid / SAMPLE_RATE;
+            let grid_time = manifold_physics::clock::replay_point(step.replay_origin, grid).seconds();
             let time = grid_time.min(boundary).min(tick_time);
             if time >= now.seconds() {
                 break;

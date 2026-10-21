@@ -73,6 +73,9 @@ pub struct TransportClock {
     placed: Option<(i64, PlayedTime)>,
     /// The sum of every tempo edit's move of the frame time.
     tempo_shift: f64,
+    /// The played time the newest placement aimed at, kept after a frame
+    /// renders it.
+    replay_origin: PlayedTime,
 }
 
 impl TransportClock {
@@ -86,6 +89,7 @@ impl TransportClock {
             last_advance: 0,
             placed: None,
             tempo_shift: 0.0,
+            replay_origin: PlayedTime::ZERO,
         }
     }
 
@@ -208,6 +212,13 @@ impl TransportClock {
             _ => PlayedTime::from_transport(target, self.tempo_shift()),
         };
         self.placed = Some((self.index, target));
+        self.replay_origin = target;
+    }
+
+    /// Where physics replay grids count from: the newest placement's target,
+    /// which no tempo edit moves.
+    pub fn replay_origin(&self) -> PlayedTime {
+        self.replay_origin
     }
 
     /// The played time the newest placement (a seek, play from a cue, a
@@ -262,7 +273,11 @@ impl TransportClock {
     }
 
     /// Switch to the export grid at `fps`, still anchored at song time 0 (D9, D17).
+    /// Export plays its own clock from a zero tempo shift, so the same
+    /// project exports the same whatever tempo edits came earlier in the
+    /// session; the generators restart before its first frame.
     pub fn begin_export(&mut self, fps: f32) {
+        self.tempo_shift = 0.0;
         self.retarget(fps);
     }
 

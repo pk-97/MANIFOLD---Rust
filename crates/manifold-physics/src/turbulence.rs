@@ -105,8 +105,9 @@ pub struct TurbulenceDrift {
 
 impl TurbulenceDrift {
     /// The offset travelled by `played`; `velocity` (m/s) takes effect at
-    /// the next replay grid point at or after it.
-    pub fn advance(&mut self, played: crate::PlayedTime, velocity: [f64; 3]) -> [f64; 3] {
+    /// the next point at or after it of the replay grid counting from
+    /// `origin`.
+    pub fn advance(&mut self, played: crate::PlayedTime, origin: crate::PlayedTime, velocity: [f64; 3]) -> [f64; 3] {
         let transport = played.seconds();
         let last = match self.last {
             Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => last,
@@ -118,7 +119,7 @@ impl TurbulenceDrift {
         // A step back inside the tolerance holds still.
         let transport = transport.max(last);
         self.last = Some(transport);
-        let next = crate::clock::next_replay_point(crate::PlayedTime::from_played(transport)).seconds();
+        let next = crate::clock::next_replay_point(crate::PlayedTime::from_played(transport), origin).seconds();
         if let Some((at, held)) = self.pending.take_if(|(at, _)| *at < next) {
             self.commit(at, held);
         }
@@ -321,11 +322,11 @@ mod tests {
         let speed = |t: f64| if t < 0.5 { 2.0 } else { 6.0 + 4.0 * (t - 0.5) };
         let fly = |fps: f64| {
             let mut drift = TurbulenceDrift::default();
-            drift.advance(crate::PlayedTime::from_played(0.0), [speed(0.0), 0.0, 0.0]);
+            drift.advance(crate::PlayedTime::from_played(0.0), crate::PlayedTime::ZERO, [speed(0.0), 0.0, 0.0]);
             let mut previous = (0.0, 0.0);
             let (mut ticks, mut grid) = (Vec::new(), Vec::new());
             for (t, tick) in evaluations(fps) {
-                let offset = drift.advance(crate::PlayedTime::from_played(t), [speed(t), 0.0, 0.0])[0];
+                let offset = drift.advance(crate::PlayedTime::from_played(t), crate::PlayedTime::ZERO, [speed(t), 0.0, 0.0])[0];
                 let step = offset - previous.1;
                 assert!((0.0..=8.0 * (t - previous.0) + 1e-12).contains(&step), "no jump at {t}: {step}");
                 previous = (t, offset);
@@ -354,11 +355,32 @@ mod tests {
         let half = f64::from_bits(reference.1[119].1);
         assert!((half - 1.0).abs() < 0.01, "{half}");
         let mut drift = TurbulenceDrift::default();
-        drift.advance(crate::PlayedTime::from_played(0.0), [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(1.0), [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25), [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
+        drift.advance(crate::PlayedTime::from_played(0.0), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(1.0), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
         // Rounding below the clock's seek tolerance holds, as the clock does.
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25 - 1e-12), [5.0, 0.0, 0.0]), [0.0; 3]);
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.75), [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25 - 1e-12), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [0.0; 3]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.75), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
+    }
+
+    /// The drift's grid counts from the replay origin: a cue played after a
+    /// tempo edit, whose played time the edit's shift moved off the 240 Hz
+    /// grid, drifts the same distances from the cue as one played without.
+    #[test]
+    fn drift_grid_counts_from_the_replay_origin() {
+        let fly = |origin: f64| {
+            let at = crate::PlayedTime::from_played(origin);
+            let mut drift = TurbulenceDrift::default();
+            (0..=40)
+                .map(|k| {
+                    let since = f64::from(k) * 0.0037;
+                    let velocity = if since < 0.05 { 2.0 } else { 6.0 };
+                    drift.advance(crate::PlayedTime::from_played(origin + since), at, [velocity, 0.0, 0.0])[0]
+                })
+                .collect::<Vec<_>>()
+        };
+        for (k, (fresh, shifted)) in fly(2.0).iter().zip(&fly(2.0 - 0.0123)).enumerate() {
+            assert!((fresh - shifted).abs() < 1e-9, "sample {k}: {fresh} against {shifted}");
+        }
     }
 }

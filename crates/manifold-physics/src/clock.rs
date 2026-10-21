@@ -18,10 +18,17 @@ pub const BACKWARD_SEEK: f64 = 1e-9;
 /// Sim Rate divides it.
 pub const REPLAY_RATE: f64 = 240.0;
 
-/// The first replay grid point at or after `played`, by the replay's own
-/// formula (`k / REPLAY_RATE`), so the two agree bit for bit.
-pub fn next_replay_point(played: PlayedTime) -> PlayedTime {
-    PlayedTime::from_played((played.seconds() * REPLAY_RATE - 1e-9).ceil() / REPLAY_RATE)
+/// Replay grid point `k` of a grid counting from `origin`, the newest
+/// placement's target. Every replay consumer names its points through this,
+/// so they agree bit for bit.
+pub fn replay_point(origin: PlayedTime, k: f64) -> PlayedTime {
+    PlayedTime::from_played(origin.seconds() + k / REPLAY_RATE)
+}
+
+/// The first point at or after `played` of the replay grid counting from
+/// `origin`.
+pub fn next_replay_point(played: PlayedTime, origin: PlayedTime) -> PlayedTime {
+    replay_point(origin, ((played.seconds() - origin.seconds()) * REPLAY_RATE - 1e-9).ceil())
 }
 
 /// The previous live frame's measured load (render work plus GPU surface wait)

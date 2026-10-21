@@ -2235,6 +2235,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         } else {
             manifold_node_engine::exec::effect_node::SimStep::live(interval).with_live_load(Some(load))
         }
+        .with_replay_origin(engine.replay_origin())
         .with_played_target(engine.take_played_target())
         .with_tempo_shift(engine.tempo_shift());
         self.apply_sim_step(engine, sim_step);

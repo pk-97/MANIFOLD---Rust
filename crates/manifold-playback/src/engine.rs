@@ -463,6 +463,11 @@ impl PlaybackEngine {
         self.clock.played_target()
     }
 
+    /// Where physics replay grids count from: the newest placement's target.
+    pub fn replay_origin(&self) -> manifold_core::PlayedTime {
+        self.clock.replay_origin()
+    }
+
     /// [`Self::played_target`] for the frame being rendered, once.
     pub fn take_played_target(&mut self) -> Option<manifold_core::PlayedTime> {
         self.clock.take_played_target()
@@ -1002,7 +1007,20 @@ impl PlaybackEngine {
         let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
         self.tempo = TempoSource::Map { beat_offset: 0.0 };
         // The beat stays and its seconds move: no jump, so physics continues.
+        let before = self.clock.time().0;
         self.place(|clock| clock.relocate(Seconds(t.0.max(0.0))));
+        // Live hop clocks map audio onto transport time. They move with the
+        // transport, so a hop keeps its played time across the edit.
+        let moved = self.clock.time().0 - before;
+        if moved != 0.0 && let Some(project) = &mut self.project {
+            project.for_each_preset_instance_mut(|instance| {
+                for m in instance.audio_mods.iter_mut().flatten() {
+                    if let Some(clock) = &mut m.hop_timeline.clock {
+                        clock.offset += moved;
+                    }
+                }
+            });
+        }
         self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
     }

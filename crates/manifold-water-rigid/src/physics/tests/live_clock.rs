@@ -7,14 +7,19 @@ use super::*;
 /// and the closing sample at the frame carry the held gravity, the frame
 /// its own.
 fn replayed_frame(simulation: &mut RigidSimulation, from: f64, until: f64, held: [f32; 3], own: [f32; 3]) {
+    replayed_frame_at(simulation, live_step(), from, until, held, own);
+}
+
+/// [`replayed_frame`] on `step`'s Sim Rate.
+fn replayed_frame_at(simulation: &mut RigidSimulation, step: SimStep, from: f64, until: f64, held: [f32; 3], own: [f32; 3]) {
     let mut played = Vec::new();
     simulation.request_samples(PlayedTime::from_played(from), PlayedTime::from_played(until), &mut played);
     let requests: Vec<f64> = played.into_iter().map(PlayedTime::seconds).collect();
     for &time in requests.iter().filter(|&&time| time < until).chain([&until]) {
-        simulation.set_step(live_step().authored_sample());
+        simulation.set_step(step.authored_sample());
         simulation.advance(one_body([0.0, 4.0, 0.0]), held, PlayedTime::from_played(time), 1.0, 0.0).unwrap();
     }
-    simulation.set_step(live_step());
+    simulation.set_step(step);
     simulation.advance(one_body([0.0, 4.0, 0.0]), own, PlayedTime::from_played(until), 1.0, 0.0).unwrap();
 }
 
@@ -51,6 +56,38 @@ fn a_frame_landing_past_its_placement_knots_at_the_target() {
     let last = simulation.authored_samples.back().expect("knots recorded");
     assert!(last.time.abs() < 1e-12, "the knots sit at the cue, not at {}", last.time);
     replayed_frame(&mut simulation, CUE - 1e-6, CUE + 2.0 * FRAME, calm, calm);
+}
+
+/// A placement while paused, then a paused frame, then Play: the paused
+/// frame knots at the cue too, so the replay that opens there on Play
+/// records forward.
+#[test]
+fn a_paused_frame_after_a_placement_knots_at_the_target_until_play() {
+    const CUE: f64 = 2.0;
+    let calm = [0.0, -9.8, 0.0];
+    let placed = live_step().with_played_target(Some(PlayedTime::from_played(CUE)));
+    let mut simulation = RigidSimulation::default().with_step(placed);
+    simulation.advance(one_body([0.0, 4.0, 0.0]), calm, PlayedTime::from_played(CUE + FRAME), 1.0, 0.0).unwrap();
+    simulation.set_step(live_step());
+    simulation.advance(one_body([0.0, 4.0, 0.0]), calm, PlayedTime::from_played(CUE + FRAME), 1.0, 0.0).unwrap();
+    replayed_frame(&mut simulation, CUE - 1e-6, CUE + 2.0 * FRAME, calm, calm);
+}
+
+/// A forward seek at a 30 Hz Sim Rate from a frame half a tick past the
+/// last boundary: that frame's replay took knots past the boundary, and the
+/// new grid starts at the boundary's simulated time. Those knots belong to
+/// transport the grid abandoned, so they go, and the jump records forward.
+#[test]
+fn a_forward_seek_drops_the_knots_the_abandoned_grid_took() {
+    let calm = [0.0, -9.8, 0.0];
+    let step = SimStep::live(Seconds(1.0 / 30.0));
+    let mut simulation = RigidSimulation::default().with_step(step);
+    simulation.advance(one_body([0.0, 4.0, 0.0]), calm, PlayedTime::ZERO, 1.0, 0.0).unwrap();
+    replayed_frame_at(&mut simulation, step, 0.0, FRAME, calm, calm);
+    simulation.set_step(step.with_played_target(Some(PlayedTime::from_played(0.5))));
+    let jump = simulation.advance(one_body([0.0, 4.0, 0.0]), calm, PlayedTime::from_played(0.5 + FRAME), 1.0, 0.0);
+    assert!(jump.is_ok(), "the jump frame records forward: {jump:?}");
+    replayed_frame_at(&mut simulation, step, 0.5 - 1e-6, 0.5 + 2.0 * FRAME, calm, calm);
 }
 
 #[test]

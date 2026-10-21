@@ -71,6 +71,46 @@ fn durations_use_beat_differences() {
     assert!((loop_len - 2.0 * 60.0 / 128.0).abs() < 1e-6, "loop {loop_len}");
 }
 
+/// A live hop clock moves with a tempo edit's transport move, so a hop keeps
+/// its played time and audio-driven physics reads it in place, up or down.
+#[test]
+fn a_tempo_edit_moves_live_hop_clocks_with_the_transport() {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, HopClock, ParameterAudioMod};
+    for bpm in [150.0_f32, 100.0] {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), manifold_core::types::TempoPointSource::Manual, 0.001);
+        let send = manifold_core::audio_setup::AudioSend::new("Kick");
+        let mut layer = manifold_core::layer::Layer::new_generator("Gen".into(), manifold_core::PresetTypeId::new("TestGen"), 0);
+        let feature = AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low);
+        layer.gen_params_mut().unwrap().audio_mods_mut().push(ParameterAudioMod::new("speed".to_owned().into(), send.id.clone(), feature));
+        project.audio_setup.sends.push(send);
+        project.timeline.layers.push(layer);
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.play();
+        for _ in 0..30 {
+            let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+            engine.reclaim_tick_result(result);
+        }
+        fn hop_clock(engine: &mut PlaybackEngine) -> &mut Option<HopClock> {
+            &mut engine.project_mut().unwrap().timeline.layers[0].gen_params_mut().unwrap().audio_mods_mut()[0].hop_timeline.clock
+        }
+        let now = engine.current_time_double();
+        *hop_clock(&mut engine) = Some(HopClock::anchored(1, 48_000, 48_000, now));
+        let heard = engine.played_time().seconds();
+        let old_map = engine.project().unwrap().tempo_map.clone();
+        let edited = engine.project_mut().unwrap();
+        edited.settings.bpm = Bpm(bpm);
+        edited.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), manifold_core::types::TempoPointSource::Manual, 0.001);
+        engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
+        assert_ne!(engine.current_time_double(), now, "{bpm} BPM: the edit moves the transport");
+        let mapped = hop_clock(&mut engine).unwrap().time_of(48_000);
+        let played = manifold_core::PlayedTime::from_transport(Seconds(mapped), engine.tempo_shift()).seconds();
+        assert!((played - heard).abs() < 1e-9, "{bpm} BPM: the hop moved from played {heard} to {played}");
+    }
+}
+
 /// A tempo edit while playing keeps the beat and moves its seconds; it is
 /// no jump, so physics gets no target from it.
 #[test]

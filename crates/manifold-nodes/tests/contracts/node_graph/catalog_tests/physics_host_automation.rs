@@ -296,6 +296,7 @@ fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item =
     let mut next_hop = 1;
     let mut epoch = 1;
     let mut previous: Option<f64> = None;
+    let mut replay_origin = PlayedTime::ZERO;
     for (frame, Frame { seconds, target, bpm, tempo_shift }) in frames.enumerate() {
         let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(bpm as f32));
         let beat = Beats((seconds + 1e-7 / f64::from(fps)) * bpm / 60.0);
@@ -321,10 +322,11 @@ fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item =
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
         // The frame's step first, as the host sets it: hops become played
-        // time with its tempo shift.
+        // time with its tempo shift. The replay origin outlives its jump frame.
         let step = if offline { SimStep::export(Seconds(TICK)) } else { SimStep::live(Seconds(TICK)) };
         let target = target.map(|target| PlayedTime::from_transport(Seconds(target), Seconds(tempo_shift)));
-        runtime.set_sim_step(step.with_played_target(target).with_tempo_shift(Seconds(tempo_shift)));
+        replay_origin = target.unwrap_or(replay_origin);
+        runtime.set_sim_step(step.with_replay_origin(replay_origin).with_played_target(target).with_tempo_shift(Seconds(tempo_shift)));
         runtime.set_project_tempo(Some(&tempo));
         runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);

@@ -443,10 +443,10 @@ pub struct RigidSimulation {
     /// A history replay drives this world's inputs. Without one (a direct
     /// caller), each frame records its own inputs.
     replay_driven: bool,
-    /// The origin of a grid the last frame started before its own time (a
-    /// placement it landed past): nothing past it is simulated, and the
-    /// replay samples from there, so every knot recorded until the next
-    /// frame goes at the origin.
+    /// The origin of a grid a frame started before its own time (a placement
+    /// it landed past): nothing past it is simulated, and the replay samples
+    /// from there, so every knot goes at the origin until a replay records
+    /// at or past it or a frame moves transport on.
     owed_origin: Option<PlayedTime>,
 }
 
@@ -1072,18 +1072,27 @@ impl RigidSimulation {
         // sample, which no frame rate moves; a held frame still records an
         // edit made while time stands still, and a frame that started a new
         // grid (a restart, a seek, an overload reanchor) starts its first tick
-        // from its own inputs. That knot goes at the grid's origin: a frame
-        // that landed past its placement's target has simulated nothing past
-        // the target, and the replay samples the span from there next frame.
+        // from its own inputs. That knot goes at the grid's origin, and every
+        // knot past the origin's simulated time goes: it was recorded for
+        // transport the new grid abandoned. A frame that landed past its
+        // placement's target has simulated nothing past the target, so until
+        // a replay samples from there, or transport moves on, every knot goes
+        // at the origin, held frames included.
         let held_frame = clock_frame.as_ref().is_some_and(|frame| frame.held);
         let new_origin = clock_frame
             .as_ref()
             .filter(|frame| frame.restarted || frame.reanchored)
             .and_then(|_| self.clock.tick_start(self.clock.ticks_done()))
             .filter(|start| start.seconds() <= now.0 + 1e-9);
-        self.owed_origin = new_origin.filter(|start| start.seconds() < now.0 - 1e-9);
+        if let Some(start) = new_origin {
+            self.drop_authored_samples_after(self.clock.simulation_at(start, live_load(self.step)))?;
+            self.owed_origin = (start.seconds() < now.0 - 1e-9).then_some(start);
+        } else if clock_frame.is_some() && !held_frame {
+            self.owed_origin = None;
+        }
         if self.advancement_policy.is_worker() || !self.replay_driven || held_frame || new_origin.is_some() {
-            let knot_time = new_origin.map_or(authored_time, |start| self.clock.simulation_at(start, live_load(self.step)));
+            let origin = new_origin.or(self.owed_origin);
+            let knot_time = origin.map_or(authored_time, |start| self.clock.simulation_at(start, live_load(self.step)));
             self.record_authored_sample(
                 knot_time,
                 bodies.clone(),
@@ -1813,12 +1822,12 @@ impl RigidSimulation {
         self.requests.clear();
         let requests = &mut self.requests;
         self.clock.tick_starts(from, until, |played| requests.push(played.seconds()));
-        let (from, until) = (from.seconds(), until.seconds());
+        let origin = self.step.replay_origin;
         let rate = manifold_physics::clock::REPLAY_RATE;
-        let last = (until * rate + 1e-6).floor();
-        let mut point = (from * rate + 1e-6).floor() + 1.0;
+        let last = ((until.seconds() - origin.seconds()) * rate + 1e-6).floor();
+        let mut point = ((from.seconds() - origin.seconds()) * rate + 1e-6).floor() + 1.0;
         while point <= last {
-            requests.push(point / rate);
+            requests.push(manifold_physics::clock::replay_point(origin, point).seconds());
             point += 1.0;
         }
         requests.sort_unstable_by(f64::total_cmp);
@@ -1838,6 +1847,11 @@ impl RigidSimulation {
         targeted_fields: Option<&[Option<FieldValue>]>,
     ) -> Result<(), String> {
         let reached = self.requests.partition_point(|&transport| transport <= now + 1e-9);
+        if let Some(origin) = self.owed_origin
+            && self.requests[..reached].iter().any(|&request| request >= origin.seconds() - 1e-9)
+        {
+            self.owed_origin = None;
+        }
         for index in 0..reached {
             let time = self.clock.simulation_at(PlayedTime::from_played(self.requests[index]), live_load(self.step));
             self.record_authored_sample(time, bodies.clone(), prototype.cloned(), gravity, acceleration_field.cloned(), targeted_fields)?;
@@ -2310,6 +2324,16 @@ impl RigidSimulation {
             .map_err(|error| format!("Physics: failed to prune input history: {error}"))?;
         self.targeted_fields.prune(removed)?;
         Ok(())
+    }
+
+    /// Drop every knot later than `time`, keeping the parallel targeted
+    /// storage aligned.
+    fn drop_authored_samples_after(&mut self, time: f64) -> Result<(), String> {
+        let removed = self
+            .authored_samples
+            .drop_after(Seconds(time))
+            .map_err(|error| format!("Physics: failed to trim input history: {error}"))?;
+        self.targeted_fields.drop_back(removed)
     }
 }
 
