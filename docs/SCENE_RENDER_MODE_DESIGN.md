@@ -160,7 +160,7 @@ without the port load byte-identical (unwired default).
 
 ## 4. Invariants & enforcement
 
-- **INV-R1 — Unwired `render_mode` input, or mode = Rendered, is pixel-identical
+- **INV-R1 — Unwired `render_mode_in` input, or mode = Rendered, is pixel-identical
   to today.** Enforcement: `render_mode.rs` test `default_is_rendered` (struct
   default) + a headless-render parity test in `render_scene/tests.rs`
   (same scene, port unwired vs wired-with-Rendered, buffers compared).

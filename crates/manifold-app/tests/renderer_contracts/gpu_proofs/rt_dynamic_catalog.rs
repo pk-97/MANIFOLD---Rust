@@ -144,6 +144,19 @@ fn with_catalog_environment(mut owner: EffectGraphDef) -> EffectGraphDef {
         SerializedParamValue::Bool { value: true },
     );
     let scene_id = scene.id;
+    let scene_node = scene.node_id.clone();
+    // An imported scene stamps rt_enabled as a surface row; the row's value
+    // re-asserts over the node param every frame, so it carries the toggle.
+    if let Some(meta) = owner.preset_metadata.as_mut() {
+        let row = meta.bindings.iter().find_map(|binding| match &binding.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if *node_id == scene_node && param == "rt_enabled" => Some(binding.id.clone()),
+            _ => None,
+        });
+        if let Some(spec) = row.and_then(|id| meta.params.iter_mut().find(|spec| spec.id == id)) {
+            spec.default_value = 1.0;
+        }
+    }
     let environment_id = owner.nodes.iter().map(|node| node.id).max().unwrap() + 1;
     owner.wires.retain(|wire| wire.to_node != scene_id || wire.to_port != "envmap");
     owner.nodes.push(

@@ -3,7 +3,7 @@
 //! Per `docs/SCENE_RENDER_MODE_DESIGN.md` D3: emits a single
 //! [`RenderMode`] struct (mode index + clay color + line color +
 //! line brightness + point size), consumed by `render_scene`'s optional
-//! `render_mode` input. Every param is port-shadowed by a same-named
+//! `render_mode_in` input. Every param is port-shadowed by a same-named
 //! optional scalar input (prefer the wired scalar, fall back to the param)
 //! so the mode and every color/gain row is drivable from a fader, an LFO,
 //! or a clip envelope — the performability the design exists for.
@@ -118,7 +118,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire `render_mode` into render_scene's `render_mode` input (unwired = Rendered, byte-identical to no input). The enable gate multiplies INTO the port-shadowed `mode` scalar: enabled=0 → mode 0 → Rendered (INV-R2: Rendered is index 0 forever). mode is a continuous float on the wire inside the gate — the atom rounds + clamps it, so a modulated enabled at 0.5 floors the mode index, same behavior as fog's gate at partial enable. The per-mode floats are NOT gated: inert when their mode isn't active (clay_color unread outside Solid, line_color/line_brightness unread outside Wireframe/Points, point_size unread outside Points).",
+    composition_notes: "Wire `render_mode` into render_scene's `render_mode_in` input (unwired = Rendered, byte-identical to no input). The enable gate multiplies INTO the port-shadowed `mode` scalar: enabled=0 → mode 0 → Rendered (INV-R2: Rendered is index 0 forever). mode is a continuous float on the wire inside the gate — the atom rounds + clamps it, so a modulated enabled at 0.5 floors the mode index, same behavior as fog's gate at partial enable. The per-mode floats are NOT gated: inert when their mode isn't active (clay_color unread outside Solid, line_color/line_brightness unread outside Wireframe/Points, point_size unread outside Points).",
     examples: [],
     picker: { label: "Render Mode", category: Driver },
     summary: "Viewport shading mode (Rendered/Solid/Wireframe/Points) for render_scene. Wire it into a scene's render_mode input; put the mode row on a MIDI pad for a live wireframe drop.",

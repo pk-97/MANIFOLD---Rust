@@ -248,7 +248,7 @@ impl RenderScene {
         // Optional scene-wide render mode (SCENE_RENDER_MODE_DESIGN.md D2).
         // Unwired = Rendered, byte-identical to no render_mode.
         inputs.push(NodePort {
-            name: std::borrow::Cow::Borrowed("render_mode"),
+            name: std::borrow::Cow::Borrowed("render_mode_in"),
             ty: PortType::RenderMode,
             kind: PortKind::Input,
             required: false,
@@ -295,7 +295,7 @@ impl RenderScene {
                 enum_values: &[],
             },
             // Scene-wide shading mode (SCENE_RENDER_MODE_DESIGN.md): Rendered,
-            // Solid, Wireframe, Points. A wired `render_mode` input overrides it.
+            // Solid, Wireframe, Points. A wired `render_mode_in` input overrides it.
             ParamDef {
                 name: std::borrow::Cow::Borrowed("render_mode"),
                 label: "Render Mode",

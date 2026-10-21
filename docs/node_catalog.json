@@ -36713,7 +36713,7 @@
           "type": "Atmosphere"
         },
         {
-          "name": "render_mode",
+          "name": "render_mode_in",
           "required": false,
           "type": "RenderMode"
         },

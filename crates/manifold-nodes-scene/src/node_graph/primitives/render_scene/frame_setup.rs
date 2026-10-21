@@ -583,7 +583,7 @@ impl RenderScene {
         // Scene-wide render mode (SCENE_RENDER_MODE_DESIGN.md D2). Unwired =
         // RenderMode::default() = mode Rendered = the raster pass draws
         // exactly as today, byte-identical to no render_mode input.
-        let render_mode = ctx.inputs.render_mode("render_mode").unwrap_or_else(|| {
+        let render_mode = ctx.inputs.render_mode("render_mode_in").unwrap_or_else(|| {
             use manifold_node_engine::scene::render_mode::{RENDER_MODE_POINTS, RENDER_MODE_RENDERED, RenderMode};
             let mode = match ctx.params.get("render_mode") {
                 Some(ParamValue::Enum(mode)) => (*mode).min(RENDER_MODE_POINTS),

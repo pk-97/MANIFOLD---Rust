@@ -108,7 +108,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_glass_mode.value"
+          "name_suffix": "_glass_mode.value"
         }
       }
     }
@@ -117,7 +117,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_glass_mode.value"
+          "name_suffix": "_glass_mode.value"
         }
       },
       "check": {
@@ -129,7 +129,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_transmission.value"
+          "name_suffix": "_transmission.value"
         }
       },
       "check": {
@@ -149,7 +149,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_glass_mode.value"
+          "name_suffix": "_glass_mode.value"
         }
       },
       "check": {
@@ -170,7 +170,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_glass_mode.value"
+          "name_suffix": "_glass_mode.value"
         }
       },
       "check": {
