@@ -173326,6 +173326,90 @@
           "name": "Billboard"
         },
         {
+          "default": "0",
+          "id": "2_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "2_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "2_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "2_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "2_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
+          "default": "1",
+          "id": "2_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "2_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "2_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
+        },
+        {
           "default": "1",
           "id": "12_enabled",
           "max": "1",

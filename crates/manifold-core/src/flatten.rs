@@ -28,7 +28,7 @@ use crate::effect_graph_def::{
 /// Delimiter between a group instance's handle and an inner node's handle in a
 /// flattened document (`soft_focus/blur`). Reserved: a user handle may not
 /// contain it. Confirmed clear of every shipping preset (see the design doc).
-const HANDLE_DELIM: char = '/';
+pub(crate) const HANDLE_DELIM: char = '/';
 
 /// Defensive cap on group-nesting depth. Embedded-by-value groups form a finite
 /// tree and cannot recurse infinitely, so this only fires on pathological input

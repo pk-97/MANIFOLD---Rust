@@ -621,7 +621,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1416 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2017 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1394 |
-| `WaterInScan` | Water in a Photoscan | generator | Sim | 2050 |
+| `WaterInScan` | Water in a Photoscan | generator | Sim | 2062 |
 | `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2345 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
