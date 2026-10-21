@@ -254,4 +254,10 @@
              apply_binding_defaults unconditionally replants default_value over \
              whatever instantiate_def just wrote from node.params."
         );
+        // The build keeps the write, but the card owns what renders: the
+        // first apply writes the card value, whatever the node holds (BUG-c48e6).
+        assert_eq!(
+            bound.cache.entries,
+            vec![manifold_node_engine::param_binding::BindingCacheEntry::Unset],
+        );
     }

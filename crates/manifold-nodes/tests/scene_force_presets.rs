@@ -823,3 +823,42 @@ fn a_gusty_wind_builds_over_water_a_physics_world_and_a_swarm() {
     let solids: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
     PresetRuntime::from_def_for_render(with_recipe(&solids, "Wind", &wind), &registry, None, false).expect("gusts over the solids build");
 }
+
+/// BUG-2bulf (force loads one file into every object): two bodies whose
+/// `path` bindings share one string id with different defaults, one spec
+/// for that id, and one Radial Force. The second body keeps its own file,
+/// and preparing the force leaves every host node exactly as authored.
+#[test]
+fn adding_a_force_changes_no_host_node() {
+    use manifold_core::effect_graph_def::{SerializedParamValue, StringBindingDef, StringParamSpecDef};
+    let mut host: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
+    for (id, path) in [(111, "a.glb"), (121, "b.glb")] {
+        let body = host.nodes.iter_mut().find(|node| node.id == id).unwrap();
+        body.params.insert("path".into(), SerializedParamValue::String { value: path.into() });
+    }
+    let metadata = host.preset_metadata.as_mut().unwrap();
+    let spec: StringParamSpecDef = serde_json::from_value(serde_json::json!({
+        "id": "model_file", "name": "Model File", "defaultValue": "a.glb", "isFilePicker": true,
+    }))
+    .unwrap();
+    metadata.string_params.push(spec);
+    for (node, path) in [("physics_demo_111", "a.glb"), ("physics_demo_121", "b.glb")] {
+        let binding: StringBindingDef = serde_json::from_value(serde_json::json!({
+            "id": "model_file", "label": "Model File", "defaultValue": path,
+            "target": {"kind": "node", "nodeId": node, "param": "path"},
+        }))
+        .unwrap();
+        metadata.string_bindings.push(binding);
+    }
+    let forced = with_force(&host, "RadialForce");
+    let prepared = prepare_scene_modifiers(&forced, &PrimitiveRegistry::with_builtin())
+        .expect("the force prepares")
+        .def;
+    let second = node(&prepared.nodes, "physics_demo_121");
+    assert_eq!(second.params["path"], SerializedParamValue::String { value: "b.glb".into() });
+    let authored = manifold_core::flatten::flatten_groups(&host).unwrap();
+    for authored in &authored.nodes {
+        let prepared = node(&prepared.nodes, authored.node_id.as_str());
+        assert_eq!(prepared.params, authored.params, "{} changed when the force was added", authored.node_id);
+    }
+}

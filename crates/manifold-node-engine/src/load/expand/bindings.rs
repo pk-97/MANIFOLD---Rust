@@ -272,8 +272,16 @@ pub(super) fn expand_bindings_with_sources(
     Ok((Some(expanded), sources))
 }
 
+/// Write each binding's own default onto the nodes the preparation minted.
+///
+/// `is_host` names the owner's authored nodes. Preparation never changes
+/// them: the runtime seeds them exactly as it does on the plain path (no
+/// modifiers), so adding a force cannot move, retexture or reload an object.
+/// A string binding seeds from its own default, never from a spec found by
+/// id, so two bindings that share an id cannot overwrite each other.
 pub(super) fn seed_local_defaults(
     local: &EffectGraphDef,
+    is_host: &dyn Fn(&NodeId) -> bool,
 ) -> Result<EffectGraphDef, SceneModifierExpandError> {
     let mut seeded = local.clone();
     let Some(metadata) = local.preset_metadata.as_ref() else {
@@ -285,6 +293,7 @@ pub(super) fn seed_local_defaults(
             continue;
         }
         let target = match &binding.target {
+            BindingTarget::Node { node_id, .. } if is_host(node_id) => continue,
             BindingTarget::Node { node_id, param } => (node_id, param),
             BindingTarget::Composite { .. } if metadata.scene_modifier.is_none() => continue,
             BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => {
@@ -314,6 +323,7 @@ pub(super) fn seed_local_defaults(
 
     for binding in &metadata.string_bindings {
         let target = match &binding.target {
+            BindingTarget::Node { node_id, .. } if is_host(node_id) => continue,
             BindingTarget::Node { node_id, param } => (node_id, param),
             BindingTarget::Composite { .. } if metadata.scene_modifier.is_none() => continue,
             BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => {
@@ -323,17 +333,11 @@ pub(super) fn seed_local_defaults(
                 ));
             }
         };
-        let default_value = metadata
-            .string_params
-            .iter()
-            .find(|param| param.id == binding.id)
-            .map(|param| param.default_value.clone())
-            .unwrap_or_else(|| binding.default_value.clone());
         let node = unique_node_mut(&mut seeded.nodes, target.0, &binding.id)?;
         node.params.insert(
             target.1.clone(),
             SerializedParamValue::String {
-                value: default_value,
+                value: binding.default_value.clone(),
             },
         );
     }
@@ -689,9 +693,9 @@ mod tests {
     }
 
     #[test]
-    fn scene_modifier_expand_bindings_seed_defaults_respects_mirrors_and_string_specs() {
+    fn scene_modifier_expand_bindings_seed_defaults_respects_mirrors_and_own_string_defaults() {
         let local: EffectGraphDef = serde_json::from_value(local_json()).expect("local parses");
-        let mut seeded = seed_local_defaults(&local).expect("defaults seed");
+        let mut seeded = seed_local_defaults(&local, &|_| false).expect("defaults seed");
         let node = &seeded.nodes[0];
         assert_eq!(
             node.params["amount"],
@@ -700,16 +704,18 @@ mod tests {
         assert_eq!(
             node.params["text"],
             SerializedParamValue::String {
-                value: "from-spec".into()
+                value: "from-binding".into()
             }
         );
+        let untouched = seed_local_defaults(&local, &|id| id.as_str() == "leaf").expect("host seed");
+        assert_eq!(untouched.nodes[0].params, local.nodes[0].params, "host nodes are never seeded");
 
         let binding = &mut seeded.preset_metadata.as_mut().expect("metadata").bindings[0];
         binding.default_mirrors_node_param = true;
         seeded.nodes[0]
             .params
             .insert("amount".into(), SerializedParamValue::Float { value: 9.0 });
-        let mirrored = seed_local_defaults(&seeded).expect("mirrored seed skips");
+        let mirrored = seed_local_defaults(&seeded, &|_| false).expect("mirrored seed skips");
         assert_eq!(
             mirrored.nodes[0].params["amount"],
             SerializedParamValue::Float { value: 9.0 }
@@ -724,7 +730,7 @@ mod tests {
             "defaultValue":0.25, "invert":true
         }]);
         let local: EffectGraphDef = serde_json::from_value(raw).unwrap();
-        let seeded = seed_local_defaults(&local).unwrap();
+        let seeded = seed_local_defaults(&local, &|_| false).unwrap();
         assert_eq!(seeded.nodes[0].params["amount"], SerializedParamValue::Float { value: 2.0 });
         assert_ne!(seeded.nodes[0].params["amount"], local.nodes[0].params["amount"]);
     }

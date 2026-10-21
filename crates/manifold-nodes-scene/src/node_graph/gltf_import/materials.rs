@@ -17,7 +17,6 @@ use manifold_core::NodeId;
 
 use crate::node_graph::gltf_load::GltfMaterialInfo;
 use super::assembly::{enum_val, float, int, plain_node, wire};
-use super::MODEL_FILE_PARAM_ID;
 
 /// The per-object accumulators a map-family wire threads through: the running
 /// node/wire/string-binding vectors, the id source, the object's index and
@@ -30,6 +29,9 @@ pub(super) struct ObjectAssembly<'a> {
     pub k: usize,
     /// The glb file path, bound onto each source node's `path` param.
     pub path_str: &'a str,
+    /// The string binding id this file binds under: one id per file, so a
+    /// merged file never shares a Model File with another (typed identity D5).
+    pub model_file_id: &'a str,
     /// Fresh numeric node-id source (a counter — importer output stays
     /// deterministic).
     pub fresh_id: &'a mut dyn FnMut() -> u32,
@@ -300,7 +302,7 @@ fn wire_map_family(family: &MapFamily, m: &GltfMaterialInfo, asm: &mut ObjectAss
         asm.group_nodes.push(node);
 
         asm.string_bindings.push(StringBindingDef {
-            id: MODEL_FILE_PARAM_ID.to_string(),
+            id: asm.model_file_id.to_string(),
             label: "Model File".to_string(),
             default_value: asm.path_str.to_string(),
             target: BindingTarget::Node {

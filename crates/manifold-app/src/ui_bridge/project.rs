@@ -1048,7 +1048,7 @@ pub(super) fn dispatch_project(
                 plan.new_objects_count,
                 plan.new_card_params,
                 plan.new_card_bindings,
-                plan.new_string_bindings,
+                plan.new_string_params, plan.new_string_bindings,
                 default,
             )
             .with_scene_bounds(plan.scene_bounds);

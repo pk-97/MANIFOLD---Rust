@@ -14,7 +14,6 @@ use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use crate::node_graph::gltf_load;
 use crate::node_graph::scene_exposure::metadata_for_node_type;
 
-use super::MODEL_FILE_PARAM_ID;
 use super::animation::*;
 use super::assembly::*;
 use super::cards::*;
@@ -58,6 +57,9 @@ pub(super) struct ImportCtx<'a> {
     pub render_id: u32,
     /// The glb file path, bound onto each source node's `path` param.
     pub path_str: &'a str,
+    /// The string binding id this file binds under: one id per file, so a
+    /// merged file never shares a Model File with another (typed identity D5).
+    pub model_file_id: &'a str,
     /// The whole-scene bbox center from this parse; each object recenters
     /// about `own_center - center` (see the transform assembly below).
     pub center: [f32; 3],
@@ -117,6 +119,7 @@ pub(super) fn build_object_group(
 ) -> ObjectGroupOutput {
     let render_id = ctx.render_id;
     let path_str = ctx.path_str;
+    let model_file_id = ctx.model_file_id;
     let center = ctx.center;
     let bbox_radius = ctx.bbox_radius;
     let node_anims_by_clip = ctx.node_anims_by_clip;
@@ -242,7 +245,7 @@ pub(super) fn build_object_group(
                 .insert("skin_index".to_string(), int(obj_skin.skin_index as i32));
             group_nodes.push(pose_node);
             string_bindings.push(StringBindingDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
+                id: model_file_id.to_string(),
                 label: "Model File".to_string(),
                 default_value: path_str.to_string(),
                 target: BindingTarget::Node {
@@ -328,7 +331,7 @@ pub(super) fn build_object_group(
             pose_node.params.insert("node_slots".to_string(), table(node_slots_rows));
             group_nodes.push(pose_node);
             string_bindings.push(StringBindingDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
+                id: model_file_id.to_string(),
                 label: "Model File".to_string(),
                 default_value: path_str.to_string(),
                 target: BindingTarget::Node {
@@ -442,7 +445,7 @@ pub(super) fn build_object_group(
                 .insert("target_node".to_string(), int(morph.mesh_node_index as i32));
             group_nodes.push(weights_node);
             string_bindings.push(StringBindingDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
+                id: model_file_id.to_string(),
                 label: "Model File".to_string(),
                 default_value: path_str.to_string(),
                 target: BindingTarget::Node {
@@ -480,7 +483,7 @@ pub(super) fn build_object_group(
                 .insert("skinned".to_string(), bool_val(skinned_vertices_source.is_some()));
             group_nodes.push(deltas_node);
             string_bindings.push(StringBindingDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
+                id: model_file_id.to_string(),
                 label: "Model File".to_string(),
                 default_value: path_str.to_string(),
                 target: BindingTarget::Node {
@@ -864,7 +867,7 @@ pub(super) fn build_object_group(
             anim_node.params.insert("scale_node".to_string(), int(scale_node.unwrap_or(-1)));
             group_nodes.push(anim_node);
             string_bindings.push(StringBindingDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
+                id: model_file_id.to_string(),
                 label: "Model File".to_string(),
                 default_value: path_str.to_string(),
                 target: BindingTarget::Node {
@@ -882,7 +885,7 @@ pub(super) fn build_object_group(
         }
 
         string_bindings.push(StringBindingDef {
-            id: MODEL_FILE_PARAM_ID.to_string(),
+            id: model_file_id.to_string(),
             label: "Model File".to_string(),
             default_value: path_str.to_string(),
             target: BindingTarget::Node {
@@ -913,7 +916,7 @@ pub(super) fn build_object_group(
             group_wires.push(wire(tex_id, "out", scene_object_id, "base_color_map"));
 
             string_bindings.push(StringBindingDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
+                id: model_file_id.to_string(),
                 label: "Model File".to_string(),
                 default_value: path_str.to_string(),
                 target: BindingTarget::Node {
@@ -952,6 +955,7 @@ pub(super) fn build_object_group(
         let mut object_assembly = ObjectAssembly {
             k,
             path_str,
+            model_file_id,
             fresh_id: &mut *fresh_id,
             group_nodes: &mut group_nodes,
             group_wires: &mut group_wires,
