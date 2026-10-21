@@ -119,6 +119,28 @@ pub fn sync_track_layout(ui: &mut UIRoot, project: &Project, selection: &Selecti
     ui.viewport.rebuild_mapper_layout(&layout_layers);
 }
 
+/// The trigger source and target choices, projected from the layers and
+/// effect instances alone (`Projection::TriggerCatalog`). It runs before
+/// `sync_project_data`, whose layer headers label themselves from it, and
+/// refreshes an open target picker.
+pub fn sync_trigger_catalog(ui: &mut UIRoot, project: &Project) {
+    record_work(WorkKind::TriggerCatalogProjection);
+    ui.trigger_routing = TriggerRoutingCatalog::project(project);
+    ui.refresh_trigger_target_picker();
+}
+
+/// Both projections, for callers outside the frame plan (load, harness and
+/// editor-window setup) that need a whole fresh timeline.
+pub fn sync_project_all(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) {
+    sync_trigger_catalog(ui, project);
+    sync_project_data(ui, project, active_layer, selection);
+}
+
 pub fn sync_project_data(
     ui: &mut UIRoot,
     project: &Project,
@@ -128,10 +150,10 @@ pub fn sync_project_data(
     record_work(WorkKind::ProjectSync);
     // Keep the chooser catalog beside the manifest projection. It is rebuilt
     // only with structural project data, so opening/searching the popup does
-    // not walk or allocate from the project on the input hot path.
+    // not walk or allocate from the project on the input hot path. The trigger
+    // catalog the layer headers label from has its own projection
+    // (`sync_trigger_catalog`), which runs first.
     ui.automation_chooser_candidates = automation_chooser_candidates(project);
-    ui.trigger_routing = TriggerRoutingCatalog::project(project);
-    ui.refresh_trigger_target_picker();
     ui.pinned_automation_lanes.clear();
     ui.pinned_automation_lanes.extend_from_slice(selection.pinned_automation_lanes());
     {

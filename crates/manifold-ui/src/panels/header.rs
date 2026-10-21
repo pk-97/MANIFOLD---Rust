@@ -35,6 +35,7 @@ const ZOOM_CLUSTER_W: f32 = ZOOM_BUTTON_W * 2.0 + ZOOM_LABEL_W;
 const TIME_DISPLAY_W: f32 = 260.0;
 /// The clock label's host key, for its in-place text writes.
 const CLOCK_KEY: u64 = 1;
+const ZOOM_KEY: u64 = 2;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
@@ -58,6 +59,8 @@ pub struct HeaderPanel {
     /// `time_display` it shows.
     clock_w: f32,
     zoom_label: String,
+    /// The label being formatted, so a zoom writes no new string.
+    zoom_scratch: String,
     /// Whether the Audio Setup dock is open — drives its button's highlight.
     audio_setup_open: bool,
 }
@@ -96,6 +99,7 @@ impl HeaderPanel {
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             clock_w: 0.0,
             zoom_label: "120 px/beat".into(),
+            zoom_scratch: String::new(),
             audio_setup_open: false,
         }
     }
@@ -129,8 +133,18 @@ impl HeaderPanel {
         self.host.set_text_by_key(tree, CLOCK_KEY, shown);
     }
 
-    pub fn set_zoom_label(&mut self, text: &str) {
-        self.zoom_label = text.into();
+    /// The zoom label writes its fixed-width text in place, like the clock,
+    /// reusing the strings it holds.
+    pub fn set_zoom_label(&mut self, tree: &mut UITree, pixels_per_beat: f32) {
+        use std::fmt::Write as _;
+        let decimals = if pixels_per_beat >= 1.0 { 0 } else { 2 };
+        self.zoom_scratch.clear();
+        let _ = write!(self.zoom_scratch, "{pixels_per_beat:.decimals$} px/beat");
+        if self.zoom_label == self.zoom_scratch {
+            return;
+        }
+        std::mem::swap(&mut self.zoom_label, &mut self.zoom_scratch);
+        self.host.set_text_by_key(tree, ZOOM_KEY, &self.zoom_label);
     }
 
     /// Paint the Audio dock toggle's active state.
@@ -275,6 +289,7 @@ impl HeaderPanel {
             )
             .child(
                 View::label(self.zoom_label.as_str())
+                    .key(ZOOM_KEY)
                     .w(Sizing::Fixed(zoom_label_w))
                     .fill_h()
                     .font(color::FONT_SUBHEADING)

@@ -6,6 +6,18 @@ use super::*;
 use std::fmt::Write as _;
 
 impl TimelineViewportPanel {
+    /// The last clip end across every layer, by a full walk.
+    pub(super) fn clips_end_beat(&self) -> f32 {
+        let mut max_beat = 0.0f32;
+        for clip in self.clips_by_layer.iter().flatten() {
+            let end = clip.start_beat.as_f32() + clip.duration_beats.as_f32();
+            if end > max_beat {
+                max_beat = end;
+            }
+        }
+        max_beat
+    }
+
     /// Update insert cursor ruler marker position without rebuilding.
     /// Track-area cursor is painted into bitmap.
     pub(super) fn sync_insert_cursor_ruler(&self, tree: &mut UITree) {
@@ -90,15 +102,13 @@ impl TimelineViewportPanel {
             return;
         }
 
-        // Content duration for normalization
-        let mut max_beat = 0.0f32;
-        for clip in self.clips_by_layer.iter().flatten() {
-            let end = clip.start_beat.as_f32() + clip.duration_beats.as_f32();
-            if end > max_beat {
-                max_beat = end;
-            }
+        // Content duration for normalization. It moves with the clip data, so
+        // a scroll or zoom reads the value held since the last clip change
+        // (`set_clips` and the in-place preview writes mark the clips dirty).
+        if self.overview_clips_dirty {
+            self.overview_max_beat = self.clips_end_beat();
         }
-        self.overview_max_beat = max_beat;
+        let max_beat = self.overview_max_beat;
         if max_beat <= 0.0 {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
