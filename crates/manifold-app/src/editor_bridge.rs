@@ -1715,17 +1715,10 @@ impl Application {
             // the one composition entry the main preview also calls; mid-drag
             // they follow the live knob values the drag writes. Domain boxes
             // are the ones the solver accepted for the displayed frame.
-            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, compose_lines, gizmo_target_for};
-            let target = viewport_def
-                .scene
-                .as_deref()
-                .zip(ws.viewport_selected.as_ref())
-                .and_then(|(scene, id)| gizmo_target_for(scene, id));
-            if let Some(scene) = viewport_def.scene.as_deref()
-                && let Some(manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object)) =
-                    target.as_ref().and_then(|target| crate::scene_gizmo::scene_selection(scene, target))
-            {
-                crate::selection_outline::outline_slots(scene, object, &mut ws.viewport_outline);
+            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, compose_lines};
+            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), &ws.viewport_selected);
+            if let Some(drawn) = drawn {
+                drawn.outline(&mut ws.viewport_outline);
             }
             let displayed = session.displayed.as_ref().filter(|frame| frame.has_image());
             let shown = displayed.map(|frame| &frame.domains);
@@ -1739,7 +1732,7 @@ impl Application {
                     live_columns: displayed.map_or(&[][..], |frame| &frame.live_columns[..]),
                     physics: &[],
                     problems: ws.viewport_problems.problems(),
-                    selected: target.as_ref(),
+                    selection: drawn.map_or(&crate::physics_overlay::NO_SELECTION, |drawn| &drawn.selection),
                     mode: ws.viewport_gizmo_mode,
                     fade_handles: false,
                 },
