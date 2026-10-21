@@ -80,7 +80,7 @@ fn rubble_blast_scatters_a_settled_pile_and_keeps_it_in_the_world() {
     let frame = std::cell::Cell::new(0_u32);
     let advance = |sim: &mut RigidSimulation, frames: u32| {
         for _ in 0..frames {
-            sim.advance_with_copy_layout(bodies.clone(), Some(prototype.clone()), layout[0], layout[1], layout[2], layout[3], [0.0, -9.81, 0.0], Seconds(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
+            sim.advance_with_copy_layout(bodies.clone(), Some(prototype.clone()), layout[0], layout[1], layout[2], layout[3], [0.0, -9.81, 0.0], manifold_core::PlayedTime::from_played(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
             frame.set(frame.get() + 1);
         }
     };
