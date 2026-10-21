@@ -26,7 +26,7 @@ use manifold_physics::clock::TICK;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
-use manifold_water_liquid::fluid_role::FluidRole;
+use manifold_water_liquid::fluid_role::{FluidRole, take_initial_fill};
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::lattice::closed_faces;
@@ -108,14 +108,14 @@ impl MatterGeometry {
 }
 
 /// The fill in the layout's cells: the pool's height in cells and the
-/// initial volume's cell range per axis (empty without one). A height past the
+/// Initial Fill's cell range per axis (empty without one). A height past the
 /// top is capped there and a volume past a wall is clipped to the domain, one
 /// wholly outside fills nothing (`manifold_core::liquid_setup`); an unusable
 /// height or a volume that is not an axis-aligned finite box is refused by name.
 pub(crate) fn fill_region(
     layout: &FluidDomainLayout,
     fill_height: f32,
-    initial_volume: Option<Transform>,
+    initial_fill: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
     // The lattice's f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
@@ -124,9 +124,9 @@ pub(crate) fn fill_region(
     let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
     let mut column = [[0u32; 2]; 3];
-    if let Some(volume) = initial_volume {
+    if let Some(volume) = initial_fill {
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
-            return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
+            return Err("Matter: the Initial Fill must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
         let (edges, outcome) = fit_column(layout, volume.pos, volume.scale).map_err(|reason| format!("Matter: {reason}"))?;
         fit.column = outcome;
@@ -148,7 +148,7 @@ pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
     domain: Option<Transform>,
-    initial_volume: Option<Transform>,
+    initial_fill: Option<Transform>,
 ) -> Result<MatterGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
@@ -158,7 +158,7 @@ pub(crate) fn matter_geometry(
         _ => 8.0,
     };
     admit_lattice(&lattice, budget)?;
-    let (pool_cells, column, fit) = fill_region(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_volume)?;
+    let (pool_cells, column, fit) = fill_region(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_fill)?;
     let points_per_cell = match params.get("points_per_cell") {
         Some(ParamValue::Enum(1)) => 27,
         _ => 8,
@@ -181,10 +181,9 @@ pub(crate) fn matter_geometry(
 manifold_node_engine::primitive! {
     name: MatterDomain,
     type_id: "node.matter_domain",
-    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and box, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
+    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
     inputs: {
         domain: Transform optional,
-        initial_volume: Transform optional,
         resolution: ScalarF32 optional,
         domain_size: ScalarF32 optional,
         fill_height: ScalarF32 optional,
@@ -600,6 +599,8 @@ impl Primitive for MatterDomain {
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
         let role_pending = manifold_water_liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        // The Initial Fill seeds the water; the bodies never see it.
+        let fill = take_initial_fill(&mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
@@ -630,7 +631,7 @@ impl Primitive for MatterDomain {
         // so the outputs are declared pending.
         self.coupled.exchange = None;
         self.schedule.clear();
-        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
+        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles, fill) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
@@ -846,10 +847,14 @@ impl MatterDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
+        fill: Result<Option<Transform>, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let column = ctx.inputs.transform("initial_volume");
-        let geometry = match matter_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.params, ctx.inputs.transform("domain"), column) {
-            Ok(geometry) => geometry,
+        let geometry = fill.map_err(|reason| format!("Matter: {reason}")).and_then(|column| {
+            matter_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.params, ctx.inputs.transform("domain"), column)
+                .map(|geometry| (geometry, column))
+        });
+        let (geometry, column) = match geometry {
+            Ok(found) => found,
             Err(reason) => {
                 self.setup_report.refuse(&reason);
                 return Err(reason);

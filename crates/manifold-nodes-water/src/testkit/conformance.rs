@@ -681,17 +681,37 @@ pub fn set_type_param(def: &mut EffectGraphDef, type_id: &str, param: &str, valu
     }
 }
 
-/// Set `param` on the transform feeding the domain's `port`. The def is
-/// flattened first, so the wire is direct.
-fn set_source_param(def: &mut EffectGraphDef, type_id: &str, port: &str, param: &str, value: f32) {
+/// The flattened def's domain of `type_id` and the Initial Fill role
+/// source wired into it.
+fn initial_fill(def: &mut EffectGraphDef, type_id: &str) -> (u32, u32) {
     *def = manifold_core::flatten::flatten_groups(def).expect("a liquid preset flattens");
     let domain = def.nodes.iter().find(|node| node.type_id == type_id).unwrap_or_else(|| panic!("no {type_id} node")).id;
-    let wire = def.wires.iter().find(|wire| wire.to_node == domain && wire.to_port == port);
-    let from = wire.unwrap_or_else(|| panic!("{type_id}.{port} is not wired")).from_node;
+    let is_fill = |id: u32| {
+        def.nodes.iter().find(|node| node.id == id).is_some_and(|node| {
+            node.type_id == manifold_core::initial_fill::FLUID_ROLE_SOURCE_TYPE_ID
+                && matches!(node.params.get("role"), Some(SerializedParamValue::Enum { value: 0 }))
+        })
+    };
+    let fill = def.wires.iter().find(|wire| wire.to_node == domain && wire.to_port.starts_with("role_") && is_fill(wire.from_node));
+    (domain, fill.unwrap_or_else(|| panic!("{type_id} has no Initial Fill")).from_node)
+}
+
+/// Set `param` on the transform placing the domain's Initial Fill. The def
+/// is flattened first, so the wires are direct.
+fn set_fill_param(def: &mut EffectGraphDef, type_id: &str, param: &str, value: f32) {
+    let (_, fill) = initial_fill(def, type_id);
+    let from = def.wires.iter().find(|wire| wire.to_node == fill && wire.to_port == "transform").expect("the fill is placed").from_node;
     let source = def.nodes.iter().find(|node| node.id == from).expect("the wire's source");
-    assert_eq!(source.type_id, "node.transform_3d", "{type_id}.{port} comes from a transform");
+    assert_eq!(source.type_id, "node.transform_3d", "the Initial Fill is placed by a transform");
     let node_id = source.node_id.clone();
     set_node_param(def, node_id.as_str(), param, SerializedParamValue::Float { value });
+}
+
+/// Unwire the domain's Initial Fill, so the water starts from its fill
+/// height alone.
+fn drop_fill(def: &mut EffectGraphDef, type_id: &str) {
+    let (domain, fill) = initial_fill(def, type_id);
+    def.wires.retain(|wire| !(wire.to_node == domain && wire.from_node == fill));
 }
 
 #[cfg(test)]

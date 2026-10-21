@@ -13471,11 +13471,6 @@
           "type": "Transform"
         },
         {
-          "name": "initial_volume",
-          "required": false,
-          "type": "Transform"
-        },
-        {
           "name": "acceleration_field",
           "required": false,
           "type": "VectorField"
@@ -14295,7 +14290,7 @@
           "type": "bool"
         }
       ],
-      "purpose": "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
+      "purpose": "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. An Initial Fill role is the water's starting box and never a body; a second Initial Fill switched on is refused by name.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -19137,7 +19132,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two and count is its slot count. Every slot the fill leaves dead is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -21346,11 +21341,6 @@
           "type": "Transform"
         },
         {
-          "name": "initial_volume",
-          "required": false,
-          "type": "Transform"
-        },
-        {
           "name": "resolution",
           "required": false,
           "type": "f32"
@@ -22186,7 +22176,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and box, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
+      "purpose": "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -125077,6 +125067,90 @@
           "name": "Billboard"
         },
         {
+          "default": "0",
+          "id": "2_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "2_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "2_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "2_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "2_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
+          "default": "1",
+          "id": "2_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "2_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "2_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
+        },
+        {
           "default": "1",
           "id": "12_enabled",
           "max": "1",
@@ -139072,76 +139146,6 @@
           "name": "Global Illumination"
         },
         {
-          "default": "-1.25",
-          "id": "32_pos_x",
-          "max": "100",
-          "min": "-100",
-          "name": "Position X"
-        },
-        {
-          "default": "1.12",
-          "id": "32_pos_y",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Y"
-        },
-        {
-          "default": "0",
-          "id": "32_pos_z",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Z"
-        },
-        {
-          "default": "0",
-          "id": "32_rot_x",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation X"
-        },
-        {
-          "default": "0",
-          "id": "32_rot_y",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation Y"
-        },
-        {
-          "default": "0",
-          "id": "32_rot_z",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation Z"
-        },
-        {
-          "default": "1.18",
-          "id": "32_scale_x",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale X"
-        },
-        {
-          "default": "1.92",
-          "id": "32_scale_y",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale Y"
-        },
-        {
-          "default": "3.5",
-          "id": "32_scale_z",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale Z"
-        },
-        {
-          "default": "0",
-          "id": "32_billboard",
-          "max": "1",
-          "min": "0",
-          "name": "Billboard"
-        },
-        {
           "default": "0",
           "id": "33_mode",
           "max": "2",
@@ -143657,71 +143661,225 @@
           "name": "Level"
         },
         {
+          "default": "-1.25",
+          "id": "1_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "1.12",
+          "id": "1_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "1_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "1_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "1_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "1_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1.18",
+          "id": "1_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1.92",
+          "id": "1_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "3.5",
+          "id": "1_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "0",
+          "id": "1_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
+          "default": "0",
+          "id": "2_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "2_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "2_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "2_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "2_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
+          "default": "1",
+          "id": "2_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "2_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "2_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
+        },
+        {
           "default": "9.35",
-          "id": "69_focus_distance",
+          "id": "70_focus_distance",
           "max": "100",
           "min": "0",
           "name": "Focus Distance"
         },
         {
           "default": "32",
-          "id": "69_f_stop",
+          "id": "70_f_stop",
           "max": "32",
           "min": "0.5",
           "name": "F-Stop"
         },
         {
           "default": "180",
-          "id": "69_shutter_angle",
+          "id": "70_shutter_angle",
           "max": "360",
           "min": "0",
           "name": "Shutter Angle"
         },
         {
           "default": "0",
-          "id": "69_exposure_ev",
+          "id": "70_exposure_ev",
           "max": "8",
           "min": "-8",
           "name": "Exposure"
         },
         {
           "default": "24",
-          "id": "72_max_radius",
+          "id": "73_max_radius",
           "max": "64",
           "min": "1",
           "name": "Max Blur"
         },
         {
           "default": "0",
-          "id": "72_enabled",
+          "id": "73_enabled",
           "max": "1",
           "min": "0",
           "name": "Depth of Field"
         },
         {
           "default": "0",
-          "id": "72_aperture",
+          "id": "73_aperture",
           "max": "2",
           "min": "0",
           "name": "Aperture Shape"
         },
         {
           "default": "1",
-          "id": "72_quality",
+          "id": "73_quality",
           "max": "2",
           "min": "0",
           "name": "Quality"
         },
         {
           "default": "32",
-          "id": "75_max_blur_px",
+          "id": "76_max_blur_px",
           "max": "128",
           "min": "0",
           "name": "Max Blur"
         },
         {
           "default": "0",
-          "id": "75_enabled",
+          "id": "76_enabled",
           "max": "1",
           "min": "0",
           "name": "Motion Blur"
@@ -149215,6 +149373,90 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
+        },
+        {
+          "default": "0",
+          "id": "2_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "2_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "2_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "2_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "2_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
+          "default": "1",
+          "id": "2_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "2_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "2_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
         },
         {
           "default": "1",
@@ -173084,6 +173326,90 @@
           "name": "Billboard"
         },
         {
+          "default": "0",
+          "id": "2_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "2_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "2_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "2_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "2_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
+          "default": "1",
+          "id": "2_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "2_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "2_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
+        },
+        {
           "default": "1",
           "id": "12_enabled",
           "max": "1",
@@ -184389,76 +184715,6 @@
           "max": "1",
           "min": "0",
           "name": "Front Wall"
-        },
-        {
-          "default": "-3.3",
-          "id": "1_pos_x",
-          "max": "100",
-          "min": "-100",
-          "name": "Position X"
-        },
-        {
-          "default": "1",
-          "id": "1_pos_y",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Y"
-        },
-        {
-          "default": "0",
-          "id": "1_pos_z",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Z"
-        },
-        {
-          "default": "0",
-          "id": "1_rot_x",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation X"
-        },
-        {
-          "default": "0",
-          "id": "1_rot_y",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation Y"
-        },
-        {
-          "default": "0",
-          "id": "1_rot_z",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation Z"
-        },
-        {
-          "default": "1.4",
-          "id": "1_scale_x",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale X"
-        },
-        {
-          "default": "2",
-          "id": "1_scale_y",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale Y"
-        },
-        {
-          "default": "4",
-          "id": "1_scale_z",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale Z"
-        },
-        {
-          "default": "0",
-          "id": "1_billboard",
-          "max": "1",
-          "min": "0",
-          "name": "Billboard"
         },
         {
           "default": "1024",
@@ -198235,6 +198491,160 @@
           "max": "1",
           "min": "0",
           "name": "Motion Blur"
+        },
+        {
+          "default": "-3.3",
+          "id": "1_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "1",
+          "id": "1_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "1_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "1_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "1_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "1_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1.4",
+          "id": "1_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "2",
+          "id": "1_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "4",
+          "id": "1_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "0",
+          "id": "1_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
+          "default": "0",
+          "id": "2_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "2_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "2_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "2_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "2_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "2_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "0.05",
+          "id": "2_shell_thickness",
+          "max": "1",
+          "min": "0",
+          "name": "Shell Thickness"
+        },
+        {
+          "default": "1",
+          "id": "2_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "2_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "2_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
         },
         {
           "default": "3.3",

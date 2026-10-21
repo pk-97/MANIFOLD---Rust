@@ -567,6 +567,7 @@ pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<S
         },
         GizmoTargetKind::Object
         | GizmoTargetKind::FluidDomain
+        | GizmoTargetKind::InitialFill
         | GizmoTargetKind::Inflow
         | GizmoTargetKind::Drain
         | GizmoTargetKind::Collider
@@ -744,8 +745,8 @@ mod tests {
         let scene = scene(project, layer);
         let domain = target(project, layer, GizmoTargetKind::FluidDomain);
         let column = gizmo_targets(&scene)
-            .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
-            .expect("the GPU FLIP family wires an Initial Fill column");
+            .find(|t| t.kind == GizmoTargetKind::InitialFill)
+            .expect("the GPU FLIP family places an Initial Fill");
         (domain, column)
     }
 
@@ -1259,10 +1260,13 @@ mod tests {
         let scene = self::scene(&fluid, &fluid_layer);
         assert_eq!(scene_selection(&scene, &domain), Some(SceneSelection::Object(row)));
         let column = gizmo_targets(&scene)
-            .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
-            .expect("the GPU FLIP family wires an Initial Fill column");
+            .find(|t| t.kind == GizmoTargetKind::InitialFill)
+            .expect("the GPU FLIP family places an Initial Fill");
+        let ShapeOwner::RoleSource { node: fill, .. } = &column.id.owner else { panic!("an Initial Fill is a role source") };
+        let fill = SceneSelection::Source(fill.clone());
+        assert_eq!(scene_selection(&scene, &column), Some(fill.clone()), "a picked Initial Fill selects itself");
         assert_eq!(
-            selected_targets(&scene, &[SceneSelection::Object(row)], std::slice::from_ref(&column.id)).pop().map(|t| t.id),
+            selected_targets(&scene, &[fill], std::slice::from_ref(&column.id)).pop().map(|t| t.id),
             Some(column.id.clone()),
             "a picked shape of the selected item keeps its handles"
         );

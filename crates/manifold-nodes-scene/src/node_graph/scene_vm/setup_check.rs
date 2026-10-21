@@ -54,6 +54,7 @@ impl SetupProblemKind {
 impl FluidRole {
     fn title(self) -> &'static str {
         match self {
+            Self::InitialFill => "Initial Fill",
             Self::Inflow => "Inflow",
             Self::Outflow => "Drain",
             Self::Collider => "Collider",
@@ -255,7 +256,7 @@ pub(super) fn check_source(
                 BoxFit::Inside | BoxFit::Clipped { .. } => return,
             }
         }
-        FluidRole::Inflow | FluidRole::Outflow => match fit_box(layout, lo, hi) {
+        FluidRole::InitialFill | FluidRole::Inflow | FluidRole::Outflow => match fit_box(layout, lo, hi) {
             BoxFit::Inside => return,
             BoxFit::Clipped { .. } => SetupProblemKind::SourceClipped(role),
             BoxFit::Outside => SetupProblemKind::SourceOutside(role),

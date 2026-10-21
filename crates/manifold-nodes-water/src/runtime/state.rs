@@ -205,7 +205,7 @@ mod tests {
         let registry = PrimitiveRegistry::with_builtin();
         let state_with = |refused: u32| {
             let mut graph = Graph::new();
-            let domain = graph.add_node(registry.construct("node.gpu_flip_domain").expect("domain"));
+            let domain = graph.add_node(registry.construct(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).expect("domain"));
             let liquid = graph.add_node(registry.construct("node.liquid_state").expect("liquid state"));
             graph.connect((domain, "ticks"), (liquid, "ticks")).expect("the domain clocks the liquid");
             let stats = LiquidTickStats { inflow_births: 3, inflow_refused: refused, ..LiquidTickStats::default() };
