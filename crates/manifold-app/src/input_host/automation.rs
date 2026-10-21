@@ -493,17 +493,12 @@ fn nudged_value(value: f32, value_steps: f32, min: f32, max: f32, whole_numbers:
     if value_steps == 0.0 {
         return value;
     }
-    let delta = if whole_numbers {
-        value_steps.signum()
+    let norm_delta = if whole_numbers {
+        value_steps.signum() / (max - min).abs().max(f32::EPSILON)
     } else {
-        value_steps * 0.01 * (max - min)
+        value_steps * 0.01
     };
-    let moved = value + delta;
-    if whole_numbers {
-        manifold_ui::automation_drag::quantise_whole_number(moved, min, max)
-    } else {
-        moved.clamp(min.min(max), min.max(max))
-    }
+    manifold_ui::automation_drag::apply_value(value, norm_delta, min, max, whole_numbers)
 }
 
 /// Arrow-key nudge of the selected breakpoints as ONE undo entry. `beat_delta`
@@ -628,7 +623,7 @@ pub(crate) fn nudge_selected(
     let mut commands: Vec<Box<dyn Command>> = lanes
         .into_iter()
         .map(|(target, param_id, moves)| {
-            Box::new(MoveAutomationPointCommand::for_group_keeping_twins(target, param_id, moves)) as Box<dyn Command>
+            Box::new(MoveAutomationPointCommand::for_group(target, param_id, moves)) as Box<dyn Command>
         })
         .collect();
     for command in &mut commands {
