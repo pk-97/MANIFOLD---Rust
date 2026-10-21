@@ -289,6 +289,65 @@ impl Seconds {
     }
 }
 
+// ─── PlayedTime ──────────────────────────────────────────────────────────────
+
+/// How long the transport has played: the clock physics runs on, like a DAW's
+/// sample counter. Every frame step moves it, and so do real placements
+/// (seek, locate, loop, reset). A tempo edit moves transport seconds, the
+/// song position, and never this. Transport seconds become played time only
+/// at a seam, by naming the sum of every tempo edit's move, so a raw float or
+/// a frame's seconds never reaches a simulation clock by accident.
+///
+/// ```compile_fail
+/// let _: manifold_foundation::units::PlayedTime = 0.5.into();
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct PlayedTime(f64);
+
+impl PlayedTime {
+    pub const ZERO: Self = Self(0.0);
+
+    /// Transport seconds less `tempo_shift`, the sum of every tempo edit's
+    /// move of the transport so far.
+    #[inline]
+    pub fn from_transport(transport: Seconds, tempo_shift: Seconds) -> Self {
+        Self(transport.0 - tempo_shift.0)
+    }
+
+    /// Transport seconds under the same shift, for tempo-map lookups.
+    #[inline]
+    pub fn to_transport(self, tempo_shift: Seconds) -> Seconds {
+        Seconds(self.0 + tempo_shift.0)
+    }
+
+    /// A time already on the played clock: one an owner of played time
+    /// stored, or computed from played times.
+    #[inline]
+    pub const fn from_played(seconds: f64) -> Self {
+        Self(seconds)
+    }
+
+    #[inline]
+    pub const fn seconds(self) -> f64 {
+        self.0
+    }
+
+    #[inline]
+    pub fn is_finite(self) -> bool {
+        self.0.is_finite()
+    }
+
+    #[inline]
+    pub fn min(self, other: Self) -> Self {
+        Self(self.0.min(other.0))
+    }
+
+    #[inline]
+    pub fn max(self, other: Self) -> Self {
+        Self(self.0.max(other.0))
+    }
+}
+
 impl fmt::Display for Seconds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:.6} s", self.0)

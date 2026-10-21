@@ -27,7 +27,8 @@
 //! `hdri_file` — GLB_CONFORMANCE_DESIGN.md G-P6): whether `id` names a
 //! numeric card param or a string param is resolved AFTER the import graph
 //! is assembled (only then do we know which `string_params`/`params` ids
-//! exist), so `--param env_mode=1 --param hdri_file=/path/to.exr` works in
+//! exist), so `--param 1_mode=2 --param hdri_file=/path/to.exr` (the bake's Mode = HDRI,
+//! plus `--param bg_enabled=1` for the visible sky) works in
 //! one consistent flag rather than a second `--string` flag callers have to
 //! remember. A numeric override outside the param's own declared `[min,
 //! max]` (e.g. `emitter_elevation`'s `[-1, 1]` normalized "up" component,

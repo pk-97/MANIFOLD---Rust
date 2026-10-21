@@ -115,19 +115,6 @@
         "cardVisible": true
       },
       {
-        "id": "environment_mode",
-        "name": "Environment",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F0",
-        "section": "Lighting",
-        "cardVisible": true
-      },
-      {
         "id": "surface_stretch",
         "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
         "tooltip": "Stretch particles along the local flow to join the surface.",
@@ -316,19 +303,6 @@
         },
         "convert": {
           "type": "IntRound"
-        }
-      },
-      {
-        "id": "environment_mode",
-        "label": "Environment",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "environment_select",
-          "param": "selector"
-        },
-        "convert": {
-          "type": "Float"
         }
       },
       {
@@ -985,34 +959,6 @@
         "height": {
           "type": "Int",
           "value": 1024
-        }
-      }
-    },
-    {
-      "id": 40,
-      "nodeId": "sky_exposure",
-      "typeId": "node.exposure",
-      "handle": "Sky Exposure",
-      "params": {
-        "gain": {
-          "type": "Float",
-          "value": 2.0
-        }
-      }
-    },
-    {
-      "id": 41,
-      "nodeId": "environment_select",
-      "typeId": "node.switch_texture",
-      "handle": "Environment Select",
-      "params": {
-        "num_inputs": {
-          "type": "Int",
-          "value": 2
-        },
-        "selector": {
-          "type": "Float",
-          "value": 0.0
         }
       }
     },
@@ -3913,24 +3859,6 @@
       "toPort": "in"
     },
     {
-      "fromNode": 2,
-      "fromPort": "envmap",
-      "toNode": 41,
-      "toPort": "in_0"
-    },
-    {
-      "fromNode": 39,
-      "fromPort": "out",
-      "toNode": 40,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 40,
-      "fromPort": "out",
-      "toNode": 41,
-      "toPort": "in_1"
-    },
-    {
       "fromNode": 1,
       "fromPort": "out",
       "toNode": 30,
@@ -3955,8 +3883,8 @@
       "toPort": "light_1"
     },
     {
-      "fromNode": 41,
-      "fromPort": "out",
+      "fromNode": 2,
+      "fromPort": "envmap",
       "toNode": 30,
       "toPort": "envmap"
     },
@@ -4055,6 +3983,12 @@
       "fromPort": "indices",
       "toNode": 62,
       "toPort": "indices"
+    },
+    {
+      "fromNode": 39,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "hdri"
     }
   ]
 }

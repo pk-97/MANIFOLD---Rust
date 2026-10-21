@@ -115,16 +115,17 @@ fn trace(
         pending.push((node.clone(), port.clone(), true));
         let def = index.node(&node)?;
         if def.type_id == "node.physics_world" {
-            let input = if port == "instances" {
-                Some(("copies".to_string(), "copies_acceleration".to_string()))
-            } else {
-                port.strip_prefix("pose_")
-                    .filter(|slot| {
-                        slot.parse::<usize>()
-                            .is_ok_and(|slot| slot < RigidImpulseTargets::BODY_CAPACITY)
-                    })
-                    .map(|slot| (format!("body_{slot}"), format!("body_acceleration_{slot}")))
+            let slot = |prefix: &str, capacity: usize| {
+                port.strip_prefix(prefix)
+                    .and_then(|slot| slot.parse::<usize>().ok())
+                    .filter(|&slot| slot < capacity)
             };
+            let input = slot("instances_", RigidImpulseTargets::GROUP_CAPACITY)
+                .map(|group| (format!("copies_{group}"), format!("copies_acceleration_{group}")))
+                .or_else(|| {
+                    slot("pose_", RigidImpulseTargets::BODY_CAPACITY)
+                        .map(|slot| (format!("body_{slot}"), format!("body_acceleration_{slot}")))
+                });
             if let Some((input, port)) = input {
                 if index.input(&node, &input)?.is_some() {
                     candidates.push(Candidate { node, port });
@@ -302,28 +303,23 @@ pub fn impulse_recipients_with_index(
         } else if whole {
             ImpulseTarget::Swarm
         } else {
-            let mut targets = RigidImpulseTargets::default();
-            if recipient.port == "copies_acceleration" {
-                targets.copies = true;
-            } else {
-                let slot = recipient
+            let index = |prefix: &str| {
+                recipient
                     .port
-                    .strip_prefix("body_acceleration_")
+                    .strip_prefix(prefix)
                     .and_then(|slot| slot.parse::<usize>().ok())
-                    .filter(|&slot| slot < RigidImpulseTargets::BODY_CAPACITY)
-                    .ok_or_else(|| {
-                        unsupported(&recipient.port, "invalid rigid impulse recipient")
-                    })?;
-                targets.bodies = 1u64 << slot;
-            }
+            };
+            let targets = index("copies_acceleration_")
+                .and_then(RigidImpulseTargets::group)
+                .or_else(|| index("body_acceleration_").and_then(RigidImpulseTargets::body))
+                .ok_or_else(|| unsupported(&recipient.port, "invalid rigid impulse recipient"))?;
             ImpulseTarget::Rigid(targets)
         };
         let previous = worlds
             .entry(node.node_id.as_str().to_owned())
             .or_insert(target);
         if let (ImpulseTarget::Rigid(previous), ImpulseTarget::Rigid(target)) = (previous, target) {
-            previous.bodies |= target.bodies;
-            previous.copies |= target.copies;
+            *previous = previous.union(target);
         }
     }
     Ok(worlds

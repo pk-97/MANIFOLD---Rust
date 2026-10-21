@@ -989,7 +989,7 @@ const SURFACE_DETAIL_OFFSET: usize = 1;
 const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_mesh", "basin_material",
         "floor_transform", "floor_object", "rear_mesh", "rear_transform", "rear_object", "left_mesh",
         "left_transform", "left_object", "right_mesh", "right_transform", "right_object", "scene",
-        "final_output", "rim_light", "filmic_display", "sky_environment", "sky_exposure", "environment_select"];
+        "final_output", "rim_light", "filmic_display", "sky_environment"];
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn assert_preset_root(nodes: &[EffectGraphNode]) {

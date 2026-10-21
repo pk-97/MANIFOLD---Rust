@@ -14,7 +14,8 @@ use manifold_node_engine::channel_names::well_known;
 use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
 use manifold_physics::tick_samples::TickSamples;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_physics::PlayedTime;
+use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry, scale_steps};
 use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES};
@@ -604,10 +605,10 @@ impl LiquidBodies {
         cell_size: f32,
         wait: bool,
     ) -> Result<BodiesStatus, String> {
-        let occupied = roles.iter().flatten().count();
-        if occupied + coupled.len() > MAX_FLUID_ROLES {
+        let colliders = roles.iter().flatten().filter(|role| role.kind == FluidRoleKind::Collider).count();
+        if colliders + coupled.len() > MAX_LIQUID_BODIES {
             return Err(format!(
-                "Liquid: {occupied} roles and {} coupled bodies exceed the {MAX_FLUID_ROLES} bodies a liquid holds",
+                "Liquid: {colliders} colliders and {} coupled bodies exceed the {MAX_LIQUID_BODIES} bodies a liquid holds",
                 coupled.len()
             ));
         }
@@ -719,17 +720,17 @@ impl LiquidBodies {
         self.version += 1;
     }
 
-    /// The transport times the history replay must sample before the next
-    /// frame: each tick's start under `clock`, in `(from, until]`.
-    pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
+    /// The played times the history replay must sample before the next
+    /// frame: each boundary a tick may start at under `clock`, in `(from, until]`.
+    pub fn request_samples(&mut self, clock: &LiquidClock, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
         self.samples.request(clock, from, until, out);
     }
 
-    /// A history replay sample of the roles at transport `now`; `None` while
-    /// a role is still pending.
-    pub fn observe_sample(&mut self, now: f64, roles: Option<&[Option<FluidRole>]>) {
+    /// A history replay sample of the roles at played time `now`, after `clock`
+    /// observed this sample's Speed; `None` while a role is still pending.
+    pub fn observe_sample(&mut self, clock: &LiquidClock, now: PlayedTime, roles: Option<&[Option<FluidRole>]>) {
         let controls = roles.map(controls_of);
-        self.samples.observe(now, controls.as_ref());
+        self.samples.observe(clock, now, controls.as_ref());
     }
 
     /// This frame's roles, right after `clock` advanced to `frame`: they
@@ -1060,14 +1061,18 @@ mod tests {
         ) -> ClockFrame {
             if let Some(last) = self.last.filter(|&last| transport > last) {
                 self.times.clear();
-                bodies.request_samples(&self.clock, last, transport, &mut self.times);
-                for &time in self.times.iter().filter(|&&time| time < transport) {
-                    bodies.observe_sample(time, Some(&roles_at(time)));
+                {
+                    let mut played = Vec::new();
+                    bodies.request_samples(&self.clock, PlayedTime::from_played(last), PlayedTime::from_played(transport), &mut played);
+                    self.times.extend(played.into_iter().map(PlayedTime::seconds));
                 }
-                bodies.observe_sample(transport, Some(&roles_at(transport)));
+                for &time in self.times.iter().filter(|&&time| time < transport) {
+                    bodies.observe_sample(&self.clock, PlayedTime::from_played(time), Some(&roles_at(time)));
+                }
+                bodies.observe_sample(&self.clock, PlayedTime::from_played(transport), Some(&roles_at(transport)));
             }
             self.last = Some(transport);
-            let frame = self.clock.advance(transport, interval, 1.0, 0.0, false, false);
+            let frame = self.clock.advance(PlayedTime::from_played(transport), interval, 1.0, 0.0, false, false);
             bodies.settle(&roles_at(transport), &self.clock, &frame);
             frame
         }
@@ -1180,7 +1185,7 @@ mod tests {
         ready(&mut bodies, &roles_at(0.0));
         let mut rig = Rig::default();
         rig.frame(&mut bodies, 0.0, TICK, &roles_at);
-        rig.clock.observe_speed(TICK, 2.0);
+        rig.clock.observe_speed(PlayedTime::from_played(TICK), 2.0);
         let frame = rig.frame(&mut bodies, 2.0 * TICK, TICK, &roles_at);
         assert_eq!(frame.ticks, 2);
         assert!((frame.interval(0).unwrap().duration().0 - TICK).abs() < 1e-9);
@@ -1265,7 +1270,12 @@ mod tests {
         assert_eq!(rows[1].accel_shape, [0.0, -9.81, 0.0, 1.0]);
         assert_eq!(rows[2].accel_shape[3], -1.0);
         assert_eq!(rows[1].position_inv_mass, [0.0, 1.0, 0.0, 0.5]);
-        let many: Vec<_> = (0..MAX_FLUID_ROLES).map(|_| Arc::clone(&hull)).collect();
+        // The collider and the coupled bodies share the liquid's body rows,
+        // past the 64 role ports.
+        let full: Vec<_> = (1..MAX_LIQUID_BODIES).map(|_| Arc::clone(&hull)).collect();
+        ready_coupled(&mut bodies, &roles, &full);
+        assert_eq!(bodies.count(), MAX_LIQUID_BODIES);
+        let many: Vec<_> = (0..MAX_LIQUID_BODIES).map(|_| Arc::clone(&hull)).collect();
         assert!(bodies.prepare(&roles, &many, 0.0625, false).unwrap_err().contains("exceed"));
     }
 

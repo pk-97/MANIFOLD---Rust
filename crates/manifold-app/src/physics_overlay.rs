@@ -557,6 +557,7 @@ mod tests {
             fit,
             column_box,
             refusal: None,
+            uncoupled_bodies: 0,
         };
         let mut observations = PhysicsOverlayObservations::default();
         observations.set_layer(Some(LayerId::new("water")));

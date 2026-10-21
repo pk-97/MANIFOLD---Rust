@@ -563,7 +563,7 @@ pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<S
     match target.kind {
         GizmoTargetKind::Force => match &target.id.owner {
             ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
-            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } | ShapeOwner::Swarm(_) => None,
+            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } | ShapeOwner::Swarm(_) | ShapeOwner::World(_) => None,
         },
         GizmoTargetKind::Object
         | GizmoTargetKind::FluidDomain

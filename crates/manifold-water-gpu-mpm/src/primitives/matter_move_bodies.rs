@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::{LIQUID_POSE, LiquidBody};
 use crate::matter::REACTION_WORDS;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -59,12 +59,12 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("first_tick"), label: "First Tick This Frame", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("step_dt"), label: "Substep (s)", ty: ParamType::Float, default: ParamValue::Float(4.9e-4), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_LIQUID_BODIES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("rows"), label: "Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substeps_per_tick"), label: "Substeps per Tick", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("dynamic_count"), label: "Dynamic Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("dynamic_count"), label: "Dynamic Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_LIQUID_BODIES as f32)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Live Matter group, before node.matter_to_grid. bodies, first_tick, body_count, rows, substeps_per_tick, momentum_unit, cell_size, dynamic_count and reaction come from node.matter_domain (one row per body per tick of this frame; reaction is the tick's slot that node.matter_body_reaction adds to later in each substep); tick_index, substep_in_tick and step_dt from node.matter_state. bodies_out feeds node.matter_grid_update's collider projection, node.matter_body_reaction and node.liquid_solid_distance. reaction is read only when dynamic_count is above 0.",
@@ -87,7 +87,7 @@ impl Primitive for MatterMoveBodies {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "bodies_out").then_some(MAX_FLUID_ROLES as u32)
+        (port_name == "bodies_out").then_some(MAX_LIQUID_BODIES as u32)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -96,7 +96,7 @@ impl Primitive for MatterMoveBodies {
         let first_tick = int(ctx, "first_tick");
         let substep_in_tick = int(ctx, "substep_in_tick");
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
-        let body_count = int(ctx, "body_count").min(MAX_FLUID_ROLES as i32);
+        let body_count = int(ctx, "body_count").min(MAX_LIQUID_BODIES as i32);
         let rows = int(ctx, "rows");
         let substeps_per_tick = int(ctx, "substeps_per_tick").max(1);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);

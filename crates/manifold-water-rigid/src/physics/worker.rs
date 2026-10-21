@@ -4,83 +4,121 @@ use manifold_core::Seconds;
 use manifold_physics::input::AppliedEvent;
 use manifold_physics::stepping::{StepCoupling, StepInterval};
 use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
+use manifold_core::scene_surface::{PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS};
 
 use super::{
-    same_collider, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation,
-    IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS,
+    same_topology_body, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
+    IMPULSE_CAPACITY,
 };
 
-/// The retained scene inputs consumed by the shared FLIP worker.
-///
-/// Copy population controls remain authored inputs here. Native rigid copy
-/// count and layout are still latched by [`RigidSimulation`] at the existing
-/// reset points.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// The retained scene inputs of one Physics World: one entry per body port,
+/// one copies body per copy-group port, and the fields. Its vectors are
+/// sized when the world's counts change; refilling them each frame with
+/// [`Clone::clone_from`] never allocates.
+#[derive(Debug, PartialEq)]
 pub struct RigidSceneInputs {
-    #[serde(with = "super::serialization::array")]
-    pub bodies: [Option<RigidBody>; MAX_BODIES],
-    pub prototype: Option<RigidBody>,
-    pub copy_count: f32,
-    pub copy_spacing: f32,
-    pub copy_columns: f32,
-    pub layout: f32,
+    pub bodies: Vec<Option<RigidBody>>,
+    /// Each copy group's copies body. Its spawner sets the group's count and
+    /// layout; an edit lays the copies out at the next tick start.
+    pub groups: Vec<Option<RigidBody>>,
     pub gravity: [f32; 3],
     pub acceleration_field: Option<FieldValue>,
-    #[serde(with = "super::serialization::array")]
-    pub targeted_fields: [Option<FieldValue>; TARGET_SLOTS],
+    /// Empty, or one per body then one per copy group.
+    pub targeted_fields: Vec<Option<FieldValue>>,
 }
 
 impl Default for RigidSceneInputs {
     fn default() -> Self {
+        Self::with_counts(PHYSICS_WORLD_DEFAULT_BODIES as usize, PHYSICS_WORLD_DEFAULT_COPY_GROUPS as usize)
+    }
+}
+
+impl Clone for RigidSceneInputs {
+    fn clone(&self) -> Self {
         Self {
-            bodies: std::array::from_fn(|_| None),
-            prototype: None,
-            copy_count: 0.0,
-            copy_spacing: 1.25,
-            copy_columns: 16.0,
-            layout: 0.0,
-            gravity: [0.0; 3],
-            acceleration_field: None,
-            targeted_fields: std::array::from_fn(|_| None),
+            bodies: self.bodies.clone(),
+            groups: self.groups.clone(),
+            gravity: self.gravity,
+            acceleration_field: self.acceleration_field.clone(),
+            targeted_fields: self.targeted_fields.clone(),
         }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.bodies.clone_from(&source.bodies);
+        self.groups.clone_from(&source.groups);
+        self.gravity = source.gravity;
+        self.acceleration_field.clone_from(&source.acceleration_field);
+        self.targeted_fields.clone_from(&source.targeted_fields);
     }
 }
 
 /// One resolved graph observation. The normal rigid node and a coupled scene
 /// consume the same authored body, field and playback values.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct RigidSceneObservation {
     pub inputs: RigidSceneInputs,
-    pub transport: Seconds,
+    pub transport: manifold_core::PlayedTime,
     pub speed: f32,
     pub reset: f32,
 }
 
-impl RigidSceneInputs {
-    /// Compare the parts that require native geometry to be rebuilt.
-    ///
-    /// Count, spacing, columns, and layout intentionally do not participate:
-    /// those controls retain the existing reset-latched copy semantics.
-    pub fn same_topology(&self, other: &Self) -> bool {
-        self.bodies
-            .iter()
-            .zip(other.bodies.iter())
-            .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
-            && same_topology_body(self.prototype.as_ref(), other.prototype.as_ref())
+impl Clone for RigidSceneObservation {
+    fn clone(&self) -> Self {
+        Self {
+            inputs: self.inputs.clone(),
+            transport: self.transport,
+            speed: self.speed,
+            reset: self.reset,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.inputs.clone_from(&source.inputs);
+        self.transport = source.transport;
+        self.speed = source.speed;
+        self.reset = source.reset;
     }
 }
 
-fn same_topology_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
-    match (left, right) {
-        (None, None) => true,
-        (Some(left), Some(right)) => {
-            left.shape == right.shape
-                && left.transform.scale == right.transform.scale
-                && left.enabled == right.enabled
-                && same_collider(left, right)
+impl RigidSceneInputs {
+    /// Empty inputs for a world of `bodies` bodies and `groups` copy groups.
+    pub fn with_counts(bodies: usize, groups: usize) -> Self {
+        Self {
+            bodies: vec![None; bodies],
+            groups: vec![None; groups],
+            gravity: [0.0; 3],
+            acceleration_field: None,
+            targeted_fields: vec![None; bodies + groups],
         }
-        _ => false,
+    }
+
+    /// Resize for a world of `bodies` bodies and `groups` copy groups,
+    /// keeping every entry that still has a port.
+    pub fn resize(&mut self, bodies: usize, groups: usize) {
+        self.bodies.resize(bodies, None);
+        self.groups.resize(groups, None);
+        self.targeted_fields.clear();
+        self.targeted_fields.resize(bodies + groups, None);
+    }
+
+    /// Whether a coupled owner keeps the same native bodies: same geometry
+    /// and, for copy groups, the same count. A liquid binds each copy's body
+    /// once per epoch, so a Count change starts a new one there; a world
+    /// without a liquid changes Count in place.
+    pub fn same_topology(&self, other: &Self) -> bool {
+        self.bodies.len() == other.bodies.len()
+            && self.groups.len() == other.groups.len()
+            && self
+                .bodies
+                .iter()
+                .chain(&self.groups)
+                .zip(other.bodies.iter().chain(&other.groups))
+                .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+            && self.groups.iter().zip(&other.groups).all(|(left, right)| {
+                left.as_ref().map(|body| super::requested_count(body.spawn))
+                    == right.as_ref().map(|body| super::requested_count(body.spawn))
+            })
     }
 }
 
@@ -117,21 +155,7 @@ impl RigidSimulation {
 
         let previous_policy = self.advancement_policy;
         self.advancement_policy = AdvancementPolicy::Worker { max_ticks };
-        let result = self.advance_with_coupling(
-            inputs.bodies.clone(),
-            inputs.prototype.clone(),
-            inputs.copy_count,
-            inputs.copy_spacing,
-            inputs.copy_columns,
-            inputs.layout,
-            inputs.gravity,
-            now,
-            1.0,
-            0.0,
-            inputs.acceleration_field.clone(),
-            &inputs.targeted_fields,
-            coupling,
-        );
+        let result = self.advance_inner(SceneRef::of(inputs), now, 1.0, 0.0, None, None, coupling);
         self.advancement_policy = previous_policy;
         result
     }
@@ -158,19 +182,11 @@ impl RigidSimulation {
 
         let previous_policy = self.advancement_policy;
         self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 1 };
-        let result = self.advance_with_coupling_inner(
-            inputs.bodies.clone(),
-            inputs.prototype.clone(),
-            inputs.copy_count,
-            inputs.copy_spacing,
-            inputs.copy_columns,
-            inputs.layout,
-            inputs.gravity,
+        let result = self.advance_inner(
+            SceneRef::of(inputs),
             now,
             1.0,
             0.0,
-            inputs.acceleration_field.clone(),
-            &inputs.targeted_fields,
             Some(events),
             None,
             coupling,
@@ -220,19 +236,11 @@ impl RigidSimulation {
             }
         }
         self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 1 };
-        let result = self.advance_with_coupling_inner(
-            inputs.bodies.clone(),
-            inputs.prototype.clone(),
-            inputs.copy_count,
-            inputs.copy_spacing,
-            inputs.copy_columns,
-            inputs.layout,
-            inputs.gravity,
+        let result = self.advance_inner(
+            SceneRef::of(inputs),
             observation_time,
             1.0,
             0.0,
-            inputs.acceleration_field.clone(),
-            &inputs.targeted_fields,
             Some(events),
             Some(interval),
             coupling,
@@ -245,19 +253,31 @@ impl RigidSimulation {
         self.world.as_ref()
     }
 
-    pub fn native_handles(
-        &self,
-    ) -> (&[Option<BodyHandle>; MAX_BODIES], &[Option<BodyHandle>]) {
-        (&self.handles, &self.copy_handles[..self.active_copy_count])
+    /// Each body port's installed body.
+    pub fn native_handles(&self) -> &[Option<BodyHandle>] {
+        &self.handles
+    }
+
+    /// Copy group `group`'s installed active copies.
+    pub fn native_copy_handles(&self, group: usize) -> &[Option<BodyHandle>] {
+        self.groups.get(group).map_or(&[], |state| &state.handles[..state.active])
     }
 
     fn native_topology_matches(&self, inputs: &RigidSceneInputs) -> bool {
-        self.descriptions
-            .iter()
-            .zip(inputs.bodies.iter())
-            .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
-            && same_topology_body(self.copy_description.as_ref(), inputs.prototype.as_ref())
+        self.descriptions.len() == inputs.bodies.len()
+            && self.groups.len() == inputs.groups.len()
+            && self
+                .descriptions
+                .iter()
+                .zip(inputs.bodies.iter())
+                .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+            && self
+                .groups
+                .iter()
+                .zip(&inputs.groups)
+                .all(|(state, right)| same_topology_body(state.description.as_ref(), right.as_ref()))
     }
+
 
     #[cfg(test)]
     fn validate_assigned_impulses(
@@ -363,9 +383,11 @@ impl RigidSimulation {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PlayedTime;
     use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::{ResolvedRigidImpulse, SimStep};
     use manifold_physics::input::{AppliedEvent, EventStamp};
@@ -511,10 +533,7 @@ mod tests {
                 stamp,
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
-                    targets: RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false,
-                    },
+                    targets: RigidImpulseTargets::body(0).unwrap(),
                 },
             )
             .unwrap();
@@ -540,7 +559,7 @@ mod tests {
         simulation
             .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
             .unwrap();
-        let handle = simulation.native_handles().0[0].unwrap();
+        let handle = simulation.native_handles()[0].unwrap();
         let before_pose = simulation.native_world().unwrap().pose(handle).unwrap();
         let before_epoch = simulation.impulse_epoch();
         let before_last_time = simulation.last_time;
@@ -554,7 +573,7 @@ mod tests {
         assert!(simulation
             .advance_worker(&changed, Seconds::ZERO, 1, &mut coupling)
             .is_err());
-        assert_eq!(simulation.native_handles().0[0], Some(handle));
+        assert_eq!(simulation.native_handles()[0], Some(handle));
         assert_eq!(
             simulation.native_world().unwrap().pose(handle).unwrap(),
             before_pose
@@ -575,14 +594,19 @@ mod tests {
     }
 
     #[test]
-    fn topology_ignores_reset_latched_copy_controls() {
-        let left = scene();
+    fn a_coupled_owner_keeps_its_bodies_through_layout_edits_but_not_count() {
+        let mut left = scene();
         let mut right = left.clone();
-        right.copy_count = 20.0;
-        right.copy_spacing = 3.0;
-        right.copy_columns = 4.0;
-        right.layout = 1.0;
-        assert!(left.same_topology(&right));
+        left.groups[0] = Some(RigidBody::default());
+        right.groups[0] = Some(RigidBody {
+            spawn: crate::physics::CopySpawn { spacing: 3.0, columns: 4.0, layout: 1.0, turn: [0.1; 3], ..Default::default() },
+            ..RigidBody::default()
+        });
+        assert!(left.same_topology(&right), "layout, spacing, columns and turn keep the bodies");
+        right.groups[0].as_mut().unwrap().spawn.count = 20.0;
+        assert!(!left.same_topology(&right), "a coupled solver binds a new copy set per epoch");
+        right.groups.push(None);
+        assert!(!left.same_topology(&right), "a new copy group is new topology");
     }
 
     #[test]
@@ -590,12 +614,14 @@ mod tests {
         let mut simulation = RigidSimulation::with_worker_epoch(1).unwrap();
         let mut coupling = Uncoupled;
         let mut inputs = scene();
-        inputs.prototype = Some(RigidBody::default());
-        inputs.copy_count = 3.0;
+        inputs.groups[0] = Some(RigidBody {
+            spawn: crate::physics::CopySpawn { count: 3.0, ..Default::default() },
+            ..RigidBody::default()
+        });
         simulation
             .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
             .unwrap();
-        let (_, copies) = simulation.native_handles();
+        let copies = simulation.native_copy_handles(0);
         assert_eq!(copies.len(), 3);
         assert!(copies.iter().all(Option::is_some));
         assert!(super::super::MAX_COPIES >= copies.len());
@@ -613,51 +639,22 @@ mod tests {
         };
         let mut ordinary_coupling = Uncoupled;
         ordinary
-            .advance_with_fields(
-                inputs.bodies.clone(),
-                inputs.prototype.clone(),
-                inputs.copy_count,
-                inputs.copy_spacing,
-                inputs.copy_columns,
-                inputs.layout,
-                inputs.gravity,
-                Seconds::ZERO,
-                1.0,
-                0.0,
-                inputs.acceleration_field.clone(),
-            )
+            .advance_scene(&inputs, PlayedTime::ZERO, 1.0, 0.0)
             .unwrap();
         let ordinary_epoch = ordinary.impulse_epoch().unwrap();
         ordinary
             .enqueue_impulse(
                 ordinary
-                    .impulse_stamp(Seconds::ZERO, 1)
+                    .impulse_stamp(PlayedTime::ZERO, 1)
                     .expect("ordinary observation accepted"),
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
-                    targets: RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false,
-                    },
+                    targets: RigidImpulseTargets::body(0).unwrap(),
                 },
             )
             .unwrap();
         ordinary
-            .advance_with_coupling(
-                inputs.bodies.clone(),
-                inputs.prototype.clone(),
-                inputs.copy_count,
-                inputs.copy_spacing,
-                inputs.copy_columns,
-                inputs.layout,
-                inputs.gravity,
-                Seconds(total_time),
-                1.0,
-                0.0,
-                inputs.acceleration_field.clone(),
-                &inputs.targeted_fields,
-                &mut ordinary_coupling,
-            )
+            .advance_with_coupling(&inputs, PlayedTime::from_played(total_time), 1.0, 0.0, &mut ordinary_coupling)
             .unwrap();
 
         let mut worker = RigidSimulation::with_worker_epoch(ordinary_epoch).unwrap();
@@ -669,14 +666,11 @@ mod tests {
         worker
             .enqueue_impulse(
                 worker
-                    .impulse_stamp(Seconds::ZERO, 1)
+                    .impulse_stamp(PlayedTime::ZERO, 1)
                     .expect("worker observation accepted"),
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
-                    targets: RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false,
-                    },
+                    targets: RigidImpulseTargets::body(0).unwrap(),
                 },
             )
             .unwrap();
@@ -689,8 +683,8 @@ mod tests {
                 .unwrap();
         }
 
-        let ordinary_handle = ordinary.native_handles().0[0].unwrap();
-        let worker_handle = worker.native_handles().0[0].unwrap();
+        let ordinary_handle = ordinary.native_handles()[0].unwrap();
+        let worker_handle = worker.native_handles()[0].unwrap();
         let ordinary_pose = ordinary
             .native_world()
             .unwrap()
@@ -738,10 +732,7 @@ mod tests {
             epoch,
             0,
             2,
-            RigidImpulseTargets {
-                bodies: 1,
-                copies: false,
-            },
+            RigidImpulseTargets::body(0).unwrap(),
         );
         let original_source = event.source;
         let original_applied = event.applied;
@@ -760,7 +751,7 @@ mod tests {
         assert_eq!(event.lateness, original_lateness);
         assert_eq!(event.value, original_value);
         assert!(simulation.pending_time.0.abs() < 1e-12);
-        let handle = simulation.native_handles().0[0].unwrap();
+        let handle = simulation.native_handles()[0].unwrap();
         let velocity = simulation
             .native_world()
             .unwrap()
@@ -790,10 +781,7 @@ mod tests {
             epoch,
             0,
             2,
-            RigidImpulseTargets {
-                bodies: 1,
-                copies: false,
-            },
+            RigidImpulseTargets::body(0).unwrap(),
         );
         simulation
             .advance_worker_tick(
@@ -809,10 +797,7 @@ mod tests {
             epoch,
             1,
             1,
-            RigidImpulseTargets {
-                bodies: 1,
-                copies: false,
-            },
+            RigidImpulseTargets::body(0).unwrap(),
         );
         simulation
             .advance_worker_tick(
@@ -837,7 +822,7 @@ mod tests {
         simulation
             .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
             .unwrap();
-        let handle = simulation.native_handles().0[0].unwrap();
+        let handle = simulation.native_handles()[0].unwrap();
         let before_pose = simulation.native_world().unwrap().pose(handle).unwrap();
         let before_cursor = simulation.impulse_queue.as_ref().unwrap().next_tick();
         let before_physics_time = simulation.physics_time;
@@ -845,10 +830,7 @@ mod tests {
             epoch,
             0,
             1,
-            RigidImpulseTargets {
-                bodies: 1 << 1,
-                copies: false,
-            },
+            RigidImpulseTargets::body(1).unwrap(),
         );
         assert!(simulation
             .advance_worker_tick(
@@ -872,10 +854,7 @@ mod tests {
             epoch,
             1,
             1,
-            RigidImpulseTargets {
-                bodies: 1,
-                copies: false,
-            },
+            RigidImpulseTargets::body(0).unwrap(),
         );
         assert!(simulation
             .advance_worker_tick(

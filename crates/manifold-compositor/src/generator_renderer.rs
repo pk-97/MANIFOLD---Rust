@@ -395,22 +395,26 @@ impl GeneratorRenderer {
     }
 
     /// Every generator layer that rendered in the last `render_all`, with
-    /// its fluid domains' snapshots: the setup check's run-time report reads
-    /// what each solver did with the fill it ran. `domains` is the caller's
-    /// buffer, refilled per layer.
-    pub fn each_rendered_fluid_domains(
+    /// its fluid domains' snapshots and its worlds' unmade copies: the setup
+    /// check's run-time report reads what each solver did with the setup it
+    /// ran. `domains` and `not_made` are the caller's buffers, refilled per
+    /// layer.
+    pub fn each_rendered_setup(
         &self,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
-        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)]),
+        not_made: &mut Vec<(NodeId, u32)>,
+        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)]),
     ) {
         for (layer_id, state) in &self.layer_generators {
             if state.rendered_pass != Some(self.render_pass) {
                 continue;
             }
             domains.clear();
+            not_made.clear();
             state.generator.write_fluid_domains_watched(domains);
-            if !domains.is_empty() {
-                each(layer_id, domains);
+            state.generator.write_copies_not_made_watched(not_made);
+            if !domains.is_empty() || !not_made.is_empty() {
+                each(layer_id, domains, not_made);
             }
         }
     }
@@ -1114,7 +1118,8 @@ impl GeneratorRenderer {
             if !self.waiting_fires.is_empty()
                 && let Some(layer) = layers.get(layer_index as usize)
             {
-                self.land_waiting_fires(layer, project_tempo);
+                let frame = self.sim_step.played_at(manifold_core::Seconds(time));
+                self.land_waiting_fires(layer, project_tempo, frame);
             }
         }
         if !self.waiting_fires.is_empty() {

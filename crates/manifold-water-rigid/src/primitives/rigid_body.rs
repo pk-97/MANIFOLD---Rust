@@ -35,9 +35,14 @@ fn read_spawn(ctx: &EffectNodeContext<'_, '_>) -> CopySpawn {
     });
     CopySpawn {
         count: ctx.scalar_or_param("copy_count", defaults.count),
-        spacing: ctx.scalar_or_param("copy_spacing", defaults.spacing),
+        spacing: ctx.scalar_or_param("copy_size_spacing", defaults.spacing),
         columns: ctx.scalar_or_param("copy_columns", defaults.columns),
         layout,
+        turn: [
+            ctx.scalar_or_param("copy_turn_x", 0.0),
+            ctx.scalar_or_param("copy_turn_y", 0.0),
+            ctx.scalar_or_param("copy_turn_z", 0.0),
+        ],
     }
 }
 
@@ -172,9 +177,12 @@ manifold_node_engine::primitive! {
   bounce: ScalarF32 optional,
   release_count: ScalarF32 optional,
   copy_count: ScalarF32 optional,
-  copy_spacing: ScalarF32 optional,
+  copy_size_spacing: ScalarF32 optional,
   copy_columns: ScalarF32 optional,
   copy_layout: ScalarF32 optional,
+  copy_turn_x: ScalarF32 optional,
+  copy_turn_y: ScalarF32 optional,
+  copy_turn_z: ScalarF32 optional,
  },
  outputs: { body: RigidBody, shape: ScalarF32, },
 params: [
@@ -201,12 +209,15 @@ ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty:
 ParamDef { name: Cow::Borrowed("collider_parts"), label: "Collider Detail", ty: ParamType::Int, default: ParamValue::Float(32.0), range: Some((1.0,64.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials", ty: ParamType::Table, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(1.25), range: Some((0.01, 100.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_size_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(manifold_core::copies_body::SIZE_SPACING_DEFAULT), range: Some(manifold_core::copies_body::SIZE_SPACING_RANGE), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_layout"), label: "Arrangement", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Grid", "Pile"] },
+ParamDef { name: Cow::Borrowed("copy_layout"), label: "Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &manifold_core::copies_body::COPY_LAYOUT_LABELS },
+ParamDef { name: Cow::Borrowed("copy_turn_x"), label: "Copy Turn X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_turn_y"), label: "Copy Turn Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider. Wired into a Physics World's copies input, the body is the prototype of its box spawner: copy_count, copy_spacing, copy_columns and copy_layout (Grid or Pile) set how many copies the world makes and how it lays them out, apply on first build, reset or backwards transport, and are port-shadowed; any other body ignores them.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object density, friction and bounce, then connect it to a Physics World.",

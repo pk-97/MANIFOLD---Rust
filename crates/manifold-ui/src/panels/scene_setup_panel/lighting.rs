@@ -7,6 +7,7 @@
 use super::*;
 
 const KEY_HDRI_FILE: u64 = 80_014;
+const KEY_AIM_SUN: u64 = 80_028;
 
 /// One light's sub-section in the current Lighting pass.
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +95,14 @@ impl ScenePanel {
                 tree.set_name(id, "scene_setup.lighting.hdri_file");
                 self.hdri_file_id = Some((id, *index));
                 cy += ROW_H;
+                if !file.is_empty() {
+                    let id = tree.add_button_keyed(
+                        Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "Aim Sun at HDRI", KEY_AIM_SUN,
+                    );
+                    tree.set_name(id, "scene_setup.lighting.aim_sun");
+                    self.aim_sun_id = Some((id, file));
+                    cy += ROW_H;
+                }
             }
             EnvironmentRowVm::Importer { hdri_file, .. } if !hdri_file.is_empty() => {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &format!("HDRI: {hdri_file}"), label_style());
@@ -120,6 +129,13 @@ impl ScenePanel {
     pub(super) fn hdri_file_click(&self, node_id: NodeId) -> Option<PanelAction> {
         let (_, index) = self.hdri_file_id.filter(|(id, _)| *id == node_id)?;
         Some(PanelAction::Params(ParamsAction::GenStringParamClicked(index)))
+    }
+
+    /// "Aim Sun at HDRI": the app turns the sun toward the file's brightest
+    /// region as one undo step.
+    pub(super) fn aim_sun_click(&self, node_id: NodeId, layer_id: &LayerId) -> Option<PanelAction> {
+        let (_, file) = self.aim_sun_id.as_ref().filter(|(id, _)| *id == node_id)?;
+        Some(PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(layer_id.clone(), file.clone())))
     }
 
     /// The HDRI file row's current text and screen rect, for the text entry

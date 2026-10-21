@@ -101,7 +101,7 @@ pub fn physics_free_body_slots(
 ) -> Option<u32> {
     let source = object_producer_id(&graph.wires, render_scene_node_id, object_index)?;
     match physics_scene_object_match(&graph.nodes, &graph.wires, render_scene_node_id, object_index, source) {
-        PhysicsSceneObjectMatch::Valid(physics) if !physics.copies => worlds.get(physics.world_id).map(BodySlots::free),
+        PhysicsSceneObjectMatch::Valid(physics) if physics.copy_group.is_none() => worlds.get(physics.world_id).map(BodySlots::free),
         _ => None,
     }
 }
@@ -162,7 +162,7 @@ fn duplicate_scene_object_edit(
             if !scope.is_empty() {
                 return Err(refuse("Duplicate Object physics ownership requires a root-level scene"));
             }
-            if physics.copies {
+            if physics.copy_group.is_some() {
                 return Err(refuse("Duplicate Object cannot duplicate a Physics World copies object"));
             }
             if let Some(message) = copies_shortfall(copies, BodySlots::of(wires, physics.world_id).free()) {
@@ -455,6 +455,7 @@ fn append_physics_duplicate(
         .map(|wire| remap_physics_wire(wire, &node_map, physics, new_slot, render_id, new_index))
         .collect();
     wires.extend(copied);
+    fit_world_bodies(nodes, wires, physics.world_id);
     Ok(())
 }
 

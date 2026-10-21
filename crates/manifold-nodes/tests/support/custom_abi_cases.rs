@@ -349,6 +349,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "bake_equirect_envmap.rs",
+        rust_struct: "HdriCopyUniforms",
+        shader: "shaders/bake_environment_hdri.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "digital_plants_render.rs",
         rust_struct: "RenderUniforms",
         shader: "../../generators/shaders/digital_plants_render.wgsl",

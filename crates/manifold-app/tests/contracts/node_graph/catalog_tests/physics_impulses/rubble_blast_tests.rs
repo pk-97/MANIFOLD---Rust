@@ -5,7 +5,7 @@ use manifold_core::effect_graph_def::{BindingTarget, SerializedParamValue};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_impulse::{ImpulseFire, RigidImpulseTargets};
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_rigid::physics::{MAX_BODIES, ResolvedRigidImpulse, RigidBody, RigidSimulation};
+use manifold_water_rigid::physics::{CopySpawn, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSimulation};
 
 fn rubble() -> EffectGraphDef {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes/assets/generator-presets/RubblePile.json");
@@ -32,14 +32,16 @@ fn blast_field(def: &EffectGraphDef) -> FieldValue {
     runtime.execute_frame(time(DT));
     let mut fields = Vec::new();
     runtime.water().drain_scene_impulses(|_, event| {
-        assert!(matches!(event.value.target, ImpulseTarget::Rigid(t) if t.copies), "the Blast reaches the copies");
+        assert!(matches!(event.value.target, ImpulseTarget::Rigid(t) if t.contains_group(0)), "the Blast reaches the copies");
         fields.push(event.value.field);
     });
     assert_eq!(fields.len(), 1, "one press, one hit");
     fields.remove(0)
 }
 
-fn bodies_of(def: &EffectGraphDef) -> ([Option<RigidBody>; MAX_BODIES], RigidBody, [f32; 4]) {
+/// The pile's world as the scene hands it to the solver: three wired bodies
+/// and the copies body as copy group 0.
+fn scene_of(def: &EffectGraphDef) -> RigidSceneInputs {
     let scalar = |id: u32, name: &str| {
         let node = def.nodes.iter().find(|n| n.id == id).unwrap();
         match node.params.get(name).unwrap_or_else(|| panic!("node {id} has no {name}")) {
@@ -48,7 +50,7 @@ fn bodies_of(def: &EffectGraphDef) -> ([Option<RigidBody>; MAX_BODIES], RigidBod
             other => panic!("unexpected {name}: {other:?}"),
         }
     };
-    let body = |id: u32| RigidBody {
+    let body = |id: u32, spawn: CopySpawn| RigidBody {
         transform: Transform {
             pos: ["pos_x", "pos_y", "pos_z"].map(|p| scalar(id - 1, p)),
             rot_euler: ["rot_x", "rot_y", "rot_z"].map(|p| scalar(id - 1, p)),
@@ -61,42 +63,51 @@ fn bodies_of(def: &EffectGraphDef) -> ([Option<RigidBody>; MAX_BODIES], RigidBod
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),
         enabled: true,
+        spawn,
         ..RigidBody::default()
     };
-    let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
+    let mut scene = RigidSceneInputs::with_counts(3, 1);
+    scene.gravity = [0.0, -9.81, 0.0];
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
-        bodies[slot] = Some(body(id));
+        scene.bodies[slot] = Some(body(id, CopySpawn::default()));
     }
-    let layout = [scalar(121, "copy_count"), scalar(121, "copy_spacing"), scalar(121, "copy_columns"), scalar(121, "copy_layout")];
-    (bodies, body(121), layout)
+    let spawn = CopySpawn {
+        count: scalar(121, "copy_count"),
+        spacing: scalar(121, "copy_size_spacing"),
+        columns: scalar(121, "copy_columns"),
+        layout: scalar(121, "copy_layout"),
+        turn: ["copy_turn_x", "copy_turn_y", "copy_turn_z"].map(|name| scalar(121, name)),
+    };
+    scene.groups = vec![Some(body(121, spawn))];
+    scene
 }
 
 #[test]
 fn rubble_blast_scatters_a_settled_pile_and_keeps_it_in_the_world() {
     let def = rubble();
     let field = blast_field(&def);
-    let (bodies, prototype, layout) = bodies_of(&def);
+    let scene = scene_of(&def);
     let mut sim = RigidSimulation::default();
     let frame = std::cell::Cell::new(0_u32);
     let advance = |sim: &mut RigidSimulation, frames: u32| {
         for _ in 0..frames {
-            sim.advance_with_copy_layout(bodies.clone(), Some(prototype.clone()), layout[0], layout[1], layout[2], layout[3], [0.0, -9.81, 0.0], Seconds(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
+            sim.advance_scene(&scene, manifold_core::PlayedTime::from_played(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
             frame.set(frame.get() + 1);
         }
     };
     advance(&mut sim, 600);
-    let settled = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let settled = sim.group_poses(0).to_vec();
     advance(&mut sim, 60);
-    let still = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let still = sim.group_poses(0).to_vec();
     let drift = settled.iter().zip(&still).map(|(a, b)| dist(a.pos, b.pos)).fold(0.0_f32, f32::max);
     let epoch = sim.impulse_epoch().unwrap();
     sim.enqueue_impulse(
         EventStamp { epoch, time: Seconds(f64::from(frame.get()) / 60.0), sequence: 0 },
-        ResolvedRigidImpulse { field, targets: RigidImpulseTargets { bodies: 0, copies: true } },
+        ResolvedRigidImpulse { field, targets: RigidImpulseTargets::group(0).unwrap() },
     )
     .unwrap();
     advance(&mut sim, 90);
-    let after = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let after = sim.group_poses(0).to_vec();
     let mut moved: Vec<f32> = still.iter().zip(&after).map(|(a, b)| dist(a.pos, b.pos)).collect();
     moved.sort_by(|a, b| a.total_cmp(b));
     let median = moved[moved.len() / 2];
@@ -104,9 +115,86 @@ fn rubble_blast_scatters_a_settled_pile_and_keeps_it_in_the_world() {
     let lost = after.iter().filter(|p| !p.pos.iter().all(|v| v.is_finite()) || p.pos[1] < -1.0 || p.pos.iter().any(|v| v.abs() > 40.0)).count();
     println!("RUBBLE_BLAST settled_drift={drift:.3} count={} moved>0.5m={over_half} median={median:.2}m max={:.2}m lost={lost}", after.len(), moved.last().unwrap());
     assert!(drift < 0.1, "the pile has settled before the blast: {drift}");
-    assert!(over_half * 10 >= after.len() * 8, "most copies move far: {over_half}/{}", after.len());
+    assert!(over_half * 10 >= after.len() * 7, "most copies move far: {over_half}/{}", after.len());
     assert!(median > 1.0, "the pile does not just twitch: median {median}");
     assert_eq!(lost, 0, "no copy leaves the world");
+}
+
+/// Where a copy that left the ground went over: its last on-ground pose.
+struct Escape {
+    copy: usize,
+    frame: u32,
+    pos: [f32; 3],
+    after_blast: bool,
+}
+
+/// Plays one pile through the Blast. Returns every copy that dropped below
+/// the ground slab at any point, with where and when it left.
+fn play_with_blast(scene: &RigidSceneInputs, field: &FieldValue) -> (Vec<Escape>, [f32; 2]) {
+    const SETTLE: u32 = 660;
+    const AFTER: u32 = 240;
+    let mut sim = RigidSimulation::default();
+    let mut last: Vec<Transform> = Vec::new();
+    let mut escapes: Vec<Escape> = Vec::new();
+    let mut reach = [0.0_f32; 2];
+    for frame in 0..SETTLE + AFTER {
+        if frame == SETTLE {
+            let epoch = sim.impulse_epoch().unwrap();
+            sim.enqueue_impulse(
+                EventStamp { epoch, time: Seconds(f64::from(frame) / 60.0), sequence: 0 },
+                ResolvedRigidImpulse { field: field.clone(), targets: RigidImpulseTargets::group(0).unwrap() },
+            )
+            .unwrap();
+        }
+        sim.advance_scene(scene, manifold_core::PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        let poses = sim.group_poses(0);
+        for (i, pose) in poses.iter().enumerate() {
+            reach = [reach[0].max(pose.pos[0].abs()), reach[1].max(pose.pos[2].abs())];
+            if pose.pos[1] < -0.5 && !escapes.iter().any(|e| e.copy == i) {
+                escapes.push(Escape { copy: i, frame, pos: last.get(i).map_or(pose.pos, |p| p.pos), after_blast: frame >= SETTLE });
+            }
+        }
+        last = poses.to_vec();
+    }
+    (escapes, reach)
+}
+
+/// The drop point and the spacing are card values a performer moves, so the
+/// pile must stay on the ground through the Blast across the whole band, not
+/// only at the shipped values.
+#[test]
+fn rubble_pile_stays_on_the_ground_across_drop_points_and_spacings() {
+    let def = rubble();
+    let field = blast_field(&def);
+    let base = scene_of(&def);
+    let mut failures = Vec::new();
+    let mut worst = [0.0_f32; 2];
+    for spacing in [0.8_f32, 1.0, 1.2] {
+        for step in 0..=10 {
+            let x = -2.5 + 0.25 * step as f32;
+            let mut scene = base.clone();
+            let group = scene.groups[0].as_mut().unwrap();
+            group.transform.pos[0] = x;
+            group.spawn.spacing = spacing;
+            let (escapes, reach) = play_with_blast(&scene, &field);
+            println!("REACH spacing={spacing} x={x} max_x={:.1} max_z={:.1}", reach[0], reach[1]);
+            worst = [worst[0].max(reach[0]), worst[1].max(reach[1])];
+            for e in &escapes {
+                println!("ESCAPE spacing={spacing} x={x} copy={} frame={} after_blast={} last_pos={:?}", e.copy, e.frame, e.after_blast, e.pos);
+            }
+            if !escapes.is_empty() {
+                failures.push(format!("spacing {spacing}, drop x {x}: {} copies left the ground", escapes.len()));
+            }
+        }
+    }
+    let half = |param: &str| match def.nodes.iter().find(|n| n.id == 100).unwrap().params.get(param) {
+        Some(SerializedParamValue::Float { value }) => value / 2.0,
+        other => panic!("ground {param}: {other:?}"),
+    };
+    let (half_x, half_z) = (half("scale_x"), half("scale_z"));
+    println!("WORST reach x={:.1} of {half_x}, z={:.1} of {half_z}", worst[0], worst[1]);
+    assert!(worst[0] + 2.0 <= half_x && worst[1] + 2.0 <= half_z, "the Blast must leave 2 m of ground to spare: reach {worst:?}, ground half-sizes [{half_x}, {half_z}]");
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {

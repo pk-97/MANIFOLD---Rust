@@ -277,12 +277,10 @@ pub struct ModulatedRow {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EnvironmentRowVm {
-    /// Importer shape (switch_texture selecting Softbox/HDRI) — Mode is
-    /// shown as a static chip in P1 (toggling it is a P2+ affordance; the
-    /// value is legible, just not yet a control here).
-    /// `hdri_param` is the generator's string param that loads the HDRI
-    /// file, when the preset declares one.
-    Importer { mode_is_hdri: bool, intensity: ModulatedRow, fill: ModulatedRow, hdri_file: String, hdri_param: Option<usize> },
+    /// Importer shape (an HDRI source wired into the bake). Mode is an
+    /// ordinary Lighting row; `hdri_param` is the generator's string param
+    /// that loads the HDRI file, when the preset declares one.
+    Importer { intensity: ModulatedRow, fill: ModulatedRow, hdri_file: String, hdri_param: Option<usize> },
     Bare { intensity: ModulatedRow, fill: ModulatedRow },
     /// Some other producer wired into `envmap` — honest custom row, no
     /// controls (D3).
@@ -919,6 +917,8 @@ pub struct ScenePanel {
     add_environment_id: Option<NodeId>,
     /// Lighting's HDRI file row and its string param index.
     hdri_file_id: Option<(NodeId, usize)>,
+    /// Lighting's "Aim Sun at HDRI" button and the file it aims at.
+    aim_sun_id: Option<(NodeId, String)>,
     add_fog_id: Option<NodeId>,
     camera_setup_id: Option<NodeId>,
     new_scene_id: Option<NodeId>,
@@ -1126,6 +1126,7 @@ impl Default for ScenePanel {
             bg_id: NodeId::PLACEHOLDER,
             add_environment_id: None,
             hdri_file_id: None,
+            aim_sun_id: None,
             add_fog_id: None,
             camera_setup_id: None,
             new_scene_id: None,
@@ -1383,6 +1384,7 @@ impl ScenePanel {
         // rebuilds fresh every pass, D1 "no staleness").
         self.add_environment_id = None;
         self.hdri_file_id = None;
+        self.aim_sun_id = None;
         self.add_fog_id = None;
         self.camera_setup_id = None;
         self.new_scene_id = None;
@@ -2136,6 +2138,7 @@ impl ScenePanel {
                     } else if let Some(act) = self
                         .outliner_click(*node_id, vm)
                         .or_else(|| self.hdri_file_click(*node_id))
+                        .or_else(|| self.aim_sun_click(*node_id, &vm.layer_id))
                         .or_else(|| self.item_header_click(*node_id, vm))
                     {
                         actions.push(act);

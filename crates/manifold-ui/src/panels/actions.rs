@@ -240,6 +240,9 @@ pub enum ProjectAction {
     /// "Add environment" (D3): spawn `node.bake_environment` wired to the
     /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
     SceneSetupAddEnvironment(LayerId, u32),
+    /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of
+    /// the HDRI file at the given path. `(layer_id, hdri_file)`.
+    SceneSetupAimSunAtHdri(LayerId, String),
     /// "Add fog" (D3): spawn `node.atmosphere` wired to the scene's
     /// `atmosphere` port. `(layer_id, render_scene_node_doc_id)`.
     SceneSetupAddFog(LayerId, u32),

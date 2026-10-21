@@ -40,6 +40,8 @@ mod fluid_object_lifecycle_tests;
 pub use fluid::*;
 pub use duplicate::{physics_free_body_slots, DuplicateSceneObjectCommand};
 pub use manifold_core::physics_body_slots::{BodySlots, WorldBodySlots};
+use manifold_core::copies_body::copy_group_of_input;
+use manifold_core::physics_body_slots::fit_world_bodies;
 
 /// The card metadata a scene def gets when a scene edit stamps exposures
 /// into a def that has none.
@@ -432,10 +434,9 @@ impl Command for RemoveSceneObjectCommand {
                     .iter()
                     .copied()
                     .collect::<std::collections::HashSet<_>>();
-                let field_port = if physics.copies {
-                    "copies_acceleration".to_string()
-                } else {
-                    format!("body_acceleration_{}", physics.body_slot)
+                let field_port = match physics.copy_group {
+                    Some(group) => format!("copies_acceleration_{group}"),
+                    None => format!("body_acceleration_{}", physics.body_slot),
                 };
                 nodes.retain(|node| !owned.contains(&node.id));
                 wires.retain(|wire| {
@@ -1293,9 +1294,8 @@ fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Opti
         .map(|w| w.from_node)
 }
 
-// The graph schema is sparse (only occupied ports are serialized), so a
-// larger world does not change existing documents.
-const PHYSICS_BODY_SLOTS: u32 = manifold_core::scene_surface::PHYSICS_WORLD_BODY_SLOTS;
+/// The most material parts one compound rigid body takes: its `part_k` ports.
+const COMPOUND_MAX_PARTS: u32 = manifold_core::scene_surface::RIGID_BODY_MAX_PARTS;
 
 fn graph_level<'a>(
     def: &'a EffectGraphDef,
@@ -1457,9 +1457,10 @@ impl Command for AddSceneEnvironmentCommand {
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let env_id = max_node_id_over(&def.nodes).checked_add(1)?;
+                let hdri_id = env_id.checked_add(1)?;
                 let prev_metadata = def.preset_metadata.clone();
 
-                let (env_id, env_node_id, env_node_params, prev) = {
+                let (env_id, env_node_id, env_node_params, hdri_node_id, prev) = {
                     let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                     let prev = (nodes.clone(), wires.clone());
 
@@ -1491,7 +1492,21 @@ impl Command for AddSceneEnvironmentCommand {
                     nodes.push(env_node);
                     wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
 
-                    (env_id, env_node_id, env_node_params, prev)
+                    // The HDRI mode reads this node. Its path stays empty until
+                    // the performer picks a file on the Lighting card's HDRI
+                    // File row, so the bake never sits on a mode with no source.
+                    let mut hdri_node = scene_build_node(
+                        hdri_id,
+                        "node.hdri_source",
+                        Some("hdri".to_string()),
+                        BTreeMap::new(),
+                    );
+                    hdri_node.editor_pos = Some((pos.0, pos.1 + 120.0));
+                    let hdri_node_id = hdri_node.node_id.clone();
+                    nodes.push(hdri_node);
+                    wires.push(scene_build_wire(hdri_id, "out", env_id, "hdri"));
+
+                    (env_id, env_node_id, env_node_params, hdri_node_id, prev)
                 };
 
                 // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
@@ -1511,6 +1526,25 @@ impl Command for AddSceneEnvironmentCommand {
                     &self.env_metadata,
                     &env_node_params,
                 );
+                // The HDRI File row: a file-picker string param bound to the
+                // hdri node's path, the shape the importer authors, so the
+                // Lighting card resolves it through the one string-param lookup.
+                meta.string_params.retain(|p| p.id != "hdri_file");
+                meta.string_bindings.retain(|b| b.id != "hdri_file");
+                meta.string_params.push(StringParamSpecDef {
+                    id: "hdri_file".to_string(),
+                    name: "HDRI File".to_string(),
+                    default_value: String::new(),
+                    is_file_picker: true,
+                    use_dropdown: false,
+                    is_file_path: true,
+                });
+                meta.string_bindings.push(StringBindingDef {
+                    id: "hdri_file".to_string(),
+                    label: "HDRI File".to_string(),
+                    default_value: String::new(),
+                    target: BindingTarget::Node { node_id: hdri_node_id, param: "path".to_string() },
+                });
 
                 Some((prev, prev_metadata))
             });

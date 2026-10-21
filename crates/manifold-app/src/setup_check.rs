@@ -25,20 +25,27 @@ use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_node_engine::param_binding::convert_param_value;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_nodes_scene::node_graph::scene_vm::{
-    ParamAddr, RuntimeFit, SceneVm, SetupAnchor, SetupProblem, problems_with_runtime,
+    CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupAnchor, SetupProblem, copies_anchors, copies_problems, problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
 use crate::physics_overlay::SharedDomains;
 
 /// One liquid domain whose solver capped, clipped or refused the setup it
-/// ran on the last rendered frame.
+/// ran on the last rendered frame, or one Physics World whose copy pool left
+/// copies unmade.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SetupFitEntry {
     pub layer: LayerId,
     pub node: NodeId,
     pub fit: SetupFit,
     pub refusal: Option<Arc<str>>,
+    /// Copies asked for that the world's pool could not make: the most seen
+    /// while latched.
+    pub copies_not_made: u32,
+    /// Coupled-world bodies the liquid could not take: the most seen while
+    /// latched.
+    pub uncoupled_bodies: u32,
 }
 
 /// Every such domain the cards warn about: the content thread's report,
@@ -55,6 +62,7 @@ pub(crate) type SetupFitReport = Arc<[SetupFitEntry]>;
 /// only when the latched set changes.
 pub(crate) struct SetupFitObservations {
     domains: Vec<(NodeId, FluidDomainSnapshot)>,
+    not_made: Vec<(NodeId, u32)>,
     /// The latched entries; `report` is a copy taken when they change.
     scratch: Vec<SetupFitEntry>,
     latched_layers: Vec<LatchedLayer>,
@@ -65,7 +73,7 @@ pub(crate) struct SetupFitObservations {
 
 impl Default for SetupFitObservations {
     fn default() -> Self {
-        Self { domains: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
+        Self { domains: Vec::new(), not_made: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
     }
 }
 
@@ -121,9 +129,9 @@ impl LatchedLayer {
     }
 }
 
-/// Hands each rendered layer's domain snapshots to the callback, refilling
-/// the buffer it is given.
-pub(crate) type EachRenderedDomains<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)]);
+/// Hands each rendered layer's domain snapshots and its worlds' unmade
+/// copies to the callback, refilling the buffers it is given.
+pub(crate) type EachRenderedSetup<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)]);
 
 /// A card param's authored value, as `PresetInstance::get_base_param` reads
 /// it, from the param in hand rather than a lookup by id.
@@ -131,15 +139,56 @@ fn authored_value(inst: &PresetInstance, param: &manifold_core::params::Param) -
     if inst.base_tracked { param.base } else { param.value }
 }
 
+/// What one node reported this frame, folded into its latched entry.
+struct Seen<'a> {
+    fit: SetupFit,
+    refusal: Option<&'a Arc<str>>,
+    copies_not_made: u32,
+    uncoupled_bodies: u32,
+}
+
+impl Seen<'_> {
+    /// Fold into `entry`; true when it changed.
+    fn fold_into(self, entry: &mut SetupFitEntry) -> bool {
+        let mut fit = entry.fit;
+        fit.fill_capped |= self.fit.fill_capped;
+        fit.pool_full |= self.fit.pool_full;
+        fit.column = match (fit.column, self.fit.column) {
+            (ColumnOutcome::Fits, ran) => ran,
+            // A column that was outside also crossed the wall.
+            (held, ran) if ran != ColumnOutcome::Fits && ran != held => ColumnOutcome::Clipped,
+            (held, _) => held,
+        };
+        let mut changed = false;
+        if fit != entry.fit {
+            entry.fit = fit;
+            changed = true;
+        }
+        if entry.refusal.is_none() && self.refusal.is_some() {
+            entry.refusal = self.refusal.cloned();
+            changed = true;
+        }
+        if self.copies_not_made > entry.copies_not_made {
+            entry.copies_not_made = self.copies_not_made;
+            changed = true;
+        }
+        if self.uncoupled_bodies > entry.uncoupled_bodies {
+            entry.uncoupled_bodies = self.uncoupled_bodies;
+            changed = true;
+        }
+        changed
+    }
+}
+
 impl SetupFitObservations {
     /// Take this frame's report from `observe`, which walks the layers that
-    /// rendered (`GeneratorRenderer::each_rendered_fluid_domains`), into the
-    /// latch. `project` and the editing service's `stamps` release it.
+    /// rendered (`GeneratorRenderer::each_rendered_setup`), into the latch.
+    /// `project` and the editing service's `stamps` release it.
     pub fn record(
         &mut self,
         project: Option<&Project>,
         stamps: PartStamps,
-        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, EachRenderedDomains<'_>),
+        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, EachRenderedSetup<'_>),
     ) {
         let find = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| layer);
         let edits = stamps.key(LATCH_PARTS);
@@ -150,9 +199,11 @@ impl SetupFitObservations {
         self.scratch.retain(|entry| latched_layers.iter().any(|latched| latched.layer == entry.layer));
         let mut changed = self.scratch.len() != before;
         let (scratch, latched_layers) = (&mut self.scratch, &mut self.latched_layers);
-        observe(&mut self.domains, &mut |layer, domains| {
-            for (node, snapshot) in domains {
-                if snapshot.fit.is_clean() && snapshot.refusal.is_none() {
+        observe(&mut self.domains, &mut self.not_made, &mut |layer, domains, not_made| {
+            let domains = domains.iter().map(|(node, snapshot)| (node, Seen { fit: snapshot.fit, refusal: snapshot.refusal.as_ref(), copies_not_made: 0, uncoupled_bodies: snapshot.uncoupled_bodies }));
+            let worlds = not_made.iter().map(|(node, count)| (node, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: *count, uncoupled_bodies: 0 }));
+            for (node, seen) in domains.chain(worlds) {
+                if seen.fit.is_clean() && seen.refusal.is_none() && seen.copies_not_made == 0 && seen.uncoupled_bodies == 0 {
                     continue;
                 }
                 if !latched_layers.iter().any(|latched| &latched.layer == layer) {
@@ -160,27 +211,16 @@ impl SetupFitObservations {
                     latched_layers.push(LatchedLayer::new(found));
                 }
                 match scratch.iter_mut().find(|entry| &entry.layer == layer && &entry.node == node) {
-                    Some(entry) => {
-                        let mut fit = entry.fit;
-                        fit.fill_capped |= snapshot.fit.fill_capped;
-                        fit.pool_full |= snapshot.fit.pool_full;
-                        fit.column = match (fit.column, snapshot.fit.column) {
-                            (ColumnOutcome::Fits, ran) => ran,
-                            // A column that was outside also crossed the wall.
-                            (held, ran) if ran != ColumnOutcome::Fits && ran != held => ColumnOutcome::Clipped,
-                            (held, _) => held,
-                        };
-                        if fit != entry.fit {
-                            entry.fit = fit;
-                            changed = true;
-                        }
-                        if entry.refusal.is_none() && snapshot.refusal.is_some() {
-                            entry.refusal = snapshot.refusal.clone();
-                            changed = true;
-                        }
-                    }
+                    Some(entry) => changed |= seen.fold_into(entry),
                     None => {
-                        scratch.push(SetupFitEntry { layer: layer.clone(), node: node.clone(), fit: snapshot.fit, refusal: snapshot.refusal.clone() });
+                        scratch.push(SetupFitEntry {
+                            layer: layer.clone(),
+                            node: node.clone(),
+                            fit: seen.fit,
+                            refusal: seen.refusal.cloned(),
+                            copies_not_made: seen.copies_not_made,
+                            uncoupled_bodies: seen.uncoupled_bodies,
+                        });
                         changed = true;
                     }
                 }
@@ -203,24 +243,28 @@ pub(crate) fn runtime_fits<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) 
         refusal: entry.refusal.as_deref(),
         layout: None,
         column_box: None,
+        uncoupled_bodies: entry.uncoupled_bodies,
+        copies_not_made: entry.copies_not_made,
     })
 }
 
 /// The problems of the scene `def` is, with `inst`'s card values folded into
 /// the params they drive so shapes sit where the knobs put them, plus what
-/// the solvers reported (`runtime`). Empty for a graph with no liquid domain,
-/// which builds no scene model at all.
+/// the solvers and copy pools reported (`runtime`). A graph with no liquid
+/// domain builds no scene model; its worlds still warn of unmade copies.
 pub(crate) fn problems_of<'a>(def: &EffectGraphDef, inst: &PresetInstance, runtime: impl IntoIterator<Item = RuntimeFit<'a>>) -> Vec<SetupProblem> {
-    if liquid_domains_in(&def.nodes).is_empty() {
-        return Vec::new();
-    }
-    let mut authored = def.clone();
-    if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
-        authored = def.clone();
-    }
-    let Some(vm) = SceneVm::from_def(&authored) else { return Vec::new() };
+    let runtime: Vec<RuntimeFit<'a>> = runtime.into_iter().collect();
     let mut out = Vec::new();
-    problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime, &mut out);
+    if !liquid_domains_in(&def.nodes).is_empty() {
+        let mut authored = def.clone();
+        if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
+            authored = def.clone();
+        }
+        if let Some(vm) = SceneVm::from_def(&authored) {
+            problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime.iter().copied(), &mut out);
+        }
+    }
+    copies_problems(&copies_anchors(def), runtime, &mut out);
     out
 }
 
@@ -298,26 +342,34 @@ impl BoundParam {
 }
 
 /// One layer's scene model, built once per graph, with the card params that
-/// move its setup shapes.
+/// move its setup shapes, and the worlds that copy bodies.
 struct SlotModel {
-    vm: SceneVm,
+    /// `None` for a graph with no liquid domain.
+    vm: Option<SceneVm>,
     bound: Vec<BoundParam>,
+    copies: Vec<CopiesAnchor>,
 }
 
 impl SlotModel {
-    /// `None` for a graph with no liquid domain, which has no setup to check.
+    /// `None` for a graph with neither a liquid domain nor a world that
+    /// copies bodies, which has no setup to check.
     fn build(def: &EffectGraphDef, inst: &PresetInstance) -> Option<Self> {
-        if liquid_domains_in(&def.nodes).is_empty() {
+        let copies = copies_anchors(def);
+        let vm = (!liquid_domains_in(&def.nodes).is_empty())
+            .then(|| {
+                let mut authored = def.clone();
+                if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
+                    authored = def.clone();
+                }
+                SceneVm::from_def(&authored)
+            })
+            .flatten();
+        if vm.is_none() && copies.is_empty() {
             return None;
         }
-        let mut authored = def.clone();
-        if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
-            authored = def.clone();
-        }
-        let vm = SceneVm::from_def(&authored)?;
         let metadata = def.preset_metadata.as_ref();
         let mut bound: Vec<BoundParam> = Vec::new();
-        for (addr, structural) in vm.setup_params() {
+        for (addr, structural) in vm.iter().flat_map(SceneVm::setup_params) {
             if bound.iter().any(|known| &known.addr == addr) {
                 continue;
             }
@@ -345,7 +397,7 @@ impl SlotModel {
                 structural,
             });
         }
-        Some(Self { vm, bound })
+        Some(Self { vm, bound, copies })
     }
 
     /// The bound card values of one kind, hashed without allocating.
@@ -454,8 +506,8 @@ impl SlotCheck {
             let values = self.model_values(inst, false);
             if moved || values != self.values {
                 self.values = values;
-                match &self.model {
-                    Some(model) => model.vm.recheck_setup(&|addr| model.value(inst, addr), &mut self.authored, &mut self.anchors),
+                match self.model.as_ref().and_then(|model| Some((model, model.vm.as_ref()?))) {
+                    Some((model, vm)) => vm.recheck_setup(&|addr| model.value(inst, addr), &mut self.authored, &mut self.anchors),
                     None => {
                         self.authored.clear();
                         self.anchors.clear();
@@ -470,6 +522,9 @@ impl SlotCheck {
         }
         self.report = Some(report.clone());
         problems_with_runtime(&self.anchors, &self.authored, runtime_fits(report, &layer.layer_id), &mut self.problems);
+        if let Some(model) = &self.model {
+            copies_problems(&model.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
+        }
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);

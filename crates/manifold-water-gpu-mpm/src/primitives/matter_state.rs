@@ -8,7 +8,7 @@
 use manifold_gpu::GpuBuffer;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use crate::matter::{MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
@@ -209,7 +209,7 @@ impl Primitive for MatterState {
         match port_name {
             "out" => input_capacities.iter().find(|(p, _)| *p == "seed").map(|&(_, n)| n),
             "stats" => Some(STATS_WORDS),
-            "reaction" => Some(MAX_FLUID_ROLES as u32 * REACTION_WORDS),
+            "reaction" => Some(MAX_LIQUID_BODIES as u32 * REACTION_WORDS),
             // Provided storage, sized to the lattice at run time.
             "grid_accum" | "grid" => Some(1),
             _ => None,

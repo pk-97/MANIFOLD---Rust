@@ -101,9 +101,11 @@ impl SceneParamFacts {
 /// `node.light`'s `mode` values (`LIGHT_MODES`): Sun 0, Point 1, Spot 2.
 const POINT_AND_SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b110));
 const SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b100));
-/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1.
-const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b01));
-const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b10));
+/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1, HDRI 2.
+const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b001));
+const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b010));
+/// The Background switch's values: off 0, on 1.
+const BACKGROUND_ON: Gate = Gate::Only(Feature::Background, Modes(0b10));
 
 /// `node.fluid_role_source`'s roles past Initial Fill (0): an Initial Fill
 /// is the water at rest in its box, so it reads no motion.
@@ -235,7 +237,10 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
         // (`copies_body::is_copies_body_param`), and the copies body belongs
         // to its physics world's item, so they sit with the world's controls.
         "copy_count" => card(ControlGroup::PhysicsWorld, CardBand::Scene, 0),
-        "copy_spacing" => setup(ControlGroup::PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+        // Counted in copy sizes along the layout's axis, not metres.
+        "copy_size_spacing" => setup(ControlGroup::PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Each copy's own turn inside the layout, like a transform's rotation.
+        "copy_turn_x" | "copy_turn_y" | "copy_turn_z" => setup(ControlGroup::PhysicsWorld).limit(HardLimit::Unlimited),
         "copy_columns" | "copy_layout" => setup(ControlGroup::PhysicsWorld),
         _ => return None,
     })
@@ -250,6 +255,9 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Port counts: an allocation grows them, and the copies card sets the
+        // group count, so neither is a slider.
+        "bodies" | "copy_groups" => hidden(PhysicsWorld),
         // Still air every consumer's Air Drag acts against (D-114).
         "air_resistance" => setup(PhysicsWorld).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
         _ => return None,
@@ -437,7 +445,8 @@ fn atmosphere(param: &str) -> Option<SceneParamFacts> {
 
 /// Gates follow `bake_equirect_envmap.wgsl`: the gradient branch reads only
 /// the horizon and variation, the softbox branch only the strips, sun disc
-/// and fill. Size and intensity apply in both.
+/// and fill. Intensity applies in all three modes, and the HDRI copy reads
+/// nothing else (its size is the file's).
 fn bake_environment(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Environment;
     Some(match param {
@@ -454,6 +463,21 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
         "uniform" => hidden(Environment),
         _ => return None,
     })
+}
+
+/// Where the importer's Background controls sit on the Scene tab: the
+/// Environment group, as setup rows. They drive nodes outside the scene
+/// vocabulary (the switch, blur and exposure of the sky chain), so the
+/// importer places them by card param id instead of by node type. Blur and
+/// Brightness read only while the Background switch is on.
+pub(crate) fn background_scene(param: &str) -> Option<SceneParamDesc> {
+    let facts = match param {
+        "bg_enabled" => setup(ControlGroup::Environment).switch(Feature::Background),
+        "bg_blur" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
+        "bg_brightness" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
+        _ => return None,
+    };
+    Some(facts.desc)
 }
 
 fn scene_object(param: &str) -> Option<SceneParamFacts> {

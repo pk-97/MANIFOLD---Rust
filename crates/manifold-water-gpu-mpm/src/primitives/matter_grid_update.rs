@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
 use manifold_water_liquid::lattice::LiquidLattice;
@@ -145,7 +145,7 @@ impl Primitive for MatterGridUpdate {
         ];
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
-        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
+        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
         // In place on the grid input; the GPU is touched on every path.
         let accum = ctx.inputs.array("accum");
         let grid = ctx.inputs.array("grid");

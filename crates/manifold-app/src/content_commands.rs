@@ -1175,6 +1175,9 @@ impl ContentThread {
                             && before + 1.0 > before)
                 });
                 if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
+                    // Between frames: the next frame's target and tempo shift, peeked,
+                    // so a hit after a seek in this drain sees the seek.
+                    let (pending_target, tempo_shift) = (self.engine.played_target(), self.engine.tempo_shift());
                     let (renderers, project) = self.engine.split_renderer_project();
                     // The renderer counts its own refusals into the scene
                     // impulse diagnostics the stage shows; only a missing
@@ -1191,7 +1194,7 @@ impl ContentThread {
                             ));
                         match renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()) {
                             Some(renderer) => {
-                                if let Err(message) = renderer.fire_scene_impulse(layer, param_id.as_ref(), source, project_tempo.as_ref()) {
+                                if let Err(message) = renderer.fire_scene_impulse_between_frames(layer, param_id.as_ref(), source, project_tempo.as_ref(), pending_target, tempo_shift) {
                                     log::warn!("{message}");
                                 }
                             }

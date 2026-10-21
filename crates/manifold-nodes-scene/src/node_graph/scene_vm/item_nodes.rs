@@ -46,7 +46,10 @@ pub(super) fn world_nodes(
 ) -> Vec<NodeId> {
     let mut ids = vec![scene_node.id];
     match environment {
-        EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
+        EnvironmentVm::Importer(e) => {
+            ids.push(e.bake_node_id);
+            ids.extend(e.background_node_ids.iter().copied());
+        }
         EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
         EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
     }
@@ -56,9 +59,10 @@ pub(super) fn world_nodes(
     stable_ids(level, ids)
 }
 
-/// Each physics world with the body it copies (wired into `copies`) and that
-/// body's transform: the copy body draws no object of its own, so its
-/// controls are the world's (Physics Boxes' box shape and spawn transform).
+/// Each physics world with the bodies its copy groups copy (wired into
+/// `copies_k`) and their transforms: a copies body draws no object of its
+/// own, so its controls are the world's (Physics Boxes' box shape and spawn
+/// transform).
 /// A shared value wired into the world is the world's control too: Add Fluid
 /// routes gravity, speed and reset through values that also drive the water.
 pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
@@ -68,9 +72,11 @@ pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
         .filter(|node| node.type_id == "node.physics_world")
         .map(|world| {
             let mut ids = vec![world.id];
-            if let Some((body, _)) = level.producer(world.id, "copies") {
-                ids.push(body);
-                ids.extend(level.producer(body, "transform").map(|(transform, _)| transform));
+            for wire in level.wires.iter().filter(|wire| {
+                wire.to_node == world.id && manifold_core::copies_body::copy_group_of_input(&wire.to_port).is_some()
+            }) {
+                ids.push(wire.from_node);
+                ids.extend(level.producer(wire.from_node, "transform").map(|(transform, _)| transform));
             }
             ids.extend(
                 level

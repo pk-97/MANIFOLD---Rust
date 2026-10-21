@@ -2,7 +2,7 @@
 //! composite preset, and user-saved composite implements.
 
 use ahash::AHashMap;
-use manifold_core::{Beats, Seconds};
+use manifold_core::{Beats, PlayedTime, Seconds};
 use std::sync::{Mutex, OnceLock};
 
 use crate::runtime::layer_skin::LayerSkinRegistry;
@@ -79,6 +79,24 @@ pub struct SimStep {
     /// Let a bounded historical input batch advance the native simulation.
     /// Honoured only in export; live preview stays observe-only.
     pub history_drain: bool,
+    /// The played time the transport jumped to (a seek, a loop, play from a
+    /// cue) when this frame is the frame the jump landed on, at or after it;
+    /// None otherwise. A simulation restarting on this frame starts its tick
+    /// grid there, so the grid after a jump is the same at any frame rate.
+    pub played_target: Option<PlayedTime>,
+    /// A replay sample's played time, exactly as its clock named it. None
+    /// for a frame, whose played time is its seconds less `tempo_shift`.
+    pub played: Option<PlayedTime>,
+    /// The sum of every tempo edit's move of the transport so far. Physics
+    /// runs on played time, which a tempo edit never moves; this converts a
+    /// transport stamp at a seam (a frame's seconds, a hop, a Fire) and a
+    /// played time back for a tempo-map lookup.
+    pub tempo_shift: Seconds,
+    /// The played time the newest placement aimed at, kept after its frame
+    /// renders: the physics replay grid and the drift grid count from it, so
+    /// the samples after a cue sit at the same distances from the cue
+    /// whatever tempo edits came earlier in the session.
+    pub replay_origin: PlayedTime,
 }
 
 impl SimStep {
@@ -93,6 +111,10 @@ impl SimStep {
             live_load: None,
             authored_sample_only: false,
             history_drain: false,
+            played_target: None,
+            played: None,
+            tempo_shift: Seconds::ZERO,
+            replay_origin: PlayedTime::ZERO,
         }
     }
 
@@ -119,6 +141,39 @@ impl SimStep {
 
     pub fn draining_history(self) -> Self {
         Self { history_drain: true, ..self }
+    }
+
+    /// A placement's target is also the new [`Self::replay_origin`].
+    pub fn with_played_target(self, target: Option<PlayedTime>) -> Self {
+        Self { played_target: target, replay_origin: target.unwrap_or(self.replay_origin), ..self }
+    }
+
+    pub fn with_replay_origin(self, origin: PlayedTime) -> Self {
+        Self { replay_origin: origin, ..self }
+    }
+
+    /// A replay sample at played time `played`.
+    pub fn at_played(self, played: PlayedTime) -> Self {
+        Self { played: Some(played), ..self }
+    }
+
+    pub fn with_tempo_shift(self, shift: Seconds) -> Self {
+        Self { tempo_shift: shift, ..self }
+    }
+
+    /// The played time of a frame or sample at transport `seconds`.
+    pub fn played_at(self, seconds: Seconds) -> PlayedTime {
+        self.played.unwrap_or_else(|| self.to_played(seconds))
+    }
+
+    /// A transport stamp (a hop, a Fire, a pulse) as played time.
+    pub fn to_played(self, transport: Seconds) -> PlayedTime {
+        PlayedTime::from_transport(transport, self.tempo_shift)
+    }
+
+    /// Played time as transport seconds, for a tempo-map lookup.
+    pub fn to_transport(self, played: PlayedTime) -> Seconds {
+        played.to_transport(self.tempo_shift)
     }
 
     pub fn offline(self) -> bool {
@@ -424,6 +479,12 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
+    /// This frame's or replay sample's played time: the clock every
+    /// simulation runs on, which a tempo edit never moves.
+    pub fn played(&self) -> PlayedTime {
+        self.sim_step.played_at(self.time.seconds)
+    }
+
     pub fn new(
         time: FrameTime,
         params: &'ctx ParamValues,

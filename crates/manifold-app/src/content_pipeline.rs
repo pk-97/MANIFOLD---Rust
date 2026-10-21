@@ -2239,7 +2239,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             manifold_node_engine::exec::effect_node::SimStep::export(interval)
         } else {
             manifold_node_engine::exec::effect_node::SimStep::live(interval).with_live_load(Some(load))
-        };
+        }
+        .with_replay_origin(engine.replay_origin())
+        .with_played_target(engine.take_played_target())
+        .with_tempo_shift(engine.tempo_shift());
         self.apply_sim_step(engine, sim_step);
         let _t_frame = std::time::Instant::now();
 
@@ -2602,7 +2605,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             });
             #[cfg(target_os = "macos")]
             self.gizmos.take_frame_depth(generators, self.physics_overlay.layer());
-            self.setup_fits.record(project, stamps, |domains, each| generators.into_iter().for_each(|g| g.each_rendered_fluid_domains(domains, &mut *each)));
+            self.setup_fits.record(project, stamps, |domains, not_made, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, &mut *each)));
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,

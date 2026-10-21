@@ -14,7 +14,7 @@ use manifold_physics::clock::{LiveLoad, SimulationClock};
 use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, TickForces};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::TickHits;
-use manifold_physics::{FieldValue, Seconds, TickStamp, VectorField};
+use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
 
 use crate::force_lattice::{felt_field, LatticeBuffers, LatticeUpload};
 use crate::hits::{TakesHits, TakesHitsRegistration};
@@ -107,7 +107,7 @@ fn felt(ctx: &EffectNodeContext<'_, '_>) -> Result<Option<FieldValue>, String> {
 }
 
 impl TickSampled for SwarmForces {
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
         self.forces.request_samples(&self.clock, from, until, out);
     }
 }
@@ -130,13 +130,13 @@ impl TakesHits for SwarmForces {
 
     /// A hit is stamped at the fire's own simulated time, so it lands on the
     /// tick whose interval holds that time, the same tick at any frame rate.
-    fn hit_stamp(&self, transport: Seconds, sequence: u64, step: SimStep) -> Result<EventStamp, String> {
+    fn hit_stamp(&self, played: PlayedTime, sequence: u64, step: SimStep) -> Result<EventStamp, String> {
         if !self.hit_readiness()? {
             return Err("Swarm impulses: the swarm has not started; fire waits for it".into());
         }
-        let mut stamp = self.hits.stamp(transport.0, sequence)?;
+        let mut stamp = self.hits.stamp(played, sequence)?;
         let load = step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget });
-        stamp.time = Seconds(self.clock.simulation_at(transport.0, load));
+        stamp.time = Seconds(self.clock.simulation_at(played, load));
         Ok(stamp)
     }
 
@@ -171,7 +171,7 @@ impl SwarmForces {
         let lattice = Self::lattice(ctx)?;
         let field = felt(ctx)?;
         let frame = self.clock.advance(
-            ctx.time.seconds.0,
+            ctx.played(),
             ctx.sim_step.interval.0,
             ctx.scalar_or_param("speed", 1.0),
             ctx.scalar_or_param("reset", 0.0),
@@ -180,7 +180,7 @@ impl SwarmForces {
         );
         // Hits follow the clock before anything else can fail, so a refused
         // frame never leaves them a frame behind it.
-        self.hits.observe_frame(ctx.time.seconds.0, &frame)?;
+        self.hits.observe_frame(ctx.played(), &frame)?;
         if frame.numerical_error {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
@@ -300,12 +300,13 @@ impl Primitive for SwarmForces {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(ctx.sim_step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget }));
+        self.clock.set_played_target(ctx.sim_step.played_target);
         // A physics sample reads the field at a tick's start; it never
         // advances time.
         if ctx.sim_step.authored_sample_only {
-            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
+            self.clock.observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
             match felt(ctx) {
-                Ok(field) => self.forces.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.forces.observe_sample(&self.clock, ctx.played(), field.as_ref()),
                 Err(error) => ctx.error(error),
             }
             return;
@@ -406,9 +407,9 @@ mod tests {
         /// start, then the frame runs.
         fn frame(&mut self, from: f64, until: f64, params: &[(&'static str, f32)]) -> Frame {
             let mut starts = Vec::new();
-            self.node.request_physics_samples(from, until, &mut starts);
+            self.node.request_physics_samples(self.step.to_played(Seconds(from)), self.step.to_played(Seconds(until)), &mut starts);
             for start in starts {
-                assert!(self.run(start, params, self.step.authored_sample()).is_empty());
+                assert!(self.run(self.step.to_transport(start).0, params, self.step.authored_sample().at_played(start)).is_empty());
             }
             let errors = self.run(until, params, self.step);
             assert!(errors.is_empty(), "{errors:?}");
@@ -419,7 +420,7 @@ mod tests {
 
         /// Fire a scene hit at transport `at`, as the impulse runtime does.
         fn fire(&mut self, at: f64, sequence: u64, field: FieldValue) {
-            let stamp = self.node.hit_stamp(Seconds(at), sequence, self.step).expect("the swarm takes hits");
+            let stamp = self.node.hit_stamp(self.step.to_played(Seconds(at)), sequence, self.step).expect("the swarm takes hits");
             self.node.enqueue_hit(stamp, field).expect("the hit is queued");
         }
 
@@ -561,25 +562,34 @@ mod tests {
         assert!((half.frames.last().unwrap().get("simulation_time") - 0.5).abs() < 1e-5);
     }
 
-    /// Speed rising under a playing swarm, one step per Sim Rate tick. The
-    /// clock applies a Speed edit from where it is observed, so only edits on
-    /// tick starts read the same at every display rate.
-    fn stepped_ramp(seconds: f64) -> f32 {
-        0.5 + 0.75 * ((seconds / TICK + 1e-6).floor() * TICK) as f32
+    /// Speed rising smoothly under a playing swarm, changing between every
+    /// pair of frames at any display rate.
+    fn smooth_ramp(seconds: f64) -> f32 {
+        0.5 + 0.75 * seconds as f32
     }
 
-    /// While Speed moves, each tick runs for its own length: a 30 fps frame's
-    /// two ticks differ, and every tick is told exactly what it is at 120 fps.
+    /// While Speed moves, each tick runs for its own length, at the Speed of
+    /// its own start: a 30 fps frame's two ticks differ, and every tick is
+    /// told exactly the same at 60, 120 and 144 fps, live or exported.
     #[test]
-    fn swarm_speed_ramp_ticks_match_at_30_and_120_fps() {
-        let step = SimStep::live(Seconds(TICK));
-        let rig = |speed| Rig { speed: Some(speed), ..Rig::new(Some(swelling), step) };
-        let slow = rig(stepped_ramp).play(30.0, 2.0, 0.0, &[]);
-        let fast = rig(stepped_ramp).play(120.0, 2.0, 0.0, &[]);
+    fn swarm_speed_ramp_ticks_match_at_30_60_120_144_fps_live_and_export() {
+        let rig = |step| Rig { speed: Some(smooth_ramp), ..Rig::new(Some(swelling), step) };
+        let live = SimStep::live(Seconds(TICK));
+        let slow = rig(live).play(30.0, 2.0, 0.0, &[]);
         assert_eq!(slow.tick_seconds.len(), 120);
         let bits = |seconds: &[f32]| seconds.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
-        assert_eq!(bits(&slow.tick_seconds), bits(&fast.tick_seconds), "a Speed ramp ticks the same at any frame rate");
-        assert_eq!(slow.lattices, fast.lattices);
+        for (k, &seconds) in slow.tick_seconds.iter().enumerate() {
+            let expected = TICK * f64::from(smooth_ramp(k as f64 * TICK));
+            assert!((f64::from(seconds) - expected).abs() < 1e-8, "tick {k} runs at its start's Speed: {seconds} against {expected}");
+        }
+        for step in [live, SimStep::export(Seconds(TICK))] {
+            for fps in [30.0, 60.0, 120.0, 144.0] {
+                let run = rig(step).play(fps, 2.0, 0.0, &[]);
+                assert_eq!(bits(&run.tick_seconds), bits(&slow.tick_seconds), "a Speed ramp ticks the same at {fps} fps, offline {}", step.offline());
+                assert_eq!(run.lattices, slow.lattices, "{fps} fps lattices");
+                assert_eq!(run.frames.last().unwrap().get("simulation_time"), slow.frames.last().unwrap().get("simulation_time"));
+            }
+        }
         // At 30 fps each frame after the first runs ticks 2k and 2k + 1.
         assert!(slow.frames[1..].iter().all(|frame| frame.get("ticks") == 2.0));
         assert!(slow.tick_seconds.chunks(2).all(|pair| pair[1] > pair[0]), "a frame's ticks keep their own lengths: {:?}", &slow.tick_seconds[..8]);

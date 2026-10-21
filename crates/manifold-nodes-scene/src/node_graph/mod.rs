@@ -12,6 +12,7 @@ pub(crate) mod decode_cache;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
 pub mod gltf_import;
+pub mod hdri_sun;
 manifold_core::testkit_visible! { mod gltf_load; }
 pub mod primitives;
 pub mod scene_modifier_authoring;

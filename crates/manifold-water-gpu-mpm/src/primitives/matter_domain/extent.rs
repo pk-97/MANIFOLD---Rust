@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
@@ -33,7 +33,7 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // Body kernels clamp rows and body counts to the bodies array, so the
     // walk takes a scene without colliders; the reaction slot is sized for
     // every body a liquid holds.
-    let reaction = MAX_FLUID_ROLES as u64 * u64::from(REACTION_WORDS) * 4;
+    let reaction = MAX_LIQUID_BODIES as u64 * u64::from(REACTION_WORDS) * 4;
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),

@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits};
@@ -142,7 +142,7 @@ impl Primitive for GridToMatter {
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
-        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
+        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
         let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as i32;
         let density = ctx.scalar_or_param("density", 1000.0);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);

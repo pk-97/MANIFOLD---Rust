@@ -6,7 +6,8 @@ use super::*;
 pub(super) struct PhysicsSceneObject {
     pub(super) world_id: u32,
     pub(super) body_slot: u32,
-    pub(super) copies: bool,
+    /// The copy group whose copies this object draws; `None` for a wired body.
+    pub(super) copy_group: Option<u32>,
     pub(super) transform_id: u32,
     pub(super) object_id: u32,
     pub(super) owned_ids: Vec<u32>,
@@ -114,7 +115,7 @@ pub(super) fn physics_scene_object_match(
     let Ok(body_slot) = body_suffix.parse::<u32>() else {
         return PhysicsSceneObjectMatch::Malformed("Physics object pose slot is malformed");
     };
-    if body_slot >= PHYSICS_BODY_SLOTS {
+    if body_slot >= manifold_core::physics_body_slots::world_bodies(world) {
         return PhysicsSceneObjectMatch::Malformed("Physics object pose slot is out of range");
     }
     let Ok(Some(pose_wire)) = unique_output(wires, world.id, transform_wire.from_port.as_str())
@@ -267,7 +268,7 @@ pub(super) fn physics_scene_object_match(
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
         world_id: world.id,
         body_slot,
-        copies: false,
+        copy_group: None,
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,
@@ -359,7 +360,7 @@ pub(super) fn grouped_physics_scene_object_match(
     else {
         return PhysicsSceneObjectMatch::Malformed("Physics group body slot is malformed");
     };
-    if body_slot >= PHYSICS_BODY_SLOTS {
+    if body_slot >= manifold_core::physics_body_slots::world_bodies(world) {
         return PhysicsSceneObjectMatch::Malformed("Physics group body slot is out of range");
     }
     let compound_count = group
@@ -367,9 +368,9 @@ pub(super) fn grouped_physics_scene_object_match(
         .iter()
         .filter(|node| node.type_id == "node.scene_object")
         .count();
-    if compound_count > PHYSICS_BODY_SLOTS as usize {
+    if compound_count > COMPOUND_MAX_PARTS as usize {
         static TOO_MANY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-            format!("Physics compound group has more than {PHYSICS_BODY_SLOTS} parts")
+            format!("Physics compound group has more than {COMPOUND_MAX_PARTS} parts")
         });
         return PhysicsSceneObjectMatch::Malformed(TOO_MANY.as_str());
     }
@@ -403,7 +404,7 @@ pub(super) fn grouped_physics_scene_object_match(
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
         world_id: world.id,
         body_slot,
-        copies: false,
+        copy_group: None,
         transform_id: authored.id,
         object_id: group_node.id,
         owned_ids: vec![group_node.id],
@@ -471,7 +472,7 @@ pub(super) fn physics_copies_candidate(
                     && wires.iter().any(|body_wire| {
                         body_wire.from_node == node.id
                             && body_wire.from_port == "body"
-                            && body_wire.to_port == "copies"
+                            && copy_group_of_input(&body_wire.to_port).is_some()
                             && nodes.iter().any(|world| {
                                 world.id == body_wire.to_node
                                     && world.type_id == "node.physics_world"
@@ -567,11 +568,14 @@ pub(super) fn physics_copies_scene_object_match(
             "Physics copies object body output is missing or duplicated",
         );
     };
-    if body_wire.to_port != "copies" {
+    let Some(group) = copy_group_of_input(&body_wire.to_port) else {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies object body output is malformed",
         );
-    }
+    };
+    let copies_port = body_wire.to_port.as_str();
+    let instances_port = format!("instances_{group}");
+    let count_port = format!("active_count_{group}");
     let Some(world) = nodes.iter().find(|node| node.id == body_wire.to_node) else {
         return PhysicsSceneObjectMatch::Malformed("Physics copies object world is unavailable");
     };
@@ -580,7 +584,7 @@ pub(super) fn physics_copies_scene_object_match(
             "Physics copies object world has the wrong type",
         );
     }
-    let Ok(Some(copies_wire)) = unique_input(wires, world.id, "copies") else {
+    let Ok(Some(copies_wire)) = unique_input(wires, world.id, copies_port) else {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies world input is missing or duplicated",
         );
@@ -631,12 +635,12 @@ pub(super) fn physics_copies_scene_object_match(
             "Physics copies object instances input is missing or duplicated",
         );
     };
-    if instances_wire.from_node != world.id || instances_wire.from_port != "instances" {
+    if instances_wire.from_node != world.id || instances_wire.from_port != instances_port {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies object instances input is malformed",
         );
     }
-    let Ok(Some(world_instances_wire)) = unique_output(wires, world.id, "instances") else {
+    let Ok(Some(world_instances_wire)) = unique_output(wires, world.id, &instances_port) else {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies world instances output is missing or shared",
         );
@@ -652,12 +656,12 @@ pub(super) fn physics_copies_scene_object_match(
             "Physics copies object count input is missing or duplicated",
         );
     };
-    if count_wire.from_node != world.id || count_wire.from_port != "active_count" {
+    if count_wire.from_node != world.id || count_wire.from_port != count_port {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies object count input is malformed",
         );
     }
-    let Ok(Some(world_count_wire)) = unique_output(wires, world.id, "active_count") else {
+    let Ok(Some(world_count_wire)) = unique_output(wires, world.id, &count_port) else {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies world count output is missing or shared",
         );
@@ -703,7 +707,7 @@ pub(super) fn physics_copies_scene_object_match(
             || (wire.from_node == body.id
                 && wire.from_port == "body"
                 && wire.to_node == world.id
-                && wire.to_port == "copies")
+                && wire.to_port == copies_port)
             || (wire.from_node == body.id
                 && wire.from_port == "shape"
                 && wire.to_node == mesh.id
@@ -717,11 +721,11 @@ pub(super) fn physics_copies_scene_object_match(
                 && wire.to_node == object.id
                 && wire.to_port == "material")
             || (wire.from_node == world.id
-                && wire.from_port == "instances"
+                && wire.from_port == instances_port
                 && wire.to_node == object.id
                 && wire.to_port == "instances")
             || (wire.from_node == world.id
-                && wire.from_port == "active_count"
+                && wire.from_port == count_port
                 && wire.to_node == object.id
                 && wire.to_port == "instance_count")
             || (wire.from_node == object.id
@@ -739,7 +743,7 @@ pub(super) fn physics_copies_scene_object_match(
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
         world_id: world.id,
         body_slot: 0,
-        copies: true,
+        copy_group: Some(group as u32),
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,
