@@ -531,9 +531,10 @@ timeline per move) is a frame-planner class and stays its own bead.
   the press state (beat, value, neighbours captured at press), the pointer
   delta since the last resolve, the modifiers now, the lane range,
   pixels-per-beat and the grid step. Rules:
-  - Nothing moves until `DRAG_THRESHOLD_PX` from the press; the resolver then
-    starts from the pointer's position at that moment, so a point never jumps
-    to catch the cursor.
+  - Nothing moves until `DRAG_THRESHOLD_PX` from the press. Travel then counts
+    from the press, so the dot stays under the pointer and a fast flick loses
+    no distance. Discarding the travel spent crossing the threshold leaves the
+    dot short of the pointer by up to a whole first mouse event.
   - Snap is relative: the beat moves by whole grid steps from the press beat
     and keeps its off-grid offset. Cmd moves it freely. There is no axis lock:
     `AUTOMATION_AXIS_LOCK_PX` and the x-unlock latch are deleted.
