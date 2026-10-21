@@ -27,23 +27,18 @@ mod duplicate;
 mod fluid;
 mod physics;
 mod physics_match;
-mod split;
 
 use physics::*;
 use physics_match::*;
 use manifold_core::scene_object_migration::loose_scene_object_owned_ids;
-use split::*;
-pub use physics::{
-    scene_object_physics_eligibility, DisableSceneObjectPhysicsCommand,
-    EnableSceneObjectPhysicsCommand,
-};
-pub use split::SplitSceneObjectCommand;
+pub use physics::{enable_physics_edit, scene_object_physics_eligibility, EnableSceneObjectPhysicsCommand};
 
 #[cfg(test)]
 mod fluid_object_lifecycle_tests;
 
 pub use fluid::*;
-pub use duplicate::DuplicateSceneObjectCommand;
+pub use duplicate::{physics_free_body_slots, DuplicateSceneObjectCommand};
+pub use manifold_core::physics_body_slots::{BodySlots, WorldBodySlots};
 
 /// The card metadata a scene def gets when a scene edit stamps exposures
 /// into a def that has none.
@@ -1305,10 +1300,9 @@ fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Opti
         .map(|w| w.from_node)
 }
 
-// Keep authoring in lock-step with the runtime world.  The graph schema is
-// intentionally sparse (only occupied ports are serialized), so increasing
-// this limit does not change existing documents.
-const PHYSICS_BODY_SLOTS: u32 = 64;
+// The graph schema is sparse (only occupied ports are serialized), so a
+// larger world does not change existing documents.
+const PHYSICS_BODY_SLOTS: u32 = manifold_core::scene_surface::PHYSICS_WORLD_BODY_SLOTS;
 
 fn graph_level<'a>(
     def: &'a EffectGraphDef,

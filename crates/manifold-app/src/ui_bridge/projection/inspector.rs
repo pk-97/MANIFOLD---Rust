@@ -185,6 +185,8 @@ pub fn sync_inspector_data(
                                 manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm)
                             }).unwrap_or_default();
                             let fluid_domains = super::scene::fluid_domains(&vm);
+                            // Every card's free-slot count, from one pass over the wires.
+                            let world_slots = def.as_ref().map(manifold_editing::commands::graph::WorldBodySlots::of).unwrap_or_default();
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
                             // intensity [0,4] / fill [0,2]; `atmosphere`'s
@@ -478,13 +480,12 @@ pub fn sync_inspector_data(
                                             physics_imported,
                                             ..
                                         } = known.as_ref();
-                                        // Water has no Physics row: the liquid moves it.
+                                        // The model decides who takes physics: Water has no
+                                        // Physics row, since the liquid moves it.
                                         let (physics_available, physics_unavailable_reason) =
-                                            if known.kind == manifold_core::scene_surface::SceneObjectRowKind::LookChild {
-                                                (false, None)
-                                            } else if physics.is_some() {
+                                            if physics.is_some() {
                                                 (true, None)
-                                            } else if known.liquid_domain.is_some() {
+                                            } else if !known.capabilities.enable_physics {
                                                 (false, None)
                                             } else {
                                                 match def.as_ref().map(|def| {
@@ -575,6 +576,9 @@ pub fn sync_inspector_data(
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available,
                                                 physics_unavailable_reason,
+                                                physics_free_body_slots: physics.as_ref().and(def.as_ref()).and_then(|def| {
+                                                    manifold_editing::commands::graph::physics_free_body_slots(def, &world_slots, vm.scene_root_node_id, *index as u32)
+                                                }),
                                                 physics_imported: *physics_imported,
                                                 fluid_roles: if parent_group_id.is_none() {
                                                     def.as_ref().map(|def| super::scene::fluid_role_rows(def, *group_node_id, &fluid_domains))
@@ -791,6 +795,16 @@ pub fn sync_inspector_data(
                                 );
                                 attach_project_sources(std::slice::from_mut(&mut surface), project);
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
+                                if let Some(d) = authored.as_ref() {
+                                    let mut problems = Vec::new();
+                                    manifold_nodes_scene::node_graph::scene_vm::problems_with_runtime(
+                                        &vm.setup_anchors,
+                                        &vm.problems,
+                                        crate::setup_check::runtime_fits(&ui.setup_fits, &layer_id),
+                                        &mut problems,
+                                    );
+                                    crate::setup_check::mark_rows(&mut surface.rows, &problems, d);
+                                }
                                 surface
                             });
                             let tree_items =
@@ -948,6 +962,7 @@ pub fn sync_inspector_data(
                     mark_selected_automation_row(c, &layer.layer_id, target, param_id);
                 }
                 attach_project_sources(std::slice::from_mut(c), project);
+                crate::setup_check::mark_layer_card(c, layer, &ui.setup_fits);
             }
             let layer_id = layer.layer_id.clone();
             let scene_folds = gen_config.as_ref().zip(layer.gen_params()).and_then(|(card, gp)| scene_card_folds(gp, card));

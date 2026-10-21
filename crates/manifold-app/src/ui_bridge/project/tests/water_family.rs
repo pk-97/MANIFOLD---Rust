@@ -19,7 +19,7 @@ fn water_project_with_preset(preset: &'static str) -> (Project, LayerId, u32) {
     (project, id, render)
 }
 
-fn add_water(project: &mut Project, layer: &LayerId, _render: u32, editing: &mut EditingService) {
+pub(super) fn add_water(project: &mut Project, layer: &LayerId, _render: u32, editing: &mut EditingService) {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let before = effective_def(project, layer);
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -35,13 +35,13 @@ fn add_water(project: &mut Project, layer: &LayerId, _render: u32, editing: &mut
     assert!(rx.is_empty());
 }
 
-fn rows(def: &EffectGraphDef) -> Vec<SceneObjectKnownRow> {
+pub(super) fn rows(def: &EffectGraphDef) -> Vec<SceneObjectKnownRow> {
     SceneVm::from_def(def).unwrap().objects.into_iter().filter_map(|row| match row {
         SceneObjectVm::Known(row) => Some(*row), _ => None,
     }).collect()
 }
 
-fn binding(def: &EffectGraphDef, node: &NodeId, param: &str) -> String {
+pub(super) fn binding(def: &EffectGraphDef, node: &NodeId, param: &str) -> String {
     def.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding| matches!(&binding.target,
         BindingTarget::Node { node_id, param: name } if node_id == node && name == param)).unwrap().id.clone()
 }

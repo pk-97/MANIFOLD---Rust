@@ -12,7 +12,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
-    GizmoAxis, GizmoChrome, GizmoMode, GizmoView, HANDLE_VIEW_FRACTION, compose_lines, gizmo_targets, outline_slots,
+    GizmoAxis, GizmoChrome, GizmoMode, GizmoSelection, GizmoView, HANDLE_VIEW_FRACTION, compose_lines, gizmo_targets, outline_slots,
 };
 
 use super::SelectionOutline;
@@ -123,7 +123,7 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
     let scene = SceneVm::from_def(&def).expect("a scene");
     let mut slots = Vec::new();
-    outline_slots(&scene, 41, &mut slots);
+    outline_slots(&scene, [41], &mut slots);
     assert_eq!(slots, [1], "the panel draws in render slot 1");
 
     let mut runtime = build(&device);
@@ -139,9 +139,10 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     // The preview's chrome over the picture: outline, then the handles.
     let view = GizmoView::new(camera, W, H);
     let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(41)).expect("the panel's target");
+    let selection = GizmoSelection::new(&scene, vec![panel.clone()]);
     let mut lines = Vec::new();
     compose_lines(
-        &GizmoChrome { view, lights: &lights, domains: &[], physics: &[], selected: Some(&panel), mode: GizmoMode::Move, fade_handles: false },
+        &GizmoChrome { view, lights: &lights, domains: &[], live_columns: &[], physics: &[], problems: &[], selection: &selection, mode: GizmoMode::Move, fade_handles: false },
         &mut lines,
     );
     let composite = target(&device, "d102 composite");
@@ -312,7 +313,7 @@ fn an_export_with_a_selection_renders_no_mask() {
 
 /// A3 after render: the real Water Dam Break scene with its liquid domain
 /// selected the way the Scene panel selects it. The cell grid comes from the
-/// solver's own snapshot, the target from `selected_target`, the lines from
+/// solver's own snapshot, the target from `selected_targets`, the lines from
 /// `compose_lines`. Writes `/tmp/a3_domain_lattice_after.png`.
 #[test]
 fn a_selected_water_domain_draws_its_solvers_cell_grid() {
@@ -339,13 +340,14 @@ fn a_selected_water_domain_draws_its_solvers_cell_grid() {
     let layout = snapshot.accepted_layout.expect("an accepted layout");
 
     let row = gizmo_targets(&scene).find(|t| t.kind == GizmoTargetKind::FluidDomain).and_then(|t| t.row).expect("the domain's row");
-    let selected = crate::scene_gizmo::selected_target(&scene, &SceneSelection::Object(row), None).expect("the row's target");
+    let selected = crate::scene_gizmo::selected_targets(&scene, &[SceneSelection::Object(row)], &[]).pop().expect("the row's target");
     assert_eq!(selected.kind, GizmoTargetKind::FluidDomain);
     let view = GizmoView::new(camera, W, H);
-    let chrome = |selected| GizmoChrome { view, lights: &lights, domains: &domains, physics: &[], selected, mode: GizmoMode::Move, fade_handles: false };
+    let chrome = |selection| GizmoChrome { view, lights: &lights, domains: &domains, live_columns: &[], physics: &[], problems: &[], selection, mode: GizmoMode::Move, fade_handles: false };
     let (mut bare, mut lines) = (Vec::new(), Vec::new());
-    compose_lines(&chrome(None), &mut bare);
-    compose_lines(&chrome(Some(&selected)), &mut lines);
+    let (none, domain) = (GizmoSelection::new(&scene, Vec::new()), GizmoSelection::new(&scene, vec![selected.clone()]));
+    compose_lines(&chrome(&none), &mut bare);
+    compose_lines(&chrome(&domain), &mut lines);
     let handles = selected.handles.iter().filter(|h| h.mode == GizmoMode::Move).count();
     let lattice = lines.len() - bare.len() - handles;
     eprintln!("a3: cells {:?}, cell {}, lattice lines {lattice}", layout.cells, layout.cell_size);

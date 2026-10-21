@@ -1552,6 +1552,7 @@ impl ContentThread {
             node_preview_info: self.content_pipeline.node_preview_info(),
             scene_viewport_frames: self.content_pipeline.scene_viewport_frames().clone(),
             physics_overlay_frames: self.content_pipeline.physics_overlay_frames().clone(),
+            setup_fits: self.content_pipeline.setup_fits().clone(),
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
             clip_atlas_layout: self.content_pipeline.clip_atlas_layout().clone(),

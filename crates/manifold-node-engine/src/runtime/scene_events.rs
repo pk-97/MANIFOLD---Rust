@@ -70,7 +70,7 @@ impl PresetRuntime {
                 .modifier_preview_local_node(context, output[read].0.as_str())
                 .cloned();
             if let Some(authored) = authored {
-                let snapshot = output[read].1;
+                let snapshot = output[read].1.clone();
                 output[write] = (authored, snapshot);
                 write += 1;
             }

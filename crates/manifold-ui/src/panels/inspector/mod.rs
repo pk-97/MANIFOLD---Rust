@@ -1769,6 +1769,7 @@ mod tests {
                 disabled: None,
                 material_role: None,
                 inactive_reason: None,
+                setup_warning: None,
                 scene: None,
                 limit: Default::default(),
             },

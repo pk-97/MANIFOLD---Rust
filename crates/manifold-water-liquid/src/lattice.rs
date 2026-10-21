@@ -10,7 +10,7 @@ use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
-pub const PADDING_NODES: u32 = 3;
+pub const PADDING_NODES: u32 = manifold_core::liquid_setup::LATTICE_PADDING_CELLS;
 
 /// Native meshing extent: three extra cells total, 1.5 on each side.
 pub const SURFACE_PADDING_CELLS: f32 = 1.5;

@@ -16,9 +16,7 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use manifold_nodes_scene::node_graph::viewport_gizmo::{
-    GizmoChrome, GizmoMode, GizmoTarget, GizmoTargetId, compose_lines,
-};
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoSelection, GizmoTargetId, compose_lines};
 use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{Rect, Vec2};
@@ -27,6 +25,30 @@ use crate::scene_gizmo::{GizmoGesture, GizmoPress, GizmoView};
 use crate::ui_bridge::DispatchCtx;
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
+pub(crate) type SharedDomains = Arc<Domains>;
+
+/// How many domains a frame carries the live column box of beside the shared
+/// snapshots. A domain past these keeps its box in its snapshot, so a driven
+/// clipped column there re-shares the snapshots as it moves.
+pub(crate) const LIVE_COLUMNS: usize = 8;
+/// The live column box of each of a frame's first [`LIVE_COLUMNS`] domains,
+/// in domain order: `FluidDomainSnapshot::column_box`, moved out of the
+/// snapshot so a driven column moving every frame re-allocates nothing.
+pub(crate) type LiveColumns = [Option<([f32; 3], [f32; 3])>; LIVE_COLUMNS];
+
+/// Publish this frame's domain snapshots: the live column boxes move out of
+/// `scratch` into the returned slots, and `shared` is re-allocated only when
+/// what is left changes (readiness, layout, fit, refusal).
+pub(crate) fn share_domains(scratch: &mut [(NodeId, FluidDomainSnapshot)], shared: &mut SharedDomains) -> LiveColumns {
+    let mut live = [None; LIVE_COLUMNS];
+    for ((_, snapshot), slot) in scratch.iter_mut().zip(&mut live) {
+        *slot = snapshot.column_box.take();
+    }
+    if &*scratch != shared.as_ref() {
+        *shared = Arc::from(&*scratch);
+    }
+    live
+}
 type Lights = [[f32; 3]];
 type Gizmos = [PhysicsGizmo];
 
@@ -46,6 +68,7 @@ pub(crate) struct PhysicsOverlayFrame {
     pub scene_node: NodeId,
     pub camera: Camera,
     pub domains: Arc<Domains>,
+    pub live_columns: LiveColumns,
     pub lights: Arc<Lights>,
     /// Forces, colliders, bodies, sources, drains and the fill, as the
     /// simulation used them.
@@ -69,14 +92,17 @@ impl PhysicsOverlayFrame {
 #[derive(Default)]
 pub(crate) struct PreviewGizmo {
     mode: GizmoMode,
-    /// The shape last picked on the preview. Its handles show while it
-    /// belongs to the Scene panel's selection; otherwise the selection's
-    /// first shape shows.
-    picked: Option<GizmoTargetId>,
+    /// The shapes picked on the preview, in pick order. A picked shape is
+    /// selected while its item is selected in the Scene panel; an item
+    /// selected with none of its shapes picked shows its first shape.
+    picked: Vec<GizmoTargetId>,
     drag: Option<PreviewDrag>,
+    /// A press on empty space inside the picture, where it landed: its
+    /// release there is a click, which clears the selection.
+    missed_at: Option<Vec2>,
     /// The preview took the last left press, so W, E and R pick the mode.
     focused: bool,
-    /// Moves with the mode and the picked shape: a frame-planner input.
+    /// Moves with the mode and the picked shapes: a frame-planner input.
     version: u64,
     /// The overlay frame the last present showed, and the output size it
     /// was rendered at.
@@ -84,8 +110,11 @@ pub(crate) struct PreviewGizmo {
     /// The navigated picture shown instead of the output, if any.
     navigated: Option<GizmoView>,
     scene: crate::editor_graph_cache::EditorGraphCache,
-    target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
+    target: Option<(TargetKey, GizmoSelection, bool)>,
     lines: Vec<WorldLine>,
+    /// The shown scene's setup problems with what the shown frame's solvers
+    /// reported, for the red boxes.
+    problems: crate::setup_check::GizmoProblems,
     /// Render slots of the selected object, for its outline (D-102); empty
     /// while an effect moves the picture off the scene.
     outline: Vec<u32>,
@@ -94,6 +123,9 @@ pub(crate) struct PreviewGizmo {
 /// What the shown handles read: the scene, the panel selection, this host's
 /// version and the parts an effect chain lives in.
 type TargetKey = (Arc<SceneVm>, u64, u64, u64);
+
+/// A frame with no scene to read: the chrome draws, nothing is selected.
+pub(crate) static NO_SELECTION: GizmoSelection = GizmoSelection { targets: Vec::new(), selected: Vec::new(), handles: None };
 
 /// Parts that decide whether an effect follows the scene layer.
 const CHAIN_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Settings]);
@@ -118,6 +150,11 @@ impl PreviewGizmo {
 
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// The last left press landed on empty space in the picture.
+    pub fn missed(&self) -> bool {
+        self.missed_at.is_some()
     }
 
     pub fn set_mode(&mut self, mode: GizmoMode) {
@@ -168,40 +205,45 @@ impl PreviewGizmo {
         };
         if !fresh {
             self.target = key.map(|key| {
-                let selected = panel
-                    .live_selection()
-                    .and_then(|selection| crate::scene_gizmo::selected_target(&key.0, selection, self.picked.as_ref()));
+                let items = panel.live_selected();
+                let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items, &self.picked));
                 let fade = effect_follows(project, &layer);
-                self.outline.clear();
-                if let Some(SceneSelection::Object(object)) = panel.live_selection().filter(|_| !fade) {
-                    crate::selection_outline::outline_slots(&key.0, *object, &mut self.outline);
-                }
-                (key, selected, fade)
+                let objects = items.iter().filter(|_| !fade).filter_map(|item| match item {
+                    SceneSelection::Object(object) => Some(*object),
+                    _ => None,
+                });
+                crate::selection_outline::outline_slots(&key.0, objects, &mut self.outline);
+                (key, selection, fade)
             });
             if self.target.is_none() {
                 self.outline.clear();
             }
         }
-        let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
         let (frame, _) = self.shown.as_ref()?;
+        let (selection, fade_handles) = self.target.as_ref().map_or((&NO_SELECTION, &false), |(_, selection, fade)| (selection, fade));
+        self.problems.update(self.target.as_ref().map(|(key, ..)| &key.0), Some(&frame.domains));
         let chrome = GizmoChrome {
             view,
             lights: &frame.lights,
             domains: &frame.domains,
+            live_columns: &frame.live_columns,
             physics: &frame.gizmos,
-            selected,
+            problems: self.problems.problems(),
+            selection,
             mode: self.mode,
-            fade_handles,
+            fade_handles: *fade_handles,
         };
         compose_lines(&chrome, &mut self.lines);
         Some((&self.lines, view))
     }
 
-    /// A left press at `pos` in the window. `fit` is where the show picture
-    /// sits (`ui_frame::video_fit_rect`). True when the preview took it: a
-    /// handle grabbed or refused, or a shape picked. Every press inside the
-    /// picture focuses the preview; one outside unfocuses it.
-    pub fn press(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) -> bool {
+    /// A left press at `pos` in the window; `extend` (Shift) adds the
+    /// picked shape to the selection or takes it out. `fit` is where the
+    /// show picture sits (`ui_frame::video_fit_rect`). True when the preview
+    /// took it: a handle grabbed or refused, or a shape picked. Every press
+    /// inside the picture focuses the preview; one outside unfocuses it.
+    pub fn press(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2, extend: bool) -> bool {
+        self.missed_at = None;
         let layer = ctx.ui.scene_setup_panel.gizmo_layer().cloned();
         // An open overlay over the picture takes its own presses.
         let inside = fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
@@ -212,25 +254,41 @@ impl PreviewGizmo {
         let Some(scene) = crate::scene_gizmo::authored_def(&ctx.project, &graph).as_ref().and_then(SceneVm::from_def) else {
             return false;
         };
-        let selected = ctx
-            .ui
-            .scene_setup_panel
-            .live_selection()
-            .and_then(|selection| crate::scene_gizmo::selected_target(&scene, selection, self.picked.as_ref()))
-            .map(|target| target.id);
-        match crate::scene_gizmo::press(ctx, &layer, &scene, selected.as_ref(), self.mode, &view, point) {
+        let items = ctx.ui.scene_setup_panel.live_selected();
+        let selection = GizmoSelection::new(&scene, crate::scene_gizmo::selected_targets(&scene, items, &self.picked));
+        let at = crate::scene_gizmo::PressAt { view: &view, point, extend };
+        match crate::scene_gizmo::press(ctx, &layer, &scene, &selection, self.mode, at) {
             GizmoPress::Handle(gesture) => {
-                self.drag = gesture.map(|gesture| PreviewDrag { gesture, view });
+                self.drag = gesture.map(|gesture| PreviewDrag { gesture: *gesture, view });
                 true
             }
-            GizmoPress::Picked(Some(id)) => {
-                if self.picked.as_ref() != Some(&id) {
-                    self.picked = Some(id);
+            GizmoPress::Picked(Some(ids)) => {
+                if self.picked != ids {
+                    self.picked = ids;
                     self.version += 1;
                 }
                 true
             }
-            GizmoPress::Picked(None) => false,
+            GizmoPress::Picked(None) => {
+                self.missed_at = Some(pos);
+                false
+            }
+        }
+    }
+
+    /// A left release at `pos`. A press on empty space released where it
+    /// landed is a click there, which clears the selection, as in Blender;
+    /// a press that orbited the preview away is not.
+    pub fn release_click(&mut self, ctx: &mut DispatchCtx, pos: Vec2) {
+        let Some(at) = self.missed_at.take() else { return };
+        if (pos.x - at.x).hypot(pos.y - at.y) > manifold_ui::color::DRAG_THRESHOLD_PX {
+            return;
+        }
+        let Some(layer) = ctx.ui.scene_setup_panel.gizmo_layer().cloned() else { return };
+        ctx.ui.scene_setup_panel.clear_selected(layer);
+        if !self.picked.is_empty() {
+            self.picked.clear();
+            self.version += 1;
         }
     }
 
@@ -286,7 +344,9 @@ impl PreviewGizmo {
     /// object asks for one. Call after [`Self::compose`].
     #[cfg(feature = "ui-snapshot")]
     pub fn grips(&self, fit: Rect) -> Vec<(String, Vec2)> {
-        let (Some(view), Some((_, Some(target), _))) = (self.view(), self.target.as_ref()) else { return Vec::new() };
+        let (Some(view), Some((_, GizmoSelection { handles: Some(target), .. }, _))) = (self.view(), self.target.as_ref()) else {
+            return Vec::new();
+        };
         let at = |point: [f32; 3]| {
             let p = view.camera.project_to_pixel(point, view.width, view.height)?;
             Some(Vec2::new(fit.x + p.px * fit.width / view.width as f32, fit.y + p.py * fit.height / view.height as f32))
@@ -425,9 +485,7 @@ impl PhysicsOverlayObservations {
         self.light_scratch.clear();
         self.gizmo_scratch.clear();
         let Some((scene_node, camera)) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
-        if self.domain_scratch.as_slice() != self.domains.as_ref() {
-            self.domains = Arc::from(self.domain_scratch.as_slice());
-        }
+        let live_columns = share_domains(&mut self.domain_scratch, &mut self.domains);
         if self.light_scratch.as_slice() != self.lights.as_ref() {
             self.lights = Arc::from(self.light_scratch.as_slice());
         }
@@ -440,6 +498,7 @@ impl PhysicsOverlayObservations {
             scene_node,
             camera,
             domains: self.domains.clone(),
+            live_columns,
             lights: self.lights.clone(),
             gizmos: self.gizmos.clone(),
             outline: None,
@@ -515,6 +574,47 @@ mod tests {
         assert_eq!(first.as_ref(), [collider, wind]);
         observations.record(1, 2, |_, _, _, gizmos| observe(gizmos));
         assert!(Arc::ptr_eq(&first, &observations.frames[1].as_ref().unwrap().gizmos));
+    }
+
+    /// A driven column clipped by a wall moves its box every frame; the box
+    /// rides the frame's live slots and the shared snapshots stay put, so
+    /// neither a steady nor a moving frame re-allocates them.
+    #[test]
+    fn a_moving_clipped_column_shares_the_domain_snapshots() {
+        use manifold_core::fluid_domain::FluidDomainState;
+        use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
+        let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped };
+        let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
+        let snapshot = |column_box, fit| FluidDomainSnapshot {
+            epoch: 1,
+            state: FluidDomainState::Ready,
+            accepted_layout: None,
+            fit,
+            column_box,
+            refusal: None,
+        };
+        let mut observations = PhysicsOverlayObservations::default();
+        observations.set_layer(Some(LayerId::new("water")));
+        let mut record = |frame: u64, column_box, fit| {
+            let slot = frame as usize % observations.frames.len();
+            observations.record(slot, frame, |_, domains, _, _| {
+                domains.push((NodeId::new("water"), snapshot(column_box, fit)));
+                Some((NodeId::new("scene"), Camera::default_perspective()))
+            });
+            observations.frames[slot].clone().unwrap()
+        };
+        let first = record(0, at(1.5), clipped);
+        let shared = (first.domains.as_ptr(), first.domains.len());
+        assert_eq!(first.live_columns[0], at(1.5));
+        assert_eq!(first.domains[0].1.column_box, None, "the live box is not part of the shared snapshot");
+        for frame in 1..120 {
+            let x = 1.5 + frame as f32 * 0.01;
+            let moving = record(frame, at(x), clipped);
+            assert_eq!((moving.domains.as_ptr(), moving.domains.len()), shared, "frame {frame} re-shared the snapshots");
+            assert_eq!(moving.live_columns[0], at(x), "the frame carries where the column is now");
+        }
+        let fitting = record(120, None, SetupFit::default());
+        assert_ne!(fitting.domains.as_ptr(), shared.0, "a new fit is a new snapshot");
     }
 
     #[test]

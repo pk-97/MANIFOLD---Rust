@@ -11,7 +11,7 @@ use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_template::{SceneTemplate, insert_scene_template};
 
 use crate::command::Command;
-use crate::scene_transaction::{SceneGraphRejection, SceneGraphTransaction};
+use crate::scene_transaction::SceneGraphTransaction;
 
 /// Insert one prepared template into a render scene, or a fluid role source
 /// into its `water` (the liquid domain). The candidate graph is built when
@@ -63,12 +63,7 @@ impl Command for InsertSceneTemplateCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        match self.transaction.error()? {
-            SceneGraphRejection::MissingOwner => Some("Scene owner is no longer present"),
-            SceneGraphRejection::PresetTypeChanged => Some("Scene type changed while preparing this edit"),
-            SceneGraphRejection::StaleOwner => Some("Scene graph changed while preparing this edit"),
-            SceneGraphRejection::Noop => None,
-        }
+        self.transaction.rejection_reason()
     }
 }
 
@@ -115,11 +110,6 @@ impl Command for RemoveScenePlacedSourceCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        match self.transaction.error()? {
-            SceneGraphRejection::MissingOwner => Some("Scene owner is no longer present"),
-            SceneGraphRejection::PresetTypeChanged => Some("Scene type changed while preparing this edit"),
-            SceneGraphRejection::StaleOwner => Some("Scene graph changed while preparing this edit"),
-            SceneGraphRejection::Noop => None,
-        }
+        self.transaction.rejection_reason()
     }
 }

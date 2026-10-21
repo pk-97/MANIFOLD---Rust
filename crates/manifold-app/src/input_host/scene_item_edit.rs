@@ -56,15 +56,10 @@ impl AppInputHost<'_> {
                 };
                 ContentCommand::send(
                     self.content_tx,
-                    ContentCommand::SceneItem(SceneItemAction::Duplicate {
-                        layer: item.layer_id,
-                        scene: item.scene,
-                        kind: if item.is_light {
-                            SceneItemKind::Light
-                        } else {
-                            SceneItemKind::Object
-                        },
-                        index: item.index,
+                    ContentCommand::SceneItem(if item.is_light {
+                        SceneItemAction::DuplicateLight { layer: item.layer_id, scene: item.scene, index: item.index }
+                    } else {
+                        SceneItemAction::DuplicateObject { layer: item.layer_id, scene: item.scene, index: item.index, copies: 1 }
                     }),
                 );
             }

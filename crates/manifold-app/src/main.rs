@@ -81,6 +81,7 @@ mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
 mod scene_gizmo;
+mod setup_check;
 mod scene_insert;
 mod selection_outline;
 mod scene_modifier_edit;
@@ -172,6 +173,7 @@ mod window_input;
 #[cfg(all(feature = "ui-automation", unix))]
 mod live_ui;
 mod viewport_input;
+mod viewport_selection;
 mod scene_viewport;
 mod physics_overlay;
 mod preview_navigation;

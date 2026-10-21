@@ -269,7 +269,7 @@ impl ParamCardPanel {
                     continue;
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
-                h += self.inactive_reason_height(i);
+                h += self.note_lines_height(i);
                 // A plain switch or a pick list never gets a drawer: zero
                 // height, unconditionally. Sliders, fire rows and trigger
                 // gates go through the general `active_mod_tabs`-driven
@@ -323,7 +323,7 @@ impl ParamCardPanel {
     /// channel sliders; a channel drawn inside one counts nothing itself.
     fn generator_row_height(&self, i: usize) -> f32 {
         let slider = |i: usize| {
-            let mut h = ROW_HEIGHT + ROW_SPACING + self.inactive_reason_height(i);
+            let mut h = ROW_HEIGHT + ROW_SPACING + self.note_lines_height(i);
             // Same rule as `effect_body_natural_height`.
             if self.rows[i].grows_drawer(self.draws_by_kind()) {
                 h += self.animated_drawer_height(i);
@@ -343,10 +343,12 @@ impl ParamCardPanel {
         h
     }
 
-    /// The dimmed reason line a row draws under itself when it does nothing
-    /// right now (`build_inactive_reason`).
-    fn inactive_reason_height(&self, i: usize) -> f32 {
-        if self.rows[i].spec.inactive_reason.is_some() { ROW_HEIGHT + ROW_SPACING } else { 0.0 }
+    /// The note lines a row draws under itself (`build_note_lines`): the
+    /// setup warning and the dimmed reason it does nothing right now.
+    fn note_lines_height(&self, i: usize) -> f32 {
+        let spec = &self.rows[i].spec;
+        let lines = usize::from(spec.setup_warning.is_some()) + usize::from(spec.inactive_reason.is_some());
+        lines as f32 * (ROW_HEIGHT + ROW_SPACING)
     }
 
     /// section 6b — set compact mode (hide all modulation config drawers on this card).

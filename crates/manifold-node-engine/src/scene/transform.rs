@@ -94,14 +94,19 @@ pub fn quat_to_render_scene_euler(q: [f32; 4]) -> [f32; 3] {
     // Row-major rotation matrix r[row][col] — same convention as
     // `gltf_load::mat4_from_trs`'s upper-left 3x3 (that function is
     // column-major; these are its entries read row-major).
-    let r20 = 2.0 * (xz - wy);
-    let r21 = 2.0 * (yz + wx);
-    let r22 = 1.0 - 2.0 * (xx + yy);
-    let r10 = 2.0 * (xy + wz);
-    let r00 = 1.0 - 2.0 * (yy + zz);
-    let r01 = 2.0 * (xy - wz);
-    let r11 = 1.0 - 2.0 * (xx + zz);
+    rotation_to_render_scene_euler([
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 0.0],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 0.0],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+    ])
+}
 
+/// A row-major rotation matrix `r[row][col]` → the `(rot_x, rot_y, rot_z)`
+/// Euler triple `render_scene::model_matrix` composes back into it (see
+/// [`quat_to_render_scene_euler`]). Reads only `r00`, `r01`, `r10`, `r11`,
+/// `r20`, `r21`, `r22`.
+pub fn rotation_to_render_scene_euler(r: [[f32; 3]; 3]) -> [f32; 3] {
+    let [[r00, r01, _], [r10, r11, _], [r20, r21, r22]] = r;
     let r20c = r20.clamp(-1.0, 1.0);
     if (1.0 - r20c.abs()) < 1e-6 {
         // Gimbal lock: x and z become degenerate around this axis (only

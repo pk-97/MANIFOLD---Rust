@@ -805,11 +805,10 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
 
-        // Buttons and keyboard duplication use the same content-owned transfer.
-        ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index) => {
-            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Duplicate {
-                layer: layer_id.clone(), scene: *render_scene_node_id,
-                kind: crate::scene_item_transfer::SceneItemKind::Object, index: *source_index,
+        // Buttons and keyboard duplication build on the content thread.
+        ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index, copies) => {
+            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::DuplicateObject {
+                layer: layer_id.clone(), scene: *render_scene_node_id, index: *source_index, copies: *copies,
             }));
             DispatchResult::handled()
         }
@@ -829,35 +828,14 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
-            use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-            let enabled = matches!(action, ProjectAction::SceneSetupEnablePhysics(..));
-            if let Some(mut default) = generator_catalog_default(project, layer_id) {
-                manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let physics = project.graph_for_target(&target, Some(&default))
-                    .and_then(SceneVm::from_def)
-                    .filter(|vm| vm.scene_root_node_id == *render_scene_node_id)
-                    .and_then(|vm| vm.objects.into_iter().find_map(|object| match object {
-                        SceneObjectVm::Known(row) if row.index == *object_index as usize => row.physics,
-                        _ => None,
-                    }));
-                let cmd: Box<dyn manifold_editing::command::Command + Send> = if let Some(physics) = physics {
-                    Box::new(manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                        target, physics.body_node_id, "enabled".into(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
-                        default,
-                    ).with_scope(physics.body_scope_path))
-                } else if enabled {
-                    Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
-                        target, *render_scene_node_id, *object_index,
-                        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
-                        default,
-                    ).with_world_metadata(manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world")))
-                } else {
-                    return DispatchResult::handled();
-                };
-                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd));
-            }
+            // Built on the content thread, like Duplicate: a click that lands
+            // before the last edit's snapshot returns still reads that edit.
+            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::SetPhysics {
+                layer: layer_id.clone(),
+                scene: *render_scene_node_id,
+                index: *object_index,
+                enabled: matches!(action, ProjectAction::SceneSetupEnablePhysics(..)),
+            }));
             DispatchResult::handled()
         }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
@@ -1358,6 +1336,9 @@ mod tests {
     mod water_family_draw;
     mod water_family_expansion;
     mod water_family_sources;
+    mod setup_check;
+    mod physics_reload;
+    mod typed_write;
 
     fn scene_layer_project() -> (Project, LayerId, u32) {
         let mut project = Project::default();
@@ -1575,9 +1556,10 @@ mod tests {
                 &mut selection, &mut active_layer, &mut prefs, Default::default());
             assert!(effective_def(&project, &layer_id) == before_dispatch,
                 "UI dispatch waits for content");
-            let crate::content_command::ContentCommand::ExecuteOnContent(mut cmd) = rx.try_recv().unwrap() else {
-                panic!("toggle must send an undoable edit to content");
+            let crate::content_command::ContentCommand::SceneItem(switch) = rx.try_recv().unwrap() else {
+                panic!("the switch builds on content");
             };
+            let mut cmd = crate::scene_item_transfer::build_action(&project, switch).expect("the switch builds");
             cmd.execute(&mut project);
             assert!(cmd.touches().contains(manifold_core::change::Part::Effects),
                 "the toggle shows or hides the body rows, so the Scene tab re-projects");
@@ -1746,9 +1728,10 @@ mod tests {
             added,
             "Physics enable waits for content"
         );
-        let ContentCommand::ExecuteOnContent(mut enable) = rx.try_recv().unwrap() else {
-            panic!("Physics enable must execute on content");
+        let ContentCommand::SceneItem(switch) = rx.try_recv().unwrap() else {
+            panic!("Physics enable builds on content");
         };
+        let mut enable = crate::scene_item_transfer::build_action(&project, switch).expect("enable builds");
         enable.execute(&mut project);
         assert!(
             enable.was_applied(),
@@ -1895,9 +1878,10 @@ mod tests {
                 Default::default(),
             );
             assert_eq!(effective_def(&project, &layer_id), before_toggle);
-            let ContentCommand::ExecuteOnContent(mut toggle) = rx.try_recv().unwrap() else {
-                panic!("Physics toggle must execute on content");
+            let ContentCommand::SceneItem(switch) = rx.try_recv().unwrap() else {
+                panic!("Physics toggle builds on content");
             };
+            let mut toggle = crate::scene_item_transfer::build_action(&project, switch).expect("the toggle builds");
             toggle.execute(&mut project);
             assert!(toggle.was_applied(), "toggle rejected: {:?}", toggle.rejection_reason());
             let toggled_vm = SceneVm::from_def(&effective_def(&project, &layer_id)).unwrap();
@@ -2533,6 +2517,7 @@ mod tests {
             layer_id.clone(),
             render_scene_id,
             source_index,
+            1,
         );
         dispatch_project(
             &duplicate,
@@ -2586,8 +2571,8 @@ mod tests {
         assert_eq!(section, Some(format!("{duplicate_name} — Transform").as_str()));
         assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_y"), 2.25,
             "the duplicate keeps the source's authored control values");
-        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.25,
-            "the shared scene clipboard duplicates the authored position in place");
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.75,
+            "the copy sits 0.5 m on from its source (D11)");
         command.undo(&mut project);
         assert_eq!(serde_json::to_value(&project).unwrap(), before_duplicate);
         command.execute(&mut project);
@@ -2657,6 +2642,7 @@ mod tests {
             layer_id.clone(),
             render_scene_id,
             source_index,
+            1,
         );
         dispatch_project(
             &duplicate,

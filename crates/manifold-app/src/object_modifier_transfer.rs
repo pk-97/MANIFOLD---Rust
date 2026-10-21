@@ -462,7 +462,7 @@ fn remap_routes(
         .iter()
         .map(|(source_id, destination_id)| (source_id.clone(), destination_id.clone()))
         .collect();
-    crate::scene_modifier_transfer::copy_host_routes(source, destination, &remaps, false);
+    manifold_editing::param_routes::copy_param_routes(source, destination, &remaps, manifold_editing::param_routes::RouteTransfer::Copy);
 }
 
 fn build_transfer(
@@ -933,11 +933,11 @@ mod tests {
             .id;
         let mut add = crate::scene_item_transfer::build_action(
             &project,
-            crate::scene_item_transfer::SceneItemAction::Duplicate {
+            crate::scene_item_transfer::SceneItemAction::DuplicateObject {
                 layer: destination_layer.clone(),
                 scene,
-                kind: crate::scene_item_transfer::SceneItemKind::Object,
                 index: 0,
+                copies: 1,
             },
         )
         .unwrap();

@@ -144,13 +144,9 @@ fn duplicate_imported_object(
     service: &mut EditingService,
 ) {
     let (scope, render_id, _) = render_scene(project, layer_id);
-    let command = DuplicateSceneObjectCommand::new(
-        GraphTarget::Generator(layer_id.clone()),
-        scope,
-        render_id,
-        0,
-        host_graph(project, layer_id).clone(),
-    );
+    let default = host_graph(project, layer_id).clone();
+    let command = DuplicateSceneObjectCommand::new(project, GraphTarget::Generator(layer_id.clone()), scope, render_id, 0, 1, &default)
+        .expect("the imported object copies");
     service.execute(with_admission(Box::new(command)), project);
 }
 

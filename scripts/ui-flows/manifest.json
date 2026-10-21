@@ -20,6 +20,15 @@
     "crates/manifold-app/src/scene_gizmo.rs": [
       "scene-preview-gizmo-drag"
     ],
+    "crates/manifold-app/src/setup_check.rs": [
+      "scene-setup-check"
+    ],
+    "crates/manifold-nodes-scene/src/node_graph/scene_vm/setup_check.rs": [
+      "scene-setup-check"
+    ],
+    "crates/manifold-core/src/liquid_setup.rs": [
+      "scene-setup-check"
+    ],
     "crates/manifold-ui/src/chrome/diff.rs": [
       "rack-bypass",
       "rack-wet-dry"
@@ -143,6 +152,17 @@
       "scene-fluid-authoring",
       "scene-physics-template",
       "water-family-preset"
+    ],
+    "crates/manifold-editing/src/commands/graph/scene/physics.rs": [
+      "scene-physics-switch",
+      "scene-imported-physics"
+    ],
+    "crates/manifold-editing/src/commands/graph/scene/duplicate.rs": [
+      "scene-physics-duplicate-count",
+      "scene-physics-duplicate-paused"
+    ],
+    "crates/manifold-ui/src/panels/scene_setup_panel/copies.rs": [
+      "scene-physics-duplicate-count"
     ],
     "crates/manifold-core/src/scene_exposure.rs": [
       "scene-fluid-dam-break-controls",
@@ -447,9 +467,14 @@
     "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
+    "scene-setup-check": "fluidauthoring",
+    "scene-water-domain-size": "fluidauthoring",
     "scene-physics-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
+    "scene-value-box-fits": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
+    "scene-physics-switch": "gltfscene",
+    "scene-physics-duplicate-count": "gltfscene",
     "scene-imported-physics": "gltfscene",
     "render-mode-solid": "gltfscene",
     "render-mode-points": "gltfscene",
