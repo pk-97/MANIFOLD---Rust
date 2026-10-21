@@ -14,7 +14,8 @@
 //!   held; releasing it never rescales travel already made. The beat axis
 //!   ignores Shift.
 //! - The caller clamps what the resolver returns: [`clamp_single_beat`] for one
-//!   point, [`clamp_group_beat_delta`] for a group, [`apply_value`] for values.
+//!   point, [`clamp_group_beat_delta`] for a group, [`shared_norm_delta`] then
+//!   [`apply_value`] for values of a segment or group.
 //! - Whole-number lanes quantise through [`quantise_whole_number`] only.
 //! - Preview and commit are the same resolve: callers store the last resolved
 //!   (beat, value) and commit that, never a re-derivation.
@@ -101,7 +102,9 @@ impl DragResolver {
         let fine = if input.shift { FINE_SCALE } else { 1.0 };
         self.norm_delta += (self.last_y - input.pos.y) / input.curve_height.max(f32::EPSILON) * fine;
         self.last_y = input.pos.y;
-        let beat_delta = if self.beat_locked {
+        // Horizontal travel under the threshold is wobble, not a time move,
+        // however fine the grid cell is.
+        let beat_delta = if !self.moves_in_time(input.pos) {
             0.0
         } else {
             let travel = input.pointer_beat.0 - self.press_beat.0;
@@ -134,6 +137,29 @@ pub fn apply_value(original: f32, norm_delta: f32, min: f32, max: f32, whole_num
     } else {
         moved.clamp(min.min(max), min.max(max))
     }
+}
+
+/// One shared value delta (normalised) for points moving together: the
+/// requested delta, bounded so no point's clamped position crosses a lane
+/// bound. `originals` is `(value, min, max)` per point. Out-of-range originals
+/// bound as if sitting on the nearest edge, so the bounds never invert; no
+/// travel stays exactly zero.
+pub fn shared_norm_delta(originals: impl Iterator<Item = (f32, f32, f32)>, requested: f32) -> f32 {
+    if requested == 0.0 {
+        return 0.0;
+    }
+    let mut lo = f32::NEG_INFINITY;
+    let mut hi = f32::INFINITY;
+    for (value, min, max) in originals {
+        let range = (max - min).max(f32::EPSILON);
+        let norm = ((value - min) / range).clamp(0.0, 1.0);
+        lo = lo.max(-norm);
+        hi = hi.min(1.0 - norm);
+    }
+    if lo > hi {
+        return 0.0;
+    }
+    requested.clamp(lo, hi)
 }
 
 /// Single-point beat: not before zero, and not across the neighbours captured
@@ -214,7 +240,7 @@ mod tests {
     fn the_crossing_resolve_applies_the_full_travel_since_the_press() {
         // One fast flick: a single first move 20 px up and two beats right.
         let mut r = pressed(false);
-        let moved = r.resolve(&input(100.0, 80.0, 12.0));
+        let moved = r.resolve(&input(120.0, 80.0, 12.0));
         assert_eq!(moved.beat_delta, 2.0, "the beat travel counts from the press");
         assert_eq!(moved.norm_delta, 0.2, "exactly 20 px of a 100 px lane");
         // A fine first move is scaled by the Shift state at that resolve.
@@ -223,7 +249,7 @@ mod tests {
         let moved = pressed(false).resolve(&fine);
         assert!((moved.norm_delta - 0.05).abs() < 1e-7);
         // Later moves stay incremental.
-        let next = r.resolve(&input(100.0, 70.0, 12.0));
+        let next = r.resolve(&input(120.0, 70.0, 12.0));
         assert!((next.norm_delta - 0.3).abs() < 1e-6);
     }
 
@@ -330,13 +356,24 @@ mod tests {
     }
 
     #[test]
-    fn preview_and_commit_values_are_bit_identical() {
-        // The overlay stores the last resolve and commits it; applying the same
-        // resolve twice gives the same bits.
+    fn shared_delta_survives_out_of_range_originals() {
+        let pts = [(-0.2_f32, 0.0_f32, 1.0_f32), (1.3, 0.0, 1.0)];
+        // Both endpoints sit past opposite edges: no room either way, no panic.
+        assert_eq!(shared_norm_delta(pts.iter().copied(), 0.4), 0.0);
+        assert_eq!(shared_norm_delta(pts.iter().copied(), -0.4), 0.0);
+        // Zero travel stays exactly zero even with an endpoint out of range.
+        let one_out = [(-0.2_f32, 0.0_f32, 1.0_f32), (0.5, 0.0, 1.0)];
+        assert_eq!(shared_norm_delta(one_out.iter().copied(), 0.0), 0.0);
+        assert_eq!(shared_norm_delta(one_out.iter().copied(), 0.3), 0.3);
+        let in_range = [(0.2_f32, 0.0_f32, 1.0_f32), (0.9, 0.0, 1.0)];
+        assert!((shared_norm_delta(in_range.iter().copied(), 0.5) - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_wobble_under_the_threshold_leaves_the_beat_alone_on_a_five_pixel_cell() {
         let mut r = started(false);
-        let resolved = r.resolve(&input(137.0, 41.0, 13.4));
-        let a = apply_value(0.37, resolved.norm_delta, 0.0, 1.0, false);
-        let b = apply_value(0.37, resolved.norm_delta, 0.0, 1.0, false);
-        assert_eq!(a.to_bits(), b.to_bits());
+        let mut wobble = input(103.0, 60.0, 10.0 + 3.0 / 80.0);
+        wobble.grid_step = 1.0 / 16.0;
+        assert_eq!(r.resolve(&wobble).beat_delta, 0.0);
     }
 }
