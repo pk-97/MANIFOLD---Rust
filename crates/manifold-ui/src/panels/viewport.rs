@@ -51,7 +51,7 @@ pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
 #[cfg(test)]
 use coordinate::GridSubdivision;
 pub use model::{
-    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion,
+    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion, clip_overlaps_region,
     TimelineOverlays, TrackInfo, ViewportAutomationLane, ViewportClip, clip_zones,
     AUTOMATION_TITLE_NAME_H, AUTOMATION_TITLE_PAD_TOP, AUTOMATION_TITLE_VALUE_GAP,
     AUTOMATION_TITLE_VALUE_H, automation_label_prefix, automation_title_has_value_line,
@@ -119,8 +119,6 @@ pub struct TimelineViewportPanel {
     /// same measurer its trees draw with.
     text_measure: Box<dyn crate::text::TextMeasure>,
 
-    // Per-layer bitmap renderers (None for group layers)
-    bitmap_renderers: Vec<Option<crate::bitmap_renderer::LayerBitmapRenderer>>,
     render_scale: f32,
 
     // Playback state
@@ -367,7 +365,6 @@ impl TimelineViewportPanel {
             #[cfg(test)]
             lane_fills: std::cell::Cell::new(0),
             text_measure: Box::new(crate::text::HeuristicTextMeasure),
-            bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: Beats::ZERO,
             insert_cursor_beat: Beats::ZERO,
@@ -503,11 +500,9 @@ impl TimelineViewportPanel {
         // Track layout changed — overview clip layer needs full repaint
         self.overview_clips_dirty = true;
 
-        // Create/resize bitmap renderers (one per visible layer, including groups).
         // Heights come from the CoordinateMapper — the sole Y-layout authority.
         // `rebuild_mapper_layout` runs before `set_tracks` (state_sync), so the
         // mapper is current here; a zero height means a hidden child layer.
-        self.bitmap_renderers.clear();
         // Zebra parity is counted over visible rows only — a hidden row (height 0,
         // i.e. a collapsed group's child) keeps the same parity so the lanes below
         // it stay correctly alternating.
@@ -516,16 +511,9 @@ impl TimelineViewportPanel {
         for i in 0..self.tracks.len() {
             let height = self.mapper.get_layer_height(i);
             if height <= 0.0 {
-                self.bitmap_renderers.push(None);
                 // Hidden: inherit the next visible row's parity (don't advance).
                 self.track_zebra_even.push(visible_row.is_multiple_of(2));
             } else {
-                self.bitmap_renderers
-                    .push(Some(crate::bitmap_renderer::LayerBitmapRenderer::new(
-                        i,
-                        self.render_scale,
-                        height,
-                    )));
                 self.track_zebra_even.push(visible_row.is_multiple_of(2));
                 visible_row += 1;
             }
@@ -555,13 +543,6 @@ impl TimelineViewportPanel {
     /// together.
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
-        // A lane resize moves track heights with no `set_tracks`: the grid
-        // bitmaps take the new heights here.
-        for (i, renderer) in self.bitmap_renderers.iter_mut().enumerate() {
-            if let Some(renderer) = renderer {
-                renderer.set_track_height(self.mapper.get_layer_height(i));
-            }
-        }
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
         self.rebuild_automation_lane_screens();
     }
@@ -738,9 +719,6 @@ impl TimelineViewportPanel {
 
     pub fn set_render_scale(&mut self, scale: f32) {
         self.render_scale = scale.max(1.0);
-        for r in self.bitmap_renderers.iter_mut().flatten() {
-            r.set_render_scale(self.render_scale);
-        }
     }
 
     /// Playhead pixel X position in the tracks area (for overlay rendering in app.rs).
@@ -774,69 +752,65 @@ impl TimelineViewportPanel {
         self.insert_cursor_beat
     }
 
-    /// Repaint all dirty layer grid bitmaps. Call once per frame before GPU
-    /// upload. The grid is a pure function of the viewport (scroll / zoom / width
-    /// / time-sig), so this takes no selection/clip state — clip bodies, content,
-    /// and overlays are all GPU now.
-    pub fn repaint_dirty_layers(&mut self) {
-        let (min_beat, max_beat) = self.visible_beat_range();
-        let viewport_width_px = self.tracks_rect.width;
-        let time_sig = self.beats_per_bar;
-        let ppb = self.mapper.pixels_per_beat();
+    /// What the track grid pass draws this frame: the viewport's beat mapping
+    /// and layer 0's top. `None` when no layer row is on screen. The grid is a
+    /// pure function of these and of [`Self::timeline_grid_rows`]; nothing is
+    /// cached.
+    pub fn timeline_grid_view(&self) -> Option<crate::timing_grid::TimelineGridView> {
+        let tr = self.tracks_rect;
+        let first_layer_top = self.grid_row(0).map(|(top, _)| top);
+        self.timeline_grid_rows().next()?;
+        Some(crate::timing_grid::TimelineGridView {
+            tracks: tr,
+            min_beat: self.scroll_x_beats.as_f32(),
+            logical_ppb: self.mapper.pixels_per_beat(),
+            beats_per_bar: self.beats_per_bar as f32,
+            render_scale: self.render_scale,
+            first_layer_top,
+        })
+    }
 
-        for renderer in self.bitmap_renderers.iter_mut().flatten() {
-            renderer.repaint(min_beat, max_beat, viewport_width_px, time_sig, ppb);
+    /// The visible clamped screen row `(top, bottom)` of layer `i`, if any.
+    fn grid_row(&self, i: usize) -> Option<(f32, f32)> {
+        let tr = self.tracks_rect;
+        let track_h = self.track_height(i);
+        let track_y = self.track_y(i);
+        if track_h <= 0.0 || track_y + track_h < tr.y || track_y >= tr.y + tr.height {
+            return None;
         }
+        Some((track_y.max(tr.y), (track_y + track_h).min(tr.y + tr.height)))
     }
 
-    /// Iterate layer grid bitmaps that were repainted (for GPU upload).
-    /// Yields `(layer_index, pixels, tex_w, tex_h)` for dirty layers.
-    pub fn dirty_layer_iter(
-        &self,
-    ) -> impl Iterator<Item = (usize, &[crate::node::Color32], usize, usize)> {
-        self.bitmap_renderers
-            .iter()
-            .enumerate()
-            .filter_map(|(i, opt)| {
-                opt.as_ref().and_then(|r| {
-                    if r.was_dirty() && r.tex_w() > 0 && r.tex_h() > 0 {
-                        Some((i, r.pixels(), r.tex_w(), r.tex_h()))
-                    } else {
-                        None
+    /// Vertical spans the grid lines cover: every visible layer row (group
+    /// rows included, as the per-layer grid had), contiguous rows merged; a
+    /// hidden row (height 0) breaks a span. No allocation.
+    pub fn timeline_grid_rows(&self) -> impl Iterator<Item = (f32, f32)> + '_ {
+        let mut next = 0usize;
+        std::iter::from_fn(move || {
+            let mut span: Option<(f32, f32)> = None;
+            while next < self.tracks.len() {
+                let i = next;
+                next += 1;
+                match (self.grid_row(i), span) {
+                    (None, Some(_)) => return span,
+                    (None, None) => {}
+                    (Some((y, y_end)), None) => span = Some((y, y_end)),
+                    (Some((y, y_end)), Some((top, bottom))) => {
+                        if (y - bottom).abs() <= 0.01 {
+                            span = Some((top, y_end));
+                        } else {
+                            next = i;
+                            return Some((top, bottom));
+                        }
                     }
-                })
-            })
-    }
-
-    /// Get screen-space rects for each layer bitmap texture (for GPU rendering).
-    /// Returns (layer_index, rect) for each active bitmap renderer.
-    pub fn layer_bitmap_rects(&self) -> Vec<(usize, Rect)> {
-        let mut rects = Vec::new();
-        for (i, renderer_opt) in self.bitmap_renderers.iter().enumerate() {
-            if renderer_opt.is_some() && i < self.tracks.len() {
-                let track_y = self.track_y(i);
-                let track_h = self.track_height(i);
-                // Only include layers that are visible in the viewport
-                if track_y + track_h >= self.tracks_rect.y
-                    && track_y < self.tracks_rect.y + self.tracks_rect.height
-                    && track_h > 0.0
-                {
-                    // Clamp to tracks rect bounds
-                    let y = track_y.max(self.tracks_rect.y);
-                    let y_end =
-                        (track_y + track_h).min(self.tracks_rect.y + self.tracks_rect.height);
-                    rects.push((
-                        i,
-                        Rect::new(self.tracks_rect.x, y, self.tracks_rect.width, y_end - y),
-                    ));
                 }
             }
-        }
-        rects
+            span
+        })
     }
 
     /// On-screen clip rectangles for the GPU clip pass (section 24 5b), rebuilt every
-    /// frame into `out`. Mirrors `layer_bitmap_rects`' visibility cull and the
+    /// frame into `out`. Uses the same visibility cull as `timeline_grid_view` and the
     /// hit-tester's geometry (same `beat_to_pixel` / `track_y` + `CLIP_VERTICAL_PAD`),
     /// so the drawn body and the clickable region can't disagree. Group layers are
     /// skipped — collapsed groups draw their own summary bitmap and expanded group
@@ -847,13 +821,13 @@ impl TimelineViewportPanel {
         let tx1 = self.tracks_rect.x + self.tracks_rect.width;
         let ty0 = self.tracks_rect.y;
         let ty1 = self.tracks_rect.y + self.tracks_rect.height;
-        for (i, renderer_opt) in self.bitmap_renderers.iter().enumerate() {
-            if renderer_opt.is_none() || self.is_group_layer(i) {
+        for i in 0..self.tracks.len() {
+            if self.is_group_layer(i) {
                 continue;
             }
             let track_y = self.track_y(i);
             let track_h = self.track_height(i);
-            // Same visibility cull as layer_bitmap_rects.
+            // Same visibility cull as timeline_grid_view.
             if track_h <= 0.0 || track_y + track_h < ty0 || track_y > ty1 {
                 continue;
             }
@@ -1992,10 +1966,6 @@ mod tests {
         // Clips and grid lines are painted into bitmaps, not UITree nodes.
         // Track backgrounds should still exist as UITree nodes.
         assert!(!panel.track_bg_ids.is_empty());
-        // Bitmap renderers should be created (one per non-group layer)
-        assert_eq!(panel.bitmap_renderers.len(), 2);
-        assert!(panel.bitmap_renderers[0].is_some());
-        assert!(panel.bitmap_renderers[1].is_some());
     }
 
     #[test]

@@ -380,7 +380,7 @@ impl Application {
                 for cr in &mut self.clip_rect_scratch {
                     let in_marquee = region_selects_clips
                         && region.is_some_and(|r| {
-                            manifold_ui::bitmap_renderer::clip_overlaps_region(
+                            manifold_ui::panels::viewport::clip_overlaps_region(
                                 r,
                                 cr.layer_index,
                                 cr.start_beat.as_f32(),
@@ -624,7 +624,7 @@ impl Application {
         // Pass 4c (lane / stem / overview / collapsed-group panel bitmaps)
         // moved entirely into the seam below — it reads
         // `ui_root.viewport.overview_rect()`/`collapsed_group_rects()` and
-        // `inputs.layer_bitmap_gpu` directly, no caller-side resolution
+        // `inputs.panel_bitmap_gpu` directly, no caller-side resolution
         // needed (module doc, `ui_frame.rs`).
 
         // Timeline overlays (region highlight / insert cursor / beat markers) as
@@ -685,7 +685,7 @@ impl Application {
                 logical_h,
                 scale,
                 crate::ui_frame::MainUiPassInputs {
-                    layer_bitmap_gpu: self.layer_bitmap_gpu.as_mut(),
+                    panel_bitmap_gpu: self.panel_bitmap_gpu.as_mut(),
                     clip_bodies: &self.clip_body_scratch,
                     clip_rects: &self.clip_rect_scratch,
                     clip_content_gpu: self.clip_content_gpu.as_mut(),

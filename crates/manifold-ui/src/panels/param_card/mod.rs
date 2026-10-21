@@ -977,7 +977,7 @@ impl ParamCardPanel {
     }
 
     /// Non-consuming read of the band bitmap — the headless harness rebuilds
-    /// its throwaway `LayerBitmapGpu` every render, so it re-uploads from the
+    /// its throwaway `PanelBitmapGpu` every render, so it re-uploads from the
     /// current buffer regardless of the dirty flag (the live app's persistent
     /// instance consumes `led_band_bitmap` instead).
     pub fn led_band_bitmap_peek(&self) -> Option<(&[Color32], usize, usize)> {
