@@ -358,6 +358,73 @@
         assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Object(object_ref(43))));
     }
 
+    /// Groups nest: each group at any depth folds under its own chevron, a
+    /// folded outer group hides everything inside however the inner ones
+    /// stand, and each row is indented by its depth.
+    #[test]
+    fn nested_groups_fold_each_level_and_indent_by_depth() {
+        let mut vm = compound_shaped_vm();
+        let Some(ObjectRowVm::Known(part)) = vm.objects.get(1).cloned() else { unreachable!("the compound has a part") };
+        let mut inner = (*part).clone();
+        inner.is_group = true;
+        inner.node = object_ref(44);
+        inner.object_node_id = 44;
+        inner.name = "Inner Group".into();
+        inner.parent = Some(object_ref(42));
+        let mut deep = (*part).clone();
+        deep.node = object_ref(45);
+        deep.object_node_id = 45;
+        deep.name = "Deep Part".into();
+        deep.parent = Some(object_ref(44));
+        vm.objects.push(ObjectRowVm::Known(Box::new(inner)));
+        vm.objects.push(ObjectRowVm::Known(Box::new(deep)));
+        sync_items(&mut vm);
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm));
+        let mut tree = UITree::new();
+        let rebuild = |panel: &mut ScenePanel, tree: &mut UITree| {
+            tree.clear();
+            panel.build_docked(tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        };
+        let shown = |panel: &ScenePanel| -> Vec<u32> {
+            panel
+                .outliner_row_ids
+                .iter()
+                .filter_map(|(_, sel)| match sel {
+                    SceneSelection::Object(id) => id.node.as_str().strip_prefix("object")?.parse().ok(),
+                    _ => None,
+                })
+                .collect()
+        };
+        let toggle = |panel: &mut ScenePanel, tree: &mut UITree, group: u32| {
+            let (id, _) = *panel.group_toggle_ids.iter().find(|(_, owner)| *owner == object_ref(group)).expect("the group has a chevron");
+            panel.handle_event(&UIEvent::Click { node_id: id, pos: Vec2::ZERO, modifiers: Modifiers::default() }, tree);
+        };
+        rebuild(&mut panel, &mut tree);
+        assert_eq!(shown(&panel), [42], "a folded outer group hides everything inside");
+        toggle(&mut panel, &mut tree, 42);
+        rebuild(&mut panel, &mut tree);
+        assert_eq!(shown(&panel), [42, 43, 44], "opening the outer group shows its own level only");
+        toggle(&mut panel, &mut tree, 44);
+        rebuild(&mut panel, &mut tree);
+        assert_eq!(shown(&panel), [42, 43, 44, 45]);
+        let x = |panel: &ScenePanel, tree: &UITree, id: u32| {
+            let (row, _) = panel.outliner_row_ids.iter().find(|(_, sel)| *sel == SceneSelection::Object(object_ref(id))).unwrap();
+            tree.get_bounds(*row).x
+        };
+        assert!(x(&panel, &tree, 45) > x(&panel, &tree, 43), "a row two groups deep sits further in than one a group deep");
+        assert_eq!(x(&panel, &tree, 44), x(&panel, &tree, 45), "a group's contents line up under its name");
+        let chevron_x = |panel: &ScenePanel, tree: &UITree, group: u32| {
+            let (id, _) = panel.group_toggle_ids.iter().find(|(_, owner)| *owner == object_ref(group)).unwrap();
+            tree.get_bounds(*id).x
+        };
+        assert!(chevron_x(&panel, &tree, 44) > chevron_x(&panel, &tree, 42), "the inner chevron is indented");
+        toggle(&mut panel, &mut tree, 42);
+        rebuild(&mut panel, &mut tree);
+        assert_eq!(shown(&panel), [42], "folding the outer group hides the open inner one too");
+    }
+
     /// A placed source folds with its water's other children and sits after
     /// them at their indent.
     #[test]

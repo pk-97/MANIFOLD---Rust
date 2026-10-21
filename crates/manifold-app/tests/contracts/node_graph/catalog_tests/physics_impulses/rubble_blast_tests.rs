@@ -56,6 +56,7 @@ fn scene_of(def: &EffectGraphDef) -> RigidSceneInputs {
             rot_euler: ["rot_x", "rot_y", "rot_z"].map(|p| scalar(id - 1, p)),
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(id - 1, p)),
             billboard: false,
+            ..Default::default()
         },
         mass: scalar(id, "mass"),
         shape: scalar(id, "shape") as u32,

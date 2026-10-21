@@ -165,11 +165,140 @@ fn scene_object_model_lists_imported_model_parts_under_their_group() {
     let models = scene_object_models(&graph, &scene()).expect("models");
     let rows: Vec<_> = models.iter().map(|model| (model.object.node.as_str(), model.kind, model.parent.clone())).collect();
     assert_eq!(rows, [
-        ("statue", SceneObjectRowKind::PhysicsParent, None),
+        ("statue", SceneObjectRowKind::Group, None),
         ("statue_head", SceneObjectRowKind::Object, Some(reference(&[], "statue"))),
         ("statue_body", SceneObjectRowKind::Object, Some(reference(&[], "statue"))),
     ]);
     assert_eq!(models[0].doc_path, [1]);
+    assert_eq!(models[0].transform, Some(reference(&["statue"], "statue_root")));
+}
+
+/// An object group: one draw placed by its own transform and, through the
+/// group input, by the enclosing group's transform.
+fn object_group(id: u32, name: &str, port: &str) -> Value {
+    json!({
+        "id": id, "nodeId": name, "typeId": "group", "handle": name,
+        "group": {
+            "interface": {
+                "inputs": [{"name": "parent", "portType": "Transform"}],
+                "outputs": [{"name": port, "portType": "SceneObject"}]
+            },
+            "nodes": [
+                node(1, &format!("{name}_in"), "system.group_input"),
+                node(2, &format!("{name}_transform"), "node.transform_3d"),
+                node(3, &format!("{name}_draw"), "node.scene_object"),
+                node(4, &format!("{name}_out"), "system.group_output"),
+            ],
+            "wires": [
+                wire(2, "transform", 3, "transform"),
+                wire(1, "parent", 3, "parent_transform"),
+                wire(3, "object", 4, port),
+            ]
+        }
+    })
+}
+
+/// A scene group: `children` (object and group graph groups) placed by its
+/// own group transform, which takes the enclosing group's on `parent`.
+fn scene_group(id: u32, name: &str, children: Vec<(u32, Value, &str)>, nested: bool) -> Value {
+    let mut nodes = vec![
+        node(1, &format!("{name}_in"), "system.group_input"),
+        node(2, &format!("{name}_group_transform"), "node.transform_3d"),
+        node(3, &format!("{name}_out"), "system.group_output"),
+    ];
+    let mut wires = Vec::new();
+    if nested {
+        wires.push(wire(1, "parent", 2, "parent"));
+    }
+    let mut outputs = Vec::new();
+    for (child_id, child, port) in children {
+        nodes.push(child);
+        wires.push(wire(2, "transform", child_id, "parent"));
+        wires.push(wire(child_id, port, 3, port));
+        outputs.push(json!({"name": port, "portType": "SceneObject"}));
+    }
+    json!({
+        "id": id, "nodeId": name, "typeId": "group", "handle": name,
+        "group": {
+            "interface": {"inputs": [{"name": "parent", "portType": "Transform"}], "outputs": outputs},
+            "nodes": nodes, "wires": wires
+        }
+    })
+}
+
+/// Groups nest: every row's parent is its nearest group at any depth, and
+/// each group lists its contents in render slot order straight after it.
+#[test]
+fn scene_object_model_nests_groups_three_deep() {
+    // outer { rock_a, middle { rock_b, inner { rock_c, rock_d } } }, rock_e loose.
+    let inner = scene_group(30, "inner", vec![(31, object_group(31, "rock_c", "c"), "c"), (32, object_group(32, "rock_d", "d"), "d")], true);
+    let middle = scene_group(20, "middle", vec![(21, object_group(21, "rock_b", "b"), "b"), (30, inner, "c")], true);
+    let mut middle = middle;
+    // The inner group re-exports both of its objects.
+    middle["group"]["wires"].as_array_mut().unwrap().push(wire(30, "d", 3, "d"));
+    middle["group"]["interface"]["outputs"].as_array_mut().unwrap().push(json!({"name": "d", "portType": "SceneObject"}));
+    let mut outer = scene_group(10, "outer", vec![(11, object_group(11, "rock_a", "a"), "a"), (20, middle, "b")], false);
+    for port in ["c", "d"] {
+        outer["group"]["wires"].as_array_mut().unwrap().push(wire(20, port, 3, port));
+        outer["group"]["interface"]["outputs"].as_array_mut().unwrap().push(json!({"name": port, "portType": "SceneObject"}));
+    }
+    let loose = object_group(40, "rock_e", "object");
+    let graph = graph(
+        scene_nodes(vec![outer, loose]),
+        vec![
+            wire(40, "object", 100, "object_0"),
+            wire(10, "a", 100, "object_1"),
+            wire(10, "d", 100, "object_2"),
+            wire(10, "b", 100, "object_3"),
+            wire(10, "c", 100, "object_4"),
+            wire(100, "color", 101, "in"),
+        ],
+    );
+    let models = scene_object_models(&graph, &scene()).expect("models");
+    let rows: Vec<_> = models
+        .iter()
+        .map(|model| (model.object.node.as_str(), model.kind, model.parent.as_ref().map(|parent| parent.node.as_str())))
+        .collect();
+    use SceneObjectRowKind::{Group, Object};
+    assert_eq!(rows, [
+        ("rock_e_draw", Object, None),
+        ("outer", Group, None),
+        ("rock_a_draw", Object, Some("outer")),
+        ("middle", Group, Some("outer")),
+        ("inner", Group, Some("middle")),
+        ("rock_d_draw", Object, Some("inner")),
+        ("rock_c_draw", Object, Some("inner")),
+        ("rock_b_draw", Object, Some("middle")),
+    ]);
+    let inner = models.iter().find(|model| model.object.node.as_str() == "inner").unwrap();
+    assert_eq!(inner.object.scope, [NodeId::new("outer"), NodeId::new("middle")]);
+    assert_eq!(inner.transform, Some(reference(&["outer", "middle", "inner"], "inner_group_transform")));
+    assert_eq!(inner.doc_path, [10, 20, 30]);
+    // Only a top-level group takes the whole-group commands for now.
+    let outer = models.iter().find(|model| model.object.node.as_str() == "outer").unwrap();
+    assert!(outer.capabilities.enable_physics && outer.capabilities.delete);
+    assert!(inner.capabilities.transform && inner.capabilities.rename && !inner.capabilities.enable_physics && !inner.capabilities.delete);
+}
+
+/// A group with physics draws through its body's pose; the group's own
+/// transform is the authored one behind the body.
+#[test]
+fn scene_object_model_reads_a_physics_groups_transform_behind_its_body() {
+    let model = group(1, "statue", &["object"], vec![
+        node(1, "statue_root", "node.transform_3d"),
+        node(2, "statue_head", "node.scene_object"),
+        node(3, "statue_body", "node.rigid_body"),
+        node(4, "statue_out", "system.group_output"),
+    ], vec![
+        wire(1, "transform", 3, "transform"),
+        wire(3, "pose", 2, "parent_transform"),
+        wire(2, "object", 4, "object"),
+    ]);
+    let graph = graph(scene_nodes(vec![model]), vec![wire(1, "object", 100, "object_0"), wire(100, "color", 101, "in")]);
+    let models = scene_object_models(&graph, &scene()).expect("models");
+    assert_eq!(models[0].kind, SceneObjectRowKind::Group);
+    assert_eq!(models[0].transform, Some(reference(&["statue"], "statue_root")));
+    assert_eq!(models[1].parent, Some(reference(&[], "statue")));
 }
 
 #[test]

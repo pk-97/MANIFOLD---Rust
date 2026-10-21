@@ -251,7 +251,7 @@ impl RenderScene {
                 } else {
                     parent.rot_euler
                 };
-                mat4_mul(model_matrix(parent.pos, parent_rot, parent.scale), local_model)
+                mat4_mul(parent.world_with_rotation(parent_rot), local_model)
             });
             // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)

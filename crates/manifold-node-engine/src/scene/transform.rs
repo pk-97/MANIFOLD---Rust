@@ -13,8 +13,29 @@
 //! [`Light`](crate::node_graph::light::Light), and
 //! [`Material`](crate::node_graph::material::Material) — no GPU resource on
 //! the wire, so zero interaction with texture prebinding or pooling.
+//!
+//! A transform may sit inside a parent: `node.transform_3d`'s `parent` input
+//! stores the parent chain's world matrix in [`Transform::parent`], and
+//! [`Transform::world`] is that matrix times the node's own TRS. Groups nest
+//! by chaining transforms; every reader of a placement reads `world()`.
 
-/// Local TRS of one scene object. CPU-only wire value (`PortType::Transform`),
+use crate::mesh::pipeline::mat4_mul;
+
+/// A column-major 4x4 matrix, `m[col][row]`, the layout WGSL `mat4x4<f32>`
+/// and `render_scene` use.
+pub type Mat4 = [[f32; 4]; 4];
+
+pub const IDENTITY_MAT4: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+fn identity_mat4() -> Mat4 {
+    IDENTITY_MAT4
+}
+
+fn is_identity_mat4(m: &Mat4) -> bool {
+    *m == IDENTITY_MAT4
+}
+
+/// A TRS inside a parent frame. CPU-only wire value (`PortType::Transform`),
 /// composed to a model matrix by the consuming renderer per frame. Euler
 /// radians, XYZ application order — matching `render_scene`'s existing
 /// `model_matrix` (`render_scene.rs:419`), which is unchanged.
@@ -29,6 +50,12 @@ pub struct Transform {
     /// frame. Position and scale stay user-controlled; roll is locked to
     /// zero so the plane stays upright.
     pub billboard: bool,
+    /// The frame this TRS sits in: the parent chain's composed world matrix,
+    /// identity when `node.transform_3d`'s `parent` is unwired. A full
+    /// matrix, so a turned child under a non-uniformly scaled parent keeps
+    /// its shear.
+    #[serde(default = "identity_mat4", skip_serializing_if = "is_identity_mat4")]
+    pub parent: Mat4,
 }
 
 impl Default for Transform {
@@ -38,11 +65,43 @@ impl Default for Transform {
             rot_euler: [0.0; 3],
             scale: [1.0; 3],
             billboard: false,
+            parent: IDENTITY_MAT4,
         }
     }
 }
 
+/// `T * R * S` from a position, XYZ Euler radians (`R = Rz * Ry * Rx`) and a
+/// scale: the same matrix as `render_scene::model_matrix`.
+pub fn trs_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> Mat4 {
+    let (cx, sx) = (rot[0].cos(), rot[0].sin());
+    let (cy, sy) = (rot[1].cos(), rot[1].sin());
+    let (cz, sz) = (rot[2].cos(), rot[2].sin());
+    let rx: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, cx, sx, 0.0], [0.0, -sx, cx, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let ry: Mat4 = [[cy, 0.0, -sy, 0.0], [0.0, 1.0, 0.0, 0.0], [sy, 0.0, cy, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let rz: Mat4 = [[cz, sz, 0.0, 0.0], [-sz, cz, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut m = mat4_mul(mat4_mul(rz, ry), rx);
+    for (col, s) in m.iter_mut().zip(scale) {
+        for v in col.iter_mut().take(3) {
+            *v *= s;
+        }
+    }
+    m[3] = [pos[0], pos[1], pos[2], 1.0];
+    m
+}
+
 impl Transform {
+    /// The world matrix: the parent frame times this TRS.
+    pub fn world(&self) -> Mat4 {
+        self.world_with_rotation(self.rot_euler)
+    }
+
+    /// [`Self::world`] with `rot_euler` in place of the stored rotation: a
+    /// billboard's rotation is known only once the camera is.
+    pub fn world_with_rotation(&self, rot_euler: [f32; 3]) -> Mat4 {
+        let local = trs_matrix(self.pos, rot_euler, self.scale);
+        if is_identity_mat4(&self.parent) { local } else { mat4_mul(self.parent, local) }
+    }
+
     /// Euler angles (radians, XYZ order) that rotate the object so its local
     /// +Z axis points from `self.pos` toward `camera_pos`, with zero roll.
     /// Falls back to `self.rot_euler` if the camera is coincident with the
@@ -137,7 +196,7 @@ impl From<Transform> for manifold_core::fluid_domain::DomainBox {
 
 impl From<manifold_core::fluid_domain::DomainBox> for Transform {
     fn from(b: manifold_core::fluid_domain::DomainBox) -> Self {
-        Self { pos: b.pos, rot_euler: b.rot_euler, scale: b.scale, billboard: b.billboard }
+        Self { pos: b.pos, rot_euler: b.rot_euler, scale: b.scale, billboard: b.billboard, parent: IDENTITY_MAT4 }
     }
 }
 
@@ -239,6 +298,52 @@ mod tests {
         assert_eq!(t.rot_euler, [0.0, 0.0, 0.0]);
         assert_eq!(t.scale, [1.0, 1.0, 1.0]);
         assert!(!t.billboard);
+    }
+
+    /// A point through one TRS by plain point math: scale, then X, Y, Z
+    /// turns, then the move. Independent of the matrix code under test.
+    fn trs_point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
+        let [x, y, z] = [p[0] * t.scale[0], p[1] * t.scale[1], p[2] * t.scale[2]];
+        let (cx, sx) = (t.rot_euler[0].cos(), t.rot_euler[0].sin());
+        let (y, z) = (y * cx - z * sx, y * sx + z * cx);
+        let (cy, sy) = (t.rot_euler[1].cos(), t.rot_euler[1].sin());
+        let (x, z) = (x * cy + z * sy, -x * sy + z * cy);
+        let (cz, sz) = (t.rot_euler[2].cos(), t.rot_euler[2].sin());
+        let (x, y) = (x * cz - y * sz, x * sz + y * cz);
+        [x + t.pos[0], y + t.pos[1], z + t.pos[2]]
+    }
+
+    fn apply(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|r| m[0][r] * p[0] + m[1][r] * p[1] + m[2][r] * p[2] + m[3][r])
+    }
+
+    #[test]
+    fn a_three_level_chain_composes_parent_times_child_with_shear_kept() {
+        let outer = Transform { pos: [1.0, -2.0, 0.5], rot_euler: [0.0, 0.0, 0.0], scale: [3.0, 1.0, 0.5], ..Transform::default() };
+        let middle = Transform { pos: [0.5, 1.0, -1.0], rot_euler: [0.3, -0.7, 0.4], scale: [1.0, 2.0, 1.0], ..Transform::default() };
+        let inner = Transform { pos: [-0.25, 0.75, 2.0], rot_euler: [-0.5, 0.2, 1.1], scale: [0.5, 0.5, 1.5], ..Transform::default() };
+        // What node.transform_3d does with a wired parent.
+        let middle = Transform { parent: outer.world(), ..middle };
+        let inner = Transform { parent: middle.world(), ..inner };
+        let world = inner.world();
+        for p in [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.3, -0.8, 2.5]] {
+            let expected = trs_point(&outer, trs_point(&middle, trs_point(&inner, p)));
+            let got = apply(&world, p);
+            for i in 0..3 {
+                assert!((expected[i] - got[i]).abs() < 1e-4, "point {p:?}: expected {expected:?}, got {got:?}");
+            }
+        }
+        // A turned child under a non-uniformly scaled parent shears: its
+        // world axes are no longer at right angles.
+        let dot = (0..3).map(|r| world[0][r] * world[1][r]).sum::<f32>();
+        assert!(dot.abs() > 1e-3, "the composed matrix must keep the shear, dot {dot}");
+    }
+
+    #[test]
+    fn an_unparented_transform_is_its_own_trs() {
+        let t = Transform { pos: [1.0, 2.0, 3.0], rot_euler: [0.1, 0.2, 0.3], scale: [2.0, 2.0, 2.0], ..Transform::default() };
+        assert_eq!(t.world(), trs_matrix(t.pos, t.rot_euler, t.scale));
+        assert_eq!(Transform::default().world(), IDENTITY_MAT4);
     }
 
     #[test]

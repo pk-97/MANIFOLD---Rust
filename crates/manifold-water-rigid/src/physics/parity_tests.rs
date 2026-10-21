@@ -25,7 +25,7 @@ fn digest(poses: impl Iterator<Item = Transform>) -> u64 {
 
 fn placed(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3], kind: u32) -> RigidBody {
     RigidBody {
-        transform: Transform { pos, rot_euler: rot, scale, billboard: false },
+        transform: Transform { pos, rot_euler: rot, scale, billboard: false, ..Default::default() },
         kind,
         ..RigidBody::default()
     }

@@ -126,6 +126,7 @@ mod tests {
             rot_euler: [0.25, 0.5, -0.75],
             scale: [4.0, 5.0, 6.0],
             billboard: false,
+            ..Default::default()
         }));
         let expected = [
             ("pos_x", 1.0), ("pos_y", -2.0), ("pos_z", 3.5),

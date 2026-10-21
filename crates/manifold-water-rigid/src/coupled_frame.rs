@@ -187,6 +187,7 @@ impl CoupledRigidLayout {
                     rot_euler: quat_to_render_scene_euler(pose.rotation),
                     scale,
                     billboard: false,
+                    ..Default::default()
                 };
             }
             next += count;

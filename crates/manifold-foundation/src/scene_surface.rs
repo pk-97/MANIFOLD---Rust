@@ -274,13 +274,15 @@ pub enum SourceRole {
 /// 5.2 (One scene-object model)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SceneObjectRowKind {
-    /// An ordinary object, a placed fluid source, or a part of an imported
-    /// model.
+    /// An ordinary object, a placed fluid source, or an object inside a
+    /// group.
     #[default]
     Object,
-    /// The row that owns a simulation or a shared body for its children:
-    /// Water's real object, or an imported model's group.
+    /// Water's real object: it owns the simulation its looks draw.
     PhysicsParent,
+    /// A group of objects and groups at any depth, placed by its own
+    /// transform: what it is set to applies to everything inside.
+    Group,
     /// One of Water's looks (Foam, Spray, Bubbles, Physics View's dots): it
     /// owns its material, Size and visibility only.
     LookChild,

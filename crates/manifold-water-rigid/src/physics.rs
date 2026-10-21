@@ -1560,6 +1560,7 @@ impl RigidSimulation {
                 rot_euler,
                 scale: body.transform.scale,
                 billboard: false,
+                ..Default::default()
             };
             if self.deferred_animated_edit[i].is_some() {
                 self.poses[i].pos = body.transform.pos;
@@ -1581,6 +1582,7 @@ impl RigidSimulation {
                 rot_euler: self.poses[parent_index].rot_euler,
                 scale: body.transform.scale,
                 billboard: false,
+                ..Default::default()
             };
         }
         let (made, _) = copy_pool(groups.iter().map(Option::as_ref));
@@ -1618,6 +1620,7 @@ impl RigidSimulation {
                         rot_euler: manifold_node_engine::scene::transform::quat_to_render_scene_euler(pose.rotation),
                         scale,
                         billboard: false,
+                        ..Default::default()
                     };
                 }
                 state.shown = state.active;

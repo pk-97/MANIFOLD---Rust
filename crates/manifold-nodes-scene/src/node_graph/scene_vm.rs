@@ -60,6 +60,8 @@ pub use setup_check::{
 };
 mod shapes;
 #[cfg(test)]
+mod group_rows_tests;
+#[cfg(test)]
 pub(crate) use shapes::object_shapes;
 pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite};
 
@@ -984,19 +986,31 @@ fn trace_objects(
                 out.push((anchor, row));
             }
             Some(_) => {}
-            None if model.kind == SceneObjectRowKind::PhysicsParent => {
-                // An imported model's group: a virtual row shaped from its
-                // first part.
-                let Some(child) = models[position + 1..].iter().find(|child| child.parent.as_ref() == Some(&model.object)) else {
+            None if model.kind == SceneObjectRowKind::Group => {
+                // A group: a row shaped from the first object inside it, at
+                // any depth, placed by its own group transform.
+                let inside = |child: &SceneObjectModel| {
+                    let mut parent = child.parent.as_ref();
+                    for _ in 0..models.len() {
+                        let Some(reference) = parent else { return false };
+                        if reference == &model.object {
+                            return true;
+                        }
+                        parent = models.iter().find(|row| &row.object == reference).and_then(|row| row.parent.as_ref());
+                    }
+                    false
+                };
+                let Some(child) = models[position + 1..].iter().find(|child| child.slot.is_some() && inside(child)) else {
                     continue;
                 };
                 let Some((SceneObjectVm::Known(first), _)) = trace_model_object(root, child, layer_id_set) else { continue };
                 let Some((_, group_node)) = locate_doc_path(root, &model.doc_path) else { continue };
-                let Some(group) = group_node.group.as_ref() else { continue };
-                let inner = Level { nodes: &group.nodes, wires: &group.wires };
-                let parent_source = inner.producer(first.object_node_id, "parent_transform").map(|(id, _)| id);
+                // The first object's draw: the group's eye is its `parent_visible`.
+                let draw_path = [first.visible_addr.scope_path.as_slice(), &[first.visible_addr.node_doc_id]].concat();
+                let Some((draw_level, _)) = locate_doc_path(root, &draw_path) else { continue };
                 let mut parent = first;
                 parent.is_group = true;
+                parent.parent = model.parent.clone();
                 parent.kind = model.kind;
                 parent.capabilities = model.capabilities;
                 parent.controls = model.controls.clone();
@@ -1007,15 +1021,14 @@ fn trace_objects(
                 parent.modifier_owner = model.object.clone();
                 parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
                 parent.visible_addr.param_id = "parent_visible".into();
-                parent.visible_value = inner.node(parent.visible_addr.node_doc_id)
+                parent.visible_value = draw_level.node(parent.visible_addr.node_doc_id)
                     .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
-                parent.visible_driven = inner.producer(parent.visible_addr.node_doc_id, "parent_visible").is_some();
-                let authored = parent_source
-                    .and_then(|id| inner.node(id))
-                    .filter(|node| node.type_id == TRANSFORM_3D_TYPE_ID)
-                    .map(|node| node.id)
-                    .or_else(|| group_body_id(&inner).and_then(|body| inner.producer(body, "transform").map(|(id, _)| id)));
-                parent.transform = authored.map(|id| trace_transform(&inner, model.doc_path.clone(), id));
+                parent.visible_driven = draw_level.producer(parent.visible_addr.node_doc_id, "parent_visible").is_some();
+                parent.transform = model
+                    .transform
+                    .as_ref()
+                    .and_then(|transform| locate_node(root, transform))
+                    .map(|at| trace_transform(&at.level, at.scope.clone(), at.node.id));
                 parent.material = MaterialVm::None;
                 parent.skin = None;
                 parent.transform_chain.clear();
@@ -1128,6 +1141,10 @@ fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObj
                 row.visible_value = shown("visible") && shown("parent_visible");
                 row.visible_driven = level.producer(row.object_node_id, "parent_visible").is_some();
             }
+        }
+        SceneObjectRowKind::Group => {
+            row.is_group = true;
+            row.parent = model.parent.clone();
         }
         SceneObjectRowKind::LookChild => {
             row.parent = model.parent.clone();

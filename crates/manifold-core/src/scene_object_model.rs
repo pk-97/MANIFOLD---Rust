@@ -11,6 +11,12 @@
 //! family: a group holding two domains keeps its objects independent, and an
 //! object the simulation does not feed stays an ordinary object.
 //!
+//! A scene group is found by its transform chain: a draw whose
+//! `parent_transform` comes from a group transform sits in the graph group
+//! holding that transform, and that transform's `parent` names the group
+//! above it. Groups nest to any depth; each row's `parent` is its nearest
+//! group.
+//!
 //! The model reads topology and type ids only, never a param value, so a
 //! cache keyed on the owner's structure version is exact.
 //!
@@ -101,6 +107,10 @@ pub struct SceneObjectModel {
     /// The instancer whose copies this row places: the swarm forces node or
     /// the copy group's copies body behind its `instances`.
     pub instancer: Option<SceneInstancer>,
+    /// A group row's group transform: the `node.transform_3d` placing
+    /// everything inside. `None` on every other row, whose transform is
+    /// traced from its object.
+    pub transform: Option<SceneNodeRef>,
     /// The same row addressed by document ids, root first, ending with the
     /// object's own id: the form panel rows and editing commands use.
     pub doc_path: Vec<u32>,
@@ -216,8 +226,9 @@ pub fn scene_object_models_in(
     for (slot, at) in &slots {
         rows.push(Row::object(*slot, at.clone()));
     }
-    // Water families and imported models, by the object's nearest groups.
-    let mut parents: Vec<Parent<'_>> = Vec::new();
+    // Water families by the object's nearest groups; scene groups by the
+    // transform chain placing each object.
+    let mut groups: Vec<SceneGroup<'_>> = Vec::new();
     for row in &mut rows {
         let at = row.at.clone();
         if let Some(owner) = family_owner(&at) {
@@ -233,15 +244,18 @@ pub fn scene_object_models_in(
             }
             continue;
         }
-        let Some(group) = at.path.groups.last().copied() else { continue };
-        if at.path.level().producer(at.node.id, "parent_transform").is_none() {
+        // A parent wire left dangling at an unwired group input places
+        // nothing.
+        if at.path.producer_outward(at.node.id, "parent_transform").is_none() {
             continue;
         }
-        let group_at = at.path.parent_at(group);
-        if !parents.iter().any(|parent| parent.at.node.id == group.id && parent.at.path.doc_scope() == group_at.path.doc_scope()) {
-            parents.push(Parent { at: group_at.clone() });
+        let transform = group_transform_of(&at, "parent_transform");
+        // A draw whose parent is not a group transform belongs to the group
+        // it sits in.
+        let group = transform.as_ref().and_then(enclosing_group).or_else(|| enclosing_group(&at));
+        if let Some(group) = group {
+            row.group = Some(intern_group(&mut groups, group, transform, 0));
         }
-        row.compound = Some(group_at);
     }
 
     // Liquids, then each row's controls.
@@ -264,50 +278,16 @@ pub fn scene_object_models_in(
 
     let mut out: Vec<SceneObjectModel> = Vec::new();
     let mut placed_seen: Vec<SceneNodeRef> = Vec::new();
-    let mut emitted_parents: Vec<usize> = Vec::new();
+    let mut emitted_groups: Vec<bool> = vec![false; groups.len()];
     for position in 0..rows.len() {
         let row = &rows[position];
         if row.kind == SceneObjectRowKind::LookChild && rows.iter().any(|other| other.is_parent_of(row)) {
             continue; // emitted under its parent
         }
-        if let Some(group_at) = &row.compound {
-            let parent_index = parents.iter().position(|parent| parent.at.node.id == group_at.node.id
-                && parent.at.path.doc_scope() == group_at.path.doc_scope()).expect("compound parent listed");
-            if emitted_parents.contains(&parent_index) {
-                continue;
-            }
-            emitted_parents.push(parent_index);
-            let parent_at = &parents[parent_index].at;
-            let parent_ref = parent_at.reference();
-            out.push(SceneObjectModel {
-                object: parent_ref.clone(),
-                owner: parent_ref.clone(),
-                parent: None,
-                kind: SceneObjectRowKind::PhysicsParent,
-                controls: group_role_sources(parent_at, &[]),
-                capabilities: SceneObjectCapabilities {
-                    rename: true,
-                    delete: true,
-                    duplicate: true,
-                    transform: true,
-                    enable_physics: true,
-                    fluid_role: true,
-                    ..SceneObjectCapabilities::default()
-                },
-                slot: None,
-                liquid_domain: None,
-                instancer: None,
-                doc_path: parent_at.doc_path(),
-            });
-            for child in rows.iter().filter(|other| other.compound.as_ref().is_some_and(|at| at.node.id == group_at.node.id
-                && at.path.doc_scope() == group_at.path.doc_scope()))
-            {
-                let mut model = child.identity(&rows);
-                model.parent = Some(parent_ref.clone());
-                model.capabilities.enable_physics = false;
-                model.capabilities.make_copies = false;
-                model.capabilities.fluid_role = false;
-                out.push(model);
+        if let Some(group) = row.group {
+            let top = top_group(&groups, group);
+            if !emitted_groups[top] {
+                emit_group(&groups, &rows, top, &mut emitted_groups, &mut out);
             }
             continue;
         }
@@ -353,6 +333,7 @@ pub fn scene_object_models_in(
                 slot: None,
                 liquid_domain: None,
                 instancer: None,
+                transform: None,
                 doc_path: source.role.doc_path(),
             });
         }
@@ -499,6 +480,27 @@ impl<'a> Path<'a> {
         self.resolve_inward(from, from_port)
     }
 
+    /// The node feeding `node`'s `port`, leaving through as many group
+    /// inputs as the wire crosses and entering groups through their outputs.
+    fn producer_outward<'p>(&self, node: u32, port: &'p str) -> Option<At<'a>>
+    where
+        'a: 'p,
+    {
+        let mut path = self.clone();
+        let (mut node, mut port) = (node, port);
+        for _ in 0..64 {
+            let (from, from_port) = path.level().producer(node, port)?;
+            if path.level().node(from)?.type_id != GROUP_INPUT_TYPE_ID {
+                return path.resolve_inward(from, from_port);
+            }
+            let (outer, group) = path.leave()?;
+            path = outer;
+            node = group.id;
+            port = from_port;
+        }
+        None
+    }
+
     /// `group`, a node of this level, located with the path to it.
     fn parent_at(&self, group: &'a EffectGraphNode) -> At<'a> {
         let (outer, _) = self.leave().expect("a grouped node has an enclosing level");
@@ -575,8 +577,136 @@ fn push_unique(controls: &mut Vec<SceneNodeRef>, reference: SceneNodeRef) {
     }
 }
 
-struct Parent<'a> {
+/// One scene group: a graph group placed by a group transform. Groups nest
+/// by chaining transforms: an inner group's transform takes the outer one's
+/// on its `parent` input.
+struct SceneGroup<'a> {
     at: At<'a>,
+    /// Its group transform; `None` when its objects' parent is not one (a
+    /// body pose with no authored transform behind it).
+    transform: Option<At<'a>>,
+    /// The enclosing group, an index into the same list.
+    parent: Option<usize>,
+}
+
+/// The `node.transform_3d` feeding `at`'s `port` (`parent_transform` on a
+/// draw, `parent` on a group transform), through group boundaries: a
+/// transform directly, or the authored transform behind a rigid body's pose
+/// when the group has physics.
+fn group_transform_of<'a>(at: &At<'a>, port: &str) -> Option<At<'a>> {
+    let source = at.path.producer_outward(at.node.id, port)?;
+    if source.node.type_id == crate::physics_members::BODY_TYPE_ID {
+        return source.path.producer_outward(source.node.id, "transform").filter(|at| at.node.type_id == TRANSFORM_3D_TYPE_ID);
+    }
+    (source.node.type_id == TRANSFORM_3D_TYPE_ID).then_some(source)
+}
+
+/// The graph group holding `at`, located with the path to it.
+fn enclosing_group<'a>(at: &At<'a>) -> Option<At<'a>> {
+    let group = at.path.groups.last()?;
+    Some(at.path.parent_at(group))
+}
+
+/// The index of `group` in `groups`, listing it and every group above it
+/// first. `depth` guards a transform chain that loops.
+fn intern_group<'a>(groups: &mut Vec<SceneGroup<'a>>, group: At<'a>, transform: Option<At<'a>>, depth: usize) -> usize {
+    let path = group.doc_path();
+    if let Some(index) = groups.iter().position(|known| known.at.doc_path() == path) {
+        return index;
+    }
+    let outer = transform
+        .as_ref()
+        .filter(|_| depth < 64)
+        .and_then(|transform| group_transform_of(transform, "parent"))
+        .and_then(|outer| enclosing_group(&outer).map(|group| (group, outer)))
+        .filter(|(outer_group, _)| outer_group.doc_path() != path);
+    let index = groups.len();
+    groups.push(SceneGroup { at: group, transform, parent: None });
+    if let Some((outer_group, outer_transform)) = outer {
+        let parent = intern_group(groups, outer_group, Some(outer_transform), depth + 1);
+        // A chain that loops back into this group stays top-level.
+        if top_group(groups, parent) != index {
+            groups[index].parent = Some(parent);
+        }
+    }
+    index
+}
+
+/// The outermost group above `group`, itself when it is top-level.
+fn top_group(groups: &[SceneGroup<'_>], mut group: usize) -> usize {
+    for _ in 0..groups.len() {
+        match groups[group].parent {
+            Some(parent) => group = parent,
+            None => break,
+        }
+    }
+    group
+}
+
+/// Whether `group` sits inside `ancestor` at any depth.
+fn group_within(groups: &[SceneGroup<'_>], mut group: usize, ancestor: usize) -> bool {
+    for _ in 0..=groups.len() {
+        if group == ancestor {
+            return true;
+        }
+        match groups[group].parent {
+            Some(parent) => group = parent,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// `group`'s row, then its objects and inner groups in render slot order,
+/// each inner group followed by its own contents.
+fn emit_group(groups: &[SceneGroup<'_>], rows: &[Row<'_>], group: usize, emitted: &mut [bool], out: &mut Vec<SceneObjectModel>) {
+    emitted[group] = true;
+    let at = &groups[group].at;
+    let reference = at.reference();
+    let top_level = groups[group].parent.is_none();
+    out.push(SceneObjectModel {
+        object: reference.clone(),
+        owner: reference.clone(),
+        parent: groups[group].parent.map(|parent| groups[parent].at.reference()),
+        kind: SceneObjectRowKind::Group,
+        controls: group_role_sources(at, &[]),
+        // An inner group moves and renames; its commands arrive with group
+        // editing.
+        capabilities: SceneObjectCapabilities {
+            rename: true,
+            delete: top_level,
+            duplicate: top_level,
+            transform: true,
+            enable_physics: top_level,
+            fluid_role: top_level,
+            ..SceneObjectCapabilities::default()
+        },
+        slot: None,
+        liquid_domain: None,
+        instancer: None,
+        transform: groups[group].transform.as_ref().map(At::reference),
+        doc_path: at.doc_path(),
+    });
+    for row in rows {
+        let Some(own) = row.group.filter(|&own| group_within(groups, own, group)) else { continue };
+        if own == group {
+            let mut model = row.identity(rows);
+            model.parent = Some(reference.clone());
+            model.capabilities.enable_physics = false;
+            model.capabilities.make_copies = false;
+            model.capabilities.fluid_role = false;
+            out.push(model);
+            continue;
+        }
+        // The inner group directly under this one that holds the row.
+        let mut child = own;
+        while let Some(parent) = groups[child].parent.filter(|&parent| parent != group) {
+            child = parent;
+        }
+        if !emitted[child] {
+            emit_group(groups, rows, child, emitted, out);
+        }
+    }
 }
 
 /// A placed Inflow, Drain or Collider: its role node and the group holding it.
@@ -602,14 +732,15 @@ struct Row<'a> {
     at: At<'a>,
     kind: SceneObjectRowKind,
     family: Option<(At<'a>, WaterFamily)>,
-    compound: Option<At<'a>>,
+    /// The scene group this object sits in, an index into the groups found.
+    group: Option<usize>,
     /// The domain and whether it builds this row's surface.
     liquid: Option<(At<'a>, bool)>,
 }
 
 impl<'a> Row<'a> {
     fn object(slot: u32, at: At<'a>) -> Self {
-        Self { slot, at, kind: SceneObjectRowKind::Object, family: None, compound: None, liquid: None }
+        Self { slot, at, kind: SceneObjectRowKind::Object, family: None, group: None, liquid: None }
     }
 
     fn is_parent_of(&self, child: &Row<'_>) -> bool {
@@ -688,7 +819,8 @@ impl<'a> Row<'a> {
                 modifiers: true,
                 ..SceneObjectCapabilities::default()
             },
-            SceneObjectRowKind::Object => SceneObjectCapabilities {
+            // A draw is never a group row: those come from `emit_group`.
+            SceneObjectRowKind::Object | SceneObjectRowKind::Group => SceneObjectCapabilities {
                 rename: true,
                 delete: true,
                 duplicate: true,
@@ -710,6 +842,7 @@ impl<'a> Row<'a> {
             slot: Some(self.slot),
             liquid_domain: self.liquid.as_ref().map(|(domain, _)| domain.reference()),
             instancer: instancer.map(|(kind, at)| SceneInstancer { kind, node: at.reference() }),
+            transform: None,
             doc_path: self.at.doc_path(),
         }
     }

@@ -157,8 +157,8 @@ fn assert_model_matches_graph(label: &str, def: &EffectGraphDef, models: &[manif
             models.iter().find(|row| &row.object == parent).unwrap_or_else(|| panic!("{label}: {:?}'s parent is a row", model.object))
         });
         match model.kind {
-            Kind::PhysicsParent if model.liquid_domain.is_some() => {
-                let domain = model.liquid_domain.as_ref().unwrap();
+            Kind::PhysicsParent => {
+                let domain = model.liquid_domain.as_ref().unwrap_or_else(|| panic!("{label}: {:?} is a water with a domain", model.object));
                 assert!(manifold_core::liquid_domain::is_liquid_domain(&node_of(def, domain).expect("the domain resolves").type_id),
                     "{label}: {:?} simulates a liquid domain", model.object);
                 let owner = node_of(def, &model.owner).expect("the owner resolves");
@@ -167,8 +167,11 @@ fn assert_model_matches_graph(label: &str, def: &EffectGraphDef, models: &[manif
                 assert!(model.object.scope.starts_with(&[model.owner.scope.clone(), vec![model.owner.node.clone()]].concat()),
                     "{label}: the water's object is inside its group");
             }
-            Kind::PhysicsParent => {
-                assert_eq!(object.type_id, "group", "{label}: an imported model's row is its group");
+            Kind::Group => {
+                assert_eq!(object.type_id, "group", "{label}: a group row is its graph group");
+                if let Some(transform) = &model.transform {
+                    assert_eq!(node_of(def, transform).expect("the group transform resolves").type_id, "node.transform_3d");
+                }
             }
             Kind::LookChild => {
                 let water = parent.unwrap_or_else(|| panic!("{label}: a look has its water"));
@@ -185,7 +188,8 @@ fn assert_model_matches_graph(label: &str, def: &EffectGraphDef, models: &[manif
             Kind::Object => {
                 assert_eq!(object.type_id, "node.scene_object", "{label}: an object row is a scene object");
                 if let Some(group) = parent {
-                    assert_eq!(model.object.scope.last(), Some(&group.object.node), "{label}: a part sits in its model's group");
+                    let inside = [group.object.scope.clone(), vec![group.object.node.clone()]].concat();
+                    assert!(model.object.scope.starts_with(&inside), "{label}: an object sits inside its group");
                     assert!(model.controls.is_empty(), "{label}: a part leaves its controls to its model");
                 }
             }

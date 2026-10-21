@@ -120,6 +120,7 @@ impl Primitive for TransformShake {
                 ],
                 scale: input.scale,
                 billboard: input.billboard,
+                parent: input.parent,
             },
         );
     }
@@ -241,6 +242,7 @@ mod tests {
             rot_euler: [0.1, -0.2, 0.3],
             scale: [1.0, 2.0, 0.5],
             billboard: false,
+            ..Default::default()
         };
         let out = run_with_params_and_wires(input, &[("amount", 0.0)], &[]);
         assert_eq!(out, input, "amount = 0 must pass the transform through unchanged");
@@ -253,6 +255,7 @@ mod tests {
             rot_euler: [0.0; 3],
             scale: [1.0; 3],
             billboard: false,
+            ..Default::default()
         };
         let amount = 2.0f32;
         let frequency = 3.5f32;

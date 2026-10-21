@@ -243,6 +243,7 @@ mod transform_tests {
                 rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2],
                 scale: [2.0, 1.0, 1.0],
                 billboard: false,
+                ..Default::default()
             },
         )
         .unwrap();
