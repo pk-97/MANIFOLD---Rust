@@ -2,7 +2,7 @@
 
 <!-- index: Programme brief for 3D scene setup in the main window: interactive gizmos on the output preview, one Add menu and shape model for every scene object, physics on imported meshes, readable forces, force-only swarms, starter scenes. Routing, waves, landing and cleanup rules for the Opus lead. -->
 
-**Status:** WAVE 0 DONE · 2026-10-20 · Fable with Peter. Opus leads execution unattended; every wave lands through this doc's rules. Wave 0's rulings are D-66 to D-83 in `.claude/orchestration/decisions.md`; the designs are amended in place (REALTIME_3D D7a, D8, D9; PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model) and section 7 (Phasing) P2, P3, P6a).
+**Status:** SHIPPED · 2026-10-22 · all waves are on main (landing messages in git history). Domain Size and lattice grid, gizmo selection, outline, handle size and draw modes (also in export), inflow, starters, swarms and forces, import fixes, Initial Fill, copy groups (CG0 to CG2), Speed on the physics clock, HDRI, typed identity (SceneNodeRef and one numbered membership wire), the world fixes, and Render Mode in the Scene panel header (the modifier is deleted). Owed, all open beads: BUG-0miku (closing split of the god files), BUG-yuc2n (Paste drops the Model File override), BUG-lzmtu (compound copy groups and row order), BUG-7e3wa (membership compile out of node-engine), BUG-fbwu6 (Initial Fill refusal not named by the setup warning). Rulings: D-66 to D-119 in `.claude/orchestration/decisions.md`. The body below is the original plan and audit; the designs it amended are updated in place (REALTIME_3D D7a, D8, D9; PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model), section 5.5 (Copy groups) and section 7 (Phasing) P2, P3, P6a). Dropped: impulse decay (D-106).
 **Document type:** Programme brief. Each workstream gets its phase brief from this doc; the designs it amends are named per workstream. No separate design doc unless a workstream's audit finds a decision this doc does not make.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs) and section 6 (Seam briefs) per phase; [AGENT_ROUTING.md](AGENT_ROUTING.md) for seats, briefs, gates and the unattended-run rules.
 
@@ -68,14 +68,14 @@ Outcome: every scene thing is added from one menu, carries one card, one gizmo a
 Outcome: a photoscan is a water solid or a rigid collider with one switch; N copies of an object with physics on.
 
 - **C1 Open-mesh solids.** D8 in `sdf.rs` and `liquid_solid_distance.rs`; thickness param on the collider card. Seat: Opus lane, high. GPU proof once at the end.
-- **C2 Physics switch and copies.** Boundary P6a (rigid add, enable, duplicate) plus a copy count on duplicate. Seat: Opus lane, high for P6a; Sonnet, medium for the count.
+- **C2 Physics switch and copies.** Boundary P6a (rigid add, enable, duplicate). The copy count on duplicate was replaced by the copy group (CG0 to CG2, D-111 and D-113): Make Copies on the object card. Seat: Opus lane, high for P6a; Sonnet, medium for the count.
 
 ### D. Forces you can read
 
 Outcome: a force row says what it does in units; the industry set is complete.
 
 - **D1 Labels and units.** D9 renames; unit shown on the row from the manifest `unit` field; gravity reference line on the force card. Seat: Sonnet, medium. Files: the three force manifests, the param row renderer, the node catalog regenerated.
-- **D2 Industry set.** Drag, wind with turbulence, attractor, explosion, falloff curve choice, impulse decay. Manifests over existing engine fields where they fit; drag needs a velocity-dependent field kind in `interaction.rs`. Seat: Opus lane, high for the engine field; Sonnet, medium for manifests.
+- **D2 Industry set.** Drag, wind with turbulence, attractor, explosion, falloff curve choice. Impulse decay is dropped (D-106). Manifests over existing engine fields where they fit; drag needs a velocity-dependent field kind in `interaction.rs`. Seat: Opus lane, high for the engine field; Sonnet, medium for manifests.
 
 ### E. Swarms
 
