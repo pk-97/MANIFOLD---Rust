@@ -71,7 +71,12 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 1)
         .unwrap();
-    assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
+    // Speed 2, seen at 10.125, takes effect at the next 60 Hz tick start,
+    // 10 + 8/60; Speed 0, seen at 10.25, on that tick start itself.
+    let started = 8.0 / 60.0;
+    let sped = 0.125 + (started - 0.125) + 2.0 * (0.25 - started);
+    let near = |stamp: Seconds, expected: f64| (stamp.0 - expected).abs() < 1e-12;
+    assert!(near(hit.test_stamp(0).time, sped), "{:?}", hit.test_stamp(0).time);
     runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     edit(&mut runtime, "world", "speed", 0.0);
@@ -79,14 +84,14 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 2)
         .unwrap();
-    assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
+    assert!(near(hit.test_stamp(0).time, sped), "{:?}", hit.test_stamp(0).time);
     runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
         .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.5), 3)
         .unwrap();
-    assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
+    assert!(near(hit.test_stamp(0).time, sped), "{:?}", hit.test_stamp(0).time);
     assert_eq!(
         POSITIONS.get(),
         [0.0, 5.0],
@@ -112,15 +117,12 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         [7, 15, 15, 15]
     );
     let world = runtime.graph.instance_by_node_id(&NodeId::new("world")).unwrap();
-    assert_eq!(
-        node::get(runtime.graph.get_node(world).unwrap().node.as_ref())
-            .expect("native world fixture")
-            .physics_impulse_stamp(manifold_core::PlayedTime::from_played(10.6), 5, Default::default())
-            .unwrap()
-            .time
-            .0,
-        0.375 + (10.6 - 10.5)
-    );
+    let resumed = node::get(runtime.graph.get_node(world).unwrap().node.as_ref())
+        .expect("native world fixture")
+        .physics_impulse_stamp(manifold_core::PlayedTime::from_played(10.6), 5, Default::default())
+        .unwrap()
+        .time;
+    assert!(near(resumed, sped + (10.6 - 10.5)), "{resumed:?}");
 }
 
 #[test]

@@ -1859,7 +1859,11 @@ impl RigidSimulation {
             self.owed_origin = None;
         }
         for index in 0..reached {
-            let time = self.clock.simulation_at(PlayedTime::from_played(self.requests[index]), live_load(self.step));
+            // A request a rounding past `now` is the same instant spelled by
+            // another formula (grid point 4k/240 against frame k/60): it takes
+            // the frame's spelling, so a knot at the frame never lands behind it.
+            let request = self.requests[index].min(now);
+            let time = self.clock.simulation_at(PlayedTime::from_played(request), live_load(self.step));
             self.record_authored_sample(time, bodies.clone(), prototype.cloned(), gravity, acceleration_field.cloned(), targeted_fields)?;
         }
         self.requests.drain(..reached);

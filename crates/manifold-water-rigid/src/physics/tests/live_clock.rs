@@ -58,6 +58,24 @@ fn a_frame_landing_past_its_placement_knots_at_the_target() {
     replayed_frame(&mut simulation, CUE - 1e-6, CUE + 2.0 * FRAME, calm, calm);
 }
 
+/// A world evaluated twice a frame (the second a held frame) at 60 fps
+/// export: replay grid point 4k/240 and frame end k/60 are one instant
+/// whose two spellings can differ by an ulp (k = 23), and the held frame's
+/// knot at the frame end must not land behind the replay's.
+#[test]
+fn a_frame_evaluated_twice_records_forward_where_grid_and_frame_spell_one_time_apart() {
+    let calm = [0.0, -9.8, 0.0];
+    let step = SimStep::export(Seconds(FRAME));
+    let mut simulation = RigidSimulation::default().with_step(step);
+    simulation.advance(one_body([0.0, 4.0, 0.0]), calm, PlayedTime::ZERO, 1.0, 0.0).unwrap();
+    for k in 0..60 {
+        let (from, until) = (f64::from(k) * FRAME, f64::from(k + 1) * FRAME);
+        replayed_frame_at(&mut simulation, step, from, until, calm, calm);
+        simulation.advance(one_body([0.0, 4.0, 0.0]), calm, PlayedTime::from_played(until), 1.0, 0.0)
+            .unwrap_or_else(|error| panic!("frame {}: {error}", k + 1));
+    }
+}
+
 /// A placement while paused, then a paused frame, then Play: the paused
 /// frame knots at the cue too, so the replay that opens there on Play
 /// records forward.
