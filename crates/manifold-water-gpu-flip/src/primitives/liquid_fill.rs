@@ -17,7 +17,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{int_param};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::lattice::LiquidLattice;
@@ -120,7 +120,7 @@ struct FillUniforms {
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two and count is its slot count. Every slot the fill leaves dead is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -158,7 +158,7 @@ manifold_node_engine::primitive! {
         int_param!("box_z1", "Box Max Z (half cell)", 0.0, 0.0, 2048.0),
         float_param!("jitter", "Jitter", 0.0, 0.0, 1.0),
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
-        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_LIQUID_BODIES as f32),
         int_param!("epoch", "Epoch", 0.0, 0.0, 16_777_215.0),
         int_param!("particle_capacity", "Max Particles", 0.0, 0.0, 16_777_216.0),
         float_param!("wall_inset", "Wall Inset (cells)", 0.0, 0.0, 8.0),
@@ -213,7 +213,7 @@ impl Primitive for LiquidFill {
         }
         let (pool, sites) = fill_of(|name, default| ctx.scalar_or_param(name, default));
         let seed = int("seed", 0.0);
-        let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
+        let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
         // With colliders the sites depend on their pose at the epoch's start.
         let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
         let requested = ctx.scalar_or_param("particle_capacity", 0.0);

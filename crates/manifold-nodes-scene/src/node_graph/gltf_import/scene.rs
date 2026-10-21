@@ -162,7 +162,7 @@ pub(super) fn build_import_graph(
     // against D7's pure-black void every metallic import read as dark
     // chrome regardless of its albedo (the 2026-07-15 helmet/AMG failure).
     // A modest neutral dome gives metals a world to reflect while the
-    // background stays black (the envmap is never drawn as a backdrop).
+    // background stays black until the Background switch is turned on.
     // The Fill Light card slider below dials it, 0 = the original void.
     envmap_node.params.insert("fill".to_string(), float(IMPORT_FILL_DEFAULT));
     envmap_node
@@ -185,36 +185,14 @@ pub(super) fn build_import_graph(
 
     // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
     // linear-HDR .exr (Browse-wired via the `hdri_file` string binding
-    // below) and `node.switch_texture` picks between it and the softbox
-    // bake above by the `env_mode` card enum (default 0 = Softbox, so the
-    // black-void aesthetic stays the import default — Peter, 2026-07-15:
-    // "I quite like the pure void and sunlight only look"). `render_scene`'s
-    // `envmap` input now wires from the switch's `out`, not the bake
-    // directly.
+    // below). It feeds the bake's `hdri` input: the Lighting card's one Mode
+    // (Gradient, Softbox, HDRI) picks what lights the scene, and in HDRI mode
+    // the bake's Intensity is the lighting master. The default stays Softbox
+    // (Peter, 2026-07-15: "I quite like the pure void and sunlight only
+    // look"). The Background chain below reads the same file for the visible
+    // sky, so its Brightness is independent of that intensity.
     let hdri_id = fresh_id();
     nodes.push(plain_node(hdri_id, "hdri", "node.hdri_source", "hdri"));
-
-    // HDRI exposure stage: `node.bake_environment` has its own `intensity`
-    // master (the Environment card fader's original target), but a decoded
-    // EXR arrives at the file's true radiance — a real daytime pure-sky
-    // HDRI averages ~0.2–0.4 linear (measured on kloppenheim_07: mean 0.24,
-    // sky half 0.34), roughly 4× dimmer than the softbox default. Without
-    // an exposure stage the Environment fader would be dead in HDRI mode
-    // and the performer would have no way to bring a real sky up to stage
-    // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
-    // card fader) restores symmetry: env_intensity fans out to BOTH
-    // envmap.intensity and this gain, so one fader is the environment
-    // master in either mode.
-    // (`node.exposure` is the gain atom's type id; its param is `gain`.)
-    let hdri_gain_id = fresh_id();
-    nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
-
-    let env_select_id = fresh_id();
-    let mut env_select_node =
-        plain_node(env_select_id, "env_select", "node.switch_texture", "env_select");
-    env_select_node.params.insert("num_inputs".to_string(), int(2));
-    env_select_node.params.insert("selector".to_string(), float(0.0)); // 0 = Softbox
-    nodes.push(env_select_node);
 
     let camera_id = fresh_id();
     let mut cam_node = plain_node(camera_id, "camera", "node.orbit_camera", "camera");
@@ -681,18 +659,29 @@ pub(super) fn build_import_graph(
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
 
+    let bg_sky_id = fresh_id();
+    nodes.push(plain_node(bg_sky_id, "bg_sky", "node.camera_sky", "bg_sky"));
+    let bg_blur_id = fresh_id();
+    let mut bg_blur_node = plain_node(bg_blur_id, "bg_blur", "node.blur", "bg_blur");
+    bg_blur_node.params.insert("radius".to_string(), float(0.0));
+    nodes.push(bg_blur_node);
+    let bg_gain_id = fresh_id();
+    nodes.push(plain_node(bg_gain_id, "bg_gain", "node.exposure", "bg_gain"));
+    let bg_over_id = fresh_id();
+    nodes.push(plain_node(bg_over_id, "bg_over", "node.over", "bg_over"));
+    let bg_select_id = fresh_id();
+    let mut bg_select_node = plain_node(bg_select_id, "bg_select", "node.switch_texture", "bg_select");
+    bg_select_node.params.insert("num_inputs".to_string(), int(2));
+    bg_select_node.params.insert("selector".to_string(), float(0.0));
+    nodes.push(bg_select_node);
+
     // The lens sits between the raw orbit camera and every downstream
     // consumer (render_scene, the ao group) — the node whose fov_y the
     // Camera FOV card slider reads.
     wires.push(wire(camera_id, "out", lens_id, "camera"));
     wires.push(wire(lens_id, "out", render_id, "camera"));
-    // D6 env_mode switch: envmap(bake) -> in_0 (Softbox), hdri -> gain ->
-    // in_1 (HDRI, with the exposure stage — see the hdri_gain node above),
-    // the switch's `out` feeds render_scene same as the direct wire used to.
-    wires.push(wire(envmap_id, "envmap", env_select_id, "in_0"));
-    wires.push(wire(hdri_id, "out", hdri_gain_id, "in"));
-    wires.push(wire(hdri_gain_id, "out", env_select_id, "in_1"));
-    wires.push(wire(env_select_id, "out", render_id, "envmap"));
+    wires.push(wire(hdri_id, "out", envmap_id, "hdri"));
+    wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
     if let Some(sun_id) = sun_id {
         wires.push(wire(sun_id, "out", render_id, "light_0"));
     }
@@ -711,54 +700,47 @@ pub(super) fn build_import_graph(
     wires.push(wire(dof_group_id, "out", motion_blur_id, "in"));
     wires.push(wire(render_id, "velocity", motion_blur_id, "velocity"));
     wires.push(wire(lens_id, "out", motion_blur_id, "camera"));
-    wires.push(wire(motion_blur_id, "out", final_id, "in"));
+    // The visible HDRI behind the scene, off by default: `bg_select` picks
+    // the finished scene (0) or the scene over the sky (1), and the switch
+    // prunes the sky chain while it is off.
+    wires.push(wire(motion_blur_id, "out", bg_select_id, "in_0"));
+    wires.push(wire(motion_blur_id, "out", bg_over_id, "top"));
+    wires.push(wire(hdri_id, "out", bg_sky_id, "sky"));
+    wires.push(wire(lens_id, "out", bg_sky_id, "camera"));
+    wires.push(wire(bg_sky_id, "out", bg_blur_id, "source"));
+    wires.push(wire(bg_blur_id, "out", bg_gain_id, "in"));
+    wires.push(wire(bg_gain_id, "out", bg_over_id, "bottom"));
+    wires.push(wire(bg_over_id, "out", bg_select_id, "in_1"));
+    wires.push(wire(bg_select_id, "out", final_id, "in"));
 
     // P1: scene-vocabulary atoms (camera, lens, sun, envmap) are already
     // exposed above from their primitive ParamDefs. This block keeps the
     // curated cross-node fan-outs and shared controls that are not covered by
     // a single node's manifest.
     //
-    // Environment intensity also drives the HDRI exposure gain (G-P6). This
-    // fan-out copies a STAMPED binding's default but stays authored
-    // (`default_mirrors_node_param: false`) because provenance is about the
-    // binding's own target: nothing writes `hdri_gain.gain` into the def's
-    // node params, so the plant is the only thing that puts the gain there.
-    let env_intensity_id = format!("{envmap_id}_intensity");
-    let env_intensity_default = card_bindings
-        .iter()
-        .find(|b| b.id == env_intensity_id)
-        .map(|b| b.default_value)
-        .unwrap_or(1.0);
-    card_bindings.push(BindingDef {
-        id: env_intensity_id,
-        label: String::new(),
-        default_value: env_intensity_default,
-        target: BindingTarget::Node {
-            node_id: NodeId::new("hdri_gain"),
-            param: "gain".to_string(),
-        },
-        convert: manifold_core::effects::ParamConvert::Float,
-        user_added: false,
-        scale: 1.0,
-        offset: 0.0,
-        default_mirrors_node_param: false,
-    });
+    // The Lighting card's Mode is the bake's own `mode` (Gradient, Softbox,
+    // HDRI) and its Intensity the bake's `intensity`: one switch, one master.
+    // The Background rows drive the sky chain built above; they sit in the
+    // Environment group of the Scene tab, the last three rows of Lighting.
+    for (id, label, min, max, default, toggle, node, param) in [
+        ("bg_enabled", "Background", 0.0, 1.0, 0.0, true, "bg_select", "selector"),
+        ("bg_blur", "Background Blur", 0.0, 64.0, 0.0, false, "bg_blur", "radius"),
+        ("bg_brightness", "Background Brightness", 0.0, 4.0, 1.0, false, "bg_gain", "gain"),
+    ] {
+        let mut card = card_param(id, label, min, max, default, false, "Environment");
+        card.is_toggle = toggle;
+        card.whole_numbers = toggle;
+        card.scene = crate::node_graph::scene_surface::background_scene(id);
+        card_params.push(card);
+        card_bindings.push(card_binding(id, label, default, node, param, 1.0));
+    }
 
-    // HDRI mode switch: `node.switch_texture` is not scene vocabulary, so it is
-    // not auto-exposed; keep the curated enum.
-    let mut env_mode_param = card_param("env_mode", "Environment Mode", 0.0, 1.0, 0.0, false, "Environment");
-    env_mode_param.whole_numbers = true;
-    env_mode_param.value_labels = vec!["Softbox".to_string(), "HDRI".to_string()];
-    card_params.push(env_mode_param);
-    card_bindings.push(card_binding(
-        "env_mode", "Environment Mode", 0.0, "env_select", "selector", 1.0,
-    ));
     // The HDRI file itself is a SEPARATE Browse field/string param from
     // "model_file" (the imported .glb's own path) — a different file, a
     // different picker, never defaulted to the glb path. Empty until the
     // performer picks one; `node.hdri_source` reads that as "nothing decoded
-    // yet" and clears `out` to black (step 6 of its `run()`), which env_mode=0
-    // (Softbox, the default) never reaches anyway.
+    // yet" and clears `out` to black (step 6 of its `run()`), which Softbox
+    // (the default) never reads.
     string_bindings.push(StringBindingDef {
         id: HDRI_FILE_PARAM_ID.to_string(),
         label: "HDRI File".to_string(),

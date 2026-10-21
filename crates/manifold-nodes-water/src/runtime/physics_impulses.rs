@@ -4,11 +4,12 @@ use std::sync::Arc;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use manifold_core::{NodeId, Seconds};
+use manifold_core::{Beats, NodeId, PlayedTime, Seconds};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::{FieldValue, TickStamp};
 
 use super::{WaterRuntime, WaterRuntimeRef};
+use super::state::HeldFrame;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_core::scene_impulse::ImpulseTarget;
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
@@ -54,7 +55,7 @@ pub struct CapturedSceneImpulse {
     stamps: Vec<EventStamp>,
     planned: Vec<Option<TickStamp>>,
     field: Option<FieldValue>,
-    source: Option<FrameTime>,
+    source: Option<PlayedTime>,
 }
 
 impl PreparedSceneImpulse {
@@ -86,7 +87,8 @@ impl CapturedSceneImpulse {
         self.source = None;
     }
 
-    pub fn source_time(&self) -> Option<FrameTime> {
+    /// The played time the hit was captured at.
+    pub fn source_time(&self) -> Option<PlayedTime> {
         self.source
     }
 
@@ -116,21 +118,35 @@ impl WaterRuntime<'_> {
         source: FrameTime,
         sequence: u64,
     ) -> Result<(), String> {
+        let played = self.executor.sim_step().to_played(source.seconds);
+        self.capture_scene_impulse_at_played(binding, captured, played, source.beats, sequence)
+    }
+
+    /// [`Self::capture_scene_impulse_at_source`] for a source already on
+    /// played time.
+    pub fn capture_scene_impulse_at_played(
+        &mut self,
+        binding: &mut PreparedSceneImpulse,
+        captured: &mut CapturedSceneImpulse,
+        source: PlayedTime,
+        beats: Beats,
+        sequence: u64,
+    ) -> Result<(), String> {
         self.validate_impulse_capture(binding, captured)?;
-        let source = self.observe_physics_at_source(source)?;
+        let source = self.observe_physics_at_source(source, beats)?;
         let step = self.executor.sim_step();
         self.capture_scene_impulse_with_stamp(
             binding,
             captured,
             source,
             sequence,
-            |_, effect_node, transport, sequence| {
+            |_, effect_node, played, sequence| {
                 if let Some(swarm) = hits::get(effect_node) {
-                    return swarm.hit_stamp(transport, sequence, step);
+                    return swarm.hit_stamp(played, sequence, step);
                 }
                 let native = node::get(effect_node)
                     .ok_or_else(|| "node does not expose a native impulse clock".to_owned())?;
-                native.physics_impulse_stamp(transport, sequence, step)
+                native.physics_impulse_stamp(played, sequence, step)
             },
         )
     }
@@ -324,11 +340,16 @@ impl WaterRuntime<'_> {
         sequence: u64,
         mut map_time: impl FnMut(&NodeId, Seconds) -> Result<Seconds, String>,
     ) -> Result<(), String> {
+        let held = HeldFrame {
+            played: self.executor.sim_step().to_played(source.seconds),
+            beats: source.beats,
+            frame_count: source.frame_count,
+        };
         self.capture_scene_impulse_with_stamp(
-            binding, captured, source, sequence,
-            |id, node, transport, sequence| {
+            binding, captured, held, sequence,
+            |id, node, _, sequence| {
                 let epoch = hit_epoch(node).ok_or_else(|| format!("Impulse: `{id}` is not initialized"))?;
-                Ok(EventStamp { epoch, time: map_time(id, transport)?, sequence })
+                Ok(EventStamp { epoch, time: map_time(id, source.seconds)?, sequence })
             },
         )
     }
@@ -337,20 +358,27 @@ impl WaterRuntime<'_> {
         &mut self,
         binding: &mut PreparedSceneImpulse,
         captured: &mut CapturedSceneImpulse,
-        source: FrameTime,
+        source: HeldFrame,
         sequence: u64,
-        mut stamp: impl FnMut(&NodeId, &dyn manifold_node_engine::exec::effect_node::EffectNode, Seconds, u64)
+        mut stamp: impl FnMut(&NodeId, &dyn manifold_node_engine::exec::effect_node::EffectNode, PlayedTime, u64)
             -> Result<EventStamp, String>,
     ) -> Result<(), String> {
         self.validate_impulse_capture(binding, captured)?;
-        if !source.seconds.0.is_finite() || !source.beats.0.is_finite() {
+        if !source.played.is_finite() || !source.beats.0.is_finite() {
             return Err("Impulse: source clock must be finite".into());
         }
+        let frame_step = self.executor.sim_step();
+        let time = FrameTime {
+            beats: source.beats,
+            seconds: frame_step.to_transport(source.played),
+            delta: Seconds::ZERO,
+            frame_count: source.frame_count,
+        };
         captured.stamps.clear();
         for recipient in binding.recipients.iter() {
             let node = self.graph.get_node(recipient.instance)
                 .expect("prepared recipient belongs to this graph");
-            let stamp = stamp(&recipient.id, node.node.as_ref(), source.seconds, sequence)?;
+            let stamp = stamp(&recipient.id, node.node.as_ref(), source.played, sequence)?;
             if !stamp.time.0.is_finite() || stamp.time.0 < 0.0 {
                 return Err(
                     "Impulse: mapped simulation time must be finite and nonnegative".into(),
@@ -370,19 +398,22 @@ impl WaterRuntime<'_> {
             }
             if node.node.type_id().as_str() == "system.generator_input" {
                 *params.get_mut("time").expect("generator time") =
-                    ParamValue::Float(source.seconds.0 as f32);
+                    ParamValue::Float(time.seconds.0 as f32);
                 *params.get_mut("beat").expect("generator beat") =
-                    ParamValue::Float(source.beats.0 as f32);
+                    ParamValue::Float(time.beats.0 as f32);
             }
         }
         super::physics_sampling::execute_physics_sample_frame(
             self.executor,
             self.graph,
             self.plan,
-            source,
+            time,
             &binding.steps,
             &binding.params,
-            manifold_water_rigid::physics::SimStep::live(self.executor.sim_step().interval),
+            manifold_water_rigid::physics::SimStep::live(frame_step.interval)
+                .with_tempo_shift(frame_step.tempo_shift)
+                .with_replay_origin(frame_step.replay_origin)
+                .at_played(source.played),
         );
         if self.executor.mesh_pending_of(binding.field) {
             return Err("Impulse: field inputs are pending or invalid".into());
@@ -393,7 +424,7 @@ impl WaterRuntime<'_> {
             .and_then(|slot| backend.cpu_values().get::<FieldValue>(slot))
             .ok_or_else(|| "Impulse: field has no captured value".to_string())?;
         captured.field = Some(field);
-        captured.source = Some(source);
+        captured.source = Some(source.played);
         Ok(())
     }
 

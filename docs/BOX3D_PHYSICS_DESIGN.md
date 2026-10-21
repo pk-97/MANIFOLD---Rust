@@ -119,8 +119,8 @@ Physics Solids demo. The original larger design remains a roadmap.
   scene with one Physics World creates the same linked chain as a loose Dynamic cube
   starting at Y=2; a full world rejects the edit. Remove Object treats the
   Physics Boxes instanced copies chain as one owned collection and preserves
-  the shared world and other bodies. Duplicate rejects that collection because
-  the world has only one copies input and output. Nested physics ownership and
+  the shared world and other bodies. Duplicate rejects that collection: a copy
+  group is made bigger by its count, not by duplicating it. Nested physics ownership and
   malformed custom wiring reject visibly and atomically; nested nonphysical
   scene objects remain editable. The graph editor can wire an intentional
   nonphysical Scene Object beside the shared Physics World; ordinary Add
@@ -130,35 +130,38 @@ Physics Solids demo. The original larger design remains a roadmap.
 
 ### Physics Boxes demo
 
-Load **Physics Boxes** from the generator picker. **Copy Count**
-selects 0–4,000 boxes; **Reset** rebuilds the starting pile at that count. The
-initial count is 256. Boxes start in a compact, deterministically jittered pile
-with varied rotations,
-then tumble onto two opposing ramps that funnel them into each other. The floor,
+Load **Physics Boxes** from the generator picker. **Box Count**
+selects 0–4,000 boxes and adds or removes them live; **Reset** returns them to
+the starting pile. The initial count is 256. Boxes start in a compact,
+deterministically jittered Scatter with varied rotations, then tumble onto two opposing ramps that funnel them into each other. The floor,
 ramps, box geometry/contact properties, camera and lighting are authored in the preset.
 The stress-test floor uses X/Z scale 100, with a wider camera view and up to 24
-columns per pile row.
+columns per row.
 Play advances the drop; pause holds it once queued work reaches the paused position.
 The Performance HUD shows render frame interval, Physics CPU time, Physics Lag
 (maximum queued simulation seconds across worlds), and Bodies (including
 the fixed floor and two ramps). The 4,000 ceiling is a bounded demo capacity, not a measured
 real-time limit or a Box3D engine limit.
 
-The existing `node.physics_world` accepts an optional `copies` rigid-body
-prototype alongside its 64 individual bodies. Copies share their native
-world and contacts. The box spawner (`copy_count`, `copy_spacing`,
-`copy_columns`, `copy_layout`) lives on that copies body, not on the world:
-the controls show only on a body wired into `copies`, so a scene without boxes
-has no box sliders, and any scene gets boxes by wiring a body there. Graphs
-saved with the spawner on the world move it onto the body at load
-(`copies_body::migrate_world_copies`). `copy_layout` selects the original centered Grid or a compact
-Pile: Pile caps its cube-root-derived row width at `copy_columns`, adds bounded
-position jitter, and varies each copy’s rotation with an index-seeded hash. Reset
-repeats the same initial arrangement; it does not introduce a new random seed.
-`copy_count`, `copy_columns`, `copy_spacing` and `copy_layout` are sampled on
-initialization/Reset, not on slider motion. Copies require uniform scale because the existing
-`InstanceTransform` wire has one scale component. The `instances` output feeds
-`node.scene_object.instances`; `active_count` feeds its optional `instance_count`
+The existing `node.physics_world` copies the rigid body wired into each
+copy-group input `copies_k`
+(PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.5 (Copy groups)).
+Copies share their native world and contacts. The spawner
+lives on that copies body, not on the world: Count (`copy_count`), Layout
+(`copy_layout`: Grid, Scatter, Line, Ring; Scatter is the old Pile), Columns
+(`copy_columns`), Spacing (`copy_size_spacing`, a multiple of the copy's own
+size along each layout axis; Scatter steps by the box diagonal so its jitter
+clears) and Copy Turn (`copy_turn_x/y/z`). The controls show only on a body
+wired into a copy-group input, so a scene without boxes has no box sliders,
+and any scene gets boxes by wiring a body there. Graphs saved with the
+spawner on the world, or with Spacing in metres, convert at load
+(`copies_body::migrate_world_copies`). Scatter jitters each copy's position
+and turn with an index-seeded hash, so Reset repeats the same arrangement.
+Every control acts live: an edit snaps the copies into formation, at rest, at
+the next tick start, and a Count change enables or disables copies in place
+without rebuilding the world. Copies require uniform scale because the existing
+`InstanceTransform` wire has one scale component. The `instances_k` output feeds
+`node.scene_object.instances`; `active_count_k` feeds its optional `instance_count`
 input, so drawing, shadows and RT use only active copies rather than the 4,000
 buffer capacity. Unwired instance count preserves existing behavior.
 
@@ -223,7 +226,7 @@ their existing layout. Shatter keeps using internal fragments under the parent.
 
 Shatter is a modifier added through the existing picker after enabling Physics.
 Its Pieces preparation control selects 2–32 internal fragments, subject to the
-world's 64 body slots and at least one piece per material part. Pieces are
+world's free body slots (up to 256) and at least one piece per material part. Pieces are
 distributed across material parts by triangle count. Preparation preserves original
 triangles and attributes; it does not remesh or add cut caps. Source settings stay
 locked while the modifier captures them. Deformed/skinned sources are unsupported.

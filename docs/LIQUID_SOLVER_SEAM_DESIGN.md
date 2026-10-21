@@ -198,7 +198,7 @@ All live solvers use the physics-layer interval contract. GPU liquids retain the
 |---|---|
 | Play | Accept the whole transport span × Speed; numerical subdivisions do not change the accepted endpoint. |
 | Pause or Speed 0 | No ticks; outputs held; `ClockFrame.held` true. A tick already on the GPU completes and publishes. Impulses fired while held are discarded with a receipt; a hit fired before the first tick is due is kept. |
-| Speed change | Applies from the interval after the frame that sees it; must equal the paired Box3D world's Speed. |
+| Speed change | Applies from the next Sim Rate tick start at or after the frame that sees it, so each tick runs at the Speed of its own start (LIVE_SIM_CLOCK_DESIGN.md D4 (preserve control semantics)); must equal the paired Box3D world's Speed. |
 | Reset, backward seek, setup change | Restart: new epoch, state reseeds, a coupled Box3D world restarts with it. |
 | Forward jump, live | Cover the complete interval. `dropped_seconds` remains a compatibility output fixed at zero; cap hits are explicit HUD warnings. |
 | Export (offline) | Every due tick, host syncs between coupled ticks. 30 fps export equals 60 fps at the same transport time. |

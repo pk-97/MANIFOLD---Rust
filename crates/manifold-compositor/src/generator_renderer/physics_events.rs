@@ -50,15 +50,45 @@ impl GeneratorRenderer {
         source: FrameTime,
         project_tempo: Option<&ProjectTempo>,
     ) -> Result<bool, String> {
+        self.fire_scene_impulse_with_step(layer, param, source, project_tempo, self.sim_step)
+    }
+
+    /// [`Self::fire_scene_impulse`] between frames: the step the next frame
+    /// will take carries the transport's pending target and its tempo shift,
+    /// peeked, so a hit after a seek in the same drain sees the seek.
+    pub fn fire_scene_impulse_between_frames(
+        &mut self,
+        layer: &Layer,
+        param: &str,
+        source: FrameTime,
+        project_tempo: Option<&ProjectTempo>,
+        pending_target: Option<manifold_core::PlayedTime>,
+        tempo_shift: manifold_core::Seconds,
+    ) -> Result<bool, String> {
+        let step = self.sim_step.with_played_target(pending_target).with_tempo_shift(tempo_shift);
+        self.fire_scene_impulse_with_step(layer, param, source, project_tempo, step)
+    }
+
+    fn fire_scene_impulse_with_step(
+        &mut self,
+        layer: &Layer,
+        param: &str,
+        source: FrameTime,
+        project_tempo: Option<&ProjectTempo>,
+        step: manifold_node_engine::exec::effect_node::SimStep,
+    ) -> Result<bool, String> {
         if !Self::has_scene_impulse(layer, param) {
             return Ok(false);
         }
+        // The seam: the hit becomes played time here, once, so a tempo edit
+        // while it waits never moves it.
+        let source = FireSource { played: step.to_played(source.seconds), beats: source.beats };
         // Behind an earlier waiting hit of this scene, in firing order.
         let result = if self.waiting_fires.iter().any(|fire| fire.layer == layer.layer_id) {
             self.wait(layer, param, source)
         } else {
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo) {
+            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo, step) {
                 Ok(ImpulseFire::NotReady) => self.wait(layer, param, source),
                 Ok(_) => Ok(()),
                 Err(error) => Err(error),
@@ -67,7 +97,7 @@ impl GeneratorRenderer {
         result.map(|()| true).inspect_err(|error| self.scene_impulse_diagnostics.refuse(error))
     }
 
-    fn wait(&mut self, layer: &Layer, param: &str, source: FrameTime) -> Result<(), String> {
+    fn wait(&mut self, layer: &Layer, param: &str, source: FireSource) -> Result<(), String> {
         if self.waiting_fires.len() >= WAITING_FIRE_CAPACITY {
             return Err(format!(
                 "Impulse: {WAITING_FIRE_CAPACITY} hits are already waiting for the scene; this hit is refused"
@@ -85,8 +115,10 @@ impl GeneratorRenderer {
     /// Right after `layer` rendered: its waiting hits land in firing order,
     /// each once. The first still not ready keeps itself and the rest waiting;
     /// one that waited past [`MAX_WAIT`] is refused instead, so a late hit
-    /// never lands off the beat.
-    pub(super) fn land_waiting_fires(&mut self, layer: &Layer, project_tempo: Option<&ProjectTempo>) {
+    /// never lands off the beat. None lands past `frame`, the played time of
+    /// the frame that just rendered: a seek back while it waited never sends
+    /// it into time not yet played.
+    pub(super) fn land_waiting_fires(&mut self, layer: &Layer, project_tempo: Option<&ProjectTempo>, frame: manifold_core::PlayedTime) {
         let mut index = 0;
         while index < self.waiting_fires.len() {
             if self.waiting_fires[index].layer != layer.layer_id {
@@ -99,8 +131,9 @@ impl GeneratorRenderer {
                 continue;
             }
             let fire = &self.waiting_fires[index];
+            let source = FireSource { played: fire.source.played.min(frame), ..fire.source };
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, &fire.param, fire.source, project_tempo) {
+            match try_fire(state, &mut self.next_physics_event, layer, &fire.param, source, project_tempo, self.sim_step) {
                 Ok(ImpulseFire::NotReady) => return,
                 Ok(_) => {}
                 Err(error) => self.scene_impulse_diagnostics.refuse(&error),
@@ -163,11 +196,18 @@ const WAIT_TOLERANCE: f64 = 1e-6;
 
 const WAITED_TOO_LONG: &str = "Impulse: the hit waited more than 100 ms for its scene; this hit is refused";
 
+/// A Fire's source on the played clock, with the beat it fired on.
+#[derive(Clone, Copy)]
+pub(super) struct FireSource {
+    played: manifold_core::PlayedTime,
+    beats: manifold_core::Beats,
+}
+
 /// A Fire that arrived before its scene could take it.
 pub(super) struct WaitingFire {
     layer: LayerId,
     param: String,
-    source: FrameTime,
+    source: FireSource,
     /// The content clock when the hit began waiting.
     since: Seconds,
 }
@@ -187,8 +227,9 @@ fn try_fire(
     next_sequence: &mut u64,
     layer: &Layer,
     param: &str,
-    source: FrameTime,
+    source: FireSource,
     project_tempo: Option<&ProjectTempo>,
+    step: manifold_node_engine::exec::effect_node::SimStep,
 ) -> Result<ImpulseFire, String> {
     let Some(state) = state else {
         return Ok(ImpulseFire::NotReady);
@@ -217,8 +258,11 @@ fn try_fire(
             .apply_manifest_reshape(&params.params, layer.generator_graph());
         state.applied_param_version = version;
     }
+    // This frame's step, so a Fire past a jump its frame has yet to render
+    // sees the jump's target, and host hops convert with its tempo shift.
+    state.generator.set_sim_step(step);
     state.generator.apply_param_values(&params.params);
     state.generator.set_source_instance(Some(params));
     state.generator.set_project_tempo(project_tempo);
-    state.generator.fire_scene_impulse(param, source, next_sequence)
+    state.generator.fire_scene_impulse_played(param, source.played, source.beats, next_sequence)
 }

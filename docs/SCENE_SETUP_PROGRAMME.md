@@ -102,7 +102,7 @@ Outcome: picker presets that open working: water in a photoscan, swarm, rigid de
 | 4 | E1 ‖ A3 ‖ trigger-skip lane (Opus, high: BUG-mo4oa (scene force trigger skipped) and BUG-403q (scene-liquid-forces flow); triggers are never skipped, D-74) | one batched landing; GPU proof for E1 |
 | 5 | F1 ‖ E2 if approved | one batched landing |
 
-Rules: lanes commit once and stop; the lead reviews with Opus agents and lands the wave as one batch with `scripts/land_branch.py`. One `--cheap` gate per lane, reused at landing. Non-GPU waves pass `--skip-gpu`. Reds proven on main get a bead and a named red, never an in-line fix. The lead never writes code itself: reads, builds, tests, probes and edits go to agents; the lead briefs, reviews, decides and lands.
+Rules: lanes commit once and stop; the lead reviews with Opus agents and lands the wave as one batch with `scripts/land_branch.py`. One `--cheap` gate per lane, reused at landing. Non-GPU waves pass `--skip-gpu`. Reds proven on main get a bead and a named red, never an in-line fix. The lead never writes code itself: reads, builds, tests, probes and edits go to agents; the lead briefs, reviews, decides and lands. God-file splits are deferred to the closing pass (BUG-0miku, closing split and simplify pass); lanes raise ceilings and list them there.
 
 ## 5. Testing
 

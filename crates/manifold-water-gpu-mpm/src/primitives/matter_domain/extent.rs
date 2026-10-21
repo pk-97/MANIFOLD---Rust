@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
@@ -10,15 +10,12 @@ use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::matter::REACTION_WORDS;
 use crate::primitives::matter_domain::matter_geometry;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::walked_roles;
 
 fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let geometry = matter_geometry(
-        |name, default| x.scalar(name, default),
-        x.params(),
-        x.transform("domain"),
-        x.transform("initial_volume"),
-    )
-    .map_err(Verdict::Refused)?;
+    let (fill, _) = walked_roles(x, "Matter")?;
+    let geometry =
+        matter_geometry(|name, default| x.scalar(name, default), x.params(), x.transform("domain"), fill).map_err(Verdict::Refused)?;
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
@@ -36,7 +33,7 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // Body kernels clamp rows and body counts to the bodies array, so the
     // walk takes a scene without colliders; the reaction slot is sized for
     // every body a liquid holds.
-    let reaction = MAX_FLUID_ROLES as u64 * u64::from(REACTION_WORDS) * 4;
+    let reaction = MAX_LIQUID_BODIES as u64 * u64::from(REACTION_WORDS) * 4;
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),

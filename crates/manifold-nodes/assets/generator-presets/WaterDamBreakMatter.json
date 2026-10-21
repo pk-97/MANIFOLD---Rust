@@ -115,21 +115,13 @@
         "cardVisible": true
       },
       {
-        "id": "environment_mode",
-        "name": "Environment",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F0",
-        "section": "Lighting",
-        "cardVisible": true
-      },
-      {
         "id": "surface_stretch",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "tooltip": "Stretch particles along the local flow to join the surface.",
         "name": "Stretch",
         "min": 1.0,
@@ -140,7 +132,12 @@
       },
       {
         "id": "surface_centre_smoothing",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "tooltip": "Move surface particles toward their neighbours for a smoother sheet.",
         "name": "Centre Smoothing",
         "min": 0.0,
@@ -151,7 +148,12 @@
       },
       {
         "id": "surface_fill_pits",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "tooltip": "Fill surface dips; distance is measured in particle bins.",
         "name": "Fill Pits",
         "min": 0.0,
@@ -164,7 +166,12 @@
         "defaultValue": 0.0,
         "formatString": "F0",
         "id": "surface_detail",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "isToggle": false,
         "isTrigger": false,
         "max": 2.0,
@@ -177,7 +184,12 @@
         "defaultValue": 3.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "isToggle": false,
         "isTrigger": false,
         "max": 4.0,
@@ -190,7 +202,12 @@
         "defaultValue": 0.5,
         "formatString": "F2",
         "id": "mesh_relaxation",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "isToggle": false,
         "isTrigger": false,
         "max": 10.0,
@@ -203,7 +220,12 @@
         "defaultValue": 2.0,
         "formatString": "F0",
         "id": "surface_smoothing_iterations",
-        "scene": {"role": "setup", "group": "look", "cardOrder": 0, "cardLabel": "param"},
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "cardOrder": 0,
+          "cardLabel": "param"
+        },
         "isToggle": false,
         "isTrigger": false,
         "max": 10.0,
@@ -316,19 +338,6 @@
         },
         "convert": {
           "type": "IntRound"
-        }
-      },
-      {
-        "id": "environment_mode",
-        "label": "Environment",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "environment_select",
-          "param": "selector"
-        },
-        "convert": {
-          "type": "Float"
         }
       },
       {
@@ -837,38 +846,6 @@
       "handle": "final_output"
     },
     {
-      "id": 32,
-      "nodeId": "initial_column",
-      "typeId": "node.transform_3d",
-      "handle": "Initial Column",
-      "params": {
-        "pos_x": {
-          "type": "Float",
-          "value": -1.25
-        },
-        "pos_y": {
-          "type": "Float",
-          "value": 1.12
-        },
-        "pos_z": {
-          "type": "Float",
-          "value": 0
-        },
-        "scale_x": {
-          "type": "Float",
-          "value": 1.18
-        },
-        "scale_y": {
-          "type": "Float",
-          "value": 1.92
-        },
-        "scale_z": {
-          "type": "Float",
-          "value": 3.5
-        }
-      }
-    },
-    {
       "id": 33,
       "nodeId": "rim_light",
       "typeId": "node.light",
@@ -1021,34 +998,6 @@
       }
     },
     {
-      "id": 40,
-      "nodeId": "sky_exposure",
-      "typeId": "node.exposure",
-      "handle": "Sky Exposure",
-      "params": {
-        "gain": {
-          "type": "Float",
-          "value": 2.0
-        }
-      }
-    },
-    {
-      "id": 41,
-      "nodeId": "environment_select",
-      "typeId": "node.switch_texture",
-      "handle": "Environment Select",
-      "params": {
-        "num_inputs": {
-          "type": "Int",
-          "value": 2
-        },
-        "selector": {
-          "type": "Float",
-          "value": 0.0
-        }
-      }
-    },
-    {
       "id": 51,
       "typeId": "group",
       "handle": "Live Matter",
@@ -1058,7 +1007,7 @@
           "inputs": [
             {
               "name": "initialVolume",
-              "portType": "Transform"
+              "portType": "FluidRole"
             },
             {
               "name": "collider",
@@ -1973,7 +1922,7 @@
             "fromNode": 0,
             "fromPort": "initialVolume",
             "toNode": 1,
-            "toPort": "initial_volume"
+            "toPort": "role_1"
           },
           {
             "fromNode": 0,
@@ -4274,6 +4223,96 @@
       "nodeId": "obstacle_object",
       "typeId": "node.scene_object",
       "handle": "Moving Box"
+    },
+    {
+      "id": 69,
+      "nodeId": "Live Matter_initial_fill",
+      "typeId": "group",
+      "handle": "Initial Fill",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "role",
+              "portType": "FluidRole"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "initial_column",
+            "typeId": "node.transform_3d",
+            "handle": "Initial Column",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -1.25
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 1.12
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 1.18
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.92
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 3.5
+              }
+            }
+          },
+          {
+            "id": 2,
+            "nodeId": "Live Matter_initial_fill_role",
+            "typeId": "node.fluid_role_source",
+            "handle": "Initial Fill",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 0.8660254
+              },
+              "role": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "Live Matter_initial_fill_output",
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "transform",
+            "toNode": 2,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "role",
+            "toNode": 3,
+            "toPort": "role"
+          }
+        ]
+      }
     }
   ],
   "wires": [
@@ -4380,24 +4419,6 @@
       "toPort": "in"
     },
     {
-      "fromNode": 2,
-      "fromPort": "envmap",
-      "toNode": 41,
-      "toPort": "in_0"
-    },
-    {
-      "fromNode": 39,
-      "fromPort": "out",
-      "toNode": 40,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 40,
-      "fromPort": "out",
-      "toNode": 41,
-      "toPort": "in_1"
-    },
-    {
       "fromNode": 1,
       "fromPort": "out",
       "toNode": 30,
@@ -4422,8 +4443,8 @@
       "toPort": "light_1"
     },
     {
-      "fromNode": 41,
-      "fromPort": "out",
+      "fromNode": 2,
+      "fromPort": "envmap",
       "toNode": 30,
       "toPort": "envmap"
     },
@@ -4458,8 +4479,8 @@
       "toPort": "object_5"
     },
     {
-      "fromNode": 32,
-      "fromPort": "transform",
+      "fromNode": 69,
+      "fromPort": "role",
       "toNode": 51,
       "toPort": "initialVolume"
     },
@@ -4564,6 +4585,12 @@
       "fromPort": "indices",
       "toNode": 62,
       "toPort": "indices"
+    },
+    {
+      "fromNode": 39,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "hdri"
     }
   ]
 }

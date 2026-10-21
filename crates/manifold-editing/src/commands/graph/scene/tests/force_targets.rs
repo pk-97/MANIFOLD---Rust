@@ -158,7 +158,7 @@ fn scene_force_targets_copies_remove_only_their_field_and_undoes() {
         .find(|node| node.type_id == "node.physics_world")
         .unwrap()
         .id;
-    let field = connect_field(&mut graph, world, "copies_acceleration");
+    let field = connect_field(&mut graph, world, "copies_acceleration_0");
     let global = connect_field(&mut graph, world, "acceleration_field");
     let (mut project, fx) = project_with_graph(graph.clone());
     let mut remove = remove_object(&project, 
@@ -171,7 +171,7 @@ fn scene_force_targets_copies_remove_only_their_field_and_undoes() {
     remove.execute(&mut project);
     assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
     let result = graph_of(&project, &fx);
-    assert!(!has_target(result, field, world, "copies_acceleration"));
+    assert!(!has_target(result, field, world, "copies_acceleration_0"));
     assert!(has_target(result, global, world, "acceleration_field"));
     assert!(result.nodes.iter().any(|node| node.id == field));
     remove.undo(&mut project);

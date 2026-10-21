@@ -731,15 +731,15 @@
         let labels = |group| panel.add_menu(group).iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
         assert_eq!(
             labels(SceneGroup::Objects),
-            ["Object", "Plane", "Water", "Swarm", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
+            ["Object", "Plane", "Water", "Swarm", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
         );
         assert_eq!(
             labels(SceneGroup::Lighting),
-            ["Light", "Object", "Plane", "Water", "Swarm", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
+            ["Light", "Object", "Plane", "Water", "Swarm", "Initial Fill", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
         );
         assert_eq!(
             labels(SceneGroup::Forces),
-            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Swarm", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
+            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Swarm", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
         );
         let menu = panel.add_menu(SceneGroup::Objects);
         let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
@@ -748,13 +748,39 @@
         assert!(insert(1, SceneTemplateKind::Plane));
         assert!(insert(2, SceneTemplateKind::Water));
         assert!(insert(3, SceneTemplateKind::Swarm), "Swarm needs no water");
-        for source in &menu[4..7] {
+        for source in &menu[4..8] {
             assert!(source.action.is_none() && source.disabled.as_deref() == Some("Add Water first"), "{} needs a water", source.label);
         }
-        assert!(matches!(&menu[7].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
-        assert!(insert(8, SceneTemplateKind::Light));
-        assert!(matches!(&menu[9].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
-        assert!(menu[7].separator_after && !menu[6].separator_after, "the clicked group's entries are set apart");
+        assert!(matches!(&menu[8].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
+        assert!(insert(9, SceneTemplateKind::Light));
+        assert!(matches!(&menu[10].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
+        assert!(menu[8].separator_after && !menu[7].separator_after, "the clicked group's entries are set apart");
+    }
+
+    /// A water starts from one Initial Fill: with one listed under it, Add
+    /// Initial Fill says so instead of inserting a second.
+    #[test]
+    fn a_water_with_an_initial_fill_refuses_a_second() {
+        use manifold_foundation::scene_surface::{SceneItemKind, SceneTemplateKind, SourceRole};
+        let mut vm = azalea_shaped_vm();
+        vm.fluid_domains = vec![FluidDomainOption { node: FoundationNodeId::new("pool"), name: "pool".into(), rows: vec![object_ref(50)] }];
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm.clone()));
+        let fill = |panel: &ScenePanel| panel.add_menu(SceneGroup::Objects).into_iter().find(|entry| entry.label == "Initial Fill").expect("Initial Fill entry");
+        assert!(matches!(&fill(&panel).action,
+            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { kind: SceneTemplateKind::InitialFill, water: Some(_), .. }))));
+        vm.items.push(SceneItemVm {
+            kind: SceneItemKind::Source(SourceRole::InitialFill),
+            selection: SceneSelection::Source(FoundationNodeId::new("pool_fill")),
+            name: "Initial Fill".into(),
+            parent: Some(object_ref(50)),
+            parameter_ids: Vec::new(),
+        });
+        panel.configure(live(vm));
+        let refused = fill(&panel);
+        assert!(refused.action.is_none());
+        assert_eq!(refused.disabled.as_deref(), Some("The water already has an Initial Fill"));
     }
 
     /// D-94: an Inflow, Drain or Collider goes into the water the selection
@@ -1921,3 +1947,91 @@
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(highlighted(&panel, &tree).is_empty(), "no row highlights");
     }
+
+mod aim_sun_tests {
+    use super::*;
+
+    /// With an HDRI file set, Lighting offers "Aim Sun at HDRI"; its click
+    /// carries the layer and the file. With no file there is nothing to aim at.
+    #[test]
+    fn lighting_offers_aim_sun_only_with_a_file() {
+        let build = |hdri_file: &str| {
+            let mut vm = azalea_shaped_vm();
+            vm.environment = EnvironmentRowVm::Importer {
+                intensity: mrow(RowValue { addr: RowAddr::root(1, "intensity"), value: 1.0, min: 0.0, max: 4.0, driven: false, exposed: false }),
+                fill: mrow(RowValue { addr: RowAddr::root(1, "fill"), value: 0.0, min: 0.0, max: 2.0, driven: false, exposed: false }),
+                hdri_file: hdri_file.to_string(),
+                hdri_param: Some(0),
+            };
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(live(vm));
+            panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Lighting);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+            (panel, tree)
+        };
+
+        let (panel, _) = build("");
+        assert!(panel.aim_sun_id.is_none(), "no file, nothing to aim at");
+
+        let (mut panel, mut tree) = build("/skies/sunrise.exr");
+        let (id, file) = panel.aim_sun_id.clone().expect("the button renders");
+        assert_eq!(file, "/skies/sunrise.exr");
+        assert_eq!(tree.name_of(id), Some("scene_setup.lighting.aim_sun"));
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(layer, path))]
+                if layer_1(layer) && path == "/skies/sunrise.exr"
+        ), "{actions:?}");
+    }
+}
+
+mod background_rows {
+    use super::*;
+    use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, Modes};
+
+    /// Lighting always shows the Background switch; Blur and Brightness read
+    /// only while it is on.
+    #[test]
+    fn lighting_shows_background_blur_and_brightness_only_while_it_is_on() {
+        let shown = |background: f32| {
+            let (mut vm, mut surface) = world_transform_vm();
+            set_item_ids(&mut vm, SceneSelection::Lighting, &["bg_enabled", "bg_blur", "bg_brightness"]);
+            let template = surface.rows[0].clone();
+            let mut rows = Vec::new();
+            for (id, switch, gate) in [
+                ("bg_enabled", Some(Feature::Background), None),
+                ("bg_blur", None, Some(Gate::Only(Feature::Background, Modes(0b10)))),
+                ("bg_brightness", None, Some(Gate::Only(Feature::Background, Modes(0b10)))),
+            ] {
+                let mut row = scene_row(&template, id, ControlGroup::Environment);
+                if let Some(scene) = row.spec.scene.as_mut() {
+                    scene.switch = switch;
+                    scene.gate = gate;
+                }
+                if id == "bg_enabled" {
+                    row.value.base = background;
+                }
+                rows.push(row);
+            }
+            surface.rows = rows;
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(live(vm));
+            panel.configure_params(Some(surface));
+            panel.set_selection(LayerId::new("layer-1"), SceneSelection::Lighting);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1200.0));
+            panel.properties_card.rows.iter().map(|row| row.id.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(shown(0.0), ["bg_enabled"]);
+        assert_eq!(shown(1.0), ["bg_enabled", "bg_blur", "bg_brightness"]);
+    }
+}

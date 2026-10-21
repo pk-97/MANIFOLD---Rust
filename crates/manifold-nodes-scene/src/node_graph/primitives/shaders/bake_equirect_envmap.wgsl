@@ -16,6 +16,9 @@
 // the "exact zero outside the lit regions" contract holds exactly, not
 // merely approximately.
 //
+// mode = 2 (HDRI) with no HDRI wired lands here too and bakes black; with an
+// HDRI wired the copy runs in bake_environment_hdri.wgsl instead.
+//
 // Bindings:
 //   @binding(0) uniforms (80 bytes)
 //   @binding(1) output_tex (rgba16float storage)
@@ -90,7 +93,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Azimuthal variation — 1.0 + variation * sin(2 azimuth).
         color *= sin(azimuth * 2.0) * uniforms.azimuth_variation + 1.0;
-    } else {
+    } else if uniforms.mode == 1u {
         // D7 — softbox: pure-black base. The ONLY light in the environment
         // is the emitter strips (+ optional sun disc) — nothing lifts the
         // shadows, so we start from exact zero, not a dim ambient term.

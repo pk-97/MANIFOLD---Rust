@@ -1660,7 +1660,8 @@ impl PresetRuntime {
             &mut self.state_store,
             ctx.owner_key,
         );
-        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time));
+        let played = self.executor.sim_step().played_at(frame_time.seconds);
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time, played));
 
         self.output_texture()
     }
@@ -1819,7 +1820,8 @@ impl PresetRuntime {
         self.for_each_extension(|extension, context| extension.before_frame(context, time));
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
-        self.for_each_extension(|extension, context| extension.after_frame(context.graph, time));
+        let played = self.executor.sim_step().played_at(time.seconds);
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, time, played));
         self.consume_trigger_markers();
     }
 
@@ -1909,7 +1911,8 @@ impl PresetRuntime {
             // dead — found by the R2 accumulation gate, D-62).
             ctx.owner_key,
         );
-        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time));
+        let played = self.executor.sim_step().played_at(frame_time.seconds);
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time, played));
 
         self.consume_trigger_markers();
         ctx.anim_progress

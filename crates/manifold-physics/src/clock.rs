@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::Seconds;
+use crate::{PlayedTime, Seconds};
 use crate::stepping::{FramePlan, StepInterval};
 
 pub const TICK: f64 = 1.0 / 60.0;
@@ -13,6 +13,23 @@ pub const MAX_LIVE_INTERVALS: u64 = 2;
 /// Transport time going back by more than this is a seek or loop: the clock
 /// restarts, and so does anything integrating over the same transport.
 pub const BACKWARD_SEEK: f64 = 1e-9;
+/// The physics history replay evaluates authored inputs at every multiple of
+/// 1 / REPLAY_RATE seconds of transport, whatever the display rate. Every
+/// Sim Rate divides it.
+pub const REPLAY_RATE: f64 = 240.0;
+
+/// Replay grid point `k` of a grid counting from `origin`, the newest
+/// placement's target. Every replay consumer names its points through this,
+/// so they agree bit for bit.
+pub fn replay_point(origin: PlayedTime, k: f64) -> PlayedTime {
+    PlayedTime::from_played(origin.seconds() + k / REPLAY_RATE)
+}
+
+/// The first point at or after `played` of the replay grid counting from
+/// `origin`.
+pub fn next_replay_point(played: PlayedTime, origin: PlayedTime) -> PlayedTime {
+    replay_point(origin, ((played.seconds() - origin.seconds()) * REPLAY_RATE - 1e-9).ceil())
+}
 
 /// The previous live frame's measured load (render work plus GPU surface wait)
 /// against the display frame budget. A live frame takes a second interval only
@@ -68,8 +85,8 @@ pub struct ClockFrame {
     /// The live acceptance cap in force (1 after a late frame, else 2).
     /// None offline, where every owed interval runs.
     pub live_cap: Option<u32>,
-    /// The transport this frame observed.
-    pub transport: f64,
+    /// The played time this frame observed.
+    pub transport: PlayedTime,
 }
 
 /// One transport clock shared by physics consumers.
@@ -94,8 +111,7 @@ pub struct SimulationClock {
     simulation_interval: f64,
     transport_origin: f64,
     transport_done: u64,
-    /// Speed over the interval after the last frame. Like every replayed
-    /// control, a Speed edit takes effect from the frame that observes it.
+    /// The last valid Speed a frame passed in, held over an invalid one.
     speed: f64,
     /// Retain the continuity anchor and all speed edits after accepted time.
     speed_history: Vec<SpeedAnchor>,
@@ -103,6 +119,21 @@ pub struct SimulationClock {
     /// This frame's live load, set by the owner before it observes or
     /// advances. None (export, tests, previews) keeps the two-interval cap.
     live_load: Option<LiveLoad>,
+    /// The played-time target of the jump this frame landed on, set by the
+    /// owner with the live load. A restart starts its grid there.
+    played_target: Option<f64>,
+    /// Boundaries the restarting frame had already reached when a restart
+    /// began its grid at an earlier transport target. The jump owes them,
+    /// not a late frame, so the live cap counts from there.
+    restart_reached: u64,
+    /// The transport of the latest replay observation. The frame's own Speed
+    /// at that same transport does not replace it: one rule evaluates Speed
+    /// at a tick start whether or not a frame ends there.
+    sampled_at: Option<f64>,
+    /// The newest placement's target and the transport its frame landed on,
+    /// while the transport stays there: a restart for any reason on that
+    /// frame starts its grid at the target.
+    placement: Option<(f64, f64)>,
 }
 
 /// A clone advances on its own, so it never inherits the original's identity:
@@ -116,7 +147,8 @@ impl Clone for ClockInstance {
     }
 }
 
-/// Piecewise-constant speed, integrated once at each observed edit. Accepted
+/// Piecewise-constant speed, integrated once at each edit. Within an epoch an
+/// edit sits on a tick start, so every tick runs at one speed. Accepted
 /// frames retain an immutable view; later edits cannot rewrite their endpoints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpeedAnchor {
@@ -142,11 +174,21 @@ fn map_transport(anchors: &[SpeedAnchor], transport: f64) -> f64 {
 impl SimulationClock {
     /// Observe controls without accepting a render interval or consuming ticks.
     /// History/source capture and rendering share this exact time mapping.
-    pub fn observe_speed(&mut self, transport: f64, speed: f32) -> f64 {
+    /// A replay sample observes here; the frame's own observation at the
+    /// same transport, in [`Self::advance`], leaves it standing.
+    pub fn observe_speed(&mut self, played: PlayedTime, speed: f32) -> f64 {
+        let transport = played.seconds();
+        if transport.is_finite() {
+            self.sampled_at = Some(transport);
+        }
+        self.anchor_speed(transport, speed)
+    }
+
+    fn anchor_speed(&mut self, transport: f64, speed: f32) -> f64 {
         if !transport.is_finite() || !speed.is_finite() || speed < 0.0 {
             return self.target_time;
         }
-        let observed_simulation = self.simulation_at(transport, self.live_load);
+        let observed_simulation = self.simulation_at_seconds(transport, self.live_load);
         // A late source/audio observation may read accepted time, but may
         // only change the speed of time we have not accepted yet.
         let accepted_transport = if self.started {
@@ -154,24 +196,39 @@ impl SimulationClock {
         } else {
             self.last_transport
         };
+        // Speed applies from tick starts only (D4): an observation between
+        // two starts takes effect at the next one, so where speed changes
+        // depends on the Sim Rate grid, never on when frames land.
         let transport = if self.started && !self.speed_history.is_empty() {
-            transport.max(accepted_transport)
+            self.next_tick_start(transport.max(accepted_transport))
         } else {
             transport
         };
-        let simulation = map_transport(&self.speed_history, transport);
-        if self.speed_history.last().is_none_or(|last| {
-            transport >= last.transport && last.speed != f64::from(speed)
-        }) {
-            let history = &mut self.speed_history;
-            let anchor = SpeedAnchor { transport, simulation, speed: f64::from(speed) };
-            if history.last().is_some_and(|last| last.transport == transport) {
-                *history.last_mut().expect("last anchor") = anchor;
-            } else {
-                history.push(anchor);
+        let speed = f64::from(speed);
+        let history = &mut self.speed_history;
+        // The latest observation for a tick start wins. Dropping the earlier
+        // one, rather than overwriting it, keeps an unchanged speed from
+        // leaving an anchor behind, so equal speeds give equal anchors and
+        // bit-equal intervals whatever frames observed them.
+        if history.len() > 1 && history.last().is_some_and(|last| last.transport == transport) {
+            history.pop();
+        }
+        match history.last_mut() {
+            Some(last) if last.transport == transport => last.speed = speed,
+            Some(last) if last.transport > transport || last.speed == speed => {}
+            _ => {
+                let simulation = map_transport(history, transport);
+                history.push(SpeedAnchor { transport, simulation, speed });
             }
         }
         observed_simulation
+    }
+
+    /// The first tick start at or after `transport` on this epoch's grid,
+    /// rounded as `advance` counts reached boundaries.
+    fn next_tick_start(&self, transport: f64) -> f64 {
+        let index = ((transport - self.transport_origin) / self.simulation_interval - 1e-9).ceil().max(0.0);
+        self.transport_origin + index * self.simulation_interval
     }
 
     /// Intervals this live frame may accept. The load is fixed for the whole
@@ -180,10 +237,29 @@ impl SimulationClock {
         live_cap_for(self.live_load)
     }
 
+    /// The boundary the live cap counts from: the last one accepted, or one
+    /// a restart had already reached at its first frame.
+    fn cap_from(&self) -> u64 {
+        self.transport_done.max(self.restart_reached)
+    }
+
+    /// The last boundary of this epoch's grid that `transport` has reached,
+    /// by the rounding `advance` accepts boundaries with; negative before
+    /// the origin.
+    fn reached_index(&self, transport: f64) -> f64 {
+        ((transport - self.transport_origin) / self.simulation_interval + 1e-9).floor()
+    }
+
     /// Set once per frame, before `simulation_at`, `tick_starts` or
     /// `advance`, so observers and `advance` agree on the cap.
     pub fn set_live_load(&mut self, load: Option<LiveLoad>) {
         self.live_load = load;
+    }
+
+    /// Set once per frame with the live load: the time the transport jumped
+    /// to when this frame is the one the jump landed on, else None.
+    pub fn set_played_target(&mut self, target: Option<PlayedTime>) {
+        self.played_target = target.map(PlayedTime::seconds);
     }
 
     pub fn rate_changed(&self, interval: f64) -> bool {
@@ -199,16 +275,20 @@ impl SimulationClock {
         self.simulation_time
     }
 
-    /// Simulation time at `transport`, under this frame's `load`. The caller
+    /// Simulation time at `played`, under this frame's `load`. The caller
     /// passes the load from its own frame step, so an observation made before
     /// the owner's [`Self::set_live_load`] still uses this frame's cap.
-    pub fn simulation_at(&self, transport: f64, load: Option<LiveLoad>) -> f64 {
+    pub fn simulation_at(&self, played: PlayedTime, load: Option<LiveLoad>) -> f64 {
+        self.simulation_at_seconds(played.seconds(), load)
+    }
+
+    fn simulation_at_seconds(&self, transport: f64, load: Option<LiveLoad>) -> f64 {
         // Source observations may arrive before the render accepts its steps.
         // They use the same live ceiling: later input holds at the next
         // accepted boundary instead of creating timestamps in discarded time.
         let transport = if self.started && !self.offline {
             transport.min(self.transport_origin
-                + (self.transport_done + live_cap_for(load)) as f64 * self.simulation_interval)
+                + (self.cap_from() + live_cap_for(load)) as f64 * self.simulation_interval)
         } else { transport };
         map_transport(&self.speed_history, transport)
     }
@@ -227,18 +307,46 @@ impl SimulationClock {
         self.history_snapshots[index].clone()
     }
 
-    /// The transport time tick `tick` starts at, under the current speed.
-    /// None before the clock starts or while Speed is 0.
-    pub fn tick_start(&self, tick: u64) -> Option<f64> {
-        (self.started && self.speed > 0.0).then(|| {
-            self.transport_origin
-                + (self.transport_done + tick - self.ticks_done) as f64 * self.simulation_interval
-        })
+    /// The transport time not-yet-run tick `tick` starts at, under the
+    /// speeds observed so far. A transport interval at Speed 0 runs no tick,
+    /// so it is skipped. None before the clock starts, for a tick already
+    /// run, or once Speed stays 0.
+    pub fn tick_start(&self, tick: u64) -> Option<PlayedTime> {
+        self.tick_start_at(tick).map(PlayedTime::from_played)
     }
 
-    /// The transport of the last frame.
-    pub fn transport(&self) -> f64 {
-        self.last_transport
+    fn tick_start_at(&self, tick: u64) -> Option<f64> {
+        if !self.started || tick < self.ticks_done {
+            return None;
+        }
+        let at = |index: u64| self.boundary(index);
+        let mut remaining = tick - self.ticks_done;
+        let mut index = self.transport_done;
+        let mut next = self.speed_history.partition_point(|anchor| anchor.transport <= at(index));
+        let mut speed = self.speed_history.get(next.checked_sub(1)?)?.speed;
+        loop {
+            // Anchors sit on tick starts, so each transport interval runs at
+            // the speed of the last anchor at or before its start.
+            if next == self.speed_history.len() {
+                return (speed > 0.0).then(|| at(index + remaining));
+            }
+            if speed > 0.0 {
+                if remaining == 0 {
+                    return Some(at(index));
+                }
+                remaining -= 1;
+            }
+            index += 1;
+            while self.speed_history.get(next).is_some_and(|anchor| anchor.transport <= at(index)) {
+                speed = self.speed_history[next].speed;
+                next += 1;
+            }
+        }
+    }
+
+    /// The played time of the last frame.
+    pub fn transport(&self) -> PlayedTime {
+        PlayedTime::from_played(self.last_transport)
     }
 
     /// Ticks run since the epoch began: the next tick to run.
@@ -246,23 +354,88 @@ impl SimulationClock {
         self.ticks_done
     }
 
-    /// Every tick not yet run whose start lies in `(from, until]` of
-    /// transport time, ascending, with its transport time. Live samples only
-    /// the accepted steps and their closing endpoint, never discarded time.
-    pub fn tick_starts(&self, from: f64, until: f64, mut visit: impl FnMut(f64, u64)) {
-        let mut tick = self.ticks_done;
-        while let Some(transport) = self
-            .tick_start(tick)
-            .filter(|&transport| transport <= until)
-        {
-            if transport > from {
-                visit(transport, tick);
-            }
-            if !self.offline && tick - self.ticks_done == self.live_cap() {
-                break;
-            }
-            tick += 1;
+    /// Every not-yet-run Sim Rate boundary in `(from, until]` of transport
+    /// time, ascending: each place a tick may start. Speed does not narrow
+    /// it, since a Speed the replay is still to observe can start or stop a
+    /// tick at any of them; [`Self::tick_at`] names the tick once the
+    /// boundary's own Speed is known. Live visits only the accepted
+    /// intervals and their closing endpoint, never discarded time.
+    /// `from` and `until` reach a boundary by the rounding `advance` accepts
+    /// it with, so a boundary a rounding past a frame belongs to that frame
+    /// and to no other.
+    pub fn tick_starts(&self, from: PlayedTime, until: PlayedTime, mut visit: impl FnMut(PlayedTime)) {
+        let (from, until) = (from.seconds(), until.seconds());
+        if !self.started {
+            return;
         }
+        let last = self.reached_index(until);
+        if last.is_nan() || last < 0.0 {
+            return;
+        }
+        let first = (self.reached_index(from) + 1.0).max(self.transport_done as f64) as u64;
+        let mut last = last as u64;
+        if !self.offline {
+            last = last.min(self.cap_from() + self.live_cap());
+        }
+        for index in first..=last {
+            visit(PlayedTime::from_played(self.boundary(index)));
+        }
+    }
+
+    /// The tick starting at boundary `transport` (one [`Self::tick_starts`]
+    /// visited), under the speeds observed so far. Call it once Speed at that
+    /// boundary has been observed: every anchor at or before it is then
+    /// final. None when that interval runs at Speed 0, the boundary has
+    /// already run, or `transport` is not a boundary of this epoch.
+    pub fn tick_at(&self, played: PlayedTime) -> Option<u64> {
+        let index = self.boundary_index(played.seconds())?;
+        if index < self.transport_done || !self.interval_runs(index) {
+            return None;
+        }
+        Some(self.ticks_before(index))
+    }
+
+    /// The tick that would follow a tick ending at boundary `transport` where
+    /// no tick starts, because Speed there is 0: its value is that tick's
+    /// end. Same calling rule as [`Self::tick_at`].
+    pub fn tick_closing_at(&self, played: PlayedTime) -> Option<u64> {
+        let index = self.boundary_index(played.seconds())?;
+        if index <= self.transport_done || self.interval_runs(index) || !self.interval_runs(index - 1) {
+            return None;
+        }
+        Some(self.ticks_before(index))
+    }
+
+    /// The index of boundary `transport` of this epoch's grid, exactly.
+    fn boundary_index(&self, transport: f64) -> Option<u64> {
+        if !self.started {
+            return None;
+        }
+        let index = ((transport - self.transport_origin) / self.simulation_interval).round();
+        if index.is_nan() || index < 0.0 || self.boundary(index as u64) != transport {
+            return None;
+        }
+        Some(index as u64)
+    }
+
+    /// Ticks run, and to run, before not-yet-run boundary `index`.
+    fn ticks_before(&self, index: u64) -> u64 {
+        let earlier = (self.transport_done..index).filter(|&i| self.interval_runs(i)).count();
+        self.ticks_done + earlier as u64
+    }
+
+    /// Transport time of Sim Rate boundary `index` of this epoch's grid, by
+    /// the one formula every boundary comparison uses.
+    fn boundary(&self, index: u64) -> f64 {
+        self.transport_origin + index as f64 * self.simulation_interval
+    }
+
+    /// Whether transport interval `index` runs a tick: its start's Speed is
+    /// above 0.
+    fn interval_runs(&self, index: u64) -> bool {
+        let start = self.boundary(index);
+        let anchors = self.speed_history.partition_point(|anchor| anchor.transport <= start);
+        anchors.checked_sub(1).is_some_and(|last| self.speed_history[last].speed > 0.0)
     }
 
     /// Make the next frame a restart in a new epoch. The domain's
@@ -280,13 +453,14 @@ impl SimulationClock {
     /// edit starts one epoch; Speed is integrated exactly once.
     pub fn advance(
         &mut self,
-        transport: f64,
+        played: PlayedTime,
         simulation_interval: f64,
         speed: f32,
         reset: f32,
         setup_changed: bool,
         offline: bool,
     ) -> ClockFrame {
+        let transport = played.seconds();
         if self.instance.0 == 0 {
             static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
             self.instance.0 = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -345,7 +519,7 @@ impl SimulationClock {
                     fresh_dropped_seconds: 0.0,
                     due: 0,
                     live_cap: (!offline).then(|| self.live_cap() as u32),
-                    transport,
+                    transport: PlayedTime::from_played(transport),
                 };
             }
         }
@@ -354,8 +528,30 @@ impl SimulationClock {
             .previous_reset
             .is_some_and(|previous| previous != reset);
         self.previous_reset = Some(reset);
-        let restarted =
-            !self.started || rate_changed || setup_changed || reset_edge || transport < self.last_transport - BACKWARD_SEEK;
+        // A placement reaches one frame. Its target stands while the
+        // transport stays on the frame that took it.
+        let target = self.played_target.filter(|&target| target.is_finite() && target <= transport + 1e-6);
+        match target {
+            Some(target) => self.placement = Some((target, transport)),
+            None => {
+                if self.placement.is_some_and(|(_, landed)| landed != transport) {
+                    self.placement = None;
+                }
+            }
+        }
+        // A seek back is decided by its target, not by where its frame
+        // landed: one shorter than a frame may land on the frame it left.
+        let restarted = !self.started
+            || rate_changed
+            || setup_changed
+            || reset_edge
+            || transport < self.last_transport - BACKWARD_SEEK
+            || target.is_some_and(|target| target < self.last_transport - BACKWARD_SEEK);
+        // A seek forward keeps the simulation and starts a fresh grid at its
+        // target: the skipped span is neither simulated nor dropped, and the
+        // boundaries from the target to this frame run next frame, as after a
+        // restart, so where the frame landed decides nothing.
+        let seek_origin = if restarted { None } else { target.filter(|&target| target > self.last_transport) };
         let mut held = false;
         // Within an epoch the target never moves back past the last frame's.
         // Accepted work ends on a Sim Rate boundary in both modes: equal clock
@@ -364,23 +560,34 @@ impl SimulationClock {
         // frames jitter. A partial interval stays owed until its boundary.
         let speed = f64::from(speed);
         let transport_first = if restarted { 0 } else { self.transport_done };
-        let transport_reached = if !restarted {
+        // A restart on the frame a placement landed on starts its grid at the
+        // placement's target, which no frame rate moves.
+        let origin = if restarted {
+            self.placement.map_or(transport, |(target, _)| target)
+        } else {
+            self.transport_origin
+        };
+        let transport_reached = if !restarted && seek_origin.is_none() {
             (((transport - self.transport_origin) / self.simulation_interval + 1e-9).floor() as u64)
                 .max(self.transport_done)
         } else {
             transport_first
         };
         let live_cap = (!offline).then(|| self.live_cap());
-        let transport_end = live_cap.map_or(transport_reached, |cap| transport_reached.min(transport_first + cap));
+        let cap_from = transport_first.max(self.restart_reached);
+        // A paused frame runs nothing, even the boundaries a jump to an
+        // earlier target left owed; they run once transport moves on.
+        let transport_reached = if !restarted && transport <= self.last_transport { transport_first } else { transport_reached };
+        let transport_end = live_cap.map_or(transport_reached, |cap| transport_reached.min(cap_from + cap));
         let accepted_transport = if restarted {
-            transport
+            origin
         } else {
             self.transport_origin + transport_end as f64 * self.simulation_interval
         };
         // A fractional interval is ordinary pacing jitter, not an owed step.
         // Discard only when at least one whole interval exceeds the cap; once
         // overloaded, drop the entire remainder and start a fresh grid now.
-        let reanchored = !restarted && transport_end < transport_reached;
+        let reanchored = seek_origin.is_some() || (!restarted && transport_end < transport_reached);
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
@@ -389,24 +596,26 @@ impl SimulationClock {
             self.simulation_time = 0.0;
             self.dropped_seconds = 0.0;
             self.speed = speed;
-            self.transport_origin = transport;
-            self.last_accepted_transport = transport;
+            self.transport_origin = origin;
+            self.last_accepted_transport = origin;
             self.transport_done = 0;
+            self.restart_reached = self.reached_index(transport).max(0.0) as u64;
             self.speed_history.clear();
-            self.observe_speed(transport, speed as f32);
+            self.anchor_speed(origin, speed as f32);
         } else {
-            // The interval since the last frame ran at the last frame's speed.
+            // This frame's Speed applies from the next tick start; the
+            // intervals already begun keep the speed of their own start.
             held = transport <= self.last_transport || speed <= 0.0;
-            self.observe_speed(transport, speed as f32);
-            let reached = self.simulation_at(transport, self.live_load);
+            if self.sampled_at != Some(transport) {
+                self.anchor_speed(transport, speed as f32);
+            }
+            let reached = self.simulation_at_seconds(transport, self.live_load);
             if reached.is_finite() {
                 self.target_time = reached.max(self.target_time);
             } else {
                 numerical_error = true;
             }
-            if speed != self.speed {
-                self.speed = speed;
-            }
+            self.speed = speed;
         }
         self.last_transport = transport;
         let first_sequence = self.ticks_done;
@@ -415,18 +624,18 @@ impl SimulationClock {
             transport_end - transport_first
         } else {
             (transport_first..transport_end).filter(|&index| {
-                let at = |i| self.simulation_at(self.transport_origin + i as f64 * self.simulation_interval, self.live_load);
+                let at = |i| self.simulation_at_seconds(self.transport_origin + i as f64 * self.simulation_interval, self.live_load);
                 at(index + 1) > at(index)
             }).count() as u64
         };
         self.ticks_done += ticks;
-        self.simulation_time = self.simulation_at(accepted_transport, self.live_load);
+        self.simulation_time = self.simulation_at_seconds(accepted_transport, self.live_load);
         self.transport_done = transport_end;
         self.last_accepted_transport = accepted_transport;
         if !reanchored {
             // Accepting the steps releases the observation ceiling. Retain the
             // ordinary fractional remainder until its fixed boundary arrives.
-            self.target_time = self.simulation_at(transport, self.live_load).max(self.simulation_time);
+            self.target_time = self.simulation_at_seconds(transport, self.live_load).max(self.simulation_time);
         }
         let plan = FramePlan {
             start: Seconds(start),
@@ -437,22 +646,26 @@ impl SimulationClock {
         // transport ago, through the Speed history: one interval of latency at
         // any Speed, and never past the newest accepted state.
         let display_from = transport - self.simulation_interval;
-        let display_time = self.simulation_at(display_from, self.live_load).clamp(0.0, self.simulation_time);
+        let display_time = self.simulation_at_seconds(display_from, self.live_load).clamp(0.0, self.simulation_time);
         let speed_history = self.snapshot_history();
         let frame_transport_origin = self.transport_origin;
         let mut fresh_dropped_seconds = 0.0;
         if reanchored {
-            fresh_dropped_seconds = (map_transport(&self.speed_history, transport) - self.simulation_time).max(0.0);
-            self.dropped_seconds += fresh_dropped_seconds;
+            let origin = seek_origin.unwrap_or(transport);
+            if seek_origin.is_none() {
+                fresh_dropped_seconds = (map_transport(&self.speed_history, transport) - self.simulation_time).max(0.0);
+                self.dropped_seconds += fresh_dropped_seconds;
+            }
             // Keep accepted history intact. The discarded transport span is a
             // plateau, followed by the current Speed at the fresh anchor.
             let retained = self.speed_history.partition_point(|anchor| anchor.transport < accepted_transport);
             self.speed_history.truncate(retained);
             self.speed_history.push(SpeedAnchor { transport: accepted_transport, simulation: self.simulation_time, speed: 0.0 });
-            self.speed_history.push(SpeedAnchor { transport, simulation: self.simulation_time, speed });
-            self.transport_origin = transport;
+            self.speed_history.push(SpeedAnchor { transport: origin, simulation: self.simulation_time, speed });
+            self.transport_origin = origin;
             self.transport_done = 0;
-            self.last_accepted_transport = transport;
+            self.restart_reached = if seek_origin.is_some() { self.reached_index(transport).max(0.0) as u64 } else { 0 };
+            self.last_accepted_transport = origin;
             self.target_time = self.simulation_time;
         }
         let retained = self.speed_history
@@ -481,7 +694,7 @@ impl SimulationClock {
             fresh_dropped_seconds,
             due: (transport_reached - transport_first) as u32,
             live_cap: live_cap.map(|cap| cap as u32),
-            transport,
+            transport: PlayedTime::from_played(transport),
         }
     }
 }
@@ -539,22 +752,27 @@ impl ClockFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// These tests drive the clock directly on played time.
+    fn p(seconds: f64) -> PlayedTime {
+        PlayedTime::from_played(seconds)
+    }
     use crate::stepping::{CflPolicy, CflRestrictions, LiveStepSchedule};
 
     #[test]
     fn source_speed_observations_cannot_rewrite_accepted_intervals() {
         let mut clock = SimulationClock::default();
-        clock.advance(2.0, TICK, 1.0, 0.0, false, true);
-        assert!((clock.observe_speed(2.05, 2.0) - 0.05).abs() < 1e-12);
-        assert!((clock.observe_speed(2.10, 2.0) - 0.15).abs() < 1e-12);
-        let accepted = clock.advance(2.10, TICK, 2.0, 0.0, false, true);
+        clock.advance(p(2.0), TICK, 1.0, 0.0, false, true);
+        assert!((clock.observe_speed(p(2.05), 2.0) - 0.05).abs() < 1e-12);
+        assert!((clock.observe_speed(p(2.10), 2.0) - 0.15).abs() < 1e-12);
+        let accepted = clock.advance(p(2.10), TICK, 2.0, 0.0, false, true);
         let intervals: Vec<_> = (0..u64::from(accepted.ticks))
             .map(|i| accepted.interval(i).unwrap()).collect();
         assert!((accepted.simulation_time - 0.15).abs() < 1e-12);
         assert!((intervals[2].end.0 - 0.05).abs() < 1e-12);
         assert!((intervals[3].duration().0 - 2.0 * TICK).abs() < 1e-12);
-        clock.observe_speed(2.10, 0.5);
-        clock.advance(2.2, TICK, 0.5, 0.0, false, true);
+        clock.observe_speed(p(2.10), 0.5);
+        clock.advance(p(2.2), TICK, 0.5, 0.0, false, true);
         assert_eq!(intervals, (0..u64::from(accepted.ticks))
             .map(|i| accepted.interval(i).unwrap()).collect::<Vec<_>>());
     }
@@ -565,13 +783,13 @@ mod tests {
         use crate::TickStamp;
 
         let mut clock = SimulationClock::default();
-        let epoch = u64::from(clock.advance(0.0, TICK, 1.0, 0.0, false, false).epoch);
+        let epoch = u64::from(clock.advance(p(0.0), TICK, 1.0, 0.0, false, false).epoch);
         let mut hits = EventQueue::new(epoch, Seconds::ZERO, Seconds(TICK), 8).unwrap();
         for (sequence, transport) in [TICK * 0.5, TICK * 1.5, 0.3, 0.6].into_iter().enumerate() {
-            let time = Seconds(clock.observe_speed(transport, 1.0));
+            let time = Seconds(clock.observe_speed(p(transport), 1.0));
             hits.enqueue(EventStamp { epoch, time, sequence: sequence as u64 }, sequence).unwrap();
         }
-        let stalled = clock.advance(0.7, TICK, 1.0, 0.0, false, false);
+        let stalled = clock.advance(p(0.7), TICK, 1.0, 0.0, false, false);
         assert_eq!(stalled.ticks, 2);
         assert!((stalled.dropped_seconds - (0.7 - 2.0 * TICK)).abs() < 1e-12);
         let mut receipts = Vec::new();
@@ -580,13 +798,13 @@ mod tests {
                 |event| receipts.push((event.value, event.applied.tick))).unwrap();
         }
         assert_eq!(receipts, [(0, 0), (1, 1)]);
-        let resumed = clock.advance(0.7 + TICK, TICK, 1.0, 0.0, false, false);
+        let resumed = clock.advance(p(0.7 + TICK), TICK, 1.0, 0.0, false, false);
         assert_eq!(resumed.ticks, 1);
         assert_eq!(resumed.interval(0).unwrap().start, stalled.plan.end);
         hits.begin_interval(TickStamp { epoch, tick: 2 }, resumed.interval(0).unwrap(),
             |event| receipts.push((event.value, event.applied.tick))).unwrap();
         assert_eq!(receipts, [(0, 0), (1, 1), (2, 2), (3, 2)]);
-        let next = clock.advance(0.7 + 2.0 * TICK, TICK, 1.0, 0.0, false, false);
+        let next = clock.advance(p(0.7 + 2.0 * TICK), TICK, 1.0, 0.0, false, false);
         hits.begin_interval(TickStamp { epoch, tick: 3 }, next.interval(0).unwrap(),
             |event| receipts.push((event.value, event.applied.tick))).unwrap();
         assert_eq!(receipts.len(), 4);
@@ -594,23 +812,23 @@ mod tests {
 
     fn late_speed_observation_preserves_accepted_time(offline: bool) {
         let mut clock = SimulationClock::default();
-        clock.advance(2.0, TICK, 1.0, 0.0, false, offline);
+        clock.advance(p(2.0), TICK, 1.0, 0.0, false, offline);
         // A partial interval is retained when no overload ceiling was reached.
-        let previous = clock.advance(2.027, TICK, 1.0, 0.0, false, offline);
+        let previous = clock.advance(p(2.027), TICK, 1.0, 0.0, false, offline);
         let end = 2.0 + TICK;
         let samples: Vec<_> = (0..=100).map(|i| {
             let x = 2.0 + (end - 2.0) * f64::from(i) / 100.0;
-            (x, clock.simulation_at(x, None))
+            (x, clock.simulation_at(p(x), None))
         }).collect();
-        let observed = clock.simulation_at(2.005, None);
-        assert_eq!(clock.observe_speed(2.005, 3.0), observed);
+        let observed = clock.simulation_at(p(2.005), None);
+        assert_eq!(clock.observe_speed(p(2.005), 3.0), observed);
         for (x, expected) in samples {
-            assert_eq!(clock.simulation_at(x, None), expected, "past transport {x}");
+            assert_eq!(clock.simulation_at(p(x), None), expected, "past transport {x}");
         }
-        assert_eq!(clock.simulation_at(end, None), previous.simulation_time);
+        assert_eq!(clock.simulation_at(p(end), None), previous.simulation_time);
         let future = end + TICK;
-        assert!((clock.simulation_at(future, None) - (previous.simulation_time + (future - end) * 3.0)).abs() < 1e-12);
-        let next = clock.advance(2.2, TICK, 3.0, 0.0, false, offline);
+        assert!((clock.simulation_at(p(future), None) - (previous.simulation_time + (future - end) * 3.0)).abs() < 1e-12);
+        let next = clock.advance(p(2.2), TICK, 3.0, 0.0, false, offline);
         assert_eq!(next.interval(0).unwrap().start.0, previous.simulation_time);
     }
 
@@ -628,14 +846,14 @@ mod tests {
     fn historical_speed_schedule_is_independent_of_export_partition() {
         let run = |fps: u32| {
             let mut clock = SimulationClock::default();
-            clock.advance(0.0, TICK, 1.0, 0.0, false, true);
+            clock.advance(p(0.0), TICK, 1.0, 0.0, false, true);
             let mut intervals = Vec::new();
             for sample in 1..=240 {
                 let transport = sample as f64 / 240.0;
                 let speed = if sample < 53 { 1.0 } else if sample < 149 { 2.0 } else { 0.5 };
-                clock.observe_speed(transport, speed);
+                clock.observe_speed(p(transport), speed);
                 if sample % (240 / fps) == 0 {
-                    let frame = clock.advance(transport, TICK, speed, 0.0, false, true);
+                    let frame = clock.advance(p(transport), TICK, speed, 0.0, false, true);
                     intervals.extend((0..u64::from(frame.ticks)).map(|i| frame.interval(i).unwrap()));
                 }
             }
@@ -648,6 +866,145 @@ mod tests {
         }
     }
 
+    /// Frames at `fps` over one second, driven as the host drives them: the
+    /// history replay observes Speed on its 240 Hz grid and at each coming
+    /// tick's start, then the frame observes it at its own time and advances.
+    /// Returns every accepted interval's endpoints as bits.
+    fn smooth_ramp_run(fps: u32, interval: f64, offline: bool, speed: impl Fn(f64) -> f32) -> Vec<(u64, u64)> {
+        let mut clock = SimulationClock::default();
+        clock.advance(p(0.0), interval, speed(0.0), 0.0, false, offline);
+        let mut intervals = Vec::new();
+        let mut previous = 0.0;
+        let mut samples = Vec::new();
+        for frame in 1..=fps {
+            let now = f64::from(frame) / f64::from(fps);
+            samples.clear();
+            clock.tick_starts(p(previous), p(now), |transport| samples.push(transport.seconds()));
+            let mut grid = (previous * 240.0).floor() + 1.0;
+            while grid / 240.0 < now {
+                samples.push(grid / 240.0);
+                grid += 1.0;
+            }
+            samples.sort_by(f64::total_cmp);
+            for &at in &samples {
+                clock.observe_speed(p(at), speed(at));
+            }
+            let accepted = clock.advance(p(now), interval, speed(now), 0.0, false, offline);
+            intervals.extend((0..u64::from(accepted.ticks)).map(|i| {
+                let interval = accepted.interval(i).unwrap();
+                (interval.start.0.to_bits(), interval.end.0.to_bits())
+            }));
+            previous = now;
+        }
+        intervals
+    }
+
+    /// BUG-aatmc (smooth Speed and display rate): a Speed curve that moves
+    /// between ticks gives the same tick lengths, bit for bit, at every
+    /// display rate, live and exported, and each tick runs at the Speed of
+    /// its own start.
+    #[test]
+    fn smooth_speed_ramp_ticks_the_same_at_30_60_120_144_fps_live_and_export() {
+        let ramp = |t: f64| 0.5 + 0.75 * t as f32;
+        for rate in crate::SimRate::ALL {
+            let reference = smooth_ramp_run(60, rate.interval(), true, ramp);
+            assert_eq!(reference.len() as u32, rate.hz(), "{} Hz", rate.hz());
+            for (k, &(start, end)) in reference.iter().enumerate() {
+                let length = f64::from_bits(end) - f64::from_bits(start);
+                let expected = rate.interval() * f64::from(ramp(k as f64 * rate.interval()));
+                assert!((length - expected).abs() < 1e-12, "{} Hz tick {k}: {length} against {expected}", rate.hz());
+            }
+            for fps in [30, 60, 120, 144] {
+                for offline in [false, true] {
+                    assert_eq!(
+                        smooth_ramp_run(fps, rate.interval(), offline, ramp),
+                        reference,
+                        "{} Hz at {fps} fps, offline {offline}",
+                        rate.hz()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A Speed step seen mid-tick leaves that tick at the old speed and takes
+    /// effect from the next tick start: at most one Sim Rate interval late.
+    #[test]
+    fn speed_step_takes_effect_at_the_next_tick_start() {
+        let interval = 1.0 / 30.0;
+        let mut clock = SimulationClock::default();
+        clock.advance(p(0.0), interval, 1.0, 0.0, false, false);
+        let seen = clock.advance(p(0.4 * interval), interval, 2.0, 0.0, false, false);
+        assert_eq!(seen.ticks, 0);
+        let frame = clock.advance(p(2.0 * interval), interval, 2.0, 0.0, false, false);
+        assert_eq!(frame.ticks, 2);
+        assert!((frame.interval(0).unwrap().duration().0 - interval).abs() < 1e-12, "the tick the step landed in keeps its speed");
+        assert!((frame.interval(1).unwrap().duration().0 - 2.0 * interval).abs() < 1e-12, "the next tick runs at the new speed");
+    }
+
+    /// A replay sample at a tick start that a frame also ends on sets that
+    /// tick's Speed; the frame's own reading there, taken with its sampling
+    /// offset, does not replace it, so the tick runs as it would at a rate
+    /// whose frames miss that start.
+    #[test]
+    fn replay_speed_at_a_frame_tick_start_beats_the_frame_reading() {
+        let mut clock = SimulationClock::default();
+        clock.advance(p(0.0), TICK, 1.0, 0.0, false, true);
+        clock.observe_speed(p(TICK), 2.0);
+        clock.advance(p(TICK), TICK, 3.0, 0.0, false, true);
+        let frame = clock.advance(p(2.0 * TICK), TICK, 3.0, 0.0, false, true);
+        assert!((frame.interval(0).unwrap().duration().0 - 2.0 * TICK).abs() < 1e-15, "the replay's Speed at the shared start");
+    }
+
+    /// After a seek, a restart starts its grid at the seek's target, not at
+    /// the frame the transport landed on, and owes the boundaries between
+    /// them to the next frame without reading as an overload.
+    #[test]
+    fn restart_on_a_jump_starts_the_grid_at_its_target() {
+        for fps in [30.0_f64, 60.0, 144.0] {
+            let target: f64 = 0.2137;
+            let landed = (target * fps).ceil() / fps;
+            let mut clock = SimulationClock::default();
+            clock.advance(p(0.9), TICK, 1.0, 0.0, false, false);
+            clock.set_played_target(Some(p(target)));
+            let restart = clock.advance(p(landed), TICK, 1.0, 0.0, false, false);
+            assert!(restart.restarted && restart.ticks == 0 && restart.simulation_time == 0.0);
+            clock.set_played_target(None);
+            let mut starts = Vec::new();
+            clock.tick_starts(p(target - 1e-6), p(landed + 1.0 / 30.0), |transport| starts.push(transport.seconds()));
+            assert_eq!(starts[0], target, "{fps} fps: the first tick starts at the target");
+            assert!(starts.windows(2).all(|pair| ((pair[1] - pair[0]) - TICK).abs() < 1e-12));
+            let next = clock.advance(p(landed + 1.0 / 30.0), TICK, 1.0, 0.0, false, false);
+            assert!(!next.reanchored, "{fps} fps: the jump's owed boundaries are not an overload");
+            assert_eq!(next.interval(0).unwrap().start.0, 0.0);
+            assert_eq!(u64::from(next.ticks), ((landed + 1.0 / 30.0 - target) / TICK + 1e-9).floor() as u64);
+        }
+    }
+
+    /// Resuming from Speed 0 between tick starts: the tick containing the
+    /// resume stays empty, and the first tick to run is the one starting at
+    /// the next boundary, which `tick_start` names before the frame runs it.
+    #[test]
+    fn resume_from_speed_zero_runs_from_the_next_tick_start() {
+        let mut clock = SimulationClock::default();
+        clock.advance(p(0.0), TICK, 1.0, 0.0, false, false);
+        clock.advance(p(2.0 * TICK), TICK, 0.0, 0.0, false, false);
+        let held = clock.advance(p(5.0 * TICK), TICK, 0.0, 0.0, false, false);
+        assert_eq!((clock.ticks_done(), held.ticks), (2, 0));
+        assert_eq!(clock.tick_start(2), None, "Speed 0 runs no tick");
+        let resumed = clock.advance(p(5.5 * TICK), TICK, 1.0, 0.0, false, false);
+        assert_eq!(resumed.ticks, 0);
+        let start = clock.tick_start(2).expect("the next tick is known once Speed is back");
+        assert!((start.seconds() - 6.0 * TICK).abs() < 1e-12, "{start:?}");
+        let mut starts = Vec::new();
+        clock.tick_starts(p(5.5 * TICK), p(7.0 * TICK), |transport| starts.push(clock.tick_at(transport)));
+        assert_eq!(starts, [Some(2), Some(3)]);
+        let frame = clock.advance(p(7.0 * TICK), TICK, 1.0, 0.0, false, false);
+        assert_eq!((frame.first_sequence, frame.ticks), (2, 1));
+        assert!((frame.interval(0).unwrap().duration().0 - TICK).abs() < 1e-12);
+        assert!((frame.simulation_time - 3.0 * TICK).abs() < 1e-12);
+    }
+
     #[test]
     fn live_clock_covers_every_frame_at_20_24_30_60_fps() {
         for fps in [20, 24, 30, 60] {
@@ -655,7 +1012,7 @@ mod tests {
             let mut completed = 0.0;
             for index in 0..=fps {
                 let time = f64::from(index) / f64::from(fps);
-                let frame = clock.advance(time, 1.0 / f64::from(fps), 1.0, 0.0, false, false);
+                let frame = clock.advance(p(time), 1.0 / f64::from(fps), 1.0, 0.0, false, false);
                 assert_eq!(frame.plan.start.0, completed);
                 for ordinal in 0..u64::from(frame.ticks) {
                     let interval = frame.interval(ordinal).unwrap();
@@ -684,11 +1041,11 @@ mod tests {
         for rate in crate::SimRate::ALL {
             for fps in [20u32, 24, 30, 60] {
                 let mut clock = SimulationClock::default();
-                clock.advance(0.0, rate.interval(), 1.0, 0.0, false, false);
+                clock.advance(p(0.0), rate.interval(), 1.0, 0.0, false, false);
                 let mut completed = 0.0;
                 for frame in 1..=fps {
                     let transport = f64::from(frame) / f64::from(fps);
-                    let accepted = clock.advance(transport, rate.interval(), 1.0, 0.0, false, false);
+                    let accepted = clock.advance(p(transport), rate.interval(), 1.0, 0.0, false, false);
                     let at = format!("{} Hz, {fps} fps frame {frame}", rate.hz());
                     assert_eq!(accepted.plan.start.0, completed, "{at}: a gap before the span");
                     assert!(accepted.ticks <= MAX_LIVE_INTERVALS as u32, "{at}");
@@ -711,8 +1068,8 @@ mod tests {
         let interval = 1.0 / 30.0;
         for speed in [0.25f32, 1.0, 2.0] {
             let mut clock = SimulationClock::default();
-            clock.advance(0.0, interval, speed, 0.0, false, false);
-            let frame = clock.advance(0.4, interval, speed, 0.0, false, false);
+            clock.advance(p(0.0), interval, speed, 0.0, false, false);
+            let frame = clock.advance(p(0.4), interval, speed, 0.0, false, false);
             let expected = interval * f64::from(speed);
             assert_eq!(frame.ticks, 2);
             assert!((frame.duration().0 - expected).abs() < 1e-12, "speed {speed}: fixed step");
@@ -731,7 +1088,7 @@ mod tests {
                     let mut steps = Vec::new();
                     for index in 0..=fps {
                         let frame = clock.advance(
-                            f64::from(index) * (1.0 / f64::from(fps)),
+                            p(f64::from(index) * (1.0 / f64::from(fps))),
                             simulation_interval,
                             speed,
                             0.0,
@@ -778,11 +1135,11 @@ mod tests {
     #[test]
     fn live_clock_invalid_observation_reports_and_retains_transport_span() {
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
-        let invalid = clock.advance(f64::NAN, TICK, 1.0, 0.0, false, false);
+        clock.advance(p(0.0), TICK, 1.0, 0.0, false, false);
+        let invalid = clock.advance(p(f64::NAN), TICK, 1.0, 0.0, false, false);
         assert!(invalid.numerical_error);
         assert_eq!(invalid.ticks, 0);
-        let resumed = clock.advance(0.5, TICK, 1.0, 0.0, false, false);
+        let resumed = clock.advance(p(0.5), TICK, 1.0, 0.0, false, false);
         assert_eq!(resumed.plan.start, Seconds::ZERO);
         assert_eq!(resumed.plan.end, Seconds(2.0 * TICK));
         assert!((resumed.dropped_seconds - (0.5 - 2.0 * TICK)).abs() < 1e-12);
@@ -790,14 +1147,14 @@ mod tests {
     #[test]
     fn sim_rate_edit_starts_exactly_one_epoch() {
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
-        clock.advance(1.0, crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
-        let edited = clock.advance(1.0, crate::SimRate::Hz20.interval(), 1.0, 0.0, false, false);
+        clock.advance(p(0.0), crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
+        clock.advance(p(1.0), crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
+        let edited = clock.advance(p(1.0), crate::SimRate::Hz20.interval(), 1.0, 0.0, false, false);
         assert!(edited.restarted);
         assert_eq!(edited.epoch, 2);
         assert_eq!(edited.ticks, 0);
         for index in 1..=60 {
-            let next = clock.advance(1.0 + f64::from(index) / 60.0, crate::SimRate::Hz20.interval(), 1.0, 0.0, false, false);
+            let next = clock.advance(p(1.0 + f64::from(index) / 60.0), crate::SimRate::Hz20.interval(), 1.0, 0.0, false, false);
             assert!(!next.restarted);
             assert_eq!(next.epoch, edited.epoch);
         }
@@ -807,14 +1164,14 @@ mod tests {
     fn sim_rate_intervals_and_authored_trigger_samples() {
         for rate in crate::SimRate::ALL {
             let mut clock = SimulationClock::default();
-            clock.advance(0.0, rate.interval(), 2.0, 0.0, false, false);
+            clock.advance(p(0.0), rate.interval(), 2.0, 0.0, false, false);
             let mut intervals = 0;
             let mut samples = Vec::new();
             let mut cfl_steps = 0;
             for display in 1..=60 {
                 let now = f64::from(display) / 60.0;
-                clock.tick_starts(f64::from(display - 1) / 60.0, now, |time, tick| samples.push((time, tick)));
-                let frame = clock.advance(now, rate.interval(), 2.0, 0.0, false, false);
+                clock.tick_starts(p(f64::from(display - 1) / 60.0), p(now), |time| samples.push((time.seconds(), clock.tick_at(time).unwrap())));
+                let frame = clock.advance(p(now), rate.interval(), 2.0, 0.0, false, false);
                 intervals += frame.ticks;
                 for ordinal in 0..u64::from(frame.ticks) {
                     let interval = frame.interval(ordinal).unwrap();
@@ -839,20 +1196,20 @@ mod tests {
         use crate::input::{EventQueue, EventStamp};
         for rate in crate::SimRate::ALL {
             let mut clock = SimulationClock::default();
-            let first = clock.advance(0.0, rate.interval(), 1.0, 0.0, false, false);
+            let first = clock.advance(p(0.0), rate.interval(), 1.0, 0.0, false, false);
             let mut events = EventQueue::new(u64::from(first.epoch), Seconds::ZERO, Seconds(rate.interval()), 4).unwrap();
             let hit_time = rate.interval() * 0.25;
             events.enqueue(EventStamp { epoch: u64::from(first.epoch), time: Seconds(hit_time), sequence: 0 }, "kick").unwrap();
-            let waiting = clock.advance(rate.interval() * 0.5, rate.interval(), 1.0, 0.0, false, false);
+            let waiting = clock.advance(p(rate.interval() * 0.5), rate.interval(), 1.0, 0.0, false, false);
             assert_eq!(waiting.ticks, 0);
-            let ready = clock.advance(rate.interval(), rate.interval(), 1.0, 0.0, false, false);
+            let ready = clock.advance(p(rate.interval()), rate.interval(), 1.0, 0.0, false, false);
             let mut hits = Vec::new();
             events.begin_interval(events.next_tick(), ready.interval(0).unwrap(), |hit| hits.push(hit)).unwrap();
             assert_eq!(hits.len(), 1);
             assert_eq!(hits[0].value, "kick");
             assert_eq!(hits[0].source.time, Seconds(hit_time));
             assert!(ready.simulation_time - hit_time < rate.interval());
-            let next = clock.advance(2.0 * rate.interval(), rate.interval(), 1.0, 0.0, false, false);
+            let next = clock.advance(p(2.0 * rate.interval()), rate.interval(), 1.0, 0.0, false, false);
             events.begin_interval(events.next_tick(), next.interval(0).unwrap(), |_| panic!("hit repeated")).unwrap();
         }
     }
@@ -860,9 +1217,9 @@ mod tests {
     #[test]
     fn sim_rate_display_target_advances_between_updates() {
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
-        let a = clock.advance(2.0 * TICK, crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
-        let b = clock.advance(3.0 * TICK, crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
+        clock.advance(p(0.0), crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
+        let a = clock.advance(p(2.0 * TICK), crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
+        let b = clock.advance(p(3.0 * TICK), crate::SimRate::Hz30.interval(), 1.0, 0.0, false, false);
         assert_eq!(b.ticks, 0);
         assert_eq!(a.simulation_time, b.simulation_time);
         assert!((b.display_time - a.display_time - TICK).abs() < 1e-12);
@@ -872,8 +1229,8 @@ mod tests {
     fn sim_rate_late_live_update_caps_steps_and_reanchors_without_debt() {
         for rate in crate::SimRate::ALL {
             let mut clock = SimulationClock::default();
-            clock.advance(0.0, rate.interval(), 1.0, 0.0, false, false);
-            let late = clock.advance(1.07, rate.interval(), 1.0, 0.0, false, false);
+            clock.advance(p(0.0), rate.interval(), 1.0, 0.0, false, false);
+            let late = clock.advance(p(1.07), rate.interval(), 1.0, 0.0, false, false);
             assert_eq!(late.ticks, 2);
             assert!(late.reanchored);
             assert!((late.simulation_time - 2.0 * rate.interval()).abs() < 1e-12, "{} Hz", rate.hz());
@@ -884,7 +1241,7 @@ mod tests {
             while let Some(step) = schedule.next(Seconds(1e-9)).value { end = step.interval.end; }
             assert_eq!(schedule.steps_taken(), 6);
             assert_eq!(end, interval.end);
-            let resumed = clock.advance(1.07 + rate.interval(), rate.interval(), 1.0, 0.0, false, false);
+            let resumed = clock.advance(p(1.07 + rate.interval()), rate.interval(), 1.0, 0.0, false, false);
             assert_eq!(resumed.ticks, 1);
             assert!(!resumed.reanchored);
             assert_eq!(resumed.dropped_seconds, late.dropped_seconds);
@@ -901,28 +1258,28 @@ mod tests {
         let late = LiveLoad { previous: Seconds(0.025), budget };
         let on_time = LiveLoad { previous: Seconds(0.012), budget };
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        clock.advance(p(0.0), TICK, 1.0, 0.0, false, false);
         {
             clock.set_live_load(Some(late));
             let mut starts = Vec::new();
-            clock.tick_starts(-1.0, 2.5 * TICK, |_, tick| starts.push(tick));
+            clock.tick_starts(p(-1.0), p(2.5 * TICK), |transport| starts.push(clock.tick_at(transport).unwrap()));
             assert_eq!(starts, [0, 1]);
-            assert_eq!(clock.simulation_at(2.5 * TICK, Some(late)), TICK);
-            let frame = clock.advance(2.5 * TICK, TICK, 1.0, 0.0, false, false);
+            assert_eq!(clock.simulation_at(p(2.5 * TICK), Some(late)), TICK);
+            let frame = clock.advance(p(2.5 * TICK), TICK, 1.0, 0.0, false, false);
             assert_eq!(frame.ticks, 1);
             assert!(frame.reanchored);
         }
         {
             clock.set_live_load(Some(on_time));
-            let frame = clock.advance(5.0 * TICK, TICK, 1.0, 0.0, false, false);
+            let frame = clock.advance(p(5.0 * TICK), TICK, 1.0, 0.0, false, false);
             assert_eq!(frame.ticks, 2);
             assert!(!frame.reanchored);
         }
 
         let mut export = SimulationClock::default();
-        export.advance(0.0, TICK, 1.0, 0.0, false, true);
+        export.advance(p(0.0), TICK, 1.0, 0.0, false, true);
         export.set_live_load(Some(late));
-        assert_eq!(export.advance(5.5 * TICK, TICK, 1.0, 0.0, false, true).ticks, 5);
+        assert_eq!(export.advance(p(5.5 * TICK), TICK, 1.0, 0.0, false, true).ticks, 5);
     }
 
     /// The frame-time counters are the clock's own decisions: accepted ticks
@@ -934,12 +1291,12 @@ mod tests {
         let interval = 1.0 / 30.0;
         let unstarted = SimulationClock::default();
         let mut early = unstarted.clone();
-        early.advance(0.0, interval, 1.0, 0.0, false, false);
+        early.advance(p(0.0), interval, 1.0, 0.0, false, false);
         let mut original = SimulationClock::default();
-        original.advance(0.0, interval, 1.0, 0.0, false, false);
+        original.advance(p(0.0), interval, 1.0, 0.0, false, false);
         let mut late = original.clone();
         assert_eq!(late.instance(), 0, "a clone starts unassigned");
-        late.advance(interval, interval, 1.0, 0.0, false, false);
+        late.advance(p(interval), interval, 1.0, 0.0, false, false);
         let ids = [early.instance(), original.instance(), late.instance()];
         assert!(ids.iter().all(|&id| id != 0));
         assert!(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2]);
@@ -952,7 +1309,7 @@ mod tests {
         let late = Some(LiveLoad { previous: Seconds(0.05), budget });
         let on_time = Some(LiveLoad { previous: Seconds(0.01), budget });
         let mut clock = SimulationClock::default();
-        let first = clock.advance(0.0, interval, 1.0, 0.0, false, false);
+        let first = clock.advance(p(0.0), interval, 1.0, 0.0, false, false);
         assert!(first.restarted);
         assert_eq!((first.due, first.ticks), (0, 0));
         // (transport offset from the last frame, load, due, cap, reanchored)
@@ -970,7 +1327,7 @@ mod tests {
         for (step, (offset, load, due, cap, reanchored)) in sequence.into_iter().enumerate() {
             transport += offset;
             clock.set_live_load(load);
-            let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
+            let frame = clock.advance(p(transport), interval, 1.0, 0.0, false, false);
             let at = format!("frame {step}");
             assert_eq!(frame.due, due, "{at}");
             assert_eq!(frame.live_cap, Some(cap), "{at}");
@@ -978,13 +1335,13 @@ mod tests {
             assert_eq!(frame.reanchored, reanchored, "{at}");
             assert_eq!(frame.reanchored, frame.due > cap, "{at}");
             assert_eq!(frame.epoch, first.epoch, "{at}");
-            assert_eq!(frame.transport, transport, "{at}");
+            assert_eq!(frame.transport, p(transport), "{at}");
             assert_eq!(frame.first_sequence + u64::from(frame.ticks), clock.ticks_done(), "{at}");
             assert!((frame.fresh_dropped_seconds - (frame.dropped_seconds - previous_dropped)).abs() < 1e-12, "{at}");
             assert_eq!(frame.fresh_dropped_seconds > 0.0, reanchored, "{at}");
             previous_dropped = frame.dropped_seconds;
         }
-        let export = SimulationClock::default().advance(0.0, interval, 1.0, 0.0, false, true);
+        let export = SimulationClock::default().advance(p(0.0), interval, 1.0, 0.0, false, true);
         assert_eq!(export.live_cap, None);
     }
 
@@ -999,15 +1356,15 @@ mod tests {
                 let speed_at = |display: u32| speeds[(display as usize / 7) % speeds.len()];
                 let mut live = SimulationClock::default();
                 let mut export = SimulationClock::default();
-                live.advance(0.0, rate.interval(), speeds[0], 0.0, false, false);
-                export.advance(0.0, rate.interval(), speeds[0], 0.0, false, true);
+                live.advance(p(0.0), rate.interval(), speeds[0], 0.0, false, false);
+                export.advance(p(0.0), rate.interval(), speeds[0], 0.0, false, true);
                 let (mut previous, mut current) = (0.0, 0.0);
                 let mut last_display = 0.0;
                 let mut export_ends = Vec::new();
                 for display in 1..=120u32 {
                     let transport = f64::from(display) / 60.0 + JITTER[display as usize % JITTER.len()];
                     let speed = speed_at(display);
-                    let frame = live.advance(transport, rate.interval(), speed, 0.0, false, false);
+                    let frame = live.advance(p(transport), rate.interval(), speed, 0.0, false, false);
                     assert!(frame.display_time >= last_display - 1e-12, "display went back");
                     last_display = frame.display_time;
                     if frame.ticks > 0 {
@@ -1020,7 +1377,7 @@ mod tests {
                         rate.hz(),
                         frame.display_time,
                     );
-                    let offline = export.advance(transport, rate.interval(), speed, 0.0, false, true);
+                    let offline = export.advance(p(transport), rate.interval(), speed, 0.0, false, true);
                     for ordinal in 0..u64::from(offline.ticks) {
                         export_ends.push(offline.interval(ordinal).unwrap().end.0);
                     }

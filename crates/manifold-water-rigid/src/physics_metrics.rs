@@ -24,7 +24,7 @@ pub fn record_clock(
         accepted_through: frame.first_sequence + u64::from(frame.ticks),
         completed_ticks,
         epoch: frame.epoch,
-        transport: frame.transport,
+        transport: frame.transport.seconds(),
         restarted: frame.restarted,
         reanchored: frame.reanchored,
         held: frame.held,
@@ -161,14 +161,14 @@ mod tests {
     fn each_live_clock_keeps_its_own_record() {
         use manifold_physics::clock::SimulationClock;
         let (mut a, mut b) = (SimulationClock::default(), SimulationClock::default());
-        a.advance(0.0, 1.0 / 30.0, 1.0, 0.0, false, false);
-        b.advance(0.0, 1.0 / 30.0, 1.0, 0.0, false, false);
+        a.advance(manifold_core::PlayedTime::from_played(0.0), 1.0 / 30.0, 1.0, 0.0, false, false);
+        b.advance(manifold_core::PlayedTime::from_played(0.0), 1.0 / 30.0, 1.0, 0.0, false, false);
         let mut m = SimMetrics::default();
-        let restarted = a.advance(0.0, 1.0 / 30.0, 1.0, 1.0, false, false);
+        let restarted = a.advance(manifold_core::PlayedTime::from_played(0.0), 1.0 / 30.0, 1.0, 1.0, false, false);
         record_clock(&mut m, &a, &restarted, Some(7));
-        let ticked = b.advance(0.05, 1.0 / 30.0, 1.0, 0.0, false, false);
+        let ticked = b.advance(manifold_core::PlayedTime::from_played(0.05), 1.0 / 30.0, 1.0, 0.0, false, false);
         record_clock(&mut m, &b, &ticked, None);
-        let offline = b.advance(0.1, 1.0 / 30.0, 1.0, 0.0, false, true);
+        let offline = b.advance(manifold_core::PlayedTime::from_played(0.1), 1.0 / 30.0, 1.0, 0.0, false, true);
         record_clock(&mut m, &b, &offline, None);
         let clocks = m.take().clock;
         let [first, second] = clocks.records() else { panic!("two live records") };

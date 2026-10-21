@@ -417,9 +417,9 @@ pub(super) fn scene_body_params(
 pub(super) fn compound_materials_param(
     sources: &[ScenePhysicsSource],
 ) -> Result<SerializedParamValue, &'static str> {
-    if sources.len() > PHYSICS_BODY_SLOTS as usize {
+    if sources.len() > COMPOUND_MAX_PARTS as usize {
         static TOO_MANY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-            format!("Physics compound objects support at most {PHYSICS_BODY_SLOTS} material parts")
+            format!("Physics compound objects support at most {COMPOUND_MAX_PARTS} material parts")
         });
         return Err(TOO_MANY.as_str());
     }
@@ -651,7 +651,7 @@ pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObject
             .from_port
             .strip_prefix("pose_")
             .and_then(|value| value.parse::<u32>().ok())
-            .filter(|slot| *slot < PHYSICS_BODY_SLOTS)
+            .filter(|slot| *slot < manifold_core::physics_body_slots::world_bodies(world))
             .ok_or("Physics object pose slot is malformed")?;
         let body_wire = def
             .wires
@@ -719,7 +719,7 @@ pub(super) fn scene_physics_body_wired(def: &EffectGraphDef, parts: &SceneObject
             .from_port
             .strip_prefix("pose_")
             .and_then(|value| value.parse::<u32>().ok())
-            .filter(|slot| *slot < PHYSICS_BODY_SLOTS)
+            .filter(|slot| *slot < manifold_core::physics_body_slots::world_bodies(world))
             .ok_or("Physics object group pose slot is malformed")?;
         (world.id, slot)
     };
@@ -934,6 +934,7 @@ pub fn enable_physics_edit(
         def.wires.push(scene_build_wire(body_id, "body", world_id, &format!("body_{body_slot}")));
         body_node_id
     };
+    fit_world_bodies(&mut def.nodes, &def.wires, world_id);
     let string_binding = source_string_binding(&def, &parts.source, body_node_id.clone());
     let world = (!world_exists)
         .then(|| def.nodes.iter().find(|node| node.id == world_id).cloned())

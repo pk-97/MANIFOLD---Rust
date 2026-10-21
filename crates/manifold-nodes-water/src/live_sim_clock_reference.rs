@@ -528,7 +528,7 @@ fn live_sim_clock_pause_seek_speed_reset_match_today() {
             setup_changed,
             ..input(time, 3)
         });
-        let old = current.advance(time, TICK, speed as f32, reset, setup_changed, false);
+        let old = current.advance(manifold_physics::PlayedTime::from_played(time), TICK, speed as f32, reset, setup_changed, false);
         assert_eq!(
             (out.epoch, out.restarted, out.held),
             (old.epoch, old.restarted, old.held)
@@ -541,7 +541,7 @@ fn live_sim_clock_pause_seek_speed_reset_match_today() {
     reference.restart();
     current.restart();
     let out = reference.advance(input(5.0 * TICK, 3));
-    let old = current.advance(5.0 * TICK, TICK, 1.0, 0.0, false, false);
+    let old = current.advance(manifold_physics::PlayedTime::from_played(5.0 * TICK), TICK, 1.0, 0.0, false, false);
     assert_eq!(
         (out.epoch, out.restarted, out.simulation.0),
         (old.epoch, old.restarted, old.simulation_time)

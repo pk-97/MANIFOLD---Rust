@@ -13,7 +13,13 @@
     const MATTER_DAM_BREAK_JSON: &str =
         manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKMATTER_JSON;
 
-    /// Role wires into any liquid domain, at any group depth.
+    /// The water's Initial Fill: a role source, but no body.
+    fn is_initial_fill(node: &EffectGraphNode) -> bool {
+        node.type_id == ROLE_SOURCE_TYPE_ID
+            && node.params.get("role") == Some(&manifold_core::effect_graph_def::SerializedParamValue::Enum { value: 0 })
+    }
+
+    /// Body role wires into any liquid domain, at any group depth.
     fn domain_role_inputs(def: &EffectGraphDef) -> usize {
         let flat = flatten_groups(def).expect("fixture graph flattens");
         flat.wires
@@ -23,6 +29,7 @@
                     && flat.nodes.iter().any(|node| {
                         node.id == wire.to_node && is_liquid_domain(&node.type_id)
                     })
+                    && !flat.nodes.iter().any(|node| node.id == wire.from_node && is_initial_fill(node))
             })
             .count()
     }
@@ -207,7 +214,7 @@
         for (from_node, from_port, to_node, to_port) in [
             (ids + 3, "transform", ids + 1, "transform"),
             (ids + 3, "transform", ids + 2, "transform"),
-            (ids + 2, "role", domain, "role_1"),
+            (ids + 2, "role", domain, "role_2"),
             (ids + 1, "object", render, "object_10"),
         ] {
             def.wires.push(EffectGraphWire {
@@ -224,7 +231,7 @@
         let root_roles: Vec<_> = def
             .nodes
             .iter()
-            .filter(|node| node.type_id == ROLE_SOURCE_TYPE_ID)
+            .filter(|node| node.type_id == ROLE_SOURCE_TYPE_ID && !is_initial_fill(node))
             .map(|node| node.node_id.as_str())
             .collect();
         assert_eq!(root_roles, ["blocked_collider"], "the groupable obstacle must still group");

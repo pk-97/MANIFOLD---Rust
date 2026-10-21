@@ -98,7 +98,9 @@ fn water_family_inflow_inserts_inside_its_water() {
         "the Inflow feeds the water's first free role input, {free}"
     );
     let row = water_row(&added);
-    let [placed] = row.placed_sources.as_slice() else { panic!("one placed source: {:?}", row.placed_sources) };
+    // Beside the water's Initial Fill.
+    let [fill, placed] = row.placed_sources.as_slice() else { panic!("the fill and the Inflow: {:?}", row.placed_sources) };
+    assert_eq!(fill.role, manifold_foundation::scene_surface::SourceRole::InitialFill);
     assert_eq!(placed.name, "Inflow 1");
     assert!(!row.control_nodes().iter().any(|node| placed.owned.contains(node)), "the Inflow's controls are its own row's");
 
@@ -132,7 +134,7 @@ fn water_family_inflow_inserts_inside_its_water() {
         .iter()
         .filter(|object| matches!(object, SceneObjectVm::Known(child) if child.parent.as_ref() == Some(&water.address)))
         .count();
-    assert_eq!(rows.get(at + children + 1).map(String::as_str), Some("Inflow 1"), "the Inflow lists after the water's children: {rows:?}");
+    assert_eq!(rows.get(at + children + 2).map(String::as_str), Some("Inflow 1"), "the Inflow lists after the water's children and fill: {rows:?}");
 
     assert!(editing.undo(&mut project));
     assert_eq!(effective_def(&project, &layer), before, "one undo takes the Inflow out");
@@ -184,7 +186,7 @@ fn physics_boundary_delete_placed_source_one_undo() {
     run(&insert, &mut project, &mut ui, &mut selection);
     let added = effective_def(&project, &layer);
     let water = water_row(&added);
-    let [placed] = water.placed_sources.as_slice() else { panic!("one placed source") };
+    let placed = water.placed_sources.iter().find(|source| source.name == "Drain 1").expect("the Drain's row");
 
     sync(&mut ui, &project, &selection);
     ui.scene_setup_panel.set_selection(layer.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Source(placed.node.clone()));
@@ -198,7 +200,7 @@ fn physics_boundary_delete_placed_source_one_undo() {
     assert!(!level.nodes.iter().any(|node| node.type_id == GROUP_TYPE_ID && node.handle.as_deref() == Some("Drain 1")), "the Drain's group is gone");
     let group = source_group(domain_level(&added, &water), "Drain 1").id;
     assert!(!level.wires.iter().any(|wire| wire.from_node == group || wire.to_node == group), "no wire is left dangling");
-    assert!(water_row(&removed).placed_sources.is_empty());
+    assert!(water_row(&removed).placed_sources.iter().all(|source| source.name != "Drain 1"));
 
     assert!(editing.undo(&mut project));
     assert_eq!(effective_def(&project, &layer), added, "one undo brings the Drain back");
@@ -207,8 +209,8 @@ fn physics_boundary_delete_placed_source_one_undo() {
 }
 
 /// Role set to Initial Fill from the card moves Effects, so the frame that
-/// shows the write rebuilds the Scene tab tree: the Inflow's row goes and its
-/// controls join the water's. Undo moves Effects back the same way.
+/// shows the write rebuilds the Scene tab tree: the Inflow's row becomes an
+/// Initial Fill row. Undo moves Effects back the same way.
 #[test]
 fn physics_boundary_role_to_initial_fill_rebuilds_the_tree() {
     let (mut project, layer, _) = super::water_family::water_project();
@@ -229,7 +231,7 @@ fn physics_boundary_role_to_initial_fill_rebuilds_the_tree() {
     assert_eq!(editing.take_rejection(), None);
     let added = effective_def(&project, &layer);
     let water = water_row(&added);
-    assert_eq!(water.placed_sources.len(), 1);
+    assert_eq!(water.placed_sources.len(), 2, "the water's fill and the Inflow");
     // The receipt selects the Inflow and unfolds its water.
     let update = crate::edit_selection::EditSelectionUpdate { sequence: 1, selection: pending.resolve(&project).expect("the Inflow is found") };
     assert!(crate::edit_selection::apply_update(&mut ui, &project, Some(&update), &mut selection, &mut active));
@@ -248,15 +250,15 @@ fn physics_boundary_role_to_initial_fill_rebuilds_the_tree() {
         crate::scene_gizmo::project_authored_params(&mut def, project, &manifold_core::GraphTarget::Generator(layer.clone()));
         def
     };
-    let filled = water_row(&authored(&project));
-    assert!(filled.placed_sources.is_empty(), "an Initial Fill is no source row");
-    assert!(filled.control_nodes().contains(&role.node_id), "its controls join the water's");
-    sync(&mut ui, &project, &selection);
-    assert!(!scene_tree_rows(&mut ui).iter().any(|name| name == "Inflow 1"));
+    let role_of = |project: &Project| {
+        water_row(&authored(project)).placed_sources.iter().find(|source| source.node == role.node_id).expect("its row stays").role
+    };
+    assert_eq!(role_of(&project), manifold_foundation::scene_surface::SourceRole::InitialFill, "the row is an Initial Fill now");
+    assert!(!water_row(&authored(&project)).control_nodes().contains(&role.node_id), "its controls stay its own");
 
     assert!(editing.undo(&mut project));
     assert!(editing.peek_redo_touches().contains(manifold_core::change::Part::Effects), "undo moves it back");
-    assert_eq!(water_row(&authored(&project)).placed_sources.len(), 1);
+    assert_eq!(role_of(&project), manifold_foundation::scene_surface::SourceRole::Inflow);
 }
 
 /// Inserting into an imported scene keeps every imported row: the model

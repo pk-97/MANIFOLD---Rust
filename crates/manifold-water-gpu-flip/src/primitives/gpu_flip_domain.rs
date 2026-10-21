@@ -29,13 +29,13 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_core::liquid_setup::{ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
-use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind};
+use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, take_initial_fill};
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
-use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, coupling_capacity, decode_reaction, takes_reaction};
 use {manifold_water_liquid::fields, manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_physics::tick_samples::TickSamples;
@@ -123,7 +123,7 @@ manifold_core::testkit_visible! {
 }
 
 /// The fill in the layout's half-cell sites: the pool's height and the
-/// initial volume's site range per axis (empty without one). A height past
+/// Initial Fill's site range per axis (empty without one). A height past
 /// the top is capped there and a volume past a wall is clipped to the domain;
 /// one wholly outside fills nothing (`manifold_core::liquid_setup`, which the
 /// setup check reports from). An unusable height or a volume that is not an
@@ -131,7 +131,7 @@ manifold_core::testkit_visible! {
 fn fill_sites(
     layout: &FluidDomainLayout,
     fill_height: f32,
-    initial_volume: Option<Transform>,
+    initial_fill: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
     let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits, pool_full: false };
@@ -140,9 +140,9 @@ fn fill_sites(
     let h = layout.cell_size;
     let pool = site_range(min[1], min[1] + f64::from(fill_height), min[1], h, layout.cells[1])[1];
     let mut sites = [[0u32; 2]; 3];
-    if let Some(volume) = initial_volume {
+    if let Some(volume) = initial_fill {
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
-            return Err("GPU FLIP: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
+            return Err("GPU FLIP: the Initial Fill must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
         let (edges, outcome) = fit_column(layout, volume.pos, volume.scale).map_err(|reason| format!("GPU FLIP: {reason}"))?;
         fit.column = outcome;
@@ -164,7 +164,7 @@ manifold_core::testkit_visible! {
 pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
-    initial_volume: Option<Transform>,
+    initial_fill: Option<Transform>,
 ) -> Result<GpuFlipGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
@@ -175,7 +175,7 @@ pub fn gpu_flip_geometry(
     let solve_level = read_solve_level(read("solve_level", 0.0), solver.cells()).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0), false).map_err(|reason| format!("GPU FLIP: {reason}"))?;
-    let (pool_sites, box_sites, fit) = fill_sites(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_volume)?;
+    let (pool_sites, box_sites, fit) = fill_sites(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_fill)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
@@ -267,6 +267,8 @@ pub struct Coupling {
     owner: Option<LiquidRigidOwner>,
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
+    /// The coupled bodies this frame's roles leave the liquid room for.
+    capacity: usize,
     /// This frame's simulation step, handed to the rigid owner.
     step: manifold_water_rigid::physics::SimStep,
     /// Rows before the pending tick's first coupled body's (its Collider
@@ -315,10 +317,9 @@ fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
 manifold_node_engine::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. An Initial Fill role is the water's starting box and never a body; a second Initial Fill switched on is refused by name.",
     inputs: {
         domain: Transform optional,
-        initial_volume: Transform optional,
         acceleration_field: VectorField optional,
         resolution: ScalarF32 optional,
         domain_size: ScalarF32 optional,
@@ -595,22 +596,25 @@ impl Primitive for GpuFlipDomain {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
+        self.clock.set_played_target(ctx.sim_step.played_target);
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
         let role_pending = manifold_water_liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        // The Initial Fill seeds the water; the bodies never see it.
+        let fill = take_initial_fill(&mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
-            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
+            self.clock.observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Liquid") {
-                Ok(field) => self.fields.observe_sample(ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.fields.observe_sample(&self.clock, ctx.played(), field.as_ref()),
                 Err(error) => ctx.error(error),
             }
-            self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
-            self.coupled.scenes.observe(ctx.time.seconds.0, None);
+            self.bodies.observe_sample(&self.clock, ctx.played(), (!role_pending).then_some(&roles[..]));
+            self.coupled.scenes.observe_staged(&self.clock, ctx.played());
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -632,7 +636,7 @@ impl Primitive for GpuFlipDomain {
         self.coupled.exchange = None;
         self.scheduled_frame = None;
         self.later_obstacle_tick = None;
-        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
+        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles, fill) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
@@ -667,7 +671,7 @@ impl Primitive for GpuFlipDomain {
             // Sized for every body a liquid holds, so a pending reaction never
             // moves when roles come and go.
             let reaction = self.reaction.get_or_insert_with(|| {
-                let bytes = MAX_FLUID_ROLES * REACTION_FLOATS * 4;
+                let bytes = MAX_LIQUID_BODIES * REACTION_FLOATS * 4;
                 let buffer = gpu.device.create_buffer_shared(bytes as u64);
                 // SAFETY: new shared buffer, not yet visible to the GPU.
                 unsafe { buffer.write(0, &vec![0u8; bytes]) };
@@ -703,7 +707,14 @@ impl Primitive for GpuFlipDomain {
 impl PhysicsNode for GpuFlipDomain {
     fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
-        Some(manifold_water_liquid::gizmos::domain_snapshot(self.layout, self.coupled.failed, self.role_pending, epoch, &self.setup_report))
+        Some(manifold_water_liquid::gizmos::domain_snapshot(
+            self.layout,
+            self.coupled.failed,
+            self.role_pending,
+            epoch,
+            &self.setup_report,
+            self.coupled.owner.as_ref().map_or(0, LiquidRigidOwner::uncoupled),
+        ))
     }
 
     /// The pool under the fill height and the initial column as the fill
@@ -737,16 +748,20 @@ impl PhysicsNode for GpuFlipDomain {
         error: Option<&str>,
         authored_sample_only: bool,
     ) {
-        // A replay sample records the scene at a tick's start; a pending one
-        // records nothing, and `run` closes the sample.
+        // A replay sample hands the scene over before this domain observes
+        // the sample's Speed; `run` records it once Speed names the tick. A
+        // pending one records nothing.
         if authored_sample_only {
-            if let Some(observation) = observation.filter(|_| error.is_none()) {
-                self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
-            }
+            let scene = observation.filter(|_| error.is_none()).map(|observation| &observation.inputs);
+            self.coupled.scenes.stage(scene);
             return;
         }
         self.set_coupled_physics(true);
-        self.coupled.observation = observation.cloned();
+        // Refill the retained inputs in place: a steady frame never reallocates.
+        match (observation, &mut self.coupled.observation) {
+            (Some(source), Some(retained)) => retained.clone_from(source),
+            (source, retained) => *retained = source.cloned(),
+        }
         self.coupled.colliders = colliders;
         self.coupled.error = error.map(str::to_owned);
     }
@@ -779,15 +794,15 @@ impl PhysicsNode for GpuFlipDomain {
     /// it lands on the first tick of the next frame.
     fn physics_impulse_stamp(
         &self,
-        transport: manifold_core::Seconds,
+        played: manifold_core::PlayedTime,
         sequence: u64,
         step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if !self.physics_impulse_readiness()? {
             return Err("GPU FLIP impulses: the liquid is still preparing; fire waits for it".into());
         }
-        let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
+        let mut stamp = self.impulses.stamp(played, sequence)?;
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(played, manifold_water_rigid::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -814,7 +829,7 @@ impl PhysicsNode for GpuFlipDomain {
 inventory::submit! { PhysicsNodeRegistration::new::<GpuFlipDomain>() }
 
 impl TickSampled for GpuFlipDomain {
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
         if self.coupled.mode {
@@ -832,10 +847,14 @@ impl GpuFlipDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
+        fill: Result<Option<Transform>, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let column = ctx.inputs.transform("initial_volume");
-        let geometry = match gpu_flip_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.inputs.transform("domain"), column) {
-            Ok(geometry) => geometry.sized_for(role_kinds(roles)),
+        let geometry = fill.map_err(|reason| format!("GPU FLIP: {reason}")).and_then(|column| {
+            gpu_flip_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.inputs.transform("domain"), column)
+                .map(|geometry| (geometry, column))
+        });
+        let (geometry, column) = match geometry {
+            Ok((geometry, column)) => (geometry.sized_for(role_kinds(roles)), column),
             Err(reason) => {
                 self.setup_report.refuse(&reason);
                 return Err(reason);
@@ -857,7 +876,8 @@ impl GpuFlipDomain {
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         self.coupled.walls = DomainWalls::of(&geometry.layout, closed_faces(ctx.params));
-        if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
+        self.coupled.capacity = coupling_capacity(roles);
+        if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
@@ -898,7 +918,7 @@ impl GpuFlipDomain {
         self.setup = Some(geometry.setup);
         self.layout = Some(geometry.layout);
         let frame = self.clock.advance(
-            ctx.time.seconds.0,
+            ctx.played(),
             ctx.sim_step.interval.0,
             speed,
             ctx.scalar_or_param("reset", 0.0),
@@ -925,7 +945,7 @@ impl GpuFlipDomain {
             self.coupled.scenes.settle(&self.clock, &frame, scene);
             self.coupled.scenes.prune_before(owner.completed());
         }
-        self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
+        self.impulses.observe_frame(ctx.played(), &frame)?;
         self.bodies.settle(roles, &self.clock, &frame);
         let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
@@ -1040,8 +1060,8 @@ impl GpuFlipDomain {
     /// the water's clock, and build a new rigid owner (restarting the pair)
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
-    fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
-        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, step, .. } = &mut self.coupled;
+    fn observe_rigid(&mut self, played: manifold_core::PlayedTime, speed: f32) -> Result<bool, String> {
+        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, capacity, step, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
         }
@@ -1052,16 +1072,16 @@ impl GpuFlipDomain {
                 observation.speed
             ));
         }
-        if (observation.transport.0 - transport).abs() > 1e-9 {
+        if (observation.transport.seconds() - played.seconds()).abs() > 1e-9 {
             return Err("GPU FLIP coupling: rigid observation transport does not match water transport".into());
         }
         CoupledRigidInputs { scene: &observation.inputs, colliders: *colliders, density: f64::from(WATER_DENSITY) }
             .validate()?;
         let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
         *previous_reset = Some(observation.reset);
-        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders)) {
+        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders, *capacity)) {
             *epochs += 1;
-            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?;
+            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *capacity, *epochs, owner.as_ref())?;
             built.set_step(*step);
             *owner = Some(built);
             *owner_fresh = true;
@@ -1127,7 +1147,7 @@ impl GpuFlipDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.capacity, self.coupled.epochs, self.coupled.owner.as_ref())?;
         owner.set_step(self.coupled.step);
         self.coupled.owner = Some(owner);
         Ok(())
@@ -1139,6 +1159,7 @@ const _: () = assert!(ROLE_PORTS.len() == MAX_FLUID_ROLES);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PlayedTime;
 
     fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<GpuFlipGeometry, String> {
         let read = |name: &str, default: f32| match name {
@@ -1155,8 +1176,8 @@ mod tests {
     fn gpu_flip_domain_later_ticks_get_their_own_obstacle_bound() {
         use manifold_physics::clock::SimulationClock;
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
-        let frame = clock.advance(1.0, 0.5, 1.0, 0.0, false, true);
+        clock.advance(PlayedTime::from_played(0.0), 0.5, 1.0, 0.0, false, true);
+        let frame = clock.advance(PlayedTime::from_played(1.0), 0.5, 1.0, 0.0, false, true);
         assert!(frame.ticks >= 2, "the fixture needs a later tick");
         let mut domain = GpuFlipDomain::new();
         domain.scheduled_frame = Some(frame);
@@ -1179,8 +1200,8 @@ mod tests {
         use manifold_physics::clock::{SimulationClock, TICK};
         let mut domain = GpuFlipDomain::new();
         assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
-        let frame = SimulationClock::default().advance(0.0, TICK, 1.0, 0.0, false, false);
-        domain.impulses.observe_frame(0.0, &frame).unwrap();
+        let frame = SimulationClock::default().advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
+        domain.impulses.observe_frame(PlayedTime::from_played(0.0), &frame).unwrap();
         assert_eq!(domain.physics_impulse_readiness(), Ok(true));
         domain.holding = true;
         assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role or the field is still preparing");
@@ -1283,7 +1304,7 @@ mod tests {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
         assert!(refused(geometry(64.0, -1.0, None)).contains("Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
-        assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));
+        assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("Initial Fill"));
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Fill Height"), "{over}");

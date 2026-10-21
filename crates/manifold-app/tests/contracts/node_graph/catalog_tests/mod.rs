@@ -1,6 +1,7 @@
 #[cfg(feature = "gpu-proofs")]
 mod bokeh_gather;
 mod fluid_objects;
+mod initial_fill_migration;
 #[cfg(feature = "gpu-proofs")]
 mod generator_renderer_tests;
 #[cfg(feature = "gpu-proofs")]

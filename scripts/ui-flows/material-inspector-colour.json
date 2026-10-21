@@ -45,7 +45,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_color_r.colour"
+          "name_suffix": "_color_r.colour"
         }
       }
     }
@@ -54,7 +54,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_color_r.colour"
+          "name_suffix": "_color_r.colour"
         }
       },
       "gesture": {
@@ -68,7 +68,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_color_r.slider"
+          "name_suffix": "_color_r.slider"
         }
       }
     }
@@ -77,7 +77,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_color_r.slider"
+          "name_suffix": "_color_r.slider"
         }
       },
       "gesture": {
@@ -97,7 +97,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_color_r.value"
+          "name_suffix": "_color_r.value"
         }
       },
       "check": {
@@ -109,7 +109,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_color_g.value"
+          "name_suffix": "_color_g.value"
         }
       },
       "check": {
@@ -121,7 +121,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_color_b.value"
+          "name_suffix": "_color_b.value"
         }
       },
       "check": {
@@ -142,7 +142,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_color_r.value"
+          "name_suffix": "_color_r.value"
         }
       },
       "check": {
@@ -154,7 +154,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_color_g.value"
+          "name_suffix": "_color_g.value"
         }
       },
       "check": {
@@ -166,7 +166,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_color_b.value"
+          "name_suffix": "_color_b.value"
         }
       },
       "check": {
@@ -178,7 +178,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_color_g.driver_btn"
+          "name_suffix": "_color_g.driver_btn"
         }
       },
       "gesture": {

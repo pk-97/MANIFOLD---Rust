@@ -379,13 +379,11 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
         meta.params.len() > 14,
         "P1 exposes many more params than the old 14 curated sliders"
     );
-    // Every param routes one-to-one except: the shared Ambient, which
-    // fans out to every material's ambient (2 for azalea); and G-P6's
-    // Environment master, which fans out to the softbox bake's intensity
-    // AND the HDRI branch's exposure gain.
+    // Every param routes one-to-one except the shared Ambient, which fans
+    // out to every material's ambient (2 for azalea).
     assert!(
         meta.bindings.len() > meta.params.len(),
-        "fan-outs (ambient, env intensity) give more bindings than params"
+        "the ambient fan-out gives more bindings than params"
     );
     // Every card param routes to at least one node param.
     for p in &meta.params {
@@ -445,14 +443,14 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
         meta.bindings.iter().any(|b| b.id == "scene_ambient"),
         "every lit-by-default material contributes a scene_ambient binding"
     );
-    // The envmap intensity slider is the Environment master; it fans out
-    // to envmap.intensity AND hdri_gain.gain (G-P6).
+    // The envmap intensity slider is the Environment master in every mode
+    // (HDRI included), so it drives the bake alone.
     let env_bindings: Vec<_> = meta
         .bindings
         .iter()
         .filter(|b| b.id == env_intensity_id)
         .collect();
-    assert_eq!(env_bindings.len(), 2, "env intensity fans out to envmap + hdri gain");
+    assert_eq!(env_bindings.len(), 1, "env intensity drives the bake alone");
     assert!(env_bindings.iter().any(|b| match &b.target {
         BindingTarget::Node { node_id, param } => node_id.as_str() == "envmap" && param == "intensity",
         _ => false,
@@ -1083,6 +1081,7 @@ fn merge_plan_never_contains_chrome_nodes() {
         "node.camera_lens",
         "node.bake_environment",
         "node.hdri_source",
+        "node.camera_sky",
         "node.exposure",
         "node.switch_texture",
         "node.light",
@@ -2750,4 +2749,75 @@ fn imported_light_title_is_glb_name_and_rung_restores_it() {
     meta.params.iter_mut().find(|p| p.id == stamp).unwrap().section = Some("Scene".to_string());
     assert!(!migrate_light_titles_for_test(&mut def), "the stamp fallback is not a light name");
     assert_eq!(title(&def), None);
+}
+
+/// One Lighting Mode (Gradient, Softbox, HDRI) lives on the bake; the HDRI
+/// feeds it and the visible sky; the old second switch is gone. The sky is off
+/// until the Background switch is turned on, and its Blur and Brightness read
+/// only then.
+#[test]
+fn import_has_one_environment_mode_and_an_off_by_default_hdri_background() {
+    use manifold_core::scene_surface::{ControlGroup, Feature, Gate, Modes, SurfaceRole};
+
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "Solid", 500)],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let (def, _) = build_import_graph(&summary, std::path::Path::new("/tmp/synthetic_background.glb")).expect("build");
+    let handle = |h: &str| def.nodes.iter().find(|n| n.node_id == h).unwrap_or_else(|| panic!("node `{h}`"));
+    let wired = |from: &str, from_port: &str, to: &str, to_port: &str| {
+        let (from, to) = (handle(from).id, handle(to).id);
+        def.wires.iter().any(|w| w.from_node == from && w.from_port == from_port && w.to_node == to && w.to_port == to_port)
+    };
+
+    for gone in ["env_select", "hdri_gain"] {
+        assert!(def.nodes.iter().all(|n| n.node_id != gone), "{gone} is the second mode path");
+    }
+    let meta = def.preset_metadata.as_ref().unwrap();
+    assert!(meta.params.iter().all(|p| p.id != "env_mode"), "no second Environment Mode param");
+    assert!(wired("hdri", "out", "envmap", "hdri"), "the HDRI feeds the bake's HDRI mode");
+    assert!(wired("envmap", "envmap", "render", "envmap"));
+
+    assert!(wired("hdri", "out", "bg_sky", "sky"));
+    assert!(wired("lens", "out", "bg_sky", "camera"), "the sky is seen through the scene camera");
+    assert!(wired("bg_sky", "out", "bg_blur", "source"));
+    assert!(wired("bg_blur", "out", "bg_gain", "in"));
+    assert!(wired("bg_gain", "out", "bg_over", "bottom"));
+    assert!(wired("bg_over", "out", "bg_select", "in_1"));
+    assert!(wired("bg_select", "out", "final", "in"));
+    let selector = handle("bg_select").params.get("selector");
+    assert_eq!(selector, Some(&SerializedParamValue::Float { value: 0.0 }), "Background starts off");
+
+    let spec = |id: &str| meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("card param `{id}`"));
+    let target = |id: &str| {
+        let binding = meta.bindings.iter().find(|b| b.id == id).unwrap();
+        match &binding.target {
+            BindingTarget::Node { node_id, param } => (node_id.as_str().to_string(), param.clone()),
+            other => panic!("expected a node target, got {other:?}"),
+        }
+    };
+    assert_eq!(target("bg_enabled"), ("bg_select".to_string(), "selector".to_string()));
+    assert_eq!(target("bg_blur"), ("bg_blur".to_string(), "radius".to_string()));
+    assert_eq!(target("bg_brightness"), ("bg_gain".to_string(), "gain".to_string()));
+    assert_eq!(spec("bg_enabled").default_value, 0.0);
+    assert!(spec("bg_enabled").is_toggle);
+    assert_eq!(spec("bg_brightness").default_value, 1.0);
+
+    let scene = |id: &str| spec(id).scene.unwrap_or_else(|| panic!("`{id}` has no Scene tab placement"));
+    assert_eq!(scene("bg_enabled").switch, Some(Feature::Background));
+    for read_while_on in ["bg_blur", "bg_brightness"] {
+        let placed = scene(read_while_on);
+        assert_eq!(placed.gate, Some(Gate::Only(Feature::Background, Modes(0b10))), "{read_while_on}");
+        assert_eq!((placed.group, placed.role), (ControlGroup::Environment, SurfaceRole::Setup));
+    }
 }

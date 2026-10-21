@@ -54,7 +54,10 @@ use liquid::locate_node;
 use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
 mod setup_check;
-pub use setup_check::{RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, problems_with_runtime};
+pub use setup_check::{
+    CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, copies_anchors, copies_problems,
+    problems_with_runtime,
+};
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;
@@ -71,6 +74,9 @@ const BAKE_ENVIRONMENT_TYPE_ID: &str = "node.bake_environment";
 const HDRI_SOURCE_TYPE_ID: &str = "node.hdri_source";
 const EXPOSURE_TYPE_ID: &str = "node.exposure";
 const SWITCH_TEXTURE_TYPE_ID: &str = "node.switch_texture";
+const CAMERA_SKY_TYPE_ID: &str = "node.camera_sky";
+const BLUR_TYPE_ID: &str = "node.blur";
+const OVER_TYPE_ID: &str = "node.over";
 const SWITCH_MESH_TYPE_ID: &str = "node.switch_mesh";
 const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
 const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
@@ -466,7 +472,7 @@ pub enum MaterialVm {
 /// primitive's Enum-typed params (`node.light`'s `LIGHT_MODES` /
 /// `SHADOW_SOFTNESS_LABELS`); their value is the raw enum index — the panel
 /// owns the display-label mapping (it can't depend on this crate's
-/// constants, same DTO-boundary convention as `EnvironmentRowVm::mode_is_hdri`).
+/// constants).
 /// `light_size` is P9's Contact-softness-only knob (REALTIME_3D_DESIGN.md) —
 /// always resolved and always writable (D4: "parameter dependency, not
 /// conditional UI"), regardless of the current `shadow_softness_value`.
@@ -544,16 +550,16 @@ pub enum CameraVm {
 /// panel renders sliders, which need a live position, not just a target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImporterEnvironmentRow {
-    /// The `node.switch_texture` selector's own doc id (the "mode" chip).
-    pub switch_node_id: u32,
-    /// The `node.bake_environment`'s doc id (the Softbox intensity/fill
-    /// params).
+    /// The `node.bake_environment`'s doc id (Mode, Intensity, Fill).
     pub bake_node_id: u32,
     /// The `node.hdri_source`'s doc id — its `path` param isn't manifest/
     /// slider-backed (a file path, not a numeric row), so only the resolved
     /// display string is carried, not an addr.
     pub hdri_node_id: u32,
     pub hdri_file_value: String,
+    /// The sky chain drawn behind the scene (camera sky, blur, exposure, over
+    /// and the switch that turns it on), so the World item owns its controls.
+    pub background_node_ids: Vec<u32>,
 }
 
 /// Payload for [`EnvironmentVm::Bare`].
@@ -564,10 +570,9 @@ pub struct BareEnvironmentRow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnvironmentVm {
-    /// The importer's shape: `switch_texture` selecting between
-    /// `bake_environment` (Softbox) and `hdri_source`→`exposure` (HDRI).
+    /// `bake_environment` with an `hdri_source` wired into its `hdri` input.
     Importer(Box<ImporterEnvironmentRow>),
-    /// A bare `node.bake_environment`, no HDRI switch.
+    /// A bare `node.bake_environment`, no HDRI source.
     Bare(Box<BareEnvironmentRow>),
     /// Some other producer wired into `envmap` — honest custom row.
     Custom { node_doc_id: u32 },
@@ -1012,9 +1017,8 @@ fn trace_objects(
             }
             None => {
                 // A placed fluid source: its own row under the water it feeds,
-                // named by its role. An Initial Fill group stays the water's:
-                // its controls join the water's row. The model reads no
-                // values, so the role is read here.
+                // named by its role. The model reads no values, so the role is
+                // read here.
                 let Some(water) = model.parent.as_ref() else { continue };
                 let Some((_, SceneObjectVm::Known(row))) =
                     out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if &row.address == water))
@@ -1022,18 +1026,10 @@ fn trace_objects(
                     continue;
                 };
                 let role = match locate_node(root, &model.object).map_or(1, |at| param_f32(at.node, "role", 1.0).round() as i32) {
-                    0 => None,
-                    2 => Some(SourceRole::Drain),
-                    3 => Some(SourceRole::Collider),
-                    _ => Some(SourceRole::Inflow),
-                };
-                let Some(role) = role else {
-                    for control in &model.controls {
-                        if !row.controls.contains(control) {
-                            row.controls.push(control.clone());
-                        }
-                    }
-                    continue;
+                    0 => SourceRole::InitialFill,
+                    2 => SourceRole::Drain,
+                    3 => SourceRole::Collider,
+                    _ => SourceRole::Inflow,
                 };
                 let name = locate_node(root, &model.owner)
                     .and_then(|at| at.node.handle.clone().or_else(|| at.node.title.clone()))
@@ -1720,42 +1716,54 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
         return EnvironmentVm::None;
     };
 
-    if node.type_id == SWITCH_TEXTURE_TYPE_ID {
-        // Importer shape: in_0 = bake_environment, in_1 = exposure(hdri_source).
-        let bake = level
-            .producer(node.id, "in_0")
-            .and_then(|(n, _)| level.node(n))
-            .filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID);
-        let hdri_chain = level.producer(node.id, "in_1").and_then(|(gain_id, _)| {
-            let gain_node = level.node(gain_id).filter(|n| n.type_id == EXPOSURE_TYPE_ID)?;
-            let (hdri_id, _) = level.producer(gain_node.id, "in")?;
-            let hdri_node = level.node(hdri_id).filter(|n| n.type_id == HDRI_SOURCE_TYPE_ID)?;
-            Some(hdri_node.id)
-        });
-        if let (Some(bake), Some(hdri_id)) = (bake, hdri_chain) {
-            let hdri_file_value = level
-                .node(hdri_id)
-                .and_then(|n| n.params.get("path"))
-                .and_then(|v| match v {
-                    SerializedParamValue::String { value } => Some(value.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            return EnvironmentVm::Importer(Box::new(ImporterEnvironmentRow {
-                switch_node_id: node.id,
-                bake_node_id: bake.id,
-                hdri_node_id: hdri_id,
-                hdri_file_value,
-            }));
-        }
-        return EnvironmentVm::Custom { node_doc_id: node.id };
-    }
-
     if node.type_id == BAKE_ENVIRONMENT_TYPE_ID {
-        return EnvironmentVm::Bare(Box::new(BareEnvironmentRow { node_doc_id: node.id }));
+        let hdri = level
+            .producer(node.id, "hdri")
+            .and_then(|(id, _)| level.node(id))
+            .filter(|n| n.type_id == HDRI_SOURCE_TYPE_ID);
+        let Some(hdri) = hdri else {
+            return EnvironmentVm::Bare(Box::new(BareEnvironmentRow { node_doc_id: node.id }));
+        };
+        return EnvironmentVm::Importer(Box::new(ImporterEnvironmentRow {
+            bake_node_id: node.id,
+            hdri_node_id: hdri.id,
+            hdri_file_value: param_string(hdri, "path").unwrap_or_default(),
+            background_node_ids: background_chain(level, hdri.id),
+        }));
     }
 
     EnvironmentVm::Custom { node_doc_id: node.id }
+}
+
+/// The sky chain behind the scene: from the camera sky the HDRI feeds, along
+/// the blur, exposure and over it passes through, to the switch that turns it
+/// on. Only those atoms are followed, so the walk never leaves the chain.
+fn background_chain(level: &Level, hdri_id: u32) -> Vec<u32> {
+    let in_chain = |id: u32| {
+        level.node(id).is_some_and(|node| {
+            matches!(
+                node.type_id.as_str(),
+                CAMERA_SKY_TYPE_ID | BLUR_TYPE_ID | EXPOSURE_TYPE_ID | OVER_TYPE_ID | SWITCH_TEXTURE_TYPE_ID
+            )
+        })
+    };
+    let mut chain = Vec::new();
+    let mut pending: Vec<u32> = level
+        .wires
+        .iter()
+        .filter(|w| w.from_node == hdri_id && level.node(w.to_node).is_some_and(|n| n.type_id == CAMERA_SKY_TYPE_ID))
+        .map(|w| w.to_node)
+        .collect();
+    while let Some(id) = pending.pop() {
+        if chain.contains(&id) {
+            continue;
+        }
+        chain.push(id);
+        if level.node(id).is_some_and(|n| n.type_id != SWITCH_TEXTURE_TYPE_ID) {
+            pending.extend(level.wires.iter().filter(|w| w.from_node == id && in_chain(w.to_node)).map(|w| w.to_node));
+        }
+    }
+    chain
 }
 
 fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm {
@@ -1904,8 +1912,7 @@ mod tests {
             node(4, FLIP_DOMAIN_TYPE_ID, None), node(5, "node.transform_3d", None), domain],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
                 wire(6, "transform", 4, "domain"),
-                wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter"),
-                wire(5, "transform", 4, "initial_volume")]);
+                wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter")]);
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4", "n6", "n5"].map(NodeId::new));
@@ -1914,12 +1921,12 @@ mod tests {
         assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
         assert_eq!(row.fluid_domain.expect("static domain").size, [4.0, 4.0, 1.0]);
         assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
-        // The domain box and the initial column come from the declaration,
-        // each through its own transform; the surface gets no object box.
+        // The domain box comes from the declaration, through its transform;
+        // the surface gets no object box.
         let shapes: Vec<_> = vm.shapes.iter().map(|shape| (&shape.owner, shape.index, shape.params[0].write.clone())).collect();
         let owner = ShapeOwner::LiquidDomain(NodeId::new("n4"));
         let at = |node_doc_id| ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id, param_id: "pos_x".into() });
-        assert_eq!(shapes, [(&owner, 0, at(6)), (&owner, 1, at(5))]);
+        assert_eq!(shapes, [(&owner, 0, at(6))]);
         assert_eq!(vm.shapes[0].params[1].value, 2.0);
     }
 
@@ -1982,7 +1989,7 @@ mod tests {
                 wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
                 wire(10, "role", 4, "role_1")]);
         let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
-        // Each role names its row; an Initial Fill group stays the water's.
+        // Each role names its row, an Initial Fill's too.
         let with_role = |role: f32| {
             let mut graph = restored.clone();
             let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_deref_mut().unwrap();
@@ -1994,8 +2001,16 @@ mod tests {
         assert_eq!(with_role(2.0).0, [SourceRole::Drain]);
         assert_eq!(with_role(3.0).0, [SourceRole::Collider]);
         let (sources, controls) = with_role(0.0);
-        assert!(sources.is_empty(), "an Initial Fill group is no source row");
-        assert_eq!(controls, ["n4", "n11", "n12"].map(NodeId::new), "its controls stay the water's");
+        assert_eq!(sources, [SourceRole::InitialFill], "an Initial Fill is its own row");
+        assert_eq!(controls, ["n4"].map(NodeId::new), "its controls are its own");
+        // The water fills an axis-aligned box, so its handle does not turn.
+        let mut graph = restored.clone();
+        let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_deref_mut().unwrap();
+        group.nodes.iter_mut().find(|node| node.id == 11).unwrap().params.insert("role".into(), SerializedParamValue::Float { value: 0.0 });
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let fill = vm.shapes.iter().find(|shape| matches!(shape.owner, ShapeOwner::RoleSource { .. })).expect("fill shape");
+        assert_eq!(fill.owner, ShapeOwner::RoleSource { node: NodeId::new("n11"), role: FluidRole::InitialFill });
+        assert!(matches!(fill.decl.shape, manifold_foundation::scene_surface::SceneShape::Box { rotation: None, .. }));
         let vm = SceneVm::from_def(&restored).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4"].map(NodeId::new), "a placed source is its own row, not the water's");
@@ -2131,23 +2146,30 @@ mod tests {
         let lens = node(2, CAMERA_LENS_TYPE_ID, Some("lens"));
         let envmap = node(3, BAKE_ENVIRONMENT_TYPE_ID, Some("envmap"));
         let hdri = node(4, HDRI_SOURCE_TYPE_ID, Some("hdri"));
-        let gain = node(5, EXPOSURE_TYPE_ID, Some("hdri_gain"));
-        let select = node(6, SWITCH_TEXTURE_TYPE_ID, Some("env_select"));
+        let sky = node(5, CAMERA_SKY_TYPE_ID, Some("bg_sky"));
+        let gain = node(6, EXPOSURE_TYPE_ID, Some("bg_gain"));
+        let over = node(11, OVER_TYPE_ID, Some("bg_over"));
+        let select = node(12, SWITCH_TEXTURE_TYPE_ID, Some("bg_select"));
         let atmo = node(7, ATMOSPHERE_TYPE_ID, Some("atmosphere"));
         let sun = with_param(node(8, LIGHT_TYPE_ID, Some("sun")), "cast_shadows", SerializedParamValue::Float { value: 1.0 });
         let out = node(20, "system.final_output", None);
         def(
-            vec![cam, lens, envmap, hdri, gain, select, atmo, sun, scene, out],
+            vec![cam, lens, envmap, hdri, sky, gain, over, select, atmo, sun, scene, out],
             vec![
                 wire(1, "out", 2, "camera"),
                 wire(2, "out", 10, "camera"),
-                wire(3, "envmap", 6, "in_0"),
-                wire(4, "out", 5, "in"),
-                wire(5, "out", 6, "in_1"),
-                wire(6, "out", 10, "envmap"),
+                wire(4, "out", 3, "hdri"),
+                wire(3, "envmap", 10, "envmap"),
+                wire(4, "out", 5, "sky"),
+                wire(2, "out", 5, "camera"),
+                wire(5, "out", 6, "in"),
+                wire(6, "out", 11, "bottom"),
+                wire(10, "color", 11, "top"),
+                wire(10, "color", 12, "in_0"),
+                wire(11, "out", 12, "in_1"),
                 wire(7, "atmosphere", 10, "atmosphere"),
                 wire(8, "out", 10, "light_0"),
-                wire(10, "color", 20, "in"),
+                wire(12, "out", 20, "in"),
             ],
         )
     }
@@ -2158,7 +2180,11 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         match vm.environment {
             EnvironmentVm::Importer(row) => {
+                assert_eq!(row.bake_node_id, 3);
                 assert_eq!(row.hdri_node_id, 4);
+                let mut chain = row.background_node_ids.clone();
+                chain.sort_unstable();
+                assert_eq!(chain, vec![5, 6, 11, 12], "the sky chain, ending at the switch");
             }
             other => panic!("expected Importer shape, got {other:?}"),
         }

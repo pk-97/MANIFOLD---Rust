@@ -251,6 +251,10 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     ("node.physics_world", "copy_spacing"),
     ("node.physics_world", "copy_columns"),
     ("node.physics_world", "copy_layout"),
+    // Copy spacing counts box sizes now (`copy_size_spacing`); the copies
+    // migration converts it where it can reach the body, and this strips any
+    // metres value it could not reach so the load does not fail.
+    ("node.rigid_body", "copy_spacing"),
 ];
 
 /// Whether any param of `type_id` is listed in [`RETIRED_PARAMS`].

@@ -578,7 +578,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 370 |
+| `Lantern` | Lantern | generator | Geometry | 369 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -599,11 +599,11 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1336 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1339 |
 | `PhysicsSolids` | Physics Solids | generator | Geometry | 1997 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `RubblePile` | Rubble Pile | generator | Geometry | 1343 |
+| `RubblePile` | Rubble Pile | generator | Geometry | 1346 |
 | `Scene` | Scene | generator | Geometry | 368 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
@@ -617,13 +617,13 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2050 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1404 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2005 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1394 |
-| `WaterInScan` | Water in a Photoscan | generator | Sim | 2050 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2061 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1415 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2016 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
+| `WaterInScan` | Water in a Photoscan | generator | Sim | 2061 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2344 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1070 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

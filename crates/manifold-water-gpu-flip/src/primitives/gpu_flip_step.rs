@@ -56,7 +56,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTIC
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
@@ -736,7 +736,7 @@ pub(crate) struct StepState {
 
 /// Zero bytes bound for an unwired input: the uniform-sized arrays, and an
 /// empty reaction for every body a liquid holds.
-const ZERO_BYTES: u64 = (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64;
+const ZERO_BYTES: u64 = (MAX_LIQUID_BODIES * REACTION_FLOATS * 4) as u64;
 
 const SORT_LABELS: SortLabels = SortLabels {
     clear: "gpu_flip.step.sort.clear",
@@ -2227,7 +2227,7 @@ manifold_node_engine::primitive! {
         int_param!("impulse_tick", "Impulse Tick", -1.0, -1.0, 16_777_216.0),
         int_param!("first_tick", "First Tick", 0.0, 0.0, 16_777_216.0),
         int_param!("tick_index", "Tick", 0.0, 0.0, 16_777_216.0),
-        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_LIQUID_BODIES as f32),
         int_param!("rows", "Rows", 0.0, 0.0, 16_777_216.0),
         int_param!("region_count", "Regions", 0.0, 0.0, MAX_FLUID_ROLES as f32),
         float_param!("inflow_jitter", "Inflow Jitter", 0.0, 0.0, 1.0),
@@ -2397,7 +2397,7 @@ impl Primitive for GpuFlipStep {
         } else {
             None
         };
-        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
+        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
         let pressure = match read_max_iterations(ctx.scalar_or_param("max_iterations", MAX_ITERATIONS as f32))
             .and_then(|max| read_iterations(ctx.scalar_or_param("iterations", 0.0), max))

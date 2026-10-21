@@ -85,13 +85,14 @@ fn scene_insertions_allocate_ids_across_nested_groups() {
         };
         command.execute(&mut project);
         let edited = graph_of(&project, &effect);
-        assert_eq!(max_node_id_over(&edited.nodes), 101, "insertion {kind}");
+        let expected_max = if kind == 1 { 102 } else { 101 };
+        assert_eq!(max_node_id_over(&edited.nodes), expected_max, "insertion {kind}");
         let after = edited.clone();
         command.undo(&mut project);
         assert_eq!(graph_of(&project, &effect), &graph);
         command.execute(&mut project);
         // New stable IDs are allowed on redo; document addresses remain unique.
-        assert_eq!(max_node_id_over(&graph_of(&project, &effect).nodes), 101);
+        assert_eq!(max_node_id_over(&graph_of(&project, &effect).nodes), expected_max);
         assert_eq!(graph_of(&project, &effect).nodes.len(), after.nodes.len());
     }
 }
@@ -498,6 +499,58 @@ fn compound_imported_group_scene_graph() -> EffectGraphDef {
         EffectGraphWire { from_node: 10, from_port: "object_1".into(), to_node: 0, to_port: "object_1".into() },
     ]);
     def
+}
+
+/// One imported group of `parts` material parts, each its own scene object.
+fn compound_imported_group_with_parts(parts: u32) -> EffectGraphDef {
+    let mut def = imported_group_scene_graph();
+    let render = def.nodes.iter_mut().find(|node| node.id == 0).unwrap();
+    render.params.insert("objects".into(), SerializedParamValue::Float { value: parts as f32 });
+    let group = def.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    let output_id = group.nodes.iter().find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().id;
+    let template = group.nodes.iter().find(|node| node.id == 14).unwrap().clone();
+    for part in 1..parts {
+        let id = 1000 + part;
+        let port = format!("object_{part}");
+        group.nodes.push(EffectGraphNode {
+            id,
+            node_id: NodeId::new(format!("import_object_{part}")),
+            handle: Some(format!("Imported Part {}", part + 1)),
+            ..template.clone()
+        });
+        group.interface.outputs.push(InterfacePortDef { name: port.clone(), port_type: "Object".into() });
+        group.wires.extend([
+            EffectGraphWire { from_node: 11, from_port: "transform".into(), to_node: id, to_port: "transform".into() },
+            EffectGraphWire { from_node: 12, from_port: "vertices".into(), to_node: id, to_port: "vertices".into() },
+            EffectGraphWire { from_node: 13, from_port: "out".into(), to_node: id, to_port: "material".into() },
+            EffectGraphWire { from_node: id, from_port: "object".into(), to_node: output_id, to_port: port.clone() },
+        ]);
+        def.wires.push(EffectGraphWire { from_node: 10, from_port: port.clone(), to_node: 0, to_port: port });
+    }
+    def
+}
+
+/// Enable Physics takes a compound with one part per rigid-body part port,
+/// and refuses one more by name, leaving the graph as it loaded: the body
+/// has no port to wire the extra part to.
+#[test]
+fn compound_physics_refuses_more_parts_than_the_rigid_body_has_ports() {
+    let fits = compound_imported_group_with_parts(super::COMPOUND_MAX_PARTS);
+    let (mut project, fx) = project_with_graph(fits.clone());
+    let mut enable = enable_physics(&project, GraphTarget::Effect(fx.clone()), 0, 0, body_params(), fits);
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "a full compound is refused: {:?}", enable.rejection_reason());
+    let group = graph_of(&project, &fx).nodes.iter().find(|node| node.id == 10).unwrap().group.as_deref().unwrap();
+    let last = format!("part_{}", super::COMPOUND_MAX_PARTS - 1);
+    assert!(group.wires.iter().any(|wire| wire.to_port == last), "the last part is wired to {last}");
+
+    let over = compound_imported_group_with_parts(super::COMPOUND_MAX_PARTS + 1);
+    let (mut project, fx) = project_with_graph(over.clone());
+    let mut enable = enable_physics(&project, GraphTarget::Effect(fx.clone()), 0, 0, body_params(), over.clone());
+    enable.execute(&mut project);
+    assert!(!enable.was_applied());
+    assert_eq!(enable.rejection_reason(), Some("Physics compound objects support at most 64 material parts"));
+    assert_eq!(graph_of(&project, &fx), &over);
 }
 
 fn compound_imported_group_with_one_boundary_per_material() -> EffectGraphDef {
@@ -1742,7 +1795,7 @@ fn physics_scene_commands_reject_shared_pose_atomically() {
 #[test]
 fn duplicate_physics_scene_object_rejects_full_world_atomically() {
     let mut graph = physics_scene_graph();
-    for slot in 1..64 {
+    for slot in 1..manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES {
         let id = 2_000 + slot;
         graph.nodes.push(EffectGraphNode {
             id,
@@ -2514,7 +2567,7 @@ fn shipped_physics_copies_refuse_partial_scene_edits() {
     let mut graph = graph;
     graph
         .wires
-        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count"));
+        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count_0"));
     let (mut project, fx) = project_with_graph(graph.clone());
     let mut duplicate = duplicate_object(&project, 
         GraphTarget::Effect(fx.clone()),
@@ -2556,17 +2609,17 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
             )),
             1,
             vec![
-                ("instances", "instances"),
-                ("active_count", "instance_count"),
-                ("", "copies"),
+                ("instances_0", "instances"),
+                ("active_count_0", "instance_count"),
+                ("", "copies_0"),
             ],
         ),
     ] {
         let mut graph: EffectGraphDef = serde_json::from_str(source).unwrap();
         graph.wires.retain(|wire| {
             !detached_outputs.iter().any(|(from_port, to_port)| {
-                if *to_port == "copies" {
-                    wire.to_node == 40 && wire.to_port == "copies"
+                if *to_port == "copies_0" {
+                    wire.to_node == 40 && wire.to_port == "copies_0"
                 } else {
                     wire.from_node == 40 && wire.from_port == *from_port && wire.to_port == *to_port
                 }
@@ -2651,7 +2704,7 @@ fn shipped_physics_copies_remove_as_one_owned_object_and_undoes() {
     );
     assert!(!def.wires.iter().any(|wire| {
         (wire.from_node == 40
-            && (wire.from_port == "instances" || wire.from_port == "active_count"))
+            && (wire.from_port == "instances_0" || wire.from_port == "active_count_0"))
             || wire.from_node == 121
             || wire.to_node == 121
     }));
@@ -3958,4 +4011,34 @@ fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
     assert!(in_manifest(&project), "merged control in the live manifest after execute");
     cmd.undo(&mut project);
     assert!(!in_manifest(&project), "merged control gone from the live manifest after undo");
+}
+
+#[test]
+fn add_environment_brings_an_hdri_source_and_its_file_row() {
+    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+    let before = graph_of(&project, &fx).clone();
+    let mut cmd = AddSceneEnvironmentCommand::new(
+        GraphTarget::Effect(fx.clone()), vec![], 0, (10.0, 20.0), Vec::new(), mirror_catalog_default(),
+    );
+    cmd.execute(&mut project);
+
+    let def = graph_of(&project, &fx);
+    let bake = find_typed(def, "node.bake_environment");
+    let hdri = find_typed(def, "node.hdri_source");
+    assert!(
+        def.wires.iter().any(|w| w.from_node == hdri.id && w.from_port == "out" && w.to_node == bake.id && w.to_port == "hdri"),
+        "the HDRI source feeds the bake's hdri input"
+    );
+    let meta = def.preset_metadata.as_ref().expect("metadata stamped");
+    assert_eq!(meta.string_params.len(), 1);
+    assert_eq!(meta.string_params[0].id, "hdri_file");
+    assert!(meta.string_params[0].is_file_picker);
+    assert!(
+        meta.string_bindings.iter().any(|b| b.id == "hdri_file"
+            && matches!(&b.target, BindingTarget::Node { node_id, param } if *node_id == hdri.node_id && param == "path")),
+        "hdri_file writes the HDRI source's path"
+    );
+
+    cmd.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &before, "undo removes the source and its file row");
 }

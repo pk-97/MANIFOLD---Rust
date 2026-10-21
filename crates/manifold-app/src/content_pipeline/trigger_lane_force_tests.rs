@@ -798,3 +798,177 @@ fn scene_impulse_waiting_through_a_reset_is_refused_never_landed() {
         assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{path}: {diagnostics:?}");
     }
 }
+
+/// A Fire in the same drain as a forward seek, through the real
+/// FireParameter command: the hit sees the seek's pending target, so it lands
+/// once at the latest observation instead of replaying the skipped ten
+/// minutes.
+#[test]
+fn scene_impulse_fired_after_a_forward_seek_in_the_same_drain_lands_once() {
+    use crate::content_command::ContentCommand;
+    use crate::headless_harness::headless_content_thread;
+    let (mut project, parent, _, _, fire, _) = project_fixture();
+    // The scene plays past the seek: twenty minutes at 240 BPM.
+    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    scene.clips[0].duration_beats = Beats(4_800.0);
+    let mut thread = headless_content_thread(project, WIDTH, HEIGHT);
+    thread.timer.set_frame_clocked(true);
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.handle_command(ContentCommand::Play);
+    // Past every lane hit, so only the manual Fire lands after.
+    for _ in 0..40 {
+        thread.tick_frame(&state_tx);
+    }
+    let before = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!((before.refused, before.discarded), (0, 0), "{before:?}");
+    thread.handle_command(ContentCommand::SeekTo(Seconds(600.0)));
+    thread.handle_command(ContentCommand::FireParameter {
+        target: GraphTarget::Generator(parent.clone()),
+        param_id: manifold_core::effects::ParamId::from(fire),
+    });
+    for _ in 0..4 {
+        thread.tick_frame(&state_tx);
+    }
+    let after = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!(
+        (after.started - before.started, after.refused, after.discarded),
+        (1, 0, 0),
+        "{after:?}"
+    );
+}
+
+/// The scene's native physics epoch: it changes only when the world reseeds.
+fn world_epoch(engine: &mut PlaybackEngine, parent: &LayerId) -> Option<u64> {
+    let state = generator(engine).layer_generators.get(parent)?;
+    let instance = state.generator.graph.instance_by_node_id(&NodeId::new("world"))?;
+    let node = state.generator.graph.get_node(instance)?;
+    manifold_water_rigid::node::get(node.node.as_ref())?.physics_impulse_epoch()
+}
+
+/// The world kept its epoch (no reseed) and the frame rendered without a
+/// node error (a physics history moved backward fails it).
+#[track_caller]
+fn assert_world_holds(thread: &mut crate::content_thread::ContentThread, parent: &LayerId, epoch: u64) {
+    let time = thread.engine.current_time_double();
+    assert_eq!(world_epoch(&mut thread.engine, parent), Some(epoch), "at {time} s the world reseeded");
+    let status = thread.content_pipeline.frame_render_status();
+    assert!(
+        !matches!(status, manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(_)),
+        "at {time} s the frame failed: {status:?}"
+    );
+}
+
+/// The fixture on the headless content thread, its scene playing for twenty
+/// minutes at 240 BPM.
+fn long_scene_thread() -> (crate::content_thread::ContentThread, LayerId, String) {
+    let (mut project, parent, _, _, fire, _) = project_fixture();
+    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    scene.clips[0].duration_beats = Beats(4_800.0);
+    let mut thread = crate::headless_harness::headless_content_thread(project, WIDTH, HEIGHT);
+    thread.timer.set_frame_clocked(true);
+    (thread, parent, fire)
+}
+
+/// A BPM edit through the editing service, as the tempo field sends it.
+fn change_bpm(thread: &mut crate::content_thread::ContentThread, bpm: f32) {
+    let command = manifold_editing::commands::settings::ChangeBpmCommand::master(thread.engine.project().expect("project installed"), Bpm(bpm));
+    thread.handle_command(crate::content_command::ContentCommand::Execute(Box::new(command)));
+}
+
+/// A Fire waiting for its scene's first render, the first frame after Play,
+/// across a BPM-up edit lands once, and the world neither fails nor reseeds:
+/// that frame lands past Play's target, and the replay opens there next.
+#[test]
+fn a_waiting_fire_across_a_bpm_up_edit_lands_once_without_reseeding() {
+    use crate::content_command::ContentCommand;
+    let (mut thread, parent, fire) = long_scene_thread();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.handle_command(ContentCommand::SeekTo(Seconds(2.0)));
+    thread.handle_command(ContentCommand::Play);
+    // The scene has not rendered yet, so the hit waits for it.
+    thread.handle_command(ContentCommand::FireParameter {
+        target: GraphTarget::Generator(parent.clone()),
+        param_id: manifold_core::effects::ParamId::from(fire),
+    });
+    change_bpm(&mut thread, 300.0);
+    thread.tick_frame(&state_tx);
+    let first = world_epoch(&mut thread.engine, &parent).expect("the world renders");
+    for _ in 0..6 {
+        thread.tick_frame(&state_tx);
+        assert_world_holds(&mut thread, &parent, first);
+    }
+    let diagnostics = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
+}
+
+/// Lane pulses fired while the BPM is dragged down and back up, one edit a
+/// frame, each land once and never reseed the world.
+#[test]
+fn lane_pulses_across_a_bpm_drag_land_once_without_reseeding() {
+    use crate::content_command::ContentCommand;
+    let (mut thread, parent, _) = long_scene_thread();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.handle_command(ContentCommand::Play);
+    thread.tick_frame(&state_tx);
+    let first = world_epoch(&mut thread.engine, &parent).expect("the world renders");
+    // The lanes fire at beats 0.4 to 1.2: the drag spans them.
+    for frame in 1..40 {
+        let bpm = if frame < 20 { 240.0 - 6.0 * frame as f32 } else { 126.0 + 8.0 * (frame - 20) as f32 };
+        change_bpm(&mut thread, bpm);
+        thread.tick_frame(&state_tx);
+        assert_world_holds(&mut thread, &parent, first);
+    }
+    let diagnostics = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (5, 0, 0), "{diagnostics:?}");
+}
+
+/// A Fire waiting behind an opaque layer across a BPM-up edit lands once,
+/// never ahead of the frame it waited for, and never reseeds the world: the
+/// edit moves the transport back, but not the time the hit was fired at.
+#[test]
+fn a_fire_waiting_for_an_occluded_scene_across_a_bpm_up_edit_never_lands_ahead() {
+    use crate::content_command::ContentCommand;
+    let (mut project, parent, lane_a, lane_b, fire, _) = project_fixture();
+    project.timeline.layers.retain(|layer| layer.layer_id != lane_a && layer.layer_id != lane_b);
+    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    scene.clips[0].duration_beats = Beats(4_800.0);
+    // The scene sits under an opaque cover for its first two beats.
+    let mut cover = Layer::new_generator("Cover".into(), PresetTypeId::new("Scene"), 0);
+    let params = cover.gen_params_mut().expect("generator params");
+    params.graph = Some(scene_fixture());
+    params.refresh_manifest_from_graph();
+    cover.default_blend_mode = manifold_core::types::BlendMode::Opaque;
+    cover.clips.push(manifold_core::clip::TimelineClip::new_generator(Beats::ZERO, Beats(2.0)));
+    project.timeline.layers.insert(0, cover);
+    for (index, layer) in project.timeline.layers.iter_mut().enumerate() {
+        layer.index = index as i32;
+    }
+    let mut thread = crate::headless_harness::headless_content_thread(project, WIDTH, HEIGHT);
+    thread.timer.set_frame_clocked(true);
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.handle_command(ContentCommand::Play);
+    while thread.engine.current_beat_f64() < 1.8 {
+        thread.tick_frame(&state_tx);
+    }
+    assert!(world_epoch(&mut thread.engine, &parent).is_none(), "the covered scene has not rendered");
+    thread.handle_command(ContentCommand::FireParameter {
+        target: GraphTarget::Generator(parent.clone()),
+        param_id: manifold_core::effects::ParamId::from(fire),
+    });
+    change_bpm(&mut thread, 300.0);
+    let mut first = None;
+    for _ in 0..6 {
+        thread.tick_frame(&state_tx);
+        first = world_epoch(&mut thread.engine, &parent);
+        if first.is_some() {
+            break;
+        }
+    }
+    let first = first.expect("the scene renders once the cover ends");
+    for _ in 0..6 {
+        thread.tick_frame(&state_tx);
+        assert_world_holds(&mut thread, &parent, first);
+    }
+    let diagnostics = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
+}

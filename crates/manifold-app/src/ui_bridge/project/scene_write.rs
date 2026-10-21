@@ -178,3 +178,110 @@ fn scene_param_write(
     );
     Some(cmd)
 }
+
+/// "Aim Sun at HDRI": move the first Sun light so it shines from the HDRI's
+/// brightest region, keeping its target and its distance from it. The three
+/// position writes are one undo step. Reads the file's decoded bytes once, on
+/// the click, and writes nothing per frame.
+pub(crate) fn aim_sun_at_hdri(
+    project: &Project,
+    layer_id: &LayerId,
+    hdri_file: &str,
+) -> Result<Box<dyn manifold_editing::command::Command + Send>, String> {
+    let default = generator_catalog_default(project, layer_id).ok_or("There is no scene to aim")?;
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let inst = project.graph_target_owner(&target);
+    let def = inst.and_then(|instance| instance.graph.as_ref()).unwrap_or(&default);
+    let read = |sun: u32, param: &str| scene_param_value(def, inst, &[], sun, param);
+    let sun = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.light" && read(node.id, "mode") < 0.5)
+        .map(|node| node.id)
+        .ok_or("This scene has no Sun light to aim")?;
+    let toward = manifold_nodes_scene::node_graph::hdri_sun::hdri_sun_direction(std::path::Path::new(hdri_file))
+        .map_err(|reason| format!("Could not aim the Sun: {reason}"))?;
+
+    let aim = ["aim_x", "aim_y", "aim_z"].map(|param| read(sun, param));
+    let pos = ["pos_x", "pos_y", "pos_z"].map(|param| read(sun, param));
+    let apart = (0..3).map(|k| (pos[k] - aim[k]).powi(2)).sum::<f32>().sqrt();
+    let distance = if apart > 1e-3 { apart } else { 5.0 };
+    let writes: Vec<Box<dyn manifold_editing::command::Command>> = ["pos_x", "pos_y", "pos_z"]
+        .into_iter()
+        .enumerate()
+        .filter_map(|(k, param)| {
+            scene_param_write(project, layer_id, Vec::new(), sun, param, aim[k] + toward[k] * distance)
+        })
+        .map(|cmd| cmd as Box<dyn manifold_editing::command::Command>)
+        .collect();
+    if writes.is_empty() {
+        return Err("The Sun already points at the brightest part of the HDRI".to_string());
+    }
+    Ok(Box::new(manifold_editing::command::CompositeCommand::new(writes, "Aim Sun at HDRI".into())))
+}
+
+#[cfg(test)]
+mod aim_sun_tests {
+    use super::*;
+    use manifold_core::PresetTypeId;
+    use manifold_core::types::LayerType;
+
+    fn scene_project() -> (Project, LayerId) {
+        let mut project = Project::default();
+        let preset = PresetTypeId::from_string("Scene".to_string());
+        let idx = project.timeline.add_layer("Scene", LayerType::Generator, preset);
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        (project, layer_id)
+    }
+
+    fn sun_vectors(project: &Project, layer_id: &LayerId) -> ([f32; 3], [f32; 3]) {
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let inst = project.graph_target_owner(&target);
+        let default = generator_catalog_default(project, layer_id).unwrap();
+        let def = inst.and_then(|instance| instance.graph.as_ref()).unwrap_or(&default);
+        let sun = def
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.light" && scene_param_value(def, inst, &[], node.id, "mode") < 0.5)
+            .expect("the Scene preset has a Sun")
+            .id;
+        let read = |params: [&str; 3]| params.map(|param| scene_param_value(def, inst, &[], sun, param));
+        (read(["pos_x", "pos_y", "pos_z"]), read(["aim_x", "aim_y", "aim_z"]))
+    }
+
+    fn hdri_fixture() -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/hdri/hdri_float32.exr")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// The Sun ends up on the HDRI's bright side of its target at the same
+    /// distance, and one undo puts it back.
+    #[test]
+    fn aiming_moves_the_sun_toward_the_hdri_peak_and_undoes_in_one_step() {
+        let (mut project, layer_id) = scene_project();
+        let (pos_before, aim) = sun_vectors(&project, &layer_id);
+        let toward = manifold_nodes_scene::node_graph::hdri_sun::hdri_sun_direction(std::path::Path::new(&hdri_fixture()))
+            .expect("the fixture has a bright region");
+        let distance = (0..3).map(|k| (pos_before[k] - aim[k]).powi(2)).sum::<f32>().sqrt();
+
+        let mut command = aim_sun_at_hdri(&project, &layer_id, &hdri_fixture()).expect("aim");
+        command.execute(&mut project);
+        let (pos_after, aim_after) = sun_vectors(&project, &layer_id);
+        assert_eq!(aim_after, aim, "the target stays");
+        for k in 0..3 {
+            let want = aim[k] + toward[k] * distance;
+            assert!((pos_after[k] - want).abs() < 1e-3, "axis {k}: {} vs {want}", pos_after[k]);
+        }
+        command.undo(&mut project);
+        assert_eq!(sun_vectors(&project, &layer_id).0, pos_before);
+    }
+
+    #[test]
+    fn aiming_at_a_missing_file_says_why() {
+        let (project, layer_id) = scene_project();
+        let Err(reason) = aim_sun_at_hdri(&project, &layer_id, "/nonexistent/sky.exr") else { panic!("a missing file is refused") };
+        assert!(reason.starts_with("Could not aim the Sun"), "{reason}");
+    }
+}

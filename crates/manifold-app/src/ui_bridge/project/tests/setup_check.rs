@@ -34,9 +34,11 @@ impl Rig {
         let def = effective_def(&project, &layer);
         let water = rows(&def).into_iter().filter(|row| row.is_group && row.liquid_domain.is_some()).last().expect("the added water");
         let family = def.nodes.iter().find(|node| Some(node.id) == water.group_node_id).and_then(|node| node.group.as_deref()).unwrap();
+        // The column's transform sits inside the water's Initial Fill group.
         let column = family
             .nodes
             .iter()
+            .flat_map(|node| std::iter::once(node).chain(node.group.iter().flat_map(|body| body.nodes.iter())))
             .find(|node| node.node_id.as_str().starts_with("initial_column"))
             .expect("the water's initial column")
             .node_id
@@ -117,7 +119,7 @@ impl Rig {
 
     /// The solver's report for this water's domain.
     fn report(&self, fit: SetupFit) -> SetupFitReport {
-        Arc::from([SetupFitEntry { layer: self.layer.clone(), node: self.domain.clone(), fit, refusal: None }])
+        Arc::from([SetupFitEntry { layer: self.layer.clone(), node: self.domain.clone(), fit, refusal: None, copies_not_made: 0, uncoupled_bodies: 0 }])
     }
 }
 
@@ -281,6 +283,7 @@ fn a_swept_driven_fill_syncs_the_inspector_once_until_an_edit() {
         fit,
         column_box: None,
         refusal: None,
+        uncoupled_bodies: 0,
     };
     let mut observations = crate::setup_check::SetupFitObservations::default();
     let mut check = CardCheck::default();
@@ -292,7 +295,7 @@ fn a_swept_driven_fill_syncs_the_inspector_once_until_an_edit() {
             let capped = (frame * 8 / 60) % 2 == 1;
             let fit = if capped { CAPPED_FIT } else { SetupFit::default() };
             let domains = [(rig.domain.clone(), snapshot(fit))];
-            observations.record(Some(&rig.project), rig.parts, |_, each| each(&rig.layer, &domains));
+            observations.record(Some(&rig.project), rig.parts, |_, _, each| each(&rig.layer, &domains, &[]));
             let next = FrameInputs { setup_check: check.input(&rig.project, rig.parts, [Some(&rig.layer), None], &observations.report), ..Default::default() };
             *syncs += usize::from(plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
             last = next;
@@ -330,6 +333,7 @@ fn automation_never_releases_the_latch_and_an_edit_or_undo_does() {
         fit,
         column_box: None,
         refusal: None,
+        uncoupled_bodies: 0,
     };
     let mut observations = crate::setup_check::SetupFitObservations::default();
     let mut check = CardCheck::default();
@@ -342,7 +346,7 @@ fn automation_never_releases_the_latch_and_an_edit_or_undo_does() {
             rig.project.timeline.layers[index].gen_params_mut().unwrap().set_base_param_from_automation(&unrelated, value);
             let fit = if capped { CAPPED_FIT } else { SetupFit::default() };
             let domains = [(rig.domain.clone(), snapshot(fit))];
-            observations.record(Some(&rig.project), editing.stamps(), |_, each| each(&rig.layer, &domains));
+            observations.record(Some(&rig.project), editing.stamps(), |_, _, each| each(&rig.layer, &domains, &[]));
             let next = FrameInputs { setup_check: check.input(&rig.project, editing.stamps(), [Some(&rig.layer), None], &observations.report), ..Default::default() };
             *syncs += usize::from(plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
             last = next;
@@ -386,6 +390,7 @@ fn a_steady_gizmo_frame_rebuilds_nothing() {
         fit,
         column_box,
         refusal: None,
+        uncoupled_bodies: 0,
     };
     let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped, pool_full: false };
     let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
@@ -422,11 +427,12 @@ fn the_fit_report_is_reallocated_only_on_change() {
         fit,
         column_box: None,
         refusal: None,
+        uncoupled_bodies: 0,
     };
     let (water, other, calm) = (NodeId::new("water"), NodeId::new("other"), NodeId::new("calm"));
     let mut observations = crate::setup_check::SetupFitObservations::default();
     let mut record = |rig: &Rig, domains: &[(NodeId, FluidDomainSnapshot)]| {
-        observations.record(Some(&rig.project), rig.parts, |_, each| each(&rig.layer, domains));
+        observations.record(Some(&rig.project), rig.parts, |_, _, each| each(&rig.layer, domains, &[]));
         observations.report.clone()
     };
     let capped = |node: &NodeId| (node.clone(), snapshot(CAPPED_FIT));
@@ -445,6 +451,80 @@ fn the_fit_report_is_reallocated_only_on_change() {
     rig.set(&domain, "fill_height", 0.3);
     let released = record(&rig, &[(water, snapshot(SetupFit::default()))]);
     assert!(released.is_empty(), "an edit releases the latch");
+}
+
+/// A world whose copy pool ran out reaches the report with its count, holds
+/// its largest shortfall while latched, and an authored edit releases it.
+#[test]
+fn a_copy_shortfall_reaches_the_report_and_latches() {
+    let mut rig = Rig::new();
+    let world = NodeId::new("world");
+    let mut observations = crate::setup_check::SetupFitObservations::default();
+    let mut record = |rig: &Rig, not_made: &[(NodeId, u32)]| {
+        observations.record(Some(&rig.project), rig.parts, |_, _, each| each(&rig.layer, &[], not_made));
+        observations.report.clone()
+    };
+    assert!(record(&rig, &[]).is_empty());
+    let short = record(&rig, &[(world.clone(), 10)]);
+    let entry = short.iter().find(|entry| entry.node == world).expect("the shortfall is reported");
+    assert_eq!((entry.copies_not_made, entry.fit, entry.refusal.is_none()), (10, SetupFit::default(), true));
+    assert!(Arc::ptr_eq(&short, &record(&rig, &[(world.clone(), 4)])), "a smaller shortfall keeps the latched count");
+    assert!(Arc::ptr_eq(&short, &record(&rig, &[])), "the latch holds when the pool fits again");
+    assert_eq!(record(&rig, &[(world.clone(), 25)])[0].copies_not_made, 25, "a larger shortfall raises it");
+    let domain = rig.domain.clone();
+    rig.set(&domain, "fill_height", 0.3);
+    assert!(record(&rig, &[]).is_empty(), "an edit releases the latch");
+}
+
+/// A coupled world with more bodies than the water holds warns on the water
+/// with the count, through the same report as its fill and column.
+#[test]
+fn bodies_the_water_cannot_take_warn_on_the_water() {
+    use manifold_core::fluid_domain::FluidDomainState;
+    let rig = Rig::new();
+    let snapshot = FluidDomainSnapshot {
+        epoch: 1,
+        state: FluidDomainState::Ready,
+        accepted_layout: None,
+        fit: SetupFit::default(),
+        column_box: None,
+        refusal: None,
+        uncoupled_bodies: 7,
+    };
+    let domains = [(rig.domain.clone(), snapshot)];
+    let mut observations = crate::setup_check::SetupFitObservations::default();
+    observations.record(Some(&rig.project), rig.parts, |_, _, each| each(&rig.layer, &domains, &[]));
+    assert_eq!(observations.report.iter().map(|entry| entry.uncoupled_bodies).collect::<Vec<_>>(), [7]);
+    assert_eq!(rig.problems_with(&observations.report), vec![SetupProblemKind::BodiesNotCoupled(7)]);
+}
+
+/// Physics Boxes has no water, yet a world short of copies warns on the Box
+/// Count row of its card.
+#[test]
+fn copies_not_made_warn_on_the_count_row_of_a_scene_with_no_water() {
+    let def: manifold_core::effect_graph_def::EffectGraphDef =
+        serde_json::from_str(include_str!("../../../../../manifold-nodes/assets/generator-presets/PhysicsBoxes.json")).unwrap();
+    let mut layer = manifold_core::layer::Layer::new_generator("Boxes".into(), PresetTypeId::new("PhysicsBoxes"), 0);
+    let fx = layer.gen_params_mut().unwrap();
+    fx.graph = Some(def.clone());
+    fx.refresh_manifest_from_graph();
+    let inst = layer.gen_params().unwrap();
+    let entry = SetupFitEntry {
+        layer: layer.layer_id.clone(),
+        node: NodeId::new("physics_demo_40"),
+        fit: SetupFit::default(),
+        refusal: None,
+        copies_not_made: 96,
+        uncoupled_bodies: 0,
+    };
+    let report = [entry];
+    let problems = crate::setup_check::problems_of(&def, inst, crate::setup_check::runtime_fits(&report, &layer.layer_id));
+    assert_eq!(problems.iter().map(|problem| problem.kind.clone()).collect::<Vec<_>>(), [SetupProblemKind::CopiesNotMade(96)]);
+
+    let mut surface = gen_params_to_surface(inst, layer.layer_id.as_str(), None, &[], SurfaceVisibility::All, (manifold_core::Bpm(120.0), 4.0));
+    crate::setup_check::mark_rows(&mut surface.rows, &problems, &def);
+    let warning = surface.rows.iter().find(|row| row.id.as_ref() == "40_copy_count").and_then(|row| row.spec.setup_warning.clone());
+    assert_eq!(warning.as_deref(), Some("96 copies not made; the world's copy pool is full"));
 }
 
 impl Rig {

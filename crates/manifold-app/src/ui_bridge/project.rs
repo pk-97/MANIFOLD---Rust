@@ -13,7 +13,7 @@ use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
 mod scene_write;
-pub(crate) use scene_write::{apply_scene_param_write, find_node_by_scope, is_water_object, scene_binding_id, scene_param_value};
+pub(crate) use scene_write::{aim_sun_at_hdri, apply_scene_param_write, find_node_by_scope, is_water_object, scene_binding_id, scene_param_value};
 
 /// The Add menu's insert action for `kind` into the scene `render`.
 #[cfg(test)]
@@ -374,6 +374,13 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
+        ProjectAction::SceneSetupAimSunAtHdri(layer_id, hdri_file) => {
+            match aim_sun_at_hdri(project, layer_id, hdri_file) {
+                Ok(cmd) => ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd)),
+                Err(reason) => ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason)),
+            }
+            DispatchResult::handled()
+        }
         ProjectAction::SceneSetupAddFog(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -596,6 +603,7 @@ pub(super) fn dispatch_project(
                     Kind::Light => templates::light_template((-260.0, 50.0 + 40.0 * lights as f32)),
                     Kind::Water => manifold_nodes_water::presets::gpu_flip::gpu_flip_family_template(),
                     Kind::Swarm => templates::swarm_template(objects, (900.0, 200.0 + 40.0 * objects as f32))?,
+                    Kind::InitialFill => source(templates::RoleSourceKind::InitialFill)?,
                     Kind::Inflow => source(templates::RoleSourceKind::Inflow)?,
                     Kind::Drain => source(templates::RoleSourceKind::Drain)?,
                     Kind::Collider => source(templates::RoleSourceKind::Collider)?,
@@ -616,7 +624,7 @@ pub(super) fn dispatch_project(
                     // A new source is selected so its gizmo shows at once.
                     let select = match kind {
                         Kind::Light => crate::edit_selection::SelectAfterEdit::NewLight(layer_id.clone()),
-                        Kind::Inflow | Kind::Drain | Kind::Collider => {
+                        Kind::InitialFill | Kind::Inflow | Kind::Drain | Kind::Collider => {
                             crate::edit_selection::SelectAfterEdit::NewSource(layer_id.clone())
                         }
                         _ => crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
@@ -1940,7 +1948,12 @@ mod tests {
             Some(&added), &row.control_nodes(),
         );
         assert!(sections.iter().any(|section| section.contains("Simulation")));
-        assert!(sections.iter().any(|section| section.contains("Initial Volume")));
+        // The starting water is its own Initial Fill row under the water.
+        let fill = row.placed_sources.iter()
+            .find(|source| source.role == manifold_foundation::scene_surface::SourceRole::InitialFill)
+            .expect("the water has an Initial Fill");
+        let fill_sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(&added), &fill.owned);
+        assert!(fill_sections.iter().any(|section| section.contains("Initial Fill")), "{fill_sections:?}");
         assert!(row.transform.is_none(), "fluid has no disconnected render-only transform");
 
         let saved = serde_json::to_string(&project).unwrap();
@@ -2004,7 +2017,7 @@ mod tests {
             let after = migrated.preset_metadata.as_ref().unwrap().params.iter().find(|spec| &spec.id == id).unwrap();
             assert_eq!(before, after, "reload must preserve shared World control metadata");
         }
-        for (param, expected_label) in [("fill_height", "Simulation"), ("scale_y", "Initial Volume")] {
+        for (param, expected_label) in [("fill_height", "Simulation"), ("scale_y", "Initial Fill")] {
             let binding = metadata.bindings.iter().find(|binding| matches!(
                 &binding.target,
                 manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
@@ -2014,7 +2027,8 @@ mod tests {
             let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
             let section = spec.section.as_ref().unwrap();
             assert!(section.contains(expected_label));
-            assert!(reloaded_sections.contains(section), "source control appears in fluid inspector");
+            let inspector = if expected_label == "Initial Fill" { &fill_sections } else { &reloaded_sections };
+            assert!(inspector.contains(section), "source control appears in its own inspector");
         }
         command.undo(&mut project);
         assert_eq!(effective_def(&project, &layer_id), original);

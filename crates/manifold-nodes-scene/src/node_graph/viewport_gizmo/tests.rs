@@ -6,7 +6,7 @@ use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 
 use super::*;
-use crate::node_graph::scene_surface::scene_shape;
+use crate::node_graph::scene_surface::{fluid_role_shape, scene_shape};
 use crate::node_graph::scene_vm::{ParamAddr, SceneHeaderVm, SceneObjectVm, ShapeWrite, TransformVm, object_shapes};
 
 fn cam_looking_down_neg_z(pos: [f32; 3]) -> Camera {
@@ -233,12 +233,14 @@ fn unwired_transform_target_is_unplaced_at_the_origin() {
 #[test]
 fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    assert_eq!(decls.len(), 1, "the domain declares its box alone; the column is an Initial Fill");
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
     let domain = node_shape(owner.clone(), 0, &decls[0], &[("pos_y", 2.0), ("pos_z", -6.0), ("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
-    let column = node_shape(owner.clone(), 1, &decls[1], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
+    let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
+    let column = node_shape(fill.clone(), 0, &fluid_role_shape(0)[0], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
     let scene = scene_of(Vec::new(), vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
-    assert_eq!(targets.len(), 2, "a domain's box and column are two targets");
+    assert_eq!(targets.len(), 2, "a domain's box and its Initial Fill are two targets");
     let box_target = &targets[0];
     assert_eq!(box_target.kind, GizmoTargetKind::FluidDomain);
     assert_eq!(box_target.origin, [0.0, 2.0, -6.0]);
@@ -257,7 +259,9 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
         panic!("one value")
     };
     assert_eq!(column, MIN_EXTENT, "an undeclared box stops only at the smallest extent");
-    assert_eq!(targets[1].id, GizmoTargetId { owner, shape: 1 });
+    assert_eq!(targets[1].id, GizmoTargetId { owner: fill, shape: 0 });
+    assert_eq!(targets[1].kind, GizmoTargetKind::InitialFill);
+    assert!(!targets[1].supports_mode(GizmoMode::Rotate), "the liquids fill an axis-aligned box");
     assert_eq!(targets[1].origin, [-1.0, 0.0, -6.0]);
 }
 
@@ -265,6 +269,7 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
 fn role_source_targets_derive_their_kind_from_the_role() {
     let decl = &scene_shape("node.fluid_role_source")[0];
     for (role, kind) in [
+        (FluidRole::InitialFill, GizmoTargetKind::InitialFill),
         (FluidRole::Inflow, GizmoTargetKind::Inflow),
         (FluidRole::Outflow, GizmoTargetKind::Drain),
         (FluidRole::Collider, GizmoTargetKind::Collider),
@@ -409,7 +414,7 @@ fn composition_draws_what_physics_did_faintly_then_the_selected_handles() {
     use manifold_core::fluid_domain::FluidDomainLayout;
     use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
     let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
-    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None };
+    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None, uncoupled_bodies: 0 };
     let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready.clone() };
     let domains = [(NodeId::new("a"), ready), (NodeId::new("b"), pending)];
     let physics = [
@@ -807,7 +812,7 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
     let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let scene = scene_of(Vec::new(), vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
-    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None })];
+    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None, uncoupled_bodies: 0 })];
     let selection = GizmoSelection::new(&scene, selected.then(|| target.clone()).into_iter().collect());
     let chrome = GizmoChrome {
         view,
@@ -963,8 +968,9 @@ fn edge_px(target: &GizmoTarget) -> (f32, f32) {
 fn domain_and_column() -> (SceneVm, GizmoTarget, GizmoTarget) {
     let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let domain = node_shape(owner.clone(), 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
-    let column = node_shape(owner, 1, &decls[1], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let domain = node_shape(owner, 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
+    let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
+    let column = node_shape(fill, 0, &fluid_role_shape(0)[0], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
     let scene = scene_of(Vec::new(), vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
     (scene, targets[0].clone(), targets[1].clone())

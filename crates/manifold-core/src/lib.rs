@@ -35,6 +35,7 @@ pub mod clip;
 pub mod color;
 pub mod control_history;
 pub mod copies_body;
+pub mod initial_fill;
 pub mod effect_graph_def;
 pub mod effect_registration;
 pub mod effects;
@@ -135,7 +136,7 @@ pub use stage::{
     StageLayout, derive_stage,
 };
 pub use types::*;
-pub use units::{Beats, Bpm, Seconds};
+pub use units::{Beats, Bpm, PlayedTime, Seconds};
 pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgress, WarmupRun};
 
 // Foundation modules manifold-app reaches through `manifold_core`; the

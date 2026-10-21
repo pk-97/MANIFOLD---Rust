@@ -574,6 +574,11 @@ pub fn evaluate_automation_previews(
             let value = param.driven_value(raw);
             let changed = param.base != value || param.value != value;
             fx.set_base_param_from_automation(param_id.as_ref(), value);
+            // The draft, not the arrangement lane, drives the param now:
+            // physics holds the value written here instead of reading the lane.
+            if let Some(param) = fx.params.get_mut(param_id.as_ref()) {
+                param.automated = false;
+            }
             changed
         }) else {
             continue;
@@ -649,6 +654,7 @@ fn evaluate_instance_automation_inspection(
             let param_id = lane.param_id.clone();
             if let Some(param) = fx.params.get_mut(param_id.as_ref()) {
                 param.touched = false;
+                param.automated = false;
             }
             latches.insert((fx_id.clone(), param_id), ());
             continue;
@@ -656,6 +662,9 @@ fn evaluate_instance_automation_inspection(
         if !export && (contains_automation_key(latches, fx_id, &lane.param_id)
             || contains_automation_key(gestures, fx_id, &lane.param_id))
         {
+            if let Some(param) = fx.params.get_mut(lane.param_id.as_ref()) {
+                param.automated = false;
+            }
             continue;
         }
 
@@ -667,6 +676,7 @@ fn evaluate_instance_automation_inspection(
         any_wrote |= param.base != value || param.value != value;
         param.base = value;
         param.value = value;
+        param.automated = true;
     }
 
     any_wrote
@@ -783,6 +793,13 @@ fn evaluate_instance_automation(
         }
         latches.insert((fx_id.clone(), param_id), ());
     }
+    // Only a lane that writes this pass marks its param automated; a latch,
+    // a take or a held hand leaves the frame's value authoritative.
+    for lane in fx.automation_lanes.iter().flatten() {
+        if let Some(p) = fx.params.get_mut(lane.param_id.as_ref()) {
+            p.automated = false;
+        }
+    }
     let mut any_wrote = false;
     for (param_id, value) in to_write {
         let changed = fx
@@ -790,6 +807,9 @@ fn evaluate_instance_automation(
             .get(param_id.as_ref())
             .is_some_and(|p| p.base != value || p.value != value);
         fx.set_base_param_from_automation(param_id.as_ref(), value);
+        if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
+            p.automated = true;
+        }
         any_wrote |= changed;
     }
     for (param_id, applied_base) in to_record {
@@ -1303,6 +1323,30 @@ mod tests {
         assert!(wrote);
         let gp = project.timeline.layers[0].gen_params().unwrap();
         assert!((gp.params.get("amount").unwrap().base - 0.8).abs() < 1e-6);
+    }
+
+    /// A draft lane being dragged writes the param, so physics must hold that
+    /// value rather than read the arrangement lane underneath it.
+    #[test]
+    fn preview_leaves_the_param_unautomated() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+        eval_unarmed(&mut project, Beats(2.0), &mut latches);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert!(fx.params.get("amount").unwrap().automated, "the arrangement lane drives the param");
+        let mut draft = amount_lane();
+        draft.points[1].value = 0.2;
+        let mut previews = AutomationLanePreviews::default();
+        previews.insert(
+            (manifold_core::GraphTarget::Effect(fx.id.clone()), "amount".into()),
+            AutomationLanePreview { lane: draft, original_base: 0.5 },
+        );
+        assert!(evaluate_automation_previews(&mut project, Beats(2.0), &mut previews, &latches, &AutomationGestures::default()));
+        let amount = project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap();
+        assert_eq!(amount.base, 0.2);
+        assert!(!amount.automated, "a previewed param is held, not read from the arrangement lane");
     }
 
     // ─────────────────────────────────────────────────────────────

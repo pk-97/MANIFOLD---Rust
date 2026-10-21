@@ -197,6 +197,12 @@ use manifold_node_engine::freeze::classify::FusionKind;
         //     returns `Some(max_edges)` verbatim as the allocated `edges`
         //     array capacity — sizes a real allocation.
         //
+        // node.physics_world (physics_world.rs) - hand-`impl EffectNode`,
+        // `param_contract` override:
+        //   - bodies, copy_groups: physics_world.rs `reconfigure` clamps both
+        //     through `count_param` to [1, MAX_BODIES] and [0, MAX_COPY_GROUPS]
+        //     before `rebuild` sizes the live body and copy-group port families.
+        //
         // section 2 VERIFY reads performed, all REJECTED (evidence in the P2
         // session report, not repeated here — no contract added):
         //   - connect_nearest.max_distance: only ever squared into a
@@ -231,6 +237,16 @@ use manifold_node_engine::freeze::classify::FusionKind;
             (
                 "node.connect_nearest",
                 "max_edges",
+                manifold_core::effects::RangeReason::Count,
+            ),
+            (
+                "node.physics_world",
+                "bodies",
+                manifold_core::effects::RangeReason::Count,
+            ),
+            (
+                "node.physics_world",
+                "copy_groups",
                 manifold_core::effects::RangeReason::Count,
             ),
         ];

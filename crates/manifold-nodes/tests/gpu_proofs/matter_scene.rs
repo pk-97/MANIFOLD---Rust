@@ -236,7 +236,13 @@ impl MatterScene {
             ] {
                 graph.set_param(t, name, ParamValue::Float(value)).expect(name);
             }
-            wire(&mut graph, (t, "transform"), (domain, "initial_volume"));
+            let fill = add(&mut graph, "node.fluid_role_source");
+            graph.set_param(fill, "role", ParamValue::Enum(0)).expect("role");
+            graph.set_param(fill, "shape", ParamValue::Enum(1)).expect("shape");
+            graph.set_param(fill, "radius", ParamValue::Float(manifold_core::initial_fill::UNIT_CUBE_RADIUS)).expect("radius");
+            wire(&mut graph, (t, "transform"), (fill, "transform"));
+            // The last role, past the colliders.
+            wire(&mut graph, (fill, "role"), (domain, "role_63"));
         }
 
         let plan = compile(&graph).expect("matter scene compiles");

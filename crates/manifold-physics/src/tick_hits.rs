@@ -86,7 +86,7 @@ impl<P> TickHits<P> {
 
     /// Begin this frame's ticks, right after the clock advanced to `frame`. A
     /// restart opens a new epoch and cancels every unread event of the old one.
-    pub fn observe_frame(&mut self, transport: f64, frame: &ClockFrame) -> Result<(), String> {
+    pub fn observe_frame(&mut self, played: crate::PlayedTime, frame: &ClockFrame) -> Result<(), String> {
         let label = self.label;
         if frame.restarted {
             self.epoch += 1;
@@ -111,7 +111,7 @@ impl<P> TickHits<P> {
         }
         self.abandon_frame();
         self.held = frame.held;
-        self.transport = Some(transport);
+        self.transport = Some(played.seconds());
         self.simulation_time = frame.simulation_time;
         self.impulse_tick = None;
         if let Some(error) = &self.failure {
@@ -164,14 +164,14 @@ impl<P> TickHits<P> {
     /// has no tick yet whatever its transport, so it lands on the next
     /// frame's first tick. A hit older than that frame is late, never
     /// skipped: triggers are the performance.
-    pub fn stamp(&self, transport: f64, sequence: u64) -> Result<EventStamp, String> {
+    pub fn stamp(&self, played: crate::PlayedTime, sequence: u64) -> Result<EventStamp, String> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
         if self.queue.is_none() || self.transport.is_none() {
             return Err(format!("{}: the clock has not started", self.label));
         }
-        if !transport.is_finite() {
+        if !played.is_finite() {
             return Err(format!("{}: the hit time is not finite", self.label));
         }
         Ok(EventStamp { epoch: self.epoch, time: Seconds(self.simulation_time), sequence })

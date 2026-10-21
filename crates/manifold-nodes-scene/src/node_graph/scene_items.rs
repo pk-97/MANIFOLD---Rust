@@ -244,7 +244,7 @@ mod tests {
                 {"fromNode": 1, "fromPort": "out", "toNode": 30, "toPort": "camera"},
                 {"fromNode": 4, "fromPort": "out", "toNode": 30, "toPort": "light_0"},
                 {"fromNode": 120, "fromPort": "transform", "toNode": 121, "toPort": "transform"},
-                {"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies"},
+                {"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies_0"},
                 {"fromNode": 30, "fromPort": "color", "toNode": 31, "toPort": "in"}
             ],
             "presetMetadata": {

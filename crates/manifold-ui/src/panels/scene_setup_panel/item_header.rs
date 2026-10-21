@@ -45,6 +45,7 @@ pub(super) fn kind_label(kind: SceneItemKind) -> &'static str {
         SceneItemKind::Force => "Force",
         SceneItemKind::Physics => "Physics",
         SceneItemKind::World => "World",
+        SceneItemKind::Source(SourceRole::InitialFill) => "Initial Fill",
         SceneItemKind::Source(SourceRole::Inflow) => "Inflow",
         SceneItemKind::Source(SourceRole::Drain) => "Drain",
         SceneItemKind::Source(SourceRole::Collider) => "Collider",

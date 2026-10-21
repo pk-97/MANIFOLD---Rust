@@ -1123,6 +1123,13 @@ mod ownership_tests {
                 .unwrap_or_else(|e| panic!("{fixture}: {e}"));
             let camera = assert_one_owner(fixture, &def);
             assert!(!camera.is_empty(), "{fixture}: the camera owns its dials");
+            let owned: std::collections::BTreeSet<String> = scene_items(&def)
+                .iter()
+                .flat_map(|(_, nodes, _)| parameter_ids_for_nodes(Some(&def), nodes))
+                .collect();
+            for id in ["bg_enabled", "bg_blur", "bg_brightness"] {
+                assert!(owned.contains(id), "{fixture}: the world owns the Background control {id}");
+            }
         }
     }
 

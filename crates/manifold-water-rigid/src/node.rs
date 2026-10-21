@@ -19,10 +19,27 @@ pub trait PhysicsNode: Send {
     /// the gizmo overlay. Read-only; the caller reuses the buffer.
     fn write_physics_gizmos(&self, _out: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {}
 
+    /// Copies the world's pool could not make on its last evaluation, so a
+    /// shortfall always reaches the card.
+    fn copies_not_made(&self) -> u32 {
+        0
+    }
+
     /// Resolved rigid inputs from the latest successful graph evaluation.
     /// Pending or invalid inputs must clear the previous observation.
     fn rigid_scene_observation(&self) -> Option<&crate::physics::RigidSceneObservation> {
         None
+    }
+
+    /// Transport times in `(from, until]` the physics history replay must
+    /// sample exactly before the next frame. A world that records its authored
+    /// inputs only at times no frame rate moves asks for them here.
+    fn request_physics_samples(
+        &mut self,
+        _from: manifold_core::PlayedTime,
+        _until: manifold_core::PlayedTime,
+        _out: &mut Vec<manifold_core::PlayedTime>,
+    ) {
     }
 
     /// Configure ownership during graph preparation, before any evaluation.
@@ -80,11 +97,11 @@ pub trait PhysicsNode: Send {
     }
 
     /// Timestamp an impulse against the exact native observation accepted at
-    /// the supplied transport value, if this node owns such a clock. `step`
-    /// is the frame's step, so the stamp never depends on node order.
+    /// the supplied played time, if this node owns such a clock. `step` is
+    /// the frame's step, so the stamp never depends on node order.
     fn physics_impulse_stamp(
         &self,
-        _transport: manifold_core::Seconds,
+        _played: manifold_core::PlayedTime,
         _sequence: u64,
         _step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {

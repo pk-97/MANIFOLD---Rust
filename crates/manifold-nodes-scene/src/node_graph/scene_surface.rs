@@ -101,9 +101,15 @@ impl SceneParamFacts {
 /// `node.light`'s `mode` values (`LIGHT_MODES`): Sun 0, Point 1, Spot 2.
 const POINT_AND_SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b110));
 const SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b100));
-/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1.
-const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b01));
-const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b10));
+/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1, HDRI 2.
+const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b001));
+const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b010));
+/// The Background switch's values: off 0, on 1.
+const BACKGROUND_ON: Gate = Gate::Only(Feature::Background, Modes(0b10));
+
+/// `node.fluid_role_source`'s roles past Initial Fill (0): an Initial Fill
+/// is the water at rest in its box, so it reads no motion.
+const MOVES_WATER: Gate = Gate::Only(Feature::SourceRole, Modes(0b1110));
 
 const AT_LEAST_ZERO: HardLimit = HardLimit::AtLeast(0.0);
 /// Field of view, 1° to 179°, in radians.
@@ -176,12 +182,19 @@ const DOMAIN_BOX: SceneShapeDecl = {
     decl.extent_limit = Some(HardLimit::Between(DOMAIN_EXTENT_METRES.0, DOMAIN_EXTENT_METRES.1));
     decl
 };
-/// The solvers take axis-aligned boxes only, so neither box rotates. The
-/// Initial Fill height is a level above the domain floor, not a world
-/// value, so it has no handle yet.
-static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 2] = [DOMAIN_BOX, transform_box("initial_volume", false)];
+/// The solvers take an axis-aligned box only, so it does not rotate. The
+/// fill height is a level above the domain floor, not a world value, so it
+/// has no handle yet.
+static LIQUID_DOMAIN_SHAPES: [SceneShapeDecl; 1] = [DOMAIN_BOX];
 /// The `transform` input places the role's volume.
 static FLUID_ROLE_SOURCE_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
+/// The liquids fill an axis-aligned box, so an Initial Fill does not rotate.
+static INITIAL_FILL_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", false)];
+
+/// A fluid role source's shapes for its `role` (0 is Initial Fill).
+pub fn fluid_role_shape(role: i32) -> &'static [SceneShapeDecl] {
+    if role == 0 { &INITIAL_FILL_SHAPES } else { &FLUID_ROLE_SOURCE_SHAPES }
+}
 /// A swarm's forces node (manifold-nodes-physics, which this crate does not
 /// depend on).
 pub(crate) use manifold_core::scene_object_model::SWARM_FORCES_TYPE_ID;
@@ -224,7 +237,10 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
         // (`copies_body::is_copies_body_param`), and the copies body belongs
         // to its physics world's item, so they sit with the world's controls.
         "copy_count" => card(ControlGroup::PhysicsWorld, CardBand::Scene, 0),
-        "copy_spacing" => setup(ControlGroup::PhysicsWorld).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+        // Counted in copy sizes along the layout's axis, not metres.
+        "copy_size_spacing" => setup(ControlGroup::PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Each copy's own turn inside the layout, like a transform's rotation.
+        "copy_turn_x" | "copy_turn_y" | "copy_turn_z" => setup(ControlGroup::PhysicsWorld).limit(HardLimit::Unlimited),
         "copy_columns" | "copy_layout" => setup(ControlGroup::PhysicsWorld),
         _ => return None,
     })
@@ -239,6 +255,9 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Port counts: an allocation grows them, and the copies card sets the
+        // group count, so neither is a slider.
+        "bodies" | "copy_groups" => hidden(PhysicsWorld),
         // Still air every consumer's Air Drag acts against (D-114).
         "air_resistance" => setup(PhysicsWorld).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
         _ => return None,
@@ -249,11 +268,12 @@ fn fluid_role_source(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Source;
     Some(match param {
         "enabled" => card(Source, CardBand::Scene, 0),
-        "velocity_x" => card(Source, CardBand::Scene, 1).unit(Unit::MetresPerSecond),
-        "velocity_y" => card(Source, CardBand::Scene, 2).unit(Unit::MetresPerSecond),
-        "velocity_z" => card(Source, CardBand::Scene, 3).unit(Unit::MetresPerSecond),
+        "velocity_x" => card(Source, CardBand::Scene, 1).unit(Unit::MetresPerSecond).gate(MOVES_WATER),
+        "velocity_y" => card(Source, CardBand::Scene, 2).unit(Unit::MetresPerSecond).gate(MOVES_WATER),
+        "velocity_z" => card(Source, CardBand::Scene, 3).unit(Unit::MetresPerSecond).gate(MOVES_WATER),
         "role" => setup(Source).switch(Feature::SourceRole),
-        "geometry" | "shape" | "inherit_motion" | "friction" | "collider_parts" => setup(Source),
+        "inherit_motion" | "friction" => setup(Source).gate(MOVES_WATER),
+        "geometry" | "shape" | "collider_parts" => setup(Source),
         "radius" | "shell_thickness" => setup(Source).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "path" | "compound_materials" | "mesh_index" | "primitive_index" | "material_index"
         | "fit" | "recenter" | "translate_x" | "translate_y" | "translate_z" | "fragment_count"
@@ -425,7 +445,8 @@ fn atmosphere(param: &str) -> Option<SceneParamFacts> {
 
 /// Gates follow `bake_equirect_envmap.wgsl`: the gradient branch reads only
 /// the horizon and variation, the softbox branch only the strips, sun disc
-/// and fill. Size and intensity apply in both.
+/// and fill. Intensity applies in all three modes, and the HDRI copy reads
+/// nothing else (its size is the file's).
 fn bake_environment(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Environment;
     Some(match param {
@@ -442,6 +463,21 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
         "uniform" => hidden(Environment),
         _ => return None,
     })
+}
+
+/// Where the importer's Background controls sit on the Scene tab: the
+/// Environment group, as setup rows. They drive nodes outside the scene
+/// vocabulary (the switch, blur and exposure of the sky chain), so the
+/// importer places them by card param id instead of by node type. Blur and
+/// Brightness read only while the Background switch is on.
+pub(crate) fn background_scene(param: &str) -> Option<SceneParamDesc> {
+    let facts = match param {
+        "bg_enabled" => setup(ControlGroup::Environment).switch(Feature::Background),
+        "bg_blur" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
+        "bg_brightness" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
+        _ => return None,
+    };
+    Some(facts.desc)
 }
 
 fn scene_object(param: &str) -> Option<SceneParamFacts> {

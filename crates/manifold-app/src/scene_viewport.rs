@@ -383,6 +383,7 @@ mod tests {
                 fit: Default::default(),
                 column_box: None,
                 refusal: None,
+                uncoupled_bodies: 0,
             },
         ));
         observations.record(

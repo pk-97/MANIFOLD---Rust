@@ -236,7 +236,10 @@ fn physics_boundary_rows_share_owner() {
         let models = SceneVm::object_models(&def).expect("a scene");
         let waters: Vec<_> = models.iter().filter(|model| model.liquid_domain.is_some() && model.kind == manifold_core::scene_object_model::SceneObjectRowKind::PhysicsParent).collect();
         let [water] = waters.as_slice() else { panic!("{preset}: one water, got {}", waters.len()) };
-        let children = models.iter().filter(|model| model.parent.as_ref() == Some(&water.object)).count();
+        // Its placed sources, the Initial Fill among them, are no looks.
+        let children = models.iter().filter(|model| {
+            model.parent.as_ref() == Some(&water.object) && model.kind == manifold_core::scene_object_model::SceneObjectRowKind::LookChild
+        }).count();
         assert_eq!(children, looks, "{preset}: the water's looks");
     }
     // An imported model: its group is the parent of its parts.

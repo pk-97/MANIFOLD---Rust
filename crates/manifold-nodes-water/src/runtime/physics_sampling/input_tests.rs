@@ -5,6 +5,7 @@ use manifold_node_engine::runtime::FrameContextInputs;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::Beats;
 use manifold_core::NodeId;
+use manifold_core::audio_mod::HopValue;
 use manifold_core::Seconds;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use super::*;
@@ -125,7 +126,7 @@ fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -
         delta: Seconds(
             runtime
                 .water_ref().water.last_frame_time
-                .map_or(0.0, |previous| seconds - previous.seconds.0),
+                .map_or(0.0, |previous| seconds - previous.played.seconds()),
         ),
         frame_count: 0,
     };
@@ -219,13 +220,20 @@ fn tempo(points: &[(f64, f32)]) -> ProjectTempo {
     ProjectTempo::new(&map, Bpm(120.0))
 }
 
+/// The beat on `tempo` at `seconds`, read as a physics sample reads it.
+fn sample_beat_on(tempo: &ProjectTempo, seconds: f64) -> Beats {
+    TempoMapConverter::seconds_to_beat_immut(tempo.map(), Seconds(seconds + SAMPLE_BEAT_OFFSET), tempo.fallback_bpm())
+}
+
+/// Replay samples read the beat at their time plus the sample offset; the
+/// frame itself carries the host's beat.
 fn assert_tempo_samples(observations: &[Observation], tempo: &ProjectTempo) {
     for sample in observations {
-        let expected = TempoMapConverter::seconds_to_beat_immut(
-            tempo.map(),
-            sample.time.seconds,
-            tempo.fallback_bpm(),
-        );
+        let expected = if sample.authored_only {
+            sample_beat_on(tempo, sample.time.seconds.0)
+        } else {
+            TempoMapConverter::seconds_to_beat_immut(tempo.map(), sample.time.seconds, tempo.fallback_bpm())
+        };
         assert_eq!(sample.time.beats, expected);
         assert_eq!(sample.values[2], expected.0 as f32);
     }
@@ -266,7 +274,7 @@ fn physics_history_keeps_old_tempo_until_the_edit_observation() {
     let samples = frame(&mut runtime, 0.1, 9.0, 3.0);
     let (current, historical) = samples.split_last().unwrap();
     assert_tempo_samples(historical, &old);
-    assert_eq!(historical.last().unwrap().time.beats, Beats(0.2));
+    assert_eq!(historical.last().unwrap().time.beats, sample_beat_on(&old, 0.1));
     assert_eq!(current.time.beats, Beats(0.1));
     assert_tempo_samples(&frame(&mut runtime, 0.2, 10.0, 4.0), &edited);
 }
@@ -289,7 +297,8 @@ fn compatible_rebuild_keeps_held_tempo_and_synthetic_context_can_clear_it() {
     frame(&mut rebuilt, 0.1, 9.0, 3.0);
     let synthetic = frame(&mut rebuilt, 0.2, 9.0, 3.0);
     for sample in synthetic {
-        assert!((sample.time.beats.0 - sample.time.seconds.0 * 2.0).abs() < 1e-12);
+        // Within the sample offset: a sample's beat is read just past its time.
+        assert!((sample.time.beats.0 - sample.time.seconds.0 * 2.0).abs() < 1e-8);
     }
 }
 
@@ -309,9 +318,11 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
         delta: Seconds(0.02),
         frame_count: 1,
     };
-    runtime.water().observe_physics_at_source(source).unwrap();
+    observe(&mut runtime, source);
     let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
-    assert_tempo_samples(&samples, &tempo);
+    let (at_source, replayed) = samples.split_last().unwrap();
+    assert_tempo_samples(replayed, &tempo);
+    assert_eq!(at_source.time.beats, source.beats, "the source keeps its own beat stamp");
     assert_eq!(samples.last().unwrap().time.seconds, source.seconds);
     assert!(samples.iter().all(|sample| !sample.draining));
     runtime.set_sim_step(manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
@@ -333,14 +344,17 @@ fn source_older_than_the_latest_observation_lands_at_it() {
     let latest = runtime.water_ref().water.last_frame_time.unwrap();
     OBSERVATIONS.with_borrow_mut(std::mem::take);
     let late = FrameTime { seconds: Seconds(0.06), beats: Beats(0.12), delta: Seconds::ZERO, frame_count: 1 };
-    let observed = runtime.water().observe_physics_at_source(late).unwrap();
-    assert_eq!((observed.seconds, observed.beats), (latest.seconds, latest.beats));
+    let observed = observe(&mut runtime, late);
+    assert_eq!((observed.played, observed.beats), (latest.played, latest.beats));
     let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
-    assert!(samples.iter().all(|sample| sample.time.seconds == latest.seconds), "history never reopens");
+    assert!(samples.iter().all(|sample| sample.time.seconds.0 == latest.played.seconds()), "history never reopens");
 }
 
+/// The closing observation reads the held map's beat at the sample offset,
+/// as a replay sample at that time would at any frame rate; the source's
+/// own observation keeps the host's beat stamp.
 #[test]
-fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation() {
+fn closing_observation_reads_the_sample_beat_and_the_source_keeps_its_stamp() {
     let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(137.37));
     let beat = Beats(1_000_000.25);
     let seconds = TempoMapConverter::beat_to_seconds_immut(tempo.map(), beat, tempo.fallback_bpm());
@@ -365,14 +379,11 @@ fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation(
         runtime.set_project_tempo(Some(&tempo));
         frame(&mut runtime, seconds.0 - 1.0 / 30.0, 1.0, 0.0);
         runtime.set_project_tempo(Some(current_tempo));
-        runtime.water().observe_physics_at_source(source).unwrap();
+        observe(&mut runtime, source);
         let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
         let closing = &samples[samples.len() - 2];
         assert_eq!(closing.time.seconds, source.seconds);
-        assert_eq!(
-            closing.time.beats, source.beats,
-            "roundtrip drift must not produce a second clock stamp at the same second"
-        );
+        assert_eq!(closing.time.beats, sample_beat_on(&tempo, seconds.0));
         assert_eq!(samples.last().unwrap().time.beats, source.beats);
     }
 }
@@ -445,4 +456,143 @@ fn offline_history_drain_is_never_requested_by_preview_sampling() {
     let observations = frame(&mut runtime, 3.0, 9.0, 3.0);
     assert!(observations.iter().all(|sample| !sample.draining));
     assert!(observations[0].time.seconds > Seconds::ZERO);
+}
+
+/// A host instance whose Speed is audio modulated, `enabled` or not, with
+/// this frame's hops as `(time, value)`.
+fn modulated(enabled: bool, hops: &[(f64, f32)]) -> PresetInstance {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    let mut instance = PresetInstance::new_generator(manifold_core::PresetTypeId::new("Modulated"));
+    let send = manifold_core::audio_setup::AudioSend::new("Kick");
+    let mut follow = ParameterAudioMod::new("speed".to_owned().into(), send.id, AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low));
+    follow.enabled = enabled;
+    follow.hop_timeline.values = hops.iter().map(|&(time, value)| HopValue { time: Seconds(time), value }).collect();
+    instance.audio_mods_mut().push(follow);
+    instance
+}
+
+/// The water runtime's Fire seam, as the host's Fire takes it: transport
+/// `source` becomes played time with the runtime's own step.
+fn observe(runtime: &mut PresetRuntime, source: FrameTime) -> HeldFrame {
+    let mut water = runtime.water();
+    let played = water.executor.sim_step().to_played(source.seconds);
+    water.observe_physics_at_source(played, source.beats).unwrap()
+}
+
+fn empty_snapshot() -> PhysicsInputSnapshot {
+    PhysicsInputSnapshot {
+        values: Vec::new(),
+        clock_steps: Vec::new(),
+        project_tempo: None,
+        tick_times: Vec::new(),
+        hops: Vec::new(),
+        hop_len: 0,
+        hop_routes: Vec::new(),
+        automation: Vec::new(),
+        automation_len: 0,
+        automation_routes: Vec::new(),
+    }
+}
+
+/// A mod switched off and on again starts from its own new hops: a sample
+/// before the first of them never hears the hop from before it was off.
+#[test]
+fn a_re_enabled_audio_mod_carries_no_hop_from_before_it_was_off() {
+    let mut inputs = empty_snapshot();
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[(0.03, 0.4)])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.02), Some(0.9), "a live mod carries its latest hop into the next frame");
+    inputs.set_hops(Some(&modulated(false, &[])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[(0.5, 0.2)])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.45), None, "the re-enabled mod carried a hop from before it was off");
+    assert_eq!(inputs.heard("speed", 0.5), Some(0.2));
+}
+
+/// A frame a transport jump landed on hands no hop from before the jump to
+/// the samples after it, and all of its own hops to the replay that opens
+/// at the jump's target, where a sample before the first hop reads that
+/// first hop. Once that replay ran, frames carry only their latest hop, and
+/// a second call in one tick (a Fire, then the frame) carries what the
+/// first carried.
+#[test]
+fn a_transport_jump_drops_the_carried_hop_and_hands_its_own_to_the_opening() {
+    let mut inputs = empty_snapshot();
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.02), Some(0.9));
+    inputs.jump_hops(true);
+    assert_eq!(inputs.heard("speed", 0.02), None, "the hop from before the jump reached a sample after it");
+    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.85), Some(0.3), "the opening reads the first hop after the jump");
+    let mut inputs = empty_snapshot();
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[(0.85, 0.7), (0.86, 0.6)])), Seconds::ZERO);
+    inputs.jump_hops(true);
+    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.855), Some(0.7), "the opening replay reads the jump frame's hops at their own times");
+    assert_eq!(inputs.heard("speed", 0.87), Some(0.6));
+    assert_eq!(inputs.heard("speed", 0.9), Some(0.3));
+    inputs.hops_replayed();
+    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.855), None, "a later frame carries only the latest hop");
+    assert_eq!(inputs.heard("speed", 0.92), Some(0.3));
+    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])), Seconds::ZERO);
+    assert_eq!(inputs.heard("speed", 0.92), Some(0.3), "a second call in one tick keeps the first's carry");
+}
+
+/// A Fire handled after a forward seek, before the seek's frame renders,
+/// lands at the latest observation: the skipped span is never replayed, and
+/// the next replay opens at the seek's target, at every rate.
+#[test]
+fn a_fire_after_a_forward_seek_never_replays_the_skipped_span() {
+    const TARGET: f64 = 0.9137;
+    let interval = Seconds(manifold_physics::clock::TICK);
+    for fps in [30_u32, 60, 120, 144] {
+        for offline in [false, true] {
+            let step = || if offline { SimStep::export(interval) } else { SimStep::live(interval) };
+            let fps_f = f64::from(fps);
+            let mut runtime = runtime();
+            runtime.set_sim_step(step());
+            for k in 0..=(0.5 * fps_f).round() as u32 {
+                frame(&mut runtime, f64::from(k) / fps_f, 1.0, 0.0);
+            }
+            let landed = (TARGET * fps_f - 2e-7).ceil() / fps_f;
+            runtime.set_sim_step(step().with_played_target(Some(PlayedTime::from_played(TARGET))));
+            let source = FrameTime { seconds: Seconds(landed), beats: Beats(landed * 2.0), delta: Seconds::ZERO, frame_count: 1 };
+            observe(&mut runtime, source);
+            let mut seen = OBSERVATIONS.with_borrow_mut(std::mem::take);
+            seen.extend(frame(&mut runtime, landed, 1.0, 1.0));
+            runtime.set_sim_step(step());
+            let next = frame(&mut runtime, landed + 1.0 / fps_f, 1.0, 1.0);
+            let at = |sample: &Observation| sample.time.seconds.0;
+            let skipped = seen.iter().chain(&next).find(|sample| at(sample) > 0.5 + 1e-12 && at(sample) < TARGET - 1e-12);
+            assert!(skipped.is_none(), "{fps} fps, offline {offline}: a sample in the skipped span at {:?}", skipped.map(at));
+            assert_eq!(at(&next[0]), TARGET, "{fps} fps, offline {offline}: the replay opens at the seek's target");
+        }
+    }
+}
+
+/// Fires observed while the BPM is dragged up and down, one edit a frame,
+/// keep their source on played time: each lands after the one before and is
+/// never moved back by an edit.
+#[test]
+fn fire_sources_hold_across_a_bpm_drag() {
+    let interval = Seconds(manifold_physics::clock::TICK);
+    let mut runtime = runtime();
+    let (mut seconds, mut shift) = (1.0, 0.0);
+    let mut sources = Vec::new();
+    for k in 0..30_i64 {
+        // Up (the transport moves back further than a frame) for ten
+        // frames, then down.
+        let moved = match k { 0 => 0.0, 1..10 => -0.03, _ => 0.02 };
+        seconds += moved;
+        shift += moved;
+        runtime.set_sim_step(SimStep::live(interval).with_tempo_shift(Seconds(shift)));
+        frame(&mut runtime, seconds, 1.0, 0.0);
+        let at = seconds + 1.0 / 120.0;
+        let source = FrameTime { seconds: Seconds(at), beats: Beats(at * 2.0), delta: Seconds::ZERO, frame_count: k };
+        sources.push(observe(&mut runtime, source).played.seconds());
+        seconds += 1.0 / 60.0;
+    }
+    assert!(sources.windows(2).all(|pair| pair[1] > pair[0]), "{sources:?}");
 }
