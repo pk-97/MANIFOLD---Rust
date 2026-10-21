@@ -703,4 +703,41 @@ mod tests {
         assert!(graph.wires().iter().any(|w| w.from.0 == id("Box Transform copies") && w.to == (id(BOX_BODY_HANDLE), "transform")));
         assert_spawner_on_the_body(graph);
     }
+
+    /// The GPU FLIP domain sizes its own pool, so an old show's saved Max
+    /// Particles, exposed or not, loads cleanly and is ignored: the bundled
+    /// GPU FLIP Dam Break with a domain carrying 5000 builds, and the domain
+    /// has no such param left.
+    #[test]
+    fn old_gpu_flip_max_particles_loads_and_is_ignored() {
+        use manifold_node_engine::runtime::PresetRuntime;
+
+        let mut doc: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../assets/generator-presets/WaterDamBreakGpuFlip.json"
+        ))
+        .unwrap();
+        let mut stack = vec![&mut doc];
+        let mut saved = 0;
+        while let Some(value) = stack.pop() {
+            if value["typeId"] == "node.gpu_flip_domain" {
+                value["params"]["particle_capacity"] = serde_json::json!({"type": "Int", "value": 5000});
+                value["exposedParams"] = serde_json::json!(["particle_capacity"]);
+                saved += 1;
+            }
+            match value {
+                serde_json::Value::Array(items) => stack.extend(items.iter_mut()),
+                serde_json::Value::Object(map) => stack.extend(map.values_mut()),
+                _ => {}
+            }
+        }
+        assert_eq!(saved, 1, "one GPU FLIP domain");
+        let def: EffectGraphDef = serde_json::from_value(doc).unwrap();
+        assert!(has_retired_params(&def));
+        let runtime = PresetRuntime::from_def_for_render(def, &registry(), None, false)
+            .unwrap_or_else(|e| panic!("an old GPU FLIP show must build: {e:?}"));
+        let domains: Vec<_> = runtime.graph.nodes().filter(|node| node.node_id.as_str() == "domain").collect();
+        assert_eq!(domains.len(), 1);
+        assert!(domains[0].params.get("particle_capacity").is_none(), "Max Particles is gone");
+        assert!(domains[0].exposed_params.iter().all(|param| &**param != "particle_capacity"));
+    }
 }

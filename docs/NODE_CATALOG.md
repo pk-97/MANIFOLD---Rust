@@ -524,7 +524,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (99)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -595,14 +595,15 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `Ocean` | Ocean | generator | Sim | 363 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2361 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2360 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1338 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1996 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1336 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1997 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
+| `RubblePile` | Rubble Pile | generator | Geometry | 1343 |
 | `Scene` | Scene | generator | Geometry | 368 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
@@ -610,16 +611,18 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
-| `Swarm` | Swarm | generator | Geometry | 372 |
+| `Swarm` | Swarm | generator | Geometry | 407 |
+| `SwarmCloud` | Swarm Cloud | generator | Geometry | 416 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2051 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2050 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1404 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2006 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2334 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2005 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1394 |
+| `WaterInScan` | Water in a Photoscan | generator | Sim | 2050 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |

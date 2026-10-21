@@ -7,6 +7,7 @@ mod scene_card;
 pub(crate) mod inspector;
 pub(crate) mod live_shapes;
 pub(crate) mod material;
+pub(crate) mod preview;
 pub(crate) mod scene;
 pub(crate) mod timeline;
 pub(crate) mod transport;

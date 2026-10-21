@@ -455,12 +455,14 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     plan: &crate::frame_plan::FramePlan,
     changes: ProjectionChanges,
     push: PushInputs<'_>,
+    edits: &mut crate::gesture_preview::UiEdits,
     between: impl FnOnce(
         &mut UIRoot,
         &mut P,
         &mut manifold_ui::UIState,
         &mut Option<manifold_core::LayerId>,
         &mut bool,
+        &mut crate::gesture_preview::UiEdits,
     ) -> bool,
 ) {
     use crate::frame_plan::Projection;
@@ -525,7 +527,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
         project_editor_inspector(ed, project, idx, selection, latched, led_preview);
     }
 
-    let clip_drag = between(ui_root, project_mut, selection, active_layer, redraw);
+    let clip_drag = between(ui_root, project_mut, selection, active_layer, redraw, edits);
     let project: &manifold_core::project::Project = (*project_mut).borrow();
 
     // The plan's regions rebuild alone (D7); an inspector projection
@@ -603,19 +605,23 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
         }
     }
 
-    // Re-project clips and automation lanes only when their source moved: a
-    // committed edit, a drag preview, or a live clip drag.
-    if project_sync
-        || clip_drag
-        || projections.contains(Projection::ClipPositions)
-        || projections.contains(Projection::ClipPreview)
-    {
+    // Re-project clips and automation lanes only when their source moved. A
+    // committed edit re-projects whole. A drag preview touches only what it
+    // drags (P7a): the clips and lanes the gesture recorded, in place. The
+    // whole projection also runs when the gesture ends (nothing recorded
+    // any more) and when the viewport cannot show the gesture in place.
+    let clips_moved = project_sync || projections.contains(Projection::ClipPositions);
+    let clip_preview = projections.contains(Projection::ClipPreview);
+    if clips_moved {
+        crate::ui_bridge::sync_clip_positions(ui_root, project);
+    } else if edits.preview.clip_gesture_live() {
+        if (clip_preview || clip_drag) && !crate::ui_bridge::project_clip_preview(ui_root, project, &edits.preview) {
+            crate::ui_bridge::sync_clip_positions(ui_root, project);
+        }
+    } else if clip_preview {
         crate::ui_bridge::sync_clip_positions(ui_root, project);
     }
-    if project_sync
-        || projections.contains(Projection::LaneGeometry)
-        || projections.contains(Projection::LanePreview)
-    {
+    let sync_lanes = |ui_root: &mut UIRoot| {
         crate::ui_bridge::sync_automation_lane_geometry(
             ui_root,
             project,
@@ -625,6 +631,22 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
             selection.hidden_automation_lanes(),
             selection.pinned_automation_lanes(),
         );
+    };
+    if project_sync || projections.contains(Projection::LaneGeometry) {
+        sync_lanes(ui_root);
+    } else if projections.contains(Projection::LanePreview) {
+        if !edits.preview.lanes().is_empty() {
+            if !crate::ui_bridge::project_lane_preview(
+                ui_root,
+                project,
+                &edits.preview,
+                selection.automation_mode_visible(),
+            ) {
+                sync_lanes(ui_root);
+            }
+        } else {
+            sync_lanes(ui_root);
+        }
     }
 }
 

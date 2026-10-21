@@ -1212,152 +1212,69 @@ fn merge_extends_card_spec_sections_for_new_objects() {
     );
 }
 
-/// D5 scale sanity, no-op case: an incoming asset within 10x of the
-/// scene's reference radius gets NO seeded scale (native units).
+/// Typed identity D5: a merged file binds under its own id with its own
+/// Model File, so its loads never follow another file's; merging the scene's
+/// own file again reuses that file's id.
 #[test]
-fn merge_within_10x_never_normalizes() {
-    let def = scene_def_with_bbox_half_extent(1.0); // scene reference radius ~= sqrt(3)
-    let summary = merge_summary(vec![full_material(0, "Same", 100)], 1.0); // identical bbox, ratio 1.0
-    let path = std::path::Path::new("/tmp/synthetic_merge_no_normalize.glb");
-    let plan = merge_import_into_graph(&def, &summary, path).expect("merge same-scale object");
-
-    let group = plan.new_nodes.first().unwrap();
-    let transform = group
-        .group
-        .as_ref()
-        .unwrap()
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.transform_3d")
-        .expect("object group has a transform_3d");
-    assert!(
-        !transform.params.contains_key("scale_x"),
-        "within 10x, no scale should be seeded at all — native units"
-    );
-    assert!(
-        !plan.report_lines.iter().any(|l| l.contains("scaled ×")),
-        "no normalize report line when the ratio is within bounds"
-    );
-}
-
-/// BUG-195 real fix: when the target's own mesh-source node carries a
-/// KNOWN `source_bbox_radius` that disagrees with what the
-/// orbit-camera-distance proxy would derive (e.g. the user hand-retuned
-/// Camera Distance on the card after import, per the confessed BUG-195
-/// blind spot), the stored radius wins — never the proxy.
-#[test]
-fn merge_scale_sanity_prefers_stored_radius_over_camera_proxy() {
-    let mut def = scene_def_with_bbox_half_extent(1.0);
-    // The proxy (unmutated orbit_camera.distance / 2.2) is ~= sqrt(3) ~=
-    // 1.732 — same as the stored radius build_import_graph seeded, by
-    // construction. Mutate ONLY the stored radius to something wildly
-    // different, simulating a scene whose stored provenance no longer
-    // agrees with the (user-editable) camera distance.
-    let group = def
-        .nodes
-        .iter_mut()
-        .find(|n| n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID)
-        .expect("one object group");
-    let mesh = group
-        .group
-        .as_mut()
-        .unwrap()
-        .nodes
-        .iter_mut()
-        .find(|n| n.type_id == "node.gltf_mesh_source")
-        .expect("object group has a mesh source");
-    mesh.params
-        .insert("source_bbox_radius".to_string(), SerializedParamValue::Float { value: 100.0 });
-
-    // Incoming asset has the SAME bbox as the (unmutated) target scene —
-    // against the proxy (~1.732) the ratio is 1.0 (no normalize); against
-    // the mutated stored radius (100.0) the ratio is ~0.017 (normalizes).
-    let summary = merge_summary(vec![full_material(0, "Same", 100)], 1.0);
-    let path = std::path::Path::new("/tmp/synthetic_merge_prefers_stored_radius.glb");
-    let plan = merge_import_into_graph(&def, &summary, path).expect("merge");
-
-    let new_group = plan.new_nodes.first().unwrap();
-    let transform = new_group
-        .group
-        .as_ref()
-        .unwrap()
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.transform_3d")
-        .expect("object group has a transform_3d");
-    let scale = match transform.params.get("scale_x") {
-        Some(SerializedParamValue::Float { value }) => *value,
-        other => panic!(
-            "expected a seeded scale_x — the stored radius (100.0), not the camera proxy \
-             (~1.732), must have driven this decision, got {other:?}"
-        ),
-    };
-    assert!(
-        scale > 10.0,
-        "stored radius (100.0) vs incoming (~1.732) should normalize UP by ~57x, got {scale}"
-    );
-}
-
-/// D5 scale sanity, too-big boundary: an incoming asset >10x LARGER
-/// than the scene's reference radius gets a seeded scale < 1.0 that
-/// brings it back down to the reference size.
-#[test]
-fn merge_over_10x_too_big_normalizes_down() {
+fn merge_binds_each_file_under_its_own_id() {
     let def = scene_def_with_bbox_half_extent(1.0);
-    // 20x the scene's half-extent -> incoming radius ~20x the scene's.
-    let summary = merge_summary(vec![full_material(0, "Giant", 100)], 20.0);
-    let path = std::path::Path::new("/tmp/synthetic_merge_too_big.glb");
-    let plan = merge_import_into_graph(&def, &summary, path).expect("merge oversized object");
-
-    let group = plan.new_nodes.first().unwrap();
-    let transform = group
-        .group
-        .as_ref()
-        .unwrap()
-        .nodes
+    let summary = merge_summary(vec![full_material(0, "Moss", 100)], 1.0);
+    let moss = std::path::Path::new("/tmp/synthetic_moss.glb");
+    let plan = merge_import_into_graph(&def, &summary, moss).expect("merge");
+    let ids: std::collections::BTreeSet<_> = plan
+        .new_string_bindings
         .iter()
-        .find(|n| n.type_id == "node.transform_3d")
-        .unwrap();
-    let scale = match transform.params.get("scale_x") {
-        Some(SerializedParamValue::Float { value }) => *value,
-        other => panic!("expected a seeded scale_x float param, got {other:?}"),
-    };
-    assert!(scale < 1.0, "an oversized incoming asset must be scaled DOWN, got {scale}");
-    assert!(
-        plan.report_lines.iter().any(|l| l.contains("scaled ×")),
-        "a normalize report line must be present"
-    );
+        .filter(|b| b.id != "hdri_file")
+        .map(|b| (b.id.as_str(), b.default_value.as_str()))
+        .collect();
+    assert_eq!(ids.into_iter().collect::<Vec<_>>(), vec![("model_file_2", "/tmp/synthetic_moss.glb")]);
+    assert_eq!(plan.new_string_params.len(), 1);
+    assert_eq!(plan.new_string_params[0].id, "model_file_2");
+    assert_eq!(plan.new_string_params[0].default_value, "/tmp/synthetic_moss.glb");
+    assert_eq!(plan.new_string_params[0].name, "Model File — synthetic_moss");
+
+    let again = merge_import_into_graph(&def, &summary, std::path::Path::new("/tmp/synthetic_target_scene.glb"))
+        .expect("merge the scene's own file");
+    assert!(again.new_string_params.is_empty());
+    assert!(again.new_string_bindings.iter().all(|b| b.id == "model_file"));
 }
 
-/// D5 scale sanity, too-small boundary: an incoming asset >10x SMALLER
-/// than the scene's reference radius gets a seeded scale > 1.0 that
-/// brings it back up to the reference size.
+/// D-115 (imports keep file units): the transform's scale on the card is
+/// what the node holds, for a small asset merged into a scene 50 times
+/// larger and for one 20 times smaller. Card Scale 1.0 is the imported size.
 #[test]
-fn merge_over_10x_too_small_normalizes_up() {
-    let def = scene_def_with_bbox_half_extent(1.0);
-    // 1/20th the scene's half-extent -> incoming radius ~1/20th the scene's.
-    let summary = merge_summary(vec![full_material(0, "Tiny", 100)], 0.05);
-    let path = std::path::Path::new("/tmp/synthetic_merge_too_small.glb");
-    let plan = merge_import_into_graph(&def, &summary, path).expect("merge undersized object");
-
-    let group = plan.new_nodes.first().unwrap();
-    let transform = group
-        .group
-        .as_ref()
-        .unwrap()
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.transform_3d")
-        .unwrap();
-    let scale = match transform.params.get("scale_x") {
-        Some(SerializedParamValue::Float { value }) => *value,
-        other => panic!("expected a seeded scale_x float param, got {other:?}"),
-    };
-    assert!(scale > 1.0, "an undersized incoming asset must be scaled UP, got {scale}");
-    assert!(
-        plan.report_lines.iter().any(|l| l.contains("scaled ×")),
-        "a normalize report line must be present"
-    );
+fn merge_keeps_file_units_and_the_card_matches_the_node() {
+    for half_extent in [0.02, 20.0] {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        let summary = merge_summary(vec![full_material(0, "Prop", 100)], half_extent);
+        let path = std::path::Path::new("/tmp/synthetic_merge_file_units.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge");
+        let transform = plan.new_nodes[0]
+            .group
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.transform_3d")
+            .expect("object group has a transform_3d");
+        for axis in ["scale_x", "scale_y", "scale_z"] {
+            let node_scale = match transform.params.get(axis) {
+                Some(SerializedParamValue::Float { value }) => *value,
+                None => 1.0,
+                other => panic!("{axis} is a float, got {other:?}"),
+            };
+            assert_eq!(node_scale, 1.0, "{axis} keeps the file's units at half extent {half_extent}");
+            let binding = plan
+                .new_card_bindings
+                .iter()
+                .find(|b| matches!(&b.target, BindingTarget::Node { node_id, param } if *node_id == transform.node_id && param == axis))
+                .unwrap_or_else(|| panic!("{axis} is on the card"));
+            let spec = plan.new_card_params.iter().find(|p| p.id == binding.id).expect("card spec");
+            assert_eq!(binding.default_value, node_scale, "{axis} binding default");
+            assert_eq!(spec.default_value, node_scale, "{axis} card default");
+        }
+        assert!(!plan.report_lines.iter().any(|l| l.contains("scaled")), "{:?}", plan.report_lines);
+    }
 }
 
 /// Negative gate: OBJECT_SAFETY_MAX is enforced on the POST-MERGE total

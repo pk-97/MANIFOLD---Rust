@@ -7,7 +7,7 @@ use std::path::Path;
 
 use manifold_core::effect_graph_def::{
     BindingDef, EffectGraphDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
-    SerializedParamValue, StringBindingDef,
+    SerializedParamValue, StringBindingDef, StringParamSpecDef,
 };
 
 use crate::node_graph::gltf_load;
@@ -19,7 +19,7 @@ use super::cards::*;
 use super::object_group::*;
 mod scans;
 pub(super) use scans::max_node_id_recursive;
-use scans::{max_known_source_bbox_radius, max_local_k_recursive};
+use scans::max_local_k_recursive;
 
 
 /// D5's merge plan: everything `ImportModelIntoSceneCommand`
@@ -48,6 +48,9 @@ pub struct MergePlan {
     /// name — same shape the importer's own outer card carries).
     pub new_card_params: Vec<ParamSpecDef>,
     pub new_card_bindings: Vec<BindingDef>,
+    /// The incoming file's Model File spec when the scene does not bind that
+    /// file yet; its bindings use this id (typed identity D5).
+    pub new_string_params: Vec<StringParamSpecDef>,
     pub new_string_bindings: Vec<StringBindingDef>,
     /// D9 doctrine ("every import produces a report") applied to the merge:
     /// unmapped per-material features (same as [`ImportReport::report_lines`])
@@ -78,21 +81,11 @@ manifold_core::testkit_visible! {
 /// can never silently share a namespace root with the scene's own chrome
 /// or another object.
 ///
-/// **Scale sanity (D5):** the incoming asset keeps its native units; each
-/// new object's `transform_3d` is seeded with `pos = -center` (the
-/// importer's own recenter convention). A uniform `scale` is ALSO seeded,
-/// but only when the incoming bbox radius differs from a "scene reference
-/// radius" by more than 10× in either direction. **BUG-195, fixed:** the
-/// reference radius is [`max_known_source_bbox_radius`] — the largest
-/// `source_bbox_radius` (BUG-194's import-time provenance param) among the
-/// target def's own existing mesh-source nodes, a real per-object size fact
-/// rather than an inversion of a camera value the user may have hand-retuned.
-/// The old proxy — the target's own synthesized `node.orbit_camera`'s
-/// `distance` param, inverted through the EXACT formula [`build_import_graph`]
-/// used to seed it (`distance = 2.2 * radius`) — is kept as the fallback for
-/// a scene with no known-radius mesh-source node at all (a hand-built scene
-/// with no glTF import in its history). No top-level `node.orbit_camera`
-/// either → normalization is skipped entirely (native units), never guessed.
+/// **Units (D-115):** the incoming asset keeps its file's own units (glTF
+/// metres), whatever the size of what is already in the scene. Each new
+/// object's `transform_3d` is seeded with `pos = -center` (the importer's
+/// recenter convention) and no scale, so card Scale 1.0 is the imported size.
+/// The camera's Frame shows the result, as in Blender, Unity and Cinema 4D.
 pub(super) fn merge_import_into_graph(
     def: &EffectGraphDef,
     summary: &GltfImportSummary,
@@ -161,32 +154,6 @@ pub(super) fn merge_import_into_graph(
     ];
     let incoming_radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
-
-    // Prefer a STORED per-object radius (BUG-194's
-    // `source_bbox_radius` provenance param) over the orbit-camera proxy
-    // below — the largest known radius among the target's own existing
-    // mesh-source nodes is a real fact about the scene's geometry, not an
-    // inversion of a camera framing value the user may have hand-retuned.
-    // Only when no mesh-source node in the def has a known radius (e.g. a
-    // scene built entirely by hand, never touched by this importer) does
-    // the proxy apply — kept unchanged as the fallback, never removed.
-    let scene_reference_radius: Option<f32> =
-        max_known_source_bbox_radius(&def.nodes).filter(|r| *r > 1e-6).or_else(|| {
-            def.nodes
-                .iter()
-                .find(|n| n.type_id == "node.orbit_camera")
-                .and_then(|n| match n.params.get("distance") {
-                    Some(SerializedParamValue::Float { value }) => Some(*value / 2.2),
-                    _ => None,
-                })
-                .filter(|r| *r > 1e-6)
-        });
-
-    let normalize_scale: Option<f32> = scene_reference_radius.and_then(|ref_radius| {
-        let ratio = incoming_radius / ref_radius;
-        if (0.1..=10.0).contains(&ratio) { None } else { Some(ref_radius / incoming_radius) }
-    });
-
     let mut next_id = max_node_id_recursive(&def.nodes) + 1;
     let mut fresh_id = move || {
         let v = next_id;
@@ -208,6 +175,14 @@ pub(super) fn merge_import_into_graph(
             .collect();
 
     let path_str = path.to_string_lossy().into_owned();
+    // One string id per file: a file the scene already binds keeps its id,
+    // any other file gets its own, so its Model File and its loads are its own.
+    let (model_file_id, new_model_file_spec) = manifold_core::binding_identity::string_id_for(
+        def.preset_metadata.as_ref(),
+        super::MODEL_FILE_PARAM_ID,
+        &path_str,
+        &super::model_file_spec(&path_str),
+    );
 
     let mut new_nodes = Vec::new();
     let mut new_wires = Vec::new();
@@ -240,6 +215,7 @@ pub(super) fn merge_import_into_graph(
     let mut import_ctx = ImportCtx {
         render_id: render_scene_node_id,
         path_str: &path_str,
+        model_file_id: &model_file_id,
         center,
         bbox_radius: incoming_radius,
         node_anims_by_clip: &node_anims_by_clip,
@@ -286,31 +262,6 @@ pub(super) fn merge_import_into_graph(
             .collect()
     };
     for mut out in outputs.drain(..) {
-        // D5 scale sanity: seeded on THIS object's own transform_3d — an
-        // ordinary, visible, undoable value, never hidden state. Every
-        // object in one incoming asset shares the same normalize factor
-        // (it's the whole asset's scale, not a per-material one).
-        //
-        // Confessed shortcut: an object whose glTF animation ALSO drives
-        // scale (`node.gltf_animation_source`'s `scale_x/y/z` wired as
-        // port-shadows onto this SAME transform_3d, unconditionally, by
-        // `build_object_group`) has this static seed overridden at runtime
-        // by that wire — a port-shadow always wins over the static param
-        // regardless of value. Normalizing a >10x-mismatched asset whose
-        // objects are ALSO scale-animated is therefore a known gap, not
-        // silently wrong: logged in BUG_BACKLOG (BUG-195 addendum) rather
-        // than fixed here.
-        if let Some(scale) = normalize_scale
-            && let Some(transform_node) = out
-                .group_node
-                .group
-                .as_mut()
-                .and_then(|g| g.nodes.iter_mut().find(|n| n.type_id == "node.transform_3d"))
-        {
-            transform_node.params.insert("scale_x".to_string(), float(scale));
-            transform_node.params.insert("scale_y".to_string(), float(scale));
-            transform_node.params.insert("scale_z".to_string(), float(scale));
-        }
         new_nodes.push(out.group_node);
         new_wires.append(&mut out.wires_to_render);
         new_card_params.append(&mut out.card_params);
@@ -341,14 +292,6 @@ pub(super) fn merge_import_into_graph(
         new_card_params = anim_params;
     }
 
-    if let Some(scale) = normalize_scale {
-        report_lines.push(format!(
-            "merged import scaled ×{scale:.4} to match the scene (incoming radius \
-             {incoming_radius:.4} vs scene reference {:.4})",
-            scene_reference_radius.unwrap_or(0.0),
-        ));
-    }
-
     // One radius per graph: the scene's saved bounds win, and a scene with
     // none takes the incoming asset's; the lookup scales ranges by it.
     let scene_bounds = def
@@ -364,6 +307,7 @@ pub(super) fn merge_import_into_graph(
         new_objects_count: (existing_objects as usize + incoming) as u32,
         new_card_params,
         new_card_bindings,
+        new_string_params: new_model_file_spec.into_iter().collect(),
         new_string_bindings,
         report_lines,
         scene_bounds,

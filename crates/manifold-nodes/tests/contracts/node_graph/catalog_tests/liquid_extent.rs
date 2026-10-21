@@ -46,7 +46,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
     /// Every bundled generator preset holding a liquid domain.
     fn liquid_presets() -> Vec<(String, std::sync::Arc<EffectGraphDef>)> {
         let holds_liquid = |def: &EffectGraphDef| {
-            let flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
+            let flat = manifold_node_engine::load::expand::flatten_expanded(def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin()).expect("flattens");
             flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id))
         };
         bundled_preset_type_ids(PresetKind::Generator)
@@ -308,6 +308,7 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.matter_face_component",
         "node.face_sample_component",
         manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID,
+        "node.fluid_role_source",
         "node.liquid_fill",
         "node.liquid_state",
         "node.liquid_stats",

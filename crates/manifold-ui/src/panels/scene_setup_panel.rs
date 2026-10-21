@@ -898,6 +898,10 @@ fn placeholder_param_info() -> ParamRow {
     }
 }
 
+/// What a selection note compares: the layer, its active item and its
+/// selected set (`None` when it follows the active item).
+type NotedSelection = (LayerId, Option<SceneSelection>, Option<Vec<SceneSelection>>);
+
 /// One numeric row's interactive node ids, set by `build_numeric_row` when
 pub struct ScenePanel {
     open: bool,
@@ -977,13 +981,19 @@ pub struct ScenePanel {
     /// `BTreeMap` — is the map that actually compiles; same "keyed per
     /// layer, UI-local, never serialized" contract either way.
     selection: std::collections::HashMap<LayerId, SceneSelection>,
+    /// The selected items per layer, as Blender keeps a selection beside
+    /// its active object: `selection` is the active item whose card shows,
+    /// this the set the outliner highlights and the gizmos handle. A layer
+    /// with no entry has its active item alone selected; an empty entry has
+    /// nothing selected (a click on empty space), its card still showing.
+    selected: std::collections::HashMap<LayerId, Vec<SceneSelection>>,
     /// UI_INVALIDATION D14 for the Scene panel: moves when a noted selection
     /// differs from the last noted one, or the selection write cleared a
     /// reveal or modifier focus. Noted at the gesture's commit (click, menu,
     /// external pick), never on press, so a press does not rebuild under a
     /// drag.
     selection_version: u64,
-    noted_selection: Option<(LayerId, Option<SceneSelection>)>,
+    noted_selection: Option<NotedSelection>,
     /// Moves on a body scroll or a card tween frame: the planner rebuilds
     /// the inspector region the docked body lives in (UI_INVALIDATION D6).
     view_version: u64,
@@ -1135,6 +1145,7 @@ impl Default for ScenePanel {
             header_buttons: Default::default(),
             copy_count: Default::default(),
             selection: std::collections::HashMap::new(),
+            selected: std::collections::HashMap::new(),
             selection_version: 0,
             noted_selection: None,
             view_version: 0,
@@ -1285,9 +1296,23 @@ impl ScenePanel {
         }
     }
 
-    /// The selected item of the scene this panel shows.
+    /// The active item of the scene this panel shows: the one whose card
+    /// shows.
     pub fn live_selection(&self) -> Option<&SceneSelection> {
         self.selection.get(self.live_layer_id()?)
+    }
+
+    /// Every selected item of the scene this panel shows, in selection
+    /// order, the active one last when it is selected.
+    pub fn live_selected(&self) -> &[SceneSelection] {
+        self.live_layer_id().map_or(&[], |layer| self.selected_of(layer))
+    }
+
+    fn selected_of(&self, layer: &LayerId) -> &[SceneSelection] {
+        match self.selected.get(layer) {
+            Some(set) => set,
+            None => self.selection.get(layer).map_or(&[], std::slice::from_ref),
+        }
     }
 
     /// Build into the inspector's Scene tab content rect
@@ -1442,8 +1467,55 @@ impl ScenePanel {
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
         self.clear_item_focus();
         self.selection.insert(layer_id.clone(), sel.shown());
+        self.selected.remove(&layer_id);
         self.reveal_properties = true;
         self.note_selection(&layer_id);
+    }
+
+    /// External selection write of a whole set (a Shift-click on a gizmo):
+    /// `items` selected, the last one active. An empty set clears the
+    /// selection and keeps the active item's card showing, as Blender does.
+    pub fn select_items(&mut self, layer_id: LayerId, items: Vec<SceneSelection>) {
+        let items: Vec<SceneSelection> = items.into_iter().map(SceneSelection::shown).collect();
+        match items.last().cloned() {
+            None => {
+                self.selected.insert(layer_id.clone(), items);
+                self.note_selection(&layer_id);
+            }
+            Some(active) => {
+                if self.selection.get(&layer_id) != Some(&active) {
+                    self.clear_item_focus();
+                    self.reveal_properties = true;
+                }
+                self.selection.insert(layer_id.clone(), active);
+                if items.len() == 1 {
+                    self.selected.remove(&layer_id);
+                } else {
+                    self.selected.insert(layer_id.clone(), items);
+                }
+                self.note_selection(&layer_id);
+            }
+        }
+    }
+
+    /// Nothing selected on `layer_id` (a click on empty space); the active
+    /// item's card keeps showing.
+    pub fn clear_selected(&mut self, layer_id: LayerId) {
+        self.select_items(layer_id, Vec::new());
+    }
+
+    /// A Shift-click on an outliner row: `sel` joins the selection as the
+    /// active item, or leaves it when it was selected.
+    fn toggle_selected(&mut self, layer_id: &LayerId, sel: SceneSelection) {
+        let sel = sel.shown();
+        let mut items = self.selected_of(layer_id).to_vec();
+        let before = items.len();
+        items.retain(|item| *item != sel);
+        // When the active item leaves, the last one still selected shows.
+        if items.len() == before {
+            items.push(sel);
+        }
+        self.select_items(layer_id.clone(), items);
     }
 
     /// Unfold the tree group `parent` (its row's object id), so a selected
@@ -1476,7 +1548,7 @@ impl ScenePanel {
     /// selection differs from the last noted one, or a focus was cleared
     /// since the last note.
     pub(crate) fn note_selection(&mut self, layer_id: &LayerId) {
-        let current = (layer_id.clone(), self.selection.get(layer_id).cloned());
+        let current = (layer_id.clone(), self.selection.get(layer_id).cloned(), self.selected.get(layer_id).cloned());
         let cleared = std::mem::take(&mut self.focus_cleared);
         if cleared || self.noted_selection.as_ref() != Some(&current) {
             self.noted_selection = Some(current);
@@ -1494,6 +1566,7 @@ impl ScenePanel {
         let SceneSetupState::Live(vm) = &self.state else { return false; };
         let (layer_id, selection) = (vm.layer_id.clone(), selection.clone());
         self.clear_item_focus();
+        self.selected.remove(&layer_id);
         self.selection.insert(layer_id, selection);
         self.view_version += 1;
         true
@@ -1510,12 +1583,17 @@ impl ScenePanel {
             Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
         };
+        // A selected item a graph edit removed leaves the selection.
+        if let Some(set) = self.selected.get_mut(&vm.layer_id) {
+            set.retain(|sel| Self::selection_exists(vm, sel.clone()));
+        }
         // The build shows the fallback, so it is what the next note compares
         // against: reselecting the vanished item after a redo is a change.
-        if let Some((layer, noted)) = self.noted_selection.as_mut()
+        if let Some((layer, noted, noted_set)) = self.noted_selection.as_mut()
             && *layer == vm.layer_id
         {
             *noted = Some(resolved.clone());
+            *noted_set = self.selected.get(&vm.layer_id).cloned();
         }
         self.selection.insert(vm.layer_id.clone(), resolved.clone());
         resolved
@@ -1843,7 +1921,7 @@ impl ScenePanel {
                 }
                 (true, vec![PanelAction::Root(RootAction::SceneItemRightClicked)])
             }
-            UIEvent::Click { node_id, .. } => {
+            UIEvent::Click { node_id, modifiers, .. } => {
                 if self.show_gizmos_id == Some(*node_id) {
                     self.show_gizmos = !self.show_gizmos;
                     self.view_version += 1;
@@ -1880,12 +1958,18 @@ impl ScenePanel {
                         *folded = !*folded;
                         return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
                     }
-                    // Normal selection change
+                    // Normal selection change; Shift adds the row to the
+                    // selection or takes it out, as in Blender's outliner.
                     if let SceneSetupState::Live(vm) = &self.state {
                         let (layer_id, sel) = (vm.layer_id.clone(), sel.clone());
-                        self.clear_item_focus();
-                        self.selection.insert(layer_id.clone(), sel);
-                        self.note_selection(&layer_id);
+                        if modifiers.shift {
+                            self.toggle_selected(&layer_id, sel);
+                        } else {
+                            self.clear_item_focus();
+                            self.selection.insert(layer_id.clone(), sel);
+                            self.selected.remove(&layer_id);
+                            self.note_selection(&layer_id);
+                        }
                         return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer_id))]);
                     }
                     return (true, Vec::new());

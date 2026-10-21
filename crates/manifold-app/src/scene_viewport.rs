@@ -284,16 +284,7 @@ pub(crate) fn project_line(
     rect: manifold_ui::Rect,
     line: &WorldLine,
 ) -> Option<[f32; 4]> {
-    let depth = |p: [f32; 3]| (0..3).map(|i| (p[i] - camera.pos[i]) * camera.fwd[i]).sum::<f32>();
-    let toward = |from: [f32; 3], to: [f32; 3], t: f32| [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t);
-    let near = camera.near.max(1e-4);
-    let (da, db) = (depth(line.a), depth(line.b));
-    let (a, b) = match (da < near, db < near) {
-        (true, true) => return None,
-        (true, false) => (toward(line.a, line.b, (near - da) / (db - da)), line.b),
-        (false, true) => (line.a, toward(line.b, line.a, (near - db) / (da - db))),
-        (false, false) => (line.a, line.b),
-    };
+    let (a, b) = manifold_nodes_scene::node_graph::viewport_overlay::clip_to_near(camera, line.a, line.b)?;
     let a = camera.project_to_pixel(a, width, height)?;
     let b = camera.project_to_pixel(b, width, height)?;
     let (sx, sy) = (rect.width / width.max(1) as f32, rect.height / height.max(1) as f32);

@@ -31,11 +31,15 @@ use crate::scene::transform::Transform;
 /// The canvas canvas-sized arrays are planned at: the stage.
 const CANVAS: (u32, u32) = (1920, 1080);
 
-/// A resolved scalar or transform wire.
+/// A resolved scalar or transform wire, or the kind of an object wire.
 #[derive(Clone, Copy, Debug)]
 pub enum Wire {
     F32(f32),
     Transform(Transform),
+    /// Which kind of object a wire carries (a fluid role's Inflow or
+    /// Drain), published by its producer's rule for a consumer whose
+    /// storage depends on what arrives.
+    Kind(u32),
 }
 
 /// Why a rule stopped.
@@ -162,6 +166,18 @@ impl AtomExtent<'_> {
         }
     }
 
+    /// The kind an object wire carries, `None` when the port is not wired.
+    pub fn kind(&self, name: &str) -> Option<u32> {
+        let resource = self.input(name)?;
+        match self.wires.get(&resource) {
+            Some(Wire::Kind(kind)) => Some(*kind),
+            _ => {
+                self.unresolved.borrow_mut().get_or_insert(self.step.inputs.iter().find(|(n, _)| *n == name).expect("wired").0);
+                None
+            }
+        }
+    }
+
     /// A count carried on an f32 wire, refused past the range f32 holds
     /// exactly.
     pub fn count(&self, name: &str, default: f32) -> Result<u32, Verdict> {
@@ -231,6 +247,10 @@ impl AtomExtent<'_> {
 
     pub fn publish_transform(&mut self, port: &'static str, value: Transform) {
         self.published.push((port, Wire::Transform(value)));
+    }
+
+    pub fn publish_kind(&mut self, port: &'static str, kind: u32) {
+        self.published.push((port, Wire::Kind(kind)));
     }
 }
 
@@ -374,6 +394,7 @@ fn evaluate_plumbing(graph: &mut Graph, plan: &ExecutionPlan, step: &ExecutionSt
         match *wire {
             Wire::F32(value) => backend.set_scalar(slot, ParamValue::Float(value)),
             Wire::Transform(value) => backend.set_transform(slot, value),
+            Wire::Kind(_) => return,
         }
         inputs.push((port, slot));
     }

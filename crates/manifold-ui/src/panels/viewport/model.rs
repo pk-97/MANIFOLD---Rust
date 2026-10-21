@@ -417,7 +417,7 @@ impl AutomationLaneScreen {
         let norm = (1.0 - (y - rect.y) / rect.height).clamp(0.0, 1.0);
         let value = self.param_min + norm * (self.param_max - self.param_min);
         if self.whole_numbers {
-            value.round().clamp(self.param_min, self.param_max)
+            crate::automation_drag::quantise_whole_number(value, self.param_min, self.param_max)
         } else {
             value
         }
@@ -461,7 +461,8 @@ pub struct AutomationDotScreen {
 /// Build the automation stroke from segment geometry rather than a fixed
 /// screen-space sampler. Breakpoints are always emitted at their exact x
 /// coordinate; Hold segments emit both sides of their vertical step there.
-/// The returned points are screen-space and ordered by beat/x.
+/// The points are screen-space and ordered by beat/x.
+#[cfg(test)]
 pub(crate) fn build_automation_polyline(
     lane: &UiAutomationLane,
     min_beat: f32,
@@ -471,10 +472,29 @@ pub(crate) fn build_automation_polyline(
     graph: Rect,
     pixels_per_beat: f32,
 ) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    build_automation_polyline_into(&mut out, lane, min_beat, max_beat, x0, x1, graph, pixels_per_beat);
+    out
+}
+
+/// The lane stroke into a caller-owned buffer, which it clears first, so a
+/// drag preview refills a lane's stroke without allocating.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_automation_polyline_into(
+    out: &mut Vec<(f32, f32)>,
+    lane: &UiAutomationLane,
+    min_beat: f32,
+    max_beat: f32,
+    x0: f32,
+    x1: f32,
+    graph: Rect,
+    pixels_per_beat: f32,
+) {
+    out.clear();
     if !min_beat.is_finite() || !max_beat.is_finite() || max_beat < min_beat
         || x1 < x0 || !pixels_per_beat.is_finite() || pixels_per_beat <= 0.0
     {
-        return Vec::new();
+        return;
     }
     let min = f64::from(min_beat);
     let max = f64::from(max_beat);
@@ -482,12 +502,11 @@ pub(crate) fn build_automation_polyline(
         x0 + (beat as f32 - min_beat) * pixels_per_beat,
         graph.y + graph.height * (1.0 - norm.clamp(0.0, 1.0)),
     );
-    let mut out = Vec::new();
     if lane.points.len() < 2
         || lane.points.first().is_some_and(|p| p.beat.0 > min)
         || lane.points.last().is_some_and(|p| p.beat.0 < min)
     {
-        push_curve_point(&mut out, screen(min, lane.value_at_norm(Beats(min))));
+        push_curve_point(out, screen(min, lane.value_at_norm(Beats(min))));
     }
     // Keep one adjacent endpoint on each side; work scales with the visible
     // interval, not the length of an entire performance envelope.
@@ -498,8 +517,8 @@ pub(crate) fn build_automation_polyline(
         let (start, end) = (a.beat.0, b.beat.0);
         if end < min || start > max { continue; }
         if end == start {
-            push_curve_point(&mut out, screen(start, a.value_norm));
-            push_curve_point(&mut out, screen(end, b.value_norm));
+            push_curve_point(out, screen(start, a.value_norm));
+            push_curve_point(out, screen(end, b.value_norm));
             continue;
         }
         if end < start { continue; }
@@ -508,9 +527,9 @@ pub(crate) fn build_automation_polyline(
         let t0 = ((from - start) / (end - start)) as f32;
         let t1 = ((to - start) / (end - start)) as f32;
         if a.shape == UiSegmentShape::Hold {
-            push_curve_point(&mut out, screen(from, a.value_norm));
-            push_curve_point(&mut out, screen(to, a.value_norm));
-            if to == end { push_curve_point(&mut out, screen(end, b.value_norm)); }
+            push_curve_point(out, screen(from, a.value_norm));
+            push_curve_point(out, screen(to, a.value_norm));
+            if to == end { push_curve_point(out, screen(end, b.value_norm)); }
         } else {
             let sample = |t: f32| {
                 if t == 0.0 { return screen(start, a.value_norm); }
@@ -522,16 +541,15 @@ pub(crate) fn build_automation_polyline(
             };
             let p0 = sample(t0);
             let p1 = sample(t1);
-            push_curve_point(&mut out, p0);
+            push_curve_point(out, p0);
             if a.shape == UiSegmentShape::Linear {
-                push_curve_point(&mut out, p1);
+                push_curve_point(out, p1);
             } else {
-                append_curve_segment(&mut out, &sample, t0, t1, p0, p1, 0);
+                append_curve_segment(out, &sample, t0, t1, p0, p1, 0);
             }
         }
     }
-    push_curve_point(&mut out, screen(max, lane.value_at_norm(Beats(max))));
-    out
+    push_curve_point(out, screen(max, lane.value_at_norm(Beats(max))));
 }
 
 fn push_curve_point(out: &mut Vec<(f32, f32)>, point: (f32, f32)) {

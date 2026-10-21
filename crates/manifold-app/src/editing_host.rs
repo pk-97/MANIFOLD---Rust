@@ -749,25 +749,15 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         target: &UiGraphTarget,
         param_id: &ParamId,
         beat: Beats,
+        outside_shape: UiSegmentShape,
     ) -> Option<f32> {
         let graph_target = to_graph_target(target);
         let param_id_str = param_id.as_ref();
-        let can_insert = self
-            .project
-            .preset_instance(&graph_target)
-            .and_then(|inst| inst.automation_lanes.as_ref())
-            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id.as_ref() == param_id_str))
-            .is_some_and(|lane| {
-                lane.points.windows(2).any(|pair| pair[0].beat.0 < pair[1].beat.0)
-                    && !lane.points.iter().any(|point| point.beat == beat)
-            });
-        if !can_insert {
-            return None;
-        }
         let mut local_cmd = AddAutomationPointCommand::new_on_curve(
             graph_target.clone(),
             param_id_str,
             beat,
+            to_segment_shape(outside_shape),
         );
         self.project.executed_by(|project| {
             local_cmd.execute(project);
@@ -978,7 +968,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
         }
         let commands: Vec<Box<dyn Command>> = lanes.into_iter().map(|(target, param_id, points)| {
-            Box::new(MoveAutomationPointCommand::for_group(target, param_id.as_ref(), points))
+            Box::new(MoveAutomationPointCommand::for_group_keeping_twins(target, param_id.as_ref(), points))
                 as Box<dyn Command>
         }).collect();
         self.project.stamp(crate::gesture_preview::touches_of(&commands));

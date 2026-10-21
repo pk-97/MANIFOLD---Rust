@@ -156,7 +156,7 @@ mod tests {
     fn a_refusal_clears_the_last_fit_and_keeps_its_text() {
         let snapshot = |report: &SetupReport| domain_snapshot(None, false, false, 1, report, 0);
         let mut report = SetupReport::default();
-        let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped };
+        let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped, pool_full: false };
         report.accept(clipped, Some(([2.0, 1.0, 0.0], [2.0, 1.0, 1.0])));
         let taken = snapshot(&report);
         assert_eq!(taken.fit, clipped);

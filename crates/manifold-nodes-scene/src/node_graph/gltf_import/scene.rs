@@ -492,6 +492,7 @@ pub(super) fn build_import_graph(
     let mut import_ctx = ImportCtx {
         render_id,
         path_str: &path_str,
+        model_file_id: MODEL_FILE_PARAM_ID,
         center,
         bbox_radius: radius,
         node_anims_by_clip: &node_anims_by_clip,
@@ -833,16 +834,7 @@ pub(super) fn build_import_graph(
         param_aliases: Vec::new(),
         value_aliases: Vec::new(),
         string_params: vec![
-            StringParamSpecDef {
-                id: MODEL_FILE_PARAM_ID.to_string(),
-                name: "Model File".to_string(),
-                default_value: path_str,
-                is_file_picker: true,
-                use_dropdown: false,
-                // The imported .glb is a project asset — collected by the
-                // io asset-path inventory (PROJECT_FOLDERS_DESIGN D5).
-                is_file_path: true,
-            },
+            super::model_file_spec(&path_str),
             StringParamSpecDef {
                 id: HDRI_FILE_PARAM_ID.to_string(),
                 name: "HDRI File".to_string(),

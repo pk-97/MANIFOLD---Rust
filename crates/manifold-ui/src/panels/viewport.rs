@@ -39,6 +39,8 @@ const MAX_RULER_TICKS: usize = 1500;
 // See `docs/TIMELINE_API_DESIGN.md` section 3.6.
 mod coordinate;
 mod interaction;
+mod lane_screens;
+mod preview;
 mod model;
 mod render;
 
@@ -93,6 +95,9 @@ pub struct TimelineViewportPanel {
     // Clip data — single storage, bucketed by layer index.
     // Access all clips via clips_by_layer.iter().flatten().
     clips_by_layer: Vec<Vec<ViewportClip>>,
+    /// Where each clip sits in `clips_by_layer`, built by `set_clips` and kept by the
+    /// drag-preview writes (`preview.rs`).
+    clip_index: ahash::AHashMap<ClipId, (usize, usize)>,
 
     // Automation lane data (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) — single
     // storage bucketed by layer index, mirroring `clips_by_layer`. Populated
@@ -107,6 +112,9 @@ pub struct TimelineViewportPanel {
     /// `(layer, lane)` index of each screen's source lane, so a playhead move
     /// refreshes the title values without rebuilding the geometry.
     automation_lane_sources: Vec<(usize, usize)>,
+    /// Lane screens built or refilled, so a test can tell a one-lane update from a rebuild.
+    #[cfg(test)]
+    lane_fills: std::cell::Cell<usize>,
     /// Sizes the lane titles when the screens rebuild. The app installs the
     /// same measurer its trees draw with.
     text_measure: Box<dyn crate::text::TextMeasure>,
@@ -351,10 +359,13 @@ impl TimelineViewportPanel {
             tracks: Vec::new(),
             track_zebra_even: Vec::new(),
             clips_by_layer: Vec::new(),
+            clip_index: ahash::AHashMap::new(),
             automation_lanes_by_layer: Vec::new(),
             automation_lane_heights: Vec::new(),
             automation_lane_screens: Vec::new(),
             automation_lane_sources: Vec::new(),
+            #[cfg(test)]
+            lane_fills: std::cell::Cell::new(0),
             text_measure: Box::new(crate::text::HeuristicTextMeasure),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
@@ -587,9 +598,12 @@ impl TimelineViewportPanel {
         }
         // Match track count: resize_with grows OR truncates as needed.
         self.clips_by_layer.resize_with(self.tracks.len(), Vec::new);
+        self.clip_index.clear();
         for clip in clips {
             if clip.layer_index < self.clips_by_layer.len() {
-                self.clips_by_layer[clip.layer_index].push(clip);
+                let bucket = &mut self.clips_by_layer[clip.layer_index];
+                self.clip_index.insert(clip.clip_id.clone(), (clip.layer_index, bucket.len()));
+                bucket.push(clip);
             }
         }
     }
@@ -1023,135 +1037,6 @@ impl TimelineViewportPanel {
     /// [`Self::rebuild_automation_lane_screens`].
     pub fn automation_lane_screens(&self) -> &[AutomationLaneScreen] {
         &self.automation_lane_screens
-    }
-
-    /// One [`AutomationLaneScreen`] per visible lane (P4,
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7); empty whenever
-    /// `set_automation_lanes` last got no data. Every mutator of an input read
-    /// here (lanes, lane heights, tracks, layout rect, scroll, zoom, beats per
-    /// bar) calls this, so the cache is never stale. May allocate; reads never do.
-    fn rebuild_automation_lane_screens(&mut self) {
-        let mut out = std::mem::take(&mut self.automation_lane_screens);
-        out.clear();
-        self.automation_lane_sources.clear();
-        let tx0 = self.tracks_rect.x;
-        let tx1 = self.tracks_rect.x_max();
-        let ty0 = self.tracks_rect.y;
-        let ty1 = self.tracks_rect.y + self.tracks_rect.height;
-        let (min_beat, max_beat) = self.visible_beat_range();
-        // Keep lane timing geometry sourced from the same mapper/grid policy as
-        // the ruler and layer bitmap. The renderer consumes these scalars while
-        // walking its bounded grid loop; it must not invent a second snap grid.
-        let pixels_per_beat = self.mapper.pixels_per_beat();
-        let grid_step = self.grid_step();
-        let beats_per_bar = self.beats_per_bar as f32;
-        let bar_skip = self.bar_skip();
-
-        for (i, lanes) in self.automation_lanes_by_layer.iter().enumerate() {
-            if lanes.is_empty() || self.is_group_layer(i) {
-                continue;
-            }
-            let track_y = self.track_y(i);
-            let track_h = self.track_height(i);
-            if track_h <= 0.0 || track_y + track_h < ty0 || track_y > ty1 {
-                continue;
-            }
-            // Lanes stack below the fixed base card, in the extra height
-            // `CoordinateMapper::layer_height` reserved for them — the same
-            // constant both sides use, so they cannot disagree.
-            let base_h = color::TRACK_HEIGHT;
-            let mut strip_y = track_y + base_h;
-            for (lane_index, lane) in lanes.iter().enumerate() {
-                let lane_h = self
-                    .automation_lane_heights
-                    .get(i)
-                    .and_then(|heights| heights.get(lane_index))
-                    .copied()
-                    .unwrap_or(color::AUTOMATION_LANE_STRIP_HEIGHT);
-                let strip_rect = Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), lane_h);
-                strip_y += lane_h;
-
-                let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
-                let (title_rect, title_value_w) =
-                    model::automation_title_rect(&*self.text_measure, strip_rect, lane);
-
-                // Segment-aware geometry keeps exact breakpoint attachment and
-                // gives Hold segments their vertical edge. Curves receive more
-                // samples as their on-screen span grows, without a fixed-step
-                // sampler skipping a breakpoint between two samples.
-                let polyline = model::build_automation_polyline(
-                    lane,
-                    min_beat,
-                    max_beat,
-                    tx0,
-                    tx1,
-                    graph,
-                    pixels_per_beat,
-                );
-
-                // Placeholder lanes (P5, section 7 addendum) carry one synthetic
-                // point at the param's current value so the flat-line
-                // polyline above samples correctly, but it isn't a real
-                // breakpoint yet — no dot, until the first click creates one.
-                let dots = if lane.placeholder || lane.points.is_empty() {
-                    Vec::new()
-                } else {
-                    // Keep the adjacent point on either side of the visible
-                    // interval. Those endpoints are needed to identify and
-                    // drag a segment crossing the viewport edge, while the
-                    // binary-search bounds ensure allocation is proportional
-                    // to the visible points rather than the whole lane.
-                    let lower = lane.points.partition_point(|p| p.beat.as_f32() < min_beat);
-                    let upper = lane.points.partition_point(|p| p.beat.as_f32() <= max_beat);
-                    let first = lower.saturating_sub(1);
-                    let last = (upper + 1).min(lane.points.len());
-                    lane.points[first..last]
-                        .iter()
-                        .map(|p| {
-                            let x = self.beat_to_pixel(p.beat);
-                            let y = graph.y + graph.height * (1.0 - p.value_norm);
-                            model::AutomationDotScreen {
-                                x,
-                                y,
-                                beat: p.beat,
-                                value_norm: p.value_norm,
-                                shape: p.shape,
-                                past_end: p.past_end,
-                            }
-                        })
-                        .collect()
-                };
-
-                out.push(AutomationLaneScreen {
-                    strip_rect,
-                    pixels_per_beat,
-                    visible_beat_start: min_beat,
-                    grid_step,
-                    beats_per_bar,
-                    bar_skip,
-                    label: lane.label.clone(),
-                    effect_id: lane.effect_id.clone(),
-                    polyline,
-                    dots,
-                    target: lane.target.clone(),
-                    param_id: lane.param_id.clone(),
-                    param_min: lane.param_min,
-                    param_max: lane.param_max,
-                    whole_numbers: lane.whole_numbers,
-                    placeholder_value: lane
-                        .placeholder
-                        .then(|| lane.points.first())
-                        .flatten()
-                        .map(|p| lane.param_min + p.value_norm * (lane.param_max - lane.param_min)),
-                    display: lane.display.clone(),
-                    title_rect,
-                    title_value_w,
-                    playhead_value: lane.denormalize(lane.value_at_norm(self.playhead_beat)),
-                });
-                self.automation_lane_sources.push((i, lane_index));
-            }
-        }
-        self.automation_lane_screens = out;
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {

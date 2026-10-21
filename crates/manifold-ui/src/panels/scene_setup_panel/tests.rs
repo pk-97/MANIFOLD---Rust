@@ -716,15 +716,15 @@
         let labels = |group| panel.add_menu(group).iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
         assert_eq!(
             labels(SceneGroup::Objects),
-            ["Object", "Plane", "Water", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
+            ["Object", "Plane", "Water", "Swarm", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
         );
         assert_eq!(
             labels(SceneGroup::Lighting),
-            ["Light", "Object", "Plane", "Water", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
+            ["Light", "Object", "Plane", "Water", "Swarm", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
         );
         assert_eq!(
             labels(SceneGroup::Forces),
-            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
+            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Swarm", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
         );
         let menu = panel.add_menu(SceneGroup::Objects);
         let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
@@ -732,13 +732,14 @@
         assert!(insert(0, SceneTemplateKind::Object));
         assert!(insert(1, SceneTemplateKind::Plane));
         assert!(insert(2, SceneTemplateKind::Water));
-        for source in &menu[3..6] {
+        assert!(insert(3, SceneTemplateKind::Swarm), "Swarm needs no water");
+        for source in &menu[4..7] {
             assert!(source.action.is_none() && source.disabled.as_deref() == Some("Add Water first"), "{} needs a water", source.label);
         }
-        assert!(matches!(&menu[6].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
-        assert!(insert(7, SceneTemplateKind::Light));
-        assert!(matches!(&menu[8].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
-        assert!(menu[6].separator_after && !menu[5].separator_after, "the clicked group's entries are set apart");
+        assert!(matches!(&menu[7].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
+        assert!(insert(8, SceneTemplateKind::Light));
+        assert!(matches!(&menu[9].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
+        assert!(menu[7].separator_after && !menu[6].separator_after, "the clicked group's entries are set apart");
     }
 
     /// D-94: an Inflow, Drain or Collider goes into the water the selection
@@ -1802,4 +1803,60 @@
             assert!(consumed, "{}: click consumed", case.name);
             assert!((case.expect)(&panel, id, &actions), "{}: click emitted {actions:?}", case.name);
         }
+    }
+
+    /// BUG-mqgsi: the outliner keeps a selection beside its active item, as
+    /// Blender's does. Shift-click adds a row (it becomes the active one)
+    /// or takes a selected row out; a plain click selects one row; clearing
+    /// leaves nothing selected and the active item's card showing.
+    #[test]
+    fn shift_click_adds_and_removes_outliner_rows() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(azalea_shaped_vm()));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let layer = LayerId::new("layer-1");
+        let row = |panel: &ScenePanel, sel: &SceneSelection| panel.outliner_row_ids.iter().find(|(_, s)| s == sel).map(|(id, _)| *id).unwrap();
+        let click = |panel: &mut ScenePanel, tree: &mut UITree, sel: SceneSelection, shift: bool| {
+            let node_id = row(panel, &sel);
+            let modifiers = Modifiers { shift, ..Modifiers::default() };
+            let (consumed, actions) = panel.handle_event(&UIEvent::Click { node_id, pos: Vec2::ZERO, modifiers }, tree);
+            assert!(consumed && matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupSelectionChanged(_))]));
+            tree.clear();
+            panel.build_docked(tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        };
+        let highlighted = |panel: &ScenePanel, tree: &UITree| -> Vec<SceneSelection> {
+            panel
+                .outliner_row_ids
+                .iter()
+                .filter(|(_, sel)| !matches!(sel, SceneSelection::OutlinerFold(_)))
+                .filter(|(id, _)| tree.get_node(*id).is_some_and(|node| node.style.bg_color != Color32::TRANSPARENT))
+                .map(|(_, sel)| sel.clone())
+                .collect()
+        };
+        let (azalea, world) = (SceneSelection::Object(40), SceneSelection::World);
+        assert_eq!(panel.live_selected(), std::slice::from_ref(&azalea), "the active item alone is selected");
+
+        click(&mut panel, &mut tree, world.clone(), true);
+        assert_eq!(panel.live_selected(), [azalea.clone(), world.clone()]);
+        assert_eq!(panel.selection.get(&layer), Some(&world), "the added row is the active one");
+        assert_eq!(highlighted(&panel, &tree).len(), 2, "both rows highlight");
+
+        click(&mut panel, &mut tree, azalea.clone(), true);
+        assert_eq!(panel.live_selected(), std::slice::from_ref(&world), "Shift on a selected row takes it out");
+        assert_eq!(highlighted(&panel, &tree), std::slice::from_ref(&world));
+
+        click(&mut panel, &mut tree, azalea.clone(), true);
+        click(&mut panel, &mut tree, world.clone(), false);
+        assert_eq!(panel.live_selected(), std::slice::from_ref(&world), "a plain click selects one row");
+
+        let version = panel.selection_version();
+        panel.clear_selected(layer.clone());
+        assert!(panel.live_selected().is_empty());
+        assert_eq!(panel.selection.get(&layer), Some(&world), "the card keeps showing");
+        assert!(panel.selection_version() > version, "the planner sees the change");
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert!(highlighted(&panel, &tree).is_empty(), "no row highlights");
     }

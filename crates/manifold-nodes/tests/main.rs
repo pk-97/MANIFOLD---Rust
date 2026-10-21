@@ -15,6 +15,7 @@ mod photoscan_modifier_plans;
 mod physics_scene;
 mod project_preset_overlay;
 mod scene_force_presets;
+mod swarm_hold;
 mod scene_loop_e2e_import;
 mod scene_loop_probe;
 mod scene_loop_wrap_parity;

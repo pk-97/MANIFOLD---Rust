@@ -72,15 +72,16 @@ static PORT_NAMES: LazyLock<PortNames> = LazyLock::new(|| {
     }
 });
 
-const SCALAR_INPUTS: [&str; 6] = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset", "air_drag"];
+const SCALAR_INPUTS: [&str; 7] = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset", "air_drag", "air_resistance"];
 
-static PARAMS: [ParamDef; 8] = [
+static PARAMS: [ParamDef; 9] = [
     ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("gravity_y"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
+    ParamDef { name: Cow::Borrowed("air_resistance"), label: "Air Resistance", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("bodies"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_BODIES as f32), range: Some((1.0, MAX_BODIES as f32)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("copy_groups"), label: "Copy Groups", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_COPY_GROUPS as f32), range: Some((0.0, MAX_COPY_GROUPS as f32)), enum_values: &[] },
 ];
@@ -294,12 +295,14 @@ impl PhysicsWorldNode {
             return Ok(false);
         }
         // Every field as the bodies feel it: the air it carries scaled by Air
-        // Drag (0 ignores the air).
+        // Drag (0 ignores the air). The World's still air reaches every body
+        // once, through the global field (D-114).
         let air_drag = ctx.scalar_or_param("air_drag", 1.0);
+        let air_resistance = ctx.scalar_or_param("air_resistance", 0.0);
         let felt = |field: FieldValue| field.with_air_drag(air_drag).map_err(|error| format!("Physics World: {error}"));
-        if let Some(field) = inputs.acceleration_field.take() {
-            inputs.acceleration_field = Some(felt(field)?);
-        }
+        let acceleration_field = FieldValue::felt_in_still_air(inputs.acceleration_field.as_ref(), air_resistance, air_drag)
+            .map_err(|error| format!("Physics World: {error}"))?;
+        inputs.acceleration_field = acceleration_field;
         for field in &mut inputs.targeted_fields {
             if let Some(value) = field.take() {
                 *field = Some(felt(value)?);

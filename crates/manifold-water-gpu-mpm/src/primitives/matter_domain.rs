@@ -120,7 +120,7 @@ pub(crate) fn fill_region(
     // The lattice's f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
     let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?;
-    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits };
+    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits, pool_full: false };
     let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
     let mut column = [[0u32; 2]; 3];
@@ -191,6 +191,7 @@ manifold_node_engine::primitive! {
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
         air_drag: ScalarF32 optional,
+        air_resistance: ScalarF32 optional,
         reset: ScalarF32 optional,
         stiffness: ScalarF32 optional,
         cohesion: ScalarF32 optional,
@@ -520,6 +521,11 @@ const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
 impl Primitive for MatterDomain {
+    /// A liquid follows the Physics World: its gravity and its clock.
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        &manifold_core::scene_world_controls::WORLD_INPUTS
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
     }

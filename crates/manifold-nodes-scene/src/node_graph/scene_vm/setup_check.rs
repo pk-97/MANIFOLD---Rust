@@ -44,6 +44,9 @@ pub enum SetupProblemKind {
     /// A Physics World's copy groups ask for more copies than its pool
     /// holds; the groups past the cap make fewer.
     CopiesNotMade(u32),
+    /// The particle pool is full and an inflow wants more: the inflow is
+    /// held back until water drains. Only the solver sees it.
+    PoolFull,
 }
 
 impl SetupProblemKind {
@@ -60,6 +63,7 @@ impl SetupProblemKind {
             Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; the water passes through them"),
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
+            Self::PoolFull => "Water pool is full; the inflow is held back. Add a Drain or lower Resolution".to_owned(),
         }
     }
 }
@@ -441,15 +445,21 @@ pub fn problems_with_runtime<'a>(
         if let Some(kind) = column {
             add(kind, &anchor.column, report.column_box.or(anchor.column_bounds));
         }
+        let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
         if let Some(reason) = report.refusal {
             let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
-            let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
             add(SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
         }
         if report.uncoupled_bodies > 0 {
             // On the water's own rows; the bodies it skips are not one shape.
             let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
             add(SetupProblemKind::BodiesNotCoupled(report.uncoupled_bodies), params, None);
+        }
+        if report.fit.pool_full {
+            // The pool holds a fixed number of sites, so a coarser lattice
+            // holds more water; Resolution is the domain's, beside Fill Height.
+            let resolution = ParamAddr { param_id: "resolution".to_owned(), ..anchor.fill.clone() };
+            add(SetupProblemKind::PoolFull, &[resolution, anchor.fill.clone()], layout_box.or(anchor.domain_bounds));
         }
     }
 }
@@ -727,7 +737,7 @@ mod tests {
         let ran = ([2.5, 0.0, -0.5], [3.5, 1.0, 0.5]);
         let report = RuntimeFit {
             node: &node,
-            fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside },
+            fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false },
             refusal: None,
             layout: Some(&layout()),
             column_box: Some(ran),
@@ -765,7 +775,7 @@ mod tests {
         };
         let ran = ([4.0; 3], [5.0; 3]);
         let report =
-            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran), uncoupled_bodies: 0, copies_not_made: 0 };
+            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false }, refusal: None, layout: None, column_box: Some(ran), uncoupled_bodies: 0, copies_not_made: 0 };
         let problems = runtime(&anchors, std::slice::from_ref(&authored), report);
         assert_eq!(problems.len(), 1, "one column, one warning: {problems:?}");
         assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
@@ -819,5 +829,24 @@ mod tests {
         assert_eq!(out[0].params, anchors[0].counts);
         assert_eq!((out[0].kind.message(), out[0].bounds), ("250 copies not made; the world's copy pool is full".to_owned(), None));
         assert_eq!(SetupProblemKind::CopiesNotMade(1).message(), "1 copy not made; the world's copy pool is full");
+    }
+
+    /// BUG-3zq4r (inflow runs out): a pool too full for an inflow is never
+    /// silent. It warns on Resolution (then Fill Height) and outlines the
+    /// domain the solver ran.
+    #[test]
+    fn a_full_pool_warns_on_resolution() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        let fit = SetupFit { pool_full: true, ..SetupFit::default() };
+        let report = RuntimeFit { node: &node, fit, refusal: None, layout: Some(&layout()), column_box: None, uncoupled_bodies: 0, copies_not_made: 0 };
+        let problems = runtime(&anchors, &[], report);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].kind, SetupProblemKind::PoolFull);
+        assert_eq!(problems[0].params[0].param_id, "resolution");
+        assert_eq!(problems[0].params[1], anchors[0].fill);
+        let layout = layout();
+        assert_eq!(problems[0].bounds, Some((layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d]))));
+        assert!(problems[0].kind.message().contains("inflow is held back"));
     }
 }

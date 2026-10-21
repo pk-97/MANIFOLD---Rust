@@ -939,7 +939,7 @@ pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplat
             domain.clone(),
             Some("Simulation"),
             stamped(&domain.type_id, &|name| {
-                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "domain_size" | "emission" | "inflow_speed")
+                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "emission" | "inflow_speed")
             }),
         ),
         (
@@ -964,7 +964,7 @@ pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplat
         stamp_scene_node_exposures_into(&mut metadata.params, &mut metadata.bindings, node.id, &node.node_id, &label, &descriptors, &node.params);
     }
     metadata.display_name = "Water".into();
-    SceneTemplate { group: wrap_family(body, false), metadata }
+    SceneTemplate { group: wrap_family(body, false), metadata, physics: Default::default() }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]

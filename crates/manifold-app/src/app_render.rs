@@ -2286,7 +2286,6 @@ impl Application {
         let cursor_pos = self.cursor_pos;
         let content_state = &self.content_state;
         let cursor_manager = &mut self.cursor_manager;
-        let ui_edits = &mut self.ui_edits;
         let ui_profile = &mut self.ui_profile;
         let seg_ref = &mut seg;
         crate::ui_frame::apply_frame_plan(
@@ -2305,7 +2304,8 @@ impl Application {
                 project_path: self.current_project_path.as_deref(),
                 transport_cache: &mut self.transport_cache,
             },
-            |ui_root, project, selection, active_layer, redraw| {
+            &mut self.ui_edits,
+            |ui_root, project, selection, active_layer, redraw, ui_edits| {
                 // Per-frame drag polling with auto-scroll (move/trim/rubber-band and
                 // automation point/segment/group/marquee/pencil gestures).
                 // Continues edge autoscroll when the mouse is stationary; also

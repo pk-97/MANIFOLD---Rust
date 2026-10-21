@@ -12,40 +12,59 @@
 //! its values follow the shape kind alone; no target kind has handle code
 //! of its own.
 //!
-//! **Picking is origin-based, not an ID-buffer pass.** [`pick_target`]
-//! projects each pickable target's origin through the camera the frame was
-//! rendered with and takes the nearest within [`PICK_RADIUS_PT`]. Two
-//! targets overlapping on screen resolve to the nearer origin, not the one
-//! drawn on top.
+//! **Picking is geometric, not an ID-buffer pass.** [`pick_target`]
+//! projects each pickable target through the camera the frame was rendered
+//! with and takes the nearest: its own drawn edges within
+//! [`EDGE_PICK_TOLERANCE_PT`], or its origin within [`PICK_RADIUS_PT`]. A
+//! domain box is picked by its edges, not only at its centre, where its
+//! fill column sits too. An object has no edges here (its declared box is
+//! its transform, not its mesh), so it is picked at its origin.
 //!
 //! A handle whose param is wired reports locked: the host refuses the drag
 //! and the handle draws in [`LOCKED_COLOR`]. The viewport never fights the
 //! graph.
 //!
+//! **Selection is a set** ([`GizmoSelection`]), as in Blender, Cinema 4D
+//! and Maya: every helper shape draws faintly so it can be clicked, the
+//! selected ones draw bright, and one handle set shows, on the lone
+//! selected shape or at the selection's centre ([`GizmoTarget::selection`]).
+//!
 //! **One composition entry draws every host's chrome** ([`compose_lines`]):
 //! the ground grid, then what physics did (light markers, accepted domain
 //! boxes, solver-reported shapes, all from the host's frame report), then
-//! the selected shape's handles from its declaration.
+//! every helper shape's outline from its declaration, then the handles.
 
 use std::sync::LazyLock;
 
 use manifold_core::NodeId;
 use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
-use manifold_core::physics_gizmo::PhysicsGizmo;
+use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ParamTriple, SceneShape};
 use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
+use crate::node_graph::primitives::render_scene::model_matrix;
 use crate::node_graph::scene_vm::{
     FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
 };
 use crate::node_graph::viewport_overlay::{
-    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines, fluid_domain_lines, fluid_lattice_lines, grid_lines, light_billboard_lines,
-    physics_gizmo_lines,
+    DOMAIN_BOX_COLOR, PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines, clip_to_near, fluid_domain_lines, fluid_lattice_lines,
+    grid_lines, light_billboard_lines, physics_gizmo_color, physics_gizmo_lines,
 };
+
+mod selection;
+pub use selection::{GizmoSelection, SelectionWrite, selection_writes, toggle_pick};
 
 /// Hit-test radius around a target's origin, screen points.
 pub const PICK_RADIUS_PT: f32 = 22.0;
+/// Hit-test tolerance around a shape's drawn edges, screen points.
+pub const EDGE_PICK_TOLERANCE_PT: f32 = 8.0;
+/// Alpha of a shape that is not selected: faint, but there to click.
+pub const UNSELECTED_ALPHA: u8 = 90;
+/// Segments per circle of a shape outline.
+const OUTLINE_SEGMENTS: usize = 24;
+/// A swarm's forces box.
+const SWARM_COLOR: [u8; 4] = [160, 150, 255, 255];
 /// Handle hit-test tolerance, screen points.
 pub const AXIS_PICK_TOLERANCE_PT: f32 = 10.0;
 /// A Move or Scale handle whose axis lies within about 8 degrees of the
@@ -164,6 +183,10 @@ pub enum HandleWrite {
     /// handle's axis. `normalize` writes a unit vector; otherwise the
     /// length is kept.
     Direction { params: [ShapeParamVm; 3], normalize: bool },
+    /// A handle of the selection's set ([`GizmoTarget::selection`]): one
+    /// amount (a distance, a factor or an angle) that [`selection_writes`]
+    /// turns into each member's params. `locked` when no member can take it.
+    Selection { locked: bool },
 }
 
 impl HandleWrite {
@@ -171,12 +194,18 @@ impl HandleWrite {
         match self {
             HandleWrite::Linear { param, .. } | HandleWrite::Angle(param) => std::slice::from_ref(param),
             HandleWrite::Direction { params, .. } => params,
+            HandleWrite::Selection { .. } => &[],
         }
     }
 
     /// A wire feeds a param this handle writes.
     pub fn locked(&self) -> bool {
-        self.params().iter().any(|param| param.wired)
+        match self {
+            HandleWrite::Selection { locked } => *locked,
+            HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. } => {
+                self.params().iter().any(|param| param.wired)
+            }
+        }
     }
 }
 
@@ -205,7 +234,64 @@ pub struct GizmoTarget {
     pub row: Option<u32>,
     /// The declared direction, drawn as a line from the origin.
     pub direction: Option<[f32; 3]>,
+    /// The shape's own edges in world space: what draws and what is picked.
+    pub outline: ShapeOutline,
     pub handles: Vec<GizmoHandle>,
+}
+
+/// A shape's edges in world space, drawn faint or bright and hit-tested by
+/// [`pick_target`]. An object has none: its declared box is the transform,
+/// not the mesh, so it shows by its selection outline instead.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeOutline {
+    None,
+    /// A box's eight corners; two corners that differ in one index bit
+    /// share an edge.
+    Box([[f32; 3]; 8]),
+    /// A ball: three great circles.
+    Ball { center: [f32; 3], radius: f32 },
+    /// A direction from a point, with the ring of its reach around it.
+    Ray { from: [f32; 3], dir: [f32; 3], length: f32, reach: Option<f32> },
+}
+
+impl ShapeOutline {
+    /// Each edge as a world segment.
+    pub fn for_each_edge(&self, mut edge: impl FnMut([f32; 3], [f32; 3])) {
+        fn circle(center: [f32; 3], u: [f32; 3], v: [f32; 3], r: f32, edge: &mut impl FnMut([f32; 3], [f32; 3])) {
+            let point = |k: usize| -> [f32; 3] {
+                let (s, c) = (k as f32 / OUTLINE_SEGMENTS as f32 * std::f32::consts::TAU).sin_cos();
+                std::array::from_fn(|i| center[i] + r * (c * u[i] + s * v[i]))
+            };
+            for k in 0..OUTLINE_SEGMENTS {
+                edge(point(k), point(k + 1));
+            }
+        }
+        match *self {
+            ShapeOutline::None => {}
+            ShapeOutline::Box(corners) => {
+                for k in 0..8 {
+                    for axis in 0..3 {
+                        if k >> axis & 1 == 0 {
+                            edge(corners[k], corners[k | 1 << axis]);
+                        }
+                    }
+                }
+            }
+            ShapeOutline::Ball { center, radius } => {
+                for (u, v) in [(0, 1), (1, 2), (0, 2)] {
+                    circle(center, IDENTITY_AXES[u], IDENTITY_AXES[v], radius, &mut edge);
+                }
+            }
+            ShapeOutline::Ray { from, dir, length, reach } => {
+                edge(from, offset(from, dir, length));
+                if let Some(r) = reach {
+                    let u = normalized(perpendicular(dir)).unwrap_or(IDENTITY_AXES[0]);
+                    let v = cross3(dir, u);
+                    circle(from, u, v, r, &mut edge);
+                }
+            }
+        }
+    }
 }
 
 const IDENTITY_AXES: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -253,10 +339,19 @@ impl GizmoTarget {
                         handles.push(GizmoHandle { mode: GizmoMode::Rotate, axis, write: HandleWrite::Angle(param) });
                     }
                 }
-                for (axis, id) in GizmoAxis::XYZ.into_iter().zip(size) {
-                    if let Some(param) = param(id) {
-                        let write = HandleWrite::Linear { param, limit: extent_limit };
-                        handles.push(GizmoHandle { mode: GizmoMode::Scale, axis, write });
+                match triple(size) {
+                    // A cube's sides are one param: it scales uniformly.
+                    Some([side, y, z]) if side.write != ShapeWrite::Unplaced && side.write == y.write && side.write == z.write => {
+                        let write = HandleWrite::Linear { param: side, limit: extent_limit };
+                        handles.push(GizmoHandle { mode: GizmoMode::Scale, axis: GizmoAxis::Uniform, write });
+                    }
+                    _ => {
+                        for (axis, id) in GizmoAxis::XYZ.into_iter().zip(size) {
+                            if let Some(param) = param(id) {
+                                let write = HandleWrite::Linear { param, limit: extent_limit };
+                                handles.push(GizmoHandle { mode: GizmoMode::Scale, axis, write });
+                            }
+                        }
                     }
                 }
             }
@@ -282,23 +377,48 @@ impl GizmoTarget {
             SceneShape::Axis { origin: None, .. } => shape.anchor,
             SceneShape::Box { .. } | SceneShape::Sphere { .. } | SceneShape::Plane { .. } | SceneShape::PointRadius { .. } | SceneShape::Axis { .. } => [0.0; 3],
         });
-        let (origin, world_axes) = match shape.frame {
-            Some(m) => (
-                std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * local[j]).sum::<f32>()),
-                std::array::from_fn(|j| [m[j][0], m[j][1], m[j][2]]),
-            ),
-            None => (local, IDENTITY_AXES),
+        let to_world = |p: [f32; 3]| -> [f32; 3] {
+            match shape.frame {
+                Some(m) => std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * p[j]).sum::<f32>()),
+                None => p,
+            }
         };
+        let origin = to_world(local);
+        let world_axes = shape.frame.map_or(IDENTITY_AXES, |m| std::array::from_fn(|j| [m[j][0], m[j][1], m[j][2]]));
+        let kind = GizmoTargetKind::of(&shape.owner);
         Self {
             id: GizmoTargetId { owner: shape.owner.clone(), shape: shape.index },
-            kind: GizmoTargetKind::of(&shape.owner),
+            kind,
             origin,
             world_axes,
             unplaced: shape.params.iter().any(|param| param.write == ShapeWrite::Unplaced),
             pickable: shape.pickable,
             row: shape.row,
             direction,
+            outline: outline(shape, kind, origin, to_world),
             handles,
+        }
+    }
+
+    /// The lines of this shape's outline in `color`, appended to `out`.
+    fn outline_lines(&self, color: [u8; 4], out: &mut Vec<WorldLine>) {
+        self.outline.for_each_edge(|a, b| out.push(WorldLine { a, b, color }));
+    }
+
+    /// The color this shape's outline draws in, by what it is: the families
+    /// the solver's own report draws in.
+    fn outline_color(&self) -> [u8; 4] {
+        match self.kind {
+            // A liquid domain declares its box first (`LIQUID_DOMAIN_SHAPES`),
+            // then its fill column.
+            GizmoTargetKind::FluidDomain if self.id.shape == 0 => DOMAIN_BOX_COLOR,
+            GizmoTargetKind::FluidDomain => physics_gizmo_color(PhysicsGizmoFamily::Fill),
+            GizmoTargetKind::Inflow => physics_gizmo_color(PhysicsGizmoFamily::Source),
+            GizmoTargetKind::Drain => physics_gizmo_color(PhysicsGizmoFamily::Drain),
+            GizmoTargetKind::Collider => physics_gizmo_color(PhysicsGizmoFamily::Collider),
+            GizmoTargetKind::Force => physics_gizmo_color(PhysicsGizmoFamily::Force),
+            GizmoTargetKind::Swarm => SWARM_COLOR,
+            GizmoTargetKind::Object => UNIFORM_COLOR,
         }
     }
 
@@ -376,6 +496,33 @@ impl GizmoTarget {
             GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4]).nth(3).map(|line| self.world_point(line.a)),
         }
     }
+}
+
+/// The world outline `shape` declares, sitting at `origin`. Box params are
+/// in the shape's parent space; `to_world` maps them out.
+fn outline(shape: &SceneShapeVm, kind: GizmoTargetKind, origin: [f32; 3], to_world: impl Fn([f32; 3]) -> [f32; 3]) -> ShapeOutline {
+    let value = |id: &str| shape.params.iter().find(|param| param.id == id).map(|param| param.value);
+    let values = |ids: &ParamTriple| Some([value(&ids[0])?, value(&ids[1])?, value(&ids[2])?]);
+    let outline = match (kind, &shape.decl.shape) {
+        (GizmoTargetKind::Object, _) => None,
+        (_, SceneShape::Box { center, rotation, size }) => values(center).zip(values(size)).map(|(center, size)| {
+            let turn = rotation.as_ref().and_then(values).unwrap_or([0.0; 3]);
+            let m = model_matrix(center, turn, size);
+            ShapeOutline::Box(std::array::from_fn(|k| {
+                let local: [f32; 3] = std::array::from_fn(|i| if k >> i & 1 == 1 { 0.5 } else { -0.5 });
+                to_world(std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * local[j]).sum::<f32>()))
+            }))
+        }),
+        (_, SceneShape::Sphere { radius, .. } | SceneShape::PointRadius { radius, .. }) => {
+            value(radius).map(|radius| ShapeOutline::Ball { center: origin, radius: radius.abs() })
+        }
+        (_, SceneShape::Axis { direction, radius, .. }) => values(direction).and_then(normalized).map(|dir| {
+            let reach = radius.as_deref().and_then(value).map(f32::abs);
+            ShapeOutline::Ray { from: origin, dir, length: reach.filter(|r| *r > MIN_EXTENT).unwrap_or(1.0), reach }
+        }),
+        (_, SceneShape::Plane { .. }) => None,
+    };
+    outline.unwrap_or(ShapeOutline::None)
 }
 
 /// The picture a host shows: the camera it was rendered through, the
@@ -463,20 +610,40 @@ pub fn gizmo_target_for(scene: &SceneVm, id: &GizmoTargetId) -> Option<GizmoTarg
         .map(GizmoTarget::from_shape)
 }
 
-/// The pickable target whose origin projects nearest `click` (render
-/// pixels of `view`), within [`PICK_RADIUS_PT`]. `None` clears the
-/// selection.
+/// The pickable target nearest `click` (render pixels of `view`): by its
+/// drawn edges within [`EDGE_PICK_TOLERANCE_PT`], or by its origin within
+/// [`PICK_RADIUS_PT`]. `None` is a click on empty space.
 pub fn pick_target(scene: &SceneVm, view: &GizmoView, click: (f32, f32)) -> Option<GizmoTargetId> {
-    let radius = PICK_RADIUS_PT * view.px_per_point;
     let mut best: Option<(GizmoTargetId, f32)> = None;
     for target in gizmo_targets(scene).filter(|target| target.pickable) {
-        let Some(proj) = view.camera.project_to_pixel(target.origin, view.width, view.height) else { continue };
-        let d = dist2(click, (proj.px, proj.py));
-        if d <= radius * radius && best.as_ref().is_none_or(|(_, bd)| d < *bd) {
+        if let Some(d) = target_distance(&target, view, click)
+            && best.as_ref().is_none_or(|(_, bd)| d < *bd)
+        {
             best = Some((target.id, d));
         }
     }
     best.map(|(id, _)| id)
+}
+
+/// How far `click` lies from `target` on screen, in render pixels: the
+/// nearer of its origin (within [`PICK_RADIUS_PT`]) and its edges (within
+/// [`EDGE_PICK_TOLERANCE_PT`]). `None` when neither is in reach.
+fn target_distance(target: &GizmoTarget, view: &GizmoView, click: (f32, f32)) -> Option<f32> {
+    let project = |p: [f32; 3]| view.camera.project_to_pixel(p, view.width, view.height).map(|p| (p.px, p.py));
+    let radius = PICK_RADIUS_PT * view.px_per_point;
+    let tolerance = EDGE_PICK_TOLERANCE_PT * view.px_per_point;
+    let mut best = project(target.origin).map(|o| dist2(click, o).sqrt()).filter(|d| *d <= radius);
+    target.outline.for_each_edge(|a, b| {
+        // A camera inside a domain box still reaches the edges in front of it.
+        let Some((a, b)) = clip_to_near(&view.camera, a, b) else { return };
+        if let (Some(a), Some(b)) = (project(a), project(b)) {
+            let d = point_segment_dist(click, a, b);
+            if d <= tolerance && best.is_none_or(|bd| d < bd) {
+                best = Some(d);
+            }
+        }
+    });
+    best
 }
 
 fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
@@ -486,8 +653,8 @@ fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 /// What one host frame shows (REALTIME_3D_DESIGN.md D7a). What physics did
-/// comes from the host's frame report; handles come from the selected
-/// shape's declaration.
+/// comes from the host's frame report; outlines and handles come from the
+/// shape declarations.
 #[derive(Clone, Copy)]
 pub struct GizmoChrome<'a> {
     /// The picture the lines draw over; handles size to it.
@@ -502,18 +669,29 @@ pub struct GizmoChrome<'a> {
     /// The scene's setup check: each shape that does not fit its domain
     /// draws a red box.
     pub problems: &'a [SetupProblem],
-    pub selected: Option<&'a GizmoTarget>,
+    /// Every shape in the scene, which are selected, and the one handle set.
+    pub selection: &'a GizmoSelection,
     pub mode: GizmoMode,
     /// An effect after the scene layer moves the picture off the scene, so
     /// the handles fade (D-69).
     pub fade_handles: bool,
 }
 
+/// `color` drawn faint unless `bright`.
+fn shown(mut color: [u8; 4], bright: bool) -> [u8; 4] {
+    if !bright {
+        color[3] = color[3].min(UNSELECTED_ALPHA);
+    }
+    color
+}
+
 /// Every line a host draws for one frame, into `out` (cleared first): the
-/// ground grid, a marker per light, a box per accepted liquid domain, each
-/// solver-reported physics shape, a red box on every shape the setup check
-/// finds outside its domain, then the selected shape's handles. The
-/// one composition entry every host calls.
+/// ground grid, a marker per light, each solver-reported physics shape
+/// (faint), a box per accepted liquid domain, every pickable helper shape's
+/// outline (faint, or bright when selected), the selected domains' cell
+/// grids, a red box on every shape the setup check finds outside its domain
+/// whatever is selected, then the one handle set. The one composition entry
+/// every host calls.
 pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     out.clear();
     out.extend_from_slice(&GROUND_GRID);
@@ -521,38 +699,57 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     for &pos in chrome.lights {
         out.extend(light_billboard_lines(pos, size));
     }
-    let accepted = chrome
-        .domains
-        .iter()
-        .filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready)
-        .filter_map(|(_, snapshot)| snapshot.accepted_layout);
-    for layout in accepted {
-        out.extend(fluid_domain_lines(layout));
-    }
-    // The cell grid shows only for the selected domain, from what its solver
-    // accepted (D7a); handles and cards read the declaration instead.
-    if let Some(ShapeOwner::LiquidDomain(selected)) = chrome.selected.map(|target| &target.id.owner)
-        && let Some((_, snapshot)) = chrome.domains.iter().find(|(id, _)| id == selected)
-        && snapshot.state == FluidDomainState::Ready
-        && let Some(layout) = snapshot.accepted_layout
-    {
-        let view = &chrome.view;
-        let on_screen = |a: [f32; 3], b: [f32; 3]| {
-            let a = view.camera.project_to_pixel(a, view.width, view.height)?;
-            let b = view.camera.project_to_pixel(b, view.width, view.height)?;
-            Some((a.px - b.px).hypot(a.py - b.py) / view.px_per_point)
-        };
-        fluid_lattice_lines(layout, view.camera.pos, view.camera.fwd, on_screen, out);
-    }
+    // What physics did carries no owner, so it never draws bright; the
+    // declared outline over it does.
     let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
     for gizmo in chrome.physics {
         let count = physics_gizmo_lines(gizmo, &mut shape);
-        out.extend_from_slice(&shape[..count]);
+        out.extend(shape[..count].iter().map(|line| WorldLine { color: shown(line.color, false), ..*line }));
+    }
+    let selection = chrome.selection;
+    let accepted = |node: &NodeId| {
+        chrome
+            .domains
+            .iter()
+            .find(|(id, snapshot)| id == node && snapshot.state == FluidDomainState::Ready)
+            .and_then(|(_, snapshot)| snapshot.accepted_layout)
+    };
+    // A domain box the solver accepted draws where the solver put it (its
+    // size snaps to whole cells), in place of its declared outline.
+    for (node, snapshot) in chrome.domains.iter().filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready) {
+        let Some(layout) = snapshot.accepted_layout else { continue };
+        let bright = selection.selected.iter().any(|target| is_domain_box(target, node));
+        out.extend(fluid_domain_lines(layout, shown(DOMAIN_BOX_COLOR, bright)));
+    }
+    for target in selection.targets.iter().filter(|target| target.pickable) {
+        if let ShapeOwner::LiquidDomain(node) = &target.id.owner
+            && is_domain_box(target, node)
+            && accepted(node).is_some()
+        {
+            continue;
+        }
+        let bright = selection.is_selected(&target.id);
+        target.outline_lines(shown(target.outline_color(), bright), out);
+    }
+    // The cell grid shows only for a selected domain, from what its solver
+    // accepted (D7a); handles and cards read the declaration instead.
+    let view = &chrome.view;
+    let on_screen = |a: [f32; 3], b: [f32; 3]| {
+        let a = view.camera.project_to_pixel(a, view.width, view.height)?;
+        let b = view.camera.project_to_pixel(b, view.width, view.height)?;
+        Some((a.px - b.px).hypot(a.py - b.py) / view.px_per_point)
+    };
+    for (index, target) in selection.selected.iter().enumerate() {
+        let ShapeOwner::LiquidDomain(node) = &target.id.owner else { continue };
+        let first = !selection.selected[..index].iter().any(|other| other.id.owner == target.id.owner);
+        if let Some(layout) = accepted(node).filter(|_| first) {
+            fluid_lattice_lines(layout, view.camera.pos, view.camera.fwd, on_screen, out);
+        }
     }
     for (lo, hi) in chrome.problems.iter().filter_map(|problem| problem.live_bounds(chrome.domains, chrome.live_columns)) {
         out.extend(box_lines(lo, hi, PROBLEM_COLOR));
     }
-    if let Some(target) = chrome.selected {
+    if let Some(target) = selection.handles.as_ref() {
         let start = out.len();
         let len = handle_length(target.origin, &chrome.view.camera, chrome.view.height);
         gizmo_lines(chrome.mode, target, len, out);
@@ -562,6 +759,12 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
             }
         }
     }
+}
+
+/// `target` is the box of the liquid domain `node`: its first declared
+/// shape (`LIQUID_DOMAIN_SHAPES`).
+fn is_domain_box(target: &GizmoTarget, node: &NodeId) -> bool {
+    target.id.shape == 0 && matches!(&target.id.owner, ShapeOwner::LiquidDomain(owner) if owner == node)
 }
 
 /// World-space handle geometry for `mode` at `target`, plus the declared
@@ -713,15 +916,18 @@ impl GizmoDrag {
         if handle.write.locked() || target.unplaced {
             return None;
         }
-        let grab = match handle.write {
-            HandleWrite::Linear { .. } => {
-                let grab = target.axis_param(axis, view, at)?;
-                if mode == GizmoMode::Scale && grab.abs() < 1e-6 {
-                    return None;
-                }
-                Some(grab)
+        let held_linearly = match (&handle.write, mode) {
+            (HandleWrite::Linear { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Move | GizmoMode::Scale) => true,
+            (HandleWrite::Angle(_) | HandleWrite::Direction { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Rotate) => false,
+        };
+        let grab = if held_linearly {
+            let grab = target.axis_param(axis, view, at)?;
+            if mode == GizmoMode::Scale && grab.abs() < 1e-6 {
+                return None;
             }
-            HandleWrite::Angle(_) | HandleWrite::Direction { .. } => None,
+            Some(grab)
+        } else {
+            None
         };
         Some(Self { target, mode, axis, grab, last: at, angle: 0.0 })
     }
@@ -760,6 +966,16 @@ impl GizmoDrag {
                 let rotated = rotate_about(base, self.axis.unit(), self.angle);
                 HandleValues::Three(if *normalize { normalized(rotated)? } else { rotated })
             }
+            // The selection's amount: the distance moved, the factor scaled
+            // (never through zero) or the angle turned.
+            HandleWrite::Selection { .. } => HandleValues::One(match self.mode {
+                GizmoMode::Move => self.target.axis_param(self.axis, view, cur)? - self.grab?,
+                GizmoMode::Scale => (self.target.axis_param(self.axis, view, cur)? / self.grab?).max(MIN_EXTENT),
+                GizmoMode::Rotate => {
+                    self.angle += turned?;
+                    self.angle
+                }
+            }),
         };
         match values {
             HandleValues::One(v) if v.is_finite() => Some(values),
@@ -783,6 +999,10 @@ fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
 /// Rotation delta (radians) for dragging a ring: the screen-space angle
@@ -814,12 +1034,12 @@ pub fn rotate_drag_delta(
     Some(d)
 }
 
-/// The render slots that draw scene object `object_node_id`, for its
-/// selection outline (D-102): its own slot, plus every part's for a group
-/// row. A Water row is a group and a real render slot, its looks the parts;
-/// an imported model's group row shares its first part's slot. Written into
-/// `out`, sorted and deduplicated.
-pub fn outline_slots(scene: &SceneVm, object_node_id: u32, out: &mut Vec<u32>) {
+/// The render slots that draw the scene objects `object_node_ids`, for
+/// their selection outline (D-102): each one's own slot, plus every part's
+/// for a group row. A Water row is a group and a real render slot, its looks
+/// the parts; an imported model's group row shares its first part's slot.
+/// Written into `out`, sorted and deduplicated.
+pub fn outline_slots(scene: &SceneVm, object_node_ids: impl IntoIterator<Item = u32>, out: &mut Vec<u32>) {
     let rows = || {
         scene.objects.iter().filter_map(|object| match object {
             SceneObjectVm::Known(row) => Some(row),
@@ -827,10 +1047,12 @@ pub fn outline_slots(scene: &SceneVm, object_node_id: u32, out: &mut Vec<u32>) {
         })
     };
     out.clear();
-    for row in rows().filter(|row| row.object_node_id == object_node_id) {
-        out.push(row.index as u32);
-        if row.is_group {
-            out.extend(rows().filter(|part| part.parent_group_id == Some(object_node_id) && !part.is_group).map(|part| part.index as u32));
+    for object_node_id in object_node_ids {
+        for row in rows().filter(|row| row.object_node_id == object_node_id) {
+            out.push(row.index as u32);
+            if row.is_group {
+                out.extend(rows().filter(|part| part.parent_group_id == Some(object_node_id) && !part.is_group).map(|part| part.index as u32));
+            }
         }
     }
     out.sort_unstable();

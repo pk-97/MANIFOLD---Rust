@@ -197,11 +197,20 @@ fn liquid_shapes(
         let first = out.len();
         let owner = ShapeOwner::LiquidDomain(at.node.node_id.clone());
         node_shapes(&at, owner.clone(), Some(row.object_node_id), pickable, out);
-        let declared = |via: &str| out[first..].iter().position(|shape| shape.decl.via.as_deref() == Some(via)).map(|at| first + at);
-        let (box_shape, column) = (declared("domain"), declared("initial_volume"));
         let param = |id: &str, default: f32| {
             (ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: id.to_owned() }, param_f32(at.node, id, default))
         };
+        // `trace_fluid_domain` leaves both unset exactly when a wire drives the box.
+        let checked = row.fluid_domain.is_some() || row.fluid_domain_error.is_some();
+        // With the `domain` port unwired the solver runs its default cube,
+        // sized by Domain Size alone; the cube still takes clicks and scales.
+        let cube = checked && row.fluid_domain_transform.is_none();
+        if cube && let Some(shape) = cube_shape(&at, owner.clone(), Some(row.object_node_id), pickable) {
+            out.insert(first, shape);
+        }
+        let declared = |via: &str| out[first..].iter().position(|shape| shape.decl.via.as_deref() == Some(via)).map(|at| first + at);
+        // The setup check reads a cube's size off its layout, not a box shape.
+        let (box_shape, column) = (declared("domain").filter(|_| !cube), declared("initial_volume"));
         let (fill, fill_value) = param("fill_height", DEFAULT_FILL_HEIGHT);
         let fill_authored = at.level.producer(at.node.id, "fill_height").is_none().then_some(fill_value);
         let (size, resolution) = (param("domain_size", 4.0), param("resolution", 24.0));
@@ -210,8 +219,7 @@ fn liquid_shapes(
             node_doc_id: transform.node_doc_id,
             param_id: "billboard".to_owned(),
         });
-        // `trace_fluid_domain` leaves both unset exactly when a wire drives the box.
-        let layout = match (row.fluid_domain.is_some() || row.fluid_domain_error.is_some(), row.fluid_domain_transform.clone()) {
+        let layout = match (checked, row.fluid_domain_transform.clone()) {
             (false, _) => SiteLayout::Unchecked,
             (true, None) => SiteLayout::Cube { size, resolution },
             (true, Some(transform)) => SiteLayout::Box { transform: Box::new(transform), size, resolution },
@@ -341,6 +349,28 @@ fn transform_params(decl: &SceneShapeDecl, t: &TransformVm) -> Option<Vec<ShapeP
             Some(ShapeParamVm { id: id.to_string(), write: ShapeWrite::Node((*addr).clone()), value: *value, wired: *wired })
         })
         .collect()
+}
+
+/// The domain's default cube (`domain_layout` with no box), in place of the
+/// box its `domain` transform would declare: it sits on the floor at the
+/// world origin, Domain Size on every side. Each side writes Domain Size,
+/// so the box scales uniformly; no param positions it, so its centre reads
+/// as driven and does not move.
+fn cube_shape(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<u32>, pickable: bool) -> Option<SceneShapeVm> {
+    let (index, decl) = scene_shape(&at.node.type_id).iter().enumerate().find(|(_, decl)| decl.via.as_deref() == Some("domain"))?;
+    let SceneShape::Box { center, size: sides, .. } = &decl.shape else { return None };
+    let size = ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: "domain_size".to_owned() };
+    let value = param_f32(at.node, "domain_size", 4.0);
+    let driven = at.level.producer(at.node.id, "domain_size").is_some();
+    let centre = [0.0, value * 0.5, 0.0];
+    let params = center
+        .iter()
+        .zip(centre)
+        .map(|(id, value)| (id, value, true))
+        .chain(sides.iter().map(|id| (id, value, driven)))
+        .map(|(id, value, wired)| ShapeParamVm { id: id.to_string(), write: ShapeWrite::Node(size.clone()), value, wired })
+        .collect();
+    Some(SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row, pickable })
 }
 
 /// The params of a shape whose `via` node does not exist yet, at the

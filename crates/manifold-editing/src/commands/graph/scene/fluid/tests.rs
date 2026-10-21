@@ -20,21 +20,30 @@ use manifold_core::{GraphTarget, NodeId};
 
 /// The Physics World's shared controls and the ports the test liquid's domain
 /// takes them on, as the node registry declares them (a real liquid domain
-/// declares the same five); every other type declares nothing here, so a
+/// declares the same); every other type declares nothing here, so a
 /// lifted control keeps its saved spec.
 fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
     match type_id {
         "node.physics_world" => world_metadata(),
-        MATTER_DOMAIN_TYPE_ID => ["gravity_x", "gravity", "gravity_z", "speed", "reset"]
+        MATTER_DOMAIN_TYPE_ID => manifold_core::scene_world_controls::WORLD_INPUTS
             .into_iter()
-            .map(|name| scene_param_meta(name, name))
+            .map(|input| scene_param_meta(input.input, input.input))
             .collect(),
         _ => Vec::new(),
     }
 }
 
+/// The test liquid's domain takes the World's gravity and clock, as a real
+/// liquid domain declares.
+fn world_inputs(type_id: &str) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    match type_id {
+        MATTER_DOMAIN_TYPE_ID => &manifold_core::scene_world_controls::WORLD_INPUTS,
+        _ => &[],
+    }
+}
+
 inventory::submit! {
-    manifold_core::param_lookup::NodeParamSource { params_for_type: node_params }
+    manifold_core::param_lookup::NodeParamSource { params_for_type: node_params, world_inputs_for_type: world_inputs }
 }
 
 fn render_scene_graph(objects: u32, occupied_next_slot: bool) -> EffectGraphDef {
@@ -95,7 +104,7 @@ fn fresh_project() -> (manifold_core::project::Project, GraphTarget) {
 }
 
 fn world_metadata() -> Vec<NodeParamMetadata> {
-    [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0), ("speed", 1.0), ("reset", 0.0)]
+    [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0), ("air_resistance", 0.0), ("speed", 1.0), ("reset", 0.0)]
         .into_iter()
         .map(|(name, value)| {
             let mut metadata = scene_param_meta(name, name);
@@ -192,7 +201,7 @@ fn liquid_template() -> SceneTemplate {
         wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],
         tint: None,
     }));
-    SceneTemplate { group, metadata }
+    SceneTemplate { group, metadata, physics: Default::default() }
 }
 
 fn insert(
@@ -257,7 +266,7 @@ fn scene_physics_two_fluids_get_independent_ids_and_sections() {
     assert_eq!(result.nodes.iter().filter(|node| node.type_id == "node.physics_world").count(), 1);
     assert_eq!(
         result.nodes.iter().filter(|node| node.type_id == "node.value").count(),
-        5,
+        manifold_core::scene_world_controls::WORLD_INPUTS.len(),
         "additional liquid domains reuse the existing World sources"
     );
 }
@@ -323,9 +332,8 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     assert!(project.graph_target_owner_mut(&target).unwrap().set_base_param("30_speed", 2.0));
     let mut before_speed = project.graph_target_owner(&target).unwrap().params.get("30_speed").unwrap().clone();
     // Manifest refresh clears this frame-local gesture latch, not authored
-    // state; the lifted control's lookup moves to its value source.
+    // state. The World's own param still describes the lifted control.
     before_speed.touched = false;
-    before_speed.source = manifold_core::params::SpecSource::Unresolved;
     let audio = vec![manifold_core::audio_mod::ParameterAudioMod::new(
         "30_speed".into(),
         manifold_core::id::AudioSendId::new("scene-audio"),
@@ -340,7 +348,7 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     let input = domain_nodes.iter().find(|node| node.type_id == GROUP_INPUT_TYPE_ID).unwrap();
     let metadata = result.preset_metadata.as_ref().unwrap();
     for (world_param, fluid_param) in
-        [("gravity_x", "gravity_x"), ("gravity_y", "gravity"), ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
+        manifold_core::scene_world_controls::WORLD_INPUTS.map(|input| (input.world, input.input))
     {
         let world_wire = result.wires.iter().find(|wire| wire.to_node == 30 && wire.to_port == world_param).unwrap();
         let fluid_wire =
@@ -352,19 +360,23 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
             && wire.to_port == fluid_param));
         let id = format!("30_{world_param}");
         let before = original_metadata.bindings.iter().find(|binding| binding.id == id).unwrap();
-        let after = metadata.bindings.iter().find(|binding| binding.id == id).unwrap();
-        let mut expected = before.clone();
+        let after: Vec<_> = metadata.bindings.iter().filter(|binding| binding.id == id).collect();
+        // The World's own param stays the first target, so it still
+        // describes the control; the lifted value source is the second.
+        let mut expected = vec![before.clone()];
         if world_param == "gravity_x" {
             assert_eq!(world_wire.from_node, 31, "existing graph modulation stays authoritative");
         } else {
             let source = result.nodes.iter().find(|node| node.id == world_wire.from_node).unwrap();
-            expected.target = BindingTarget::Node { node_id: source.node_id.clone(), param: "value".into() };
+            let mut lifted = before.clone();
+            lifted.target = BindingTarget::Node { node_id: source.node_id.clone(), param: "value".into() };
+            expected.push(lifted);
             if world_param == "speed" {
                 assert!(source.exposed_params.contains("value"));
                 assert_eq!(source.params["value"], SerializedParamValue::Float { value: 1.75 });
             }
         }
-        assert_eq!(after, &expected, "binding identity and conversion must survive lifting");
+        assert_eq!(after, expected.iter().collect::<Vec<_>>(), "binding identity and conversion must survive lifting");
         assert_eq!(
             metadata.params.iter().find(|spec| spec.id == id),
             original_metadata.params.iter().find(|spec| spec.id == id)
@@ -506,7 +518,7 @@ fn scene_physics_add_fluid_wires_world_controls_into_nested_gpu_domain() {
     assert_eq!(inner_inputs.len(), 1, "Live Matter's own sentinel is reused");
     let domain = inner.nodes.iter().find(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
     for (world_param, domain_param) in
-        [("gravity_x", "gravity_x"), ("gravity_y", "gravity"), ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
+        manifold_core::scene_world_controls::WORLD_INPUTS.map(|input| (input.world, input.input))
     {
         let source = result.wires.iter().find(|wire| wire.to_node == world.id && wire.to_port == world_param).unwrap();
         assert!(
@@ -534,7 +546,7 @@ fn scene_physics_add_fluid_wires_world_controls_into_nested_gpu_domain() {
     }
     let flat = manifold_core::flatten::flatten_groups(result).expect("nested routing flattens");
     let flat_domain = flat.nodes.iter().find(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
-    for port in ["gravity_x", "gravity", "gravity_z", "speed", "reset"] {
+    for port in manifold_core::scene_world_controls::WORLD_INPUTS.map(|input| input.input) {
         assert!(
             flat.wires.iter().any(|wire| wire.to_node == flat_domain.id && wire.to_port == port),
             "flattened graph drives the domain's {port}"

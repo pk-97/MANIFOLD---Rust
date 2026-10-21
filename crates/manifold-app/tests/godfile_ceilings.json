@@ -38,7 +38,7 @@
     "crates/manifold-playback/src/engine.rs": 4720,
     "crates/manifold-playback/src/modulation.rs": 4667,
     "crates/manifold-ui/src/graph_canvas/tests.rs": 2949,
-    "crates/manifold-ui/src/interaction_overlay.rs": 6865,
+    "crates/manifold-ui/src/interaction_overlay.rs": 3858,
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": 2811,
     "crates/manifold-ui/src/panels/inspector/mod.rs": 3581,
     "crates/manifold-ui/src/panels/layer_header.rs": 3549,
