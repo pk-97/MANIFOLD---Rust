@@ -544,7 +544,9 @@ pub fn sync_automation_lane_geometry(
     pinned_lanes: &[manifold_ui::ui_state::AutomationLaneKey],
 ) {
     record_work(WorkKind::LaneProjection);
+    // This is the only lane writer, so hiding automation must clear the strips.
     if !automation_visible {
+        ui.viewport.set_automation_lanes(Vec::new());
         return;
     }
     use manifold_ui::panels::viewport::ViewportAutomationLane;
