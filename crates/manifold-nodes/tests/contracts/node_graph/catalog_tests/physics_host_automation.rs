@@ -404,3 +404,32 @@ fn ticks_after_a_seek_match_at_30_60_120_144_fps_live_and_export() {
         }
     }
 }
+
+/// Plays half a second, seeks forward to a time on no frame grid, and plays
+/// a second more. Returns the ticks run from the seek's frame on.
+fn after_forward_seek(fps: u32, offline: bool) -> Vec<(u64, u64)> {
+    const TARGET: f64 = 0.9137;
+    let fps_f = f64::from(fps);
+    let before = (0..=(0.5 * fps_f).round() as u32).map(|frame| (f64::from(frame) / fps_f, None));
+    let landed = (TARGET * fps_f - 2e-7).ceil() as u32;
+    let after = (landed..=((TARGET + 1.0) * fps_f).floor() as u32)
+        .map(move |frame| (f64::from(frame) / fps_f, (frame == landed).then_some(TARGET)));
+    play(Case::Lane, fps, offline, before.chain(after))
+}
+
+/// A forward seek keeps the simulation and starts the tick grid at the
+/// seek's target, so the ticks after it match bit for bit at every rate.
+#[test]
+fn ticks_after_a_forward_seek_match_at_30_60_120_144_fps_live_and_export() {
+    let reference = after_forward_seek(60, true);
+    assert!(reference.len() >= 59, "a second of ticks after the seek: {}", reference.len());
+    assert!(f64::from_bits(reference[0].0) > 0.0, "the seek keeps the simulated time");
+    for fps in [30, 60, 120, 144] {
+        for offline in [false, true] {
+            let ticks = after_forward_seek(fps, offline);
+            let shared = ticks.len().min(reference.len());
+            assert!(shared >= 59, "{fps} fps, offline {offline}: {} ticks after the seek", ticks.len());
+            assert!(ticks[..shared] == reference[..shared], "{fps} fps, offline {offline}: ticks after the forward seek differ");
+        }
+    }
+}

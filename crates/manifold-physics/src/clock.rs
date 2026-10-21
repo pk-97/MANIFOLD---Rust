@@ -508,6 +508,15 @@ impl SimulationClock {
         self.previous_reset = Some(reset);
         let restarted =
             !self.started || rate_changed || setup_changed || reset_edge || transport < self.last_transport - BACKWARD_SEEK;
+        // A seek forward keeps the simulation and starts a fresh grid at its
+        // target: the skipped span is neither simulated nor dropped, and the
+        // boundaries from the target to this frame run next frame, as after a
+        // restart, so where the frame landed decides nothing.
+        let seek_origin = if restarted {
+            None
+        } else {
+            self.transport_target.filter(|&target| target.is_finite() && target > self.last_transport && target <= transport + 1e-6)
+        };
         let mut held = false;
         // Within an epoch the target never moves back past the last frame's.
         // Accepted work ends on a Sim Rate boundary in both modes: equal clock
@@ -523,7 +532,7 @@ impl SimulationClock {
         } else {
             self.transport_origin
         };
-        let transport_reached = if !restarted {
+        let transport_reached = if !restarted && seek_origin.is_none() {
             (((transport - self.transport_origin) / self.simulation_interval + 1e-9).floor() as u64)
                 .max(self.transport_done)
         } else {
@@ -543,7 +552,7 @@ impl SimulationClock {
         // A fractional interval is ordinary pacing jitter, not an owed step.
         // Discard only when at least one whole interval exceeds the cap; once
         // overloaded, drop the entire remainder and start a fresh grid now.
-        let reanchored = !restarted && transport_end < transport_reached;
+        let reanchored = seek_origin.is_some() || (!restarted && transport_end < transport_reached);
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
@@ -607,18 +616,21 @@ impl SimulationClock {
         let frame_transport_origin = self.transport_origin;
         let mut fresh_dropped_seconds = 0.0;
         if reanchored {
-            fresh_dropped_seconds = (map_transport(&self.speed_history, transport) - self.simulation_time).max(0.0);
-            self.dropped_seconds += fresh_dropped_seconds;
+            let origin = seek_origin.unwrap_or(transport);
+            if seek_origin.is_none() {
+                fresh_dropped_seconds = (map_transport(&self.speed_history, transport) - self.simulation_time).max(0.0);
+                self.dropped_seconds += fresh_dropped_seconds;
+            }
             // Keep accepted history intact. The discarded transport span is a
             // plateau, followed by the current Speed at the fresh anchor.
             let retained = self.speed_history.partition_point(|anchor| anchor.transport < accepted_transport);
             self.speed_history.truncate(retained);
             self.speed_history.push(SpeedAnchor { transport: accepted_transport, simulation: self.simulation_time, speed: 0.0 });
-            self.speed_history.push(SpeedAnchor { transport, simulation: self.simulation_time, speed });
-            self.transport_origin = transport;
+            self.speed_history.push(SpeedAnchor { transport: origin, simulation: self.simulation_time, speed });
+            self.transport_origin = origin;
             self.transport_done = 0;
-            self.restart_reached = 0;
-            self.last_accepted_transport = transport;
+            self.restart_reached = if seek_origin.is_some() { self.reached_index(transport).max(0.0) as u64 } else { 0 };
+            self.last_accepted_transport = origin;
             self.target_time = self.simulation_time;
         }
         let retained = self.speed_history

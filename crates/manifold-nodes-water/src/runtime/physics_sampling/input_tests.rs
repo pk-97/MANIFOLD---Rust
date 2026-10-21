@@ -456,3 +456,61 @@ fn offline_history_drain_is_never_requested_by_preview_sampling() {
     assert!(observations.iter().all(|sample| !sample.draining));
     assert!(observations[0].time.seconds > Seconds::ZERO);
 }
+
+/// A host instance whose Speed is audio modulated, `enabled` or not, with
+/// this frame's hops as `(time, value)`.
+fn modulated(enabled: bool, hops: &[(f64, f32)]) -> PresetInstance {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    let mut instance = PresetInstance::new_generator(manifold_core::PresetTypeId::new("Modulated"));
+    let send = manifold_core::audio_setup::AudioSend::new("Kick");
+    let mut follow = ParameterAudioMod::new("speed".to_owned().into(), send.id, AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low));
+    follow.enabled = enabled;
+    follow.hop_timeline.values = hops.iter().map(|&(time, value)| HopValue { time: Seconds(time), value }).collect();
+    instance.audio_mods_mut().push(follow);
+    instance
+}
+
+fn empty_snapshot() -> PhysicsInputSnapshot {
+    PhysicsInputSnapshot {
+        values: Vec::new(),
+        clock_steps: Vec::new(),
+        project_tempo: None,
+        tick_times: Vec::new(),
+        hops: Vec::new(),
+        hop_len: 0,
+        hop_routes: Vec::new(),
+        automation: Vec::new(),
+        automation_len: 0,
+        automation_routes: Vec::new(),
+    }
+}
+
+/// A mod switched off and on again starts from its own new hops: a sample
+/// before the first of them never hears the hop from before it was off.
+#[test]
+fn a_re_enabled_audio_mod_carries_no_hop_from_before_it_was_off() {
+    let mut inputs = empty_snapshot();
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.03, 0.4)])));
+    assert_eq!(inputs.heard("speed", 0.02), Some(0.9), "a live mod carries its latest hop into the next frame");
+    inputs.set_hops(Some(&modulated(false, &[])));
+    inputs.set_hops(Some(&modulated(true, &[(0.5, 0.2)])));
+    assert_eq!(inputs.heard("speed", 0.45), None, "the re-enabled mod carried a hop from before it was off");
+    assert_eq!(inputs.heard("speed", 0.5), Some(0.2));
+}
+
+/// A frame a transport jump landed on hands no hop from before the jump to
+/// the samples after it.
+#[test]
+fn a_transport_jump_drops_the_carried_hop() {
+    let mut inputs = empty_snapshot();
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
+    // The jump's frame delivers no hop of its own.
+    inputs.set_hops(Some(&modulated(true, &[])));
+    assert_eq!(inputs.heard("speed", 0.02), Some(0.9));
+    inputs.drop_hop_carry();
+    assert_eq!(inputs.heard("speed", 0.02), None);
+    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])));
+    assert_eq!(inputs.heard("speed", 0.85), None, "the hop from before the jump reached a sample after it");
+    assert_eq!(inputs.heard("speed", 0.9), Some(0.3));
+}

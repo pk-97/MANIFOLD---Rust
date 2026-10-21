@@ -95,6 +95,18 @@ pub(crate) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
 /// The last observed external inputs to the stateless physics ancestry. Keys
 /// and storage are prepared with the graph; capturing another frame only
 /// replaces values (String/Table values retain their existing Arc storage).
+/// One host audio-modulated param's hops for this frame.
+#[derive(Clone, Default)]
+struct ParamHops {
+    id: ParamId,
+    /// This frame's hops, after the latest hop of earlier frames when
+    /// `carried`.
+    values: Vec<HopValue>,
+    carried: bool,
+    /// Its mod drove the param last frame.
+    live: bool,
+}
+
 pub(crate) struct PhysicsInputSnapshot {
     values: Vec<Option<ParamValues>>,
     clock_steps: Vec<usize>,
@@ -106,7 +118,7 @@ pub(crate) struct PhysicsInputSnapshot {
     /// `hops[..hop_len]`, so each tick reads the value at its own time
     /// (BUG-2jx6 (host-fed modulation sampled per liquid tick)). Storage is
     /// reused across frames.
-    hops: Vec<(ParamId, Vec<HopValue>)>,
+    hops: Vec<ParamHops>,
     hop_len: usize,
     /// `(binding, step, hop entry)` for bindings into the sampled ancestry.
     hop_routes: Vec<(usize, usize, usize)>,
@@ -137,25 +149,54 @@ impl PhysicsInputSnapshot {
     /// Copy the host instance's per-hop values for this frame, after the latest
     /// hop of earlier frames: a sample before this frame's first hop reads the
     /// hop before it, never the value the host composed at the last frame.
+    /// Only a mod live last frame carries one: a mod switched on, or on again,
+    /// starts from its own new hops.
     pub(super) fn set_hops(&mut self, instance: Option<&PresetInstance>) {
+        let live = self.hop_len;
+        for (index, entry) in self.hops.iter_mut().enumerate() {
+            entry.live = index < live;
+        }
         self.hop_len = 0;
         let Some(instance) = instance.filter(|instance| instance.enabled) else { return };
         let mods = instance.audio_mods.as_deref().unwrap_or_default();
         for m in mods.iter().filter(|m| m.enabled) {
-            let held = self.hops[self.hop_len..].iter().position(|(id, _)| *id == m.param_id);
-            match held {
+            let rest = &self.hops[self.hop_len..];
+            // A new mod takes an entry no live mod needs this frame.
+            match rest.iter().position(|entry| entry.id == m.param_id).or_else(|| rest.iter().position(|entry| !entry.live)) {
                 Some(offset) => self.hops.swap(self.hop_len, self.hop_len + offset),
-                None if self.hop_len == self.hops.len() => self.hops.push(Default::default()),
-                None => self.hops[self.hop_len].1.clear(),
+                None => {
+                    self.hops.push(ParamHops::default());
+                    let last = self.hops.len() - 1;
+                    self.hops.swap(self.hop_len, last);
+                }
             }
-            let (id, values) = &mut self.hops[self.hop_len];
-            id.clone_from(&m.param_id);
-            let carried = values.last().copied();
-            values.clear();
-            values.extend(carried);
-            values.extend_from_slice(&m.hop_timeline.values);
+            let entry = &mut self.hops[self.hop_len];
+            let carried = if entry.live && entry.id == m.param_id { entry.values.last().copied() } else { None };
+            entry.id.clone_from(&m.param_id);
+            entry.values.clear();
+            entry.values.extend(carried);
+            entry.carried = carried.is_some();
+            entry.values.extend_from_slice(&m.hop_timeline.values);
             self.hop_len += 1;
         }
+    }
+
+    /// A transport jump: no hop from before it reaches a sample after it.
+    fn drop_hop_carry(&mut self) {
+        for entry in &mut self.hops[..self.hop_len] {
+            if entry.carried {
+                entry.values.remove(0);
+                entry.carried = false;
+            }
+        }
+    }
+
+    /// The hop value a sample at `time` reads for `id`, if any.
+    #[cfg(test)]
+    fn heard(&self, id: &str, time: f64) -> Option<f32> {
+        let values = &self.hops[..self.hop_len].iter().find(|entry| entry.id.as_ref() == id)?.values;
+        let n = values.partition_point(|hop| hop.time.0 <= time);
+        n.checked_sub(1).map(|i| values[i].value)
     }
 
     /// Route bindings whose source has hop values into sampled node params.
@@ -168,7 +209,7 @@ impl PhysicsInputSnapshot {
             let ResolvedTarget::Node { node, param } = &binding.target else { continue };
             let Some(h) = self.hops[..self.hop_len]
                 .iter()
-                .position(|(id, _)| *id == binding.source_id)
+                .position(|entry| entry.id == binding.source_id)
             else {
                 continue;
             };
@@ -185,7 +226,7 @@ impl PhysicsInputSnapshot {
     /// Before the frame's first hop the held value stays.
     fn apply_hops(&mut self, bindings: &[ResolvedBinding], time: f64) {
         for &(b, s, h) in &self.hop_routes {
-            let values = &self.hops[h].1;
+            let values = &self.hops[h].values;
             let n = values.partition_point(|hop| hop.time.0 <= time);
             let Some(hop) = n.checked_sub(1).map(|i| values[i]) else { continue };
             let binding = &bindings[b];
@@ -562,17 +603,25 @@ impl super::WaterRuntimeState {
         inputs.route_automation(bindings, plan);
         inputs.write_frame_automation(graph, plan, bindings, sample_beat(self.project_tempo.as_ref(), current));
         let opening = self.replay_from.take();
+        let target = step.transport_target.map(|target| target.0).filter(|&target| target.is_finite() && target <= current.seconds.0 + 1e-6);
+        // The clocks start a fresh grid at a forward seek's target; the span
+        // it skipped is never sampled.
+        let seeked_forward = target.zip(self.last_frame_time).is_some_and(|(target, last)| target > last.seconds.0);
         let Some(previous) = opening.or(self.last_frame_time).filter(|previous| {
             let gap = current.seconds.0 - previous.seconds.0;
-            gap.is_finite() && gap > 0.0
+            !seeked_forward && gap.is_finite() && gap > 0.0
         }) else {
             inputs.capture(graph, plan, &self.project_tempo);
             // A jump back (or a first frame) restarts the simulations with
-            // their tick grid at the jump's target. The next replay opens
-            // there, so the boundaries between it and this frame are sampled
-            // exactly, as at any frame rate. A paused frame keeps it pending.
-            let jumped = opening.or(self.last_frame_time).is_none_or(|previous| current.seconds.0 < previous.seconds.0);
-            let target = step.transport_target.map(|target| target.0).filter(|&target| target.is_finite() && target <= current.seconds.0 + 1e-6);
+            // their tick grid at the jump's target; a jump forward moves the
+            // grid there. The next replay opens there, so the boundaries
+            // between it and this frame are sampled exactly, as at any frame
+            // rate. A paused frame keeps it pending. No hop from before a
+            // jump reaches a sample after it.
+            let jumped = seeked_forward || opening.or(self.last_frame_time).is_none_or(|previous| current.seconds.0 < previous.seconds.0);
+            if jumped {
+                inputs.drop_hop_carry();
+            }
             self.replay_from = match (jumped, target) {
                 (true, Some(target)) => Some(FrameTime {
                     seconds: Seconds(target),

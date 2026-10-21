@@ -1060,9 +1060,12 @@ impl RigidSimulation {
         self.record_requested_samples(now.0, &bodies, prototype.as_ref(), gravity, acceleration_field.as_ref(), targeted_fields)?;
         // Under a replay, inputs are knotted only at the times it was asked to
         // sample, which no frame rate moves; a held frame still records an
-        // edit made while time stands still.
+        // edit made while time stands still, and a frame the grid reanchored
+        // at starts the new grid's first tick from its own inputs.
         let held_frame = clock_frame.as_ref().is_some_and(|frame| frame.held);
-        if self.advancement_policy.is_worker() || !self.replay_driven || held_frame {
+        let new_origin = clock_frame.as_ref().is_some_and(|frame| frame.reanchored)
+            && self.clock.tick_start(self.clock.ticks_done()).is_some_and(|start| (start - now.0).abs() <= 1e-9);
+        if self.advancement_policy.is_worker() || !self.replay_driven || held_frame || new_origin {
             self.record_authored_sample(
                 authored_time,
                 bodies.clone(),
@@ -4230,6 +4233,37 @@ mod tests {
             assert!((physics_time - accepted).abs() < 1e-12);
             assert_eq!(pending_time, Seconds::ZERO);
         }
+    }
+
+    /// A replay-driven frame as the runtime drives it: the requested samples
+    /// and the closing sample at the frame carry the held gravity, the frame
+    /// its own.
+    fn replayed_frame(simulation: &mut RigidSimulation, from: f64, until: f64, held: [f32; 3], own: [f32; 3]) {
+        let mut requests = Vec::new();
+        simulation.request_samples(from, until, &mut requests);
+        for &time in requests.iter().filter(|&&time| time < until).chain([&until]) {
+            simulation.set_step(live_step().authored_sample());
+            simulation.advance(one_body([0.0, 4.0, 0.0]), held, Seconds(time), 1.0, 0.0).unwrap();
+        }
+        simulation.set_step(live_step());
+        simulation.advance(one_body([0.0, 4.0, 0.0]), own, Seconds(until), 1.0, 0.0).unwrap();
+    }
+
+    #[test]
+    fn an_overload_reanchor_records_the_frame_knot_at_the_new_origin() {
+        let calm = [0.0, -9.8, 0.0];
+        let pushed = [3.0, -9.8, 0.0];
+        let mut simulation = RigidSimulation::default().with_step(live_step());
+        simulation.advance(one_body([0.0, 4.0, 0.0]), calm, Seconds::ZERO, 1.0, 0.0).unwrap();
+        replayed_frame(&mut simulation, 0.0, FRAME, calm, calm);
+        // Six intervals late, past the two-interval live cap.
+        let late = FRAME + 0.1;
+        replayed_frame(&mut simulation, FRAME, late, calm, pushed);
+        let origin = simulation.clock.tick_start(simulation.clock.ticks_done());
+        assert_eq!(origin, Some(late), "the late frame reanchors the grid at itself");
+        let last = simulation.authored_samples.back().expect("knots recorded");
+        assert_eq!(last.time, simulation.authored_time, "a knot sits at the new origin");
+        assert_eq!(last.gravity, pushed, "the tick at the new origin starts from the frame's inputs");
     }
 
     #[test]
