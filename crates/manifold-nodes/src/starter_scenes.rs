@@ -25,6 +25,13 @@ const RUBBLE_BASE: &str = "PhysicsBoxes";
 
 pub const WATER_SCAN_PRESET: &str = "WaterInScan";
 pub const RUBBLE_PRESET: &str = "RubblePile";
+pub const SWARM_PRESET: &str = "SwarmCloud";
+
+/// World gravity the cloud opens with: the Attractor holds a swarm that is not
+/// also falling.
+const SWARM_GRAVITY: f64 = 0.0;
+/// The Burst: centred on the swarm, wide enough to take all of it.
+const SWARM_BURST: [(&str, f32); 5] = [("center_x", 0.0), ("center_y", 0.0), ("center_z", 0.0), ("radius", 5.0), ("impulse_strength", 14.0)];
 
 /// Dam Break's box obstacle: transform, role, mesh, material, object.
 const OBSTACLE_NODES: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
@@ -289,55 +296,101 @@ pub fn rubble_pile() -> Value {
     add_blast(def, &boxes_object)
 }
 
-/// Attach one Explosion to the boxes and put its Impulse on the card as Blast.
-fn add_blast(def: Value, target: &str) -> Value {
-    let owner: EffectGraphDef = serde_json::from_value(def).expect("the rubble def parses");
+/// One performer hit: an Explosion attached to `targets` of `scene`, centred and
+/// sized by `tuning`, with its Impulse on the card as `label` under `section`.
+fn add_hit(def: Value, id: &str, scene: SceneNodeRef, targets: SceneTargetSelection, section: &str, label: &str, tuning: &[(&str, f32)]) -> Value {
+    let owner: EffectGraphDef = serde_json::from_value(def).expect("the starter def parses");
     let recipe: EffectGraphDef = serde_json::from_str(&bundled_preset_json(&PresetTypeId::new("Explosion")).expect("Explosion is bundled")).expect("Explosion parses");
-    let scene = owner.nodes.iter().find(|n| n.type_id == "node.render_scene").expect("render_scene").node_id.clone();
-    let mut instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-        &owner,
-        &recipe,
-        manifold_core::NodeId::new("rubble_blast"),
-        SceneNodeRef { scope: Vec::new(), node: scene },
-        SceneTargetSelection::Explicit { objects: vec![SceneNodeRef { scope: Vec::new(), node: manifold_core::NodeId::new(target) }] },
-    )
-    .expect("the Explosion prepares against the rubble scene");
-    // Centre it on the pile's resting place, wide enough to take every box.
+    let mut instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(&owner, &recipe, manifold_core::NodeId::new(id), scene, targets)
+        .expect("the Explosion prepares against the scene");
     let local = instance.graph.preset_metadata.as_mut().expect("Explosion metadata");
-    for (id, value) in [("center_x", 3.0_f32), ("center_y", 0.6), ("center_z", 0.0), ("radius", 7.0), ("impulse_strength", 9.0)] {
-        local.params.iter_mut().find(|p| p.id == id).unwrap_or_else(|| panic!("Explosion has no param {id}")).default_value = value;
-        local.bindings.iter_mut().filter(|b| b.id == id).for_each(|b| b.default_value = value);
+    for &(param, value) in tuning {
+        local.params.iter_mut().find(|p| p.id == param).unwrap_or_else(|| panic!("Explosion has no param {param}")).default_value = value;
+        local.bindings.iter_mut().filter(|b| b.id == param).for_each(|b| b.default_value = value);
     }
     let mut edited = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, owner.scene_modifiers.len(), instance).expect("the Explosion inserts").graph;
-    // The host row bound to the Explosion's `fire` is the card's Blast.
     let host = edited.preset_metadata.as_mut().expect("host metadata");
+    let of_this = |b: &&manifold_core::effect_graph_def::BindingDef| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == id);
     let fire_ids: Vec<String> = host
         .bindings
         .iter()
-        .filter(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id } if modifier_id.as_str() == "rubble_blast" && param_id == "fire"))
+        .filter(of_this)
+        .filter(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } if param_id == "fire"))
         .map(|b| b.id.clone())
         .collect();
     assert_eq!(fire_ids.len(), 1, "the host has one row bound to the Explosion's fire: {fire_ids:?}");
     // The Explosion's other rows stay on the scene inspector, off the card.
-    let modifier_rows: Vec<String> = host
-        .bindings
-        .iter()
-        .filter(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "rubble_blast"))
-        .map(|b| b.id.clone())
-        .collect();
+    let modifier_rows: Vec<String> = host.bindings.iter().filter(of_this).map(|b| b.id.clone()).collect();
     for param in host.params.iter_mut().filter(|p| modifier_rows.contains(&p.id)) {
         param.card_visible = false;
     }
-    let blast = host.params.iter_mut().find(|p| p.id == fire_ids[0]).expect("the host fire param");
-    blast.name = "Blast".into();
-    blast.card_visible = true;
-    blast.section = Some("Rubble".into());
+    let hit = host.params.iter_mut().find(|p| p.id == fire_ids[0]).expect("the host fire param");
+    hit.name = label.into();
+    hit.card_visible = true;
+    hit.section = Some(section.into());
     serde_json::to_value(edited).expect("serialise")
+}
+
+/// Rubble's Blast: the Explosion on the boxes, centred on the pile's resting
+/// place and wide enough to take every box.
+fn add_blast(def: Value, target: &str) -> Value {
+    let scene = {
+        let owner: EffectGraphDef = serde_json::from_value(def.clone()).expect("the rubble def parses");
+        owner.nodes.iter().find(|n| n.type_id == "node.render_scene").expect("render_scene").node_id.clone()
+    };
+    add_hit(
+        def,
+        "rubble_blast",
+        SceneNodeRef { scope: Vec::new(), node: scene },
+        SceneTargetSelection::Explicit { objects: vec![SceneNodeRef { scope: Vec::new(), node: manifold_core::NodeId::new(target) }] },
+        "Rubble",
+        "Blast",
+        &[("center_x", 3.0), ("center_y", 0.6), ("center_z", 0.0), ("radius", 7.0), ("impulse_strength", 9.0)],
+    )
+}
+
+/// Set one Physics World control on its source node and on the card row that
+/// drives that node, so the file opens with the value and the card shows it.
+fn set_world_control(def: &mut Value, port: &str, value: f64) {
+    let nodes = def["nodes"].as_array().expect("nodes");
+    let world = nodes.iter().find(|n| n["typeId"] == "node.physics_world").expect("a Physics World")["id"].clone();
+    let source = def["wires"].as_array().expect("wires").iter().find(|w| w["toNode"] == world && w["toPort"] == port).unwrap_or_else(|| panic!("the World's {port} has a source"))["fromNode"].clone();
+    let node = def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["id"] == source).expect("the source node");
+    node["params"]["value"] = f(value);
+    let key = node["nodeId"].clone();
+    let meta = &mut def["presetMetadata"];
+    let ids: Vec<Value> = meta["bindings"].as_array().expect("bindings").iter().filter(|b| b["target"]["nodeId"] == key).map(|b| b["id"].clone()).collect();
+    assert!(!ids.is_empty(), "the World's {port} is on the card");
+    for b in meta["bindings"].as_array_mut().expect("bindings").iter_mut().filter(|b| ids.contains(&b["id"])) {
+        b["defaultValue"] = json!(value);
+    }
+    for p in meta["params"].as_array_mut().expect("params").iter_mut().filter(|p| ids.contains(&p["id"])) {
+        p["defaultValue"] = json!(value);
+    }
+}
+
+/// The shipped Swarm, kept together in still air, plus one performer hit: an
+/// Explosion on the swarm with Burst on the card. The swarm comes whole from
+/// the public builder; nothing of it is copied here.
+pub fn swarm_cloud() -> Value {
+    let swarm = manifold_nodes_scene::node_graph::scene_templates::swarm_preset_def();
+    let (scene, targets) = {
+        let force = swarm.scene_modifiers.first().expect("the swarm brings its forces");
+        (force.scene.clone(), force.targets.clone())
+    };
+    let mut def = serde_json::to_value(swarm).expect("serialise");
+    set_world_control(&mut def, "gravity_y", SWARM_GRAVITY);
+    let meta = &mut def["presetMetadata"];
+    meta["id"] = json!(SWARM_PRESET);
+    meta["displayName"] = json!("Swarm Cloud");
+    meta["oscPrefix"] = json!("swarmcloud");
+    assert_bindings_resolve(SWARM_PRESET, &def);
+    add_hit(def, "swarm_burst", scene, targets, "Swarm", "Burst", &SWARM_BURST)
 }
 
 /// Every starter and the file it ships as.
 pub fn starters() -> Vec<(&'static str, Value)> {
-    vec![(WATER_SCAN_PRESET, water_in_scan()), (RUBBLE_PRESET, rubble_pile())]
+    vec![(WATER_SCAN_PRESET, water_in_scan()), (RUBBLE_PRESET, rubble_pile()), (SWARM_PRESET, swarm_cloud())]
 }
 
 #[cfg(test)]
@@ -371,5 +424,14 @@ mod tests {
         let targets = manifold_node_engine::load::expand::impulse_recipients(&def, &instance.scene, &instance.targets, &PrimitiveRegistry::with_builtin()).expect("recipients resolve");
         let world = targets.iter().find(|(id, _)| id.as_str() == "physics_demo_40").unwrap_or_else(|| panic!("the physics world is a recipient: {targets:?}"));
         assert!(matches!(world.1, manifold_core::scene_impulse::ImpulseTarget::Rigid(t) if t.copies), "the blast reaches the copies: {:?}", world.1);
+    }
+
+    /// The Burst reaches the swarm through its own lattice recipient.
+    #[test]
+    fn swarm_burst_reaches_the_swarm() {
+        let def: EffectGraphDef = serde_json::from_value(swarm_cloud()).expect("parses");
+        let instance = def.scene_modifiers.iter().find(|m| m.id.as_str() == "swarm_burst").expect("the Burst is attached");
+        let targets = manifold_node_engine::load::expand::impulse_recipients(&def, &instance.scene, &instance.targets, &PrimitiveRegistry::with_builtin()).expect("recipients resolve");
+        assert!(targets.iter().any(|(_, t)| *t == manifold_core::scene_impulse::ImpulseTarget::Swarm), "the Burst reaches the swarm: {targets:?}");
     }
 }

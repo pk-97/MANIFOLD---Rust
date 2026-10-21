@@ -524,7 +524,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
 
-### Effect & generator presets (98)
+### Effect & generator presets (99)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -612,6 +612,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
 | `Swarm` | Swarm | generator | Geometry | 397 |
+| `SwarmCloud` | Swarm Cloud | generator | Geometry | 406 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |

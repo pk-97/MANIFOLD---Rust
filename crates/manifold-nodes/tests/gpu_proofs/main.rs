@@ -31,6 +31,7 @@ mod render_legacy_parity;
 mod render_scene_map_set;
 mod physics_boxes;
 mod swarm;
+mod starter_swarm;
 mod render_scene_ao_mask;
 mod render_scene_shadow_cache;
 mod rt_object_motion_shadow;

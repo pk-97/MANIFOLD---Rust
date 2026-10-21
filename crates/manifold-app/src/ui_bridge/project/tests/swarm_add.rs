@@ -139,11 +139,7 @@ fn add_swarm_restarts_on_a_clip_trigger_and_follows_world_speed_and_gravity() {
     let (mut project, layer, _) = scene_layer_project();
     insert_swarm(&mut project, &layer);
     let def = effective_def(&project, &layer);
-    // The swarm brings its forces: expand them before flattening.
-    let expanded = manifold_node_engine::load::expand::prepare_scene_modifiers(&def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin())
-        .expect("the swarm's forces expand")
-        .def;
-    let flat = manifold_core::flatten::flatten_groups(&expanded).expect("flattens");
+    let flat = manifold_node_engine::load::expand::flatten_expanded(&def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin()).expect("flattens");
     let forces = flat.nodes.iter().find(|node| node.type_id == "node.swarm_forces").expect("forces");
     let world = flat.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("a World");
     let meta = def.preset_metadata.as_ref().unwrap();
