@@ -520,22 +520,82 @@ pub fn param_value_text<'a>(
     value_labels: Option<&'a [String]>,
     unit: Option<manifold_foundation::scene_surface::Unit>,
 ) -> &'a str {
-    use std::fmt::Write;
     if let Some(labels) = value_labels {
         return &labels[label_index(val, min, labels.len())];
     }
+    write_value(buf, val, whole_numbers, is_angle, unit, 2, true);
+    buf.as_str()
+}
+
+fn write_value(
+    buf: &mut ParamValueText,
+    val: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
+    decimals: usize,
+    with_unit: bool,
+) {
+    use std::fmt::Write;
     buf.clear();
     let _ = if is_angle {
         // `val` is radians; the user always sees and edits degrees.
         write!(buf, "{:.0}°", val.to_degrees())
     } else {
-        let suffix = unit.map_or("", |unit| unit.suffix());
+        let suffix = if with_unit { unit.map_or("", |unit| unit.suffix()) } else { "" };
         if whole_numbers {
             write!(buf, "{}{suffix}", val.round() as i32)
         } else {
-            write!(buf, "{:.2}{suffix}", val)
+            write!(buf, "{val:.decimals$}{suffix}")
         }
     };
+}
+
+/// Room for text inside a card slider's value box.
+pub(crate) const CARD_VALUE_TEXT_W: f32 = crate::slider::VALUE_BOX_W - 4.0;
+
+/// [`param_value_text`] that fits `max_width` as `measure` measures it, so a
+/// value box never clips a digit. Precision goes first (fewer decimals, then
+/// none), then a compact thousands form that keeps the unit, and the unit
+/// goes last. A value label is returned whole (its box elides it).
+#[allow(clippy::too_many_arguments)]
+pub fn param_value_text_fit<'a>(
+    buf: &'a mut ParamValueText,
+    val: f32,
+    min: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    value_labels: Option<&'a [String]>,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
+    measure: &dyn crate::text::TextMeasure,
+    font_size: u16,
+    max_width: f32,
+) -> &'a str {
+    use std::fmt::Write;
+    if let Some(labels) = value_labels {
+        return &labels[label_index(val, min, labels.len())];
+    }
+    let fits = |text: &str| measure.measure_text(text, font_size, crate::color::FONT_WEIGHT_DEFAULT).x <= max_width;
+    for with_unit in [true, false] {
+        for decimals in [2, 1, 0] {
+            write_value(buf, val, whole_numbers, is_angle, unit, decimals, with_unit);
+            if fits(buf.as_str()) {
+                return buf.as_str();
+            }
+        }
+        if !is_angle && val.abs() >= 1000.0 {
+            let suffix = if with_unit { unit.map_or("", |unit| unit.suffix()) } else { "" };
+            buf.clear();
+            let _ = if val.abs() >= 1.0e6 {
+                write!(buf, "{:.1}M{suffix}", val / 1.0e6)
+            } else {
+                write!(buf, "{:.1}k{suffix}", val / 1.0e3)
+            };
+            if fits(buf.as_str()) {
+                return buf.as_str();
+            }
+        }
+    }
     buf.as_str()
 }
 
@@ -757,5 +817,36 @@ mod fine_scrub_tests {
     fn fine_scrub_zero_width_track_is_a_no_op() {
         assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, false), 25.0);
         assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, true), 25.0);
+    }
+}
+
+#[cfg(test)]
+mod value_fit_tests {
+    use super::*;
+    use manifold_foundation::scene_surface::Unit;
+
+    fn fit(val: f32, whole: bool, unit: Option<Unit>) -> String {
+        let tree = crate::tree::UITree::new();
+        let mut buf = ParamValueText::default();
+        param_value_text_fit(&mut buf, val, 0.0, whole, false, None, unit, tree.measurer(), FONT_SIZE, CARD_VALUE_TEXT_W).to_owned()
+    }
+
+    /// Precision goes before the unit: a decimal value sheds decimals while
+    /// the unit stays.
+    #[test]
+    fn precision_goes_before_the_unit() {
+        let metres = Some(Unit::Metres);
+        assert_eq!(fit(4.0, false, metres), "4.00 m", "a short value keeps everything");
+        assert_eq!(fit(12345.5, false, metres), "12345.5 m", "one decimal fits where two do not");
+        assert_eq!(fit(123_456_792.0, false, metres), "123.5M m", "compact form keeps the unit");
+        assert_eq!(fit(600.0, true, Some(Unit::KilogramsPerCubicMetre)), "600 kg/m³");
+    }
+
+    /// Only when nothing with the unit fits does the unit go; the leading
+    /// digit never does.
+    #[test]
+    fn a_value_that_cannot_hold_its_unit_drops_it_last() {
+        assert_eq!(fit(1000.0, true, Some(Unit::KilogramsPerCubicMetre)), "1000");
+        assert_eq!(fit(100_000_000.0, true, Some(Unit::MillionCells)), "100000000");
     }
 }
