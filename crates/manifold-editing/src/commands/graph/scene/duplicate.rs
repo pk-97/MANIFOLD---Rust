@@ -171,6 +171,16 @@ fn duplicate_scene_object_edit(
             Some(physics)
         }
     };
+    // Every copy brings the source's forces: refuse the whole request up front, naming the total.
+    if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
+        let per_copy = manifold_core::scene_modifier_edit::object_force_slots(graph, &source);
+        let needed = per_copy * copies as usize;
+        let limit = manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+        let free = limit.saturating_sub(manifold_core::scene_modifier_preset::force_slots_used(&graph.scene_modifiers));
+        if needed > free {
+            return Err(refuse(&manifold_core::scene_modifier_preset::force_slots_message("Duplicating", needed, free, limit)));
+        }
+    }
     let source_group = nodes.iter().any(|node| node.id == source_id && node.type_id == GROUP_TYPE_ID);
 
     let mut candidate = graph.clone();

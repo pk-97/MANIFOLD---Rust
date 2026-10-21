@@ -516,7 +516,7 @@ fn duplicate_swarm_five_copies_is_refused_whole_on_the_force_slot_limit() {
     let before = effective_def(&project, &layer);
     let refusal = duplicate_swarm_copies(&mut project, &mut editing, &layer, render, 5).expect_err("five copies do not fit");
     assert_eq!(effective_def(&project, &layer), before, "the graph is unchanged");
-    assert!(refusal.contains("16 forces"), "the refusal names the limit: {refusal}");
+    assert!(refusal.contains("Duplicating needs 15 force slots and this scene has 13 free: a scene holds at most 16 forces"), "{refusal}");
     assert!(editing.undo(&mut project), "the swarm insert is still the last step");
     assert!(swarm_groups(&effective_def(&project, &layer)).is_empty(), "undo takes the insert, not a half duplicate");
 }

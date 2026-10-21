@@ -303,9 +303,7 @@ pub fn insert_scene_template_preparing(
     let free = limit.saturating_sub(crate::scene_modifier_preset::force_slots_used(&graph.scene_modifiers));
     if needed > free {
         let name = if template.metadata.display_name.is_empty() { "This" } else { template.metadata.display_name.as_str() };
-        return Err(at(&format!(
-            "{name} needs {needed} force slots and this scene has {free} free: a scene holds at most {limit} forces"
-        )));
+        return Err(at(&crate::scene_modifier_preset::force_slots_message(name, needed, free, limit)));
     }
     let mut candidate = graph.clone();
     let mut handles = HashSet::new();

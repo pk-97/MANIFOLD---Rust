@@ -50,6 +50,9 @@ pub enum SceneModifierEditError {
     },
     /// Every force slot of the owner is taken.
     ForceSlotsFull {
+        subject: &'static str,
+        needed: usize,
+        free: usize,
         limit: usize,
     },
 }
@@ -91,8 +94,8 @@ impl fmt::Display for SceneModifierEditError {
                 write!(f, "retarget changed the saved frame for `{target}`")
             }
             Self::InvalidSchema { error } => error.fmt(f),
-            Self::ForceSlotsFull { limit } => {
-                write!(f, "a scene holds at most {limit} forces, and all {limit} slots are in use")
+            Self::ForceSlotsFull { subject, needed, free, limit } => {
+                f.write_str(&crate::scene_modifier_preset::force_slots_message(subject, *needed, *free, *limit))
             }
         }
     }
@@ -180,7 +183,7 @@ pub fn insert_scene_modifier(
     if !crate::scene_modifier_math_view::is_math_view_recipe(&instance.graph)
         && crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers) >= limit
     {
-        return Err(SceneModifierEditError::ForceSlotsFull { limit });
+        return Err(SceneModifierEditError::ForceSlotsFull { subject: "Adding a force", needed: 1, free: 0, limit });
     }
     let mut graph = owner.clone();
     graph.version = graph.version.max(3);
@@ -1047,6 +1050,12 @@ pub fn aim_at_copy(
     Ok((targets, mesh_frames))
 }
 
+/// The force slots one copy of the modifiers `source` owns takes.
+pub fn object_force_slots(owner: &EffectGraphDef, source: &SceneNodeRef) -> usize {
+    let owned = object_modifiers(owner, source).owned;
+    owner.scene_modifiers.iter().filter(|item| owned.contains(&item.id) && !crate::scene_modifier_math_view::is_math_view_recipe(&item.graph)).count()
+}
+
 /// Copy the modifiers `source` owns within `owner` and aim each copy at the
 /// duplicate of `source` (see [`aim_at_copy`]).
 pub fn copy_object_modifiers(
@@ -1063,10 +1072,11 @@ pub fn copy_object_modifiers(
         });
     }
     // Refused whole, like an insert: a copy never saves forces the scene cannot expand.
-    let needed = owner.scene_modifiers.iter().filter(|item| owned.contains(&item.id) && !crate::scene_modifier_math_view::is_math_view_recipe(&item.graph)).count();
+    let needed = object_force_slots(owner, source);
     let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
-    if crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers) + needed > limit {
-        return Err(SceneModifierEditError::ForceSlotsFull { limit });
+    let free = limit.saturating_sub(crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers));
+    if needed > free {
+        return Err(SceneModifierEditError::ForceSlotsFull { subject: "Duplicating", needed, free, limit });
     }
     let duplicated = duplicate_scene_modifiers(owner, &owned)?;
     let before: HashSet<&NodeId> = owner.scene_modifiers.iter().map(|item| &item.id).collect();
@@ -1323,7 +1333,7 @@ mod tests {
         let full = (0..limit).fold(owner(), |graph, index| insert(&graph, &format!("force_{index}")));
         let snapshot = full.clone();
         let refused = insert_scene_modifier(&full, limit, recipe("one_more"));
-        assert!(matches!(refused, Err(SceneModifierEditError::ForceSlotsFull { limit: 16 })), "{refused:?}");
+        assert!(matches!(refused, Err(SceneModifierEditError::ForceSlotsFull { limit: 16, .. })), "{refused:?}");
         assert!(refused.unwrap_err().to_string().contains("at most 16 forces"));
         assert_eq!(full, snapshot);
     }
