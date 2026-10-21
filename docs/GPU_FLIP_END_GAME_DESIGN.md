@@ -57,6 +57,8 @@ One umbrella (BUG-l2h3 rewritten) with sub-epics in attack order. Each sub-epic 
 | 6 | Whitewater simulation | Spray, foam and bubbles always refilling, matched to the engine, feeling wind and solids. |
 | 7 | Instrument and authoring | Driven bodies, audio-shaped waves, wave tanks that do not resonate, the ocean feeding the tank, action areas inside a height-field sea. |
 
+After the programme, on the same grid: BUG-rpf5b (fire and smoke on the shared sparse grid, and solids that ignite and melt) is its own epic. A gas solver with no particles on the same tiles and pressure solver, drawn by the same per-pixel walk accumulating density and blackbody emission, coupled one-way to the water, and MPM phase change so solids heat, melt into the shared grid and burn. It consumes sub-epics 0, 2, 3 and 5 and the APIC bead.
+
 Out of the programme: bakes (D7), VDB (D1), benchmarks (D8). BUG-vglg (shared liquid physics: authoring, takes, coupling plumbing) stays separate and lends its physics beads. MPM consumes sub-epics 0, 2, 3, 4 and 5 unchanged; sub-epic 1's pressure solve, coarse projection and narrow band are FLIP-only.
 
 ## 4. Free performance — the class to keep hunting
