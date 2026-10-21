@@ -524,7 +524,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (98)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -603,6 +603,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `PhysicsSolids` | Physics Solids | generator | Geometry | 1996 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
+| `RubblePile` | Rubble Pile | generator | Geometry | 1342 |
 | `Scene` | Scene | generator | Geometry | 368 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
@@ -619,6 +620,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1404 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2006 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
+| `WaterInScan` | Water in a Photoscan | generator | Sim | 2051 |
 | `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2334 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |

@@ -121,6 +121,16 @@ pub fn validate_modifier_attachment(
     expand_scene_modifiers(&candidate, registry).map(|_| ())
 }
 
+/// Expand scene modifiers, then flatten groups: the one way to get a flat view of
+/// any preset that may carry modifiers. Plain `flatten_groups` refuses those.
+pub fn flatten_expanded(
+    owner: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> Result<EffectGraphDef, String> {
+    let expanded = expand_scene_modifiers(owner, registry).map_err(|e| format!("{e:?}"))?;
+    manifold_core::flatten::flatten_groups(&expanded).map_err(|e| format!("{e:?}"))
+}
+
 /// Produce a derived graph. All saved definitions and target frames remain
 /// untouched; a second preparation of the derived graph is an exact no-op.
 pub fn expand_scene_modifiers(

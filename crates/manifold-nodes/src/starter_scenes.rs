@@ -304,7 +304,7 @@ fn add_blast(def: Value, target: &str) -> Value {
     .expect("the Explosion prepares against the rubble scene");
     // Centre it on the pile's resting place, wide enough to take every box.
     let local = instance.graph.preset_metadata.as_mut().expect("Explosion metadata");
-    for (id, value) in [("center_x", 3.0_f32), ("center_y", 0.6), ("center_z", 0.0), ("radius", 7.0), ("impulse_strength", 14.0)] {
+    for (id, value) in [("center_x", 3.0_f32), ("center_y", 0.6), ("center_z", 0.0), ("radius", 7.0), ("impulse_strength", 9.0)] {
         local.params.iter_mut().find(|p| p.id == id).unwrap_or_else(|| panic!("Explosion has no param {id}")).default_value = value;
         local.bindings.iter_mut().filter(|b| b.id == id).for_each(|b| b.default_value = value);
     }

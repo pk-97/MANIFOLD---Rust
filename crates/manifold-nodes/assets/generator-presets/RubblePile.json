@@ -833,7 +833,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 14.0,
+        "defaultValue": 9.0,
         "id": "sceneModifier:[\"rubble_blast\",\"impulse_strength\"]",
         "label": "Impulse Size",
         "target": {
@@ -1102,7 +1102,7 @@
       },
       {
         "cardVisible": false,
-        "defaultValue": 14.0,
+        "defaultValue": 9.0,
         "id": "sceneModifier:[\"rubble_blast\",\"impulse_strength\"]",
         "isToggle": false,
         "isTrigger": false,
@@ -1459,7 +1459,7 @@
               "convert": {
                 "type": "Float"
               },
-              "defaultValue": 14.0,
+              "defaultValue": 9.0,
               "id": "impulse_strength",
               "label": "Impulse Size",
               "target": {
@@ -1613,7 +1613,7 @@
               "wholeNumbers": true
             },
             {
-              "defaultValue": 14.0,
+              "defaultValue": 9.0,
               "id": "impulse_strength",
               "isToggle": false,
               "isTrigger": false,
