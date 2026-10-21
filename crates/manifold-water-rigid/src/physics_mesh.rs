@@ -9,7 +9,8 @@ use manifold_node_engine::scene::mesh_selection::{MeshSelection, fragments};
 use manifold_node_engine::scene::transform::Transform;
 use crate::physics::ColliderGeometry;
 
-pub const PART_PORTS: [&str; 64] = [
+/// One `part_k` input per compound part; its length is the editing cap.
+pub const PART_PORTS: [&str; manifold_core::scene_surface::RIGID_BODY_MAX_PARTS as usize] = [
     "part_0", "part_1", "part_2", "part_3", "part_4", "part_5", "part_6", "part_7", "part_8",
     "part_9", "part_10", "part_11", "part_12", "part_13", "part_14", "part_15", "part_16",
     "part_17", "part_18", "part_19", "part_20", "part_21", "part_22", "part_23", "part_24",

@@ -43,7 +43,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_intensity",
+          "name": "param_row.5_intensity",
           "under_name": "scene_setup"
         }
       },
@@ -54,7 +54,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.7_intensity.slider",
+          "name": "param_row.5_intensity.slider",
           "under_name": "scene_setup"
         }
       }
@@ -64,7 +64,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.7_intensity.slider",
+          "name": "param_row.5_intensity.slider",
           "under_name": "scene_setup"
         }
       },
@@ -87,7 +87,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "under_name": "scene_setup",
           "text": "0.00"
         }
@@ -113,7 +113,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "text": "0.00"
         }
       },
@@ -147,7 +147,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "under_name": "scene_setup",
           "text": "3.50"
         }
@@ -173,7 +173,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "text": "3.50"
         }
       },
@@ -198,7 +198,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_cast_shadows",
+          "name": "param_row.5_cast_shadows",
           "under_name": "scene_setup"
         }
       },
@@ -209,7 +209,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_cast_shadows",
+          "name": "param_row.5_cast_shadows",
           "under_name": "scene_setup",
           "text": "ON"
         }
@@ -221,7 +221,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.7_cast_shadows",
+          "name": "param_row.5_cast_shadows",
           "under_name": "scene_setup"
         }
       }
@@ -231,7 +231,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.7_cast_shadows",
+          "name": "param_row.5_cast_shadows",
           "under_name": "scene_setup"
         }
       },
@@ -247,7 +247,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_cast_shadows",
+          "name": "param_row.5_cast_shadows",
           "under_name": "scene_setup",
           "text": "OFF"
         }
@@ -259,7 +259,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_shadow_softness",
+          "name": "param_row.5_shadow_softness",
           "under_name": "scene_setup"
         }
       },
@@ -270,7 +270,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.7_shadow_softness",
+          "name": "param_row.5_shadow_softness",
           "under_name": "scene_setup"
         }
       }
@@ -280,7 +280,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.7_shadow_softness",
+          "name": "param_row.5_shadow_softness",
           "under_name": "scene_setup"
         }
       },
@@ -341,7 +341,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "under_name": "scene_setup"
         }
       },
@@ -352,7 +352,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "under_name": "scene_setup"
         }
       }
@@ -362,7 +362,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.7_intensity.value",
+          "name": "param_row.5_intensity.value",
           "under_name": "scene_setup"
         }
       },

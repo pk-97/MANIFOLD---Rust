@@ -70,8 +70,7 @@ pub(crate) fn add_coupled_scene(
             .ok_or_else(|| GraphError::CycleDetected {
                 involves: vec![fluid, rigid],
             })?;
-        pair.colliders.bodies |= colliders.bodies;
-        pair.colliders.copies |= colliders.copies;
+        pair.colliders = pair.colliders.union(colliders);
         for id in [fluid, rigid] {
             let instance = graph.get_node_mut(id).expect("validated coupled node");
             if let Some(native) = node::get_mut(instance.node.as_mut()) {
@@ -98,20 +97,14 @@ mod tests {
             &mut graph,
             fluid,
             rigid,
-            RigidImpulseTargets {
-                bodies: 1,
-                copies: false,
-            },
+            RigidImpulseTargets::body(0).unwrap(),
         )
         .unwrap();
         add_coupled_scene(
             &mut graph,
             fluid,
             rigid,
-            RigidImpulseTargets {
-                bodies: 4,
-                copies: true,
-            },
+            RigidImpulseTargets::body(2).unwrap().union(RigidImpulseTargets::group(0).unwrap()),
         )
         .unwrap();
         assert_eq!(graph.node_pairs().len(), 1);
@@ -123,10 +116,10 @@ mod tests {
             .expect("native pair");
         assert_eq!(
             pair.colliders,
-            RigidImpulseTargets {
-                bodies: 5,
-                copies: true
-            }
+            RigidImpulseTargets::body(0)
+                .unwrap()
+                .union(RigidImpulseTargets::body(2).unwrap())
+                .union(RigidImpulseTargets::group(0).unwrap())
         );
     }
 }

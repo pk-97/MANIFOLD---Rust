@@ -1,7 +1,9 @@
 //! `node.bake_environment` — procedurally bake an HDR studio
 //! environment map at a configurable resolution. Outputs an
 //! equirectangular Rgba16Float Texture2D suitable for wiring into
-//! `node.render_mesh`'s `envmap` input for PBR-IBL rendering.
+//! `node.render_mesh`'s `envmap` input for PBR-IBL rendering. In `HDRI` mode
+//! it outputs the wired `hdri` texture instead, so one Mode (Gradient,
+//! Softbox, HDRI) picks what lights the scene.
 //!
 //! The studio aesthetic — ambient floor + bright horizon band + overhead
 //! softbox + floor fill + two strip lights + azimuthal modulation — is
@@ -14,6 +16,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -61,6 +64,28 @@ pub struct EnvmapUniforms {
     sun_b: f32,
 }
 
+/// `mode` values. HDRI copies the wired `hdri` texture; with nothing wired it
+/// bakes black, so a half-set-up scene is dark rather than showing a stale sky.
+const MODE_HDRI: u32 = 2;
+
+fn mode_index(params: &ParamValues) -> u32 {
+    match params.get("mode") {
+        Some(ParamValue::Enum(v)) => (*v).min(MODE_HDRI),
+        Some(ParamValue::Float(f)) => (f.round().max(0.0) as u32).min(MODE_HDRI),
+        _ => 0,
+    }
+}
+
+/// The HDRI copy kernel's uniforms (`bake_environment_hdri.wgsl`).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct HdriCopyUniforms {
+    intensity: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
+
 /// What the disc reads from the wired light: the direction toward the sun
 /// and the light's hue. `None` (disc off) unless the light is a Sun with a
 /// non-black colour.
@@ -100,9 +125,10 @@ fn sun_uniform(light: Option<Light>, mode: u32, uniform_mode: u32, disc_intensit
 manifold_node_engine::primitive! {
     name: BakeEquirectEnvmap,
     type_id: "node.bake_environment",
-    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. `mode = HDRI` outputs the wired `hdri` texture (a node.hdri_source) times `intensity`, at the file's own resolution; with nothing wired it bakes black. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
     inputs: {
         sun: Light optional,
+        hdri: Texture2D optional,
     },
     outputs: {
         envmap: Texture2D,
@@ -157,10 +183,11 @@ manifold_node_engine::primitive! {
             label: "Mode",
             ty: ParamType::Enum,
             // 0 = gradient (legacy studio, byte-identical for all existing
-            // presets), 1 = softbox (D7 black-void studio).
+            // presets), 1 = softbox (D7 black-void studio), 2 = HDRI (the
+            // wired `hdri` texture, scaled by `intensity`).
             default: ParamValue::Enum(0),
-            range: Some((0.0, 1.0)),
-            enum_values: &["Gradient", "Softbox"],
+            range: Some((0.0, 2.0)),
+            enum_values: &["Gradient", "Softbox", "HDRI"],
         },
         ParamDef {
             name: Cow::Borrowed("emitter_count"),
@@ -249,7 +276,7 @@ manifold_node_engine::primitive! {
     ],
     // depth_rule: procedural HDR envmap bake (no texture input, math-defined, not a file load) — used as a Material/PBR side-channel rather than the main color chain, but structurally a procedural producer like noise/gradient
     depth_rule: SourceHeight,
-    composition_notes: "Re-bakes only when a param or the `sun` light changes — the runtime allocates a persistent slot for this output and downstream samplers read it across frames, so a static scene bakes once. Wire the scene's Sun light (the same `node.light` that feeds `render_scene`) into `sun` and the sky's sun disc follows it live: direction and hue from the light, brightness and size from `sun_disc_intensity` / `sun_disc_size`. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). For non-studio aesthetics author a sibling primitive (sky-gradient, file-loaded HDRI) — this one specifically reproduces the legacy MetallicGlass studio (mode=gradient) or D7's black-void softbox (mode=softbox). Softbox strips are compact-support (smoothstep-clamped falloff, EXACTLY 0.0 outside the band) so the base stays pure black — never a Gaussian tail.",
+    composition_notes: "Re-bakes only when a param or the `sun` light changes — the runtime allocates a persistent slot for this output and downstream samplers read it across frames, so a static scene bakes once. Wire the scene's Sun light (the same `node.light` that feeds `render_scene`) into `sun` and the sky's sun disc follows it live: direction and hue from the light, brightness and size from `sun_disc_intensity` / `sun_disc_size`. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). Wire a node.hdri_source into `hdri` and pick mode HDRI to light the scene from a real capture; `intensity` is then the lighting master. Draw the same file behind the scene with node.camera_sky, which has its own brightness. The studio modes reproduce the legacy MetallicGlass studio (mode=gradient) or D7's black-void softbox (mode=softbox). Softbox strips are compact-support (smoothstep-clamped falloff, EXACTLY 0.0 outside the band) so the base stays pure black — never a Gaussian tail.",
     examples: [],
     picker: { label: "Bake Environment (equirect)", category: Atom },
     summary: "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
@@ -258,6 +285,11 @@ manifold_node_engine::primitive! {
     aliases: ["environment map", "bake equirect envmap", "equirect", "ibl", "reflection map"],
     boundary_reason: CrossFrameState,
     extra_fields: {
+        // HDRI mode's copy kernel, built the first time that mode runs.
+        hdri_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        // The `hdri` input's logical content version at the last copy. `None`
+        // reads as changed: a pending or unbound input is never assumed still.
+        last_hdri_version: Option<ContentVersion> = None,
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7): the full
         // uniform set the shader was last dispatched with, plus the output
         // texture's physical identity at that time. `run()`'s dispatch is
@@ -277,11 +309,17 @@ impl Primitive for BakeEquirectEnvmap {
         &self,
         port: &str,
         _canvas_dims: (u32, u32),
-        _input_dims: &[(&str, (u32, u32))],
+        input_dims: &[(&str, (u32, u32))],
         params: &ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "envmap" {
             return None;
+        }
+        // HDRI mode keeps the file's own resolution: the copy is 1:1.
+        if mode_index(params) == MODE_HDRI
+            && let Some((_, dims)) = input_dims.iter().find(|(name, _)| *name == "hdri")
+        {
+            return Some(*dims);
         }
         let w = match params.get("width") {
             Some(ParamValue::Float(f)) => f.round().max(64.0) as u32,
@@ -312,11 +350,7 @@ impl Primitive for BakeEquirectEnvmap {
         let horizon_strength = read_float("horizon_strength", 1.0);
         let azimuth_variation = read_float("azimuth_variation", 0.12);
         let intensity = read_float("intensity", 1.0);
-        let mode = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(v)) => (*v).min(1),
-            Some(ParamValue::Float(f)) => (f.round() as u32).min(1),
-            _ => 0,
-        };
+        let mode = mode_index(ctx.params);
         let emitter_count = match ctx.params.get("emitter_count") {
             Some(ParamValue::Float(f)) => f.round().clamp(1.0, 8.0) as u32,
             _ => 3,
@@ -334,6 +368,8 @@ impl Primitive for BakeEquirectEnvmap {
             read_float("sun_disc_size", 0.0),
         );
 
+        let hdri = if mode == MODE_HDRI { ctx.inputs.texture_2d("hdri") } else { None };
+        let hdri_version = if hdri.is_some() { ctx.inputs.content_version("hdri") } else { None };
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
         };
@@ -374,7 +410,8 @@ impl Primitive for BakeEquirectEnvmap {
         // slot must be re-baked even with identical params, the same
         // precedent `gltf_texture_source`'s `last_mip_identity` established.
         let output_identity = envmap.identity_key();
-        let content_unchanged = self.last_uniforms == Some(uniforms);
+        let hdri_unchanged = hdri.is_none() || (hdri_version.is_some() && self.last_hdri_version == hdri_version);
+        let content_unchanged = self.last_uniforms == Some(uniforms) && hdri_unchanged;
         let unchanged =
             content_unchanged && self.last_output_identity == Some(output_identity);
 
@@ -384,35 +421,57 @@ impl Primitive for BakeEquirectEnvmap {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/bake_equirect_envmap.wgsl"),
-                "cs_main",
-                "node.bake_environment",
-            )
-        });
+        if let Some(hdri) = hdri {
+            let copy = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+            let pipeline = self.hdri_pipeline.get_or_insert_with(|| {
+                gpu.device.create_compute_pipeline(
+                    include_str!("shaders/bake_environment_hdri.wgsl"),
+                    "cs_main",
+                    "node.bake_environment.hdri",
+                )
+            });
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&copy) },
+                    GpuBinding::Texture { binding: 1, texture: envmap },
+                    GpuBinding::Texture { binding: 2, texture: hdri },
+                ],
+                [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
+                "node.bake_environment.hdri",
+            );
+        } else {
+            let pipeline = self.pipeline.get_or_insert_with(|| {
+                gpu.device.create_compute_pipeline(
+                    include_str!("shaders/bake_equirect_envmap.wgsl"),
+                    "cs_main",
+                    "node.bake_environment",
+                )
+            });
 
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: envmap,
-                },
-            ],
-            [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
-            "node.bake_environment",
-        );
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: envmap,
+                    },
+                ],
+                [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
+                "node.bake_environment",
+            );
+        }
         if content_unchanged {
             ctx.mark_output_content_unchanged();
         }
 
         self.last_uniforms = Some(uniforms);
         self.last_output_identity = Some(output_identity);
+        self.last_hdri_version = hdri_version;
     }
 }
 
@@ -535,7 +594,33 @@ mod tests {
         let defaults = BakeEquirectEnvmap::PARAMS;
         let mode_def = defaults.iter().find(|p| p.name == "mode").expect("mode param declared");
         assert_eq!(mode_def.default, ParamValue::Enum(0));
-        assert_eq!(mode_def.enum_values, &["Gradient", "Softbox"]);
+        assert_eq!(mode_def.enum_values, &["Gradient", "Softbox", "HDRI"]);
+    }
+
+    fn params_with_mode(mode: u32) -> ParamValues {
+        let mut p = params_at(512.0, 256.0);
+        p.insert(std::borrow::Cow::Borrowed("mode"), ParamValue::Enum(mode));
+        p
+    }
+
+    /// HDRI mode keeps the file's own resolution; the other modes keep the
+    /// Width and Height params whatever is wired.
+    #[test]
+    fn hdri_mode_takes_the_hdri_inputs_size() {
+        let prim = BakeEquirectEnvmap::new();
+        let node: &dyn EffectNode = &prim;
+        let wired = [("hdri", (4096, 2048))];
+        assert_eq!(node.output_dims("envmap", (1920, 1080), &wired, &params_with_mode(2)), Some((4096, 2048)));
+        assert_eq!(node.output_dims("envmap", (1920, 1080), &wired, &params_with_mode(1)), Some((512, 256)));
+        assert_eq!(node.output_dims("envmap", (1920, 1080), &[], &params_with_mode(2)), Some((512, 256)));
+    }
+
+    #[test]
+    fn the_hdri_input_is_optional() {
+        let prim = BakeEquirectEnvmap::new();
+        let node: &dyn EffectNode = &prim;
+        let hdri = node.inputs().iter().find(|p| p.name == "hdri").expect("hdri input");
+        assert!(!hdri.required);
     }
 }
 
@@ -1082,6 +1167,84 @@ mod gate_gpu_tests {
             changed_output, fresh_output,
             "a param change on a live gated executor must match a fresh executor built with that param"
         );
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod hdri_gpu_tests {
+    //! The HDRI copy kernel against a CPU copy: every texel of the source,
+    //! times the intensity, alpha 1.
+
+    use half::f16;
+    use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+
+    use super::HdriCopyUniforms;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
+
+    fn source(device: &GpuDevice, w: u32, h: u32) -> (GpuTexture, Vec<[f32; 3]>) {
+        let texels: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| [(i % w) as f32 * 0.25, (i / w) as f32 * 0.5, 40.0 + i as f32 * 0.125])
+            .collect();
+        let mut bytes = Vec::with_capacity((w * h * 8) as usize);
+        for t in &texels {
+            for c in [t[0], t[1], t[2], 0.25] {
+                bytes.extend_from_slice(&f16::from_f32(c).to_le_bytes());
+            }
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bake-env-hdri-src",
+            mip_levels: 1,
+        });
+        device.upload_texture(&tex, &bytes);
+        (tex, texels)
+    }
+
+    #[test]
+    fn hdri_copy_scales_every_texel_by_intensity() {
+        let device = manifold_gpu::testkit::test_device();
+        let (w, h) = (64u32, 32u32);
+        let (src, texels) = source(&device, w, h);
+        let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "bake-env-hdri-out");
+        let pipeline = device.create_compute_pipeline(
+            include_str!("shaders/bake_environment_hdri.wgsl"),
+            "cs_main",
+            "bake-env-hdri-test",
+        );
+        let intensity = 2.0f32;
+        let uniforms = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let mut enc = device.create_encoder("bake-env-hdri");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Texture { binding: 1, texture: &out.texture },
+                GpuBinding::Texture { binding: 2, texture: &src },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "bake-env-hdri",
+        );
+        enc.commit_and_wait_completed();
+
+        let readback = device.create_buffer_shared(u64::from(w * h * 8));
+        let mut enc = device.create_encoder("bake-env-hdri-readback");
+        enc.copy_texture_to_buffer(&out.texture, &readback, w, h, w * 8);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared readback");
+        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        for (i, t) in texels.iter().enumerate() {
+            let got: [f32; 4] = std::array::from_fn(|k| f16::from_bits(halves[i * 4 + k]).to_f32());
+            for k in 0..3 {
+                let want = f16::from_f32(t[k]).to_f32() * intensity;
+                assert!((got[k] - want).abs() <= want.abs() * 2e-3 + 1e-3, "texel {i} channel {k}: {} vs {want}", got[k]);
+            }
+            assert_eq!(got[3], 1.0, "alpha is opaque");
+        }
     }
 }
 

@@ -193,7 +193,7 @@ Rule (RENDERER_CRATE_SPLIT D8): visibility widens only on compiler demand during
 
 ### 4.1 `manifold-water-rigid`
 
-- `physics::{RigidBody, RigidSimulation, RigidSceneInputs, RigidSceneObservation, ResolvedRigidImpulse, pose_from_transform, installed_volume, MAX_BODIES, MAX_COPIES, BODY_PORTS, POSE_PORTS, DEFAULT_DENSITY, ColliderGeometry}` — the adapter the liquid's rigid owner drives (`liquid/coupling.rs`, `liquid/bodies.rs`) and the body source nodes publish.
+- `physics::{RigidBody, RigidSimulation, RigidSceneInputs, RigidSceneObservation, ResolvedRigidImpulse, pose_from_transform, installed_volume, MAX_BODIES, MAX_COPY_GROUPS, MAX_COPIES, DEFAULT_DENSITY, ColliderGeometry}` — the adapter the liquid's rigid owner drives (`liquid/coupling.rs`, `liquid/bodies.rs`) and the body source nodes publish.
 - `coupled_frame::{CoupledRigidFrame, CoupledRigidLayout}` — the frame handed across the pair.
 - `physics_events::{ResolvedNodeImpulse, map_rigid_receipt}`; `physics_mesh::{prepare_colliders, load_compound_materials, …}` (`fluid_role_source` cooks colliders through it); `vector_field::ContinuousField`.
 - `node::{PhysicsNode, PhysicsNodeRegistration, get, get_mut}` — the pair contract (D2).

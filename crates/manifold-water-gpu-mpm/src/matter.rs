@@ -362,6 +362,7 @@ pub fn solid_bytes(nodes: [u32; 3]) -> u64 {
 mod tests {
     use super::*;
     use manifold_node_engine::ports::std430_stride;
+    use manifold_physics::PlayedTime;
 
     #[test]
     fn matter_export_substeps_ignore_frame_partition_roundoff() {
@@ -370,7 +371,7 @@ mod tests {
             let mut clock = SimulationClock::default();
             let mut schedule = Vec::new();
             for frame in 0..=120 / stride {
-                let accepted = clock.advance(f64::from(frame * stride) * TICK, TICK, 1.0, 0.0, false, true);
+                let accepted = clock.advance(PlayedTime::from_played(f64::from(frame * stride) * TICK), TICK, 1.0, 0.0, false, true);
                 for i in 0..accepted.ticks {
                     let interval = accepted.interval(u64::from(i)).unwrap().duration().0 as f32;
                     let substeps = substeps_for_interval(interval, 34);

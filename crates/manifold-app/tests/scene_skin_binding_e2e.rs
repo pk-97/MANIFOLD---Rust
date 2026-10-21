@@ -94,27 +94,26 @@ fn skin_binding_survives_save_reload_and_missing_source() {
     };
 
     // Displacement precondition, observed on the imported def: the glb bakes
-    // a texture into object 11's base_color_map. If the fixture ever stops
-    // doing this the displacement contract below needs re-checking, not this
-    // assert relaxing.
+    // a texture into one object's base_color_map. The object is found by
+    // that wire, not by node number, so the import graph can gain or lose
+    // nodes without moving it. If the fixture ever stops doing this the
+    // displacement contract below needs re-checking, not this assert relaxing.
     let imported = imported_def();
-    let group = imported
+    let (group_id, object_id) = imported
         .nodes
         .iter()
-        .find(|n| n.id == 15)
-        .and_then(|n| n.group.as_ref())
-        .expect("fixture group 15");
-    assert!(
-        group.wires.iter().any(|w| w.to_node == 11 && w.to_port == "base_color_map"),
-        "fixture no longer bakes a texture into base_color_map"
-    );
+        .find_map(|n| {
+            let wire = n.group.as_ref()?.wires.iter().find(|w| w.to_port == "base_color_map")?;
+            Some((n.id, wire.to_node))
+        })
+        .expect("fixture no longer bakes a texture into base_color_map");
 
     // Set the skin through the real command, production dispatch shape.
     let target = manifold_core::GraphTarget::Generator(scene_lid.clone());
     let mut set = SetSceneObjectSkinSourceCommand::new(
         target,
-        vec![15],
-        11,
+        vec![group_id],
+        object_id,
         None,
         EditTarget::Emissive,
         Some(source_lid.to_string()),
@@ -132,10 +131,10 @@ fn skin_binding_survives_save_reload_and_missing_source() {
             .objects
             .iter()
             .find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.object_node_id == 11 => Some(row),
+                SceneObjectVm::Known(row) if row.object_node_id == object_id => Some(row),
                 _ => None,
             })
-            .expect("object 11 must stay Known");
+            .expect("the skinned object must stay Known");
         row.skin.clone().expect("skin discovered")
     };
 

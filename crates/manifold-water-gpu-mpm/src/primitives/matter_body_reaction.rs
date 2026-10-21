@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
 use manifold_water_liquid::lattice::LiquidLattice;
@@ -155,7 +155,7 @@ impl Primitive for MatterBodyReaction {
         ];
         let closed_faces = int(ctx, "closed_faces", 63.0).min(63);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
-        let body_count = int(ctx, "body_count", 0.0).min(MAX_FLUID_ROLES as i32);
+        let body_count = int(ctx, "body_count", 0.0).min(MAX_LIQUID_BODIES as i32);
         let tick_index = int(ctx, "tick_index", 0.0);
         let substep_in_tick = int(ctx, "substep_in_tick", 0.0);
         let substeps_per_tick = int(ctx, "substeps_per_tick", 1.0).max(1);

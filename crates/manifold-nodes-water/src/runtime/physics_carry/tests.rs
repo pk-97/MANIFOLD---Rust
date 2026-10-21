@@ -328,3 +328,115 @@ fn physics_carry_rejects_setup_changes_and_output_resize() {
     assert!(resized.water_ref().water.last_frame_time.is_none());
     assert_ne!(frame(&mut resized, 0.5), fallen);
 }
+
+/// Speed and a push that both move with transport time, as in-graph curves.
+struct MovingControls(EffectNodeType, [NodeOutput; 2]);
+impl EffectNode for MovingControls {
+    fn is_pure(&self) -> bool {
+        true
+    }
+    fn type_id(&self) -> &EffectNodeType {
+        &self.0
+    }
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        static INPUTS: [NodeInput; 1] = [NodePort {
+            name: Cow::Borrowed("clock"),
+            ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+            kind: PortKind::Input,
+            required: true,
+        }];
+        &INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &self.1
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(manifold_node_engine::parameters::ParamValue::Float(clock)) = ctx.inputs.scalar("clock") else {
+            panic!("moving controls clock")
+        };
+        ctx.outputs.set_scalar("speed", manifold_node_engine::parameters::ParamValue::Float(1.0 + 0.6 * (clock * 5.0).sin()));
+        let field = manifold_physics::FieldValue::uniform([6.0 * (clock * 7.0).sin(), 0.0, 0.0]).expect("finite push");
+        ctx.outputs.set_cpu_value("field", field);
+    }
+}
+
+fn moving_runtime() -> PresetRuntime {
+    let mut registry = PrimitiveRegistry::with_builtin();
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
+    registry.register("test.pose", || Box::new(PoseObserver(EffectNodeType::new("test.pose"))));
+    registry.register("test.moving_controls", || {
+        let output = |name, ty| NodePort { name: Cow::Borrowed(name), ty, kind: PortKind::Output, required: false };
+        Box::new(MovingControls(
+            EffectNodeType::new("test.moving_controls"),
+            [output("speed", PortType::Scalar(manifold_node_engine::ports::ScalarType::F32)), output("field", PortType::VectorField)],
+        ))
+    });
+    let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+        "version": 2, "name": "Moving native physics",
+        "nodes": [
+            {"id":0,"nodeId":"input","typeId":"system.generator_input"},
+            {"id":1,"nodeId":"start","typeId":"test.physics_transform","params":{
+                "pos_y":{"type":"Float","value":50.0}
+            }},
+            {"id":2,"nodeId":"body","typeId":"test.physics_body"},
+            {"id":3,"nodeId":"world","typeId":"node.physics_world"},
+            {"id":4,"nodeId":"observe","typeId":"test.pose"},
+            {"id":5,"nodeId":"source","typeId":"system.source"},
+            {"id":6,"nodeId":"output","typeId":"system.final_output"},
+            {"id":7,"nodeId":"controls","typeId":"test.moving_controls"}
+        ],
+        "wires": [
+            {"fromNode":1,"fromPort":"transform","toNode":2,"toPort":"transform"},
+            {"fromNode":2,"fromPort":"body","toNode":3,"toPort":"body_0"},
+            {"fromNode":0,"fromPort":"time","toNode":7,"toPort":"clock"},
+            {"fromNode":7,"fromPort":"speed","toNode":3,"toPort":"speed"},
+            {"fromNode":7,"fromPort":"field","toNode":3,"toPort":"acceleration_field"},
+            {"fromNode":3,"fromPort":"pose_0","toNode":4,"toPort":"pose"},
+            {"fromNode":5,"fromPort":"out","toNode":6,"toPort":"in"}
+        ]
+    }))
+    .unwrap();
+    PresetRuntime::from_def_for_render(def, &registry, None, false).unwrap()
+}
+
+/// The pose after one second at `fps`, its bits.
+fn moving_pose(fps: u32, offline: bool) -> [u32; 3] {
+    use manifold_water_rigid::physics::SimStep;
+    let tick = manifold_core::Seconds(manifold_physics::clock::TICK);
+    let mut runtime = moving_runtime();
+    runtime.set_sim_step(if offline { SimStep::export(tick) } else { SimStep::live(tick) });
+    let mut pose = Transform::default();
+    for index in 0..=fps {
+        let seconds = f64::from(index) / f64::from(fps);
+        POSE.set(None);
+        runtime.execute_frame(FrameTime {
+            seconds: Seconds(seconds),
+            beats: Beats(seconds * 2.0),
+            delta: Seconds(if index == 0 { 0.0 } else { 1.0 / f64::from(fps) }),
+            frame_count: i64::from(index),
+        });
+        pose = POSE.get().expect("native world publishes pose");
+    }
+    pose.pos.map(f32::to_bits)
+}
+
+/// The standalone rigid world takes Speed and its inputs at its own tick
+/// starts, never between frame-end samples: a Speed curve and a push that
+/// move with time land the body on the same bits at every rate, live and
+/// exported.
+#[test]
+fn rigid_world_moving_speed_and_push_match_at_30_60_120_144_fps_live_and_export() {
+    let reference = moving_pose(60, true);
+    assert!(f32::from_bits(reference[0]).abs() > 0.05, "the push must move the body: {reference:?}");
+    for fps in [30, 60, 120, 144] {
+        for offline in [false, true] {
+            assert_eq!(moving_pose(fps, offline), reference, "{fps} fps, offline {offline}");
+        }
+    }
+}

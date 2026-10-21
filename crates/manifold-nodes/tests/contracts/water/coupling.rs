@@ -93,13 +93,13 @@ mod tests {
                 self.wire(object, "object", scene, &format!("object_{object_index}"));
             }
             if copies {
-                self.wire(body, "body", world, "copies");
+                self.wire(body, "body", world, "copies_0");
                 let object = self.node(
                     format!("{scene_name}_copies_{world_name}_{object_index}"),
                     "node.scene_object",
                 );
                 *object_index += 1;
-                self.wire(world, "instances", object, "instances");
+                self.wire(world, "instances_0", object, "instances");
                 self.wire(object, "object", scene, &format!("object_{object_index}"));
             }
             let object = self.node(
@@ -195,10 +195,7 @@ mod tests {
             vec![CoupledSceneBinding {
                 fluid: NodeId::new("fluid"),
                 rigid: NodeId::new("world"),
-                colliders: RigidImpulseTargets {
-                    bodies: 1,
-                    copies: true,
-                },
+                colliders: RigidImpulseTargets::body(0).unwrap().union(RigidImpulseTargets::group(0).unwrap()),
             }]
         );
     }
@@ -228,7 +225,7 @@ mod tests {
             vec![CoupledSceneBinding {
                 fluid: NodeId::new("matter"),
                 rigid: NodeId::new("world"),
-                colliders: RigidImpulseTargets { bodies: 1, copies: false },
+                colliders: RigidImpulseTargets::body(0).unwrap(),
             }]
         );
     }
@@ -238,8 +235,7 @@ mod tests {
         let mut builder = GraphBuilder::new();
         builder.scene("scene", &[("fluid", "world", &[0, 0], false)]);
         let result = prepare(builder).unwrap();
-        assert_eq!(result[0].colliders.bodies, 1);
-        assert!(!result[0].colliders.copies);
+        assert_eq!(result[0].colliders, RigidImpulseTargets::body(0).unwrap());
     }
 
     #[test]
@@ -298,8 +294,13 @@ mod tests {
         builder.scene("second", &[("fluid", "world", &[1], true)]);
         let result = prepare(builder).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].colliders.bodies, 0b11);
-        assert!(result[0].colliders.copies);
+        assert_eq!(
+            result[0].colliders,
+            RigidImpulseTargets::body(0)
+                .unwrap()
+                .union(RigidImpulseTargets::body(1).unwrap())
+                .union(RigidImpulseTargets::group(0).unwrap())
+        );
     }
 
     #[test]

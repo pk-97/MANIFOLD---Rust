@@ -2,7 +2,7 @@
 use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use manifold_water_liquid::fluid_particles::bin_total;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::FlipSolverGrid;
@@ -85,7 +85,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // A wired reaction holds every body of one tick, as the step clamps
     // body_count; the body passes' sums come with it.
     if x.bytes("reaction").is_some() {
-        let bodies = x.scalar("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as u64;
+        let bodies = x.scalar("body_count", 0.0).round().clamp(0.0, MAX_LIQUID_BODIES as f32) as u64;
         x.covers("reaction", bodies * REACTION_FLOATS as u64 * 4)?;
         x.hold(body_pass_bytes(cells, bodies as u32));
     }

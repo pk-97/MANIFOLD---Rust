@@ -114,8 +114,12 @@ pub enum Feature {
     MotionBlur,
     /// A light's type: 0 Sun, 1 Point, 2 Spot.
     LightType,
-    /// An environment bake's mode: 0 Gradient, 1 Softbox.
+    /// An environment bake's mode: 0 Gradient, 1 Softbox, 2 HDRI.
     EnvironmentMode,
+    /// The HDRI drawn behind the scene: 0 off, 1 on. It reads as a two-mode
+    /// switch so the Scene tab leaves its Blur and Brightness rows out while
+    /// it is off.
+    Background,
     /// A fluid source's role: 0 Initial Fill, 1 Inflow, 2 Outflow, 3
     /// Collider.
     SourceRole,
@@ -124,7 +128,7 @@ pub enum Feature {
 impl Feature {
     /// Whether the switch picks a mode rather than turning the feature on.
     pub fn has_modes(self) -> bool {
-        matches!(self, Self::LightType | Self::EnvironmentMode | Self::SourceRole)
+        matches!(self, Self::LightType | Self::EnvironmentMode | Self::Background | Self::SourceRole)
     }
 
     /// Why a row gated on this feature does nothing right now.
@@ -134,6 +138,7 @@ impl Feature {
             Self::MotionBlur => "Motion blur is off",
             Self::LightType => "This light type does not use it",
             Self::EnvironmentMode => "This environment mode does not use it",
+            Self::Background => "The background is off",
             Self::SourceRole => "This source role does not use it",
         }
     }
@@ -262,13 +267,30 @@ pub struct SceneObjectCapabilities {
     pub modifiers: bool,
 }
 
-/// A Physics World's body slots. Core asserts at compile time that the
-/// runtime body capacity (`RigidImpulseTargets::BODY_CAPACITY`) matches.
-pub const PHYSICS_WORLD_BODY_SLOTS: u32 = 64;
+/// The most individually wired bodies one Physics World takes. Its `bodies`
+/// count sizes its body and pose ports up to this. Core asserts at compile
+/// time that the runtime hit mask (`RigidImpulseTargets::BODY_CAPACITY`)
+/// holds exactly this many.
+pub const PHYSICS_WORLD_MAX_BODIES: u32 = 256;
 
-/// The most copies one Duplicate makes, of any object: one per body slot, so
-/// every copy of a physics object can carry its own body.
-pub const MAX_DUPLICATE_COPIES: u32 = PHYSICS_WORLD_BODY_SLOTS;
+/// The most material parts one compound rigid body takes, one per `part_k`
+/// port. The rigid body's port table is declared at this length, so the two
+/// cannot drift.
+pub const RIGID_BODY_MAX_PARTS: u32 = 64;
+
+/// The most copy groups one Physics World takes; its `copy_groups` count
+/// sizes its copy-group ports up to this.
+pub const PHYSICS_WORLD_MAX_COPY_GROUPS: u32 = 32;
+
+/// A Physics World's `bodies` when none is saved, which is every world
+/// saved before the count existed.
+pub const PHYSICS_WORLD_DEFAULT_BODIES: u32 = 64;
+
+/// A Physics World's `copy_groups` when none is saved.
+pub const PHYSICS_WORLD_DEFAULT_COPY_GROUPS: u32 = 1;
+
+/// The most copies one Duplicate makes, of any object.
+pub const MAX_DUPLICATE_COPIES: u32 = 64;
 
 /// Why `copies` copies of a physics object cannot fit a world with `free`
 /// body slots; `None` when they fit.

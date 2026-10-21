@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use manifold_core::{
-    NodeId, PresetTypeId, effect_graph_def::EffectGraphDef, effects::PresetInstance, id::EffectId,
+    Beats, NodeId, PlayedTime, PresetTypeId, effect_graph_def::EffectGraphDef, effects::PresetInstance, id::EffectId,
 };
 
 use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::{ImpulseFire, SceneImpulseDiagnostics}};
@@ -87,6 +87,9 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
         _output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
     ) {
     }
+    /// Append each world whose copy pool left copies unmade on its last
+    /// frame, with how many, for the setup check.
+    fn write_copies_not_made(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, u32)>) {}
     fn is_scene_impulse_param(&self, _param: &str) -> bool {
         false
     }
@@ -94,7 +97,8 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
         &mut self,
         _runtime: &mut RuntimeContext<'_>,
         _param: &str,
-        _source: FrameTime,
+        _source: PlayedTime,
+        _beats: Beats,
         _next_sequence: &mut u64,
     ) -> Result<ImpulseFire, String> {
         Ok(ImpulseFire::NotImpulse)
@@ -106,10 +110,13 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
     ) {
     }
     fn before_frame(&mut self, _runtime: &mut RuntimeContext<'_>, _time: FrameTime) {}
-    fn after_frame(&mut self, _graph: &Graph, _time: FrameTime) {}
+    /// `played` is the frame's played time, which a tempo edit never moves.
+    fn after_frame(&mut self, _graph: &Graph, _time: FrameTime, _played: PlayedTime) {}
     fn reset(&mut self) {}
     fn set_project_tempo(&mut self, _graph: &mut Graph, _tempo: Option<&ProjectTempo>) {}
-    fn set_source_instance(&mut self, _graph: &mut Graph, _instance: Option<&PresetInstance>) {}
+    /// The executor holds this frame's step: the host's hop times become
+    /// played time with its tempo shift here, as they arrive.
+    fn set_source_instance(&mut self, _runtime: &mut RuntimeContext<'_>, _instance: Option<&PresetInstance>) {}
     fn prepare_modifiers(
         &mut self,
         _runtime: &mut RuntimeContext<'_>,
@@ -282,7 +289,7 @@ impl PresetRuntime {
 
     pub fn set_source_instance(&mut self, instance: Option<&PresetInstance>) {
         self.for_each_extension(|extension, context| {
-            extension.set_source_instance(context.graph, instance)
+            extension.set_source_instance(context, instance)
         });
     }
 

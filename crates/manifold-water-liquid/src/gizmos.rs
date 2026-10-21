@@ -47,13 +47,15 @@ impl SetupReport {
 }
 
 /// A liquid domain's snapshot: Ready once a setup was accepted and the
-/// liquid is neither failed nor holding on a pending input.
+/// liquid is neither failed nor holding on a pending input. `uncoupled` counts
+/// the coupled world's bodies past what the liquid holds.
 pub fn domain_snapshot(
     accepted: Option<FluidDomainLayout>,
     failed: bool,
     pending: bool,
     epoch: u64,
     report: &SetupReport,
+    uncoupled: usize,
 ) -> FluidDomainSnapshot {
     let state = match (accepted, failed, pending) {
         (_, true, _) => FluidDomainState::Failed,
@@ -68,6 +70,7 @@ pub fn domain_snapshot(
         fit: report.fit,
         column_box: report.column_box,
         refusal: report.refusal.clone(),
+        uncoupled_bodies: u32::try_from(uncoupled).unwrap_or(u32::MAX),
     }
 }
 
@@ -142,7 +145,7 @@ mod tests {
     #[test]
     fn a_domain_is_ready_only_once_accepted_and_running() {
         let layout = Some(FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 });
-        let state = |accepted, failed, pending| domain_snapshot(accepted, failed, pending, 1, &SetupReport::default()).state;
+        let state = |accepted, failed, pending| domain_snapshot(accepted, failed, pending, 1, &SetupReport::default(), 0).state;
         assert_eq!(state(layout, false, false), FluidDomainState::Ready);
         assert_eq!(state(None, false, false), FluidDomainState::Initializing);
         assert_eq!(state(layout, false, true), FluidDomainState::PendingInputs);
@@ -151,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_refusal_clears_the_last_fit_and_keeps_its_text() {
-        let snapshot = |report: &SetupReport| domain_snapshot(None, false, false, 1, report);
+        let snapshot = |report: &SetupReport| domain_snapshot(None, false, false, 1, report, 0);
         let mut report = SetupReport::default();
         let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped, pool_full: false };
         report.accept(clipped, Some(([2.0, 1.0, 0.0], [2.0, 1.0, 1.0])));

@@ -160,16 +160,15 @@ fn build_variant(
     }
 
     let mut params = harness::import_rt_manifest(&flat, true, true);
-    for (suffix, value) in [
-        ("1_intensity", ENV_INTENSITY),
-        ("1_fill", FILL_LIGHT),
-        ("7_intensity", SUN_INTENSITY),
+    // Card params are found by the node and param they drive, not by their
+    // numbered id, so the import graph can gain or lose nodes.
+    for (node_type, param, value) in [
+        ("node.bake_environment", "intensity", ENV_INTENSITY),
+        ("node.bake_environment", "fill", FILL_LIGHT),
+        ("node.light", "intensity", SUN_INTENSITY),
     ] {
-        let id = params
-            .iter()
-            .find(|p| p.id() == suffix)
-            .map(|p| p.id().to_string())
-            .unwrap_or_else(|| panic!("imported def exposes no card param `{suffix}`"));
+        let id = card_param_driving(&flat, node_type, param)
+            .unwrap_or_else(|| panic!("imported def exposes no card param for {node_type}.{param}"));
         params.get_mut(&id).expect("id came from this manifest").value = value;
     }
 
@@ -352,4 +351,15 @@ fn normal_tangent_mirror_normal_map_reaches_the_traced_reflection() {
          reflection ({differing_fraction:.5} < {min_differing_fraction:.5}) — the normal map is \
          not reaching the RT kernel"
     );
+}
+
+/// The card param id whose binding drives `param` on the first node of
+/// `node_type`.
+fn card_param_driving(def: &manifold_core::effect_graph_def::EffectGraphDef, node_type: &str, param: &str) -> Option<String> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let node = def.nodes.iter().find(|n| n.type_id == node_type)?;
+    def.preset_metadata.as_ref()?.bindings.iter().find_map(|b| match &b.target {
+        BindingTarget::Node { node_id, param: p } if *node_id == node.node_id && p == param => Some(b.id.clone()),
+        _ => None,
+    })
 }

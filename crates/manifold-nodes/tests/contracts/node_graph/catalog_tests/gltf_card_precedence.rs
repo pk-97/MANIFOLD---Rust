@@ -30,8 +30,8 @@ use manifold_node_engine::runtime::PresetRuntime;
 /// MIRRORED default, so the plant is skipped and the def keeps a node write — that
 /// is BUG-ji6q, covered by `bound_param_survives_rebuild`. But an import also
 /// carries AUTHORED bindings for the nodes that are not scene vocabulary: the
-/// `env_mode` enum over `env_select.selector`, `ssao_intensity`, the sun fan-outs
-/// onto `envmap.sun_*`, `env_intensity` onto `hdri_gain.gain`. Those defaults are
+/// `bg_enabled` switch over `bg_select.selector`, `ssao_intensity`, the sun fan-outs
+/// onto `envmap.sun_*`. Those defaults are
 /// chosen numbers, they still plant, and a caller who sets one on the node
 /// instead of the card still loses — silently, which is exactly how
 /// `rt_r3_heldout_gltf` measured two raster renders for its whole life. This pins
@@ -57,15 +57,15 @@ fn an_imported_defs_authored_binding_still_overwrites_a_node_write_and_reports_i
     let path = std::path::Path::new("/tmp/synthetic_bug1l7f_test.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build import graph");
 
-    // The mistake: switch the environment to HDRI by writing the node param,
+    // The mistake: switch the background on by writing the node param,
     // the way `rt_r3_heldout_gltf` set `rt_enabled` on `render_scene`.
-    let node_id = manifold_core::NodeId::new("env_select");
+    let node_id = manifold_core::NodeId::new("bg_select");
     let baked = 1.0_f32;
     let node = def
         .nodes
         .iter_mut()
         .find(|n| n.node_id == node_id)
-        .expect("env_select present in the imported def");
+        .expect("bg_select present in the imported def");
     node.params.insert(
         "selector".to_string(),
         manifold_core::effect_graph_def::SerializedParamValue::Float { value: baked },
@@ -77,7 +77,7 @@ fn an_imported_defs_authored_binding_still_overwrites_a_node_write_and_reports_i
     let inst = runtime
         .graph
         .instance_by_node_id(&node_id)
-        .expect("env_select in the live graph");
+        .expect("bg_select in the live graph");
     let got = runtime
         .graph
         .get_node(inst)
@@ -95,7 +95,7 @@ fn an_imported_defs_authored_binding_still_overwrites_a_node_write_and_reports_i
     assert!(
         findings
             .iter()
-            .any(|f| f.node_id == "env_select" && f.param == "selector"),
+            .any(|f| f.node_id == "bg_select" && f.param == "selector"),
         "the silent revert must be reported by node and param; got {findings:?}",
     );
 }

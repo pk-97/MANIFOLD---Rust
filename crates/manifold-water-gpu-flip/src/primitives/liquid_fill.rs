@@ -17,7 +17,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{int_param};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::lattice::LiquidLattice;
@@ -158,7 +158,7 @@ manifold_node_engine::primitive! {
         int_param!("box_z1", "Box Max Z (half cell)", 0.0, 0.0, 2048.0),
         float_param!("jitter", "Jitter", 0.0, 0.0, 1.0),
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
-        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_LIQUID_BODIES as f32),
         int_param!("epoch", "Epoch", 0.0, 0.0, 16_777_215.0),
         int_param!("particle_capacity", "Max Particles", 0.0, 0.0, 16_777_216.0),
         float_param!("wall_inset", "Wall Inset (cells)", 0.0, 0.0, 8.0),
@@ -213,7 +213,7 @@ impl Primitive for LiquidFill {
         }
         let (pool, sites) = fill_of(|name, default| ctx.scalar_or_param(name, default));
         let seed = int("seed", 0.0);
-        let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
+        let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
         // With colliders the sites depend on their pose at the epoch's start.
         let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
         let requested = ctx.scalar_or_param("particle_capacity", 0.0);

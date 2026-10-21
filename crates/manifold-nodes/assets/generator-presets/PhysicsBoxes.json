@@ -40,9 +40,9 @@
       {
         "id": "40_copy_spacing",
         "name": "Spacing",
-        "min": 0.01,
-        "max": 100,
-        "defaultValue": 1.85,
+        "min": 1,
+        "max": 20,
+        "defaultValue": 1.06375,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -63,9 +63,9 @@
       },
       {
         "id": "40_copy_layout",
-        "name": "Arrangement",
+        "name": "Layout",
         "min": 0,
-        "max": 1,
+        "max": 3,
         "defaultValue": 1,
         "wholeNumbers": true,
         "isToggle": false,
@@ -74,7 +74,9 @@
         "cardVisible": false,
         "valueLabels": [
           "Grid",
-          "Pile"
+          "Scatter",
+          "Line",
+          "Ring"
         ]
       }
     ],
@@ -108,11 +110,11 @@
       {
         "id": "40_copy_spacing",
         "label": "Spacing",
-        "defaultValue": 1.85,
+        "defaultValue": 1.06375,
         "target": {
           "kind": "node",
           "nodeId": "physics_demo_121",
-          "param": "copy_spacing"
+          "param": "copy_size_spacing"
         },
         "convert": {
           "type": "Float"
@@ -133,7 +135,7 @@
       },
       {
         "id": "40_copy_layout",
-        "label": "Arrangement",
+        "label": "Layout",
         "defaultValue": 1,
         "target": {
           "kind": "node",
@@ -157,7 +159,7 @@
       "id": 40,
       "nodeId": "physics_demo_40",
       "typeId": "node.physics_world",
-      "handle": "Boxes \u2014 Apply Count with Reset",
+      "handle": "Box World",
       "params": {},
       "exposedParams": [
         "reset"
@@ -445,13 +447,25 @@
           "type": "Float",
           "value": 24
         },
-        "copy_spacing": {
-          "type": "Float",
-          "value": 1.85
-        },
         "copy_layout": {
           "type": "Enum",
           "value": 1
+        },
+        "copy_size_spacing": {
+          "type": "Float",
+          "value": 1.06375
+        },
+        "copy_turn_x": {
+          "type": "Float",
+          "value": 0.08
+        },
+        "copy_turn_y": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "copy_turn_z": {
+          "type": "Float",
+          "value": 0.04
         }
       },
       "exposedParams": [
@@ -478,15 +492,15 @@
         },
         "rot_x": {
           "type": "Float",
-          "value": 0.08
+          "value": 0
         },
         "rot_y": {
           "type": "Float",
-          "value": 0.12
+          "value": 0
         },
         "rot_z": {
           "type": "Float",
-          "value": 0.04
+          "value": 0
         },
         "scale_x": {
           "type": "Float",
@@ -856,7 +870,7 @@
       "fromNode": 121,
       "fromPort": "body",
       "toNode": 40,
-      "toPort": "copies"
+      "toPort": "copies_0"
     },
     {
       "fromNode": 121,
@@ -884,13 +898,13 @@
     },
     {
       "fromNode": 40,
-      "fromPort": "instances",
+      "fromPort": "instances_0",
       "toNode": 124,
       "toPort": "instances"
     },
     {
       "fromNode": 40,
-      "fromPort": "active_count",
+      "fromPort": "active_count_0",
       "toNode": 124,
       "toPort": "instance_count"
     },

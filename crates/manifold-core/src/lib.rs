@@ -135,7 +135,7 @@ pub use stage::{
     StageLayout, derive_stage,
 };
 pub use types::*;
-pub use units::{Beats, Bpm, Seconds};
+pub use units::{Beats, Bpm, PlayedTime, Seconds};
 pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgress, WarmupRun};
 
 // Foundation modules manifold-app reaches through `manifold_core`; the

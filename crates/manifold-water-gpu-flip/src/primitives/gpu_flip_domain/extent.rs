@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_water_liquid::extent::walked_roles;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
@@ -49,7 +49,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("clock_obstacles", 96),
         ("clock_sources", 96),
         ("live_hits", 16),
-        ("reaction", (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64),
+        ("reaction", (MAX_LIQUID_BODIES * REACTION_FLOATS * 4) as u64),
         ("forces", forces),
         ("impulses", field.lattice.impulse_bytes()),
     ] {

@@ -7,8 +7,7 @@ use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics::ResolvedRigidImpulse;
 
 /// An owned, resolved impulse ready for native fixed-tick admission.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedNodeImpulse {
     pub field: FieldValue,
     pub target: ImpulseTarget,

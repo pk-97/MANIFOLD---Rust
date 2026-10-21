@@ -1041,6 +1041,32 @@ fn liquid_hydrostatic_lift() {
     }
 }
 
+/// A world past the 64 bodies a liquid once held couples whole: GPU FLIP
+/// takes all 100 light cubes standing under its water, each one rises
+/// (a cube the water did not see would sink), and the walls the coupled
+/// world takes past its own full set of bodies keep every cube in the tank.
+#[test]
+fn liquid_couples_a_hundred_body_world() {
+    const CUBES: usize = 100;
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    let def = manifold_nodes::testkit::liquid_conformance_fixtures::gpu_flip_box_grid(CUBES as u32);
+    let mut run = LiquidRun::offline(row, def, 1);
+    let probe = run.step();
+    assert_eq!(probe.get("body_count"), CUBES as f32, "the liquid holds every cube");
+    let start: Vec<LiquidBody> = run.read::<LiquidBody>(row.type_id, "bodies")[..CUBES].to_vec();
+    let probe = run.steps(45);
+    assert_eq!(probe.get("body_count"), CUBES as f32);
+    let end: Vec<LiquidBody> = run.read::<LiquidBody>(row.type_id, "bodies")[..CUBES].to_vec();
+    let mut least = f32::MAX;
+    for (cube, (start, end)) in start.iter().zip(&end).enumerate() {
+        let (from, to) = (start.position_inv_mass, end.position_inv_mass);
+        least = least.min(to[1] - from[1]);
+        assert!(to[1] > from[1] + 0.01, "cube {cube} did not rise: y {} -> {}", from[1], to[1]);
+        assert!(to[1] > 0.0 && to[1] < 2.4 && to[0].abs() < 1.2 && to[2].abs() < 1.2, "cube {cube} left the tank: {to:?}");
+    }
+    eprintln!("liquid_couples_a_hundred_body_world: {CUBES} cubes coupled, least rise {least:.3} m over 45 ticks");
+}
+
 /// A rest proof's run at Sim Rate `hz`, one tick per frame.
 fn rest_run(row: &'static LiquidSolverRow, fixture: Fixture, hz: u32) -> LiquidRun {
     LiquidRun::on_project_rate(row, scene(row, fixture), f64::from(60 / hz), false, false, None, f64::from(hz))
@@ -1535,7 +1561,7 @@ impl LiquidRun {
             delta: manifold_core::Seconds::ZERO,
             frame_count: i64::from(self.frame),
         };
-        let fired = self.runtime.water().fire_scene_impulse(param, source, sequence);
+        let fired = self.runtime.fire_scene_impulse(param, source, sequence);
         assert_eq!(fired, Ok(manifold_core::scene_impulse::ImpulseFire::Admitted), "{}: the impulse was not accepted", self.domain_type);
     }
 

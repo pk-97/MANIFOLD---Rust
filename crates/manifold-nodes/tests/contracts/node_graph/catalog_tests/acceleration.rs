@@ -200,11 +200,11 @@ fn force_copies_target_uses_world_instances_input() {
     wire(
         &mut owner,
         "physics_demo_40",
-        "instances",
+        "instances_0",
         "physics_demo_104",
         "instances",
     );
-    wire(&mut owner, "physics_demo_101", "body", "physics_demo_40", "copies");
+    wire(&mut owner, "physics_demo_101", "body", "physics_demo_40", "copies_0");
     let expanded = prepared(&attach(
         &owner,
         "copies_force",
@@ -212,7 +212,7 @@ fn force_copies_target_uses_world_instances_input() {
             objects: vec![reference(&owner, "node.scene_object", "physics_demo_104")],
         },
     ));
-    assert_eq!(target_wires(&expanded, "copies_acceleration").len(), 1);
+    assert_eq!(target_wires(&expanded, "copies_acceleration_0").len(), 1);
     assert!(target_wires(&expanded, "body_acceleration_0").is_empty());
 }
 

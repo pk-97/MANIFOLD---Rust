@@ -241,8 +241,8 @@ pub fn rubble_pile() -> Value {
     let (camera, sun, ground, chute, wall) = (k(1), k(4), k(100), k(140), k(160));
     set_floats(&mut def, &camera, &[("distance", 20.0), ("look_y", 2.2), ("orbit", -0.6), ("tilt", 0.38), ("fov_y", 0.9)]);
     set_floats(&mut def, &sun, &[("intensity", 2.2), ("pos_x", -10.0), ("pos_y", 18.0), ("pos_z", 12.0)]);
-    set_floats(&mut def, &ground, &[("scale_x", 16.0), ("scale_y", 0.25), ("scale_z", 12.0)]);
-    set_floats(&mut def, &boxes, &[("copy_count", 160.0), ("copy_columns", 10.0), ("copy_spacing", 0.95), ("friction", 0.45), ("bounce", 0.2)]);
+    set_floats(&mut def, &ground, &[("scale_x", 36.0), ("scale_y", 0.25), ("scale_z", 32.0)]);
+    set_floats(&mut def, &boxes, &[("copy_count", 160.0), ("copy_columns", 10.0), ("copy_size_spacing", 1.0), ("friction", 0.45), ("bounce", 0.2)]);
     set_params(&mut def, &boxes, &[("copy_layout", json!({"type": "Enum", "value": 1}))]);
     set_floats(&mut def, &transform, &[("pos_x", -2.5), ("pos_y", 8.0), ("pos_z", 0.0), ("scale_x", 0.55), ("scale_y", 0.55), ("scale_z", 0.55)]);
     set_floats(&mut def, &chute, &[("pos_x", -2.5), ("pos_y", 1.3), ("pos_z", 0.0), ("rot_y", 0.0), ("rot_z", -0.35), ("scale_x", 7.0), ("scale_y", 0.4), ("scale_z", 7.0)]);
@@ -266,12 +266,12 @@ pub fn rubble_pile() -> Value {
     meta["displayName"] = json!("Rubble Pile");
     meta["oscPrefix"] = json!("rubblepile");
     let s = "Rubble";
-    // Count, Size and Spacing are setup rows: the world rebuilds on a Size
-    // change and Count and Spacing only apply on Reset.
+    // Size is a setup row: the world rebuilds on a Size change. Count and
+    // Spacing (box sizes between copies) take effect live.
     meta["params"] = json!([
         param_spec("count", "Count", s, 0.0, 4000.0, 160.0, true, false, "F0", false),
         param_spec("size", "Size", s, 0.1, 2.0, 0.55, false, false, "F2", false),
-        param_spec("spacing", "Spacing", s, 0.3, 4.0, 0.95, false, false, "F2", false),
+        param_spec("spacing", "Spacing", s, 1.0, 4.0, 1.0, false, false, "F2", false),
         param_spec("bounce", "Bounce", s, 0.0, 1.0, 0.2, false, false, "F2", true),
         param_spec("friction", "Friction", s, 0.0, 1.0, 0.45, false, false, "F2", true),
         param_spec("speed", "Speed", s, 0.0, 4.0, 1.0, false, false, "F1", true),
@@ -282,13 +282,12 @@ pub fn rubble_pile() -> Value {
         binding("size", "Size", 0.55, &transform, "scale_x", "Float"),
         binding("size", "Size", 0.55, &transform, "scale_y", "Float"),
         binding("size", "Size", 0.55, &transform, "scale_z", "Float"),
-        binding("spacing", "Spacing", 0.95, &boxes, "copy_spacing", "IntRound"),
+        binding("spacing", "Spacing", 1.0, &boxes, "copy_size_spacing", "Float"),
         binding("bounce", "Bounce", 0.2, &boxes, "bounce", "Float"),
         binding("friction", "Friction", 0.45, &boxes, "friction", "Float"),
         binding("speed", "Speed", 1.0, &world, "speed", "Float"),
         binding("reset", "Reset", 0.0, &world, "reset", "Trigger"),
     ]);
-    meta["bindings"][4]["convert"] = json!({"type": "Float"});
     assert_bindings_resolve(RUBBLE_PRESET, &def);
     add_blast(def, &boxes_object)
 }
@@ -398,7 +397,7 @@ mod tests {
         let instance = &def.scene_modifiers[0];
         let targets = manifold_node_engine::load::expand::impulse_recipients(&def, &instance.scene, &instance.targets, &PrimitiveRegistry::with_builtin()).expect("recipients resolve");
         let world = targets.iter().find(|(id, _)| id.as_str() == "physics_demo_40").unwrap_or_else(|| panic!("the physics world is a recipient: {targets:?}"));
-        assert!(matches!(world.1, manifold_core::scene_impulse::ImpulseTarget::Rigid(t) if t.copies), "the blast reaches the copies: {:?}", world.1);
+        assert!(matches!(world.1, manifold_core::scene_impulse::ImpulseTarget::Rigid(t) if t.contains_group(0)), "the blast reaches the copies: {:?}", world.1);
     }
 
     /// The Burst reaches the swarm through its own lattice recipient.

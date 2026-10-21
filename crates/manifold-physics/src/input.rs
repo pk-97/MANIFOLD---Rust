@@ -174,6 +174,25 @@ impl<T: Timestamped> InputHistory<T> {
         Ok(removed)
     }
 
+    /// Drop inputs later than `time`: knots recorded for a span the
+    /// simulation will never run, such as transport a new grid origin
+    /// abandoned. Returns the number removed for adapters with parallel
+    /// packed storage.
+    pub fn drop_after(&mut self, time: Seconds) -> Result<usize, HistoryError> {
+        if self.exhausted {
+            return Err(self.failure.unwrap_or(HistoryError::CapacityExceeded));
+        }
+        if !time.0.is_finite() {
+            return Err(HistoryError::InvalidTime);
+        }
+        let mut removed = 0;
+        while self.samples.back().is_some_and(|last| last.time().0 > time.0) {
+            self.samples.pop_back();
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
     pub fn clear(&mut self) {
         self.samples.clear();
         self.exhausted = false;

@@ -12,7 +12,7 @@ use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
 mod scene_write;
-pub(crate) use scene_write::{apply_scene_param_write, find_node_by_scope, is_water_object, scene_binding_id, scene_param_value};
+pub(crate) use scene_write::{aim_sun_at_hdri, apply_scene_param_write, find_node_by_scope, is_water_object, scene_binding_id, scene_param_value};
 
 /// The Add menu's insert action for `kind` into the scene `render`.
 #[cfg(test)]
@@ -380,6 +380,13 @@ pub(super) fn dispatch_project(
                     content_tx,
                     ContentCommand::ExecuteOnContent(Box::new(cmd)),
                 );
+            }
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneSetupAimSunAtHdri(layer_id, hdri_file) => {
+            match aim_sun_at_hdri(project, layer_id, hdri_file) {
+                Ok(cmd) => ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd)),
+                Err(reason) => ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason)),
             }
             DispatchResult::handled()
         }

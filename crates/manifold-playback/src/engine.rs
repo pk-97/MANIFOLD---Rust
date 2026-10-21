@@ -456,6 +456,34 @@ impl PlaybackEngine {
     pub fn current_state(&self) -> PlaybackState {
         self.current_state
     }
+    /// The played time the newest seek, locate or play from a cue aimed at,
+    /// until a frame renders it; physics starts its tick grid there after a
+    /// jump.
+    pub fn played_target(&self) -> Option<manifold_core::PlayedTime> {
+        self.clock.played_target()
+    }
+
+    /// Where physics replay grids count from: the newest placement's target.
+    pub fn replay_origin(&self) -> manifold_core::PlayedTime {
+        self.clock.replay_origin()
+    }
+
+    /// [`Self::played_target`] for the frame being rendered, once.
+    pub fn take_played_target(&mut self) -> Option<manifold_core::PlayedTime> {
+        self.clock.take_played_target()
+    }
+
+    /// The clock physics runs on: the transport less every tempo edit's
+    /// move, so a tempo edit never moves it.
+    pub fn played_time(&self) -> manifold_core::PlayedTime {
+        self.clock.played_time()
+    }
+
+    /// The sum of every tempo edit's move of the transport so far: what
+    /// converts a transport stamp to played time at a seam.
+    pub fn tempo_shift(&self) -> Seconds {
+        self.clock.tempo_shift()
+    }
     pub fn current_time_double(&self) -> f64 {
         self.clock.time().0
     }
@@ -978,7 +1006,21 @@ impl PlaybackEngine {
         let beat = TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm) + beat_offset;
         let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
         self.tempo = TempoSource::Map { beat_offset: 0.0 };
-        self.place(|clock| clock.locate(Seconds(t.0.max(0.0))));
+        // The beat stays and its seconds move: no jump, so physics continues.
+        let before = self.clock.time().0;
+        self.place(|clock| clock.relocate(Seconds(t.0.max(0.0))));
+        // Live hop clocks map audio onto transport time. They move with the
+        // transport, so a hop keeps its played time across the edit.
+        let moved = self.clock.time().0 - before;
+        if moved != 0.0 && let Some(project) = &mut self.project {
+            project.for_each_preset_instance_mut(|instance| {
+                for m in instance.audio_mods.iter_mut().flatten() {
+                    if let Some(clock) = &mut m.hop_timeline.clock {
+                        clock.offset += moved;
+                    }
+                }
+            });
+        }
         self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
     }
@@ -4159,6 +4201,27 @@ mod tests {
         }).unwrap();
     }
 
+    /// Seek then Play in one tick: the seek's target reaches the first frame
+    /// rendered after it, at every rate, and only that one.
+    #[test]
+    fn a_seek_then_play_in_one_tick_keeps_the_target_for_the_rendered_frame() {
+        const TARGET: manifold_core::PlayedTime = manifold_core::PlayedTime::from_played(600.9137);
+        for fps in [30.0_f32, 60.0, 120.0, 144.0] {
+            let mut project = Project::default();
+            project.settings.frame_rate = fps;
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project);
+            engine.seek_to(Seconds(TARGET.seconds()));
+            engine.play();
+            let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+            engine.reclaim_tick_result(result);
+            assert!(engine.current_time_double() > TARGET.seconds(), "{fps} fps: the frame is past the one the seek landed on");
+            assert_eq!(engine.played_target(), Some(TARGET), "{fps} fps: play lost the seek's target");
+            assert_eq!(engine.take_played_target(), Some(TARGET), "{fps} fps");
+            assert_eq!(engine.played_target(), None, "{fps} fps: the rendered frame took it");
+        }
+    }
+
     #[test]
     fn transport_epoch_tracks_small_seeks_but_not_external_samples() {
         let mut engine = PlaybackEngine::new(Vec::new());
@@ -4644,73 +4707,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod audio_tempo_edit_tests {
-    use super::*;
-    #[test]
-    fn manual_tempo_edit_preserves_beat_while_paused_and_playing() {
-        for state in [PlaybackState::Paused, PlaybackState::Playing] {
-            let mut engine = PlaybackEngine::new(Vec::new());
-            let mut project = Project::default();
-            project.settings.bpm = Bpm(120.0);
-            project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
-            engine.initialize(project);
-            engine.set_state(state);
-            engine.locate(Seconds(10.0));
-            let old_map = engine.project().unwrap().tempo_map.clone();
-            engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats::ZERO, Bpm(60.0), TempoPointSource::Manual, 0.001);
-            engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
-            // The frame's beat sits a ten-millionth of a frame past its time (D14).
-            assert!((engine.current_beat().0 - 20.0).abs() < 1e-6, "{}", engine.current_beat());
-            assert_eq!(engine.current_time(), Seconds(20.0));
-            assert_eq!(engine.transport_frame(), 1200);
-            // Half a second later the new tempo holds: 30 frames at 60 BPM.
-            if state == PlaybackState::Playing {
-                let _ = engine.tick(TickContext { frames: 30, ..TickContext::default() });
-            } else {
-                engine.locate(Seconds(20.5));
-            }
-            assert!((engine.current_beat().0 - 20.5).abs() < 1e-6, "{}", engine.current_beat());
-        }
-    }
-
-    /// The edit happens ahead of the playhead, so the frame's position in
-    /// the old and new maps is the same: the round trip keeps the frame,
-    /// even though the frame's beat is sampled a hair after its time.
-    #[test]
-    fn tempo_edit_after_the_playhead_keeps_the_frame() {
-        for frame in [1i64, 37, 600, 4321] {
-            let mut engine = PlaybackEngine::new(Vec::new());
-            let mut project = Project::default();
-            project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(150.0), TempoPointSource::Manual, 0.001);
-            engine.initialize(project);
-            engine.locate(engine.transport_clock().time_at(frame));
-            let old_map = engine.project().unwrap().tempo_map.clone();
-            engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats(10_000.0), Bpm(90.0), TempoPointSource::Manual, 0.001);
-            engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
-            assert_eq!(engine.transport_frame(), frame);
-        }
-    }
-
-    /// D8: under the follower a clip's duration and loop length are its beat
-    /// difference at the segment's rate, even for a clip that started long
-    /// before the segment's anchor; nothing converts its distant start beat
-    /// through the segment.
-    #[test]
-    fn durations_use_beat_differences() {
-        let mut engine = PlaybackEngine::new(Vec::new());
-        engine.initialize(Project::default());
-        engine.set_follow_authority(Some(FollowProfile::FAST));
-        engine.play();
-        engine.set_external_sample(ExternalSample { beat: 200.0, bpm: 128.0, fresh: true, exact: true });
-        let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
-        engine.reclaim_tick_result(result);
-        assert!((engine.frame_beat().0 - 200.0).abs() < 1e-9, "seeded at the source's beat");
-
-        let mut clip = TimelineClip::new_trigger(Beats(0.0), Beats(8.0));
-        clip.loop_duration_beats = Beats(2.0);
-        let duration = engine.get_clip_duration_seconds(&clip).0;
-        assert!((duration - 8.0 * 60.0 / 128.0).abs() < 1e-9, "duration {duration}");
-        let loop_len = f64::from(engine.get_clip_loop_duration_seconds(&clip));
-        assert!((loop_len - 2.0 * 60.0 / 128.0).abs() < 1e-6, "loop {loop_len}");
-    }
-}
+mod audio_tempo_edit_tests;

@@ -220,6 +220,72 @@ pub fn gpu_flip_engine_tank_moved(shift: f32) -> (EffectGraphDef, BoxScene) {
     let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
     (scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
 }
+/// The engine's tank with `count` cubes of edge 0.2 m and half the water's
+/// density in one Physics World of `count` bodies, five by five per layer,
+/// every layer under the water: a world past the 64 bodies a liquid once
+/// held. Each cube is its own scene object, so the water couples every one.
+pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
+    let edge = 0.2;
+    let (mut def, _) = gpu_flip_engine_tank();
+    let float = |value: f32| SerializedParamValue::Float { value };
+    let id_of = |def: &EffectGraphDef, name: &str| {
+        def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
+    };
+    let [start, body, object, world, scene, mesh, material] =
+        ["box_start", "box_body", "box_object", "box_world", "scene", "box_mesh", "box_material"].map(|name| id_of(&def, name));
+    let objects = match def.nodes.iter().find(|node| node.id == scene).and_then(|node| node.params.get("objects")) {
+        Some(SerializedParamValue::Float { value }) => *value as u32,
+        Some(SerializedParamValue::Int { value }) => *value as u32,
+        other => panic!("the tank's render scene has no object count: {other:?}"),
+    };
+    let world_node = def.nodes.iter_mut().find(|node| node.id == world).expect("the box world");
+    world_node.params.insert("bodies".into(), SerializedParamValue::Int { value: count as i32 });
+    let mut next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
+    for k in 1..count {
+        let clone = |def: &EffectGraphDef, id: u32, new: u32, name: &str| EffectGraphNode {
+            id: new,
+            node_id: NodeId::new(format!("{name}_{k}")),
+            handle: Some(format!("{name}_{k}")),
+            ..def.nodes.iter().find(|node| node.id == id).expect("box node").clone()
+        };
+        let (start_k, body_k, object_k) = (next, next + 1, next + 2);
+        next += 3;
+        let nodes = [clone(&def, start, start_k, "box_start"), clone(&def, body, body_k, "box_body"), clone(&def, object, object_k, "box_object")];
+        def.nodes.extend(nodes);
+        let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
+            from_node,
+            from_port: from_port.into(),
+            to_node,
+            to_port: to_port.into(),
+        };
+        def.wires.extend([
+            wire(start_k, "transform", body_k, "transform"),
+            wire(body_k, "body", world, &format!("body_{k}")),
+            wire(world, &format!("pose_{k}"), object_k, "transform"),
+            wire(mesh, "vertices", object_k, "vertices"),
+            wire(material, "out", object_k, "material"),
+            wire(object_k, "object", scene, &format!("object_{}", objects - 1 + k)),
+        ]);
+    }
+    let render = def.nodes.iter_mut().find(|node| node.id == scene).expect("the render scene");
+    render.params.insert("objects".into(), float((objects - 1 + count) as f32));
+    for k in 0..count {
+        let suffix = if k == 0 { String::new() } else { format!("_{k}") };
+        let at = |i: u32| -0.9 + 0.45 * (i % 5) as f32;
+        let centre = [at(k), 0.3 + 0.3 * (k / 25) as f32, at(k / 5)];
+        for (axis, i) in [("x", 0), ("y", 1), ("z", 2)] {
+            set_node_param(&mut def, &format!("box_start{suffix}"), &format!("pos_{axis}"), float(centre[i]));
+            set_node_param(&mut def, &format!("box_start{suffix}"), &format!("rot_{axis}"), float(0.0));
+            set_node_param(&mut def, &format!("box_start{suffix}"), &format!("scale_{axis}"), float(edge / manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE));
+        }
+        set_node_param(&mut def, &format!("box_body{suffix}"), "density", float(0.5 * FIXTURE_DENSITY));
+    }
+    // The water's surface wraps every cube; sized up front, the first frame
+    // draws it rather than growing the buffer.
+    set_type_param(&mut def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 262_144 });
+    def
+}
+
 /// The GPU FLIP Dam Break with a free box `density_ratio` times as dense as
 /// the water standing where the static obstacle stands, and that obstacle
 /// removed. A light box is where an explicit body reaction runs away.
@@ -340,6 +406,20 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
 
     fn conformance_registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    /// The hundred-cube tank pairs its liquid with one world holding every
+    /// cube, so the GPU proof couples all of them.
+    #[test]
+    fn box_grid_pairs_every_cube_with_the_liquid() {
+        let def = gpu_flip_box_grid(100);
+        let bindings = manifold_nodes_water::graph_install::coupling::prepare_coupled_scenes(&def, &conformance_registry())
+            .expect("the tank pairs");
+        assert_eq!(bindings.len(), 1);
+        assert!((0..100).all(|slot| bindings[0].colliders.contains_body(slot)));
+        assert!(!bindings[0].colliders.contains_body(100));
+        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(def, &conformance_registry(), None, false)
+            .unwrap_or_else(|error| panic!("the hundred-cube tank builds: {error:?}"));
     }
 
     /// I2: every registered liquid domain type has one row; every check a row does not
