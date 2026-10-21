@@ -663,3 +663,41 @@ PREFIX_ROWS += [(prefix, ".rs", "manifold-app" if module in APP_CATALOG_MODULES 
                  ["contracts::node_graph::catalog_tests::" + module] if module in APP_CATALOG_MODULES
                  else ["contracts::node_graph::catalog_tests::" + module], [])
                 for prefix, module, cpu in CATALOG_TEST_ROWS if cpu]
+
+# Repo-scan tests read files outside their own crate, so a landing that never
+# touches that crate would stay green and turn main red for the next bystander.
+# Each row selects the test (a module prefix, `test:NAME` for one test, or a
+# binary) for every change under what it reads. A changed doc selects them too,
+# although the diff scope excludes docs from every other check (repo_scan_doc).
+REPO_SCAN_ROWS = [
+    # docs_cited_paths: a citation can name any repo path, so any change can break one.
+    ("", "", "manifold-core", [], ["docs_cited_paths"]),
+    # docs_index_sync lists docs/*.md; docs_lifecycle reads every doc, CLAUDE.md and the hooks.
+    ("docs/", ".md", "manifold-core", [], ["docs_index_sync", "docs_lifecycle"]),
+    ("CLAUDE.md", "", "manifold-core", [], ["docs_lifecycle"]),
+    (".claude/", "", "manifold-core", [], ["docs_lifecycle"]),
+    # Walks of every crates/**/*.rs.
+    ("crates/", ".rs", "manifold-core", ["test:liquid_type_ids_live_in_one_place"],
+     ["bug080_project_deserialize_single_door"]),
+    ("crates/", ".rs", "manifold-editing", ["test:command_runs_only_through_the_audit"], []),
+    ("crates/", ".rs", "manifold-gpu", [], ["queued_device_audit"]),
+    ("crates/", ".rs", "manifold-foundation", [], ["device_guard_contract"]),
+    ("crates/", ".rs", "manifold-ui-paint", ["contracts::inv7_one_text_measurer"], []),
+    # crate_layering's vocabulary scans of three other crates (its manifest scan is a Cargo.toml row).
+    ("crates/manifold-node-engine/src/", ".rs", "manifold-app", [], ["crate_layering"]),
+    (RIGID_SRC, ".rs", "manifold-app", [], ["crate_layering"]),
+    (LIQUID_SRC, ".rs", "manifold-app", [], ["crate_layering"]),
+    # Named source files that other crates' tests read.
+    *[(prefix, ".rs", "manifold-core", ["test:no_reader_goes_around_the_join"], [])
+      for prefix in ("crates/manifold-node-engine/src/", "crates/manifold-app/src/content_thread.rs",
+                     "crates/manifold-app/src/ui_snapshot", "crates/manifold-core/src/effects/instance.rs")],
+    *[("crates/manifold-core/src/" + name, ".rs", "manifold-io",
+       ["test:every_model_path_field_is_inventory_covered"], [])
+      for name in ("clip.rs", "video.rs", "layer.rs", "project/mod.rs")],
+]
+PREFIX_ROWS += REPO_SCAN_ROWS
+
+
+def repo_scan_doc(path):
+    """A changed doc the diff scope excludes but a repo-scan row still reads."""
+    return path.endswith(DOC_SUFFIXES)
