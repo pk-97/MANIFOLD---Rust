@@ -579,6 +579,12 @@ pub fn instantiate_def(
     let after_flatten = super::migration::run_stage(def, super::migration::MigrationStage::AfterFlatten);
     let def = after_flatten.as_ref();
 
+    // A body's alias wires (`pose`, `instances`, `acceleration`) become its
+    // world's numbered ports now that groups are flat and every scene
+    // modifier has wired its forces; the engine sees only slot-indexed ports.
+    let members = super::physics_members::compile(def);
+    let def = members.as_ref();
+
     // For Splice, identify the def's Source and FinalOutput up front so
     // we know which nodes to skip during instantiation and which wires
     // to fold during translation.

@@ -510,8 +510,8 @@ fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse:
     host.wires.push(EffectGraphWire {
         from_node: 900,
         from_port: "out".into(),
-        to_node: 40,
-        to_port: "body_acceleration_1".into(),
+        to_node: 111,
+        to_port: "acceleration".into(),
     });
     for (index, (name, controls)) in names.iter().zip(controls).enumerate() {
         let mut recipe = recipe(name);
@@ -574,16 +574,16 @@ fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse:
             .id;
         (producer, root)
     } else {
-        let world = def
+        let body = def
             .nodes
             .iter()
-            .find(|node| node.node_id.as_str() == "physics_demo_40")
+            .find(|node| node.node_id.as_str() == "physics_demo_111")
             .unwrap()
             .id;
         let target = def
             .wires
             .iter()
-            .find(|wire| wire.to_node == world && wire.to_port == "body_acceleration_1")
+            .find(|wire| wire.to_node == body && wire.to_port == "acceleration")
             .unwrap()
             .clone();
         let producer = def

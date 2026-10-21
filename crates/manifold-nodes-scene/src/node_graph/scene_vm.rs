@@ -1175,22 +1175,13 @@ fn walk_transform_chain(
             transform_vm = Some(trace_transform(&current_level, sp, n.id));
             break;
         }
-        if n.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID && port == "pose" {
-            cursor = group_body_id(&current_level)
-                .and_then(|id| current_level.producer(id, "transform"));
-            parseable = false;
-            continue;
-        }
-        if n.type_id == "node.physics_world" {
-            // A pose is paired with one description input. Follow that body's
+        if n.type_id == "node.rigid_body" {
+            // A pose is the body's simulated transform. Follow the body's
             // authored transform for editing; the live simulated pose is not a
             // project value and must never be written back by the scene panel.
-            cursor = port.strip_prefix("pose_")
-                .and_then(|index| current_level.producer(n.id, &format!("body_{index}")));
-            parseable = false; // transform modifiers must not splice across the solver.
-            continue;
-        }
-        if n.type_id == "node.rigid_body" {
+            if port == "pose" {
+                parseable = false; // transform modifiers must not splice across the solver.
+            }
             cursor = current_level.producer(n.id, "transform");
             continue;
         }
@@ -1263,12 +1254,8 @@ fn mesh_source_is_gltf(level: &Level<'_>, object_id: u32) -> bool {
 }
 
 fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
-    let (world_id, port) = level.producer(object_id, "transform")?;
-    let world = level.node(world_id)?;
-    if world.type_id != "node.physics_world" { return None; }
-    let input = format!("body_{}", port.strip_prefix("pose_")?);
-    let (body_id, _) = level.producer(world_id, &input)?;
-    (level.node(body_id)?.type_id == "node.rigid_body").then_some(body_id)
+    let (body_id, port) = level.producer(object_id, "transform")?;
+    (port == "pose" && level.node(body_id)?.type_id == "node.rigid_body").then_some(body_id)
 }
 
 /// Resolve the editable domain transform and derive bounds only from a

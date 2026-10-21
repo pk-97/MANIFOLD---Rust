@@ -204,11 +204,15 @@ fn play(name: &str) -> Played {
     };
     let mut group = None;
     for wire in def.wires.iter().filter(|w| w.to_node == world) {
-        if let Some(slot) = wire.to_port.strip_prefix("body_") {
-            scene.bodies[slot.parse::<usize>().unwrap()] = Some(values.body(wire.from_node));
-        } else if let Some(slot) = wire.to_port.strip_prefix("copies_") {
-            assert_eq!(slot, "0", "one copy group");
-            group = Some(values.body(wire.from_node));
+        match manifold_core::physics_members::member_input(&wire.to_port) {
+            Some((manifold_core::physics_members::Family::Body, slot)) => {
+                scene.bodies[slot as usize] = Some(values.body(wire.from_node));
+            }
+            Some((manifold_core::physics_members::Family::Copies, slot)) => {
+                assert_eq!(slot, 0, "one copy group");
+                group = Some(values.body(wire.from_node));
+            }
+            None => {}
         }
     }
     let group = group.expect("a copy group");

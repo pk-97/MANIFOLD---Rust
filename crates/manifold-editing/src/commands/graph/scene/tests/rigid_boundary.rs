@@ -17,7 +17,10 @@ fn filled_slots(graph: &EffectGraphDef, world: u32) -> Vec<u32> {
         .wires
         .iter()
         .filter(|wire| wire.to_node == world)
-        .filter_map(|wire| wire.to_port.strip_prefix("body_")?.parse().ok())
+        .filter_map(|wire| match manifold_core::physics_members::member_input(&wire.to_port) {
+            Some((manifold_core::physics_members::Family::Body, slot)) => Some(slot),
+            _ => None,
+        })
         .collect();
     slots.sort_unstable();
     slots

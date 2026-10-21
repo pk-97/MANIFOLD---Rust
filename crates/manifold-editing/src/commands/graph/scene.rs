@@ -24,6 +24,7 @@ use crate::command::Command;
 
 mod clone_sections;
 mod clone_values;
+mod copy;
 mod duplicate;
 mod fluid;
 mod physics;
@@ -38,6 +39,7 @@ pub use physics::{enable_physics_edit, scene_object_physics_eligibility, EnableS
 mod fluid_object_lifecycle_tests;
 
 pub use fluid::*;
+pub use copy::{copy_scene_item_wires, WireCopy};
 pub use duplicate::{physics_free_body_slots, DuplicateSceneObjectCommand};
 pub use manifold_core::physics_body_slots::{BodySlots, WorldBodySlots};
 use manifold_core::copies_body::copy_group_of_input;
@@ -434,16 +436,8 @@ impl Command for RemoveSceneObjectCommand {
                     .iter()
                     .copied()
                     .collect::<std::collections::HashSet<_>>();
-                let field_port = match physics.copy_group {
-                    Some(group) => format!("copies_acceleration_{group}"),
-                    None => format!("body_acceleration_{}", physics.body_slot),
-                };
                 nodes.retain(|node| !owned.contains(&node.id));
-                wires.retain(|wire| {
-                    !(owned.contains(&wire.from_node)
-                        || owned.contains(&wire.to_node)
-                        || (wire.to_node == physics.world_id && wire.to_port == field_port))
-                });
+                wires.retain(|wire| !(owned.contains(&wire.from_node) || owned.contains(&wire.to_node)));
             } else {
                 let owned = if producer.type_id == "node.scene_object" {
                     loose_scene_object_owned_ids(nodes, wires, producer_id)

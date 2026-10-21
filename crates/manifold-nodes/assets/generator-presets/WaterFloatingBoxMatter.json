@@ -4510,8 +4510,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 70,
-      "fromPort": "pose_0",
+      "fromNode": 72,
+      "fromPort": "pose",
       "toNode": 75,
       "toPort": "transform"
     },

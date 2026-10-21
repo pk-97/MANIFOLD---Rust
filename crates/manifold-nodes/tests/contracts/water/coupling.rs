@@ -80,26 +80,27 @@ mod tests {
             object_index: &mut usize,
         ) {
             let world = self.node(world_name, "node.physics_world");
-            let body = self.node(format!("{world_name}_body"), "node.rigid_body");
             let fluid = self.fluid_mesh(fluid_name);
             for &slot in slots {
+                let body = self.node(format!("{world_name}_body_{slot}"), "node.rigid_body");
                 self.wire(body, "body", world, &format!("body_{slot}"));
                 let object = self.node(
                     format!("{scene_name}_body_{world_name}_{object_index}"),
                     "node.scene_object",
                 );
                 *object_index += 1;
-                self.wire(world, &format!("pose_{slot}"), object, "transform");
+                self.wire(body, "pose", object, "transform");
                 self.wire(object, "object", scene, &format!("object_{object_index}"));
             }
             if copies {
+                let body = self.node(format!("{world_name}_copies_body"), "node.rigid_body");
                 self.wire(body, "body", world, "copies_0");
                 let object = self.node(
                     format!("{scene_name}_copies_{world_name}_{object_index}"),
                     "node.scene_object",
                 );
                 *object_index += 1;
-                self.wire(world, "instances_0", object, "instances");
+                self.wire(body, "instances", object, "instances");
                 self.wire(object, "object", scene, &format!("object_{object_index}"));
             }
             let object = self.node(
@@ -139,14 +140,14 @@ mod tests {
         fn rigid_only_scene(&mut self, scene_name: &str, world_name: &str, slots: &[usize]) {
             let scene = self.node(scene_name, "node.render_scene");
             let world = self.node(world_name, "node.physics_world");
-            let body = self.node(format!("{world_name}_body"), "node.rigid_body");
             for (object_index, &slot) in slots.iter().enumerate() {
+                let body = self.node(format!("{world_name}_body_{slot}"), "node.rigid_body");
                 self.wire(body, "body", world, &format!("body_{slot}"));
                 let object = self.node(
                     format!("{scene_name}_body_{world_name}_{object_index}"),
                     "node.scene_object",
                 );
-                self.wire(world, &format!("pose_{slot}"), object, "transform");
+                self.wire(body, "pose", object, "transform");
                 self.wire(object, "object", scene, &format!("object_{object_index}"));
             }
         }
@@ -210,7 +211,7 @@ mod tests {
         let body = builder.node("body", "node.rigid_body");
         builder.wire(body, "body", world, "body_0");
         let box_object = builder.node("box", "node.scene_object");
-        builder.wire(world, "pose_0", box_object, "transform");
+        builder.wire(body, "pose", box_object, "transform");
         builder.wire(box_object, "object", scene, "object_0");
         let domain = builder.node("matter", MATTER_DOMAIN_TYPE_ID);
         let state = builder.node("state", "node.matter_state");

@@ -335,6 +335,7 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.render_scene",
         "node.scene_object",
         "node.physics_world",
+        "node.rigid_body",
         "node.cube_mesh",
         "node.platonic_solid_mesh",
         "node.gltf_mesh_source",

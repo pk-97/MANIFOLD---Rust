@@ -289,6 +289,7 @@ pub fn validate_def(
     if kind == ValidateKind::Generator {
         report.errors.extend(check_one_scene(def));
     }
+    report.errors.extend(check_member_side_wires(def));
     report.errors.extend(check_bindings_resolve(def));
 
     // Card lints (D8) resolve binding targets against the real,
@@ -337,6 +338,33 @@ pub fn validate_def(
     }
 
     report
+}
+
+/// A Physics World's per-body ports (`pose_k`, `instances_k`, `active_count_k`,
+/// `body_acceleration_k`, `copies_acceleration_k`) exist only in the built
+/// graph. An authored graph reads a body's `pose`, `instances` and
+/// `active_count` and feeds its `acceleration`; the compile adds the numbers.
+pub fn check_member_side_wires(def: &EffectGraphDef) -> Vec<ValidationIssue> {
+    manifold_core::physics_members::member_side_wires(def)
+        .into_iter()
+        .map(|(_, wire)| {
+            let (port, alias) = if manifold_core::physics_members::member_side_input(&wire.to_port).is_some() {
+                (wire.to_port.clone(), "the body's acceleration input")
+            } else {
+                (wire.from_port.clone(), "the body's pose, instances or active_count output")
+            };
+            ValidationIssue {
+                node_id: None,
+                type_id: Some(manifold_core::physics_members::WORLD_TYPE_ID.to_string()),
+                port: Some(port.clone()),
+                message: format!(
+                    "Physics World port '{port}' is compiled only; wire {alias} instead \
+                     (wire {} -> {})",
+                    wire.from_node, wire.to_node
+                ),
+            }
+        })
+        .collect()
 }
 
 /// Mirrors `every_bundled_preset_binding_resolves_to_an_outer_param` —
@@ -1323,5 +1351,39 @@ mod tests {
         let (errors, warnings) = lint(&def);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
         assert!(warnings.is_empty(), "expected no warnings, got: {warnings:?}");
+    }
+
+    /// The world's per-body ports exist only in the built graph: a body's pose,
+    /// instances, count and force are wired on the body.
+    #[test]
+    fn an_authored_world_pose_wire_is_refused() {
+        let authored = parse(
+            r#"{
+              "version": 2,
+              "nodes": [
+                {"id": 1, "nodeId": "world", "typeId": "node.physics_world"},
+                {"id": 2, "nodeId": "body", "typeId": "node.rigid_body"},
+                {"id": 3, "nodeId": "object", "typeId": "node.scene_object"}
+              ],
+              "wires": [
+                {"fromNode": 2, "fromPort": "body", "toNode": 1, "toPort": "body_0"},
+                {"fromNode": 2, "fromPort": "pose", "toNode": 3, "toPort": "transform"}
+              ]
+            }"#,
+        );
+        assert!(check_member_side_wires(&authored).is_empty());
+
+        for (from_port, to_port) in [("pose_0", "transform"), ("instances_0", "instances"), ("active_count_0", "instance_count")] {
+            let mut old = authored.clone();
+            old.wires[1].from_node = 1;
+            old.wires[1].from_port = from_port.into();
+            old.wires[1].to_port = to_port.into();
+            let issues = check_member_side_wires(&old);
+            assert_eq!(issues.len(), 1, "{from_port}");
+            assert!(issues[0].message.contains(from_port), "{}", issues[0].message);
+        }
+        let mut force = authored;
+        force.wires.push(manifold_core::effect_graph_def::EffectGraphWire { from_node: 3, from_port: "out".into(), to_node: 1, to_port: "body_acceleration_0".into() });
+        assert_eq!(check_member_side_wires(&force).len(), 1);
     }
 }

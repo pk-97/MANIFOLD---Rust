@@ -2,6 +2,7 @@
 use super::super::{SceneModifierNodeRoute, bindings::SceneModifierBindingSource};
 use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
+use manifold_core::physics_members::{ACCELERATION_ALIAS, BODY_TYPE_ID, Family, world_member};
 
 pub(crate) fn copy_id(modifier: &NodeId, source: &NodeId, role: &str, index: usize) -> NodeId {
     namespace::namespace_node_id(&[
@@ -149,26 +150,28 @@ pub(super) fn prepare(
                 "select an imported object with Physics enabled",
             ));
         }
-        let mut assemblies: BTreeMap<(u32, usize), Vec<u32>> = BTreeMap::new();
+        let mut assemblies: BTreeMap<(u32, usize), (u32, Vec<u32>)> = BTreeMap::new();
         for target in targets {
             let object = def.nodes.iter().find(|n| n.node_id == target.node)
                 .ok_or_else(|| invalid("shatter", "prepared object is missing"))?.id;
             let pose = input(def, object, "parent_transform").or_else(|| input(def, object, "transform"))
                 .ok_or_else(|| invalid("shatter", "object needs Physics before Shatter"))?;
-            if node(def, pose.0)?.type_id != "node.physics_world" {
+            if node(def, pose.0)?.type_id != BODY_TYPE_ID || pose.1 != "pose" {
                 return Err(invalid(
                     "shatter",
                     "enable Physics on the object before adding Shatter",
                 ));
             }
-            let parent = pose
-                .1
-                .strip_prefix("pose_")
-                .and_then(|s| s.parse::<usize>().ok())
+            let member = world_member(&def.nodes, &def.wires, pose.0)
+                .filter(|member| member.family == Family::Body)
                 .ok_or_else(|| invalid("shatter", "object has no rigid body pose"))?;
-            assemblies.entry((pose.0, parent)).or_default().push(object);
+            assemblies
+                .entry((member.world, member.k as usize))
+                .or_insert_with(|| (pose.0, Vec::new()))
+                .1
+                .push(object);
         }
-        for ((world, parent_slot), parts) in assemblies {
+        for ((world, parent_slot), (parent_body, parts)) in assemblies {
             if !used_parents.insert((world, parent_slot)) {
                 return Err(invalid(
                     "shatter",
@@ -184,11 +187,8 @@ pub(super) fn prepare(
                     ),
                 ));
             }
-            let parent_input = input(def, world, &format!("body_{parent_slot}"))
-                .ok_or_else(|| invalid("shatter", "parent body is missing"))?;
-            let parent_acceleration =
-                input(def, world, &format!("body_acceleration_{parent_slot}"));
-            let parent = node(def, parent_input.0)?.clone();
+            let parent = node(def, parent_body)?.clone();
+            let parent_acceleration = input(def, parent.id, ACCELERATION_ALIAS);
             let mass = number(parent.params.get("mass"))
                 .or_else(|| {
                     registry
@@ -342,14 +342,14 @@ pub(super) fn prepare(
                         def,
                         (body_copy, "body".into()),
                         world,
-                        &format!("body_{body_slot}"),
+                        &Family::Body.member_port(body_slot),
                     );
                     if let Some(parent_acceleration) = &parent_acceleration {
                         wire(
                             def,
                             parent_acceleration.clone(),
-                            world,
-                            &format!("body_acceleration_{body_slot}"),
+                            body_copy,
+                            ACCELERATION_ALIAS,
                         );
                     }
                     let object_copy = clone_node(
@@ -366,7 +366,7 @@ pub(super) fn prepare(
                     );
                     wire(
                         def,
-                        (world, format!("pose_{body_slot}")),
+                        (body_copy, "pose".into()),
                         object_copy,
                         if nested { "parent_transform" } else { "transform" },
                     );

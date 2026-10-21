@@ -15,8 +15,6 @@ use crate::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, Ef
 
 pub const PHYSICS_WORLD_TYPE_ID: &str = "node.physics_world";
 pub const RIGID_BODY_TYPE_ID: &str = "node.rigid_body";
-/// Copy group `k`'s body input is `copies_k`.
-pub const COPIES_PORT_PREFIX: &str = "copies_";
 /// Copy group 0's body input.
 pub const FIRST_COPIES_PORT: &str = "copies_0";
 const BODY_OUTPUT: &str = "body";
@@ -29,7 +27,10 @@ const LEGACY_GROUP_OUTPUTS: [(&str, &str); 2] =
 
 /// The copy group whose body input `port` is: `copies_k` is group `k`.
 pub fn copy_group_of_input(port: &str) -> Option<usize> {
-    port.strip_prefix(COPIES_PORT_PREFIX)?.parse().ok()
+    match crate::physics_members::member_input(port) {
+        Some((crate::physics_members::Family::Copies, k)) => Some(k as usize),
+        _ => None,
+    }
 }
 /// The spawner's params on a copies body. Each is also a scalar input of the
 /// same name.
