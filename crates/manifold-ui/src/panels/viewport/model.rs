@@ -417,7 +417,7 @@ impl AutomationLaneScreen {
         let norm = (1.0 - (y - rect.y) / rect.height).clamp(0.0, 1.0);
         let value = self.param_min + norm * (self.param_max - self.param_min);
         if self.whole_numbers {
-            value.round().clamp(self.param_min, self.param_max)
+            crate::automation_drag::quantise_whole_number(value, self.param_min, self.param_max)
         } else {
             value
         }

@@ -498,8 +498,12 @@ fn nudged_value(value: f32, value_steps: f32, min: f32, max: f32, whole_numbers:
     } else {
         value_steps * 0.01 * (max - min)
     };
-    let moved = (value + delta).clamp(min.min(max), min.max(max));
-    if whole_numbers { moved.round() } else { moved }
+    let moved = value + delta;
+    if whole_numbers {
+        manifold_ui::automation_drag::quantise_whole_number(moved, min, max)
+    } else {
+        moved.clamp(min.min(max), min.max(max))
+    }
 }
 
 /// Arrow-key nudge of the selected breakpoints as ONE undo entry. `beat_delta`
@@ -551,25 +555,18 @@ pub(crate) fn nudge_selected(
             continue;
         };
         let old = lane.points[index];
-        let mut room_right = f64::INFINITY;
-        let mut room_left = f64::INFINITY;
-        for (other_index, other) in lane.points.iter().enumerate() {
-            if refs.iter().any(|selected| {
-                selected.target == point_ref.target
-                    && selected.param_id == point_ref.param_id
-                    && point_matches_ref(other, selected, min, max)
-            }) {
-                continue;
-            }
-            // A point sharing the beat keeps its place in the lane order: it
-            // is a neighbour on the side it already sits on, with no room.
-            let gap = other.beat.0 - old.beat.0;
-            if gap > 0.0 || (gap == 0.0 && other_index > index) {
-                room_right = room_right.min(gap);
-            } else {
-                room_left = room_left.min(-gap);
-            }
-        }
+        let (room_left, room_right) = manifold_ui::automation_drag::room_to_unselected(
+            index,
+            old.beat.0,
+            lane.points.iter().enumerate().map(|(other_index, other)| {
+                let selected = refs.iter().any(|selected| {
+                    selected.target == point_ref.target
+                        && selected.param_id == point_ref.param_id
+                        && point_matches_ref(other, selected, min, max)
+                });
+                (other_index, other.beat.0, selected)
+            }),
+        );
         resolved.push(Resolved {
             point_ref: point_ref.clone(),
             old,
@@ -591,7 +588,12 @@ pub(crate) fn nudge_selected(
     let min_beat = resolved.iter().map(|r| r.old.beat.0).fold(f64::INFINITY, f64::min);
     let room_right = resolved.iter().map(|r| r.room_right).fold(f64::INFINITY, f64::min);
     let room_left = resolved.iter().map(|r| r.room_left).fold(f64::INFINITY, f64::min);
-    let beat_delta = Beats(beat_delta.0.clamp(-min_beat.min(room_left), room_right));
+    let beat_delta = Beats(manifold_ui::automation_drag::clamp_group_beat_delta(
+        beat_delta.0,
+        min_beat,
+        room_left,
+        room_right,
+    ));
 
     type LaneMoves = (GraphTarget, String, Vec<(AutomationPoint, AutomationPoint)>);
     let mut lanes: Vec<LaneMoves> = Vec::new();
@@ -739,7 +741,7 @@ pub(crate) fn paste(
                 };
                 value = value.clamp(param_min, param_max);
                 if whole_numbers {
-                    value = value.round().clamp(param_min, param_max);
+                    value = manifold_ui::automation_drag::quantise_whole_number(value, param_min, param_max);
                 }
                 AutomationPoint {
                     beat: target_beat + point.beat_offset,
@@ -867,7 +869,7 @@ fn shape_points(
     let value = |norm: f32| {
         let raw = min + norm.clamp(0.0, 1.0) * (max - min);
         if whole_numbers {
-            raw.round().clamp(min, max)
+            manifold_ui::automation_drag::quantise_whole_number(raw, min, max)
         } else {
             raw.clamp(min, max)
         }
