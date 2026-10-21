@@ -1,34 +1,21 @@
-// Cursor management for timeline interaction feedback.
-// 1:1 port of Unity Cursors.cs — maps procedural cursor types to winit CursorIcon values.
-//
-// Unity generates 24x24 procedural textures for each cursor shape.
-// In Rust/winit we use the platform's built-in cursor icons instead,
-// which gives native appearance and automatic HiDPI support.
-//
-// Cursor types (from Unity Cursors.cs):
-// - Default: standard arrow (no special interaction)
-// - ResizeHorizontal: double-headed arrow (inspector resize, trim handles)
-// - ResizeVertical: double-headed arrow (video/timeline split handle)
-// - Move: four-way cross (clip drag move)
-// - Blocked: not-allowed (invalid cross-layer drag)
+//! Timeline cursor shapes, mapped to the platform's built-in cursor icons.
 
 /// The cursor shapes used by the timeline UI.
-/// Maps 1:1 to Unity's Cursors static methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineCursor {
     Crosshair,
-    /// Standard arrow. Unity: `Cursors.SetDefault()`
+    /// Standard arrow.
     Default,
-    /// ↔ horizontal resize. Unity: `Cursors.SetResizeHorizontal()`
+    /// ↔ horizontal resize.
     /// Used for: inspector width drag, trim handle hover
     ResizeHorizontal,
-    /// ↕ vertical resize. Unity: implied by PanelResizeHandle
+    /// ↕ vertical resize.
     /// Used for: video/timeline split handle
     ResizeVertical,
-    /// ✥ four-way move. Unity: `Cursors.SetMove()`
+    /// ✥ four-way move.
     /// Used for: clip body drag
     Move,
-    /// ⊘ not-allowed. Unity: `Cursors.SetBlocked()`
+    /// ⊘ not-allowed.
     /// Used for: invalid cross-layer drag (video↔generator)
     Blocked,
     /// Open hand: Alt over an automation segment, grabbing it to bend the
@@ -63,12 +50,11 @@ impl CursorManager {
     }
 
     /// Request a cursor change. Doesn't take effect until `apply()`.
-    /// From Unity: Cursors.SetMove(), Cursors.SetBlocked(), etc.
     pub fn set(&mut self, cursor: TimelineCursor) {
         self.pending = cursor;
     }
 
-    /// Reset to default cursor. Unity: `Cursors.SetDefault()`
+    /// Reset to default cursor.
     pub fn set_default(&mut self) {
         self.pending = TimelineCursor::Default;
     }
@@ -89,11 +75,6 @@ impl CursorManager {
     /// Call after `window.set_cursor()` succeeds.
     pub fn mark_applied(&mut self) {
         self.current = self.pending;
-    }
-
-    /// Get the current active cursor.
-    pub fn current(&self) -> TimelineCursor {
-        self.current
     }
 }
 

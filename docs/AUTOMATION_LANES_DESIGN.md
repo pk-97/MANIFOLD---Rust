@@ -211,7 +211,7 @@ target + `param_id`), not indices — same discipline as
 
 ## 7. UI / UX (decided: copy Ableton's model — Peter, 2026-07-02)
 
-Interaction feedback contract (2026-09-14): lane chrome identifies layer-owned
+Interaction feedback contract: lane chrome identifies layer-owned
 arrangement automation. Lanes have no header band and default to 60 px; resizing keeps them between 36 and 240 px. A large right-edge title shows the parameter name in the layer colour, the value at the playhead in parameter units, and an overridden tag. Only the title's own bare rect hits the title; right-click anywhere in a lane opens the lane menu. Plot and footer geometry is shared by rendering and input;
 chrome consumes clicks without creating points. Automation uses a cyan accent,
 with selected/hovered points and segments highlighted and overridden lanes dimmed.
@@ -225,7 +225,7 @@ segments remain stepped. Draw mode takes precedence over point/segment drags.
 The corresponding inspector parameter receives a selection outline. Modifier
 changes and lane geometry changes refresh feedback without requiring mouse motion.
 
-Gesture continuity contract (2026-09-26): pressing an empty plot or segment shows
+Gesture continuity contract: pressing an empty plot or segment shows
 the prospective point in that input frame; releasing commits one undoable edit.
 Starting a drag restores the pre-press envelope before marquee/segment routing,
 and Escape or an abandoned press restores it without a history entry. Content
@@ -239,7 +239,7 @@ outside automation, and honor Cmd-unsnap. The first and final automation drag
 positions are applied before committing. Alt-click straightens a curved segment;
 the lane menu also offers Straighten, Hold, Ease In, and Ease Out.
 
-Phrase selection contract (2026-09-26): dragging empty plot space selects a beat
+Phrase selection contract: dragging empty plot space selects a beat
 interval across the intersected lanes, independent of the points' vertical values.
 The selection stays visible after release and can contain no interior points.
 Copy includes sampled boundary values and clipped segment shapes. Pasting a single
@@ -499,124 +499,54 @@ reviewable arc; P3/P4 independent after.
 
 ### P6 — Lane feel: one line, one drag resolver, cursor = gesture
 
-Root cause of the clunky feel: the lane's line, the drag arithmetic and the
-cursor are each derived in several places with different rules. Tails are drawn
-but are not line hits, so a click past the last point takes the pointer's pixel
-instead of the line's value. The point drag grid-snaps the absolute position
-behind a latching dead zone, so a vertical drag with a few px of wobble jumps
-sideways, and Shift rescales the whole travel. The cursor map names a gesture
-the click does not perform. Three class fixes, one Sonnet lane, two commits
-(P6a, P6b), each reviewed before the next starts. BUG-w3csc (drags rebuild the
-timeline per move) is a frame-planner class and stays its own bead.
-
-**Decisions (binding, numbered for the read-back):**
+Shipped. The rules below are binding; `automation_drag.rs` and `cursors.rs`
+carry them in code.
 
 - **D-P6.1 The line is one object.** For hit testing and insertion a lane's
   line is the drawn polyline: the flat run before the first point, every
   segment, the flat run after the last point, and a placeholder's full-width
   flat line. Every on-line press is a line hit (`AutomationOperation::Segment`);
-  a tail hit carries no `segment_end_beat` and a placeholder hit carries no
-  point. An on-line click inserts at the line's value at the snapped beat: a
-  tail click goes through `insert_automation_point_on_curve`, whose command
-  already holds the end value outside the point range; a placeholder click
-  keeps the `add_automation_point` path with `placeholder_value`. The hover
-  ghost shows the same value the click will insert. The guard refusing curve
-  inserts on lanes with fewer than two distinct beats
-  (`manifold-app/src/editing_host.rs`, `commands/automation.rs`) is deleted.
-  An off-line press keeps the current rule (value from the pointer's y). A
-  tail drag is a single-point drag of the end point with the beat axis locked;
-  a placeholder line does not drag.
-- **D-P6.2 One drag resolver.** A pure function resolves every pointer-driven
-  automation move: single point, tail (beat locked), segment, group. Inputs:
-  the press state (beat, value, neighbours captured at press), the pointer
-  delta since the last resolve, the modifiers now, the lane range,
-  pixels-per-beat and the grid step. Rules:
-  - Nothing moves until `DRAG_THRESHOLD_PX` from the press. Travel then counts
-    from the press, so the dot stays under the pointer and a fast flick loses
-    no distance. Discarding the travel spent crossing the threshold leaves the
-    dot short of the pointer by up to a whole first mouse event.
+  a tail hit carries no `segment_end_beat`, a placeholder hit carries no point.
+  An on-line click inserts at the line's value at the snapped beat (tails via
+  `insert_automation_point_on_curve`, placeholders via `add_automation_point`
+  with `placeholder_value`); the hover ghost shows that same value. An
+  off-line press takes its value from the pointer's y. A tail drag is a
+  single-point drag of the end point with the beat axis locked; a placeholder
+  line does not drag. Forbidden: a guard refusing curve inserts on lanes with
+  fewer than two distinct beats.
+- **D-P6.2 One drag resolver.** `DragResolver` resolves every pointer-driven
+  move: single point, tail (beat locked), segment, group.
+  - Nothing moves until `DRAG_THRESHOLD_PX` from the press; travel then counts
+    from the press.
   - Snap is relative: the beat moves by whole grid steps from the press beat
-    and keeps its off-grid offset. Cmd moves it freely. There is no axis lock:
-    `AUTOMATION_AXIS_LOCK_PX` and the x-unlock latch are deleted.
-  - Modifiers act on increments: Shift scales each value increment by 0.25
-    from the moment it is held; releasing it never rescales travel already
-    made.
-  - The beat clamps to the press-time neighbours, equal allowed (a vertical
-    step). A group clamps its shared beat delta so no selected point crosses an
-    unselected one, the same clamp arrow nudges use; a group drop keeps the
-    unselected points it lands on (`for_group_keeping_twins`).
-  - Whole-number lanes quantise through one function, `round()` then clamp to
-    the range, the rule `value_at_y` already uses; `snap_to_whole_steps` is
-    deleted. Insert, drag, nudge and typed entry all call it.
+    and keeps its off-grid offset. Cmd moves it freely. Horizontal travel
+    under the threshold never moves the beat. No axis lock, no x-unlock latch.
+  - Shift scales each value increment by 0.25 from the moment it is held;
+    releasing it never rescales travel already made.
+  - The beat clamps to the press-time neighbours, equal allowed. A group
+    clamps its shared beat delta so no selected point crosses an unselected
+    one (the arrow-nudge clamp); a group drop keeps the unselected points it
+    lands on.
+  - Segment and group value travel goes through `shared_norm_delta` then
+    `apply_value`; whole-number lanes quantise through
+    `quantise_whole_number` only.
   - Preview and commit come from the same resolve: the commit sends the last
     resolved (beat, value), never a re-derivation.
+  - Forbidden: `AUTOMATION_AXIS_LOCK_PX`, `snap_to_whole_steps`, a second
+    quantiser, a per-caller copy of the clamp arithmetic.
 - **D-P6.3 Cursor = gesture.** `AutomationOperation` is the gesture under the
-  pointer and the only cursor writer; the drag-start `set_cursor(Move)` calls
-  are deleted. Map: Point → Pointer (hand); Segment and tails → ResizeVertical;
-  Bend → Grab while hovering, Grabbing while bending; Draw → Crosshair, the
-  only crosshair; Insert and Marquee (off-line) → Default; Resize grip →
-  ResizeVertical, and points and line win over the grip in hit order. The
-  point hover hint reads `drag: move · click: delete · shift-click: select`.
+  pointer and the only cursor writer. Point → Pointer; Segment and tails →
+  ResizeVertical; Bend → Bend hand while hovering, Grabbing while bending;
+  Draw → Crosshair, the only crosshair; Insert and Marquee → Default; Resize
+  grip → ResizeVertical, with points and line winning over the grip in hit
+  order. The point hover hint reads
+  `drag: move · click: delete · shift-click: select`. Forbidden: drag-start
+  `set_cursor(Move)` calls.
 - **D-P6.4 Insert selects what the host made.** The press commit selects the
   (beat, value) the host returns, never the UI's sample. A click on a point
   inserted less than `DOUBLE_CLICK_TIME_SEC` ago at that position does not
   delete, so a double-click on empty space adds one point.
 
-**Entry state.** `main` at or after 42a386663. Prove:
-`cargo nextest run -p manifold-ui automation` green;
-`scripts/dev.py flows automation-placeholder-first-click`,
-`drag-automation-point`, `automation-coincident-points`,
-`work-automation-point-drag`, `work-automation-hover` green.
-
-**Read-back (first step, both commits).** Read this section, section 7
-(UI/UX) in full, `automation_hit_tester.rs`, the automation arms of
-`interaction_overlay.rs`, `cursors.rs`, `panels/viewport/model.rs`
-(`AutomationLaneScreen`), `manifold-app/src/editing_host.rs` and
-`manifold-editing/src/commands/automation.rs`. Restate: the four decisions,
-the deletions each one names, and what the entry-state runs showed. The
-reuse targets are `AutomationOperation`, `insert_automation_point_on_curve`,
-`for_group_keeping_twins`, the nudge clamp in
-`manifold-app/src/input_host.rs`, and `drag.rs`'s `DragController` for the
-grab/track/release lifecycle. Nothing parallel to any of them is built.
-
-**P6a deliverables (D-P6.1, D-P6.3, D-P6.4).** `nearest_segment` and
-`hit_test_automation` cover tails and the placeholder line; the on-line press
-path in `interaction_overlay.rs` inserts at the line value for every lane
-size; the host guard and the command guard are deleted; the cursor map in
-`cursors.rs` matches D-P6.3 with a `Grabbing` variant; the three drag-start
-cursor writes are gone; the press commit selects the host's returned point;
-the recent-insert delete guard. Tests: hit tests for a tail hit, a
-single-point lane hit, a placeholder hit; a press test that a click past the
-last point inserts the last point's value; a cursor test per operation; a
-double-click-on-empty test that ends with one point.
-
-**P6b deliverables (D-P6.2).** The resolver as one pure function with its
-state struct in `automation_hit_tester.rs`'s sibling module (name it
-`automation_drag.rs`; its module doc names this section). Single, tail,
-segment and group drags call it; the group drop keeps twins; the whole-number
-quantiser is one function; `AUTOMATION_AXIS_LOCK_PX`, the x-unlock latch and
-`snap_to_whole_steps` are deleted. Tests, all CPU and pure: relative snap
-keeps a 0.3-beat offset across a one-step move; a 3 px wobble on a vertical
-drag leaves the beat unchanged at any zoom where a grid cell is wider than
-6 px; Shift pressed after 50 px of travel changes only later increments;
-the neighbour clamp allows the equal beat; a group delta stops at the nearest
-unselected point; preview and commit values are bit-identical.
-
-**Gate (each commit).** `cargo clippy -p manifold-ui -p manifold-app
--p manifold-editing --tests -- -D warnings`; `cargo nextest run -p manifold-ui
-automation`; `cargo nextest run -p manifold-editing automation`; the five
-entry-state flows plus the flows the branch touched (`scripts/dev.py flows`).
-Negative, zero hits after P6b: `rg AUTOMATION_AXIS_LOCK_PX crates/`,
-`rg snap_to_whole_steps crates/`, `rg 'x_unlocked' crates/manifold-ui`,
-`rg 'set_cursor\(TimelineCursor::Move\)' crates/manifold-ui/src/interaction_overlay.rs`,
-`rg 'len\(\) < 2' crates/manifold-app/src/editing_host.rs`.
-Then `scripts/landing_gate.py --repo "$WT" --cheap` once.
-
-**Acceptance demo (L2).** Two flow runs whose assertions are numbers: a click
-3 beats past a lane's last point at value 0.8 yields a point whose value
-equals 0.8 exactly; an off-grid point at beat 2.3 dragged one grid step right
-lands at 3.3. Peter looks at the PNGs for the cursor and the hint; the agent
-does not judge them.
 ## 11. Decided (don't reopen)
 
 1. Lanes are **tier-1 base writers**; modulation pipeline untouched.
