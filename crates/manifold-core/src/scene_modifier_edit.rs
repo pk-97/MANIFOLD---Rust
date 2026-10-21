@@ -39,11 +39,21 @@ pub enum SceneModifierEditError {
         detail: String,
     },
     EmptyModifierSelection,
+    UncopiedTarget {
+        target: String,
+    },
     RetargetChangedSavedFrame {
         target: String,
     },
     InvalidSchema {
         error: crate::scene_modifier_preset::SceneModifierSchemaError,
+    },
+    /// Every force slot of the owner is taken.
+    ForceSlotsFull {
+        subject: &'static str,
+        needed: usize,
+        free: usize,
+        limit: usize,
     },
 }
 
@@ -77,10 +87,16 @@ impl fmt::Display for SceneModifierEditError {
             Self::EmptyModifierSelection => {
                 write!(f, "at least one scene modifier must be selected")
             }
+            Self::UncopiedTarget { target } => {
+                write!(f, "the copied object has no copy of the scene node `{target}`")
+            }
             Self::RetargetChangedSavedFrame { target } => {
                 write!(f, "retarget changed the saved frame for `{target}`")
             }
             Self::InvalidSchema { error } => error.fmt(f),
+            Self::ForceSlotsFull { subject, needed, free, limit } => {
+                f.write_str(&crate::scene_modifier_preset::force_slots_message(subject, *needed, *free, *limit))
+            }
         }
     }
 }
@@ -162,6 +178,13 @@ pub fn insert_scene_modifier(
         });
     }
     validate(&instance.graph)?;
+    // Refused when written, so a full scene never saves a force it cannot expand.
+    let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+    if !crate::scene_modifier_math_view::is_math_view_recipe(&instance.graph)
+        && crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers) >= limit
+    {
+        return Err(SceneModifierEditError::ForceSlotsFull { subject: "Adding a force", needed: 1, free: 0, limit });
+    }
     let mut graph = owner.clone();
     graph.version = graph.version.max(3);
     let id = instance.id.clone();
@@ -948,6 +971,134 @@ pub fn retarget_scene_modifier(
     })
 }
 
+/// The modifiers explicitly aimed at one scene object or at nodes inside it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ObjectModifiers {
+    /// Aimed at nothing else. They belong to the object: a delete removes
+    /// them with it and a duplicate copies them onto the copy.
+    pub owned: Vec<NodeId>,
+    /// Also aimed elsewhere. Deleting the object would leave these half
+    /// aimed, so a delete is refused while any exist.
+    pub shared: Vec<NodeId>,
+}
+
+/// `target` is `object` itself or a node inside it.
+fn lies_under(target: &SceneNodeRef, object: &SceneNodeRef) -> bool {
+    target == object
+        || (target.scope.starts_with(&object.scope)
+            && target.scope.get(object.scope.len()) == Some(&object.node))
+}
+
+pub fn object_modifiers(owner: &EffectGraphDef, object: &SceneNodeRef) -> ObjectModifiers {
+    let mut found = ObjectModifiers::default();
+    for modifier in &owner.scene_modifiers {
+        let SceneTargetSelection::Explicit { objects } = &modifier.targets else {
+            continue;
+        };
+        let under = objects.iter().filter(|target| lies_under(target, object)).count();
+        if under == 0 {
+            continue;
+        }
+        if under == objects.len() {
+            found.owned.push(modifier.id.clone());
+        } else {
+            found.shared.push(modifier.id.clone());
+        }
+    }
+    found
+}
+
+/// `modifier`'s targets and mesh frames aimed at the copy of `source`: every
+/// reference under `source` mapped through `node_map`, which pairs `source`
+/// and each node inside it with its copy. A reference without a copy refuses.
+pub fn aim_at_copy(
+    modifier: &SceneModifierInstanceDef,
+    source: &SceneNodeRef,
+    node_map: &[(NodeId, NodeId)],
+) -> Result<(SceneTargetSelection, Vec<SceneMeshReferenceFrame>), SceneModifierEditError> {
+    let copied = |id: &NodeId| {
+        node_map
+            .iter()
+            .find(|(old, _)| old == id)
+            .map(|(_, new)| new.clone())
+            .ok_or_else(|| SceneModifierEditError::UncopiedTarget { target: id.to_string() })
+    };
+    let aim = |target: &SceneNodeRef| -> Result<SceneNodeRef, SceneModifierEditError> {
+        if !lies_under(target, source) {
+            return Ok(target.clone());
+        }
+        let depth = source.scope.len();
+        let mut scope = target.scope[..depth].to_vec();
+        for id in &target.scope[depth..] {
+            scope.push(copied(id)?);
+        }
+        Ok(SceneNodeRef { scope, node: copied(&target.node)? })
+    };
+    let targets = match &modifier.targets {
+        SceneTargetSelection::AllObjects => SceneTargetSelection::AllObjects,
+        SceneTargetSelection::Explicit { objects } => SceneTargetSelection::Explicit {
+            objects: objects.iter().map(&aim).collect::<Result<_, _>>()?,
+        },
+    };
+    let mesh_frames = modifier
+        .mesh_frames
+        .iter()
+        .map(|frame| {
+            Ok(SceneMeshReferenceFrame { target: aim(&frame.target)?, source: aim(&frame.source)?, ..frame.clone() })
+        })
+        .collect::<Result<_, SceneModifierEditError>>()?;
+    Ok((targets, mesh_frames))
+}
+
+/// The force slots one copy of the modifiers `source` owns takes.
+pub fn object_force_slots(owner: &EffectGraphDef, source: &SceneNodeRef) -> usize {
+    let owned = object_modifiers(owner, source).owned;
+    owner.scene_modifiers.iter().filter(|item| owned.contains(&item.id) && !crate::scene_modifier_math_view::is_math_view_recipe(&item.graph)).count()
+}
+
+/// Copy the modifiers `source` owns within `owner` and aim each copy at the
+/// duplicate of `source` (see [`aim_at_copy`]).
+pub fn copy_object_modifiers(
+    owner: &EffectGraphDef,
+    source: &SceneNodeRef,
+    node_map: &[(NodeId, NodeId)],
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
+    let owned = object_modifiers(owner, source).owned;
+    if owned.is_empty() {
+        return Ok(SceneGraphEdit {
+            graph: owner.clone(),
+            removed_param_ids: Vec::new(),
+            parameter_id_remaps: Vec::new(),
+        });
+    }
+    // Refused whole, like an insert: a copy never saves forces the scene cannot expand.
+    let needed = object_force_slots(owner, source);
+    let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+    let free = limit.saturating_sub(crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers));
+    if needed > free {
+        return Err(SceneModifierEditError::ForceSlotsFull { subject: "Duplicating", needed, free, limit });
+    }
+    let duplicated = duplicate_scene_modifiers(owner, &owned)?;
+    let before: HashSet<&NodeId> = owner.scene_modifiers.iter().map(|item| &item.id).collect();
+    let copies: Vec<SceneModifierInstanceDef> = duplicated
+        .graph
+        .scene_modifiers
+        .iter()
+        .filter(|item| !before.contains(&item.id))
+        .cloned()
+        .collect();
+    let mut graph = duplicated.graph.clone();
+    for copy in copies {
+        let (targets, mesh_frames) = aim_at_copy(&copy, source, node_map)?;
+        graph = retarget_scene_modifier(&graph, &copy.id, targets, mesh_frames)?.graph;
+    }
+    Ok(SceneGraphEdit {
+        graph,
+        removed_param_ids: Vec::new(),
+        parameter_id_remaps: duplicated.parameter_id_remaps,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -999,6 +1150,44 @@ mod tests {
         insert_scene_modifier(owner, owner.scene_modifiers.len(), recipe(id))
             .unwrap()
             .graph
+    }
+
+    /// A modifier aimed only at an object, or at nodes inside it, belongs to
+    /// it; one also aimed elsewhere is shared. A copy of the owned ones is
+    /// aimed at the object's copy through the node map, keeps its tuning,
+    /// and leaves the source's modifiers and other targets alone.
+    #[test]
+    fn scene_modifier_edit_object_owns_only_modifiers_aimed_at_it_alone() {
+        let at = |scope: &[&str], node: &str| SceneNodeRef { scope: scope.iter().map(|id| NodeId::new(*id)).collect(), node: NodeId::new(node) };
+        let aimed = |id: &str, objects: Vec<SceneNodeRef>| SceneModifierInstanceDef {
+            targets: SceneTargetSelection::Explicit { objects },
+            ..recipe(id)
+        };
+        let mut graph = owner();
+        for instance in [
+            aimed("inner", vec![at(&["swarm"], "object")]),
+            aimed("whole", vec![at(&[], "swarm")]),
+            aimed("shared", vec![at(&["swarm"], "object"), at(&[], "rock")]),
+            aimed("elsewhere", vec![at(&[], "rock")]),
+            recipe("everything"),
+        ] {
+            graph = insert_scene_modifier(&graph, graph.scene_modifiers.len(), instance).unwrap().graph;
+        }
+        let swarm = at(&[], "swarm");
+        let found = object_modifiers(&graph, &swarm);
+        assert_eq!(found.owned, [NodeId::new("inner"), NodeId::new("whole")]);
+        assert_eq!(found.shared, [NodeId::new("shared")]);
+
+        let map = [(NodeId::new("swarm"), NodeId::new("swarm2")), (NodeId::new("object"), NodeId::new("object2"))];
+        let copied = copy_object_modifiers(&graph, &swarm, &map).unwrap().graph;
+        assert_eq!(copied.scene_modifiers.len(), 7);
+        let (sources, copies): (Vec<_>, Vec<_>) =
+            copied.scene_modifiers.iter().partition(|item| graph.scene_modifiers.iter().any(|source| source.id == item.id));
+        assert!(sources.iter().zip(&graph.scene_modifiers).all(|(kept, source)| *kept == source), "the source's modifiers are untouched");
+        assert_eq!(copies[0].targets, SceneTargetSelection::Explicit { objects: vec![at(&["swarm2"], "object2")] });
+        assert_eq!(copies[1].targets, SceneTargetSelection::Explicit { objects: vec![at(&[], "swarm2")] });
+        assert!(copies.iter().zip(&graph.scene_modifiers[..2]).all(|(copy, source)| copy.graph == source.graph));
+        assert!(copy_object_modifiers(&graph, &swarm, &map[..1]).is_err(), "a target with no copy refuses");
     }
 
     #[test]
@@ -1133,6 +1322,20 @@ mod tests {
             Err(SceneModifierEditError::IndexOutOfRange { .. })
         ));
         assert_eq!(graph, snapshot);
+    }
+
+    /// An owner's sixteen force slots are checked when a force is written,
+    /// so every path that adds one (the Forces menu, a template, a paste) is
+    /// refused at the seventeenth and leaves the owner as it was.
+    #[test]
+    fn scene_modifier_edit_insert_refuses_past_the_force_slots() {
+        let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+        let full = (0..limit).fold(owner(), |graph, index| insert(&graph, &format!("force_{index}")));
+        let snapshot = full.clone();
+        let refused = insert_scene_modifier(&full, limit, recipe("one_more"));
+        assert!(matches!(refused, Err(SceneModifierEditError::ForceSlotsFull { limit: 16, .. })), "{refused:?}");
+        assert!(refused.unwrap_err().to_string().contains("at most 16 forces"));
+        assert_eq!(full, snapshot);
     }
 
     fn preparation_owner() -> EffectGraphDef {

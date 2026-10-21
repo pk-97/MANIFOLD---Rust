@@ -290,14 +290,14 @@ impl LatticeBuffers {
 }
 
 /// The scene's force field on `acceleration_field` as this consumer feels it:
-/// the air it carries scaled by the node's Air Drag (`air_drag`, 0 ignores
-/// the air). Every node that lays or steps the field reads it through here.
+/// with the Physics World's still air (`air_resistance`, 1/s), the air felt at
+/// the node's Air Drag (`air_drag`, 0 ignores it), one rule for every
+/// consumer (D-114). Every node that lays or steps the field reads it here.
 pub fn felt_field(ctx: &EffectNodeContext<'_, '_>, owner: &str) -> Result<Option<manifold_physics::FieldValue>, String> {
     let air_drag = ctx.scalar_or_param("air_drag", 1.0);
-    ctx.inputs
-        .cpu_value::<manifold_physics::FieldValue>("acceleration_field")
-        .map(|field| field.with_air_drag(air_drag))
-        .transpose()
+    let air_resistance = ctx.scalar_or_param("air_resistance", 0.0);
+    let forces = ctx.inputs.cpu_value::<manifold_physics::FieldValue>("acceleration_field");
+    manifold_physics::FieldValue::felt_in_still_air(forces.as_ref(), air_resistance, air_drag)
         .map_err(|error| format!("{owner}: {error}"))
 }
 

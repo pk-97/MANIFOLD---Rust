@@ -121,6 +121,16 @@ pub fn validate_modifier_attachment(
     expand_scene_modifiers(&candidate, registry).map(|_| ())
 }
 
+/// Expand scene modifiers, then flatten groups: the one way to get a flat view of
+/// any preset that may carry modifiers. Plain `flatten_groups` refuses those.
+pub fn flatten_expanded(
+    owner: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> Result<EffectGraphDef, String> {
+    let expanded = expand_scene_modifiers(owner, registry).map_err(|e| format!("{e:?}"))?;
+    manifold_core::flatten::flatten_groups(&expanded).map_err(|e| format!("{e:?}"))
+}
+
 /// Produce a derived graph. All saved definitions and target frames remain
 /// untouched; a second preparation of the derived graph is an exact no-op.
 pub fn expand_scene_modifiers(
@@ -148,13 +158,7 @@ fn prepare_scene_modifiers_impl(
     // instances are bounded by their own surveyed budget (see
     // `scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`), so a full legacy
     // migration of 16 carriers (16 stripped carriers + 16 views) prepares.
-    let stage_carrying = owner
-        .scene_modifiers
-        .iter()
-        .filter(|m| {
-            !manifold_core::scene_modifier_math_view::is_math_view_recipe(&m.graph)
-        })
-        .count();
+    let stage_carrying = manifold_core::scene_modifier_preset::force_slots_used(&owner.scene_modifiers);
     if stage_carrying > manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "sceneModifiers".into(),

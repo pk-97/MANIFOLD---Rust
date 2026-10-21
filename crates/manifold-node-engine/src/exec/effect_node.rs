@@ -978,6 +978,14 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// The Physics World controls this node takes, each on its own input:
+    /// a scene template inserting it wires the World's sources there, so it
+    /// follows World Speed and restarts on World Reset
+    /// (`manifold_core::scene_world_controls`). Empty: it follows no World.
+    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+        &[]
+    }
+
     /// The inputs whose producers own what `output` carries physically, for
     /// the scene force trace from an object back to its simulation. `None`:
     /// every input of the output's own type.

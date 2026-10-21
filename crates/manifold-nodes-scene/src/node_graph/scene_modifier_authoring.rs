@@ -56,6 +56,80 @@ pub fn validate_new_scene_modifier(
     validate_modifier_attachment(owner, instance, &SCENE_MODIFIER_REGISTRY)
 }
 
+/// Prepare and check one force a scene template brings, the way the Forces
+/// menu attaches one. This is the preparer template insertion takes
+/// (`manifold_core::scene_template::PrepareForce`).
+pub fn prepare_template_force(
+    owner: &EffectGraphDef,
+    recipe: &EffectGraphDef,
+    id: NodeId,
+    scene: SceneNodeRef,
+    targets: SceneTargetSelection,
+) -> Result<SceneModifierInstanceDef, String> {
+    let instance = prepare_new_scene_modifier(owner, recipe, id, scene, targets).map_err(|error| error.to_string())?;
+    validate_new_scene_modifier(owner, &instance).map_err(|error| error.to_string())?;
+    Ok(instance)
+}
+
+/// A stock force from the scene modifier catalog, tuned by [`tune_force_card`].
+pub fn stock_force(id: &str, card: &[(&str, f32)]) -> Result<EffectGraphDef, String> {
+    let catalog = manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG.load();
+    let json = catalog.json(id).ok_or_else(|| format!("The stock {id} force is missing"))?;
+    let mut recipe: EffectGraphDef =
+        serde_json::from_str(&json).map_err(|error| format!("The stock {id} force does not read: {error}"))?;
+    tune_force_card(&mut recipe, card).map_err(|error| format!("The stock {id} force: {error}"))?;
+    Ok(recipe)
+}
+
+/// Set a force's card defaults to `card` values, written through to the
+/// params those rows drive so the graph agrees with its card. The one helper
+/// for tuning a shipped force; works on a recipe or a prepared instance's
+/// graph.
+pub fn tune_force_card(force: &mut EffectGraphDef, card: &[(&str, f32)]) -> Result<(), String> {
+    use manifold_core::effect_graph_def::{BindingTarget, SerializedParamValue};
+    let metadata = force.preset_metadata.as_mut().ok_or("it has no card")?;
+    let mut driven = Vec::new();
+    for &(param, value) in card {
+        let spec = metadata
+            .params
+            .iter_mut()
+            .find(|spec| spec.id == param)
+            .ok_or_else(|| format!("it has no {param}"))?;
+        spec.default_value = value;
+        for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == param) {
+            binding.default_value = value;
+            if let BindingTarget::Node { node_id, param } = &binding.target {
+                driven.push((node_id.clone(), param.clone(), value));
+            }
+        }
+    }
+    for (node_id, param, value) in driven {
+        let slot = find_param(&mut force.nodes, &node_id, &param).ok_or_else(|| format!("it has no {node_id}.{param}"))?;
+        *slot = match slot {
+            SerializedParamValue::Enum { .. } => SerializedParamValue::Enum { value: value.round() as u32 },
+            _ => SerializedParamValue::Float { value },
+        };
+    }
+    Ok(())
+}
+
+/// The param `param` of the node with stable id `node_id`, at any depth.
+fn find_param<'a>(
+    nodes: &'a mut [manifold_core::effect_graph_def::EffectGraphNode],
+    node_id: &NodeId,
+    param: &str,
+) -> Option<&'a mut manifold_core::effect_graph_def::SerializedParamValue> {
+    for node in nodes {
+        if node.node_id == *node_id {
+            return node.params.get_mut(param);
+        }
+        if let Some(found) = node.group.as_deref_mut().and_then(|body| find_param(&mut body.nodes, node_id, param)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Initialize a catalog recipe against its owner without mesh I/O. Used both
 /// when attaching a modifier and when comparing or restoring its preset.
 pub fn initialize_scene_modifier_graph(
