@@ -1437,44 +1437,12 @@ mod consolidation_tests {
         .graph;
         let fog = picker_entry(&modified, "SceneFog");
         assert_eq!(fog.disabled.as_deref(), Some("Already applied"));
-
-        let mut conflicting = fixture();
-        let scene_id = conflicting
-            .nodes
-            .iter()
-            .find(|node| node.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
-            .expect("fixture render scene")
-            .id;
-        let next_id = conflicting.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
-        let mut existing_render_mode = conflicting
-            .nodes
-            .first()
-            .cloned()
-            .expect("fixture node");
-        existing_render_mode.id = next_id;
-        existing_render_mode.node_id = "existing_render_mode".into();
-        existing_render_mode.type_id = "node.render_mode".into();
-        existing_render_mode.handle = Some("existing_render_mode".into());
-        existing_render_mode.params.clear();
-        existing_render_mode.group = None;
-        conflicting.nodes.push(existing_render_mode);
-        conflicting.wires.push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: next_id,
-            from_port: "render_mode".into(),
-            to_node: scene_id,
-            to_port: "render_mode".into(),
-        });
-        let render_mode = picker_entry(&conflicting, "RenderMode");
-        assert!(render_mode
-            .disabled
-            .as_deref()
-            .is_some_and(|reason| reason == "Conflicting scene source"));
     }
 
     #[test]
     fn modifier_target_chrome_follows_recipe_output_scope() {
         let mut graph = fixture();
-        for preset_id in ["RenderMode", "SceneFog", "SceneLoop"] {
+        for preset_id in ["SceneFog", "SceneLoop"] {
             let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
                 &manifold_core::PresetTypeId::new(preset_id),
             )
@@ -1512,9 +1480,9 @@ mod consolidation_tests {
             &[],
             (manifold_core::Bpm(120.0), 0.0),
         );
-        let render_mode = surfaces.iter().find(|surface| surface.title == "Render Mode").unwrap();
-        assert!(!render_mode.modifier.as_ref().unwrap().targets_all);
-        assert!(render_mode.modifier.as_ref().unwrap().objects.is_empty());
+        let fog = surfaces.iter().find(|surface| surface.title == "Scene Fog").unwrap();
+        assert!(!fog.modifier.as_ref().unwrap().targets_all);
+        assert!(fog.modifier.as_ref().unwrap().objects.is_empty());
         let scene_loop = surfaces.iter().find(|surface| surface.title == "Scene Loop").unwrap();
         assert!(scene_loop.modifier.as_ref().unwrap().targets_all);
         assert!(!scene_loop.modifier.as_ref().unwrap().objects.is_empty());

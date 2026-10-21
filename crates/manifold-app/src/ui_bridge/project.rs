@@ -81,6 +81,12 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
+        ProjectAction::ToggleExportGizmos => {
+            let cmd = manifold_editing::commands::settings::ToggleExportGizmosCommand::new(project.settings.export_gizmos);
+            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            project.execute(boxed);
+            DispatchResult::handled()
+        }
         ProjectAction::ToggleLiveRecording
         | ProjectAction::SelectAudioInputDevice
         | ProjectAction::SetAudioInputDevice(_)
@@ -1950,7 +1956,7 @@ mod tests {
         assert!(sections.iter().any(|section| section.contains("Simulation")));
         // The starting water is its own Initial Fill row under the water.
         let fill = row.placed_sources.iter()
-            .find(|source| source.role == manifold_foundation::scene_surface::SourceRole::InitialFill)
+            .find(|source| source.role == manifold_core::scene_surface::SourceRole::InitialFill)
             .expect("the water has an Initial Fill");
         let fill_sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(&added), &fill.owned);
         assert!(fill_sections.iter().any(|section| section.contains("Initial Fill")), "{fill_sections:?}");

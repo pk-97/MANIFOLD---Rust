@@ -116,8 +116,8 @@ perf-soak = ["profiling"]
 
 [dev-dependencies]
 manifold-playback = { path = "../manifold-playback", features = ["testkit"] }
-manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }
+manifold-foundation = { path = "../manifold-foundation" }
 manifold-fluids = { path = "../manifold-fluids" }
 glam = "0.29.3"
 manifold-nodes = { path = "../manifold-nodes", features = ["testkit"] }

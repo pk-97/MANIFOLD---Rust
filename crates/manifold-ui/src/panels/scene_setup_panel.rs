@@ -71,7 +71,7 @@ use crate::param_surface::{
 };
 use manifold_foundation::SceneNodeRef;
 use crate::slider::GAP;
-use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, SurfaceRole};
+use manifold_foundation::scene_surface::{ControlGroup, Feature, GizmoDrawMode, Gate, SurfaceRole};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -81,6 +81,8 @@ const KEY_NEW_SCENE: u64 = 80_012;
 const KEY_OPEN_GRAPH_EDITOR: u64 = 80_013;
 const KEY_CAMERA_SETUP: u64 = 80_025;
 const KEY_SHOW_GIZMOS: u64 = 80_026;
+const KEY_GIZMO_MODE: u64 = 80_028;
+const KEY_RENDER_MODE: u64 = 80_029;
 /// Frame button offset: use offset 33 to avoid collision with Remove (20), Duplicate (21), and mod buttons (22..32)
 const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
@@ -935,6 +937,11 @@ pub struct ScenePanel {
     new_scene_id: Option<NodeId>,
     open_graph_editor_id: Option<NodeId>,
     show_gizmos_id: Option<NodeId>,
+    gizmo_mode_id: Option<NodeId>,
+    render_mode_id: Option<NodeId>,
+    /// How gizmos meet scene depth, for the preview, the viewport and an
+    /// export. UI-only workspace state, like `show_gizmos`.
+    gizmo_draw_mode: GizmoDrawMode,
     /// The global "Show gizmos" switch: the scene the panel shows draws its
     /// grid, light markers and physics shapes over the main output preview.
     /// UI-only workspace state, never saved with the project.
@@ -1141,6 +1148,9 @@ impl Default for ScenePanel {
             new_scene_id: None,
             open_graph_editor_id: None,
             show_gizmos_id: None,
+            gizmo_mode_id: None,
+            render_mode_id: None,
+            gizmo_draw_mode: GizmoDrawMode::default(),
             show_gizmos: false,
             properties_card: SceneCardState::new(),
             object_modifier_cards: Vec::new(),
@@ -1333,6 +1343,29 @@ impl ScenePanel {
         }
     }
 
+    /// How the panel's gizmos meet scene depth; export reads it too.
+    pub fn gizmo_draw_mode(&self) -> GizmoDrawMode {
+        self.gizmo_draw_mode
+    }
+
+    /// The scene's Render Mode row, drawn in the header beside Show gizmos
+    /// instead of under World.
+    pub(super) fn render_mode_row(&self) -> Option<&ParamRow> {
+        self.full_params
+            .as_ref()?
+            .rows
+            .iter()
+            .find(|row| row.spec.scene.is_some_and(|scene| scene.group == ControlGroup::RenderMode))
+    }
+
+    /// The header button's text for the Render Mode row's current value.
+    pub(super) fn render_mode_label(&self) -> Option<String> {
+        let row = self.render_mode_row()?;
+        let labels = row.spec.value_labels.as_deref().unwrap_or(&[]);
+        let index = (row.value.base - row.spec.min).round().max(0.0) as usize;
+        Some(format!("Render: {}", labels.get(index).map_or("Rendered", String::as_str)))
+    }
+
     /// The scene layer whose gizmos draw over the output preview: the one
     /// this panel shows, while "Show gizmos" is on.
     pub fn gizmo_layer(&self) -> Option<&LayerId> {
@@ -1408,6 +1441,8 @@ impl ScenePanel {
         self.new_scene_id = None;
         self.open_graph_editor_id = None;
         self.show_gizmos_id = None;
+        self.gizmo_mode_id = None;
+        self.render_mode_id = None;
         self.add_object_id = None;
         self.add_light_id = None;
         self.add_force_id = None;
@@ -1737,7 +1772,9 @@ impl ScenePanel {
             // Imported bodies keep their own collider shape; only they offer
             // the collider detail control.
             let wrong_body_kind = if imported_selection { p.spec.name == "Shape" } else { p.spec.name == "Collider Detail" };
-            let shown = owned && !excluded && !hidden && !wrong_body_kind;
+            // Render Mode is drawn in the header, beside Show gizmos.
+            let in_header = p.spec.scene.is_some_and(|scene| scene.group == ControlGroup::RenderMode);
+            let shown = owned && !excluded && !hidden && !wrong_body_kind && !in_header;
             if shown
                 && self.material_param_selected(p)
                 && (self.property_explicitly_revealed(p)
@@ -1979,6 +2016,14 @@ impl ScenePanel {
                     self.show_gizmos = !self.show_gizmos;
                     self.view_version += 1;
                     return (true, Vec::new());
+                }
+                if self.gizmo_mode_id == Some(*node_id) {
+                    self.gizmo_draw_mode = self.gizmo_draw_mode.next();
+                    self.view_version += 1;
+                    return (true, Vec::new());
+                }
+                if self.render_mode_id == Some(*node_id) {
+                    return (true, self.render_mode_pick_list(*node_id).into_iter().collect());
                 }
                 if let Some((_, group)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id).cloned() {
                     let Some(vm) = self.state.as_live() else {

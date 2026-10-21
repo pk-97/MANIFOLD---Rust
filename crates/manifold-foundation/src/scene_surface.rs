@@ -6,6 +6,37 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
+/// How scene gizmos meet the scene's depth, in the preview, the editor
+/// viewport and an export alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GizmoDrawMode {
+    /// Depth-tested: hidden behind scene geometry.
+    Occluded,
+    /// Drawn over everything, as gizmos always were.
+    #[default]
+    OnTop,
+    /// Visible parts drawn normally, hidden parts drawn faded.
+    Ghost,
+}
+
+impl GizmoDrawMode {
+    pub const ALL: [Self; 3] = [Self::Occluded, Self::OnTop, Self::Ghost];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Occluded => "Occluded",
+            Self::OnTop => "On Top",
+            Self::Ghost => "Ghost",
+        }
+    }
+
+    /// The next mode in `ALL`, wrapping.
+    pub fn next(self) -> Self {
+        Self::ALL[(Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) + 1) % Self::ALL.len()]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SurfaceRole {
@@ -48,6 +79,7 @@ pub enum ControlGroup {
     Environment,
     Fog,
     RayTracing,
+    RenderMode,
 }
 
 impl ControlGroup {
@@ -77,6 +109,7 @@ impl ControlGroup {
             Self::Environment => "Environment",
             Self::Fog => "Fog",
             Self::RayTracing => "Ray Tracing",
+            Self::RenderMode => "Render Mode",
         }
     }
 }

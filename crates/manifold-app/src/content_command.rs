@@ -351,6 +351,9 @@ pub enum ContentCommand {
         output: Option<crate::selection_outline::OutlineSlots>,
         viewport: Option<crate::selection_outline::OutlineSlots>,
     },
+    /// The gizmo lines to draw over the output preview and the scene viewport,
+    /// and the draw mode for them and for an export (BUG-b36b8 gizmo draw modes).
+    SetGizmoOverlay(Box<crate::gizmo_overlay::GizmoOverlay>),
     SetModifierPreviewContext {
         scope: Vec<manifold_core::NodeId>,
         object: Option<manifold_core::scene_modifier_preset::SceneNodeRef>,

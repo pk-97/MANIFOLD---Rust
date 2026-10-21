@@ -482,6 +482,7 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::SetSceneViewport(_)
         | ContentCommand::SetPhysicsOverlay(_)
         | ContentCommand::SetSelectionOutline { .. }
+        | ContentCommand::SetGizmoOverlay(_)
         | ContentCommand::SetModifierPreviewContext { .. }
         | ContentCommand::SetNodePreviewNormalize(_)
         | ContentCommand::SetNodeAtlasVisible(_)
@@ -638,7 +639,13 @@ impl ContentThread {
         // The selection outline's mask pass is editing chrome: it sits out
         // the export the same way.
         let (outline_output, outline_viewport) = self.content_pipeline.take_selection_outline();
+        // The gizmos an export includes are the Scene panel scene's, drawn
+        // in the Scene panel's draw mode.
+        let gizmos = config.include_gizmos.then(|| self.content_pipeline.begin_export_gizmos());
         self.run_export_inner(config, cmd_rx, state_tx);
+        if let Some(previous) = gizmos {
+            self.content_pipeline.end_export_gizmos(previous);
+        }
         self.content_pipeline.set_scene_viewport_request(viewport);
         self.content_pipeline.set_selection_outline(outline_output, outline_viewport);
         // Edits sent while it ran were dropped, but a direct UI write may
@@ -1323,6 +1330,10 @@ impl ContentThread {
             return Some(ExportFrameFailure { message, fatal: false });
         }
 
+        if export_config.include_gizmos {
+            self.content_pipeline.draw_export_gizmos();
+        }
+
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let mut sdr_mapped_texture = None;
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1681,6 +1692,7 @@ mod tests {
             audio_start_beat: 0.0,
             audio_encoder_delay: 0.0,
             split_at_markers: false,
+            include_gizmos: false,
             metadata: Vec::new(),
         }
     }

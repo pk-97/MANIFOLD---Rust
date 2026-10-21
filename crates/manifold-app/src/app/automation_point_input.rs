@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn value_reads_back_what_the_editor_opened_on() {
-        use manifold_foundation::scene_surface::Unit;
+        use manifold_core::scene_surface::Unit;
         let mut buf = manifold_ui::panels::param_slider_shared::ParamValueText::default();
         let labels = UiLaneDisplay {
             value_labels: Some(vec!["Identity".to_string(), "Mirror".to_string(), "FoldX".to_string()].into()),

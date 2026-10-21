@@ -468,6 +468,36 @@ impl GeneratorRenderer {
         self.layer_generators.get(layer_id)?.generator.scene_viewport_selection_mask()
     }
 
+    /// Keep `layer_id`'s scene depth for the gizmo pass (BUG-b36b8 gizmo
+    /// draw modes). Set every frame while wanted: a rebuilt graph starts
+    /// without the request.
+    pub fn set_gizmo_depth(&mut self, layer_id: &LayerId, wanted: bool) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_gizmo_depth(wanted);
+        }
+    }
+
+    /// The same for `layer_id`'s scene viewport render.
+    pub fn set_scene_viewport_gizmo_depth(&mut self, layer_id: &LayerId, wanted: bool) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_scene_viewport_gizmo_depth(wanted);
+        }
+    }
+
+    /// The raw depth `layer_id`'s output render kept in the last `render_all`.
+    pub fn gizmo_depth(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.layer_generators.get(layer_id)
+            .filter(|state| state.rendered_pass == Some(self.render_pass))?
+            .generator
+            .gizmo_depth()
+    }
+
+    /// The raw depth of `layer_id`'s scene viewport frame.
+    pub fn scene_viewport_gizmo_depth(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.scene_viewport_texture(layer_id)?;
+        self.layer_generators.get(layer_id)?.generator.scene_viewport_gizmo_depth()
+    }
+
     /// Keep local modifier addresses out of the host's node namespace.
     pub fn set_modifier_preview_node(
         &mut self,

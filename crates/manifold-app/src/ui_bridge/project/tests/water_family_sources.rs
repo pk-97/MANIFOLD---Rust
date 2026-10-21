@@ -100,7 +100,7 @@ fn water_family_inflow_inserts_inside_its_water() {
     let row = water_row(&added);
     // Beside the water's Initial Fill.
     let [fill, placed] = row.placed_sources.as_slice() else { panic!("the fill and the Inflow: {:?}", row.placed_sources) };
-    assert_eq!(fill.role, manifold_foundation::scene_surface::SourceRole::InitialFill);
+    assert_eq!(fill.role, manifold_core::scene_surface::SourceRole::InitialFill);
     assert_eq!(placed.name, "Inflow 1");
     assert!(!row.control_nodes().iter().any(|node| placed.owned.contains(node)), "the Inflow's controls are its own row's");
 
@@ -253,12 +253,12 @@ fn physics_boundary_role_to_initial_fill_rebuilds_the_tree() {
     let role_of = |project: &Project| {
         water_row(&authored(project)).placed_sources.iter().find(|source| source.node == role.node_id).expect("its row stays").role
     };
-    assert_eq!(role_of(&project), manifold_foundation::scene_surface::SourceRole::InitialFill, "the row is an Initial Fill now");
+    assert_eq!(role_of(&project), manifold_core::scene_surface::SourceRole::InitialFill, "the row is an Initial Fill now");
     assert!(!water_row(&authored(&project)).control_nodes().contains(&role.node_id), "its controls stay its own");
 
     assert!(editing.undo(&mut project));
     assert!(editing.peek_redo_touches().contains(manifold_core::change::Part::Effects), "undo moves it back");
-    assert_eq!(role_of(&project), manifold_foundation::scene_surface::SourceRole::Inflow);
+    assert_eq!(role_of(&project), manifold_core::scene_surface::SourceRole::Inflow);
 }
 
 /// Inserting into an imported scene keeps every imported row: the model

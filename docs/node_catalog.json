@@ -36798,6 +36798,22 @@
           "type": "int"
         },
         {
+          "default": "0",
+          "enum_values": [
+            "Rendered",
+            "Solid",
+            "Wireframe",
+            "Points"
+          ],
+          "label": "Render Mode",
+          "name": "render_mode",
+          "range": [
+            "0",
+            "3"
+          ],
+          "type": "enum"
+        },
+        {
           "default": "false",
           "label": "Ray Tracing",
           "name": "rt_enabled",
@@ -57275,6 +57291,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "8_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
           "default": "1",
           "id": "8_rt_shadows",
           "max": "1",
@@ -63101,6 +63124,13 @@
           "max": "20",
           "min": "0",
           "name": "Size"
+        },
+        {
+          "default": "0",
+          "id": "19_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -76553,6 +76583,13 @@
         },
         {
           "default": "0",
+          "id": "1019_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "1019_rt_enabled",
           "max": "1",
           "min": "0",
@@ -80492,6 +80529,13 @@
           "max": "20",
           "min": "0",
           "name": "Size"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -90063,6 +90107,13 @@
           "max": "20",
           "min": "0",
           "name": "Size"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -104002,6 +104053,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -115463,6 +115521,13 @@
         },
         {
           "default": "0",
+          "id": "20_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "20_rt_enabled",
           "max": "1",
           "min": "0",
@@ -118620,6 +118685,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -121538,6 +121610,13 @@
           "max": "20",
           "min": "0",
           "name": "Size"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -124824,6 +124903,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -139193,6 +139279,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -149118,6 +149211,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -163235,6 +163335,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -173055,6 +173162,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -189573,6 +189687,13 @@
         },
         {
           "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "463_rt_enabled",
           "max": "1",
           "min": "0",
@@ -203838,6 +203959,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",

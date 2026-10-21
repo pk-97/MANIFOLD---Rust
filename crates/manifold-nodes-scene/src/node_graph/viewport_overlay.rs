@@ -24,7 +24,7 @@ use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 
 /// One overlay line segment in world space, with its RGBA8 color.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorldLine {
     pub a: [f32; 3],
     pub b: [f32; 3],

@@ -517,6 +517,7 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
         assert_eq!(
             stamped,
             vec![
+                "render_mode",
                 "rt_enabled",
                 "temporal_upscale",
                 "rt_reflections",
@@ -524,9 +525,9 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
                 "rt_ao",
                 "rt_gi",
             ],
-            "exactly the six RT toggles; the Hidden denoise feed is never stamped, nothing else from the root node"
+            "the render mode and the six RT toggles; the Hidden denoise feed is never stamped, nothing else from the root node"
         );
-        for spec in &meta.params {
+        for spec in meta.params.iter().filter(|spec| spec.name != "Render Mode") {
             assert_eq!(spec.section.as_deref(), Some("Rendering"));
             assert!(spec.is_toggle, "{} must surface as a toggle row", spec.name);
             assert!(

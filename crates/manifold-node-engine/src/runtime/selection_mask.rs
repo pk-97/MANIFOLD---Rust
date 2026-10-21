@@ -42,3 +42,38 @@ impl PresetRuntime {
         self.executor.scene_viewport_selection_mask()
     }
 }
+
+impl PresetRuntime {
+    /// Keep the scene's raw depth each frame for the editor's gizmo lines.
+    /// A rebuilt graph starts without the request, so hosts set it each
+    /// frame while gizmos show.
+    pub fn set_gizmo_depth(&mut self, wanted: bool) {
+        let Some(slot) = self.effect_nodes.first() else { return };
+        for (_, instance) in &slot.node_map {
+            if let Some(node) = self.graph.get_node_mut(*instance) {
+                node.node.set_gizmo_depth(wanted);
+            }
+        }
+    }
+
+    /// The depth the last render kept, from the node whose camera the
+    /// overlay reads.
+    pub fn gizmo_depth(&self) -> Option<&GpuTexture> {
+        let slot = self.effect_nodes.first()?;
+        slot.node_map.iter().find_map(|(_, instance)| {
+            let node = &self.graph.get_node(*instance)?.node;
+            node.rendered_camera()?;
+            node.gizmo_depth()
+        })
+    }
+
+    /// Keep the second view's depth too ([`Self::set_scene_viewport`]).
+    pub fn set_scene_viewport_gizmo_depth(&mut self, wanted: bool) {
+        self.executor.set_scene_viewport_gizmo_depth(wanted);
+    }
+
+    /// The second view's depth for its latest frame.
+    pub fn scene_viewport_gizmo_depth(&self) -> Option<&GpuTexture> {
+        self.executor.scene_viewport_gizmo_depth()
+    }
+}

@@ -117,12 +117,18 @@ fn build(device: &std::sync::Arc<GpuDevice>) -> PresetRuntime {
         .expect("scene builds")
 }
 
+/// The scene's panel object (document id 41), by address.
+fn panel_object() -> manifold_core::SceneNodeRef {
+    let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
+    manifold_core::SceneNodeRef { scope: Vec::new(), node: def.nodes.iter().find(|node| node.id == 41).expect("the panel").node_id.clone() }
+}
+
 #[test]
 fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     let device = std::sync::Arc::new(GpuDevice::new_queued("d102 after render"));
     let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
     let scene = SceneVm::from_def(&def).expect("a scene");
-    let panel_ref = manifold_foundation::SceneNodeRef {
+    let panel_ref = manifold_core::SceneNodeRef {
         scope: Vec::new(),
         node: def.nodes.iter().find(|node| node.id == 41).expect("the panel").node_id.clone(),
     };
@@ -153,12 +159,9 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     let mut enc = device.create_encoder("d102 chrome");
     enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
     SelectionOutline::new(&device).draw(&mut enc, &composite, &mask, (0.0, 0.0, W as f32, H as f32), 1.0);
-    let mut ui = manifold_ui_paint::ui_renderer::UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
-    ui.begin_frame();
-    crate::scene_viewport::draw_world_lines(&mut ui, manifold_ui::Rect::new(0.0, 0.0, W as f32, H as f32), &camera, W, H, &lines);
-    if ui.prepare(&device, W, H, 1.0) {
-        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Load);
-    }
+    manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass::default().draw(
+        &device, &mut enc, &composite, None, &camera, &lines, manifold_core::scene_surface::GizmoDrawMode::OnTop,
+    );
     enc.commit_and_wait_completed();
 
     let shown = readback(&device, &composite);
@@ -307,6 +310,7 @@ fn an_export_with_a_selection_renders_no_mask() {
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
         split_at_markers: false,
+        include_gizmos: false,
         metadata: Vec::new(),
     };
     thread.run_export(config, &cmd_rx, &state_tx);
@@ -369,12 +373,9 @@ fn a_selected_water_domain_draws_its_solvers_cell_grid() {
     let composite = target(&device, "a3 composite");
     let mut enc = device.create_encoder("a3 chrome");
     enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
-    let mut ui = manifold_ui_paint::ui_renderer::UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
-    ui.begin_frame();
-    crate::scene_viewport::draw_world_lines(&mut ui, manifold_ui::Rect::new(0.0, 0.0, W as f32, H as f32), &camera, W, H, &lines);
-    if ui.prepare(&device, W, H, 1.0) {
-        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Load);
-    }
+    manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass::default().draw(
+        &device, &mut enc, &composite, None, &camera, &lines, manifold_core::scene_surface::GizmoDrawMode::OnTop,
+    );
     enc.commit_and_wait_completed();
     let shown = readback(&device, &composite);
     let plain = readback(&device, &picture);
@@ -390,4 +391,232 @@ fn a_selected_water_domain_draws_its_solvers_cell_grid() {
         }
     }
     image::save_buffer("/tmp/a3_domain_lattice_after.png", &png, W, H, image::ExtendedColorType::Rgba8).expect("write png");
+}
+
+/// The content thread of a project whose one layer is [`SCENE`], warmed up.
+fn scene_thread(w: u32, h: u32) -> (crate::content_thread::ContentThread, manifold_core::LayerId, crossbeam_channel::Sender<crate::content_command::ContentCommand>, crate::content_state::StateTx) {
+    scene_thread_of(SCENE, w, h)
+}
+
+/// [`scene_thread`] for another scene json.
+fn scene_thread_of(scene: &str, w: u32, h: u32) -> (crate::content_thread::ContentThread, manifold_core::LayerId, crossbeam_channel::Sender<crate::content_command::ContentCommand>, crate::content_state::StateTx) {
+    use crate::content_command::ContentCommand;
+    let mut project = manifold_core::project::Project::default();
+    (project.settings.output_width, project.settings.output_height) = (w as i32, h as i32);
+    let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::new("D102Scene"), 0);
+    let params = layer.gen_params_mut().expect("a generator layer");
+    params.graph = Some(serde_json::from_str(scene).expect("scene json"));
+    params.refresh_manifest_from_graph();
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats(0.0), manifold_core::Beats(4.0)));
+    let layer_id = layer.layer_id.clone();
+    project.timeline.layers.push(layer);
+    let mut thread = crate::headless_harness::headless_content_thread(project, w, h);
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.run_warmup(&cmd_rx, &state_tx);
+    (thread, layer_id, cmd_tx, state_tx)
+}
+
+fn overlay(mode: manifold_core::scene_surface::GizmoDrawMode, layer: &manifold_core::LayerId) -> crate::gizmo_overlay::GizmoOverlay {
+    crate::gizmo_overlay::GizmoOverlay {
+        mode,
+        scene_layer: Some(layer.clone()),
+        output: Some((layer.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[], &[], None))),
+        viewport: None,
+    }
+}
+
+/// A draw mode that tests against depth makes the scene keep its depth for
+/// the gizmo pass; On Top never does, so the default costs nothing.
+#[test]
+fn only_the_depth_testing_modes_keep_scene_depth() {
+    use crate::content_command::ContentCommand;
+    use manifold_compositor::generator_renderer::GeneratorRenderer;
+    use manifold_core::scene_surface::GizmoDrawMode;
+    let (mut thread, layer_id, _keep, state_tx) = scene_thread(64, 64);
+    let kept = |thread: &crate::content_thread::ContentThread| {
+        thread.engine.renderers().iter()
+            .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
+            .is_some_and(|generators| generators.gizmo_depth(&layer_id).is_some())
+    };
+    thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
+    for (mode, expected) in [(GizmoDrawMode::OnTop, false), (GizmoDrawMode::Occluded, true), (GizmoDrawMode::Ghost, true), (GizmoDrawMode::OnTop, false)] {
+        thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay(mode, &layer_id))));
+        for _ in 0..3 {
+            thread.tick_frame(&state_tx);
+        }
+        assert_eq!(kept(&thread), expected, "{mode:?}");
+    }
+}
+
+/// An export that includes gizmos draws the scene's chrome over the finished
+/// frame, in the draw mode set.
+#[test]
+fn an_export_draws_the_scene_chrome_in_the_set_draw_mode() {
+    use crate::content_command::ContentCommand;
+    use manifold_core::scene_surface::GizmoDrawMode;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
+    const SIZE: (u32, u32) = (320, 180);
+    let (mut thread, layer_id, _keep, state_tx) = scene_thread(SIZE.0, SIZE.1);
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
+        scene_layer: Some(layer_id.clone()),
+        ..Default::default()
+    })));
+    let previous = thread.content_pipeline.begin_export_gizmos();
+    assert!(previous.is_some(), "the Scene panel's scene is the one exported");
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+    let read = |thread: &crate::content_thread::ContentThread| {
+        let pipeline = &thread.content_pipeline;
+        readback_raw_halves(pipeline.native_device().expect("native device"), pipeline.export_output_texture(), SIZE.0, SIZE.1)
+    };
+    let changed = |a: &[u8], b: &[u8]| a.chunks_exact(8).zip(b.chunks_exact(8)).filter(|(x, y)| x != y).count();
+    let base = read(&thread);
+    thread.content_pipeline.draw_export_gizmos();
+    let on_top = changed(&base, &read(&thread));
+    eprintln!("export gizmos: On Top changed {on_top} px");
+    assert!(on_top > 100, "the export frame carries the scene's chrome ({on_top} px)");
+
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
+        mode: GizmoDrawMode::Occluded,
+        scene_layer: Some(layer_id.clone()),
+        ..Default::default()
+    })));
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+    let fresh = read(&thread);
+    thread.content_pipeline.draw_export_gizmos();
+    let occluded = changed(&fresh, &read(&thread));
+    eprintln!("export gizmos: Occluded changed {occluded} px");
+    assert!(occluded > 0 && occluded <= on_top, "Occluded draws the visible part ({occluded} of {on_top} px)");
+    thread.content_pipeline.end_export_gizmos(previous);
+}
+
+/// Mid-drag the handles and the object are one picture: the content thread
+/// builds the handle lines from the project it renders that frame, so the
+/// frame a move lands in already shows the handles on the moved object.
+/// Compared against the red panel's pixels in the frame itself, before the
+/// move and in the one frame after it; the handles moving by the object's
+/// shift is what a handle trailing the object by a frame would fail.
+#[test]
+fn a_frames_handles_sit_on_that_frames_object_while_it_moves() {
+    use crate::content_command::ContentCommand;
+    use manifold_core::scene_surface::GizmoDrawMode;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
+    use manifold_ui::panels::scene_setup_panel::SceneSelection;
+    const SIZE: (u32, u32) = (480, 270);
+    let scene = SCENE.replace(r#""distance":{"type":"Float","value":70.0}"#, r#""distance":{"type":"Float","value":12.0}"#);
+    assert_ne!(scene, SCENE, "the camera moves in close");
+    let (mut thread, layer_id, _keep, state_tx) = scene_thread_of(&scene, SIZE.0, SIZE.1);
+    thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
+        mode: GizmoDrawMode::OnTop,
+        scene_layer: Some(layer_id.clone()),
+        output: Some((layer_id.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[SceneSelection::Object(panel_object())], &[], None))),
+        viewport: None,
+    })));
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+
+    // Where the panel is in the frame (the centre of its red pixels) and
+    // where the frame's handles sit (their origin through the frame's camera).
+    let measure = |thread: &crate::content_thread::ContentThread| -> ((f32, f32), (f32, f32)) {
+        let pipeline = &thread.content_pipeline;
+        let halves = readback_raw_halves(pipeline.native_device().expect("native device"), pipeline.export_output_texture(), SIZE.0, SIZE.1);
+        let channel = |bytes: &[u8]| f16::from_le_bytes([bytes[0], bytes[1]]).to_f32();
+        let (mut sum, mut count) = ((0.0f64, 0.0f64), 0u32);
+        for (i, px) in halves.chunks_exact(8).enumerate() {
+            let (r, g, b) = (channel(&px[0..2]), channel(&px[2..4]), channel(&px[4..6]));
+            if r > 0.3 && g < 0.5 * r && b < 0.5 * r {
+                sum.0 += f64::from(i as u32 % SIZE.0);
+                sum.1 += f64::from(i as u32 / SIZE.0);
+                count += 1;
+            }
+        }
+        assert!(count > 200, "the panel shows in the frame ({count} red px)");
+        let object = ((sum.0 / f64::from(count)) as f32, (sum.1 / f64::from(count)) as f32);
+        let (origin, camera) = pipeline.output_gizmo_probe().expect("the frame carries handles for the selected panel");
+        let handle = camera.project_to_pixel(origin, SIZE.0, SIZE.1).expect("the handles are on screen");
+        (object, (handle.px, handle.py))
+    };
+    let (object_before, handle_before) = measure(&thread);
+    eprintln!("handles: object {object_before:?} handles {handle_before:?}");
+    assert!((object_before.0 - handle_before.0).abs() < 8.0 && (object_before.1 - handle_before.1).abs() < 8.0,
+        "at rest the handles sit on the panel: object {object_before:?}, handles {handle_before:?}");
+
+    // One move, then exactly one frame. The same frame must show both.
+    let def: EffectGraphDef = serde_json::from_str(&scene).expect("scene json");
+    let moved = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+        manifold_core::GraphTarget::Generator(layer_id.clone()),
+        7,
+        "pos_x".to_string(),
+        manifold_core::effect_graph_def::SerializedParamValue::Float { value: 3.0 },
+        def,
+    );
+    thread.handle_command(ContentCommand::Execute(Box::new(moved)));
+    thread.tick_frame(&state_tx);
+    let (object_after, handle_after) = measure(&thread);
+    eprintln!("handles: object {object_after:?} handles {handle_after:?}");
+    let shift = |after: (f32, f32), before: (f32, f32)| (after.0 - before.0, after.1 - before.1);
+    let (object_shift, handle_shift) = (shift(object_after, object_before), shift(handle_after, handle_before));
+    assert!(object_shift.0.abs() > 20.0, "the panel moved in the frame ({object_shift:?})");
+    assert!((object_shift.0 - handle_shift.0).abs() < 4.0 && (object_shift.1 - handle_shift.1).abs() < 4.0,
+        "the handles moved with the panel in the same frame: object moved {object_shift:?}, handles {handle_shift:?}");
+    assert!((object_after.0 - handle_after.0).abs() < 8.0 && (object_after.1 - handle_after.1).abs() < 8.0,
+        "after the move the handles still sit on the panel: object {object_after:?}, handles {handle_after:?}");
+}
+
+/// Both viewport hosts get their handles from the frame they draw on: the
+/// navigated output preview sits its handles on the panel the output does,
+/// and the graph editor's viewport on the shape it picked.
+#[test]
+fn each_viewport_host_gets_handles_built_from_its_own_frame() {
+    use crate::content_command::ContentCommand;
+    use crate::scene_viewport::{SceneViewportNavigation, ViewportHost};
+    use manifold_core::{GraphTarget, NodeId};
+    use manifold_core::scene_surface::GizmoDrawMode;
+    use manifold_ui::panels::scene_setup_panel::SceneSelection;
+    let (mut thread, layer_id, _keep, state_tx) = scene_thread(160, 90);
+    let bridge = std::sync::Arc::new(crate::shared_texture::SharedTextureBridge::new(160, 90));
+    let textures = {
+        let device = thread.content_pipeline.native_device().expect("native device");
+        std::array::from_fn(|slot| unsafe { bridge.import_texture_native(device, slot) })
+    };
+    thread.content_pipeline.set_scene_viewport_textures(textures, bridge);
+    let target = GraphTarget::Generator(layer_id.clone());
+    let scene = SceneVm::from_def(&serde_json::from_str::<EffectGraphDef>(SCENE).expect("scene json")).expect("a scene");
+    let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(panel_object())).expect("the panel's target");
+    let overlay = |viewport| crate::gizmo_overlay::GizmoOverlay {
+        mode: GizmoDrawMode::OnTop,
+        scene_layer: Some(layer_id.clone()),
+        output: Some((layer_id.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[SceneSelection::Object(panel_object())], &[], None))),
+        viewport: Some(viewport),
+    };
+    let request = |host| Some(SceneViewportNavigation::new(host, 160, 90).request(&target, &NodeId::new("scene"), None, None));
+    thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
+
+    thread.handle_command(ContentCommand::SetSceneViewport(request(ViewportHost::OutputPreview)));
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay((
+        ViewportHost::OutputPreview,
+        crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[SceneSelection::Object(panel_object())], &[], None),
+    )))));
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+    assert_eq!(thread.content_pipeline.viewport_gizmo_origin(), Some(panel.origin), "the navigated preview's handles sit on the panel");
+
+    thread.handle_command(ContentCommand::WatchGraphTarget(Some(target.clone())));
+    thread.handle_command(ContentCommand::SetGraphPreviewNode(Some(NodeId::new("scene"))));
+    thread.handle_command(ContentCommand::SetSceneViewport(request(ViewportHost::GraphEditor)));
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay((
+        ViewportHost::GraphEditor,
+        crate::gizmo_overlay::GizmoRequest::ids(GizmoMode::Move, std::slice::from_ref(&panel.id), None),
+    )))));
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+    assert_eq!(thread.content_pipeline.viewport_gizmo_origin(), Some(panel.origin), "the editor viewport's handles sit on the shape it picked");
 }

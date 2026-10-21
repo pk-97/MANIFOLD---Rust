@@ -36,7 +36,6 @@ const EXPECTED_STOCK_IDS: &[&str] = &[
     "OrderedRecon",
     "OrderedReconHit",
     "RadialForce",
-    "RenderMode",
     "SceneFog",
     "SceneLoop",
     "Shatter",
@@ -65,7 +64,6 @@ fn recipe_json(id: &str) -> &'static str {
             manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECONHIT_JSON
         }
         "RadialForce" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RADIALFORCE_JSON,
-        "RenderMode" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RENDERMODE_JSON,
         "SceneFog" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENEFOG_JSON,
         "SceneLoop" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENELOOP_JSON,
         "Shatter" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON,

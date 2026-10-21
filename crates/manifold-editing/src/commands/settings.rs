@@ -966,6 +966,34 @@ impl Command for ToggleSplitSectionsCommand {
     }
 }
 
+/// Toggle "include gizmos in the export". Shaped like
+/// `ToggleSplitSectionsCommand`.
+#[derive(Debug)]
+pub struct ToggleExportGizmosCommand {
+    old: bool,
+}
+
+impl ToggleExportGizmosCommand {
+    pub fn new(old: bool) -> Self {
+        Self { old }
+    }
+}
+
+impl Command for ToggleExportGizmosCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn do_execute(&mut self, project: &mut Project) {
+        project.settings.export_gizmos = !self.old;
+    }
+
+    fn do_undo(&mut self, project: &mut Project) {
+        project.settings.export_gizmos = self.old;
+    }
+
+    fn description(&self) -> &str {
+        "Toggle Include Gizmos in Export"
+    }
+}
+
 /// Change a layer's MIDI channel assignment.
 #[derive(Debug)]
 pub struct ChangeLayerMidiChannelCommand {

@@ -39,6 +39,11 @@ pub struct ProjectSettings {
     /// during the one-day `splitAtSectionMarkers` naming loading.
     #[serde(default, alias = "splitAtSectionMarkers")]
     pub split_at_markers: bool,
+    /// Draw the Scene panel's scene gizmos over the exported video, in the
+    /// draw mode the Scene panel has. Read into `ExportConfig.include_gizmos`
+    /// at export start.
+    #[serde(default)]
+    pub export_gizmos: bool,
 
     #[serde(default)]
     pub video_library_paths: Vec<String>,
@@ -166,6 +171,7 @@ impl Default for ProjectSettings {
             vsync_enabled: true,
             export_hdr: false,
             split_at_markers: false,
+            export_gizmos: false,
             video_library_paths: Vec::new(),
             video_player_pool_size: 10,
             max_layers: 8,

@@ -142,7 +142,8 @@
       "scene-colour-row-hex"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/panes.rs": [
-      "scene-two-panes"
+      "scene-two-panes",
+      "scene-header-draw-modes"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup-add-object",
@@ -191,8 +192,7 @@
       "scene-card-dof-switch",
       "scene-naming",
       "scene-pin-roundtrip",
-      "scene-card-to-tab",
-      "render-mode-solid"
+      "scene-card-to-tab"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
@@ -434,6 +434,7 @@
     "scene-setup-modifier-trigger": "gltfscene",
     "scene-preview-gizmo-drag": "gltfscene",
     "scene-skin": "gltfscene",
+    "scene-header-draw-modes": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",
     "toggle-lanes": "automation",
@@ -487,9 +488,6 @@
     "scene-physics-switch": "gltfscene",
     "scene-physics-duplicate-count": "gltfscene",
     "scene-imported-physics": "gltfscene",
-    "render-mode-solid": "gltfscene",
-    "render-mode-points": "gltfscene",
-    "render-mode-wireframe": "gltfscene",
     "gltf-import-card-sections": "gltfscene",
     "physics-box-count": "physicsboxes",
     "audio-clip-trigger-add": "inspector",

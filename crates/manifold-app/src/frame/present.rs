@@ -238,8 +238,8 @@ impl Application {
         let gizmos = self
             .ws
             .preview_gizmo
-            .compose(&self.local_project, &self.ws.ui_root.scene_setup_panel, &self.ui_edits.stamps.parts())
-            .map(|(lines, view)| crate::ui_frame::MainGizmos { lines, view, outline: self.selection_outline.as_ref().zip(outline_mask.as_ref()) });
+            .refresh(&self.local_project, &self.ws.ui_root.scene_setup_panel, &self.ui_edits.stamps.parts())
+            .then(|| crate::ui_frame::MainGizmos { outline: self.selection_outline.as_ref().zip(outline_mask.as_ref()) });
         if let (
             Some(cm),
             Some(ui),

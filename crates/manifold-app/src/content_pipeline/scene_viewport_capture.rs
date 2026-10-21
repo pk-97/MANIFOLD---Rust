@@ -34,6 +34,29 @@ pub(super) struct ViewportCopy {
     source: Option<manifold_gpu::GpuTexture>,
     target: manifold_gpu::GpuTexture,
     host: ViewportHost,
+    /// The camera the view rendered with, and the scene depth it kept for
+    /// the gizmo pass when a draw mode asked for it.
+    camera: manifold_node_engine::scene::camera::Camera,
+    depth: Option<manifold_gpu::GpuTexture>,
+    /// The frame as observed: its request (target, size, camera) and the
+    /// domains the solvers accepted, for the gizmo lines of this same frame.
+    frame: crate::scene_viewport::SceneViewportFrame,
+}
+
+#[cfg(target_os = "macos")]
+impl ViewportCopy {
+    /// Build this frame's gizmo lines from the project the frame rendered,
+    /// before the copy draws them. `output` is the output surface's frame,
+    /// whose lights and physics shapes the navigated output preview shows.
+    pub(super) fn compose_gizmos(
+        &self,
+        gizmos: &mut crate::gizmo_overlay::GizmoCapture,
+        project: Option<&manifold_core::project::Project>,
+        stamps: &manifold_core::change::PartStamps,
+        output: Option<&crate::physics_overlay::PhysicsOverlayFrame>,
+    ) {
+        gizmos.compose_viewport(project, stamps, &self.frame, output);
+    }
 }
 
 impl SceneViewportCapture {
@@ -68,7 +91,9 @@ impl SceneViewportCapture {
         }
         let status = generators.map_or(Err(SceneViewportHostError::MissingRuntime), |g| g.scene_viewport_status(layer));
         let texture = generators.and_then(|g| g.scene_viewport_texture(layer)).cloned();
-        self.record(request.clone(), slot, frame, status, texture)
+        let mut copy = self.record(request.clone(), slot, frame, status, texture)?;
+        copy.depth = crate::gizmo_overlay::GizmoCapture::viewport_depth(generators, Some(layer));
+        Some(copy)
     }
 
     /// The effect-scene counterpart of [`Self::observe_generator`].
@@ -96,8 +121,10 @@ impl SceneViewportCapture {
     ) -> Option<ViewportCopy> {
         let generation = self.bridge.as_ref().map_or(0, |bridge| bridge.generation());
         let host = request.host;
+        let camera = request.config.camera.to_camera();
         self.observations.record(slot, frame, generation, request, status);
-        Some(ViewportCopy { source: texture, target: self.textures[slot].clone()?, host })
+        let frame = self.observations.frames[slot].clone()?;
+        Some(ViewportCopy { source: texture, target: self.textures[slot].clone()?, host, camera, depth: None, frame })
     }
 
     /// The bridge takes the owning host's view size (D7a). Both sides
@@ -169,6 +196,9 @@ impl ContentPipeline {
         let mut pipelines = self.preview_pipelines();
         pipelines.plan = self.display_presentation_plan(display_destination(copy.host));
         Self::update_node_preview(enc, source, Some(target), false, Default::default(), &pipelines, self.preview_sampler.as_ref());
+        if let Some(device) = self.native_device.as_deref() {
+            self.gizmos.draw_viewport(device, enc, target, copy.host, copy.depth.as_ref(), &copy.camera);
+        }
     }
 }
 

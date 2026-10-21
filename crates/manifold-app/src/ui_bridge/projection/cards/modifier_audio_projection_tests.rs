@@ -284,7 +284,7 @@ use manifold_nodes_scene::node_graph::{scene_modifier_authoring::prepare_new_sce
 #[test]
 fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reorder() {
     let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
-    for preset in ["RenderMode", "SceneFog"] {
+    for preset in ["Wind", "SceneFog"] {
         let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new(preset),
         ).unwrap();
@@ -301,7 +301,7 @@ fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reord
     gp.graph = Some(graph.clone());
     gp.refresh_manifest_from_graph();
     // Match the reported collision: generator audio at full row 4,
-    // while Render Mode's local row 4 is Line Color R.
+    // while Wind's local row 4 is Turbulence.
     let prefix = (0..5).map(|i| {
         let mut spec = gp.params.iter().next().unwrap().spec.clone();
         spec.id = format!("host_{i}");
@@ -327,7 +327,7 @@ fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reord
     let vm = SceneVm::from_def(&graph).unwrap();
     let surfaces = modifier_surfaces(&gp, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     assert_eq!(surfaces.len(), 2);
-    assert_eq!(surfaces[0].rows[4].spec.name, "Line Color R");
+    assert_eq!(surfaces[0].rows[4].spec.name, "Turbulence");
     for surface in &surfaces {
         assert!(surface.rows.iter().all(|row| !row.audio.active),
             "generator audio must not appear on {}", surface.title);

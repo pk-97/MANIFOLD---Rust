@@ -19,6 +19,7 @@ impl Executor {
         } else {
             let Some(mut pass) = make() else { return false; };
             pass.set_selection_mask(&self.scene_viewport_selection);
+            pass.set_gizmo_depth(self.scene_viewport_gizmo_depth);
             self.scene_viewport = Some((node, config, pass));
         }
         self.scene_viewport_captured = false;
@@ -59,6 +60,23 @@ impl Executor {
         self.scene_viewport.as_ref()
             .filter(|_| self.scene_viewport_captured)
             .and_then(|(_, _, pass)| pass.selection_mask())
+    }
+
+    /// Whether the viewport's scene depth is kept for gizmo lines.
+    pub(crate) fn set_scene_viewport_gizmo_depth(&mut self, wanted: bool) {
+        if self.scene_viewport_gizmo_depth == wanted {
+            return;
+        }
+        self.scene_viewport_gizmo_depth = wanted;
+        if let Some((_, _, pass)) = self.scene_viewport.as_mut() {
+            pass.set_gizmo_depth(wanted);
+        }
+    }
+
+    pub(crate) fn scene_viewport_gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.scene_viewport.as_ref()
+            .filter(|_| self.scene_viewport_captured)
+            .and_then(|(_, _, pass)| pass.gizmo_depth())
     }
 
     pub(crate) fn scene_viewport_status(&self) -> Option<crate::runtime::frame_status::FrameRenderStatus> {

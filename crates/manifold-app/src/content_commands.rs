@@ -853,6 +853,12 @@ impl ContentThread {
             }
             #[cfg(not(target_os = "macos"))]
             ContentCommand::SetSelectionOutline { .. } => {}
+            #[cfg(target_os = "macos")]
+            ContentCommand::SetGizmoOverlay(overlay) => {
+                self.content_pipeline.set_gizmo_overlay(*overlay);
+            }
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::SetGizmoOverlay(_) => {}
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
             }

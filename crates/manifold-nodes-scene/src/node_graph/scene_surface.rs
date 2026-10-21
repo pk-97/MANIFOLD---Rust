@@ -505,6 +505,7 @@ fn mesh_modifier(type_id: &str, param: &str) -> Option<SceneParamFacts> {
 fn render_scene(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::RayTracing;
     Some(match param {
+        "render_mode" => setup(ControlGroup::RenderMode),
         "rt_enabled" | "temporal_upscale" | "rt_reflections" | "rt_shadows" | "rt_ao"
         | "rt_gi" => setup(RayTracing),
         "objects" | "lights" | "rt_firefly_clamp" | "rt_denoise_feed" => hidden(RayTracing),

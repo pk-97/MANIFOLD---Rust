@@ -309,7 +309,6 @@ pub enum SceneStageScope {
 pub enum SceneEndpoint {
     Camera,
     Atmosphere,
-    RenderMode,
     Transform,
     Instances,
     Vertices,

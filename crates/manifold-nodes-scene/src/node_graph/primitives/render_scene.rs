@@ -1096,6 +1096,12 @@ pub struct RenderScene {
     rendered_lights: Vec<[f32; 3]>,
     /// The selection mask the editor outlines (D-102).
     selection: selection_mask::SelectionMask,
+    /// The editor asked for this frame's scene depth (gizmo lines test
+    /// against it); resolved into `shaft_depth_internal` when `depth` is
+    /// unwired, copied there when it is wired.
+    gizmo_depth_wanted: bool,
+    /// This frame's depth resolve into `shaft_depth_internal` happened.
+    gizmo_depth_ready: bool,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -1993,6 +1999,14 @@ fn clay_material(render_mode: &manifold_node_engine::scene::render_mode::RenderM
     )
 }
 
+/// Solid in a scene with no environment: PBR needs an `envmap`, and without
+/// one the whole picture fell back to magenta. A sixteen-band cel material
+/// carries the same clay colour, lit by the scene's own lights, and needs
+/// nothing wired.
+fn clay_material_without_envmap(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> Material {
+    Material::cel(render_mode.clay_color, 16, 0.15, 1.0, [0.0; 3], 0.0)
+}
+
 /// D6: the color pass draws `Lines` under wireframe, `Fill` otherwise.
 /// The depth prepass and shadow passes never read this — they force
 /// `Fill` in the encoder (INV-R3).
@@ -2469,6 +2483,10 @@ impl EffectNode for RenderScene {
 
     fn set_selection_mask(&mut self, slots: &[u32]) { self.selection.set(slots); }
     fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> { self.selection.texture() }
+    fn set_gizmo_depth(&mut self, wanted: bool) { self.gizmo_depth_wanted = wanted; }
+    fn gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
+        if self.gizmo_depth_ready { self.shaft_depth_internal.as_ref() } else { None }
+    }
 
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
@@ -2638,6 +2656,7 @@ impl EffectNode for RenderScene {
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         self.selection.drawn = false;
+        self.gizmo_depth_ready = false;
         self.rendered_camera = None;
         self.render_objects(ctx, None);
     }

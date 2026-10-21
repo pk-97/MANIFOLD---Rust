@@ -52,7 +52,7 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 
 /// Number of control rows under the existing Settings section. Kept in lockstep
 /// with `build_rows` so `body_height` matches the imperative layout.
-const ROW_COUNT: f32 = 8.0;
+const ROW_COUNT: f32 = 9.0;
 
 pub struct SettingsPopup {
     open: bool,
@@ -70,6 +70,7 @@ pub struct SettingsPopup {
     sdr_preview: bool,
     hdr_on: bool,
     split_sections: bool,
+    export_gizmos: bool,
     sim_rate: SimRate,
     sim_rate_drag: SliderDragState,
 
@@ -100,6 +101,7 @@ impl SettingsPopup {
             sdr_preview: false,
             hdr_on: false,
             split_sections: false,
+            export_gizmos: false,
             sim_rate: SimRate::default(),
             sim_rate_drag: SliderDragState::with_range(0.0, 3.0, true),
             last_placement: None,
@@ -155,6 +157,9 @@ impl SettingsPopup {
     pub fn set_split_sections(&mut self, on: bool) {
         self.split_sections = on;
     }
+    pub fn set_export_gizmos(&mut self, on: bool) {
+        self.export_gizmos = on;
+    }
 
     pub fn sync_sim_rate(&mut self, tree: &mut UITree, rate: SimRate) {
         self.sim_rate = rate;
@@ -209,7 +214,7 @@ impl SettingsPopup {
                             .key(KEY_CLOSE),
                     ),
             )
-            .child(View::spacer().h(Sizing::Fixed(SECTION_GAP + SECTION_H + 7.0 * (ROW_H + ROW_GAP))))
+            .child(View::spacer().h(Sizing::Fixed(SECTION_GAP + SECTION_H + (ROW_COUNT - 1.0) * (ROW_H + ROW_GAP))))
             .child(View::slider_row(SliderSpec {
                 label: Some("Sim Rate".into()),
                 value: SimRate::ALL.iter().position(|rate| *rate == self.sim_rate).expect("rate choice") as f32 / 3.0,
@@ -367,6 +372,21 @@ impl SettingsPopup {
             if self.split_sections { "On" } else { "Off" },
         );
         self.actions.push((split_id, PanelAction::Project(ProjectAction::ToggleSplitSections)));
+        cy += ROW_H + ROW_GAP;
+
+        // Include the Scene panel's gizmos in the exported video, in the draw
+        // mode the Scene panel has. Off by default.
+        self.row_label(tree, inner_x, cy, "Gizmos in Export");
+        let gizmos_id = tree.add_button(
+            Some(self.bg_id),
+            ctrl_x,
+            cy,
+            ctrl_w,
+            ROW_H,
+            toggle_style(self.export_gizmos),
+            if self.export_gizmos { "On" } else { "Off" },
+        );
+        self.actions.push((gizmos_id, PanelAction::Project(ProjectAction::ToggleExportGizmos)));
         cy += ROW_H + ROW_GAP;
 
         // RT Quality… opens the floating RT tier panel (RT_QUALITY_SETTINGS_DESIGN.md).
