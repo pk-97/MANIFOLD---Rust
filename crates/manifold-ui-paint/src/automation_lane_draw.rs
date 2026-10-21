@@ -1,7 +1,7 @@
 //! Automation geometry and interaction feedback share the UI hit-test contract.
 use crate::ui_renderer::UIRenderer;
 use manifold_ui::automation_hit_tester::AutomationOperation;
-use manifold_ui::bitmap_renderer::timing_grid_lines;
+use manifold_ui::timing_grid::timing_grid_lines;
 use manifold_ui::node::{Color32, FontWeight, Rect};
 use manifold_ui::text::TextMeasure;
 use manifold_ui::panels::param_slider_shared::ParamValueText;

@@ -473,13 +473,9 @@ impl TimelineViewportPanel {
             self.track_bg_groups.push(TrackBgGroup { bg_id, separator_id });
         }
 
-        // Top separator is painted into the first layer's bitmap (not a UITree node)
-        // because the layer bitmap textures render on top of UITree panels in a later
-        // GPU pass, covering any UITree-based separator.
+        // The top separator and the grid lines are GPU lines in the grid pass
+        // (`timeline_grid_draw`), not UITree nodes.
     }
-
-    // build_grid_lines: REMOVED — grid lines are now painted into per-layer bitmaps
-    // by LayerBitmapRenderer.paint_grid_lines() (matching Unity exactly).
 
     /// The ruler draws from one fixed pool of MAX_RULER_TICKS slots, a tick
     /// and its label each, so a scroll or zoom lays it out in place whatever
@@ -517,7 +513,7 @@ impl TimelineViewportPanel {
         let (min_beat, max_beat) = self.visible_beat_range();
         let bpb = self.beats_per_bar as f32;
         let ppb = self.mapper.pixels_per_beat();
-        let grid_policy = crate::bitmap_renderer::timing_grid_policy(ppb, bpb);
+        let grid_policy = crate::timing_grid::timing_grid_policy(ppb, bpb);
 
         // ── Tick step (controls which tick marks appear) ──
         let tick_step = if !grid_policy.show_beat_lines && grid_policy.subdivisions_per_beat == 1 {
@@ -639,12 +635,6 @@ impl TimelineViewportPanel {
         tree.set_style(label, Self::ruler_label_style(false));
     }
 
-    // build_clips: REMOVED — clips are now painted into per-layer bitmaps
-    // by LayerBitmapRenderer (matching Unity's LayerBitmapPainter.DrawClip exactly).
-
-    // build_selection_region: REMOVED — selection region is now painted into
-    // per-layer bitmaps by LayerBitmapRenderer (matching Unity exactly).
-
     pub(super) fn build_export_markers(&mut self, tree: &mut UITree) {
         // Always pre-allocate all 3 export marker nodes for update-in-place.
         // Use set_visible(false) when not needed.
@@ -718,8 +708,8 @@ impl TimelineViewportPanel {
         }
     }
 
-    /// Build insert cursor ruler marker only. Track-area cursor is painted
-    /// into the per-layer bitmap by LayerBitmapRenderer.
+    /// Build insert cursor ruler marker only. The track-area cursor is a GPU
+    /// rect in the overlay pass.
     pub(super) fn build_insert_cursor_ruler(&mut self, tree: &mut UITree) {
         let px = self.beat_to_pixel(self.insert_cursor_beat);
         let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();

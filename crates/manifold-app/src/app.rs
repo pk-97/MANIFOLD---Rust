@@ -313,7 +313,7 @@ pub struct Application {
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_ui_paint::ui_cache_manager::UICacheManager>,
     /// GPU-completion fence shared by every UI immediate-draw vertex ring
-    /// (`ui_renderer`, `layer_bitmap_gpu`, `clip_content_gpu`,
+    /// (`ui_renderer`, `panel_bitmap_gpu`, `clip_content_gpu`,
     /// `clip_thumb_gpu`) — gates ring-slot reuse against in-flight command
     /// buffers so a GPU backlog (e.g. heavy GLB scene renders) can't let a
     /// later frame overwrite a slot an earlier, still-queued frame is about
@@ -325,12 +325,10 @@ pub struct Application {
     /// because `ui_frame_fence.lag()` is too high). Rate-limits the
     /// `[frame-fence]` skip log the same way ring-owner stall logging does.
     pub(crate) ui_frame_fence_skip_events: u64,
-    /// Per-layer grid bitmaps (grid lines + top separator) plus the lane / stem /
-    /// overview / collapsed-group bitmaps — all drawn around the GPU clip passes.
-    /// The grid (per-layer indices) draws BEFORE the clips so opaque bodies occlude
-    /// it; the panels (1000/1001/1002/2000+) are separate regions whose z-order vs
-    /// clips is moot. One instance since section 24 5b retired the per-layer "front" buffer.
-    pub(crate) layer_bitmap_gpu: Option<manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu>,
+    /// The overview / collapsed-group / LED-band bitmaps (indices 1002, 1003,
+    /// 2000+), drawn after the GPU clip passes. The track grid is not here: it is
+    /// GPU lines in the frame pass.
+    pub(crate) panel_bitmap_gpu: Option<manifold_ui_paint::panel_bitmap_gpu::PanelBitmapGpu>,
     /// Per-clip waveform textures, drawn INSIDE the audio-clip bodies after the
     /// body pass (section 24 5b) — the waveform is part of the clip on the GPU, no longer
     /// a layer-wide CPU bitmap laid over the bodies.
@@ -671,7 +669,7 @@ impl Application {
             ui_cache_manager: None,
             ui_frame_fence: None,
             ui_frame_fence_skip_events: 0,
-            layer_bitmap_gpu: None,
+            panel_bitmap_gpu: None,
             clip_content_gpu: None,
             clip_rect_scratch: Vec::new(),
             clip_body_scratch: Vec::new(),
@@ -1389,10 +1387,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 scale,
             ));
 
-            // Layer grid bitmaps + lane/stem/overview/group panels (one instance),
+            // Overview/group/LED panel bitmaps (one instance),
             // and per-clip waveform textures, drawn around the GPU clip passes
             // (section 24 5b).
-            self.layer_bitmap_gpu = Some(manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu::new(
+            self.panel_bitmap_gpu = Some(manifold_ui_paint::panel_bitmap_gpu::PanelBitmapGpu::new(
                 &native_device,
                 manifold_compositor::presentation::UI_FORMAT,
             ));
@@ -1414,9 +1412,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 .as_mut()
                 .expect("ui_renderer just constructed above")
                 .set_frame_fence(ui_frame_fence.clone());
-            self.layer_bitmap_gpu
+            self.panel_bitmap_gpu
                 .as_mut()
-                .expect("layer_bitmap_gpu just constructed above")
+                .expect("panel_bitmap_gpu just constructed above")
                 .set_frame_fence(ui_frame_fence.clone());
             self.clip_content_gpu
                 .as_mut()
@@ -2392,7 +2390,7 @@ impl Drop for Application {
         {
             self.ui_preview_textures = [None, None, None];
         }
-        self.layer_bitmap_gpu = None;
+        self.panel_bitmap_gpu = None;
         self.clip_content_gpu = None;
         self.clip_thumb_gpu = None;
         self.ui_renderer = None;
