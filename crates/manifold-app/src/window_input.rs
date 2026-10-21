@@ -75,6 +75,8 @@ pub(crate) fn native_timeline_cursor(cursor: TimelineCursor) -> winit::window::C
         TimelineCursor::Move => winit::window::CursorIcon::Move,
         TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
         TimelineCursor::Bend => winit::window::CursorIcon::Grab,
+        TimelineCursor::Grabbing => winit::window::CursorIcon::Grabbing,
+        TimelineCursor::Pointer => winit::window::CursorIcon::Pointer,
     }
 }
 

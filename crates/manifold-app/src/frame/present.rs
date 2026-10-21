@@ -657,7 +657,7 @@ impl Application {
         }
         if had_automation_feedback || self.selection.automation_feedback.is_some() {
             self.cursor_manager.set(self.selection.automation_feedback.as_ref()
-                .map_or(manifold_ui::cursors::TimelineCursor::Default, |f| f.operation.into()));
+                .map_or(manifold_ui::cursors::TimelineCursor::Default, manifold_ui::cursors::TimelineCursor::from));
             if self.cursor_manager.needs_update()
                 && let Some(ws) = self.window_registry.get(&window_id)
             {
