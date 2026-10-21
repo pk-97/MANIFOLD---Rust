@@ -1223,7 +1223,9 @@ impl RowHost {
             spec.is_angle,
             spec.value_labels.as_deref(),
             spec.unit,
-            super::state::CARD_VALUE_CHARS,
+            tree.measurer(),
+            super::FONT_SIZE,
+            super::state::CARD_VALUE_TEXT_W,
         );
         crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), text);
         crate::slider::BitmapSlider::mark_past_end(tree, ids, super::state::past_slider_end(value, spec));
