@@ -1,6 +1,6 @@
 # UI Invalidation — work runs only when its inputs change
 
-**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P6 built. Owed: P7a (section 7 (Phasing), drag previews touch only the dragged items); the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
+**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P7a built. Owed: the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -774,6 +774,8 @@ New CPU tests: a clip drag on a 500-clip project updates one entry and leaves
 the other 499 bit-identical; a lane drag with three lanes rebuilds one screen.
 Negative: `rg 'ClipPreview\)' crates/manifold-app/src/ui_frame.rs` shows no
 call into `sync_clip_positions`.
+
+- **As built (lane/drag-preview-inplace):** `apply_frame_plan` takes the `UiEdits` and hands it to `between`, so the projection pass reads the `GesturePreview`. A clip preview runs `project_clip_preview` (`projection/preview.rs`): each recorded clip's start, duration, in-point and layer go into its entry through `TimelineViewportPanel::preview_clip_mut`; a layer change moves the entry (`move_clip_to_layer`, `swap_remove`, so bucket order is free) and recomputes its colour, flags and, for audio, its breakpoints (`audio_waveform_breakpoints_into`). A lane preview runs `project_lane_preview`: `update_automation_lane` refills the lane's points (`preview_lane_points_into`, the same translation the full path uses) and rebuilds that one lane screen through `fill_lane_geometry`, the code `rebuild_automation_lane_screens` also runs (both in `viewport/lane_screens.rs`). The whole projections run on commit, cancel, snapshot acceptance, and when the in-place path declines: a project clip count that differs from the viewport's (a region-move split), a clip or lane the viewport does not hold, or a placeholder lane. `clip_drag` no longer re-projects every frame; it runs the in-place write, which does nothing when nothing differs. Counts (before to after, per flow window): `work-clip-drag` ClipProjection 120 to 3, FrameAlloc 6778 to 2994, ClipPreviewUpdate 32; `work-clip-trim` 61 to 3, 4690 to 2612, 27; `work-region-move` 61 to 2, 3691 to 1875, 32; `work-marquee` 62 to 3, 4781 to 2706, 59; `work-automation-point-drag` LaneProjection 64 to 7, FrameAlloc 4251 to 2814, LanePreviewUpdate 57 (the flow is green and out of the known-red list). The remaining ClipProjection and LaneProjection are the press and commit syncs.
 
 After P6: the structural-sharing design (section 9, BUG-qzea6 (design structural sharing of project parts)).
 

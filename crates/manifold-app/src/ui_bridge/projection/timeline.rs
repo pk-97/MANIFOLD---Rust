@@ -483,7 +483,7 @@ fn resolution_label(width: i32, height: i32) -> Option<String> {
 /// otherwise the owning layer's colour. Alpha is supplied by the caller — the
 /// two clip-sync paths use different clip alphas. Shared so both resolve the
 /// override identically.
-fn clip_base_color(
+pub(super) fn clip_base_color(
     layer: &manifold_core::layer::Layer,
     clip: &manifold_core::clip::TimelineClip,
     alpha: f32,
@@ -607,18 +607,31 @@ fn audio_waveform_breakpoints(
     clip: &manifold_core::clip::TimelineClip,
     project: &Project,
 ) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    audio_waveform_breakpoints_into(clip, project, &mut out);
+    out
+}
+
+/// [`audio_waveform_breakpoints`] over a caller's buffer, which it clears
+/// first: a drag preview rewrites an audio clip's breakpoints without allocating.
+pub(super) fn audio_waveform_breakpoints_into(
+    clip: &manifold_core::clip::TimelineClip,
+    project: &Project,
+    breakpoints: &mut Vec<(f32, f32)>,
+) {
+    breakpoints.clear();
     if !clip.is_audio() {
-        return Vec::new();
+        return;
     }
     let duration_beats = clip.duration_beats.as_f32();
     if duration_beats <= 0.0 {
-        return Vec::new();
+        return;
     }
 
     let start_beat = clip.start_beat;
     let end_beat = clip.end_beat();
     let clock = project.source_clock();
-    let mut breakpoints = vec![(0.0, clock.source_position(clip, start_beat).as_f32())];
+    breakpoints.push((0.0, clock.source_position(clip, start_beat).as_f32()));
     if clip.recorded_bpm_resolved() <= 0.0 {
         for point in project.tempo_map.points() {
             if point.beat > start_beat && point.beat < end_beat {
@@ -631,7 +644,6 @@ fn audio_waveform_breakpoints(
         breakpoints.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
     breakpoints.push((1.0, clock.source_position(clip, end_beat).as_f32()));
-    breakpoints
 }
 
 #[cfg(test)]

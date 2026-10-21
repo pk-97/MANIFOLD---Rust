@@ -356,6 +356,7 @@
     "work-automation-hover": "automation",
     "work-clip-drag": "timeline",
     "work-clip-trim": "timeline",
+    "work-automation-point-drag": "automation",
     "work-marquee": "timeline",
     "work-region-move": "timeline",
     "work-split-drag": "timeline",
@@ -514,11 +515,6 @@
       "scene": "inspector",
       "bug": "BUG-rqsaa",
       "reason": "FrameAlloc 25 over the 24 ceiling; red from the 2026-10-17 nightly, the same range as work-slider-grab. Not bisected."
-    },
-    "work-automation-point-drag": {
-      "scene": "automation",
-      "bug": "BUG-rqsaa",
-      "reason": "FrameAlloc 4285 over the 4251 ceiling; already red in the 2026-10-16 nightly at 8743ad871, before 9b8086df6, so a separate cause. Not bisected."
     },
     "work-lane-resize": {
       "scene": "automation",
