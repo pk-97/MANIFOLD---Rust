@@ -36,9 +36,11 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ParamTriple, SceneShape};
 use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
-use crate::node_graph::scene_vm::{FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, ShapeOwner, ShapeParamVm, ShapeWrite};
+use crate::node_graph::scene_vm::{
+    FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
+};
 use crate::node_graph::viewport_overlay::{
-    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, fluid_domain_lines, fluid_lattice_lines, grid_lines, light_billboard_lines,
+    PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines, fluid_domain_lines, fluid_lattice_lines, grid_lines, light_billboard_lines,
     physics_gizmo_lines,
 };
 
@@ -63,6 +65,8 @@ const Z_COLOR: [u8; 4] = [90, 140, 235, 255];
 const UNIFORM_COLOR: [u8; 4] = [235, 235, 235, 255];
 const DIRECTION_COLOR: [u8; 4] = [240, 200, 80, 255];
 const LOCKED_COLOR: [u8; 4] = [130, 130, 130, 255];
+/// The outline of a setup shape that does not fit its domain.
+const PROBLEM_COLOR: [u8; 4] = [255, 50, 50, 255];
 /// Handle alpha while an effect after the scene layer moves the picture
 /// off the scene (D-69).
 pub const FADED_HANDLE_ALPHA: u8 = 80;
@@ -489,7 +493,14 @@ pub struct GizmoChrome<'a> {
     pub view: GizmoView,
     pub lights: &'a [[f32; 3]],
     pub domains: &'a [(NodeId, FluidDomainSnapshot)],
+    /// The live column box of `domains[i]` when the host carries it apart
+    /// from the snapshot (so a moving column re-shares nothing); empty
+    /// otherwise.
+    pub live_columns: &'a [Option<([f32; 3], [f32; 3])>],
     pub physics: &'a [PhysicsGizmo],
+    /// The scene's setup check: each shape that does not fit its domain
+    /// draws a red box.
+    pub problems: &'a [SetupProblem],
     pub selected: Option<&'a GizmoTarget>,
     pub mode: GizmoMode,
     /// An effect after the scene layer moves the picture off the scene, so
@@ -499,7 +510,8 @@ pub struct GizmoChrome<'a> {
 
 /// Every line a host draws for one frame, into `out` (cleared first): the
 /// ground grid, a marker per light, a box per accepted liquid domain, each
-/// solver-reported physics shape, then the selected shape's handles. The
+/// solver-reported physics shape, a red box on every shape the setup check
+/// finds outside its domain, then the selected shape's handles. The
 /// one composition entry every host calls.
 pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     out.clear();
@@ -535,6 +547,9 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     for gizmo in chrome.physics {
         let count = physics_gizmo_lines(gizmo, &mut shape);
         out.extend_from_slice(&shape[..count]);
+    }
+    for (lo, hi) in chrome.problems.iter().filter_map(|problem| problem.live_bounds(chrome.domains, chrome.live_columns)) {
+        out.extend(box_lines(lo, hi, PROBLEM_COLOR));
     }
     if let Some(target) = chrome.selected {
         let start = out.len();

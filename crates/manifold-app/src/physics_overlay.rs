@@ -27,6 +27,30 @@ use crate::scene_gizmo::{GizmoGesture, GizmoPress, GizmoView};
 use crate::ui_bridge::DispatchCtx;
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
+pub(crate) type SharedDomains = Arc<Domains>;
+
+/// How many domains a frame carries the live column box of beside the shared
+/// snapshots. A domain past these keeps its box in its snapshot, so a driven
+/// clipped column there re-shares the snapshots as it moves.
+pub(crate) const LIVE_COLUMNS: usize = 8;
+/// The live column box of each of a frame's first [`LIVE_COLUMNS`] domains,
+/// in domain order: `FluidDomainSnapshot::column_box`, moved out of the
+/// snapshot so a driven column moving every frame re-allocates nothing.
+pub(crate) type LiveColumns = [Option<([f32; 3], [f32; 3])>; LIVE_COLUMNS];
+
+/// Publish this frame's domain snapshots: the live column boxes move out of
+/// `scratch` into the returned slots, and `shared` is re-allocated only when
+/// what is left changes (readiness, layout, fit, refusal).
+pub(crate) fn share_domains(scratch: &mut [(NodeId, FluidDomainSnapshot)], shared: &mut SharedDomains) -> LiveColumns {
+    let mut live = [None; LIVE_COLUMNS];
+    for ((_, snapshot), slot) in scratch.iter_mut().zip(&mut live) {
+        *slot = snapshot.column_box.take();
+    }
+    if &*scratch != shared.as_ref() {
+        *shared = Arc::from(&*scratch);
+    }
+    live
+}
 type Lights = [[f32; 3]];
 type Gizmos = [PhysicsGizmo];
 
@@ -46,6 +70,7 @@ pub(crate) struct PhysicsOverlayFrame {
     pub scene_node: NodeId,
     pub camera: Camera,
     pub domains: Arc<Domains>,
+    pub live_columns: LiveColumns,
     pub lights: Arc<Lights>,
     /// Forces, colliders, bodies, sources, drains and the fill, as the
     /// simulation used them.
@@ -86,6 +111,9 @@ pub(crate) struct PreviewGizmo {
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, Option<GizmoTarget>, bool)>,
     lines: Vec<WorldLine>,
+    /// The shown scene's setup problems with what the shown frame's solvers
+    /// reported, for the red boxes.
+    problems: crate::setup_check::GizmoProblems,
     /// Render slots of the selected object, for its outline (D-102); empty
     /// while an effect moves the picture off the scene.
     outline: Vec<u32>,
@@ -184,11 +212,14 @@ impl PreviewGizmo {
         }
         let (selected, fade_handles) = self.target.as_ref().map_or((None, false), |(_, target, fade)| (target.as_ref(), *fade));
         let (frame, _) = self.shown.as_ref()?;
+        self.problems.update(self.target.as_ref().map(|(key, ..)| &key.0), Some(&frame.domains));
         let chrome = GizmoChrome {
             view,
             lights: &frame.lights,
             domains: &frame.domains,
+            live_columns: &frame.live_columns,
             physics: &frame.gizmos,
+            problems: self.problems.problems(),
             selected,
             mode: self.mode,
             fade_handles,
@@ -425,9 +456,7 @@ impl PhysicsOverlayObservations {
         self.light_scratch.clear();
         self.gizmo_scratch.clear();
         let Some((scene_node, camera)) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
-        if self.domain_scratch.as_slice() != self.domains.as_ref() {
-            self.domains = Arc::from(self.domain_scratch.as_slice());
-        }
+        let live_columns = share_domains(&mut self.domain_scratch, &mut self.domains);
         if self.light_scratch.as_slice() != self.lights.as_ref() {
             self.lights = Arc::from(self.light_scratch.as_slice());
         }
@@ -440,6 +469,7 @@ impl PhysicsOverlayObservations {
             scene_node,
             camera,
             domains: self.domains.clone(),
+            live_columns,
             lights: self.lights.clone(),
             gizmos: self.gizmos.clone(),
             outline: None,
@@ -515,6 +545,47 @@ mod tests {
         assert_eq!(first.as_ref(), [collider, wind]);
         observations.record(1, 2, |_, _, _, gizmos| observe(gizmos));
         assert!(Arc::ptr_eq(&first, &observations.frames[1].as_ref().unwrap().gizmos));
+    }
+
+    /// A driven column clipped by a wall moves its box every frame; the box
+    /// rides the frame's live slots and the shared snapshots stay put, so
+    /// neither a steady nor a moving frame re-allocates them.
+    #[test]
+    fn a_moving_clipped_column_shares_the_domain_snapshots() {
+        use manifold_core::fluid_domain::FluidDomainState;
+        use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
+        let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped };
+        let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
+        let snapshot = |column_box, fit| FluidDomainSnapshot {
+            epoch: 1,
+            state: FluidDomainState::Ready,
+            accepted_layout: None,
+            fit,
+            column_box,
+            refusal: None,
+        };
+        let mut observations = PhysicsOverlayObservations::default();
+        observations.set_layer(Some(LayerId::new("water")));
+        let mut record = |frame: u64, column_box, fit| {
+            let slot = frame as usize % observations.frames.len();
+            observations.record(slot, frame, |_, domains, _, _| {
+                domains.push((NodeId::new("water"), snapshot(column_box, fit)));
+                Some((NodeId::new("scene"), Camera::default_perspective()))
+            });
+            observations.frames[slot].clone().unwrap()
+        };
+        let first = record(0, at(1.5), clipped);
+        let shared = (first.domains.as_ptr(), first.domains.len());
+        assert_eq!(first.live_columns[0], at(1.5));
+        assert_eq!(first.domains[0].1.column_box, None, "the live box is not part of the shared snapshot");
+        for frame in 1..120 {
+            let x = 1.5 + frame as f32 * 0.01;
+            let moving = record(frame, at(x), clipped);
+            assert_eq!((moving.domains.as_ptr(), moving.domains.len()), shared, "frame {frame} re-shared the snapshots");
+            assert_eq!(moving.live_columns[0], at(x), "the frame carries where the column is now");
+        }
+        let fitting = record(120, None, SetupFit::default());
+        assert_ne!(fitting.domains.as_ptr(), shared.0, "a new fit is a new snapshot");
     }
 
     #[test]

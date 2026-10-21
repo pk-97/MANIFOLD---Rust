@@ -338,6 +338,11 @@ pub(crate) struct FrameInputs {
     /// (`PreviewNavigation::frame_input`): a navigated frame, or the end of
     /// navigation, redraws the preview.
     pub preview_navigation: (u64, u64),
+    /// The problem list the active layer's card and the Scene panel's card
+    /// show (`setup_check::CardCheck`): a warning appearing, changing or
+    /// clearing moves it, whether an edit or a solver's live cap did it; a
+    /// scrub that leaves the list alone does not.
+    pub setup_check: u64,
 }
 
 impl FrameInputs {
@@ -575,6 +580,7 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         // outliner item, and takes a queued row reveal.
         || last.scene_selection != next.scene_selection
         || last.inspector_reveal != next.inspector_reveal
+        || last.setup_check != next.setup_check
         || runtime.automation_latches != last.runtime.automation_latches
         || runtime.led_preview_presence != last.runtime.led_preview_presence
         || runtime.chain_failures != last.runtime.chain_failures
@@ -845,6 +851,8 @@ pub(crate) struct FramePlanner {
     active_layer_seen: Option<manifold_core::LayerId>,
     active_layer_version: u64,
     chrome_text: ChromeText,
+    /// The cards' setup-check list, kept between frames for its input.
+    pub setup_check: crate::setup_check::CardCheck,
 }
 
 impl FramePlanner {
@@ -1500,6 +1508,18 @@ mod tests {
         assert!(runs(&plan(next), Projection::ProjectSync));
         let mut next = base();
         next.inspector_reveal = 1;
+        let p = plan(next);
+        assert!(runs(&p, Projection::InspectorSync));
+        assert!(!runs(&p, Projection::ProjectSync));
+        assert!(p.rebuild.contains(MainRegion::Inspector));
+    }
+
+    #[test]
+    fn row_setup_check() {
+        // A shape entering or leaving its domain re-projects the cards that
+        // carry the warning line, whatever else is still.
+        let mut next = base();
+        next.setup_check = 5;
         let p = plan(next);
         assert!(runs(&p, Projection::InspectorSync));
         assert!(!runs(&p, Projection::ProjectSync));

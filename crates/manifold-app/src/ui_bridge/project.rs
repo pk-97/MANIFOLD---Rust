@@ -1336,6 +1336,7 @@ mod tests {
     mod water_family_draw;
     mod water_family_expansion;
     mod water_family_sources;
+    mod setup_check;
     mod physics_reload;
     mod typed_write;
 

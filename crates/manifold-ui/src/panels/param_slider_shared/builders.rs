@@ -1941,7 +1941,7 @@ pub(crate) fn build_button_row(
     // there.
     let pid: &str = &info.id;
     tree.set_name(button_id, format!("param_row.{pid}"));
-    let cy = build_inactive_reason(tree, parent, x, cy, slider_w, info);
+    let cy = build_note_lines(tree, parent, x, cy, slider_w, info);
 
     ToggleTriggerRowIds {
         label_id: Some(label_id),
@@ -2476,19 +2476,28 @@ pub(crate) fn build_param_row(
         cy += DRAWER_BOTTOM_GAP;
     }
 
-    ids.new_cy = build_inactive_reason(tree, parent, x, cy, row_right - x, info);
+    ids.new_cy = build_note_lines(tree, parent, x, cy, row_right - x, info);
     ids
 }
 
-fn build_inactive_reason(
-    tree: &mut UITree, parent: Option<NodeId>, x: f32, cy: f32, width: f32, info: &ParamRow,
+/// The lines under a row: its setup warning, then the dimmed reason it does
+/// nothing right now. Returns the next row's top.
+fn build_note_lines(
+    tree: &mut UITree, parent: Option<NodeId>, x: f32, mut cy: f32, width: f32, info: &ParamRow,
 ) -> f32 {
-    let Some(reason) = info.spec.inactive_reason.as_deref() else { return cy };
-    tree.add_label(parent, x, cy, width, ROW_HEIGHT, reason, UIStyle {
-        text_color: color::TEXT_DIMMED_C32,
-        font_size: color::FONT_CAPTION,
-        text_align: TextAlign::Left,
-        ..UIStyle::default()
-    });
-    cy + ROW_HEIGHT + ROW_SPACING
+    let lines = [
+        (info.spec.setup_warning.as_deref(), color::STATUS_BAD),
+        (info.spec.inactive_reason.as_deref(), color::TEXT_DIMMED_C32),
+    ];
+    for (text, text_color) in lines {
+        let Some(text) = text else { continue };
+        tree.add_label(parent, x, cy, width, ROW_HEIGHT, text, UIStyle {
+            text_color,
+            font_size: color::FONT_CAPTION,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        });
+        cy += ROW_HEIGHT + ROW_SPACING;
+    }
+    cy
 }

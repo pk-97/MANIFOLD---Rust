@@ -1519,6 +1519,12 @@ fn gpu_flip_liquid_fill_places_pool_then_box() {
         assert!((g.position_radius[3] - 0.31017524 * H).abs() < 1e-6);
         assert_eq!((g.velocity, g.id), ([0.0; 3], i as u32 + 1), "particle {i}");
     }
+    // The domain run that sites a fill past its 4 m top reports it capped:
+    // the report the cards' setup check reads (SCENE_SETUP_PROGRAMME.md B3).
+    let mut domain = super::gpu_flip_domain::GpuFlipDomain::new();
+    let _ = harness.run(&mut domain, &[], &[], &params(&[("fill_height", 9.0), ("resolution", 8.0)]));
+    let snapshot = manifold_water_rigid::node::PhysicsNode::fluid_domain_snapshot(&domain).expect("a snapshot");
+    assert!(snapshot.fit.fill_capped, "{snapshot:?}");
 }
 
 // ── Solids ─────────────────────────────────────────────────────────────────

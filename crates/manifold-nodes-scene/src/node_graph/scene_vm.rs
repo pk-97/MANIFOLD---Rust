@@ -53,6 +53,8 @@ mod liquid;
 use liquid::locate_node;
 use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
+mod setup_check;
+pub use setup_check::{RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, problems_with_runtime};
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;
@@ -108,7 +110,7 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
 const TRANSFORM_MODIFIER_TYPE_IDS: &[&str] = &["node.transform_shake"];
 /// A write address for one editable value: the exact addressing
 /// `SetGraphNodeParamCommand::with_scope` takes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParamAddr {
     pub scope_path: Vec<u32>,
     pub node_doc_id: u32,
@@ -148,6 +150,15 @@ pub struct SceneVm {
     /// Every declared shape: objects, liquid domains, their fluid role
     /// sources and forces. Gizmo targets derive from these alone.
     pub shapes: Vec<SceneShapeVm>,
+    /// Every setup shape that does not fit its liquid's domain: the one
+    /// check the card's warning line and the viewport's red outline read.
+    pub problems: Vec<SetupProblem>,
+    /// Where each liquid's fill and column params sit, driven or not: what
+    /// the solver's run-time report ([`problems_with_runtime`]) attaches to.
+    pub setup_anchors: Vec<SetupAnchor>,
+    /// Each liquid's setup as the check reads it, so a value change re-checks
+    /// without a rebuild ([`SceneVm::recheck_setup`]).
+    pub(crate) setup_sites: Vec<SetupSite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -282,6 +293,9 @@ pub struct SceneObjectKnownRow {
     /// Static domain bounds when the fluid domain is fully authored by
     /// unwired scalar/transform parameters.
     pub fluid_domain: Option<FluidDomainLayout>,
+    /// Why the solvers refuse the domain box when unwired params author it
+    /// and `fluid_domain` is therefore `None`.
+    pub fluid_domain_error: Option<String>,
     /// The domain transform's addresses and current values, independent of
     /// the visible mesh object's ordinary transform.
     pub fluid_domain_transform: Option<TransformVm>,
@@ -670,7 +684,7 @@ impl SceneVm {
         let atmosphere = trace_atmosphere(&root, scene_node);
         let world_nodes = world_nodes(&root, scene_node, &environment, &atmosphere);
         let physics_nodes = physics_nodes(&root);
-        let shapes = shapes::trace_shapes(&root, def, &objects);
+        let (shapes, problems, setup_anchors, setup_sites) = shapes::trace_shapes(&root, def, &objects);
         let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
@@ -734,7 +748,28 @@ impl SceneVm {
             physics_nodes,
             scene_bounds,
             shapes,
+            problems,
+            setup_anchors,
+            setup_sites,
         })
+    }
+
+    /// The setup check re-run with `value` overriding the authored value of
+    /// any param it reads: what a rebuild at those values would find, without
+    /// one. `problems` and `anchors` are cleared first.
+    pub fn recheck_setup(&self, value: SetupValues<'_>, problems: &mut Vec<SetupProblem>, anchors: &mut Vec<SetupAnchor>) {
+        problems.clear();
+        anchors.clear();
+        for site in &self.setup_sites {
+            site.check(&self.shapes, value, problems, anchors);
+        }
+    }
+
+    /// Every param the setup check reads, with whether a change to it
+    /// changes the scene model's form (needs a rebuild) rather than only a
+    /// value [`SceneVm::recheck_setup`] takes.
+    pub fn setup_params(&self) -> impl Iterator<Item = (&ParamAddr, bool)> {
+        self.setup_sites.iter().flat_map(|site| site.params(&self.shapes))
     }
 }
 
@@ -965,6 +1000,7 @@ fn trace_objects(
                 parent.modifier_chain.clear();
                 parent.liquid_domain = None;
                 parent.fluid_domain = None;
+                parent.fluid_domain_error = None;
                 parent.fluid_domain_transform = None;
                 out.push((anchor, SceneObjectVm::Known(parent)));
             }
@@ -1078,6 +1114,7 @@ fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObj
             row.physics_imported = false;
             row.liquid_domain = None;
             row.fluid_domain = None;
+            row.fluid_domain_error = None;
             row.fluid_domain_transform = None;
         }
         SceneObjectRowKind::Object => {
@@ -1245,7 +1282,7 @@ fn trace_fluid_domain(
     level: &Level<'_>,
     scope_path: &[u32],
     fluid: &EffectGraphNode,
-) -> (Option<FluidDomainLayout>, Option<TransformVm>) {
+) -> (Option<FluidDomainLayout>, Option<String>, Option<TransformVm>) {
     let domain_wire = level.producer(fluid.id, "domain").is_some();
     let domain_size_driven = level.producer(fluid.id, "domain_size").is_some();
     let resolution_driven = level.producer(fluid.id, "resolution").is_some();
@@ -1254,10 +1291,13 @@ fn trace_fluid_domain(
 
     let Some((domain_level, crossed_group, domain_node, _)) = domain else {
         if domain_wire || domain_size_driven || resolution_driven {
-            return (None, None);
+            return (None, None, None);
         }
-        return (domain_layout(None, param_f32(fluid, "domain_size", 4.0),
-            param_f32(fluid, "resolution", 24.0).round() as u32).ok(), None);
+        let layout = domain_layout(None, param_f32(fluid, "domain_size", 4.0), param_f32(fluid, "resolution", 24.0).round() as u32);
+        return match layout {
+            Ok(layout) => (Some(layout), None, None),
+            Err(reason) => (None, Some(reason), None),
+        };
     };
 
     let mut domain_scope = scope_path.to_vec();
@@ -1277,7 +1317,7 @@ fn trace_fluid_domain(
     let billboard = param_bool(domain_node, "billboard", false);
     let billboard_driven = domain_level.producer(domain_node.id, "billboard").is_some();
     if resolution_driven || transform_driven || billboard || billboard_driven {
-        return (None, Some(transform));
+        return (None, None, Some(transform));
     }
 
     let layout = domain_layout(Some(manifold_core::fluid_domain::DomainBox {
@@ -1287,7 +1327,10 @@ fn trace_fluid_domain(
             billboard: false,
         }), param_f32(fluid, "domain_size", 4.0),
         param_f32(fluid, "resolution", 24.0).round() as u32);
-    (layout.ok(), Some(transform))
+    match layout {
+        Ok(layout) => (Some(layout), None, Some(transform)),
+        Err(reason) => (None, Some(reason), Some(transform)),
+    }
 }
 
 /// Traces one `node.scene_object`'s full editable surface (D12): name,
@@ -1423,10 +1466,10 @@ fn trace_scene_object(
     chain.reverse(); // wire order: source → … → scene_object.
 
     let liquid_domain = model.liquid_domain.clone();
-    let (fluid_domain, fluid_domain_transform) = liquid_domain
+    let (fluid_domain, fluid_domain_error, fluid_domain_transform) = liquid_domain
         .as_ref()
         .and_then(|domain| locate_node(root, domain))
-        .map_or((None, None), |at| trace_fluid_domain(&at.level, &at.scope, at.node));
+        .map_or((None, None, None), |at| trace_fluid_domain(&at.level, &at.scope, at.node));
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
         is_group: false,
@@ -1454,6 +1497,7 @@ fn trace_scene_object(
         liquid_domain,
         swarm: model.swarm.clone(),
         fluid_domain,
+        fluid_domain_error,
         fluid_domain_transform,
         placed_sources: Vec::new(),
     }));

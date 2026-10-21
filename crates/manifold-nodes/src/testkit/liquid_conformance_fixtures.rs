@@ -67,21 +67,9 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["resolution", "points_per_cell"],
             },
             RefusalCase {
-                what: "Initial Fill Height at the top of Dam Break Matter's domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, MATTER_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
-                names: &["fill_height"],
-            },
-            RefusalCase {
                 what: "Dam Break Matter's initial volume turned 0.3 rad",
                 fixture: Fixture::DamBreak,
                 edit: |def| set_source_param(def, MATTER_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
-            },
-            RefusalCase {
-                what: "Dam Break Matter's initial volume moved out of the domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, MATTER_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
                 names: &["initial_volume"],
             },
         ],
@@ -135,21 +123,9 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["resolution", "fill_height"],
             },
             RefusalCase {
-                what: "Initial Fill Height at the top of Dam Break GPU FLIP's domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
-                names: &["fill_height"],
-            },
-            RefusalCase {
                 what: "Dam Break GPU FLIP's initial volume turned 0.3 rad",
                 fixture: Fixture::DamBreak,
                 edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
-            },
-            RefusalCase {
-                what: "Dam Break GPU FLIP's initial volume moved out of the domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
                 names: &["initial_volume"],
             },
         ],
@@ -467,6 +443,40 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
                     report.scene_bytes as f64 / 1e6
                 );
             }
+        }
+    }
+
+    /// A fill that does not fit its domain has a defined result, not a
+    /// refusal (`manifold_core::liquid_setup`), in both solvers: Fill Height
+    /// past the top fills exactly as Fill Height at the top, and an initial
+    /// volume wholly outside fills exactly as no volume. The scene's memory
+    /// is the witness: each solver sizes its particles by the fill.
+    #[test]
+    fn liquid_fit_results_are_defined_not_refused() {
+        let bytes = |row: &LiquidSolverRow, what: &str, edit: &dyn Fn(&mut EffectGraphDef)| {
+            let mut def = (row.fixture)(Fixture::DamBreak).unwrap_or_else(|| panic!("{}: no Dam Break scene", row.type_id));
+            edit(&mut def);
+            build(row, Fixture::DamBreak, &def)
+                .check_authored()
+                .unwrap_or_else(|error| panic!("{}: {what} is fitted, not refused: {error:?}", row.type_id))
+                .scene_bytes
+        };
+        for row in LIQUID_SOLVERS {
+            let fill = |height: f32| move |def: &mut EffectGraphDef| set_type_param(def, row.type_id, "fill_height", SerializedParamValue::Float { value: height });
+            // Dam Break's domain is 4 m tall.
+            let (low, top, past) = (bytes(row, "a low fill", &fill(0.5)), bytes(row, "fill at the top", &fill(4.0)), bytes(row, "fill past the top", &fill(9.0)));
+            assert!(top > low, "{}: the fill sizes the scene ({low} then {top} bytes)", row.type_id);
+            assert_eq!(past, top, "{}: Fill Height 9 m caps at the 4 m top", row.type_id);
+
+            let column = bytes(row, "the column", &|_| {});
+            let outside = bytes(row, "a column wholly outside", &|def| set_source_param(def, row.type_id, "initial_volume", "pos_x", 10.0));
+            let unwired = bytes(row, "no column", &|def| {
+                *def = manifold_core::flatten::flatten_groups(def).expect("a liquid preset flattens");
+                let domain = def.nodes.iter().find(|node| node.type_id == row.type_id).expect("the domain").id;
+                def.wires.retain(|wire| !(wire.to_node == domain && wire.to_port == "initial_volume"));
+            });
+            assert!(column > unwired, "{}: the column fills ({unwired} then {column} bytes)", row.type_id);
+            assert_eq!(outside, unwired, "{}: a column wholly outside fills nothing", row.type_id);
         }
     }
 

@@ -495,6 +495,7 @@ fn param_surface(
                     section: p.spec.section.clone(),
                     material_role: p.spec.material_role.map(super::material::role),
                     inactive_reason: None,
+                    setup_warning: None,
                     scene: p.spec.scene,
                     limit: p.drag_limit(),
                     disabled: None,

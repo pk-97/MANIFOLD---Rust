@@ -336,6 +336,10 @@ pub struct ContentState {
     /// Per output surface: the view the gizmo scene rendered with, for the
     /// main window's output-preview gizmos.
     pub physics_overlay_frames: crate::physics_overlay::PhysicsOverlayFrames,
+    /// What the solvers capped, clipped or refused on the layers that
+    /// rendered, whatever Show gizmos says: the cards' run-time setup check.
+    /// Re-allocated only when it changes; the newest wins a fold.
+    pub setup_fits: crate::setup_check::SetupFitReport,
 
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. The editor canvas
@@ -690,6 +694,7 @@ impl Default for ContentState {
             node_preview_info: None,
             scene_viewport_frames: std::array::from_fn(|_| None),
             physics_overlay_frames: std::array::from_fn(|_| None),
+            setup_fits: Arc::from([]),
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
             clip_atlas_layout: Arc::from([]),

@@ -141,7 +141,7 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(41)).expect("the panel's target");
     let mut lines = Vec::new();
     compose_lines(
-        &GizmoChrome { view, lights: &lights, domains: &[], physics: &[], selected: Some(&panel), mode: GizmoMode::Move, fade_handles: false },
+        &GizmoChrome { view, lights: &lights, domains: &[], live_columns: &[], physics: &[], problems: &[], selected: Some(&panel), mode: GizmoMode::Move, fade_handles: false },
         &mut lines,
     );
     let composite = target(&device, "d102 composite");
@@ -342,7 +342,7 @@ fn a_selected_water_domain_draws_its_solvers_cell_grid() {
     let selected = crate::scene_gizmo::selected_target(&scene, &SceneSelection::Object(row), None).expect("the row's target");
     assert_eq!(selected.kind, GizmoTargetKind::FluidDomain);
     let view = GizmoView::new(camera, W, H);
-    let chrome = |selected| GizmoChrome { view, lights: &lights, domains: &domains, physics: &[], selected, mode: GizmoMode::Move, fade_handles: false };
+    let chrome = |selected| GizmoChrome { view, lights: &lights, domains: &domains, live_columns: &[], physics: &[], problems: &[], selected, mode: GizmoMode::Move, fade_handles: false };
     let (mut bare, mut lines) = (Vec::new(), Vec::new());
     compose_lines(&chrome(None), &mut bare);
     compose_lines(&chrome(Some(&selected)), &mut lines);
