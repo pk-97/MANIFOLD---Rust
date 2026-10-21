@@ -251,11 +251,11 @@ fn drag_the_photoscan(pick: impl Fn(&[GizmoTarget]) -> GizmoTarget) -> Dragged {
     let layer = project.timeline.layers[0].layer_id.clone();
     let imported = authored_def(&project, &GraphTarget::Generator(layer.clone())).unwrap();
     let render = imported.nodes.iter().find(|n| n.type_id == "node.render_scene").expect("render scene").id;
+    let first = manifold_core::scene_slots::object_at_slot(&imported, render, 0).expect("the import has an object");
     let mut enable = EnableSceneObjectPhysicsCommand::new(
         &project,
         GraphTarget::Generator(layer.clone()),
-        render,
-        0,
+        first,
         &metadata_for_node_type("node.rigid_body"),
         &metadata_for_node_type("node.physics_world"),
         &imported,

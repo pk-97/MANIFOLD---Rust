@@ -1786,7 +1786,7 @@ mod tests {
             .all_nodes()
             .filter_map(|node| node.text.as_deref())
             .collect();
-        assert!(enabled_texts.contains(&"Density"));
+        assert!(enabled_texts.contains(&"Mass"));
         assert!(!enabled_texts.contains(&"Shape"),
             "source-driven Physics hides the inactive body Shape control");
 
