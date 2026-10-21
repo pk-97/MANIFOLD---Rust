@@ -286,9 +286,21 @@
           "type": "Enum",
           "value": 1
         },
-        "copy_spacing": {
+        "copy_size_spacing": {
           "type": "Float",
-          "value": 0.949999988079071
+          "value": 1.0
+        },
+        "copy_turn_x": {
+          "type": "Float",
+          "value": 0.07999999821186066
+        },
+        "copy_turn_y": {
+          "type": "Float",
+          "value": 0.11999999731779099
+        },
+        "copy_turn_z": {
+          "type": "Float",
+          "value": 0.03999999910593033
         },
         "density": {
           "type": "Float",
@@ -316,7 +328,7 @@
       "params": {
         "pos_x": {
           "type": "Float",
-          "value": -2.5
+          "value": -1.25
         },
         "pos_y": {
           "type": "Float",
@@ -328,15 +340,15 @@
         },
         "rot_x": {
           "type": "Float",
-          "value": 0.07999999821186066
+          "value": 0.0
         },
         "rot_y": {
           "type": "Float",
-          "value": 0.11999999731779099
+          "value": 0.0
         },
         "rot_z": {
           "type": "Float",
-          "value": 0.03999999910593033
+          "value": 0.0
         },
         "scale_x": {
           "type": "Float",
@@ -677,13 +689,13 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.949999988079071,
+        "defaultValue": 1.0,
         "id": "spacing",
         "label": "Spacing",
         "target": {
           "kind": "node",
           "nodeId": "physics_demo_121",
-          "param": "copy_spacing"
+          "param": "copy_size_spacing"
         }
       },
       {
@@ -892,13 +904,13 @@
       },
       {
         "cardVisible": false,
-        "defaultValue": 0.949999988079071,
+        "defaultValue": 1.0,
         "formatString": "F2",
         "id": "spacing",
         "isToggle": false,
         "isTrigger": false,
         "max": 4.0,
-        "min": 0.30000001192092896,
+        "min": 1.0,
         "name": "Spacing",
         "oscSuffix": "spacing",
         "section": "Rubble",
@@ -1819,7 +1831,7 @@
       "fromNode": 121,
       "fromPort": "body",
       "toNode": 40,
-      "toPort": "copies"
+      "toPort": "copies_0"
     },
     {
       "fromNode": 121,
@@ -1847,13 +1859,13 @@
     },
     {
       "fromNode": 40,
-      "fromPort": "instances",
+      "fromPort": "instances_0",
       "toNode": 124,
       "toPort": "instances"
     },
     {
       "fromNode": 40,
-      "fromPort": "active_count",
+      "fromPort": "active_count_0",
       "toNode": 124,
       "toPort": "instance_count"
     },

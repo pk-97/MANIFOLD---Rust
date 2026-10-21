@@ -5,7 +5,7 @@ use manifold_core::effect_graph_def::{BindingTarget, SerializedParamValue};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_impulse::{ImpulseFire, RigidImpulseTargets};
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_rigid::physics::{MAX_BODIES, ResolvedRigidImpulse, RigidBody, RigidSimulation};
+use manifold_water_rigid::physics::{CopySpawn, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSimulation};
 
 fn rubble() -> EffectGraphDef {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes/assets/generator-presets/RubblePile.json");
@@ -32,14 +32,16 @@ fn blast_field(def: &EffectGraphDef) -> FieldValue {
     runtime.execute_frame(time(DT));
     let mut fields = Vec::new();
     runtime.water().drain_scene_impulses(|_, event| {
-        assert!(matches!(event.value.target, ImpulseTarget::Rigid(t) if t.copies), "the Blast reaches the copies");
+        assert!(matches!(event.value.target, ImpulseTarget::Rigid(t) if t.contains_group(0)), "the Blast reaches the copies");
         fields.push(event.value.field);
     });
     assert_eq!(fields.len(), 1, "one press, one hit");
     fields.remove(0)
 }
 
-fn bodies_of(def: &EffectGraphDef) -> ([Option<RigidBody>; MAX_BODIES], RigidBody, [f32; 4]) {
+/// The pile's world as the scene hands it to the solver: three wired bodies
+/// and the copies body as copy group 0.
+fn scene_of(def: &EffectGraphDef) -> RigidSceneInputs {
     let scalar = |id: u32, name: &str| {
         let node = def.nodes.iter().find(|n| n.id == id).unwrap();
         match node.params.get(name).unwrap_or_else(|| panic!("node {id} has no {name}")) {
@@ -48,7 +50,7 @@ fn bodies_of(def: &EffectGraphDef) -> ([Option<RigidBody>; MAX_BODIES], RigidBod
             other => panic!("unexpected {name}: {other:?}"),
         }
     };
-    let body = |id: u32| RigidBody {
+    let body = |id: u32, spawn: CopySpawn| RigidBody {
         transform: Transform {
             pos: ["pos_x", "pos_y", "pos_z"].map(|p| scalar(id - 1, p)),
             rot_euler: ["rot_x", "rot_y", "rot_z"].map(|p| scalar(id - 1, p)),
@@ -61,42 +63,51 @@ fn bodies_of(def: &EffectGraphDef) -> ([Option<RigidBody>; MAX_BODIES], RigidBod
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),
         enabled: true,
+        spawn,
         ..RigidBody::default()
     };
-    let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
+    let mut scene = RigidSceneInputs::with_counts(3, 1);
+    scene.gravity = [0.0, -9.81, 0.0];
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
-        bodies[slot] = Some(body(id));
+        scene.bodies[slot] = Some(body(id, CopySpawn::default()));
     }
-    let layout = [scalar(121, "copy_count"), scalar(121, "copy_spacing"), scalar(121, "copy_columns"), scalar(121, "copy_layout")];
-    (bodies, body(121), layout)
+    let spawn = CopySpawn {
+        count: scalar(121, "copy_count"),
+        spacing: scalar(121, "copy_size_spacing"),
+        columns: scalar(121, "copy_columns"),
+        layout: scalar(121, "copy_layout"),
+        turn: ["copy_turn_x", "copy_turn_y", "copy_turn_z"].map(|name| scalar(121, name)),
+    };
+    scene.groups = vec![Some(body(121, spawn))];
+    scene
 }
 
 #[test]
 fn rubble_blast_scatters_a_settled_pile_and_keeps_it_in_the_world() {
     let def = rubble();
     let field = blast_field(&def);
-    let (bodies, prototype, layout) = bodies_of(&def);
+    let scene = scene_of(&def);
     let mut sim = RigidSimulation::default();
     let frame = std::cell::Cell::new(0_u32);
     let advance = |sim: &mut RigidSimulation, frames: u32| {
         for _ in 0..frames {
-            sim.advance_with_copy_layout(bodies.clone(), Some(prototype.clone()), layout[0], layout[1], layout[2], layout[3], [0.0, -9.81, 0.0], Seconds(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
+            sim.advance_scene(&scene, Seconds(f64::from(frame.get()) / 60.0), 1.0, 0.0).unwrap();
             frame.set(frame.get() + 1);
         }
     };
     advance(&mut sim, 600);
-    let settled = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let settled = sim.group_poses(0).to_vec();
     advance(&mut sim, 60);
-    let still = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let still = sim.group_poses(0).to_vec();
     let drift = settled.iter().zip(&still).map(|(a, b)| dist(a.pos, b.pos)).fold(0.0_f32, f32::max);
     let epoch = sim.impulse_epoch().unwrap();
     sim.enqueue_impulse(
         EventStamp { epoch, time: Seconds(f64::from(frame.get()) / 60.0), sequence: 0 },
-        ResolvedRigidImpulse { field, targets: RigidImpulseTargets { bodies: 0, copies: true } },
+        ResolvedRigidImpulse { field, targets: RigidImpulseTargets::group(0).unwrap() },
     )
     .unwrap();
     advance(&mut sim, 90);
-    let after = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let after = sim.group_poses(0).to_vec();
     let mut moved: Vec<f32> = still.iter().zip(&after).map(|(a, b)| dist(a.pos, b.pos)).collect();
     moved.sort_by(|a, b| a.total_cmp(b));
     let median = moved[moved.len() / 2];
