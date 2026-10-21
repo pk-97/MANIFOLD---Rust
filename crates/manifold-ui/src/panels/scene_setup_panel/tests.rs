@@ -716,15 +716,15 @@
         let labels = |group| panel.add_menu(group).iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
         assert_eq!(
             labels(SceneGroup::Objects),
-            ["Object", "Plane", "Water", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
+            ["Object", "Plane", "Water", "Swarm", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
         );
         assert_eq!(
             labels(SceneGroup::Lighting),
-            ["Light", "Object", "Plane", "Water", "Initial Fill", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
+            ["Light", "Object", "Plane", "Water", "Swarm", "Initial Fill", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
         );
         assert_eq!(
             labels(SceneGroup::Forces),
-            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
+            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Swarm", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
         );
         let menu = panel.add_menu(SceneGroup::Objects);
         let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
@@ -732,13 +732,14 @@
         assert!(insert(0, SceneTemplateKind::Object));
         assert!(insert(1, SceneTemplateKind::Plane));
         assert!(insert(2, SceneTemplateKind::Water));
-        for source in &menu[3..7] {
+        assert!(insert(3, SceneTemplateKind::Swarm), "Swarm needs no water");
+        for source in &menu[4..8] {
             assert!(source.action.is_none() && source.disabled.as_deref() == Some("Add Water first"), "{} needs a water", source.label);
         }
-        assert!(matches!(&menu[7].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
-        assert!(insert(8, SceneTemplateKind::Light));
-        assert!(matches!(&menu[9].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
-        assert!(menu[7].separator_after && !menu[6].separator_after, "the clicked group's entries are set apart");
+        assert!(matches!(&menu[8].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
+        assert!(insert(9, SceneTemplateKind::Light));
+        assert!(matches!(&menu[10].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
+        assert!(menu[8].separator_after && !menu[7].separator_after, "the clicked group's entries are set apart");
     }
 
     /// A water starts from one Initial Fill: with one listed under it, Add

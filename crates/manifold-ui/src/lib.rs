@@ -2,6 +2,7 @@
 
 pub mod anim;
 pub mod automation;
+pub mod automation_drag;
 pub mod automation_hit_tester;
 pub mod bitmap_painter;
 pub mod bitmap_renderer;

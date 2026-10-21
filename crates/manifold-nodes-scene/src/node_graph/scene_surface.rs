@@ -114,8 +114,8 @@ const AT_LEAST_ZERO: HardLimit = HardLimit::AtLeast(0.0);
 const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
 
 /// The scene table's answer for one param of `type_id`. `None` for a type
-/// outside the scene vocabulary or a param the table does not classify
-/// (INV-S1 fails on the latter).
+/// the table does not place or a param it does not classify (INV-S1 fails
+/// on the latter for a scene-vocabulary type).
 pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> {
     match type_id {
         "node.rigid_body" => rigid_body(param),
@@ -144,6 +144,12 @@ pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> 
         | "node.push_mesh" | "node.morph_mesh" | "node.rotate_3d" => mesh_modifier(type_id, param),
         "node.render_scene" => render_scene(param),
         "node.whitewater_step" => whitewater(param),
+        SWARM_FORCES_TYPE_ID => swarm_forces(param),
+        // A swarm's seeder and copies: its Count and Size. Facts only: they
+        // stay outside the vocabulary, so the load-time stamp never touches
+        // another graph using these atoms.
+        "node.spawn_from_mesh" => swarm_seed(param),
+        "node.swarm_to_copies" => swarm_copies(param),
         domain if is_liquid_domain(domain) => liquid_domain(domain, param),
         _ => None,
     }
@@ -244,6 +250,8 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Still air every consumer's Air Drag acts against (D-114).
+        "air_resistance" => setup(PhysicsWorld).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
         _ => return None,
     })
 }
@@ -490,6 +498,36 @@ fn whitewater(param: &str) -> Option<SceneParamFacts> {
         | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base"
         | "influence_decay" => setup(WhitewaterAdvanced),
         "capacity" | "min_energy" | "max_energy" | "preserve_foam" => hidden(Whitewater),
+        _ => return None,
+    })
+}
+
+/// A swarm's Simulation controls, in the Swarm preset's card order: Speed,
+/// Count, Size, Air Drag. An inserted swarm takes Speed from the Physics
+/// World (D-107), so only a swarm without a World shows its own.
+fn swarm_forces(param: &str) -> Option<SceneParamFacts> {
+    use ControlGroup::Simulation;
+    Some(match param {
+        "speed" => card(Simulation, CardBand::Scene, 0).limit(AT_LEAST_ZERO),
+        "air_drag" => card(Simulation, CardBand::Scene, 3).limit(AT_LEAST_ZERO),
+        "force_detail" => setup(Simulation),
+        _ => return None,
+    })
+}
+
+fn swarm_seed(param: &str) -> Option<SceneParamFacts> {
+    use ControlGroup::Simulation;
+    Some(match param {
+        "active_count" => card(Simulation, CardBand::Scene, 1).limit(AT_LEAST_ZERO),
+        "max_capacity" | "frame_seed" | "mode" => hidden(Simulation),
+        _ => return None,
+    })
+}
+
+fn swarm_copies(param: &str) -> Option<SceneParamFacts> {
+    use ControlGroup::Simulation;
+    Some(match param {
+        "size" => card(Simulation, CardBand::Scene, 2).limit(AT_LEAST_ZERO),
         _ => return None,
     })
 }
