@@ -2,8 +2,9 @@
 //! and a placement held over paused frames before Play each land a falling
 //! body on the same bits at every rate, live and exported. A frame whose
 //! input knot the world refuses loses its ticks, and how many depends on the
-//! rate, so a refusal shows here as a pose mismatch. Speed is constant: the
-//! automated-Speed case after a jump is not covered here.
+//! rate, so a refusal shows here as a pose mismatch. With Speed on an
+//! automation lane, the ticks between the jump's target and its landed frame
+//! must also take the lane's Speed at their own starts.
 use super::*;
 use manifold_node_engine::scene::transform::Transform;
 use std::cell::Cell;
@@ -85,8 +86,10 @@ fn rigid_runtime() -> PresetRuntime {
 
 /// Plays to [`UNTIL`], jumps to `target`, holds the landed frame for
 /// `paused` more frames, then plays to `end`, a frame at every rate. Speed
-/// stays 1 (the project has no lane). Returns the body's last pose, its bits.
-fn rigid_jump(fps: u32, offline: bool, target: f64, paused: u32, end: f64) -> [u32; 3] {
+/// follows `case`'s project: 1 throughout for [`Case::InGraphSteps`] (no
+/// lane), the rising lane for [`Case::Lane`]. Returns the body's last pose,
+/// its bits.
+fn rigid_jump(case: Case, fps: u32, offline: bool, target: f64, paused: u32, end: f64) -> [u32; 3] {
     let fps_f = f64::from(fps);
     let landed = (target * fps_f - 2e-7).ceil() as u32;
     let at = |frame: u32| f64::from(frame) / fps_f;
@@ -96,7 +99,7 @@ fn rigid_jump(fps: u32, offline: bool, target: f64, paused: u32, end: f64) -> [u
     let after = (landed + 1..=(end * fps_f).round() as u32).map(|frame| (at(frame), None));
     let frames = before.chain(jump).chain(held).chain(after).map(|(seconds, target)| Frame { seconds, target, bpm: BPM, tempo_shift: 0.0 });
     POSE.set(None);
-    play_frames_on(rigid_runtime(), Case::InGraphSteps, INTERVAL, fps, offline, frames);
+    play_frames_on(rigid_runtime(), case, INTERVAL, fps, offline, frames);
     POSE.get().expect("the world publishes its pose").pos.map(f32::to_bits)
 }
 
@@ -113,17 +116,29 @@ fn assert_same_pose(run: impl Fn(u32, bool) -> [u32; 3]) {
 
 #[test]
 fn a_rigid_world_after_a_forward_seek_matches_at_30_60_120_144_fps_live_and_export() {
-    assert_same_pose(|fps, offline| rigid_jump(fps, offline, 0.9137, 0, 2.0));
+    assert_same_pose(|fps, offline| rigid_jump(Case::InGraphSteps, fps, offline, 0.9137, 0, 2.0));
 }
 
 #[test]
 fn a_rigid_world_after_a_seek_back_matches_at_30_60_120_144_fps_live_and_export() {
-    assert_same_pose(|fps, offline| rigid_jump(fps, offline, 0.3137, 0, 1.5));
+    assert_same_pose(|fps, offline| rigid_jump(Case::InGraphSteps, fps, offline, 0.3137, 0, 1.5));
 }
 
 /// A placement while paused, two paused frames, then Play.
 #[test]
 fn a_rigid_world_after_a_paused_placement_then_play_matches_at_30_60_120_144_fps_live_and_export() {
-    assert_same_pose(|fps, offline| rigid_jump(fps, offline, 0.9137, 2, 2.0));
-    assert_same_pose(|fps, offline| rigid_jump(fps, offline, 0.3137, 2, 1.5));
+    assert_same_pose(|fps, offline| rigid_jump(Case::InGraphSteps, fps, offline, 0.9137, 2, 2.0));
+    assert_same_pose(|fps, offline| rigid_jump(Case::InGraphSteps, fps, offline, 0.3137, 2, 1.5));
+}
+
+/// Speed on a rising lane: every tick after a forward seek, a seek back, or
+/// a paused placement runs at the lane's Speed at its own start, so the body
+/// lands on the same bits at every rate.
+#[test]
+fn a_rigid_world_with_automated_speed_after_a_jump_matches_at_30_60_120_144_fps_live_and_export() {
+    for (target, end) in [(0.9137, 2.0), (0.3137, 1.5)] {
+        for paused in [0, 2] {
+            assert_same_pose(|fps, offline| rigid_jump(Case::Lane, fps, offline, target, paused, end));
+        }
+    }
 }

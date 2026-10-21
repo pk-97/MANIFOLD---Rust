@@ -857,8 +857,14 @@ impl RigidSimulation {
                     (None, None) => false,
                     _ => true,
                 });
+        // A sample behind the last frame is a seek back, except the replay
+        // opening at an owed origin: the frame that started that grid landed
+        // past it, and the opening samples the span it skipped, Speed at its
+        // tick starts included.
+        let opening = self.step.authored_sample_only
+            && self.owed_origin.is_some_and(|origin| now.0 >= origin.seconds() - 1e-9);
         let reset = self.reset_count.is_some_and(|old| old != reset_count)
-            || self.last_time.is_some_and(|last| now.0 < last.0);
+            || (self.last_time.is_some_and(|last| now.0 < last.0) && !opening);
         let copy_topology_changed = match (prototype.as_ref(), self.copy_description.as_ref()) {
             (Some(current), Some(previous)) => {
                 current.shape != previous.shape
