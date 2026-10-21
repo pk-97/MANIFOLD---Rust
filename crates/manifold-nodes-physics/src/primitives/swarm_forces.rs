@@ -44,6 +44,7 @@ manifold_node_engine::primitive! {
         speed: ScalarF32 optional,
         reset: ScalarF32 optional,
         air_drag: ScalarF32 optional,
+        air_resistance: ScalarF32 optional,
         gravity_x: ScalarF32 optional,
         gravity: ScalarF32 optional,
         gravity_z: ScalarF32 optional,
@@ -68,7 +69,7 @@ manifold_node_engine::primitive! {
         param("air_drag", "Air Drag", ParamType::Float, 1.0, (0.0, 4.0)),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
+    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, air_resistance, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels) and its Air Drag acts against the World's still air (air_resistance, 1/s), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
     examples: ["Swarm"],
     picker: { label: "Swarm Forces", category: Atom },
     summary: "Runs a swarm's simulation clock and lays the scene's forces over its box.",
@@ -288,7 +289,7 @@ impl Primitive for SwarmForces {
     }
 
     /// A swarm follows every Physics World control as water does: Speed and
-    /// Reset (D-107) and gravity (D-109).
+    /// Reset (D-107), gravity (D-109) and still air (D-114).
     fn world_control_inputs(&self) -> &'static [manifold_node_engine::primitive::WorldControlInput] {
         &manifold_node_engine::primitive::WORLD_INPUTS
     }

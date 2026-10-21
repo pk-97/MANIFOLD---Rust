@@ -302,6 +302,7 @@ manifold_node_engine::primitive! {
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
         air_drag: ScalarF32 optional,
+        air_resistance: ScalarF32 optional,
         reset: ScalarF32 optional,
         role_0: FluidRole optional,
         role_1: FluidRole optional,

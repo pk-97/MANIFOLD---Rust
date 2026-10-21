@@ -50,7 +50,13 @@ fn audit_def(
     violations: &mut Vec<String>,
     allowlist_hits: &mut HashSet<(String, String)>,
 ) {
-    let flat = match flatten_groups(def) {
+    // The graph as it loads: scene forces a preset brings expand first.
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    let expanded = match manifold_node_engine::load::expand::prepare_scene_modifiers(def, &registry) {
+        Ok(prepared) => prepared.def,
+        Err(e) => panic!("preset `{preset_id}`: scene modifiers do not expand: {e:?}"),
+    };
+    let flat = match flatten_groups(&expanded) {
         Ok(f) => f,
         Err(e) => panic!("preset `{preset_id}`: flatten_groups failed: {e:?}"),
     };

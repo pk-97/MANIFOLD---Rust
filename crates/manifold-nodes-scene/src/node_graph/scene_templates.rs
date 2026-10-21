@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use manifold_core::NodeId;
 use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
+    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
     InterfacePortDef, PresetMetadata, RENDER_SCENE_TYPE_ID, SerializedParamValue,
 };
 use manifold_core::scene_object_model::scene_object_models;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
-use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate};
+use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, TemplatePhysics};
 
 use super::scene_exposure::metadata_for_node_type;
 
@@ -132,7 +132,7 @@ fn object_group(
         ],
         tint: Some([tint.r, tint.g, tint.b, 1.0]),
     }));
-    SceneTemplate { group, metadata }
+    SceneTemplate { group, metadata, physics: Default::default() }
 }
 
 /// Add Object: a default cube. `slot` picks its tint; `centroid` its graph
@@ -238,7 +238,7 @@ pub fn role_source_template(kind: RoleSourceKind, domain: &FluidDomainLayout) ->
         wires: vec![wire(TRANSFORM_NODE, "transform", ROLE_NODE, "transform"), wire(ROLE_NODE, "role", OUTPUT_NODE, "role")],
         tint: None,
     }));
-    SceneTemplate { group, metadata }
+    SceneTemplate { group, metadata, physics: Default::default() }
 }
 
 /// Add Light: a bare Sun light about 45 degrees up, white, casting shadows.
@@ -268,7 +268,7 @@ pub fn light_template(position: (f32, f32)) -> SceneTemplate {
         &metadata_for_node_type("node.light"),
         &light.params,
     );
-    SceneTemplate { group: light, metadata }
+    SceneTemplate { group: light, metadata, physics: Default::default() }
 }
 
 
@@ -276,8 +276,82 @@ pub fn light_template(position: (f32, f32)) -> SceneTemplate {
 /// scene's forces. `slot` picks its tint; `centroid` its graph editor
 /// position. The same group, inserted into the preset's dressing, is the
 /// shipped `Swarm` preset ([`swarm_preset_def`]).
-pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> SceneTemplate {
-    swarm_body(tint(slot), centroid)
+pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> Result<SceneTemplate, String> {
+    let mut template = swarm_body(tint(slot), centroid);
+    template.physics = swarm_physics()?;
+    Ok(template)
+}
+
+/// What a swarm brings (D-114): a World it creates has still air, so the
+/// swarm's Air Drag gives it a terminal speed; a gentle Attractor at the
+/// swarm's centre holds the cloud on screen under gravity, also in a World
+/// with no still air; still gusts keep it moving.
+fn swarm_physics() -> Result<TemplatePhysics, String> {
+    Ok(TemplatePhysics {
+        new_world: BTreeMap::from([("air_resistance".to_owned(), float(SWARM_AIR_RESISTANCE))]),
+        forces: vec![stock_force("Attractor", &SWARM_ATTRACTOR)?, stock_force("Wind", &SWARM_GUSTS)?],
+    })
+}
+
+/// Drifting gusts that stir the cloud so it lives on rather than settling on
+/// the attractor's centre: the stock Wind with Turbulence on (Houdini's POP
+/// Attract with wind noise). A little Speed makes the gusts drift; still gusts
+/// leave the cloud on one fixed point.
+const SWARM_GUSTS: [(&str, f32); 4] = [("speed", 1.0), ("turbulence", 5.0), ("turbulence_size", 1.2), ("air_resistance", 3.0)];
+
+/// The still air of a World a swarm creates, in 1/s.
+const SWARM_AIR_RESISTANCE: f32 = 1.0;
+
+/// The swarm's Attractor card, tuned by render to hold the cloud on screen
+/// under World gravity.
+const SWARM_ATTRACTOR: [(&str, f32); 4] = [("strength", 18.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)];
+
+/// A stock force recipe from the scene modifier catalog with `card` values
+/// as its card defaults, written through to the params they drive so the
+/// graph agrees with its card.
+fn stock_force(id: &str, card: &[(&str, f32)]) -> Result<EffectGraphDef, String> {
+    let catalog = manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG.load();
+    let json = catalog.json(id).ok_or_else(|| format!("The stock {id} force is missing"))?;
+    let mut recipe: EffectGraphDef =
+        serde_json::from_str(&json).map_err(|error| format!("The stock {id} force does not read: {error}"))?;
+    let metadata = recipe.preset_metadata.as_mut().ok_or_else(|| format!("The stock {id} force has no card"))?;
+    let mut targets = Vec::new();
+    for &(param, value) in card {
+        let spec = metadata
+            .params
+            .iter_mut()
+            .find(|spec| spec.id == param)
+            .ok_or_else(|| format!("The stock {id} force has no {param}"))?;
+        spec.default_value = value;
+        for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == param) {
+            binding.default_value = value;
+            if let BindingTarget::Node { node_id, param } = &binding.target {
+                targets.push((node_id.clone(), param.clone(), value));
+            }
+        }
+    }
+    for (node_id, param, value) in targets {
+        let slot = find_param(&mut recipe.nodes, &node_id, &param)
+            .ok_or_else(|| format!("The stock {id} force has no {node_id}.{param}"))?;
+        *slot = match slot {
+            SerializedParamValue::Enum { .. } => SerializedParamValue::Enum { value: value.round() as u32 },
+            _ => float(value),
+        };
+    }
+    Ok(recipe)
+}
+
+/// The param `param` of the node with stable id `node_id`, at any depth.
+fn find_param<'a>(nodes: &'a mut [EffectGraphNode], node_id: &NodeId, param: &str) -> Option<&'a mut SerializedParamValue> {
+    for node in nodes {
+        if node.node_id == *node_id {
+            return node.params.get_mut(param);
+        }
+        if let Some(found) = node.group.as_deref_mut().and_then(|body| find_param(&mut body.nodes, node_id, param)) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// The Swarm preset's warm orange.
@@ -307,6 +381,8 @@ fn swarm_body(tint: manifold_core::Color, centroid: (f32, f32)) -> SceneTemplate
         built
     };
     let suffixed = |suffix: &str| Some(format!("{HANDLE_TOKEN} {suffix}"));
+    // Forces act only inside the bounds box, so it is wider than the 4 m start
+    // cube: a cloud the gusts stir stays inside it.
     let nodes = vec![
         named(
             BOUNDS,
@@ -314,9 +390,9 @@ fn swarm_body(tint: manifold_core::Color, centroid: (f32, f32)) -> SceneTemplate
             "node.transform_3d",
             suffixed("Bounds"),
             BTreeMap::from([
-                ("scale_x".to_owned(), float(4.0)),
-                ("scale_y".to_owned(), float(4.0)),
-                ("scale_z".to_owned(), float(4.0)),
+                ("scale_x".to_owned(), float(6.0)),
+                ("scale_y".to_owned(), float(6.0)),
+                ("scale_z".to_owned(), float(6.0)),
             ]),
         ),
         named(FORCES, "swarm_forces", "node.swarm_forces", suffixed("Forces"), BTreeMap::new()),
@@ -386,7 +462,7 @@ fn swarm_body(tint: manifold_core::Color, centroid: (f32, f32)) -> SceneTemplate
         tint: Some([tint.r, tint.g, tint.b, 1.0]),
     }));
     let metadata = owned_card("Swarm", &group);
-    SceneTemplate { group, metadata }
+    SceneTemplate { group, metadata, physics: Default::default() }
 }
 
 /// The card rows of a one-object group's own nodes, read off the one scene
@@ -478,7 +554,8 @@ pub fn swarm_preset_def() -> EffectGraphDef {
     let def: EffectGraphDef = serde_json::from_value(dressing).expect("the Swarm dressing parses");
     let scene = manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
     let [r, g, b] = SWARM_PRESET_TINT;
-    let template = swarm_body(manifold_core::Color::new(r, g, b, 1.0), (900.0, 200.0));
+    let mut template = swarm_body(manifold_core::Color::new(r, g, b, 1.0), (900.0, 200.0));
+    template.physics = swarm_physics().expect("the stock swarm physics reads");
     manifold_core::scene_template::insert_scene_template(&def, &scene, None, &template)
         .expect("the swarm inserts into its dressing")
         .graph

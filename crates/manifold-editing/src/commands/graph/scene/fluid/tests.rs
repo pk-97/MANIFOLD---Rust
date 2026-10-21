@@ -20,14 +20,14 @@ use manifold_core::{GraphTarget, NodeId};
 
 /// The Physics World's shared controls and the ports the test liquid's domain
 /// takes them on, as the node registry declares them (a real liquid domain
-/// declares the same five); every other type declares nothing here, so a
+/// declares the same); every other type declares nothing here, so a
 /// lifted control keeps its saved spec.
 fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
     match type_id {
         "node.physics_world" => world_metadata(),
-        MATTER_DOMAIN_TYPE_ID => ["gravity_x", "gravity", "gravity_z", "speed", "reset"]
+        MATTER_DOMAIN_TYPE_ID => manifold_core::scene_world_controls::WORLD_INPUTS
             .into_iter()
-            .map(|name| scene_param_meta(name, name))
+            .map(|input| scene_param_meta(input.input, input.input))
             .collect(),
         _ => Vec::new(),
     }
@@ -104,7 +104,7 @@ fn fresh_project() -> (manifold_core::project::Project, GraphTarget) {
 }
 
 fn world_metadata() -> Vec<NodeParamMetadata> {
-    [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0), ("speed", 1.0), ("reset", 0.0)]
+    [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0), ("air_resistance", 0.0), ("speed", 1.0), ("reset", 0.0)]
         .into_iter()
         .map(|(name, value)| {
             let mut metadata = scene_param_meta(name, name);
@@ -201,7 +201,7 @@ fn liquid_template() -> SceneTemplate {
         wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],
         tint: None,
     }));
-    SceneTemplate { group, metadata }
+    SceneTemplate { group, metadata, physics: Default::default() }
 }
 
 fn insert(
@@ -266,7 +266,7 @@ fn scene_physics_two_fluids_get_independent_ids_and_sections() {
     assert_eq!(result.nodes.iter().filter(|node| node.type_id == "node.physics_world").count(), 1);
     assert_eq!(
         result.nodes.iter().filter(|node| node.type_id == "node.value").count(),
-        5,
+        manifold_core::scene_world_controls::WORLD_INPUTS.len(),
         "additional liquid domains reuse the existing World sources"
     );
 }
@@ -308,7 +308,7 @@ fn scene_physics_duplicate_fluid_keeps_shared_world_controls() {
     let before = graph(&project, &target).clone();
     let original = before.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
     let incoming: Vec<_> = before.wires.iter().filter(|wire| wire.to_node == original.id).cloned().collect();
-    assert_eq!(incoming.len(), 5);
+    assert_eq!(incoming.len(), manifold_core::scene_world_controls::WORLD_INPUTS.len());
 
     let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 10, 0, baseline);
     duplicate.execute(&mut project);
@@ -322,7 +322,7 @@ fn scene_physics_duplicate_fluid_keeps_shared_world_controls() {
             "copy keeps the same World signal"
         );
     }
-    assert_eq!(after.nodes.iter().filter(|node| node.type_id == "node.value").count(), 5);
+    assert_eq!(after.nodes.iter().filter(|node| node.type_id == "node.value").count(), manifold_core::scene_world_controls::WORLD_INPUTS.len());
     let reloaded: manifold_core::project::Project =
         serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
     assert_eq!(graph(&reloaded, &target), &after);
@@ -368,7 +368,7 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     let input = domain_nodes.iter().find(|node| node.type_id == GROUP_INPUT_TYPE_ID).unwrap();
     let metadata = result.preset_metadata.as_ref().unwrap();
     for (world_param, fluid_param) in
-        [("gravity_x", "gravity_x"), ("gravity_y", "gravity"), ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
+        manifold_core::scene_world_controls::WORLD_INPUTS.map(|input| (input.world, input.input))
     {
         let world_wire = result.wires.iter().find(|wire| wire.to_node == 30 && wire.to_port == world_param).unwrap();
         let fluid_wire =
@@ -538,7 +538,7 @@ fn scene_physics_add_fluid_wires_world_controls_into_nested_gpu_domain() {
     assert_eq!(inner_inputs.len(), 1, "Live Matter's own sentinel is reused");
     let domain = inner.nodes.iter().find(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
     for (world_param, domain_param) in
-        [("gravity_x", "gravity_x"), ("gravity_y", "gravity"), ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
+        manifold_core::scene_world_controls::WORLD_INPUTS.map(|input| (input.world, input.input))
     {
         let source = result.wires.iter().find(|wire| wire.to_node == world.id && wire.to_port == world_param).unwrap();
         assert!(
@@ -566,7 +566,7 @@ fn scene_physics_add_fluid_wires_world_controls_into_nested_gpu_domain() {
     }
     let flat = manifold_core::flatten::flatten_groups(result).expect("nested routing flattens");
     let flat_domain = flat.nodes.iter().find(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
-    for port in ["gravity_x", "gravity", "gravity_z", "speed", "reset"] {
+    for port in manifold_core::scene_world_controls::WORLD_INPUTS.map(|input| input.input) {
         assert!(
             flat.wires.iter().any(|wire| wire.to_node == flat_domain.id && wire.to_port == port),
             "flattened graph drives the domain's {port}"

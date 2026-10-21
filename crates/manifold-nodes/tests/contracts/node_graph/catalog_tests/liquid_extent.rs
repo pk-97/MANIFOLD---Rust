@@ -45,12 +45,13 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 
     /// Every bundled generator preset holding a liquid domain.
     fn liquid_presets() -> Vec<(String, std::sync::Arc<EffectGraphDef>)> {
-        let holds_liquid = |def: &EffectGraphDef| {
-            let flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
-            flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id))
-        };
+        // Walked, not flattened: a preset may bring scene forces, which only
+        // expand at load.
+        fn holds_liquid(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> bool {
+            nodes.iter().any(|node| is_liquid_domain(&node.type_id) || node.group.as_deref().is_some_and(|body| holds_liquid(&body.nodes)))
+        }
         bundled_preset_type_ids(PresetKind::Generator)
-            .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(def.as_ref())).map(|def| (id.to_string(), def)))
+            .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(&def.nodes)).map(|def| (id.to_string(), def)))
             .collect()
     }
 

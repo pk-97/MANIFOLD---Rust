@@ -922,7 +922,7 @@ mod tests {
         let (_, bounds, _) = swarm_node(&project, &layer, "node.transform_3d");
         assert_eq!(place("pos_x"), (3.0, ShapeWrite::Node(ParamAddr { scope_path: vec![group], node_doc_id: bounds, param_id: "pos_x".into() })));
         assert_eq!(place("pos_y").0, 2.0);
-        assert_eq!(place("scale_x").0, 4.0);
+        assert_eq!(place("scale_x").0, 6.0);
         let row = swarm.row.expect("the swarm box belongs to the swarm's object row");
         let (_, object, _) = swarm_node(&project, &layer, "node.scene_object");
         assert_eq!(row, object, "the row is the scene object the swarm's copies feed");

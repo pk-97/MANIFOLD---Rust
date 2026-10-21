@@ -13497,6 +13497,11 @@
           "type": "f32"
         },
         {
+          "name": "air_resistance",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "reset",
           "required": false,
           "type": "f32"
@@ -21351,6 +21356,11 @@
         },
         {
           "name": "air_drag",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "air_resistance",
           "required": false,
           "type": "f32"
         },
@@ -32525,6 +32535,11 @@
           "type": "f32"
         },
         {
+          "name": "air_resistance",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "acceleration_field",
           "required": false,
           "type": "VectorField"
@@ -33182,6 +33197,16 @@
           "default": "1",
           "label": "Air Drag",
           "name": "air_drag",
+          "range": [
+            "0",
+            "4"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Air Resistance",
+          "name": "air_resistance",
           "range": [
             "0",
             "4"
@@ -42605,11 +42630,11 @@
         },
         {
           "default": "100000",
-          "label": "Active Count",
+          "label": "Count",
           "name": "active_count",
           "range": [
             "0",
-            "16000000"
+            "100000"
           ],
           "type": "int"
         },
@@ -43799,6 +43824,11 @@
         },
         {
           "name": "air_drag",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "air_resistance",
           "required": false,
           "type": "f32"
         },
@@ -80036,6 +80066,13 @@
           "name": "Air Drag"
         },
         {
+          "default": "0",
+          "id": "40_air_resistance",
+          "max": "4",
+          "min": "0",
+          "name": "Air Resistance"
+        },
+        {
           "default": "0.55",
           "id": "1_orbit",
           "max": "6.2831855",
@@ -89360,6 +89397,13 @@
           "max": "4",
           "min": "0",
           "name": "Air Drag"
+        },
+        {
+          "default": "0",
+          "id": "40_air_resistance",
+          "max": "4",
+          "min": "0",
+          "name": "Air Resistance"
         },
         {
           "default": "0.3",
@@ -106268,9 +106312,9 @@
         {
           "default": "20000",
           "id": "35_active_count",
-          "max": "16000000",
+          "max": "100000",
           "min": "0",
-          "name": "Active Count"
+          "name": "Count"
         },
         {
           "default": "0.05",
@@ -106322,21 +106366,21 @@
           "name": "Rotation Z"
         },
         {
-          "default": "4",
+          "default": "6",
           "id": "32_scale_x",
           "max": "10",
           "min": "0.01",
           "name": "Scale X"
         },
         {
-          "default": "4",
+          "default": "6",
           "id": "32_scale_y",
           "max": "10",
           "min": "0.01",
           "name": "Scale Y"
         },
         {
-          "default": "4",
+          "default": "6",
           "id": "32_scale_z",
           "max": "10",
           "min": "0.01",
@@ -108499,6 +108543,139 @@
           "name": "Air Drag"
         },
         {
+          "default": "1",
+          "id": "44_air_resistance",
+          "max": "4",
+          "min": "0",
+          "name": "Air Resistance"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_0\",\"enabled\"]",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_0\",\"center_x\"]",
+          "max": "100",
+          "min": "-100",
+          "name": "Centre X"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_0\",\"center_y\"]",
+          "max": "100",
+          "min": "-100",
+          "name": "Centre Y"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_0\",\"center_z\"]",
+          "max": "100",
+          "min": "-100",
+          "name": "Centre Z"
+        },
+        {
+          "default": "2.5",
+          "id": "sceneModifier:[\"group_43_force_0\",\"radius\"]",
+          "max": "100",
+          "min": "0.01",
+          "name": "Radius"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_0\",\"falloff\"]",
+          "max": "8",
+          "min": "0",
+          "name": "Falloff"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_0\",\"curve\"]",
+          "max": "1",
+          "min": "0",
+          "name": "Falloff Curve"
+        },
+        {
+          "default": "18",
+          "id": "sceneModifier:[\"group_43_force_0\",\"strength\"]",
+          "max": "20",
+          "min": "-20",
+          "name": "Pull"
+        },
+        {
+          "default": "2",
+          "id": "sceneModifier:[\"group_43_force_0\",\"impulse_strength\"]",
+          "max": "20",
+          "min": "-20",
+          "name": "Impulse Size"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_0\",\"fire\"]",
+          "max": "16777216",
+          "min": "0",
+          "name": "Impulse"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_1\",\"enabled\"]",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_1\",\"direction_x\"]",
+          "max": "1",
+          "min": "-1",
+          "name": "Direction X"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"direction_y\"]",
+          "max": "1",
+          "min": "-1",
+          "name": "Direction Y"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"direction_z\"]",
+          "max": "1",
+          "min": "-1",
+          "name": "Direction Z"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_1\",\"speed\"]",
+          "max": "50",
+          "min": "0",
+          "name": "Speed"
+        },
+        {
+          "default": "5",
+          "id": "sceneModifier:[\"group_43_force_1\",\"turbulence\"]",
+          "max": "50",
+          "min": "0",
+          "name": "Turbulence"
+        },
+        {
+          "default": "1.2",
+          "id": "sceneModifier:[\"group_43_force_1\",\"turbulence_size\"]",
+          "max": "100",
+          "min": "0.05",
+          "name": "Gust Size"
+        },
+        {
+          "default": "3",
+          "id": "sceneModifier:[\"group_43_force_1\",\"air_resistance\"]",
+          "max": "20",
+          "min": "0",
+          "name": "Air Resistance"
+        },
+        {
           "default": "0.55",
           "id": "1_orbit",
           "max": "6.2831855",
@@ -108829,70 +109006,70 @@
         },
         {
           "default": "9",
-          "id": "51_focus_distance",
+          "id": "52_focus_distance",
           "max": "100",
           "min": "0",
           "name": "Focus Distance"
         },
         {
           "default": "32",
-          "id": "51_f_stop",
+          "id": "52_f_stop",
           "max": "32",
           "min": "0.5",
           "name": "F-Stop"
         },
         {
           "default": "180",
-          "id": "51_shutter_angle",
+          "id": "52_shutter_angle",
           "max": "360",
           "min": "0",
           "name": "Shutter Angle"
         },
         {
           "default": "0",
-          "id": "51_exposure_ev",
+          "id": "52_exposure_ev",
           "max": "8",
           "min": "-8",
           "name": "Exposure"
         },
         {
           "default": "24",
-          "id": "54_max_radius",
+          "id": "55_max_radius",
           "max": "64",
           "min": "1",
           "name": "Max Blur"
         },
         {
           "default": "0",
-          "id": "54_enabled",
+          "id": "55_enabled",
           "max": "1",
           "min": "0",
           "name": "Depth of Field"
         },
         {
           "default": "0",
-          "id": "54_aperture",
+          "id": "55_aperture",
           "max": "2",
           "min": "0",
           "name": "Aperture Shape"
         },
         {
           "default": "1",
-          "id": "54_quality",
+          "id": "55_quality",
           "max": "2",
           "min": "0",
           "name": "Quality"
         },
         {
           "default": "32",
-          "id": "57_max_blur_px",
+          "id": "58_max_blur_px",
           "max": "128",
           "min": "0",
           "name": "Max Blur"
         },
         {
           "default": "0",
-          "id": "57_enabled",
+          "id": "58_enabled",
           "max": "1",
           "min": "0",
           "name": "Motion Blur"
@@ -154860,6 +155037,13 @@
           "max": "4",
           "min": "0",
           "name": "Air Drag"
+        },
+        {
+          "default": "0",
+          "id": "70_air_resistance",
+          "max": "4",
+          "min": "0",
+          "name": "Air Resistance"
         },
         {
           "default": "0.2",

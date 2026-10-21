@@ -761,7 +761,7 @@ fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> Ef
 /// `host` with the Add menu's Swarm inserted by the one template insertion,
 /// its object in the render scene's next slot.
 fn graft_swarm(host: &EffectGraphDef) -> EffectGraphDef {
-    let template = manifold_nodes_scene::node_graph::scene_templates::swarm_template(0, (0.0, 0.0));
+    let template = manifold_nodes_scene::node_graph::scene_templates::swarm_template(0, (0.0, 0.0)).expect("the stock swarm reads");
     manifold_core::scene_template::insert_scene_template(host, &render_scene(host), None, &template)
         .expect("the swarm inserts beside water and a physics world")
         .graph

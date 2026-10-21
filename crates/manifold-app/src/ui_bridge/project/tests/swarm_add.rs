@@ -1,7 +1,8 @@
 //! The Add menu's Swarm goes in as one template: its object row owns the
 //! swarm's forces node, seeder, copies and box, the box is a gizmo shape,
 //! scene forces reach it, it follows the Physics World's clock as water does
-//! (D-107), its card carries Count, Size and Air Drag under Simulation, and
+//! (D-107), its card carries Count, Size and Air Drag under Simulation, it
+//! brings still air, an Attractor and gusts (D-114), and
 //! the whole insertion is one undo step.
 
 use super::*;
@@ -17,10 +18,14 @@ fn all_nodes(nodes: &[EffectGraphNode]) -> Vec<&EffectGraphNode> {
 }
 
 fn insert_swarm(project: &mut Project, layer: &LayerId) -> EditingService {
+    insert(project, layer, manifold_core::scene_surface::SceneTemplateKind::Swarm)
+}
+
+fn insert(project: &mut Project, layer: &LayerId, kind: manifold_core::scene_surface::SceneTemplateKind) -> EditingService {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let (tx, rx) = crossbeam_channel::unbounded();
     dispatch_project(
-        &crate::ui_bridge::project::insert_template_action(project, layer.clone(), manifold_core::scene_surface::SceneTemplateKind::Swarm),
+        &crate::ui_bridge::project::insert_template_action(project, layer.clone(), kind),
         &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx),
         &tx,
         &state,
@@ -30,8 +35,8 @@ fn insert_swarm(project: &mut Project, layer: &LayerId) -> EditingService {
         &mut prefs,
         Default::default(),
     );
-    let ContentCommand::ExecuteSelecting(command, _) = rx.try_recv().expect("queued swarm insertion")
-    else { panic!("Add Swarm goes through content-owned editing and selection"); };
+    let ContentCommand::ExecuteSelecting(command, _) = rx.try_recv().expect("queued insertion")
+    else { panic!("Add goes through content-owned editing and selection"); };
     let mut editing = EditingService::new();
     editing.execute(command, project);
     assert_eq!(editing.take_rejection(), None);
@@ -134,7 +139,11 @@ fn add_swarm_restarts_on_a_clip_trigger_and_follows_world_speed_and_gravity() {
     let (mut project, layer, _) = scene_layer_project();
     insert_swarm(&mut project, &layer);
     let def = effective_def(&project, &layer);
-    let flat = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+    // The swarm brings its forces: expand them before flattening.
+    let expanded = manifold_node_engine::load::expand::prepare_scene_modifiers(&def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin())
+        .expect("the swarm's forces expand")
+        .def;
+    let flat = manifold_core::flatten::flatten_groups(&expanded).expect("flattens");
     let forces = flat.nodes.iter().find(|node| node.type_id == "node.swarm_forces").expect("forces");
     let world = flat.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("a World");
     let meta = def.preset_metadata.as_ref().unwrap();
@@ -193,4 +202,77 @@ fn add_swarm_card_carries_count_size_and_air_drag_under_simulation() {
     }
     assert_eq!(control("node.swarm_forces", "force_detail"), (false, SurfaceRole::Setup, ControlGroup::Simulation));
     assert!(meta.params.iter().all(|spec| spec.section.as_deref().is_none_or(|section| !section.contains(HANDLE_TOKEN))));
+    // Count reads "Count" on a performer's 0 to 100,000 slider.
+    let seed = nodes.iter().find(|node| node.type_id == "node.spawn_from_mesh").unwrap();
+    let count = meta
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &seed.node_id && param == "active_count"))
+        .and_then(|binding| meta.params.iter().find(|spec| spec.id == binding.id))
+        .unwrap();
+    assert_eq!((count.name.as_str(), count.min, count.max), ("Count", 0.0, 100_000.0));
+}
+
+/// The value of the source that drives the World control `port`.
+fn world_source_value(def: &EffectGraphDef, port: &str) -> f32 {
+    let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("a World");
+    let wire = def.wires.iter().find(|wire| wire.to_node == world.id && wire.to_port == port).expect("a World source");
+    let source = def.nodes.iter().find(|node| node.id == wire.from_node).unwrap();
+    match source.params.get("value") {
+        Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => *value,
+        other => panic!("World {port} source value: {other:?}"),
+    }
+}
+
+/// The preset names of the forces aimed at the swarm's object alone.
+fn swarm_forces_on_its_object(def: &EffectGraphDef) -> Vec<String> {
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
+    let group = def.nodes.iter().find(|node| node.group.as_deref().is_some_and(|body| body.nodes.iter().any(|node| node.type_id == "node.swarm_forces"))).expect("the swarm group");
+    let object = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == "node.scene_object").unwrap();
+    def.scene_modifiers
+        .iter()
+        .filter(|instance| matches!(&instance.targets, SceneTargetSelection::Explicit { objects }
+            if objects.len() == 1 && objects[0].node == object.node_id && objects[0].scope == [group.node_id.clone()]))
+        .map(|instance| instance.graph.preset_metadata.as_ref().unwrap().id.as_str().to_owned())
+        .collect()
+}
+
+/// D-114: a swarm brings its own Attractor and drifting gusts, aimed at it
+/// alone, and a World it creates has still air, so its Air Drag gives it a
+/// terminal speed. A swarm added beside water keeps the water's World, still
+/// air 0, and its Attractor holds it. World Air Resistance is on the card,
+/// in the World's section. The shipped preset is the same.
+#[test]
+fn add_swarm_brings_still_air_an_attractor_and_gusts() {
+    use manifold_core::scene_surface::SceneTemplateKind;
+    let (mut project, layer, _) = scene_layer_project();
+    insert_swarm(&mut project, &layer);
+    let def = effective_def(&project, &layer);
+    assert_eq!(world_source_value(&def, "air_resistance"), 1.0, "a World the swarm creates has still air");
+    assert_eq!(swarm_forces_on_its_object(&def), ["Attractor", "Wind"]);
+    assert_eq!(def.scene_modifiers.len(), 2, "nothing else is pushed");
+    let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+    let binding = def
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &world.node_id && param == "air_resistance"))
+        .expect("World Air Resistance is on the card");
+    let (_, owner) = project.timeline.find_layer_by_id(&layer).unwrap();
+    let scene = owner.gen_params().unwrap().params.get(&binding.id).and_then(|param| param.spec.scene).expect("scene facts");
+    assert_eq!((scene.role, scene.group), (SurfaceRole::Performance, ControlGroup::PhysicsWorld));
+
+    let (mut project, layer, _) = scene_layer_project();
+    insert(&mut project, &layer, SceneTemplateKind::Water);
+    insert_swarm(&mut project, &layer);
+    let def = effective_def(&project, &layer);
+    assert_eq!(def.nodes.iter().filter(|node| node.type_id == "node.physics_world").count(), 1, "one shared World");
+    assert_eq!(world_source_value(&def, "air_resistance"), 0.0, "the water's World keeps no still air");
+    assert_eq!(swarm_forces_on_its_object(&def), ["Attractor", "Wind"], "the swarm's forces push it, not the water");
+
+    let preset = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Swarm")).unwrap();
+    assert_eq!(world_source_value(preset.as_ref(), "air_resistance"), 1.0);
+    assert_eq!(swarm_forces_on_its_object(preset.as_ref()), ["Attractor", "Wind"]);
 }

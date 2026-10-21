@@ -35,28 +35,52 @@ fn swarm_node(type_id: &str) -> (u64, String) {
     (node["id"].as_u64().unwrap(), node["nodeId"].as_str().unwrap().to_owned())
 }
 
-/// The preset document with World gravity `g` along y (m/s², negative is
-/// down): the World Gravity Y source and its card control's default, so a
-/// manifest built from the card holds it too. The proofs of scene forces
-/// run weightless, so only the force under test moves the swarm.
-fn with_world_gravity(g: f32) -> serde_json::Value {
-    let mut doc: serde_json::Value = serde_json::from_str(JSON).unwrap();
+/// Set the card control with exposure ids `ids` to `value`: its default and
+/// every binding's, so a manifest built from the card holds it too.
+fn set_card(doc: &mut serde_json::Value, ids: &[serde_json::Value], value: f32) {
+    let meta = &mut doc["presetMetadata"];
+    for binding in meta["bindings"].as_array_mut().unwrap().iter_mut().filter(|binding| ids.contains(&binding["id"])) {
+        binding["defaultValue"] = json!(value);
+    }
+    for param in meta["params"].as_array_mut().unwrap().iter_mut().filter(|param| ids.contains(&param["id"])) {
+        param["defaultValue"] = json!(value);
+    }
+}
+
+/// Set the World control `port` to `value`: its source and its card control.
+fn set_world(doc: &mut serde_json::Value, port: &str, value: f32) {
     let world = doc["nodes"].as_array().unwrap().iter().find(|node| node["typeId"] == "node.physics_world").expect("a World")["id"].clone();
     let source = doc["wires"].as_array().unwrap().iter()
-        .find(|wire| wire["toNode"] == world && wire["toPort"] == "gravity_y").expect("World gravity has a source")["fromNode"].clone();
+        .find(|wire| wire["toNode"] == world && wire["toPort"] == port).expect("the World control has a source")["fromNode"].clone();
     let node = doc["nodes"].as_array_mut().unwrap().iter_mut().find(|node| node["id"] == source).unwrap();
-    node["params"]["value"]["value"] = json!(g);
+    node["params"]["value"]["value"] = json!(value);
     let source_id = node["nodeId"].clone();
-    let meta = &mut doc["presetMetadata"];
-    let ids: Vec<serde_json::Value> = meta["bindings"].as_array_mut().unwrap().iter_mut()
+    let ids: Vec<serde_json::Value> = doc["presetMetadata"]["bindings"].as_array().unwrap().iter()
         .filter(|binding| binding["target"]["nodeId"] == source_id)
         .map(|binding| binding["id"].clone())
         .collect();
-    for binding in meta["bindings"].as_array_mut().unwrap().iter_mut().filter(|binding| ids.contains(&binding["id"])) {
-        binding["defaultValue"] = json!(g);
-    }
-    for param in meta["params"].as_array_mut().unwrap().iter_mut().filter(|param| ids.contains(&param["id"])) {
-        param["defaultValue"] = json!(g);
+    set_card(doc, &ids, value);
+}
+
+/// The preset document in a bare World: gravity `g` along y (m/s², negative
+/// is down), still air `air_resistance` (1/s), and the swarm's own Attractor
+/// and gusts switched off, so only what a proof sets moves the swarm.
+fn bare_world(g: f32, air_resistance: f32) -> serde_json::Value {
+    let mut doc: serde_json::Value = serde_json::from_str(JSON).unwrap();
+    set_world(&mut doc, "gravity_y", g);
+    set_world(&mut doc, "air_resistance", air_resistance);
+    let enabled: Vec<serde_json::Value> = doc["presetMetadata"]["params"].as_array().unwrap().iter()
+        .map(|param| param["id"].clone())
+        .filter(|id| id.as_str().is_some_and(|id| id.starts_with("sceneModifier:") && id.ends_with("\"enabled\"]")))
+        .collect();
+    assert_eq!(enabled.len(), 2, "the swarm brings an Attractor and gusts");
+    set_card(&mut doc, &enabled, 0.0);
+    for modifier in doc["sceneModifiers"].as_array_mut().unwrap() {
+        for stage in modifier["graph"]["nodes"].as_array_mut().unwrap() {
+            for node in stage["group"]["nodes"].as_array_mut().into_iter().flatten().filter(|node| node["nodeId"] == "force_enabled") {
+                node["params"]["value"]["value"] = json!(0.0);
+            }
+        }
     }
     doc
 }
@@ -65,7 +89,7 @@ fn with_world_gravity(g: f32) -> serde_json::Value {
 /// last one wired into its `acceleration_field`, as a scene force list would
 /// wire it.
 fn swarm_with_field(nodes: Vec<serde_json::Value>, mut wires: Vec<serde_json::Value>) -> EffectGraphDef {
-    let mut doc = with_world_gravity(0.0);
+    let mut doc = bare_world(0.0, 0.0);
     let (forces, _) = swarm_node("node.swarm_forces");
     let field = nodes.last().expect("a field node")["id"].clone();
     wires.push(json!({"fromNode": field, "fromPort": "out", "toNode": forces, "toPort": "acceleration_field"}));
@@ -216,7 +240,9 @@ fn swarm_fused_template_matches_unfused() {
     let canonical = pushed_swarm();
     let registry = PrimitiveRegistry::with_builtin();
     let fused = fuse_generator_view(&canonical, &registry).map_or_else(|| canonical.clone(), |view| (*view.def).clone());
-    let flat = manifold_core::flatten::flatten_groups(&fused).expect("the fused template flattens");
+    // The template brings scene forces, which expand at load.
+    let expanded = manifold_node_engine::load::expand::prepare_scene_modifiers(&fused, &registry).expect("the swarm's forces expand").def;
+    let flat = manifold_core::flatten::flatten_groups(&expanded).expect("the fused template flattens");
     assert!(
         flat.nodes.iter().any(|node| node.type_id == "node.move_swarm"),
         "move_swarm writes the loop in place, so it stays its own step"
@@ -292,14 +318,14 @@ fn a_radial_force_hit_kicks_the_swarm_once() {
     use manifold_physics::force_lattice::ForceLattice;
     use manifold_physics::VectorField;
 
-    let swarm: EffectGraphDef = serde_json::from_value(with_world_gravity(0.0)).unwrap();
+    let swarm: EffectGraphDef = serde_json::from_value(bare_world(0.0, 0.0)).unwrap();
     let recipe: EffectGraphDef = serde_json::from_str(include_str!("../../assets/scene-modifier-presets/RadialForce.json")).unwrap();
     let scene = SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
     let instance = prepare_new_scene_modifier(&swarm, &recipe, NodeId::new("blast"), scene, SceneTargetSelection::AllObjects).unwrap();
     let def = insert_scene_modifier(&swarm, 0, instance).unwrap().graph;
     let metadata = def.preset_metadata.clone().unwrap();
     let alias = |local: &str| {
-        metadata.bindings.iter().find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { param_id, .. } if param_id == local)).unwrap().id.clone()
+        metadata.bindings.iter().find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id } if modifier_id.as_str() == "blast" && param_id == local)).unwrap().id.clone()
     };
     let mut manifest = ParamManifest::from_params(metadata.params.iter().cloned().map(Param::bundled).collect());
     for (local, value) in [("strength", 0.0), ("radius", 3.0), ("falloff", 1.0), ("impulse_strength", 3.0)] {
@@ -323,8 +349,8 @@ fn a_radial_force_hit_kicks_the_swarm_once() {
     assert_eq!(receipts.len(), 1, "one fire, one landing");
     let (id, event) = &receipts[0];
     assert_eq!((id.as_str(), event.value.target), (swarm_node("node.swarm_forces").1.as_str(), ImpulseTarget::Swarm));
-    // The template's bounds: a 4 m cube about the origin, 17 nodes a side.
-    let lattice = ForceLattice::over_box([-2.0; 3], [4.0; 3], 17);
+    // The template's bounds: a 6 m cube about the origin, 17 nodes a side.
+    let lattice = ForceLattice::over_box([-3.0; 3], [6.0; 3], 17);
     let mut values = vec![[0.0f32; 4]; lattice.node_count()];
     lattice.fill(&mut values, |x| event.value.field.sample(x)).unwrap();
     let mut moved = 0;
@@ -344,13 +370,13 @@ fn a_radial_force_hit_kicks_the_swarm_once() {
 }
 
 /// D-109: the shipped swarm falls under the Physics World's gravity, as a
-/// physics object does. With no other force, after n ticks of 1/60 s every
+/// physics object does. In a bare World, after n ticks of 1/60 s every
 /// live particle moves at exactly (0, g·n/60, 0), and a different World
 /// gravity is the one it falls by.
 #[test]
 fn swarm_falls_under_world_gravity() {
     for g in [-9.81f32, -1.62] {
-        let mut swarm = Swarm::new(serde_json::from_value(with_world_gravity(g)).unwrap());
+        let mut swarm = Swarm::new(serde_json::from_value(bare_world(g, 0.0)).unwrap());
         swarm.frame(0.0, live());
         swarm.play(60.0, 0.0, 0.5, live());
         let particles = swarm.particles();
@@ -366,4 +392,30 @@ fn swarm_falls_under_world_gravity() {
         }
         assert_eq!(checked, 20_000);
     }
+}
+
+/// D-114: in still air the swarm's Air Drag gives it a terminal speed. In a
+/// bare World with still air k (1/s) and the swarm's Air Drag 1, every
+/// particle started at rest moves after n ticks at exactly
+/// (0, (g/k)(1 − e^(−k·n/60)), 0), the relaxation the CPU twin integrates.
+#[test]
+fn swarm_falls_to_a_terminal_speed_in_still_air() {
+    let (g, k) = (-9.81f32, 2.0f32);
+    let mut swarm = Swarm::new(serde_json::from_value(bare_world(g, k)).unwrap());
+    swarm.frame(0.0, live());
+    swarm.play(60.0, 0.0, 1.0, live());
+    let particles = swarm.particles();
+    let fall = |ticks: u32| g / k * (1.0 - (-k * ticks as f32 * TICK as f32).exp());
+    let first = particles.iter().find(|particle| particle.life > 0.0).expect("a live particle").velocity[1];
+    let ticks = (55..=61).min_by(|&a, &b| (fall(a) - first).abs().total_cmp(&(fall(b) - first).abs())).unwrap();
+    assert!((58..=60).contains(&ticks), "about a second of ticks ran: {ticks}");
+    let want = fall(ticks);
+    assert!(want / (g / k) > 0.85, "well on the way to the terminal speed {}: {want}", g / k);
+    let mut checked = 0;
+    for particle in particles.iter().filter(|particle| particle.life > 0.0) {
+        let [x, y, z] = particle.velocity;
+        assert!((y - want).abs() < 1e-4 && x.abs() < 1e-6 && z.abs() < 1e-6, "velocity {:?}, want y {want}", particle.velocity);
+        checked += 1;
+    }
+    assert_eq!(checked, 20_000);
 }
