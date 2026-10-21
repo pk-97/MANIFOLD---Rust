@@ -600,15 +600,18 @@ impl<'a> Row<'a> {
         let Some((domain, _)) = &self.liquid else { return Vec::new() };
         let mut out = Vec::new();
         for k in 0..MAX_FLUID_ROLES {
-            let Some(role) = domain.path.producer_inward(domain.node.id, &format!("role_{k}")) else { continue };
-            if role.node.type_id != FLUID_ROLE_SOURCE_TYPE_ID || role.path.groups.len() <= domain.path.groups.len() {
+            // A source group may sit inside the water's level or, wired in
+            // through the water's group input, beside that group.
+            let Some(role) = domain.path.producer_either(domain.node.id, &format!("role_{k}")) else { continue };
+            if role.node.type_id != FLUID_ROLE_SOURCE_TYPE_ID {
                 continue;
             }
-            let group = domain.path.groups.len();
-            let group_node = role.path.groups[group];
+            // The outermost group holding the role but not the domain.
+            let shared = role.path.groups.iter().zip(&domain.path.groups).take_while(|(a, b)| std::ptr::eq(**a, **b)).count();
+            let Some(&group_node) = role.path.groups.get(shared) else { continue };
             let mut group_path = role.path.clone();
-            group_path.groups.truncate(group);
-            group_path.levels.truncate(group + 1);
+            group_path.groups.truncate(shared);
+            group_path.levels.truncate(shared + 1);
             let group_at = At { path: group_path, node: group_node };
             let body = group_at.path.enter(group_node);
             if body.is_none_or(|body| body.level().nodes.iter().any(|node| node.type_id == SCENE_OBJECT_TYPE_ID)) {
@@ -766,7 +769,7 @@ fn look_mesh(object: &At<'_>) -> Option<SceneNodeRef> {
 fn liquid_controls(domain: &At<'_>, controls: &mut Vec<SceneNodeRef>) {
     let level = domain.path.level();
     push_unique(controls, domain.reference());
-    for port in ["domain", "emitter", "initial_volume"] {
+    for port in ["domain", "emitter"] {
         if let Some(source) = domain.path.producer_either(domain.node.id, port)
             && source.node.type_id == TRANSFORM_3D_TYPE_ID
         {

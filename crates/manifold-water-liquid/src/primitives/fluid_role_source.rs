@@ -397,6 +397,19 @@ impl Primitive for FluidRoleSource {
             Err(error) => return self.fail(ctx, error),
         };
 
+        // An Initial Fill is the box its transform places. It prepares no
+        // geometry, so the water seeds on the frame the fill is wired.
+        if role == FluidRoleKind::InitialFill {
+            if let Err(error) = initial_fill_is_a_box(ctx) {
+                return self.fail(ctx, error);
+            }
+            ctx.outputs.set_cpu_value(
+                "role",
+                FluidRole { geometry: Arc::clone(no_geometry()), kind: role, transform, enabled, velocity, inherit_motion, friction },
+            );
+            return;
+        }
+
         // Historical samples update live controls against the last prepared
         // source. Setup edits are discrete and must not recook past geometry.
         if ctx.sim_step.authored_sample_only {
@@ -832,6 +845,26 @@ fn index_from(wired: Option<f32>, param: Option<&ParamValue>, name: &str, defaul
     Ok(value as u32)
 }
 
+/// The geometry an Initial Fill carries: none, since the liquids fill its
+/// transform's box.
+fn no_geometry() -> &'static Arc<PreparedFluidGeometry> {
+    static EMPTY: std::sync::OnceLock<Arc<PreparedFluidGeometry>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(|| Arc::new(PreparedFluidGeometry::default()))
+}
+
+/// The liquids fill an Initial Fill's transform box, so a mesh or another
+/// shape is refused by name rather than filled as a box.
+fn initial_fill_is_a_box(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
+    let path = matches!(ctx.params.get("path"), Some(ParamValue::String(path)) if !path.is_empty());
+    if path || MESH_PORTS.iter().any(|port| ctx.inputs.slot(port).is_some()) {
+        return Err("An Initial Fill fills a box; a mesh cannot be filled yet".into());
+    }
+    if resolve_index(ctx, "shape", 1, PLATONIC_SHAPES.len() as u32)? != 1 {
+        return Err("An Initial Fill fills a box; set its shape to Cube".into());
+    }
+    Ok(())
+}
+
 /// The role this source plays, from the `role` wire or param. The node and
 /// its extent rule both read it here.
 fn role_kind(wired: Option<f32>, param: Option<&ParamValue>) -> Result<FluidRoleKind, String> {
@@ -845,19 +878,25 @@ fn resolve_bool(
     name: &str,
     default: bool,
 ) -> Result<bool, String> {
-    if let Some(value) = wired_f32(ctx, name)? {
+    bool_from(wired_f32(ctx, name)?, ctx.params.get(name), name, default)
+}
+
+/// A switch from its wire, else its param, else `default`.
+fn bool_from(wired: Option<f32>, param: Option<&ParamValue>, name: &str, default: bool) -> Result<bool, String> {
+    if let Some(value) = wired {
         if value.is_finite() {
             return Ok(value > 0.5);
         }
         return Err(format!("Fluid role `{name}` must be finite"));
     }
-    match ctx.params.get(name) {
+    match param {
         Some(ParamValue::Bool(value)) => Ok(*value),
         Some(ParamValue::Float(value)) if value.is_finite() => Ok(*value > 0.5),
         None => Ok(default),
         Some(_) => Err(format!("Fluid role parameter `{name}` must be a bool")),
     }
 }
+
 
 fn resolve_integer(
     ctx: &EffectNodeContext<'_, '_>,
@@ -1026,6 +1065,32 @@ mod tests {
         assert!(primitive.geometry.is_none());
         let restored = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
         assert!((extent(&restored) - 1.5).abs() < 1.0e-6);
+    }
+
+    /// BUG-ju9cb (the water column can't be removed): an Initial Fill
+    /// publishes its box on its first run, with no preparation frame, so a
+    /// migrated column seeds on the same frame it always did. Only a cube is
+    /// a box.
+    #[test]
+    fn an_initial_fill_publishes_its_box_on_the_first_run() {
+        let mut backend = MockBackend::new();
+        let (transform_slot, output_slot) = test_slots(&mut backend);
+        let column = Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() };
+        backend.set_transform(transform_slot, column);
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("role"), ParamValue::Enum(0));
+        params.insert(Cow::Borrowed("shape"), ParamValue::Enum(1));
+        let mut primitive = FluidRoleSource::new();
+        assert!(!run_once(&mut primitive, &mut backend, transform_slot, output_slot, &params), "no pending frame");
+        let role = backend.cpu_values().get::<FluidRole>(output_slot).expect("published at once");
+        assert_eq!(role.kind, FluidRoleKind::InitialFill);
+        assert_eq!(role.transform, column, "the box is the transform, unchanged");
+        assert!(role.enabled);
+        assert!(role.geometry.meshes.is_empty(), "a fill carries no geometry");
+
+        params.insert(Cow::Borrowed("shape"), ParamValue::Enum(0));
+        let mut sphere = FluidRoleSource::new();
+        assert!(run_once(&mut sphere, &mut backend, transform_slot, output_slot, &params), "a sphere is refused");
     }
 
     #[test]

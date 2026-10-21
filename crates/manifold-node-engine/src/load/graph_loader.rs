@@ -357,6 +357,9 @@ pub(crate) fn migrate_graph_shape(def: Cow<'_, EffectGraphDef>) -> Cow<'_, Effec
     if manifold_core::copies_body::carries_world_copies(&def) {
         manifold_core::copies_body::migrate_world_copies(def.to_mut());
     }
+    if manifold_core::initial_fill::carries_initial_volume(&def) {
+        manifold_core::initial_fill::migrate_initial_volume(def.to_mut());
+    }
     if has_retired_params(&def) {
         retire_params(def.to_mut());
     }

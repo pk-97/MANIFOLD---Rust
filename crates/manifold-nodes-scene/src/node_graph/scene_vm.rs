@@ -1006,9 +1006,8 @@ fn trace_objects(
             }
             None => {
                 // A placed fluid source: its own row under the water it feeds,
-                // named by its role. An Initial Fill group stays the water's:
-                // its controls join the water's row. The model reads no
-                // values, so the role is read here.
+                // named by its role. The model reads no values, so the role is
+                // read here.
                 let Some(water) = model.parent.as_ref().and_then(doc_of) else { continue };
                 let Some((_, SceneObjectVm::Known(row))) =
                     out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if row.object_node_id == water))
@@ -1016,18 +1015,10 @@ fn trace_objects(
                     continue;
                 };
                 let role = match locate_node(root, &model.object).map_or(1, |at| param_f32(at.node, "role", 1.0).round() as i32) {
-                    0 => None,
-                    2 => Some(SourceRole::Drain),
-                    3 => Some(SourceRole::Collider),
-                    _ => Some(SourceRole::Inflow),
-                };
-                let Some(role) = role else {
-                    for control in &model.controls {
-                        if !row.controls.contains(control) {
-                            row.controls.push(control.clone());
-                        }
-                    }
-                    continue;
+                    0 => SourceRole::InitialFill,
+                    2 => SourceRole::Drain,
+                    3 => SourceRole::Collider,
+                    _ => SourceRole::Inflow,
                 };
                 let name = locate_node(root, &model.owner)
                     .and_then(|at| at.node.handle.clone().or_else(|| at.node.title.clone()))
@@ -1878,8 +1869,7 @@ mod tests {
             node(4, FLIP_DOMAIN_TYPE_ID, None), node(5, "node.transform_3d", None), domain],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
                 wire(6, "transform", 4, "domain"),
-                wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter"),
-                wire(5, "transform", 4, "initial_volume")]);
+                wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter")]);
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4", "n6", "n5"].map(NodeId::new));
@@ -1888,12 +1878,12 @@ mod tests {
         assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
         assert_eq!(row.fluid_domain.expect("static domain").size, [4.0, 4.0, 1.0]);
         assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
-        // The domain box and the initial column come from the declaration,
-        // each through its own transform; the surface gets no object box.
+        // The domain box comes from the declaration, through its transform;
+        // the surface gets no object box.
         let shapes: Vec<_> = vm.shapes.iter().map(|shape| (&shape.owner, shape.index, shape.params[0].write.clone())).collect();
         let owner = ShapeOwner::LiquidDomain(NodeId::new("n4"));
         let at = |node_doc_id| ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id, param_id: "pos_x".into() });
-        assert_eq!(shapes, [(&owner, 0, at(6)), (&owner, 1, at(5))]);
+        assert_eq!(shapes, [(&owner, 0, at(6))]);
         assert_eq!(vm.shapes[0].params[1].value, 2.0);
     }
 
@@ -1956,7 +1946,7 @@ mod tests {
                 wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
                 wire(10, "role", 4, "role_1")]);
         let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
-        // Each role names its row; an Initial Fill group stays the water's.
+        // Each role names its row, an Initial Fill's too.
         let with_role = |role: f32| {
             let mut graph = restored.clone();
             let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_deref_mut().unwrap();
@@ -1968,8 +1958,16 @@ mod tests {
         assert_eq!(with_role(2.0).0, [SourceRole::Drain]);
         assert_eq!(with_role(3.0).0, [SourceRole::Collider]);
         let (sources, controls) = with_role(0.0);
-        assert!(sources.is_empty(), "an Initial Fill group is no source row");
-        assert_eq!(controls, ["n4", "n11", "n12"].map(NodeId::new), "its controls stay the water's");
+        assert_eq!(sources, [SourceRole::InitialFill], "an Initial Fill is its own row");
+        assert_eq!(controls, ["n4"].map(NodeId::new), "its controls are its own");
+        // The water fills an axis-aligned box, so its handle does not turn.
+        let mut graph = restored.clone();
+        let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_deref_mut().unwrap();
+        group.nodes.iter_mut().find(|node| node.id == 11).unwrap().params.insert("role".into(), SerializedParamValue::Float { value: 0.0 });
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let fill = vm.shapes.iter().find(|shape| matches!(shape.owner, ShapeOwner::RoleSource { .. })).expect("fill shape");
+        assert_eq!(fill.owner, ShapeOwner::RoleSource { node: NodeId::new("n11"), role: FluidRole::InitialFill });
+        assert!(matches!(fill.decl.shape, manifold_foundation::scene_surface::SceneShape::Box { rotation: None, .. }));
         let vm = SceneVm::from_def(&restored).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.controls.iter().map(|c| c.node.clone()).collect::<Vec<_>>(), ["n4"].map(NodeId::new), "a placed source is its own row, not the water's");

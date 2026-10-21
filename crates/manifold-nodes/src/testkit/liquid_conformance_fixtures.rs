@@ -1,5 +1,5 @@
 //! Authored preset fixtures for the liquid conformance suite.
-use manifold_nodes_water::testkit::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
+use manifold_nodes_water::testkit::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_fill_param};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
@@ -67,10 +67,10 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["resolution", "points_per_cell"],
             },
             RefusalCase {
-                what: "Dam Break Matter's initial volume turned 0.3 rad",
+                what: "Dam Break Matter's Initial Fill turned 0.3 rad",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, MATTER_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
+                edit: |def| set_fill_param(def, MATTER_DOMAIN_TYPE_ID, "rot_y", 0.3),
+                names: &["Initial Fill"],
             },
         ],
         totals: Some(TotalsReadout {
@@ -123,10 +123,10 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["resolution", "fill_height"],
             },
             RefusalCase {
-                what: "Dam Break GPU FLIP's initial volume turned 0.3 rad",
+                what: "Dam Break GPU FLIP's Initial Fill turned 0.3 rad",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
+                edit: |def| set_fill_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "rot_y", 0.3),
+                names: &["Initial Fill"],
             },
         ],
         totals: Some(TotalsReadout {
@@ -469,12 +469,8 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
             assert_eq!(past, top, "{}: Fill Height 9 m caps at the 4 m top", row.type_id);
 
             let column = bytes(row, "the column", &|_| {});
-            let outside = bytes(row, "a column wholly outside", &|def| set_source_param(def, row.type_id, "initial_volume", "pos_x", 10.0));
-            let unwired = bytes(row, "no column", &|def| {
-                *def = manifold_core::flatten::flatten_groups(def).expect("a liquid preset flattens");
-                let domain = def.nodes.iter().find(|node| node.type_id == row.type_id).expect("the domain").id;
-                def.wires.retain(|wire| !(wire.to_node == domain && wire.to_port == "initial_volume"));
-            });
+            let outside = bytes(row, "a column wholly outside", &|def| set_fill_param(def, row.type_id, "pos_x", 10.0));
+            let unwired = bytes(row, "no column", &|def| manifold_nodes_water::testkit::conformance::testkit::drop_fill(def, row.type_id));
             assert!(column > unwired, "{}: the column fills ({unwired} then {column} bytes)", row.type_id);
             assert_eq!(outside, unwired, "{}: a column wholly outside fills nothing", row.type_id);
         }
@@ -489,6 +485,10 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
             assert!(!row.refusals.is_empty(), "{} lists no refusals", row.type_id);
             let domain = registry.construct(row.type_id).expect("registered domain");
             let words = |name: &str| -> String {
+                // A placed object, such as the Initial Fill, by its own name.
+                if name.contains(' ') {
+                    return name.to_owned();
+                }
                 if let Some(param) = domain.parameters().iter().find(|param| param.name == name) {
                     return param.label.split(" (").next().unwrap_or(param.label).to_string();
                 }

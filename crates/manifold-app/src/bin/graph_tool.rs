@@ -20,9 +20,10 @@
 //! an estimated dispatch count.
 //!
 //! `migrate` runs [`manifold_core::scene_object_migration::migrate_scene_object_wires`]
-//! (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5) over the file — the same
-//! structural, version-gate-free rewrite `instantiate_def` applies at every
-//! load path — and prints the (possibly unchanged) def to stdout, or writes
+//! (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5) and
+//! [`manifold_core::initial_fill::migrate_initial_volume`] over the file —
+//! the same structural, version-gate-free rewrites every load applies — and
+//! prints the (possibly unchanged) def to stdout, or writes
 //! it back to `<file.json>` with `--in-place`. Used to regenerate the
 //! in-repo bundled/reference preset JSON so the checked-in files carry the
 //! modern `object_k` wiring instead of relying on the load-time migration
@@ -80,7 +81,8 @@ fn print_usage() {
          flatten + partition the freeze pipeline itself runs.\n\
          \n\
          migrate: rewrites node.render_scene's legacy per-object port wiring\n\
-         into node.scene_object nodes feeding object_k ports (structural,\n\
+         into node.scene_object nodes feeding object_k ports, and a GPU\n\
+         liquid's initial_volume column into an Initial Fill group (structural,\n\
          idempotent, no version gate). Prints the migrated JSON to stdout;\n\
          --in-place overwrites <file.json>. A def with nothing to migrate is\n\
          printed/written unchanged."
@@ -457,7 +459,8 @@ fn run_migrate(args: &[String]) -> ExitCode {
         }
     };
 
-    let changed = manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def);
+    let mut changed = manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def);
+    changed |= manifold_core::initial_fill::migrate_initial_volume(&mut def);
 
     let out = match serde_json::to_string_pretty(&def) {
         Ok(s) => s,

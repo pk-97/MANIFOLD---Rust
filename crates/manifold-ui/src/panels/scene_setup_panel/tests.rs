@@ -716,15 +716,15 @@
         let labels = |group| panel.add_menu(group).iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
         assert_eq!(
             labels(SceneGroup::Objects),
-            ["Object", "Plane", "Water", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
+            ["Object", "Plane", "Water", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}", "Light", "Force \u{2014} Gravity"],
         );
         assert_eq!(
             labels(SceneGroup::Lighting),
-            ["Light", "Object", "Plane", "Water", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
+            ["Light", "Object", "Plane", "Water", "Initial Fill", "Inflow", "Drain", "Collider", "Force \u{2014} Gravity", "Import Model\u{2026}"],
         );
         assert_eq!(
             labels(SceneGroup::Forces),
-            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
+            ["Force \u{2014} Gravity", "Object", "Plane", "Light", "Water", "Initial Fill", "Inflow", "Drain", "Collider", "Import Model\u{2026}"],
         );
         let menu = panel.add_menu(SceneGroup::Objects);
         let insert = |index: usize, expected: SceneTemplateKind| matches!(&menu[index].action,
@@ -732,13 +732,39 @@
         assert!(insert(0, SceneTemplateKind::Object));
         assert!(insert(1, SceneTemplateKind::Plane));
         assert!(insert(2, SceneTemplateKind::Water));
-        for source in &menu[3..6] {
+        for source in &menu[3..7] {
             assert!(source.action.is_none() && source.disabled.as_deref() == Some("Add Water first"), "{} needs a water", source.label);
         }
-        assert!(matches!(&menu[6].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
-        assert!(insert(7, SceneTemplateKind::Light));
-        assert!(matches!(&menu[8].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
-        assert!(menu[6].separator_after && !menu[5].separator_after, "the clicked group's entries are set apart");
+        assert!(matches!(&menu[7].action, Some(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))) if layer_1(l)));
+        assert!(insert(8, SceneTemplateKind::Light));
+        assert!(matches!(&menu[9].action, Some(PanelAction::Project(ProjectAction::SceneModifierApply(l, id))) if layer_1(l) && id == "gravity"));
+        assert!(menu[7].separator_after && !menu[6].separator_after, "the clicked group's entries are set apart");
+    }
+
+    /// A water starts from one Initial Fill: with one listed under it, Add
+    /// Initial Fill says so instead of inserting a second.
+    #[test]
+    fn a_water_with_an_initial_fill_refuses_a_second() {
+        use manifold_foundation::scene_surface::{SceneItemKind, SceneTemplateKind, SourceRole};
+        let mut vm = azalea_shaped_vm();
+        vm.fluid_domains = vec![FluidDomainOption { node: FoundationNodeId::new("pool"), name: "pool".into(), rows: vec![50] }];
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm.clone()));
+        let fill = |panel: &ScenePanel| panel.add_menu(SceneGroup::Objects).into_iter().find(|entry| entry.label == "Initial Fill").expect("Initial Fill entry");
+        assert!(matches!(&fill(&panel).action,
+            Some(PanelAction::Project(ProjectAction::SceneSetupInsertTemplate { kind: SceneTemplateKind::InitialFill, water: Some(_), .. }))));
+        vm.items.push(SceneItemVm {
+            kind: SceneItemKind::Source(SourceRole::InitialFill),
+            selection: SceneSelection::Source(FoundationNodeId::new("pool_fill")),
+            name: "Initial Fill".into(),
+            parent: Some(50),
+            parameter_ids: Vec::new(),
+        });
+        panel.configure(live(vm));
+        let refused = fill(&panel);
+        assert!(refused.action.is_none());
+        assert_eq!(refused.disabled.as_deref(), Some("The water already has an Initial Fill"));
     }
 
     /// D-94: an Inflow, Drain or Collider goes into the water the selection

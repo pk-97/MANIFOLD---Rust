@@ -18,6 +18,7 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 #[cfg(any(test, feature = "testkit"))]
 use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+use manifold_core::initial_fill::{FillBox, add_initial_fill};
 use serde_json::{Value, json};
 
 use manifold_water_gpu_flip::primitives::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
@@ -348,6 +349,27 @@ impl Builder {
         }
     }
 
+    /// The column as an Initial Fill beside `domain`: the `initial_column`
+    /// transform inside the group, wired into the first free role input.
+    fn initial_fill(&mut self, domain: usize, volume: Transform) {
+        self.node(
+            "initial_column",
+            "node.transform_3d",
+            json!({
+                "pos_x": float(f64::from(volume.pos[0])),
+                "pos_y": float(f64::from(volume.pos[1])),
+                "pos_z": float(f64::from(volume.pos[2])),
+                "scale_x": float(f64::from(volume.scale[0])),
+                "scale_y": float(f64::from(volume.scale[1])),
+                "scale_z": float(f64::from(volume.scale[2])),
+            }),
+        );
+        let column = self.nodes.pop().expect("just added");
+        let mut taken = self.nodes.iter().map(|node| node.node_id.to_string()).collect();
+        add_initial_fill(&mut self.nodes, &mut self.wires, domain as u32, FillBox::Node(Box::new(column)), &mut taken)
+            .expect("the domain has a free role input");
+    }
+
     fn from_def(def: EffectGraphDef) -> Self {
         Self { nodes: def.nodes, wires: def.wires }
     }
@@ -415,24 +437,12 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         }
     }
     let domain = b.node("domain", GPU_FLIP_DOMAIN_TYPE_ID, params);
-    if let Some(volume) = scene.initial_volume() {
-        let column = b.node(
-            "initial_column",
-            "node.transform_3d",
-            json!({
-                "pos_x": float(f64::from(volume.pos[0])),
-                "pos_y": float(f64::from(volume.pos[1])),
-                "pos_z": float(f64::from(volume.pos[2])),
-                "scale_x": float(f64::from(volume.scale[0])),
-                "scale_y": float(f64::from(volume.scale[1])),
-                "scale_z": float(f64::from(volume.scale[2])),
-            }),
-        );
-        b.wire((column, "transform"), domain, "initial_volume");
-    }
     if scene.obstacle {
         let (_, collider) = obstacle_source(&mut b);
         b.wire((collider, "role"), domain, "role_0");
+    }
+    if let Some(volume) = scene.initial_volume() {
+        b.initial_fill(domain, volume);
     }
     // The params hold the domain's own sites, so the planned storage is the
     // fill's; the wires carry any change.
@@ -624,6 +634,13 @@ impl WaterScene {
         let [domain, state, step, frame, solid, source, surface] =
             ["domain", "state", STEP_NODE, "frame", "mesh_solid", "whitewater_obstacle_source", "surface"].map(|n| b.id(n));
         if self.obstacle {
+            // The collider keeps role_0 and the Initial Fill moves to the
+            // next free role, as a migrated show with both has them.
+            let taken = |port: &str| b.wires.iter().any(|w| w.to_node == domain as u32 && w.to_port == port);
+            let free = (1..).map(|k| format!("role_{k}")).find(|port| !taken(port)).expect("a free role");
+            if let Some(fill) = b.wires.iter_mut().find(|w| w.to_node == domain as u32 && w.to_port == "role_0") {
+                fill.to_port = free;
+            }
             let input = b.node("fluid_input", "system.group_input", json!({}));
             b.wire((input, "role_0"), domain, "role_0");
         }
@@ -860,7 +877,7 @@ impl WaterScene {
 /// The insertion body is the same family used by both presets, without a collider.
 pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     let mut body = WaterScene { obstacle: false, ..WaterScene::dam_break(64) }.family_def();
-    for (id, handle) in [("water_object", ""), ("domain", "Simulation"), ("initial_column", "Initial Volume")] {
+    for (id, handle) in [("water_object", ""), ("domain", "Simulation")] {
         body.nodes.iter_mut().find(|node| node.node_id.as_str() == id)
             .expect("insertion body node").handle = Some(handle.into());
     }
@@ -921,9 +938,7 @@ pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplat
             if suffix.is_empty() { HANDLE_TOKEN.to_owned() } else { format!("{HANDLE_TOKEN} {suffix}") }
         });
     }
-    let stable = |name: &str| {
-        body.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("the family has no {name}")).clone()
-    };
+    let stable = |name: &str| find_node(&body.nodes, name).unwrap_or_else(|| panic!("the family has no {name}")).clone();
     for spec in &mut metadata.params {
         spec.section = Some(match spec.section.as_deref() {
             None | Some("Water") => HANDLE_TOKEN.to_owned(),
@@ -944,7 +959,7 @@ pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplat
         ),
         (
             stable("initial_column"),
-            Some("Initial Volume"),
+            Some("Initial Fill"),
             stamped("node.transform_3d", &|name| {
                 matches!(name, "pos_x" | "pos_y" | "pos_z" | "rot_x" | "rot_y" | "rot_z" | "scale_x" | "scale_y" | "scale_z")
             }),

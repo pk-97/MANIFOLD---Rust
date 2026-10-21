@@ -27,7 +27,7 @@ fn domain_graph(speed: f32) -> String {
         "name": "NodeErrorDomain",
         "nodes": [
             { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-            { "id": 1, "typeId": "node.gpu_flip_domain", "handle": "domain", "nodeId": "domain", "params": {
+            { "id": 1, "typeId": manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, "handle": "domain", "nodeId": "domain", "params": {
                 "domain_size": { "type": "Float", "value": 4.0 },
                 "fill_height": { "type": "Float", "value": 0.16 },
                 "resolution": { "type": "Int", "value": 64 },

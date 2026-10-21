@@ -117,8 +117,7 @@ pub enum Feature {
     /// An environment bake's mode: 0 Gradient, 1 Softbox.
     EnvironmentMode,
     /// A fluid source's role: 0 Initial Fill, 1 Inflow, 2 Outflow, 3
-    /// Collider. An Initial Fill is no source row of its own: its controls
-    /// join the water's, so the role decides which rows exist.
+    /// Collider.
     SourceRole,
 }
 
@@ -221,6 +220,8 @@ pub enum SceneItemKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SourceRole {
+    /// The box of water the liquid starts with and resets to.
+    InitialFill,
     Inflow,
     Drain,
     Collider,
@@ -287,6 +288,7 @@ pub enum SceneTemplateKind {
     Light,
     Water,
     /// The placed fluid sources, inserted inside their water.
+    InitialFill,
     Inflow,
     Drain,
     Collider,

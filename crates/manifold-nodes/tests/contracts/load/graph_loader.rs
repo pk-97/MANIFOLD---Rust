@@ -643,7 +643,7 @@ mod tests {
         let mut stack = vec![&mut doc];
         let mut saved = 0;
         while let Some(value) = stack.pop() {
-            if value["typeId"] == "node.gpu_flip_domain" {
+            if value["typeId"] == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID {
                 value["params"]["particle_capacity"] = serde_json::json!({"type": "Int", "value": 5000});
                 value["exposedParams"] = serde_json::json!(["particle_capacity"]);
                 saved += 1;

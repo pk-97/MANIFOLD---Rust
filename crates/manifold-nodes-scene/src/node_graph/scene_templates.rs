@@ -159,15 +159,17 @@ pub fn plane_template(slot: u32, centroid: (f32, f32), width: f32, height: f32) 
 /// The placed fluid sources the Add menu offers inside a water.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoleSourceKind {
+    InitialFill,
     Inflow,
     Drain,
     Collider,
 }
 
-/// Add Inflow, Drain or Collider: a box, placed by its transform, whose
-/// fluid role output the insertion wires into the target water's next free
-/// role input. The source group sits inside that water, so its row lists
-/// under it. Placed inside the water's `domain` box: an inflow at the top
+/// Add Initial Fill, Inflow, Drain or Collider: a box, placed by its
+/// transform, whose fluid role output the insertion wires into the target
+/// water's next free role input. The source group sits inside that water, so
+/// its row lists under it. Placed inside the water's `domain` box: an
+/// Initial Fill as a column against the -X wall, an inflow at the top
 /// centre, a drain on the floor by the +X wall so the inflow does not pour
 /// straight into it, a collider in the middle.
 pub fn role_source_template(kind: RoleSourceKind, domain: &FluidDomainLayout) -> SceneTemplate {
@@ -177,6 +179,12 @@ pub fn role_source_template(kind: RoleSourceKind, domain: &FluidDomainLayout) ->
     let inflow = 0.15 * sx.min(sz);
     let drain = [0.2 * sx, 0.1 * sy, 0.2 * sz];
     let (display_name, role, pos, scale) = match kind {
+        RoleSourceKind::InitialFill => (
+            "Initial Fill",
+            0,
+            [min_x + sx * 0.2, min_y + sy * 0.25, cz],
+            [0.3 * sx, 0.5 * sy, 0.8 * sz],
+        ),
         RoleSourceKind::Inflow => ("Inflow", 1, [cx, min_y + sy - inflow, cz], [inflow; 3]),
         RoleSourceKind::Drain => (
             "Drain",

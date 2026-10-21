@@ -31,15 +31,16 @@ use crate::scene::transform::Transform;
 /// The canvas canvas-sized arrays are planned at: the stage.
 const CANVAS: (u32, u32) = (1920, 1080);
 
-/// A resolved scalar or transform wire, or the kind of an object wire.
+/// A resolved scalar or transform wire, or what an object wire carries.
 #[derive(Clone, Copy, Debug)]
 pub enum Wire {
     F32(f32),
     Transform(Transform),
     /// Which kind of object a wire carries (a fluid role's Inflow or
-    /// Drain), published by its producer's rule for a consumer whose
-    /// storage depends on what arrives.
-    Kind(u32),
+    /// Initial Fill) and where it is placed, `None` while it is switched
+    /// off. Its producer's rule publishes it for a consumer whose storage
+    /// depends on what arrives.
+    Object { kind: u32, placed: Option<Transform> },
 }
 
 /// Why a rule stopped.
@@ -166,11 +167,12 @@ impl AtomExtent<'_> {
         }
     }
 
-    /// The kind an object wire carries, `None` when the port is not wired.
-    pub fn kind(&self, name: &str) -> Option<u32> {
+    /// The kind an object wire carries and where it is placed, `None` when
+    /// the port is not wired.
+    pub fn object(&self, name: &str) -> Option<(u32, Option<Transform>)> {
         let resource = self.input(name)?;
         match self.wires.get(&resource) {
-            Some(Wire::Kind(kind)) => Some(*kind),
+            Some(Wire::Object { kind, placed }) => Some((*kind, *placed)),
             _ => {
                 self.unresolved.borrow_mut().get_or_insert(self.step.inputs.iter().find(|(n, _)| *n == name).expect("wired").0);
                 None
@@ -249,8 +251,8 @@ impl AtomExtent<'_> {
         self.published.push((port, Wire::Transform(value)));
     }
 
-    pub fn publish_kind(&mut self, port: &'static str, kind: u32) {
-        self.published.push((port, Wire::Kind(kind)));
+    pub fn publish_object(&mut self, port: &'static str, kind: u32, placed: Option<Transform>) {
+        self.published.push((port, Wire::Object { kind, placed }));
     }
 }
 
@@ -394,7 +396,7 @@ fn evaluate_plumbing(graph: &mut Graph, plan: &ExecutionPlan, step: &ExecutionSt
         match *wire {
             Wire::F32(value) => backend.set_scalar(slot, ParamValue::Float(value)),
             Wire::Transform(value) => backend.set_transform(slot, value),
-            Wire::Kind(_) => return,
+            Wire::Object { .. } => return,
         }
         inputs.push((port, slot));
     }

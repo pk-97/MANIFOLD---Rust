@@ -36,6 +36,30 @@ impl FluidRoleKind {
     }
 }
 
+/// The box a water's Initial Fill places, from its Initial Fill roles in
+/// slot order, each `None` while switched off. A water takes one Initial
+/// Fill; a second one switched on is refused by name.
+pub fn initial_fill(fills: impl IntoIterator<Item = Option<Transform>>) -> Result<Option<Transform>, String> {
+    let mut on = fills.into_iter().flatten();
+    let fill = on.next();
+    if on.next().is_some() {
+        return Err("a water takes one Initial Fill; delete or switch off the others".into());
+    }
+    Ok(fill)
+}
+
+/// Takes the Initial Fill roles out of `roles`, since a liquid seeds them
+/// rather than simulating them, and returns the box they place
+/// ([`initial_fill`]).
+pub fn take_initial_fill(roles: &mut [Option<FluidRole>]) -> Result<Option<Transform>, String> {
+    let is_fill = |role: &Option<FluidRole>| role.as_ref().is_some_and(|role| role.kind == FluidRoleKind::InitialFill);
+    let fill = initial_fill(roles.iter().filter(|role| is_fill(role)).flatten().map(|role| role.enabled.then_some(role.transform)));
+    for role in roles.iter_mut().filter(|role| is_fill(role)) {
+        *role = None;
+    }
+    fill
+}
+
 /// Distance lattice nodes along the longest local axis of a role's geometry.
 /// About 34³ nodes with padding: under a second of CPU for a 1,000-triangle
 /// mesh on the worker (GPU_MPM_SOLVER_DESIGN.md D16).
@@ -199,6 +223,25 @@ mod tests {
             inherit_motion: 0.25,
             friction: 0.75,
         }
+    }
+
+    /// A liquid takes its Initial Fill out of its roles: one enabled fill is
+    /// its box, a switched-off one is no fill, and two are refused by name.
+    #[test]
+    fn a_liquid_takes_one_initial_fill_out_of_its_roles() {
+        let fill = |x: f32, enabled: bool| {
+            Some(FluidRole { kind: FluidRoleKind::InitialFill, transform: Transform { pos: [x, 0.0, 0.0], ..Transform::default() }, enabled, ..role() })
+        };
+        let mut roles = vec![Some(role()), fill(1.0, true), None, fill(2.0, false)];
+        assert_eq!(take_initial_fill(&mut roles).unwrap().map(|t| t.pos[0]), Some(1.0));
+        assert!(roles[0].is_some(), "the inflow stays");
+        assert!(roles[1..].iter().all(Option::is_none), "the bodies never see a fill");
+
+        let mut none = vec![Some(role()), fill(2.0, false)];
+        assert_eq!(take_initial_fill(&mut none), Ok(None), "a switched-off fill seeds nothing");
+
+        let mut two = vec![fill(1.0, true), fill(2.0, true)];
+        assert!(take_initial_fill(&mut two).unwrap_err().contains("one Initial Fill"));
     }
 
     #[test]

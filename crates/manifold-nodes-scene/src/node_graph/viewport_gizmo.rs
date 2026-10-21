@@ -141,6 +141,7 @@ pub enum GizmoTargetKind {
     Object,
     FluidDomain,
     Force,
+    InitialFill,
     Inflow,
     Drain,
     Collider,
@@ -153,6 +154,7 @@ impl GizmoTargetKind {
             ShapeOwner::Object(_) => Self::Object,
             ShapeOwner::LiquidDomain(_) => Self::FluidDomain,
             ShapeOwner::RoleSource { role, .. } => match role {
+                FluidRole::InitialFill => Self::InitialFill,
                 FluidRole::Inflow => Self::Inflow,
                 FluidRole::Outflow => Self::Drain,
                 FluidRole::Collider => Self::Collider,
@@ -408,10 +410,8 @@ impl GizmoTarget {
     /// the solver's own report draws in.
     fn outline_color(&self) -> [u8; 4] {
         match self.kind {
-            // A liquid domain declares its box first (`LIQUID_DOMAIN_SHAPES`),
-            // then its fill column.
-            GizmoTargetKind::FluidDomain if self.id.shape == 0 => DOMAIN_BOX_COLOR,
-            GizmoTargetKind::FluidDomain => physics_gizmo_color(PhysicsGizmoFamily::Fill),
+            GizmoTargetKind::FluidDomain => DOMAIN_BOX_COLOR,
+            GizmoTargetKind::InitialFill => physics_gizmo_color(PhysicsGizmoFamily::Fill),
             GizmoTargetKind::Inflow => physics_gizmo_color(PhysicsGizmoFamily::Source),
             GizmoTargetKind::Drain => physics_gizmo_color(PhysicsGizmoFamily::Drain),
             GizmoTargetKind::Collider => physics_gizmo_color(PhysicsGizmoFamily::Collider),

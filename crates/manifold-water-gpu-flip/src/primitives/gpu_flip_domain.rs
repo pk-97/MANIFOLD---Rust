@@ -31,7 +31,7 @@ use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
-use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind};
+use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, take_initial_fill};
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
@@ -123,7 +123,7 @@ manifold_core::testkit_visible! {
 }
 
 /// The fill in the layout's half-cell sites: the pool's height and the
-/// initial volume's site range per axis (empty without one). A height past
+/// Initial Fill's site range per axis (empty without one). A height past
 /// the top is capped there and a volume past a wall is clipped to the domain;
 /// one wholly outside fills nothing (`manifold_core::liquid_setup`, which the
 /// setup check reports from). An unusable height or a volume that is not an
@@ -131,7 +131,7 @@ manifold_core::testkit_visible! {
 fn fill_sites(
     layout: &FluidDomainLayout,
     fill_height: f32,
-    initial_volume: Option<Transform>,
+    initial_fill: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
     let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits, pool_full: false };
@@ -140,9 +140,9 @@ fn fill_sites(
     let h = layout.cell_size;
     let pool = site_range(min[1], min[1] + f64::from(fill_height), min[1], h, layout.cells[1])[1];
     let mut sites = [[0u32; 2]; 3];
-    if let Some(volume) = initial_volume {
+    if let Some(volume) = initial_fill {
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
-            return Err("GPU FLIP: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
+            return Err("GPU FLIP: the Initial Fill must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
         let (edges, outcome) = fit_column(layout, volume.pos, volume.scale).map_err(|reason| format!("GPU FLIP: {reason}"))?;
         fit.column = outcome;
@@ -164,7 +164,7 @@ manifold_core::testkit_visible! {
 pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
-    initial_volume: Option<Transform>,
+    initial_fill: Option<Transform>,
 ) -> Result<GpuFlipGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
@@ -175,7 +175,7 @@ pub fn gpu_flip_geometry(
     let solve_level = read_solve_level(read("solve_level", 0.0), solver.cells()).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0), false).map_err(|reason| format!("GPU FLIP: {reason}"))?;
-    let (pool_sites, box_sites, fit) = fill_sites(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_volume)?;
+    let (pool_sites, box_sites, fit) = fill_sites(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_fill)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
@@ -315,10 +315,9 @@ fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
 manifold_node_engine::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
     inputs: {
         domain: Transform optional,
-        initial_volume: Transform optional,
         acceleration_field: VectorField optional,
         resolution: ScalarF32 optional,
         domain_size: ScalarF32 optional,
@@ -595,6 +594,8 @@ impl Primitive for GpuFlipDomain {
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
         let role_pending = manifold_water_liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        // The Initial Fill seeds the water; the bodies never see it.
+        let fill = take_initial_fill(&mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
@@ -626,7 +627,7 @@ impl Primitive for GpuFlipDomain {
         self.coupled.exchange = None;
         self.scheduled_frame = None;
         self.later_obstacle_tick = None;
-        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
+        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles, fill) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
@@ -826,10 +827,14 @@ impl GpuFlipDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
+        fill: Result<Option<Transform>, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let column = ctx.inputs.transform("initial_volume");
-        let geometry = match gpu_flip_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.inputs.transform("domain"), column) {
-            Ok(geometry) => geometry.sized_for(role_kinds(roles)),
+        let geometry = fill.map_err(|reason| format!("GPU FLIP: {reason}")).and_then(|column| {
+            gpu_flip_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.inputs.transform("domain"), column)
+                .map(|geometry| (geometry, column))
+        });
+        let (geometry, column) = match geometry {
+            Ok((geometry, column)) => (geometry.sized_for(role_kinds(roles)), column),
             Err(reason) => {
                 self.setup_report.refuse(&reason);
                 return Err(reason);
@@ -1277,7 +1282,7 @@ mod tests {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
         assert!(refused(geometry(64.0, -1.0, None)).contains("Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
-        assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));
+        assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("Initial Fill"));
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Fill Height"), "{over}");
