@@ -749,8 +749,8 @@ impl Application {
                 // (right-click context menus: ClipRightClicked, TrackRightClicked).
                 actions.append(&mut host.pending_actions);
             }
-            // A selected point in another lane folds into `automation_view`
-            // when the planner reads it (D8).
+            // A selected point in another lane folds into
+            // `automation_point_lane` when the planner reads it (D8).
         }
 
         // Overlay-generated right-click actions (TrackRightClicked, ClipRightClicked)
