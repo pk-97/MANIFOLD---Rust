@@ -18,6 +18,7 @@ use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, insert_scene_te
 mod addressing;
 mod clip_string_overrides;
 mod force_targets;
+mod make_copies;
 mod rigid_boundary;
 
 /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
@@ -2660,12 +2661,13 @@ fn shipped_physics_copies_remove_as_one_owned_object_and_undoes() {
         mirror_catalog_default(),
     );
     duplicate.execute(&mut project);
-    assert!(!duplicate.was_applied());
-    assert_eq!(
-        duplicate.rejection_reason(),
-        Some("Duplicate Object cannot duplicate a Physics World copies object")
+    assert!(duplicate.was_applied(), "{:?}", duplicate.rejection_reason());
+    assert!(
+        graph_of(&project, &fx).wires.iter().any(|wire| wire.to_node == 40 && wire.to_port == "copies_1"),
+        "the duplicate is the next copy group"
     );
-    assert_eq!(graph_of(&project, &fx), &graph);
+    duplicate.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph, "one undo takes the duplicate back");
     let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],

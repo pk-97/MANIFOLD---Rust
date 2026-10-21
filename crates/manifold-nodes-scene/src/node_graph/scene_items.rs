@@ -225,9 +225,9 @@ mod tests {
     }
 
     /// Camera first, then lights, objects, physics worlds and World; the
-    /// copy body and its transform belong to the physics world.
+    /// copy body and its transform belong to the object drawing its copies.
     #[test]
-    fn items_follow_display_order_and_the_world_owns_its_copy_body() {
+    fn items_follow_display_order_and_the_object_owns_its_copy_body() {
         let mut def = def(serde_json::json!({
             "version": 2,
             "nodes": [
@@ -236,8 +236,9 @@ mod tests {
                 {"id": 40, "nodeId": "world", "typeId": "node.physics_world"},
                 {"id": 120, "nodeId": "box_transform", "typeId": "node.transform_3d"},
                 {"id": 121, "nodeId": "box_body", "typeId": "node.rigid_body"},
+                {"id": 50, "nodeId": "boxes", "typeId": "node.scene_object", "handle": "Boxes"},
                 {"id": 30, "nodeId": "scene", "typeId": "node.render_scene",
-                    "params": {"lights": {"type": "Float", "value": 1.0}}},
+                    "params": {"lights": {"type": "Float", "value": 1.0}, "objects": {"type": "Float", "value": 1.0}}},
                 {"id": 31, "nodeId": "final", "typeId": "system.final_output"}
             ],
             "wires": [
@@ -245,6 +246,8 @@ mod tests {
                 {"fromNode": 4, "fromPort": "out", "toNode": 30, "toPort": "light_0"},
                 {"fromNode": 120, "fromPort": "transform", "toNode": 121, "toPort": "transform"},
                 {"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies_0"},
+                {"fromNode": 121, "fromPort": "instances", "toNode": 50, "toPort": "instances"},
+                {"fromNode": 50, "fromPort": "object", "toNode": 30, "toPort": "object_0"},
                 {"fromNode": 30, "fromPort": "color", "toNode": 31, "toPort": "in"}
             ],
             "presetMetadata": {
@@ -264,18 +267,19 @@ mod tests {
         let vm = SceneVm::from_def(&def).expect("a scene");
         let items = scene_items(&def, &vm);
         let kinds: Vec<_> = items.iter().map(|item| item.kind).collect();
-        assert_eq!(
-            kinds,
-            [SceneItemKind::Camera, SceneItemKind::Light, SceneItemKind::Physics, SceneItemKind::World]
-        );
-        assert_eq!(items[2].name, "Physics");
+        assert!(matches!(
+            kinds.as_slice(),
+            [SceneItemKind::Camera, SceneItemKind::Light, SceneItemKind::Object(_), SceneItemKind::Physics, SceneItemKind::World]
+        ), "{kinds:?}");
+        assert_eq!(items[3].name, "Physics");
         let meta = def.preset_metadata.as_ref().unwrap();
         let owner = |id: &str| owner_of(&items, meta, id).map(|i| items[i].kind);
         assert_eq!(owner("1_orbit"), Some(SceneItemKind::Camera));
         assert_eq!(owner("4_intensity"), Some(SceneItemKind::Light));
-        assert_eq!(owner("40_copy_count"), Some(SceneItemKind::Physics));
-        assert_eq!(owner("121_shape"), Some(SceneItemKind::Physics));
-        assert_eq!(owner("120_pos_x"), Some(SceneItemKind::Physics));
+        let boxes = Some(items[2].kind);
+        assert_eq!(owner("40_copy_count"), boxes, "Count is the drawing object's");
+        assert_eq!(owner("121_shape"), boxes);
+        assert_eq!(owner("120_pos_x"), boxes, "the group transform is the drawing object's");
         assert_eq!(owner("30_rt_enabled"), Some(SceneItemKind::World));
         assert_eq!(owner("missing"), None);
     }

@@ -300,8 +300,9 @@ pub struct SceneObjectKnownRow {
     /// (`manifold_core::liquid_domain::liquid_domain_of`, the walk forces and
     /// pairing use).
     pub liquid_domain: Option<SceneNodeRef>,
-    /// The swarm whose copies this object places (the scene object model's).
-    pub swarm: Option<SceneNodeRef>,
+    /// What places this object's copies: a swarm, or a copy group's copies
+    /// body (the scene object model's).
+    pub instancer: Option<manifold_core::scene_object_model::SceneInstancer>,
     /// Static domain bounds when the fluid domain is fully authored by
     /// unwired scalar/transform parameters.
     pub fluid_domain: Option<FluidDomainLayout>,
@@ -317,6 +318,16 @@ pub struct SceneObjectKnownRow {
 }
 
 impl SceneObjectKnownRow {
+    /// The swarm forces node whose copies this object places.
+    pub fn swarm(&self) -> Option<&SceneNodeRef> {
+        self.instancer.as_ref().filter(|i| i.kind == manifold_core::scene_object_model::InstancerKind::Swarm).map(|i| &i.node)
+    }
+
+    /// The copies body of the copy group this object draws.
+    pub fn copy_group(&self) -> Option<&SceneNodeRef> {
+        self.instancer.as_ref().filter(|i| i.kind == manifold_core::scene_object_model::InstancerKind::CopyGroup).map(|i| &i.node)
+    }
+
     /// The stable ids of the row's controls.
     pub fn control_nodes(&self) -> Vec<NodeId> {
         self.controls.iter().map(|control| control.node.clone()).collect()
@@ -1157,7 +1168,13 @@ fn walk_transform_chain(
     let mut chain = Vec::new();
     let mut current_level = Level { nodes: level.nodes, wires: level.wires };
     let mut sp = scope_path;
-    let mut cursor = current_level.producer(object_node_id, "transform");
+    // A copy group's object has no pose: it draws its body's instances, and
+    // the body's authored transform places the whole group.
+    let mut cursor = current_level.producer(object_node_id, "transform").or_else(|| {
+        current_level
+            .producer(object_node_id, "instances")
+            .filter(|(body, port)| *port == "instances" && current_level.node(*body).is_some_and(|node| node.type_id == "node.rigid_body"))
+    });
     let mut parseable = cursor.is_some();
     let mut transform_vm = None;
     let mut guard = 0;
@@ -1199,7 +1216,7 @@ fn walk_transform_chain(
             // A pose is the body's simulated transform. Follow the body's
             // authored transform for editing; the live simulated pose is not a
             // project value and must never be written back by the scene panel.
-            if port == "pose" {
+            if port == "pose" || port == "instances" {
                 parseable = false; // transform modifiers must not splice across the solver.
             }
             cursor = current_level.producer(n.id, "transform");
@@ -1274,8 +1291,12 @@ fn mesh_source_is_gltf(level: &Level<'_>, object_id: u32) -> bool {
 }
 
 fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
-    let (body_id, port) = level.producer(object_id, "transform")?;
-    (port == "pose" && level.node(body_id)?.type_id == "node.rigid_body").then_some(body_id)
+    let is_body = |id: u32| level.node(id).is_some_and(|node| node.type_id == "node.rigid_body");
+    // A plain body drives the object's pose; a copy group's feeds it instances.
+    [("transform", "pose"), ("instances", "instances")].into_iter().find_map(|(input, output)| {
+        let (body_id, port) = level.producer(object_id, input)?;
+        (port == output && is_body(body_id)).then_some(body_id)
+    })
 }
 
 /// Resolve the editable domain transform and derive bounds only from a
@@ -1503,7 +1524,7 @@ fn trace_scene_object(
         physics,
         physics_imported,
         liquid_domain,
-        swarm: model.swarm.clone(),
+        instancer: model.instancer.clone(),
         fluid_domain,
         fluid_domain_error,
         fluid_domain_transform,

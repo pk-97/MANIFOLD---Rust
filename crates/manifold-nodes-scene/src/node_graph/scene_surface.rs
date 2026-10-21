@@ -172,10 +172,19 @@ const fn transform_box(port: &'static str, rotates: bool) -> SceneShapeDecl {
         shape: SceneShape::Box { center: POS, rotation: if rotates { Some(ROT) } else { None }, size: SCALE },
         via: Some(id(port)),
         extent_limit: None,
+        uniform_scale: false,
     }
 }
 
 static SCENE_OBJECT_SHAPES: [SceneShapeDecl; 1] = [transform_box("transform", true)];
+/// A copy group's gizmo: its copies body's transform, moved and turned as
+/// one and scaled by one number, because the Physics World reads a group's
+/// scale as uniform.
+pub static COPY_GROUP_SHAPES: [SceneShapeDecl; 1] = [{
+    let mut decl = transform_box("transform", true);
+    decl.uniform_scale = true;
+    decl
+}];
 /// The liquid domain box: each side stays inside what the solvers accept.
 const DOMAIN_BOX: SceneShapeDecl = {
     let mut decl = transform_box("domain", false);
@@ -233,15 +242,17 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
         | "fragment_count" | "fragment_index" | "fragment_parent" | "compound_materials" => {
             hidden(Body)
         }
-        // The box spawner. Only a copies body stamps these
+        // The copy group's spawner. Only a copies body stamps these
         // (`copies_body::is_copies_body_param`), and the copies body belongs
-        // to its physics world's item, so they sit with the world's controls.
-        "copy_count" => card(ControlGroup::PhysicsWorld, CardBand::Scene, 0),
+        // to the object that draws its copies (`SceneObjectModel::instancer`),
+        // so they sit on that object's card.
+        "copy_count" => card(ControlGroup::Copies, CardBand::Scene, 0),
+        "copy_layout" => card(ControlGroup::Copies, CardBand::Scene, 1),
         // Counted in copy sizes along the layout's axis, not metres.
-        "copy_size_spacing" => setup(ControlGroup::PhysicsWorld).limit(AT_LEAST_ZERO),
+        "copy_size_spacing" => card(ControlGroup::Copies, CardBand::Scene, 2).unit(Unit::SizeMultiple).limit(AT_LEAST_ZERO),
         // Each copy's own turn inside the layout, like a transform's rotation.
-        "copy_turn_x" | "copy_turn_y" | "copy_turn_z" => setup(ControlGroup::PhysicsWorld).limit(HardLimit::Unlimited),
-        "copy_columns" | "copy_layout" => setup(ControlGroup::PhysicsWorld),
+        "copy_turn_x" | "copy_turn_y" | "copy_turn_z" => setup(ControlGroup::Copies).limit(HardLimit::Unlimited),
+        "copy_columns" => setup(ControlGroup::Copies),
         _ => return None,
     })
 }
@@ -255,8 +266,8 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
-        // Port counts: an allocation grows them, and the copies card sets the
-        // group count, so neither is a slider.
+        // Port counts: an allocation and Make Copies grow them, so neither is
+        // a slider.
         "bodies" | "copy_groups" => hidden(PhysicsWorld),
         // Still air every consumer's Air Drag acts against (D-114).
         "air_resistance" => setup(PhysicsWorld).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
@@ -591,6 +602,28 @@ fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A copy group's Count, Layout and Spacing are Performance Scene rows in
+    /// that order under Copies; Columns and the per-copy turn are setup.
+    #[test]
+    fn a_copy_groups_rows_sit_in_the_copies_group() {
+        let facts = |p: &str| scene_param_facts("node.rigid_body", p).unwrap();
+        let rows: Vec<_> = ["copy_count", "copy_layout", "copy_size_spacing"]
+            .iter()
+            .map(|p| {
+                let f = facts(p);
+                assert_eq!(f.desc.group, ControlGroup::Copies, "{p}");
+                assert_eq!((f.desc.role, f.desc.band), (SurfaceRole::Performance, Some(CardBand::Scene)), "{p}");
+                f.desc.card_order
+            })
+            .collect();
+        assert!(rows.windows(2).all(|w| w[0] < w[1]), "{rows:?}");
+        assert_eq!(facts("copy_size_spacing").unit, Some(Unit::SizeMultiple));
+        for setup in ["copy_columns", "copy_turn_x", "copy_turn_y", "copy_turn_z"] {
+            let f = facts(setup);
+            assert_eq!((f.desc.group, f.desc.role), (ControlGroup::Copies, SurfaceRole::Setup), "{setup}");
+        }
+    }
 
     #[test]
     fn types_outside_the_vocabulary_have_no_facts() {

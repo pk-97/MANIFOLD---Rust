@@ -219,3 +219,32 @@ fn physics_boundary_remove_placed_source() {
     assert!(!body.nodes.iter().any(|node| node.id == 9) && !body.wires.iter().any(|wire| wire.to_port == "role_0"));
     assert_eq!(edit.removed_param_ids, ["inflow_y"]);
 }
+
+/// A loose object drawing a physics body's `instances` is a copy group: its
+/// instancer is the body, its card carries the body and the transform placing
+/// the group, and it cannot make copies again.
+#[test]
+fn scene_object_model_reads_a_copy_group_from_the_instances_it_draws() {
+    let graph = graph(
+        scene_nodes(vec![
+            node(2, "boxes", "node.scene_object"),
+            node(3, "boxes_body", "node.rigid_body"),
+            node(4, "boxes_pos", "node.transform_3d"),
+            node(5, "world", "node.physics_world"),
+        ]),
+        vec![
+            wire(4, "transform", 3, "transform"),
+            wire(3, "instances", 2, "instances"),
+            wire(3, "active_count", 2, "instance_count"),
+            wire(3, "body", 5, "copies_0"),
+            wire(2, "object", 100, "object_0"),
+            wire(100, "color", 101, "in"),
+        ],
+    );
+    let models = scene_object_models(&graph, &scene()).expect("models");
+    let boxes = models.iter().find(|model| model.object.node.as_str() == "boxes").expect("the drawing object");
+    assert_eq!(boxes.copy_group(), Some(&reference(&[], "boxes_body")));
+    assert_eq!(boxes.swarm(), None);
+    assert!(!boxes.capabilities.make_copies, "a copy group does not make copies again");
+    assert_eq!(boxes.controls, [reference(&[], "boxes_body"), reference(&[], "boxes_pos")]);
+}

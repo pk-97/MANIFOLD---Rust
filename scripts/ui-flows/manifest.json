@@ -168,11 +168,14 @@
       "scene-imported-physics"
     ],
     "crates/manifold-editing/src/commands/graph/scene/duplicate.rs": [
-      "scene-physics-duplicate-count",
+      "scene-copy-group",
       "scene-physics-duplicate-paused"
     ],
+    "crates/manifold-editing/src/commands/graph/scene/make_copies.rs": [
+      "scene-copy-group"
+    ],
     "crates/manifold-ui/src/panels/scene_setup_panel/copies.rs": [
-      "scene-physics-duplicate-count"
+      "scene-copy-group"
     ],
     "crates/manifold-core/src/scene_exposure.rs": [
       "scene-fluid-dam-break-controls",
@@ -486,7 +489,7 @@
     "scene-value-box-fits": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-switch": "gltfscene",
-    "scene-physics-duplicate-count": "gltfscene",
+    "scene-copy-group": "gltfscene",
     "scene-imported-physics": "gltfscene",
     "gltf-import-card-sections": "gltfscene",
     "physics-box-count": "physicsboxes",

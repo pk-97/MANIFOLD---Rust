@@ -5,9 +5,6 @@ use manifold_core::physics_members::{Family, is_alias_output, member_input, worl
 
 #[derive(Debug, Clone)]
 pub(super) struct PhysicsSceneObject {
-    pub(super) world_id: u32,
-    /// The copy group whose copies this object draws; `None` for a wired body.
-    pub(super) copy_group: Option<u32>,
     pub(super) transform_id: u32,
     pub(super) object_id: u32,
     pub(super) owned_ids: Vec<u32>,
@@ -262,8 +259,6 @@ pub(super) fn physics_scene_object_match(
     }
 
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
-        world_id: world.id,
-        copy_group: None,
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,
@@ -310,9 +305,6 @@ pub(super) fn grouped_physics_scene_object_match(
     else {
         return PhysicsSceneObjectMatch::Malformed("Physics group body node is unavailable");
     };
-    if let Err(reason) = group_pose_source(group, object.id, body.id) {
-        return PhysicsSceneObjectMatch::Malformed(reason);
-    }
     let Some(authored_wire) = group
         .wires
         .iter()
@@ -348,10 +340,19 @@ pub(super) fn grouped_physics_scene_object_match(
     else {
         return PhysicsSceneObjectMatch::Malformed("Physics group world is unavailable");
     };
-    let Some((Family::Body, body_slot)) = member_input(&body_wire.to_port) else {
+    let Some((family, body_slot)) = member_input(&body_wire.to_port) else {
         return PhysicsSceneObjectMatch::Malformed("Physics group body slot is malformed");
     };
-    if body_slot >= manifold_core::physics_body_slots::world_bodies(world) {
+    // A plain body drives the object's pose; a copy group's body feeds it
+    // instances and a count.
+    let sourced = match family {
+        Family::Body => group_pose_source(group, object.id, body.id),
+        Family::Copies => group_instances_source(group, object.id, body.id),
+    };
+    if let Err(reason) = sourced {
+        return PhysicsSceneObjectMatch::Malformed(reason);
+    }
+    if family == Family::Body && body_slot >= manifold_core::physics_body_slots::world_bodies(world) {
         return PhysicsSceneObjectMatch::Malformed("Physics group body slot is out of range");
     }
     let compound_count = group
@@ -374,7 +375,7 @@ pub(super) fn grouped_physics_scene_object_match(
             return PhysicsSceneObjectMatch::Malformed("Physics compound child transform is missing");
         }
     }
-    let body_port = Family::Body.member_port(body_slot);
+    let body_port = family.member_port(body_slot);
     if wires
         .iter()
         .filter(|wire| wire.to_node == world.id && wire.to_port == body_port)
@@ -384,8 +385,6 @@ pub(super) fn grouped_physics_scene_object_match(
         return PhysicsSceneObjectMatch::Malformed("Physics group body slot is duplicated");
     }
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
-        world_id: world.id,
-        copy_group: None,
         transform_id: authored.id,
         object_id: group_node.id,
         owned_ids: vec![group_node.id],
@@ -550,11 +549,11 @@ pub(super) fn physics_copies_scene_object_match(
             "Physics copies object body output is missing or duplicated",
         );
     };
-    let Some(group) = copy_group_of_input(&body_wire.to_port) else {
+    if copy_group_of_input(&body_wire.to_port).is_none() {
         return PhysicsSceneObjectMatch::Malformed(
             "Physics copies object body output is malformed",
         );
-    };
+    }
     let copies_port = body_wire.to_port.as_str();
     let Some(world) = nodes.iter().find(|node| node.id == body_wire.to_node) else {
         return PhysicsSceneObjectMatch::Malformed("Physics copies object world is unavailable");
@@ -721,8 +720,6 @@ pub(super) fn physics_copies_scene_object_match(
     }
 
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
-        world_id: world.id,
-        copy_group: Some(group as u32),
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,

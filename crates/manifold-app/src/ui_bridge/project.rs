@@ -797,9 +797,16 @@ pub(super) fn dispatch_project(
         }
 
         // Buttons and keyboard duplication build on the content thread.
-        ProjectAction::SceneSetupDuplicateObject(layer_id, object, copies) => {
+        ProjectAction::SceneSetupDuplicateObject(layer_id, object) => {
             ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::DuplicateObject {
-                layer: layer_id.clone(), object: object.clone(), copies: *copies,
+                layer: layer_id.clone(), object: object.clone(),
+            }));
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneSetupMakeCopies(layer_id, object) => {
+            // Built on the content thread, like Duplicate.
+            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::MakeCopies {
+                layer: layer_id.clone(), object: object.clone(),
             }));
             DispatchResult::handled()
         }
@@ -1314,6 +1321,7 @@ mod tests {
     use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_editing::command::Command;
     use manifold_core::types::LayerType;
+    mod copy_group;
     mod swarm_add;
     mod water_family;
     mod water_family_actions;
@@ -2521,7 +2529,6 @@ mod tests {
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
             object_ref(&project, &layer_id, render_scene_id, source_index as u32),
-              1,
         );
         dispatch_project(
             &duplicate,
@@ -2645,7 +2652,6 @@ mod tests {
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
             object_ref(&project, &layer_id, render_scene_id, source_index as u32),
-              1,
         );
         dispatch_project(
             &duplicate,

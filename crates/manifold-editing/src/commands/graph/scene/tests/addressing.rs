@@ -82,7 +82,7 @@ fn a_command_for_an_object_that_is_gone_refuses_with_a_reason() {
         assert!(stale.rejection_reason().unwrap().contains("no longer"), "{:?}", stale.rejection_reason());
         assert_eq!(graph_of(&project, &fx), &after_remove, "a refused command changes nothing");
     }
-    let duplicate = duplicate_copies(&project, target, vec![], 0, 1, 1, &mirror_catalog_default());
+    let duplicate = duplicate_one(&project, target, vec![], 0, 1, &mirror_catalog_default());
     assert!(duplicate.unwrap_err().message.contains("no longer"), "a duplicate prepared for a removed object refuses");
 }
 

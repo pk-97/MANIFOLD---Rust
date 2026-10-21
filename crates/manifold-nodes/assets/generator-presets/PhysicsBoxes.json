@@ -20,7 +20,7 @@
         "isTrigger": false,
         "formatString": "F0",
         "oscSuffix": "copy_count",
-        "section": "Physics",
+        "section": "Boxes — Copies",
         "cardVisible": true
       },
       {
@@ -46,8 +46,8 @@
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
-        "section": "Physics",
-        "cardVisible": false
+        "section": "Boxes — Copies",
+        "cardVisible": true
       },
       {
         "id": "40_copy_columns",
@@ -58,7 +58,7 @@
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
-        "section": "Physics",
+        "section": "Boxes — Copies",
         "cardVisible": false
       },
       {
@@ -70,8 +70,8 @@
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
-        "section": "Physics",
-        "cardVisible": false,
+        "section": "Boxes — Copies",
+        "cardVisible": true,
         "valueLabels": [
           "Grid",
           "Scatter",
