@@ -371,7 +371,31 @@ type VocabNodeEntry = (
 pub fn migrate_scene_exposures<F>(
     def: &mut EffectGraphDef,
     vocabulary: &[&str],
+    section_name: F,
+) -> bool
+where
+    F: FnMut(&EffectGraphNode) -> String,
+{
+    migrate_scene_exposures_moving(def, vocabulary, section_name, &mut Vec::new())
+}
+
+/// A card default the load repair moved: a card value still sitting at `old`
+/// rendered `new` (the node's value) before the repair, so it moves with it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultMove {
+    pub id: String,
+    pub old: f32,
+    pub new: f32,
+}
+
+/// [`migrate_scene_exposures`], also naming every default its repair pass
+/// moved, so the loader can move the card values that sat on the old default
+/// and the card keeps showing what renders (BUG-c48e6).
+pub fn migrate_scene_exposures_moving<F>(
+    def: &mut EffectGraphDef,
+    vocabulary: &[&str],
     mut section_name: F,
+    moves: &mut Vec<DefaultMove>,
 ) -> bool
 where
     F: FnMut(&EffectGraphNode) -> String,
@@ -450,6 +474,11 @@ where
             }
 
             let binding_id = meta.bindings[binding_idx].id.clone();
+            moves.push(DefaultMove {
+                id: binding_id.clone(),
+                old: meta.bindings[binding_idx].default_value,
+                new: correct_default,
+            });
             meta.bindings[binding_idx].default_value = correct_default;
             if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) {
                 spec.default_value = correct_default;

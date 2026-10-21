@@ -155,9 +155,9 @@ impl BoundGraph {
         let shadowed_def_params = def
             .map(|d| find_shadowed_def_params(d, &bindings, graph))
             .unwrap_or_default();
-        let mut cache = LastAppliedCache::new();
-        cache.seed_from_bindings(&bindings);
         apply_binding_defaults(&bindings, graph, None);
+        let mut cache = LastAppliedCache::new();
+        cache.seed_from_graph(&bindings, graph);
         Self {
             bindings,
             cache,
@@ -308,8 +308,8 @@ impl BoundGraph {
 /// Exactly the disagreements that matter, and nothing else:
 /// - only bindings whose default is AUTHORED. A `default_mirrors_node_param`
 ///   binding is a stamp-time snapshot of the node param, and
-///   [`apply_binding_defaults`] no longer plants those at all (BUG-ji6q), so the
-///   node value stands and there is nothing to report. This is the discriminator
+///   [`apply_binding_defaults`] no longer plants those at all (BUG-ji6q), so no
+///   plant overwrites the def value and there is nothing to report. This is the discriminator
 ///   that keeps the diagnostic pointed at the class that is still silent: an
 ///   AUTHORED default — a number someone chose, carrying the binding's
 ///   `scale`/`offset` fold — really does overwrite whatever the def baked.
@@ -918,7 +918,7 @@ mod tests {
     }
 
     /// The BUG-ji6q half: a MIRRORED default is a stamp-time snapshot of the node
-    /// param, `apply_binding_defaults` skips planting it, and the def value stands.
+    /// param, and `apply_binding_defaults` skips planting it over the def value.
     /// Nothing was shadowed, so nothing is reported — the same def+values that fire
     /// under an authored binding must stay silent under a mirrored one, or every
     /// imported scene exposure becomes a false finding.
@@ -944,6 +944,26 @@ mod tests {
         );
     }
 
+    /// BUG-c48e6 (import scale): the node holds an import fit factor (55.3)
+    /// while its mirrored card says 1.0, its default. The first apply must
+    /// still write 1.0: what renders is what the card says, whatever the
+    /// build left on the node. A node that already holds the default stays
+    /// skipped, so a card at rest writes nothing.
+    #[test]
+    fn a_card_at_its_default_still_reaches_a_node_holding_something_else() {
+        let (mut graph, feedback) = graph_with_baked_scale(55.3);
+        let mut binding = scale_binding(feedback, 1.0);
+        binding.default_mirrors_node_param = true;
+        let mut bound = BoundGraph::new(vec![binding], &mut graph, None);
+        assert_eq!(scale_of(&graph, feedback), ParamValue::Float(55.3), "a mirror never plants");
+        bound.apply(&mut graph, &ParamManifest::from_params(vec![slot("amount", 1.0, true)]));
+        assert_eq!(scale_of(&graph, feedback), ParamValue::Float(1.0), "the card value reaches the node");
+
+        let (mut graph, feedback) = graph_with_baked_scale(1.0);
+        let bound = BoundGraph::new(vec![scale_binding(feedback, 1.0)], &mut graph, None);
+        assert_eq!(bound.cache.entries, vec![crate::param_binding::BindingCacheEntry::Applied(1.0)]);
+    }
+
     /// Trigger bindings carry a monotonic counter, not a value anyone holds, so a
     /// def-baked number under one is never the mistake this detector is for.
     #[test]
@@ -953,6 +973,11 @@ mod tests {
         let mut binding = scale_binding(feedback, 0.5);
         binding.convert = ParamConvert::Trigger;
 
-        assert!(find_shadowed_def_params(&def, &[binding], &graph).is_empty());
+        assert!(find_shadowed_def_params(&def, &[binding.clone()], &graph).is_empty());
+
+        // Nor does a build ever fire one: the cache starts at the default.
+        let mut cache = LastAppliedCache::new();
+        cache.seed_from_graph(&[binding], &graph);
+        assert_eq!(cache.entries, vec![crate::param_binding::BindingCacheEntry::Applied(0.5)]);
     }
 }

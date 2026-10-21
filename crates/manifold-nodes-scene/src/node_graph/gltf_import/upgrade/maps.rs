@@ -65,6 +65,7 @@ pub(super) fn add_missing_maps(
         &mut ObjectAssembly {
             k: scene_id as usize,
             path_str: &source_binding.default_value,
+            model_file_id: &source_binding.id,
             fresh_id: &mut fresh_id,
             group_nodes: &mut generated_nodes,
             group_wires: &mut generated_wires,

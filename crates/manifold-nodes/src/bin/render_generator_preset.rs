@@ -16,6 +16,9 @@
 //! key=value` sets a string param (e.g. `text`) from frame 0, and `--string-at
 //! FRAME:key=value` changes it at that frame, the way a new clip with
 //! different text does (pair it with `--triggers FRAME` for the clip edge).
+//! `--add-modifier NAME` attaches a bundled scene modifier (`RadialForce`)
+//! to every object first, as Add Force does; `--hold-time` keeps the clock at
+//! zero so simulations never step: the look before play.
 //! Output is the
 //! same Reinhard-tonemapped, straight-alpha-over-black PNG convention the
 //! save-time thumbnail path uses (linear HDR graph output → viewable PNG).
@@ -51,6 +54,12 @@ struct Args {
     /// per-frame-varying look, or a stuck async load) can't hang the tool
     /// forever — it prints a warning and writes whatever it has instead.
     max_frames: u32,
+    /// Bundled scene modifiers (`RadialForce`, …) attached to every object of
+    /// the preset's scene before the build, the way Add Force attaches one.
+    modifiers: Vec<String>,
+    /// Hold the clock at zero while frames render, so simulations never step
+    /// while loads still converge: the look before play.
+    hold_time: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -66,8 +75,14 @@ fn parse_args() -> Result<Args, String> {
         strings: Vec::new(),
         trigger_every: 0,
         max_frames: 300,
+        modifiers: Vec::new(),
+        hold_time: false,
     };
     while let Some(flag) = argv.next() {
+        if flag == "--hold-time" {
+            args.hold_time = true;
+            continue;
+        }
         let value = argv
             .next()
             .ok_or_else(|| format!("missing value for {flag}"))?;
@@ -83,6 +98,7 @@ fn parse_args() -> Result<Args, String> {
                 args.frames = value.parse().map_err(|e| format!("bad frames: {e}"))?;
             }
             "--out" => args.out = PathBuf::from(value),
+            "--add-modifier" => args.modifiers.push(value),
             "--triggers" => {
                 args.trigger_every = value.parse().map_err(|e| format!("bad triggers: {e}"))?;
             }
@@ -116,6 +132,35 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// `def` with the bundled scene modifier `name` on every object of its one
+/// render scene, through the same preparation Add Force uses.
+fn with_modifier(def: &EffectGraphDef, name: &str, index: usize) -> EffectGraphDef {
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/scene-modifier-presets")
+        .join(format!("{name}.json"));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let recipe: EffectGraphDef = serde_json::from_str(&source).expect("parse modifier JSON");
+    let scene = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_scene")
+        .expect("--add-modifier needs a top-level render scene");
+    let scene = SceneNodeRef { scope: Vec::new(), node: scene.node_id.clone() };
+    let id = manifold_core::NodeId::new(format!("render-{name}-{index}"));
+    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        def,
+        &recipe,
+        id,
+        scene,
+        SceneTargetSelection::AllObjects,
+    )
+    .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
+    manifold_core::scene_modifier_edit::insert_scene_modifier(def, def.scene_modifiers.len(), instance)
+        .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
+        .graph
+}
+
 fn main() {
     let args = match parse_args() {
         Ok(a) => a,
@@ -134,7 +179,10 @@ fn main() {
     };
     let json = std::fs::read_to_string(&json_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", json_path.display()));
-    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse preset JSON");
+    let mut def: EffectGraphDef = serde_json::from_str(&json).expect("parse preset JSON");
+    for (index, name) in args.modifiers.iter().enumerate() {
+        def = with_modifier(&def, name, index);
+    }
 
     // Manifest seeded from the preset's own outer-card specs so overrides
     // route through the same bindings the inspector card uses.
@@ -193,7 +241,7 @@ fn main() {
     let mut stable_count = 0u32;
     let mut converged = false;
     for frame in 0..max_frames {
-        let time = frame as f64 * DT as f64;
+        let time = if args.hold_time { 0.0 } else { frame as f64 * DT as f64 };
         let ctx = PresetContext {
             time,
             beat: time * 2.0, // 120 bpm
