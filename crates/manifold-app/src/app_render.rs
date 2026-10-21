@@ -2491,20 +2491,10 @@ impl Application {
             }
         }
 
-        // 6b. Repaint dirty layer GRID bitmaps. Clip bodies/content + the region /
-        // cursor / marker overlays are all GPU now (section 24 5b), so the grid is a pure
-        // function of the viewport and needs no selection/hover state here.
-        self.ws.ui_root.viewport.repaint_dirty_layers();
-
-        // 6c. Upload dirty layer GRID textures + the lane/stem/overview/group
-        // panel bitmaps to the single layer-bitmap instance (section 24 5b — the per-layer
-        // "front" buffer is gone; waveforms are per-clip GPU textures, overlays are
-        // GPU rects). Grid uses per-layer indices; panels use 1000/1001/1002/2000+.
-        if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
-            for (layer_idx, pixels, tw, th) in self.ws.ui_root.viewport.dirty_layer_iter() {
-                bitmap_gpu.upload_layer(&gpu.device, layer_idx, pixels, tw as u32, th as u32);
-            }
-
+        // 6c. Upload the overview/group/LED panel bitmaps to the panel-bitmap
+        // instance (indices 1002/1003/2000+). The track grid is GPU lines
+        // drawn in the frame pass; nothing for it is uploaded here.
+        if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.panel_bitmap_gpu) {
             // 6f. Repaint + upload overview strip bitmap
             self.ws.ui_root.viewport.repaint_overview();
             if let Some((pixels, tw, th)) = self.ws.ui_root.viewport.overview_bitmap() {

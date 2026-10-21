@@ -1,8 +1,8 @@
-//! GPU texture management and rendering for per-layer bitmap textures.
-//!
-//! Each layer gets a native Metal texture uploaded from CPU pixel buffers produced by
-//! `manifold_ui::bitmap_renderer::LayerBitmapRenderer`. Textures are rendered
-//! as positioned quads in the viewport area via `draw_indexed`.
+//! GPU texture management and rendering for the panel bitmaps: the overview
+//! strip, collapsed-group summaries and the LED preview band. Each bitmap
+//! gets a native Metal texture uploaded from a CPU pixel buffer, rendered as
+//! a positioned quad via `draw_indexed`. The timeline grid is not here: it is
+//! GPU lines (`timeline_grid_draw`).
 
 use std::sync::Arc;
 
@@ -75,14 +75,14 @@ struct LayerTexture {
 /// backlog; correctness against slot reuse comes from `frame_fence`
 /// stamping each slot claim and blocking if the GPU hasn't retired the
 /// command buffer that last wrote it — not from this depth alone.
-/// 16 = 8 frames of cover at this ring's 2 claims per frame (Pass 4a grid +
-/// Pass 4c overview/lanes): fence logs at 4K project load
+/// 16 slots give deep cover for the one claim per frame (Pass 4c
+/// overview/lanes): fence logs at 4K project load
 /// showed the UI queue running 4-5 frames behind, so the previous 8-slot
 /// depth (4 frames) sat inside the backlog window and hit wait timeouts.
 const VBUF_RING_SIZE: usize = 16;
 /// Max layers per frame in the pre-allocated vertex buffer.
 /// BUG-q7zv: 64 → 256. The 64 cap silently vanished layers past 64 from
-/// the grid/overview previews; 256 covers any project a timeline UI
+/// the overview previews; 256 covers any project a timeline UI
 /// stays usable at (256 quads × 4 verts × 16 B × 16 ring slots = 256 KB,
 /// negligible). Past 256 the overflow logs once per session — see
 /// `select_layer_quads`.
@@ -118,7 +118,7 @@ fn select_layer_quads(
 }
 
 /// Manages GPU textures for all layer bitmaps and renders them as positioned quads.
-pub struct LayerBitmapGpu {
+pub struct PanelBitmapGpu {
     textures: Vec<Option<LayerTexture>>,
     pipeline: GpuRenderPipeline,
     sampler: GpuSampler,
@@ -145,7 +145,7 @@ pub struct LayerBitmapGpu {
     cap_overflow_logged: bool,
 }
 
-impl LayerBitmapGpu {
+impl PanelBitmapGpu {
     pub fn new(device: &GpuDevice, format: GpuTextureFormat) -> Self {
         let vertex_layout = GpuVertexLayout {
             stride: std::mem::size_of::<BitmapVertex>() as u32,
@@ -303,7 +303,7 @@ impl LayerBitmapGpu {
         self.vbuf_ring_idx = (slot + 1) % VBUF_RING_SIZE;
         if let Some(fence) = &self.frame_fence {
             fence.guard_slot(
-                "LayerBitmapGpu",
+                "PanelBitmapGpu",
                 slot,
                 &mut self.vbuf_stamps[slot],
                 &mut self.fence_wait_events,
@@ -322,7 +322,7 @@ impl LayerBitmapGpu {
             self.cap_overflow_logged = true;
             eprintln!(
                 "[manifold-nodes] layer preview quads overflowed MAX_LAYER_QUADS \
-                 ({MAX_LAYER_QUADS}) — layers past the cap are missing from grid/overview \
+                 ({MAX_LAYER_QUADS}) — layers past the cap are missing from overview \
                  previews this frame (BUG-q7zv). Raise the constant if a real project hits this."
             );
         }

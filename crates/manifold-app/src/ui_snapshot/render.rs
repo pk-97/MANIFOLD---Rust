@@ -21,7 +21,7 @@
 //! below and handed to the shared seam: clip bodies come from `selection`
 //! (no live drag state exists headless), thumbnail atlas+quads come from
 //! `thumbs::make_test_atlas`/`build_quads` (`--thumbs`-gated) instead of the
-//! content-thread atlas, and `layer_bitmap_gpu`/`clip_content_gpu`/`vqt` are
+//! content-thread atlas, and `panel_bitmap_gpu`/`clip_content_gpu`/`vqt` are
 //! `None` (no such renderers exist headless). See `docs/HEADLESS_UI_HARNESS.md`.
 
 use std::ffi::c_void;
@@ -66,8 +66,8 @@ const ATLAS_FORMAT: GpuTextureFormat = UI_FORMAT;
 pub(crate) fn make_panel_bitmap_gpu(
     device: &GpuDevice,
     ui: &UIRoot,
-) -> manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu {
-    let mut gpu = manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu::new(device, ATLAS_FORMAT);
+) -> manifold_ui_paint::panel_bitmap_gpu::PanelBitmapGpu {
+    let mut gpu = manifold_ui_paint::panel_bitmap_gpu::PanelBitmapGpu::new(device, ATLAS_FORMAT);
     if let Some((pixels, w, h)) = ui.inspector.led_preview_bitmap_peek() {
         gpu.upload_layer(
             device,
@@ -112,7 +112,7 @@ pub fn render_ui_to_png(
     // simple headless inputs this caller can (clip rects/bodies from
     // `selection`, thumbnail atlas+quads from `thumbs`, automation lanes),
     // `None`/empty for everything with no headless equivalent
-    // (`layer_bitmap_gpu`, `clip_content_gpu`, `vqt` — no such renderers
+    // (`panel_bitmap_gpu`, `clip_content_gpu`, `vqt` — no such renderers
     // exist without a content thread or live drag state).
     let mut clip_rects = Vec::new();
     ui.viewport.visible_clip_rects(&mut clip_rects);
@@ -166,7 +166,7 @@ pub fn render_ui_to_png(
         tex_h,
         dpi,
         crate::ui_frame::MainUiPassInputs {
-            layer_bitmap_gpu: Some(&mut bitmap_gpu),
+            panel_bitmap_gpu: Some(&mut bitmap_gpu),
             clip_bodies: &clip_bodies,
             clip_rects: &clip_rects,
             clip_content_gpu: None,
