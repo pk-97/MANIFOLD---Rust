@@ -119,6 +119,7 @@
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
       "scene-setup-add-object",
+      "scene-two-panes",
       "scene-swarm-add",
       "scene-setup-light-intensity-drag",
       "scene-setup-add-fog-drag",
@@ -145,6 +146,7 @@
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup-add-object",
+      "scene-two-panes",
       "scene-setup-light-intensity-drag",
       "scene-setup-add-fog-drag",
       "scene-setup-modifier-stack",

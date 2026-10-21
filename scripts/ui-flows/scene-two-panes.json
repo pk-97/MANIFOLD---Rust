@@ -2,7 +2,7 @@
   { "Pointer": { "target": { "Query": { "text": "Scene", "type": "Button", "under_name": "inspector" } }, "gesture": { "Click": { "modifiers": {} } } } },
   { "Pointer": { "target": { "Query": { "name": "scene_setup.objects.group_toggle" } }, "gesture": { "Click": { "modifiers": {} } } } },
   { "Pointer": { "target": { "Query": { "name": "scene_tree.item", "text": "QS1694-W02-1-1" } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "ScrollTo": { "target": { "Query": { "name": "param_row.10_color_r.colour" } } } },
+  { "ScrollTo": { "target": { "Query": { "name": "param_row.8_color_r.colour" } } } },
   { "Pointer": { "target": { "Query": { "name": "scene_setup.settings_pane" } }, "gesture": { "Scroll": { "delta": { "x": 0.0, "y": -4000.0 } } } } },
   { "Assert": {
       "selector": { "Query": { "name": "scene_tree.item", "text": "Camera" } },
@@ -22,6 +22,6 @@
   { "Pointer": { "target": { "Query": { "name": "scene_setup.split" } }, "gesture": "DoubleClick" } },
   { "Assert": {
       "selector": { "Query": { "name": "scene_setup.split" } },
-      "check": { "RectWithin": { "x": 940.0, "y": 424.0, "width": 592.0, "height": 6.0 } } } },
+      "check": { "RectWithin": { "x": 940.0, "y":400.0, "width": 592.0, "height": 6.0 } } } },
   "AssertFresh"
 ]
