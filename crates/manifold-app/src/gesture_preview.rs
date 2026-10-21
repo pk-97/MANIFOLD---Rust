@@ -28,17 +28,19 @@ pub(crate) struct UiEdits {
     pub preview: GesturePreview,
 }
 
-struct ClipPreview {
-    id: ClipId,
-    layer: LayerId,
-    start: Beats,
-    duration: Beats,
-    in_point: Seconds,
+/// One dragged clip as the host last wrote it.
+pub(crate) struct ClipPreview {
+    pub id: ClipId,
+    pub layer: LayerId,
+    pub start: Beats,
+    pub duration: Beats,
+    pub in_point: Seconds,
 }
 
-struct LanePreview {
-    target: GraphTarget,
-    param_id: ParamId,
+/// One dragged lane as the host last wrote it.
+pub(crate) struct LanePreview {
+    pub target: GraphTarget,
+    pub param_id: ParamId,
     points: Vec<AutomationPoint>,
 }
 
@@ -66,6 +68,21 @@ impl GesturePreview {
     /// `FrameInputs.preview`.
     pub(crate) fn version(&self) -> PreviewVersions {
         self.version
+    }
+
+    /// The clips a clip gesture is dragging, as last recorded.
+    pub(crate) fn clips(&self) -> &[ClipPreview] {
+        &self.clips
+    }
+
+    /// The lanes a point drag is moving, as last recorded.
+    pub(crate) fn lanes(&self) -> &[LanePreview] {
+        &self.lanes
+    }
+
+    /// A clip move or trim, or a region move's splits, is in flight.
+    pub(crate) fn clip_gesture_live(&self) -> bool {
+        !self.clips.is_empty() || !self.splits.is_empty()
     }
 
     pub(crate) fn is_empty(&self) -> bool {

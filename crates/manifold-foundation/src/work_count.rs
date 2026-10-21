@@ -79,11 +79,15 @@ pub enum WorkKind {
     TempoReconcile,
     /// `trigger_targets.refresh` that rebuilt the targets.
     TriggerTargetRefresh,
+    /// A drag preview wrote the clips it drags into the viewport in place.
+    ClipPreviewUpdate,
+    /// A drag preview re-projected the lanes it drags in place.
+    LanePreviewUpdate,
     /// One heap allocation, counted by the `work-trace` allocator wrapper.
     FrameAlloc,
 }
 
-pub const WORK_KIND_COUNT: usize = 33;
+pub const WORK_KIND_COUNT: usize = 35;
 
 impl WorkKind {
     pub const ALL: [WorkKind; WORK_KIND_COUNT] = [
@@ -119,6 +123,8 @@ impl WorkKind {
         WorkKind::GeneratorStructureRefresh,
         WorkKind::TempoReconcile,
         WorkKind::TriggerTargetRefresh,
+        WorkKind::ClipPreviewUpdate,
+        WorkKind::LanePreviewUpdate,
         WorkKind::FrameAlloc,
     ];
 
@@ -161,6 +167,8 @@ impl WorkKind {
             WorkKind::GeneratorStructureRefresh => "GeneratorStructureRefresh",
             WorkKind::TempoReconcile => "TempoReconcile",
             WorkKind::TriggerTargetRefresh => "TriggerTargetRefresh",
+            WorkKind::ClipPreviewUpdate => "ClipPreviewUpdate",
+            WorkKind::LanePreviewUpdate => "LanePreviewUpdate",
             WorkKind::FrameAlloc => "FrameAlloc",
         }
     }
