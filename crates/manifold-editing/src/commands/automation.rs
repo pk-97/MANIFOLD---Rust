@@ -177,15 +177,12 @@ impl Command for AddAutomationPointCommand {
                         insert_sorted(&mut lane.points, point);
                     }
                 }
-                None => {
-                    if !self.on_curve {
-                        lanes.push(AutomationLane {
-                            param_id: param_id.into(),
-                            enabled: true,
-                            points: vec![point],
-                        });
-                    }
-                }
+                // An on-curve insert into a missing lane returned above.
+                None => lanes.push(AutomationLane {
+                    param_id: param_id.into(),
+                    enabled: true,
+                    points: vec![point],
+                }),
             }
             true
         });
@@ -243,11 +240,6 @@ pub struct MoveAutomationPointCommand {
     target: GraphTarget,
     param_id: String,
     moves: Vec<(AutomationPoint, AutomationPoint)>,
-    /// A move that keeps twins never deletes anything: only the first stored
-    /// point matching each source changes, so landing on an exact
-    /// `(beat, value)` twin leaves the twin in place. Plain group moves keep
-    /// replacing collisions.
-    keep_destination_twins: bool,
     previous_lane: Option<AutomationLane>,
     previous_lane_index: Option<usize>,
 }
@@ -259,12 +251,12 @@ impl MoveAutomationPointCommand {
         old_point: AutomationPoint,
         new_point: AutomationPoint,
     ) -> Self {
-        let mut command = Self::for_group(target, param_id, vec![(old_point, new_point)]);
-        command.keep_destination_twins = true;
-        command
+        Self::for_group(target, param_id, vec![(old_point, new_point)])
     }
 
     /// Move all selected points simultaneously, preserving their authored order.
+    /// Nothing is ever deleted: only the first stored point matching each source
+    /// changes, so landing on an exact `(beat, value)` twin leaves the twin in place.
     pub fn for_group(
         target: GraphTarget,
         param_id: impl Into<String>,
@@ -272,22 +264,8 @@ impl MoveAutomationPointCommand {
     ) -> Self {
         Self {
             target, param_id: param_id.into(), moves,
-            keep_destination_twins: false,
             previous_lane: None, previous_lane_index: None,
         }
-    }
-
-    /// Like [`Self::for_group`], but a destination that lands on an exact
-    /// `(beat, value)` twin of a point outside the group leaves that twin in
-    /// place. Keyboard nudges use it so a move never deletes a point.
-    pub fn for_group_keeping_twins(
-        target: GraphTarget,
-        param_id: impl Into<String>,
-        moves: Vec<(AutomationPoint, AutomationPoint)>,
-    ) -> Self {
-        let mut command = Self::for_group(target, param_id, moves);
-        command.keep_destination_twins = true;
-        command
     }
 
     fn apply(
@@ -295,7 +273,6 @@ impl MoveAutomationPointCommand {
         target: &GraphTarget,
         param_id: &str,
         moves: &[(AutomationPoint, AutomationPoint)],
-        keep_destination_twins: bool,
     ) -> bool {
         project
             .with_preset_graph_mut(target, |inst| {
@@ -308,31 +285,17 @@ impl MoveAutomationPointCommand {
                 if moves.is_empty() || !moves.iter().all(|(from, _)| lane.points.iter().any(|p| same_point(p, from))) {
                     return false;
                 }
-                if keep_destination_twins {
-                    // Each move rewrites the first not-yet-moved stored point
-                    // matching its source; nothing else is removed.
-                    let mut moved = vec![false; lane.points.len()];
-                    for (from, to) in moves {
-                        if let Some(index) = (0..lane.points.len())
-                            .find(|&i| !moved[i] && same_point(&lane.points[i], from))
-                        {
-                            lane.points[index] = *to;
-                            moved[index] = true;
-                        }
+                // Each move rewrites the first not-yet-moved stored point
+                // matching its source; nothing else is removed.
+                let mut moved = vec![false; lane.points.len()];
+                for (from, to) in moves {
+                    if let Some(index) = (0..lane.points.len())
+                        .find(|&i| !moved[i] && same_point(&lane.points[i], from))
+                    {
+                        lane.points[index] = *to;
+                        moved[index] = true;
                     }
-                    lane.points.sort_by(|a, b| a.beat.0.total_cmp(&b.beat.0));
-                    return true;
                 }
-                // Transform in original lane order, then use a stable beat sort.
-                // This preserves step order for single and group moves alike.
-                lane.points.retain_mut(|point| {
-                    if let Some((_, to)) = moves.iter().find(|(from, _)| same_point(point, from)) {
-                        *point = *to;
-                        true
-                    } else {
-                        !moves.iter().any(|(_, to)| same_point(point, to))
-                    }
-                });
                 lane.points.sort_by(|a, b| a.beat.0.total_cmp(&b.beat.0));
                 true
             })
@@ -366,7 +329,6 @@ impl Command for MoveAutomationPointCommand {
             &self.target,
             &self.param_id,
             &self.moves,
-            self.keep_destination_twins,
         );
     }
 
