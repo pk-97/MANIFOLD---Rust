@@ -47,8 +47,14 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         let def = preset(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Swarm.json")));
         let registry = PrimitiveRegistry::with_builtin();
         let index = FlatSceneIndex::build(&def).unwrap();
+        // The preset is the Add menu's swarm inserted whole: one group.
+        let group = def.nodes.iter().find(|node| node.type_id == "group").expect("the swarm group");
+        let inside = |type_id: &str| {
+            let node = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == type_id).expect("swarm node");
+            SceneNodeRef { scope: vec![group.node_id.clone()], node: node.node_id.clone() }
+        };
         assert_eq!(
-            recipient_key(&index, &top("swarm_object"), &registry).unwrap(),
-            Some((top("swarm_forces"), "acceleration_field".to_string()))
+            recipient_key(&index, &inside("node.scene_object"), &registry).unwrap(),
+            Some((inside("node.swarm_forces"), "acceleration_field".to_string()))
         );
     }

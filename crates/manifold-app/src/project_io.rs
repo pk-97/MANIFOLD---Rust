@@ -1409,6 +1409,38 @@ mod tests {
         assert!(pinned(&new, CardPin::Shown).is_empty(), "a show saved now keeps an empty card (D-72)");
     }
 
+    /// D-103: the World's Air Resistance (D-114), new since 1.22.0, is stamped
+    /// into an old show on load as a setup row, so its card gains no row.
+    #[test]
+    fn old_show_gains_no_air_resistance_row() {
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator(
+            "PhysicsSolids".into(),
+            PresetTypeId::from_string("PhysicsSolids".to_string()),
+            0,
+        ));
+        project.reconcile_param_manifests();
+        let mut json: serde_json::Value = serde_json::to_value(&project).unwrap();
+        json["projectVersion"] = serde_json::Value::String("1.21.0".into());
+        let mut old = manifold_io::loader::load_project_from_json(&json.to_string()).expect("load");
+        migrate_project_scene_graphs(&mut old);
+        let host = old.timeline.layers[0].gen_params().unwrap();
+        let target = manifold_core::GraphTarget::Generator(old.timeline.layers[0].layer_id.clone());
+        let def = crate::graph_target::resolve(&old, &target)
+            .expect("the show's graph");
+        let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("a Physics World").node_id.clone();
+        let meta = def.preset_metadata.as_ref().expect("metadata");
+        let row = meta
+            .bindings
+            .iter()
+            .find(|binding| matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if *node_id == world && param == "air_resistance"))
+            .map(|binding| binding.id.clone())
+            .expect("the World's Air Resistance is stamped on load");
+        let param = host.params.get(&row).expect("the Air Resistance row");
+        assert!(param.exposed, "the row is offered on the scene tab");
+        assert_eq!(param.choices.pin, None, "an old show's card gains no Air Resistance row");
+    }
+
     /// PhysicsSolids' exposed Performance rows its items own, less the two the
     /// test above removes and unexposes: camera, depth of field and motion
     /// blur (switches and their gated rows), exposure and the three lights.

@@ -1270,18 +1270,20 @@ mod tests {
     }
 
     /// The Swarm template on a generator layer, its box moved off the scene
-    /// origin so no other shape shares its pick point.
+    /// origin so no other shape shares its pick point. The box is on the
+    /// card, so the card holds where it is.
     fn swarm_project() -> (Project, LayerId) {
         let mut project = Project::default();
         let index = project.timeline.add_layer("Swarm", LayerType::Generator, PresetTypeId::from_string("Swarm".to_string()));
         let layer_id = project.timeline.layers[index].layer_id.clone();
-        let mut def: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_SWARM_JSON).unwrap();
-        let bounds = def.nodes.iter_mut().find(|node| node.node_id == NodeId::new("swarm_bounds")).expect("the swarm's box");
-        bounds.params.insert("pos_x".into(), SerializedParamValue::Float { value: 3.0 });
-        bounds.params.insert("pos_y".into(), SerializedParamValue::Float { value: 2.0 });
+        let def: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_SWARM_JSON).unwrap();
+        let body = def.nodes.iter().find_map(|node| node.group.as_deref()).expect("the swarm group");
+        let bounds = body.nodes.iter().find(|node| node.type_id == "node.transform_3d").expect("the swarm's box").id;
         let generator = project.timeline.layers[index].gen_params_mut().unwrap();
         generator.graph = Some(def);
         generator.refresh_manifest_from_graph();
+        assert!(generator.set_base_param(&format!("{bounds}_pos_x"), 3.0));
+        assert!(generator.set_base_param(&format!("{bounds}_pos_y"), 2.0));
         (project, layer_id)
     }
 
@@ -1292,22 +1294,23 @@ mod tests {
     fn a_swarm_box_is_a_target_and_picking_it_selects_the_swarm_row() {
         let (mut project, layer) = swarm_project();
         let swarm = target(&project, &layer, GizmoTargetKind::Swarm);
-        assert_eq!(swarm.id.owner, ShapeOwner::Swarm(NodeId::new("swarm_forces")));
+        let (group, _, forces) = swarm_node(&project, &layer, "node.swarm_forces");
+        assert_eq!(swarm.id.owner, ShapeOwner::Swarm(forces.clone()));
         let scene = scene(&project, &layer);
         let shape = scene.shapes.iter().find(|shape| shape.owner == swarm.id.owner).expect("the swarm's box shape");
         let place = |id: &str| shape.params.iter().find(|p| p.id == id).map(|p| (p.value, p.write.clone())).unwrap();
-        let bounds = scene_vm_node_doc_id(&project, &layer, "swarm_bounds");
-        assert_eq!(place("pos_x"), (3.0, ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id: bounds, param_id: "pos_x".into() })));
+        let (_, bounds, _) = swarm_node(&project, &layer, "node.transform_3d");
+        assert_eq!(place("pos_x"), (3.0, ShapeWrite::Node(ParamAddr { scope_path: vec![group], node_doc_id: bounds, param_id: "pos_x".into() })));
         assert_eq!(place("pos_y").0, 2.0);
-        assert_eq!(place("scale_x").0, 4.0);
+        assert_eq!(place("scale_x").0, 6.0);
         let row = swarm.row.expect("the swarm box belongs to the swarm's object row");
-        let object = scene_vm_node_doc_id(&project, &layer, "swarm_object");
+        let (_, object, _) = swarm_node(&project, &layer, "node.scene_object");
         assert_eq!(row, object, "the row is the scene object the swarm's copies feed");
         let modelled = scene.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(known) if known.object_node_id == row => known.swarm.as_ref().map(|swarm| swarm.node.clone()),
             _ => None,
         });
-        assert_eq!(modelled, Some(NodeId::new("swarm_forces")), "the scene object model gives the row its swarm");
+        assert_eq!(modelled, Some(forces), "the scene object model gives the row its swarm");
 
         let view = GizmoView::new(camera(), W, H);
         let mut rig = Rig::new(&layer);
@@ -1321,8 +1324,12 @@ mod tests {
     }
 
     /// The authored doc id of the root node named `node_id`.
-    fn scene_vm_node_doc_id(project: &Project, layer: &LayerId, node_id: &str) -> u32 {
+    /// The swarm group's document id, and the document id and stable id of
+    /// its one node of `type_id`.
+    fn swarm_node(project: &Project, layer: &LayerId, type_id: &str) -> (u32, u32, NodeId) {
         let def = authored_def(project, &GraphTarget::Generator(layer.clone())).unwrap();
-        def.nodes.iter().find(|node| node.node_id == NodeId::new(node_id)).map(|node| node.id).unwrap()
+        let group = def.nodes.iter().find(|node| node.group.is_some()).expect("the swarm group");
+        let node = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == type_id).expect("swarm node");
+        (group.id, node.id, node.node_id.clone())
     }
 }

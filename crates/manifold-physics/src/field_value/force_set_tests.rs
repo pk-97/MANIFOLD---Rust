@@ -172,3 +172,33 @@ fn multiply_refuses_air_switched_on_or_off() {
     assert!(mask.multiply(&card(0.0)).is_err());
     assert!(FieldValue::uniform([1.0; 3]).unwrap().scaled(0.0).unwrap().multiply(&mask).is_ok());
 }
+
+/// Still air (D-114): with no wind, Air Drag against the World's still air
+/// gives a falling body the terminal speed g / (air resistance × Air Drag),
+/// whatever the step size. At air resistance 0 a consumer feels its forces
+/// exactly as before, so an old show is unchanged.
+#[test]
+fn still_air_gives_a_terminal_speed_and_zero_changes_nothing() {
+    let gravity = FieldValue::uniform([0.0, -9.81, 0.0]).unwrap();
+    let field = FieldValue::felt_in_still_air(Some(&gravity), 2.0, 0.5).unwrap().unwrap();
+    let sample = field.sample_force([1.0, 2.0, 3.0]);
+    assert!((sample.drag - 1.0).abs() < 1e-6);
+    for dt in [1.0 / 30.0, 1.0 / 240.0] {
+        let mut v = [0.0; 3];
+        for _ in 0..(20.0 / dt) as usize {
+            v = sample.step_velocity(v, dt);
+        }
+        assert!(close(v, [0.0, -9.81, 0.0], 1e-4), "dt {dt}: {v:?}");
+    }
+    // A consumer with Air Drag 0 ignores still air too.
+    let ignored = FieldValue::felt_in_still_air(Some(&gravity), 2.0, 0.0).unwrap().unwrap();
+    assert_eq!(ignored.sample_force([0.0; 3]).drag, 0.0);
+    // No still air: exactly the forces at the consumer's Air Drag, or nothing.
+    let windy = gravity.sum(&wind([5.0, 0.0, 0.0], 4.0)).unwrap();
+    assert_eq!(FieldValue::felt_in_still_air(Some(&windy), 0.0, 1.5).unwrap(), Some(windy.with_air_drag(1.5).unwrap()));
+    assert_eq!(FieldValue::felt_in_still_air(None, 0.0, 1.0).unwrap(), None);
+    // Still air alone, with no scene forces, still drags.
+    let alone = FieldValue::felt_in_still_air(None, 1.0, 1.0).unwrap().unwrap();
+    assert!((alone.sample_force([0.0; 3]).drag - 1.0).abs() < 1e-6);
+    assert!(FieldValue::felt_in_still_air(None, -1.0, 1.0).is_err());
+}

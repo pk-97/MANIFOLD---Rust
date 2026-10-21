@@ -85,10 +85,11 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("active_count"),
-            label: "Active Count",
+            label: "Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
-            range: Some((0.0, 16_000_000.0)),
+            // The card's slider; typed values and wires go past it, up to capacity.
+            range: Some((0.0, 100_000.0)),
             enum_values: &[],
         },
         ParamDef {

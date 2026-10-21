@@ -425,7 +425,7 @@ pub(super) fn test_object_template(centroid: (f32, f32)) -> manifold_core::scene
         ],
         tint: None,
     }));
-    manifold_core::scene_template::SceneTemplate { group, metadata: template_metadata("Object") }
+    manifold_core::scene_template::SceneTemplate { group, metadata: template_metadata("Object"), physics: Default::default() }
 }
 
 /// Add Light's shape, without card rows: a bare white Sun light casting
@@ -441,7 +441,7 @@ pub(super) fn test_light_template(position: (f32, f32)) -> manifold_core::scene_
         ("intensity".to_string(), SerializedParamValue::Float { value: 1.0 }),
         ("cast_shadows".to_string(), SerializedParamValue::Float { value: 1.0 }),
     ]);
-    manifold_core::scene_template::SceneTemplate { group: light, metadata: template_metadata("Light") }
+    manifold_core::scene_template::SceneTemplate { group: light, metadata: template_metadata("Light"), physics: Default::default() }
 }
 
 /// Stamp `rows` as card rows of the template node with template-local id
