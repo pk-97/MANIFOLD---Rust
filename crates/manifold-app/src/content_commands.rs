@@ -1171,7 +1171,7 @@ impl ContentThread {
                 if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
                     // Between frames: the next frame's target and tempo shift, peeked,
                     // so a hit after a seek in this drain sees the seek.
-                    let (pending_target, tempo_shift) = (self.engine.transport_target(), self.engine.tempo_shift());
+                    let (pending_target, tempo_shift) = (self.engine.played_target(), self.engine.tempo_shift());
                     let (renderers, project) = self.engine.split_renderer_project();
                     // The renderer counts its own refusals into the scene
                     // impulse diagnostics the stage shows; only a missing

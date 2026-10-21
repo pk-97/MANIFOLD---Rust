@@ -5,6 +5,7 @@ use manifold_node_engine::runtime::FrameContextInputs;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::Beats;
 use manifold_core::NodeId;
+use manifold_core::audio_mod::HopValue;
 use manifold_core::Seconds;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use super::*;
@@ -125,7 +126,7 @@ fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -
         delta: Seconds(
             runtime
                 .water_ref().water.last_frame_time
-                .map_or(0.0, |previous| seconds - previous.seconds.0),
+                .map_or(0.0, |previous| seconds - previous.played.seconds()),
         ),
         frame_count: 0,
     };
@@ -317,7 +318,7 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
         delta: Seconds(0.02),
         frame_count: 1,
     };
-    runtime.water().observe_physics_at_source(source).unwrap();
+    observe(&mut runtime, source);
     let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
     let (at_source, replayed) = samples.split_last().unwrap();
     assert_tempo_samples(replayed, &tempo);
@@ -343,10 +344,10 @@ fn source_older_than_the_latest_observation_lands_at_it() {
     let latest = runtime.water_ref().water.last_frame_time.unwrap();
     OBSERVATIONS.with_borrow_mut(std::mem::take);
     let late = FrameTime { seconds: Seconds(0.06), beats: Beats(0.12), delta: Seconds::ZERO, frame_count: 1 };
-    let observed = runtime.water().observe_physics_at_source(late).unwrap();
-    assert_eq!((observed.seconds, observed.beats), (latest.seconds, latest.beats));
+    let observed = observe(&mut runtime, late);
+    assert_eq!((observed.played, observed.beats), (latest.played, latest.beats));
     let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
-    assert!(samples.iter().all(|sample| sample.time.seconds == latest.seconds), "history never reopens");
+    assert!(samples.iter().all(|sample| sample.time.seconds.0 == latest.played.seconds()), "history never reopens");
 }
 
 /// The closing observation reads the held map's beat at the sample offset,
@@ -378,7 +379,7 @@ fn closing_observation_reads_the_sample_beat_and_the_source_keeps_its_stamp() {
         runtime.set_project_tempo(Some(&tempo));
         frame(&mut runtime, seconds.0 - 1.0 / 30.0, 1.0, 0.0);
         runtime.set_project_tempo(Some(current_tempo));
-        runtime.water().observe_physics_at_source(source).unwrap();
+        observe(&mut runtime, source);
         let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
         let closing = &samples[samples.len() - 2];
         assert_eq!(closing.time.seconds, source.seconds);
@@ -470,6 +471,14 @@ fn modulated(enabled: bool, hops: &[(f64, f32)]) -> PresetInstance {
     instance
 }
 
+/// The water runtime's Fire seam, as the host's Fire takes it: transport
+/// `source` becomes played time with the runtime's own step.
+fn observe(runtime: &mut PresetRuntime, source: FrameTime) -> HeldFrame {
+    let mut water = runtime.water();
+    let played = water.executor.sim_step().to_played(source.seconds);
+    water.observe_physics_at_source(played, source.beats).unwrap()
+}
+
 fn empty_snapshot() -> PhysicsInputSnapshot {
     PhysicsInputSnapshot {
         values: Vec::new(),
@@ -478,7 +487,6 @@ fn empty_snapshot() -> PhysicsInputSnapshot {
         tick_times: Vec::new(),
         hops: Vec::new(),
         hop_len: 0,
-        hops_fresh: false,
         hop_routes: Vec::new(),
         automation: Vec::new(),
         automation_len: 0,
@@ -491,11 +499,11 @@ fn empty_snapshot() -> PhysicsInputSnapshot {
 #[test]
 fn a_re_enabled_audio_mod_carries_no_hop_from_before_it_was_off() {
     let mut inputs = empty_snapshot();
-    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
-    inputs.set_hops(Some(&modulated(true, &[(0.03, 0.4)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[(0.03, 0.4)])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.02), Some(0.9), "a live mod carries its latest hop into the next frame");
-    inputs.set_hops(Some(&modulated(false, &[])));
-    inputs.set_hops(Some(&modulated(true, &[(0.5, 0.2)])));
+    inputs.set_hops(Some(&modulated(false, &[])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[(0.5, 0.2)])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.45), None, "the re-enabled mod carried a hop from before it was off");
     assert_eq!(inputs.heard("speed", 0.5), Some(0.2));
 }
@@ -509,26 +517,26 @@ fn a_re_enabled_audio_mod_carries_no_hop_from_before_it_was_off() {
 #[test]
 fn a_transport_jump_drops_the_carried_hop_and_hands_its_own_to_the_opening() {
     let mut inputs = empty_snapshot();
-    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
-    inputs.set_hops(Some(&modulated(true, &[])));
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.02), Some(0.9));
     inputs.jump_hops(true);
     assert_eq!(inputs.heard("speed", 0.02), None, "the hop from before the jump reached a sample after it");
-    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.85), Some(0.3), "the opening reads the first hop after the jump");
     let mut inputs = empty_snapshot();
-    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
-    inputs.set_hops(Some(&modulated(true, &[(0.85, 0.7), (0.86, 0.6)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])), Seconds::ZERO);
+    inputs.set_hops(Some(&modulated(true, &[(0.85, 0.7), (0.86, 0.6)])), Seconds::ZERO);
     inputs.jump_hops(true);
-    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.855), Some(0.7), "the opening replay reads the jump frame's hops at their own times");
     assert_eq!(inputs.heard("speed", 0.87), Some(0.6));
     assert_eq!(inputs.heard("speed", 0.9), Some(0.3));
     inputs.hops_replayed();
-    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.855), None, "a later frame carries only the latest hop");
     assert_eq!(inputs.heard("speed", 0.92), Some(0.3));
-    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])), Seconds::ZERO);
     assert_eq!(inputs.heard("speed", 0.92), Some(0.3), "a second call in one tick keeps the first's carry");
 }
 
@@ -549,9 +557,9 @@ fn a_fire_after_a_forward_seek_never_replays_the_skipped_span() {
                 frame(&mut runtime, f64::from(k) / fps_f, 1.0, 0.0);
             }
             let landed = (TARGET * fps_f - 2e-7).ceil() / fps_f;
-            runtime.set_sim_step(step().with_transport_target(Some(Seconds(TARGET))));
+            runtime.set_sim_step(step().with_played_target(Some(PlayedTime::from_played(TARGET))));
             let source = FrameTime { seconds: Seconds(landed), beats: Beats(landed * 2.0), delta: Seconds::ZERO, frame_count: 1 };
-            runtime.water().observe_physics_at_source(source).unwrap();
+            observe(&mut runtime, source);
             let mut seen = OBSERVATIONS.with_borrow_mut(std::mem::take);
             seen.extend(frame(&mut runtime, landed, 1.0, 1.0));
             runtime.set_sim_step(step());
@@ -562,4 +570,29 @@ fn a_fire_after_a_forward_seek_never_replays_the_skipped_span() {
             assert_eq!(at(&next[0]), TARGET, "{fps} fps, offline {offline}: the replay opens at the seek's target");
         }
     }
+}
+
+/// Fires observed while the BPM is dragged up and down, one edit a frame,
+/// keep their source on played time: each lands after the one before and is
+/// never moved back by an edit.
+#[test]
+fn fire_sources_hold_across_a_bpm_drag() {
+    let interval = Seconds(manifold_physics::clock::TICK);
+    let mut runtime = runtime();
+    let (mut seconds, mut shift) = (1.0, 0.0);
+    let mut sources = Vec::new();
+    for k in 0..30_i64 {
+        // Up (the transport moves back further than a frame) for ten
+        // frames, then down.
+        let moved = match k { 0 => 0.0, 1..10 => -0.03, _ => 0.02 };
+        seconds += moved;
+        shift += moved;
+        runtime.set_sim_step(SimStep::live(interval).with_tempo_shift(Seconds(shift)));
+        frame(&mut runtime, seconds, 1.0, 0.0);
+        let at = seconds + 1.0 / 120.0;
+        let source = FrameTime { seconds: Seconds(at), beats: Beats(at * 2.0), delta: Seconds::ZERO, frame_count: k };
+        sources.push(observe(&mut runtime, source).played.seconds());
+        seconds += 1.0 / 60.0;
+    }
+    assert!(sources.windows(2).all(|pair| pair[1] > pair[0]), "{sources:?}");
 }

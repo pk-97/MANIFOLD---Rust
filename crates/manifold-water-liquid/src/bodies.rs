@@ -14,6 +14,7 @@ use manifold_node_engine::channel_names::well_known;
 use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
 use manifold_physics::tick_samples::TickSamples;
+use manifold_physics::PlayedTime;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry, scale_steps};
@@ -719,15 +720,15 @@ impl LiquidBodies {
         self.version += 1;
     }
 
-    /// The transport times the history replay must sample before the next
+    /// The played times the history replay must sample before the next
     /// frame: each boundary a tick may start at under `clock`, in `(from, until]`.
-    pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
+    pub fn request_samples(&mut self, clock: &LiquidClock, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
         self.samples.request(clock, from, until, out);
     }
 
-    /// A history replay sample of the roles at transport `now`, after `clock`
+    /// A history replay sample of the roles at played time `now`, after `clock`
     /// observed this sample's Speed; `None` while a role is still pending.
-    pub fn observe_sample(&mut self, clock: &LiquidClock, now: f64, roles: Option<&[Option<FluidRole>]>) {
+    pub fn observe_sample(&mut self, clock: &LiquidClock, now: PlayedTime, roles: Option<&[Option<FluidRole>]>) {
         let controls = roles.map(controls_of);
         self.samples.observe(clock, now, controls.as_ref());
     }
@@ -1060,14 +1061,18 @@ mod tests {
         ) -> ClockFrame {
             if let Some(last) = self.last.filter(|&last| transport > last) {
                 self.times.clear();
-                bodies.request_samples(&self.clock, last, transport, &mut self.times);
-                for &time in self.times.iter().filter(|&&time| time < transport) {
-                    bodies.observe_sample(&self.clock, time, Some(&roles_at(time)));
+                {
+                    let mut played = Vec::new();
+                    bodies.request_samples(&self.clock, PlayedTime::from_played(last), PlayedTime::from_played(transport), &mut played);
+                    self.times.extend(played.into_iter().map(PlayedTime::seconds));
                 }
-                bodies.observe_sample(&self.clock, transport, Some(&roles_at(transport)));
+                for &time in self.times.iter().filter(|&&time| time < transport) {
+                    bodies.observe_sample(&self.clock, PlayedTime::from_played(time), Some(&roles_at(time)));
+                }
+                bodies.observe_sample(&self.clock, PlayedTime::from_played(transport), Some(&roles_at(transport)));
             }
             self.last = Some(transport);
-            let frame = self.clock.advance(transport, interval, 1.0, 0.0, false, false);
+            let frame = self.clock.advance(PlayedTime::from_played(transport), interval, 1.0, 0.0, false, false);
             bodies.settle(&roles_at(transport), &self.clock, &frame);
             frame
         }
@@ -1180,7 +1185,7 @@ mod tests {
         ready(&mut bodies, &roles_at(0.0));
         let mut rig = Rig::default();
         rig.frame(&mut bodies, 0.0, TICK, &roles_at);
-        rig.clock.observe_speed(TICK, 2.0);
+        rig.clock.observe_speed(PlayedTime::from_played(TICK), 2.0);
         let frame = rig.frame(&mut bodies, 2.0 * TICK, TICK, &roles_at);
         assert_eq!(frame.ticks, 2);
         assert!((frame.interval(0).unwrap().duration().0 - TICK).abs() < 1e-9);

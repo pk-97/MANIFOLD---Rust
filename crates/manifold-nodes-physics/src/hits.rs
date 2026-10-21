@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use ahash::AHashMap;
 use manifold_node_engine::exec::effect_node::{EffectNode, SimStep};
 use manifold_physics::input::{AppliedEvent, EventStamp};
-use manifold_physics::{FieldValue, Seconds, TickStamp};
+use manifold_physics::{FieldValue, TickStamp};
 
 /// A simulation that takes scene hits on its own fixed-tick clock.
 pub trait TakesHits: Send {
@@ -20,9 +20,9 @@ pub trait TakesHits: Send {
     /// `Ok(false)`: still preparing, the hit waits. `Err`: refused, with why.
     fn hit_readiness(&self) -> Result<bool, String>;
 
-    /// Stamp a hit fired at `transport` against the clock this frame's
+    /// Stamp a hit fired at `played` against the clock this frame's
     /// `step` accepted.
-    fn hit_stamp(&self, transport: Seconds, sequence: u64, step: SimStep) -> Result<EventStamp, String>;
+    fn hit_stamp(&self, played: manifold_physics::PlayedTime, sequence: u64, step: SimStep) -> Result<EventStamp, String>;
 
     /// Queue one hit: a velocity change in m/s, by position.
     fn enqueue_hit(&mut self, stamp: EventStamp, field: FieldValue) -> Result<TickStamp, String>;

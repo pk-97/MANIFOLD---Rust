@@ -361,8 +361,7 @@ impl Primitive for TurbulenceVectorField {
         // The drift travelled so far, in f64 and wrapped to the noise period,
         // so the gusts keep their precision through a long set.
         let velocity = if length > 0.0 { drift.map(|c| f64::from(c / length) * f64::from(speed)) } else { [0.0; 3] };
-        self.drift.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
-        let offset = self.drift.advance(ctx.time.seconds.0, velocity);
+        let offset = self.drift.advance(ctx.played(), velocity);
         // A size that is not positive is refused before the offset is read.
         let field = FieldValue::turbulence(size, TurbulenceField::wrap_offset(size, offset), seed);
         write_result(ctx, field, "turbulence vector field");

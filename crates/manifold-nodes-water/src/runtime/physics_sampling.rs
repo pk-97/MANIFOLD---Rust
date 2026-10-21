@@ -14,7 +14,8 @@ use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_water_rigid::physics::SimStep;
 use manifold_water_rigid::node;
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
-use manifold_core::audio_mod::HopValue;
+use manifold_core::PlayedTime;
+use super::state::HeldFrame;
 use manifold_core::effects::{automated_base, AutomationLane, PresetInstance};
 use manifold_core::params::Param;
 use manifold_foundation::ParamId;
@@ -92,12 +93,19 @@ pub(crate) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
     Ok(())
 }
 
+/// One host hop, on played time: a tempo edit never moves it.
+#[derive(Clone, Copy, Debug)]
+struct HeldHop {
+    played: PlayedTime,
+    value: f32,
+}
+
 /// One host audio-modulated param's hops for this frame.
 #[derive(Clone, Default)]
 struct ParamHops {
     id: ParamId,
     /// This frame's hops, after the first `carried` hops of earlier calls.
-    values: Vec<HopValue>,
+    values: Vec<HeldHop>,
     carried: usize,
     /// Its mod drove the param at the last call.
     live: bool,
@@ -115,8 +123,8 @@ impl ParamHops {
     /// the first hop, a replay opening at a jump's target reads that first
     /// hop, never the value the host composed at the frame the jump landed
     /// on.
-    fn at(&self, time: f64) -> Option<HopValue> {
-        let n = self.values.partition_point(|hop| hop.time.0 <= time);
+    fn at(&self, time: PlayedTime) -> Option<HeldHop> {
+        let n = self.values.partition_point(|hop| hop.played <= time);
         match n.checked_sub(1) {
             Some(index) => Some(self.values[index]),
             None if self.opening => self.values.first().copied(),
@@ -132,18 +140,15 @@ pub(crate) struct PhysicsInputSnapshot {
     values: Vec<Option<ParamValues>>,
     clock_steps: Vec<usize>,
     project_tempo: Option<ProjectTempo>,
-    /// Transport times GPU liquids asked to sample this interval: their
+    /// Played times GPU liquids asked to sample this interval: their
     /// ticks' starts, so forces are evaluated per tick.
-    tick_times: Vec<f64>,
+    tick_times: Vec<PlayedTime>,
     /// This frame's per-hop effective values of host audio-modulated params,
     /// `hops[..hop_len]`, so each tick reads the value at its own time
     /// (BUG-2jx6 (host-fed modulation sampled per liquid tick)). Storage is
     /// reused across frames.
     hops: Vec<ParamHops>,
     hop_len: usize,
-    /// Hops were set since the last replay: only the first `carried` of
-    /// each entry predate this frame.
-    hops_fresh: bool,
     /// `(binding, step, hop entry)` for bindings into the sampled ancestry.
     hop_routes: Vec<(usize, usize, usize)>,
     /// Host params an automation lane drives this frame, with that lane,
@@ -166,7 +171,6 @@ impl PhysicsInputSnapshot {
         self.project_tempo.clone_from(&prior.project_tempo);
         self.hops.clone_from(&prior.hops);
         self.hop_len = prior.hop_len;
-        self.hops_fresh = prior.hops_fresh;
         self.automation.clone_from(&prior.automation);
         self.automation_len = prior.automation_len;
     }
@@ -176,8 +180,9 @@ impl PhysicsInputSnapshot {
     /// hop before it, never the value the host composed at the last frame.
     /// Only a mod live last frame carries one: a mod switched on, or on again,
     /// starts from its own new hops. After a jump's frame, all of that
-    /// frame's hops carry.
-    pub(super) fn set_hops(&mut self, instance: Option<&PresetInstance>) {
+    /// frame's hops carry. Hop times become played time here, with
+    /// `tempo_shift`, the frame's.
+    pub(super) fn set_hops(&mut self, instance: Option<&PresetInstance>, tempo_shift: Seconds) {
         let live = self.hop_len;
         for (index, entry) in self.hops.iter_mut().enumerate() {
             entry.live = index < live;
@@ -201,7 +206,10 @@ impl PhysicsInputSnapshot {
             if entry.live && entry.id == m.param_id {
                 // Only hops before this call's first carry: a Fire and then
                 // the frame call twice in one tick with the same hops.
-                let end = new.first().map_or(entry.values.len(), |first| entry.values.partition_point(|hop| hop.time.0 < first.time.0));
+                let end = new.first().map_or(entry.values.len(), |first| {
+                    let first = PlayedTime::from_transport(first.time, tempo_shift);
+                    entry.values.partition_point(|hop| hop.played < first)
+                });
                 let start = end.saturating_sub(if entry.opening { OPENING_HOPS } else { 1 });
                 entry.values.truncate(end);
                 entry.values.drain(..start);
@@ -211,22 +219,8 @@ impl PhysicsInputSnapshot {
             }
             entry.carried = entry.values.len();
             entry.id.clone_from(&m.param_id);
-            entry.values.extend_from_slice(new);
+            entry.values.extend(new.iter().map(|hop| HeldHop { played: PlayedTime::from_transport(hop.time, tempo_shift), value: hop.value }));
             self.hop_len += 1;
-        }
-        self.hops_fresh = true;
-    }
-
-    /// A tempo edit moved the transport by `by`: hops held from before it
-    /// move with it. Hops the host delivered since are already on the new
-    /// times.
-    pub(super) fn shift_hops(&mut self, by: f64) {
-        let fresh = self.hops_fresh;
-        for entry in &mut self.hops[..self.hop_len] {
-            let held = if fresh { entry.carried } else { entry.values.len() };
-            for hop in &mut entry.values[..held] {
-                hop.time.0 += by;
-            }
         }
     }
 
@@ -252,7 +246,7 @@ impl PhysicsInputSnapshot {
     /// The hop value a sample at `time` reads for `id`, if any.
     #[cfg(test)]
     fn heard(&self, id: &str, time: f64) -> Option<f32> {
-        self.hops[..self.hop_len].iter().find(|entry| entry.id.as_ref() == id)?.at(time).map(|hop| hop.value)
+        self.hops[..self.hop_len].iter().find(|entry| entry.id.as_ref() == id)?.at(PlayedTime::from_played(time)).map(|hop| hop.value)
     }
 
     /// Route bindings whose source has hop values into sampled node params.
@@ -280,7 +274,7 @@ impl PhysicsInputSnapshot {
 
     /// Write each routed param's latest hop value at or before `time`.
     /// Before the frame's first hop the held value stays.
-    fn apply_hops(&mut self, bindings: &[ResolvedBinding], time: f64) {
+    fn apply_hops(&mut self, bindings: &[ResolvedBinding], time: PlayedTime) {
         for &(b, s, h) in &self.hop_routes {
             let Some(hop) = self.hops[h].at(time) else { continue };
             let binding = &bindings[b];
@@ -409,7 +403,6 @@ impl PhysicsInputSnapshot {
             tick_times: Vec::new(),
             hops: Vec::new(),
             hop_len: 0,
-            hops_fresh: false,
             hop_routes: Vec::new(),
             automation: Vec::new(),
             automation_len: 0,
@@ -571,38 +564,44 @@ impl super::WaterRuntime<'_> {
     /// the current inputs at the same timestamp. Moving the observation anchor
     /// prevents the next rendered frame from replaying the interval twice.
     ///
-    /// Returns the time the event is observed at. Triggers are never skipped:
+    /// Returns where the event is observed. Triggers are never skipped:
     /// an event older than the latest observation (audio always arrives after
     /// its detector decides) is observed at that latest time and lands on the
     /// next step, since history cannot be reopened.
-    pub(super) fn observe_physics_at_source(&mut self, source: FrameTime) -> Result<FrameTime, String> {
-        if !source.seconds.0.is_finite() || !source.beats.0.is_finite() {
+    pub(super) fn observe_physics_at_source(&mut self, source: PlayedTime, beats: Beats) -> Result<HeldFrame, String> {
+        if !source.is_finite() || !beats.0.is_finite() {
             return Err("Impulse: source clock must be finite".into());
         }
         // A producer callback observes live at the project Sim Rate and never
-        // drains offline history. It carries the frame's transport target: a
+        // drains offline history. It carries the frame's played target: a
         // jump no frame has rendered yet moves the clocks' grid only at its
         // frame, so a Fire past it lands at the latest observation and the
         // span it skipped is never replayed.
         let frame_step = self.executor.sim_step();
-        self.water.follow_tempo_shift(frame_step.tempo_shift.0);
         let previous = self
             .water
             .last_frame_time
             .ok_or("Impulse: render the scene before capturing an event")?;
         let step = SimStep::live(frame_step.interval)
-            .with_transport_target(frame_step.transport_target)
+            .with_played_target(frame_step.played_target)
             .with_tempo_shift(frame_step.tempo_shift);
-        let jump_pending = step.transport_target.is_some_and(|target| jumps(target.0, previous.seconds.0));
-        let source = if source.seconds.0 < previous.seconds.0 || jump_pending {
-            FrameTime { delta: Seconds::ZERO, ..previous }
+        let jump_pending = step.played_target.is_some_and(|target| jumps(target.seconds(), previous.played.seconds()));
+        let source = if source < previous.played || jump_pending {
+            previous
         } else {
-            source
+            HeldFrame { played: source, beats, frame_count: previous.frame_count }
         };
         if self.graph.prepared_param_violation().is_some() {
             return Err("Impulse: graph preparation is pending".into());
         }
-        self.sample_physics_history(source, step);
+        let time = FrameTime {
+            beats: source.beats,
+            seconds: step.to_transport(source.played),
+            delta: Seconds::ZERO,
+            frame_count: source.frame_count,
+        };
+        let step = step.at_played(source.played);
+        self.sample_physics_history(time, step);
         // No ancestry means no solver here replays held-input history, so
         // there is no interval to close.
         let (Some(inputs), Some(steps)) = (
@@ -612,12 +611,12 @@ impl super::WaterRuntime<'_> {
             self.water.last_frame_time = Some(source);
             return Ok(source);
         };
-        inputs.set_sample_time(source);
+        inputs.set_sample_time(time);
         execute_physics_sample_frame(
             self.executor,
             self.graph,
             self.plan,
-            source,
+            time,
             steps,
             &inputs.values,
             step,
@@ -646,6 +645,10 @@ impl super::WaterRuntimeState {
     /// the same timestamp; InputHistory preserves that discontinuity. Offline
     /// catch-up drains native ticks in bounded input batches without publishing
     /// intermediate graph outputs. Preview continues to retain its time debt.
+    ///
+    /// The replay runs on played time, which a tempo edit never moves. Lane
+    /// beats and the generator clock read transport seconds, derived from it
+    /// with this step's tempo shift.
     pub(super) fn sample_physics_history(
         &mut self,
         graph: &mut Graph,
@@ -655,27 +658,26 @@ impl super::WaterRuntimeState {
         current: FrameTime,
         step: SimStep,
     ) {
-        self.follow_tempo_shift(step.tempo_shift.0);
         let (Some(inputs), Some(steps)) = (
             self.input_snapshot.as_mut(),
             self.sample_steps.as_ref(),
         ) else {
             return;
         };
-        inputs.hops_fresh = false;
         // Automation reaches the frame at its sample beat, as it reaches every
         // sample, so a frame on a tick start agrees with the replay there.
         inputs.route_automation(bindings, plan);
         inputs.write_frame_automation(graph, plan, bindings, sample_beat(self.project_tempo.as_ref(), current));
+        let now = step.played_at(current.seconds);
         let opening = self.replay_from.take();
-        let target = step.transport_target.map(|target| target.0).filter(|&target| target.is_finite() && target <= current.seconds.0 + 1e-6);
+        let target = step.played_target.filter(|&target| target.is_finite() && target.seconds() <= now.seconds() + 1e-6);
         // The clocks start a fresh grid at a jump's target, decided by the
         // target as the clocks decide it: a seek back shorter than a frame
         // may land on the frame it left. The span a forward seek skipped is
         // never sampled.
-        let seeked = target.zip(self.last_frame_time).is_some_and(|(target, last)| jumps(target, last.seconds.0));
+        let seeked = target.zip(self.last_frame_time).is_some_and(|(target, last)| jumps(target.seconds(), last.played.seconds()));
         let Some(previous) = opening.or(self.last_frame_time).filter(|previous| {
-            let gap = current.seconds.0 - previous.seconds.0;
+            let gap = now.seconds() - previous.played.seconds();
             !seeked && gap.is_finite() && gap > 0.0
         }) else {
             inputs.capture(graph, plan, &self.project_tempo);
@@ -684,15 +686,14 @@ impl super::WaterRuntimeState {
             // grid there. The next replay opens there. A paused frame keeps
             // it pending. Hops delivered from the jump on reach that replay;
             // none from before it do.
-            let jumped = seeked || opening.or(self.last_frame_time).is_none_or(|previous| current.seconds.0 < previous.seconds.0);
+            let jumped = seeked || opening.or(self.last_frame_time).is_none_or(|previous| now < previous.played);
             if jumped {
                 inputs.jump_hops(target.is_some());
             }
             self.replay_from = match (jumped, target) {
-                (true, Some(target)) => Some(FrameTime {
-                    seconds: Seconds(target),
-                    beats: sample_beat(self.project_tempo.as_ref(), FrameTime { seconds: Seconds(target), ..current }),
-                    delta: Seconds::ZERO,
+                (true, Some(target)) => Some(HeldFrame {
+                    played: target,
+                    beats: sample_beat(self.project_tempo.as_ref(), FrameTime { seconds: step.to_transport(target), ..current }),
                     frame_count: current.frame_count,
                 }),
                 (true, None) => None,
@@ -700,7 +701,7 @@ impl super::WaterRuntimeState {
             };
             return;
         };
-        let gap = current.seconds.0 - previous.seconds.0;
+        let gap = now.seconds() - previous.played.seconds();
         inputs.route_hops(bindings, plan);
         let drain_offline = step.offline();
         if drain_offline && opening.is_none() {
@@ -708,11 +709,9 @@ impl super::WaterRuntimeState {
             // already-observed prefix before inserting another sample into a
             // nearly-full history; the current edit must not reach that prefix.
             // It reads the beat the previous closing sample read there.
-            let sample = FrameTime {
-                beats: sample_beat(inputs.project_tempo.as_ref(), previous),
-                delta: Seconds::ZERO,
-                ..previous
-            };
+            let seconds = step.to_transport(previous.played);
+            let held = FrameTime { beats: previous.beats, seconds, delta: Seconds::ZERO, frame_count: previous.frame_count };
+            let sample = FrameTime { beats: sample_beat(inputs.project_tempo.as_ref(), held), ..held };
             inputs.set_sample_time(sample);
             execute_physics_sample_frame(
                 executor,
@@ -721,7 +720,7 @@ impl super::WaterRuntimeState {
                 sample,
                 steps,
                 &inputs.values,
-                step.draining_history(),
+                step.draining_history().at_played(previous.played),
             );
         }
         const SAMPLE_RATE: f64 = manifold_physics::clock::REPLAY_RATE;
@@ -733,16 +732,17 @@ impl super::WaterRuntimeState {
         // the scratch inputs mutated for each sample. Tempo edits take effect
         // at the current observation, just like held parameter edits.
         let tempo = inputs.project_tempo.clone();
-        let beat_at = |seconds: f64| {
+        let shift = step.tempo_shift;
+        let beat_at = |played: f64| {
             tempo.as_ref().map_or_else(
                 || {
-                    let alpha = (seconds - previous.seconds.0) / gap;
+                    let alpha = (played - previous.played.seconds()) / gap;
                     Beats(previous.beats.0 + (current.beats.0 - previous.beats.0) * alpha)
                 },
                 |tempo| {
                     TempoMapConverter::seconds_to_beat_immut(
                         tempo.map(),
-                        Seconds(seconds),
+                        PlayedTime::from_played(played).to_transport(shift),
                         tempo.fallback_bpm(),
                     )
                 },
@@ -751,18 +751,14 @@ impl super::WaterRuntimeState {
         // Include exact tempo boundaries as well as the fixed observation
         // grid. A recorded clock must not smear a breakpoint between samples.
         let mut boundaries = tempo.as_ref().map(|tempo| {
-            let start = beat_at(previous.seconds.0).0.max(0.0);
+            let start = beat_at(previous.played.seconds()).0.max(0.0);
             let points = tempo.map().points();
             let first = points.partition_point(|point| point.beat.0 <= start);
             points[first..]
                 .iter()
                 .map(move |point| {
-                    TempoMapConverter::beat_to_seconds_immut(
-                        tempo.map(),
-                        point.beat,
-                        tempo.fallback_bpm(),
-                    )
-                    .0
+                    let seconds = TempoMapConverter::beat_to_seconds_immut(tempo.map(), point.beat, tempo.fallback_bpm());
+                    PlayedTime::from_transport(seconds, shift).seconds()
                 })
                 .peekable()
         });
@@ -772,35 +768,41 @@ impl super::WaterRuntimeState {
         // The standalone rigid world asks for its tick boundaries and the
         // replay grid, its only input knots. An opening replay asks from just
         // before its target, so the first tick's start is sampled there.
-        let request_from = previous.seconds.0 - if opening.is_some() { OPENING_REACH } else { 0.0 };
+        let request_from =
+            PlayedTime::from_played(previous.played.seconds() - if opening.is_some() { OPENING_REACH } else { 0.0 });
         inputs.tick_times.clear();
         for instance in graph.nodes_mut() {
             if let Some(ticked) = tick_sampled::get_mut(instance.node.as_mut()) {
-                ticked.request_physics_samples(request_from, current.seconds.0, step.tempo_shift.0, &mut inputs.tick_times);
+                ticked.request_physics_samples(request_from, now, &mut inputs.tick_times);
             } else if let Some(native) = node::get_mut(instance.node.as_mut()) {
-                native.request_physics_samples(request_from, current.seconds.0, step.tempo_shift.0, &mut inputs.tick_times);
+                native.request_physics_samples(request_from, now, &mut inputs.tick_times);
             }
         }
-        inputs.tick_times.sort_unstable_by(f64::total_cmp);
+        inputs.tick_times.sort_unstable_by(|a, b| a.seconds().total_cmp(&b.seconds()));
         if opening.is_some() {
-            let sample = FrameTime { beats: beat_at(previous.seconds.0 + SAMPLE_BEAT_OFFSET), delta: Seconds::ZERO, ..previous };
+            let sample = FrameTime {
+                beats: beat_at(previous.played.seconds() + SAMPLE_BEAT_OFFSET),
+                seconds: step.to_transport(previous.played),
+                delta: Seconds::ZERO,
+                frame_count: previous.frame_count,
+            };
             inputs.set_sample_time(sample);
             inputs.apply_automation(bindings, sample.beats);
-            inputs.apply_hops(bindings, previous.seconds.0);
-            execute_physics_sample_frame(executor, graph, plan, sample, steps, &inputs.values, step);
+            inputs.apply_hops(bindings, previous.played);
+            execute_physics_sample_frame(executor, graph, plan, sample, steps, &inputs.values, step.at_played(previous.played));
         }
         let mut tick_index = 0;
-        let mut grid = (previous.seconds.0 * SAMPLE_RATE).floor() + 1.0;
-        let mut last_time = previous.seconds.0;
+        let mut grid = (previous.played.seconds() * SAMPLE_RATE).floor() + 1.0;
+        let mut last_time = previous.played.seconds();
         loop {
             let boundary = boundaries
                 .as_mut()
                 .and_then(|values| values.peek().copied())
                 .unwrap_or(f64::INFINITY);
-            let tick_time = inputs.tick_times.get(tick_index).copied().unwrap_or(f64::INFINITY);
+            let tick_time = inputs.tick_times.get(tick_index).map_or(f64::INFINITY, |tick| tick.seconds());
             let grid_time = grid / SAMPLE_RATE;
             let time = grid_time.min(boundary).min(tick_time);
-            if time >= current.seconds.0 {
+            if time >= now.seconds() {
                 break;
             }
             if time == grid_time {
@@ -809,21 +811,22 @@ impl super::WaterRuntimeState {
             if time == boundary {
                 boundaries.as_mut().expect("finite boundary").next();
             }
-            while inputs.tick_times.get(tick_index) == Some(&time) {
+            while inputs.tick_times.get(tick_index).is_some_and(|tick| tick.seconds() == time) {
                 tick_index += 1;
             }
             if time <= last_time {
                 continue;
             }
+            let played = PlayedTime::from_played(time);
             let sample = FrameTime {
                 beats: beat_at(time + SAMPLE_BEAT_OFFSET),
-                seconds: Seconds(time),
+                seconds: step.to_transport(played),
                 delta: Seconds(time - last_time),
                 frame_count: current.frame_count,
             };
             inputs.set_sample_time(sample);
             inputs.apply_automation(bindings, sample.beats);
-            inputs.apply_hops(bindings, time);
+            inputs.apply_hops(bindings, played);
             samples_since_drain += 1;
             let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
             execute_physics_sample_frame(
@@ -833,7 +836,7 @@ impl super::WaterRuntimeState {
                 sample,
                 steps,
                 &inputs.values,
-                if drain { step.draining_history() } else { step },
+                (if drain { step.draining_history() } else { step }).at_played(played),
             );
             if drain {
                 samples_since_drain = 0;
@@ -843,15 +846,15 @@ impl super::WaterRuntimeState {
         // The held map's beat at the frame, read at the samples' offset: the
         // left limit of a tempo edit, and the beat a sample at this same time
         // would take at any other frame rate.
-        let closing_beat = if tempo.is_some() { beat_at(current.seconds.0 + SAMPLE_BEAT_OFFSET) } else { current.beats };
+        let closing_beat = if tempo.is_some() { beat_at(now.seconds() + SAMPLE_BEAT_OFFSET) } else { current.beats };
         let closing = FrameTime {
             beats: closing_beat,
-            delta: Seconds(current.seconds.0 - last_time),
+            delta: Seconds(now.seconds() - last_time),
             ..current
         };
         inputs.set_sample_time(closing);
         inputs.apply_automation(bindings, closing_beat);
-        inputs.apply_hops(bindings, current.seconds.0);
+        inputs.apply_hops(bindings, now);
         execute_physics_sample_frame(
             executor,
             graph,

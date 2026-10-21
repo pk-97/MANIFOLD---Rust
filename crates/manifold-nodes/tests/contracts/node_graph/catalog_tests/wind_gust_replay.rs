@@ -4,7 +4,7 @@
 //! rate, live or in export, and across a compatible rebuild.
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use manifold_core::{Beats, NodeId, Seconds};
+use manifold_core::{Beats, NodeId, PlayedTime, Seconds};
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, SimStep};
 use manifold_node_engine::parameters::ParamDef;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -78,7 +78,8 @@ impl EffectNode for TickedConsumer {
         if !ctx.sim_step.authored_sample_only {
             return;
         }
-        let reached = self.pending.partition_point(|&tick| tick <= ctx.time.seconds.0);
+        let now = ctx.played().seconds();
+        let reached = self.pending.partition_point(|&tick| tick <= now);
         if reached == 0 {
             return;
         }
@@ -96,10 +97,11 @@ impl EffectNode for TickedConsumer {
 }
 
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedConsumer {
-    fn request_physics_samples(&mut self, from: f64, until: f64, _tempo_shift: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+        let (from, until) = (from.seconds(), until.seconds());
         let mut tick = (from * self.rate + 1e-9).floor() + 1.0;
         while tick / self.rate <= until + 1e-12 {
-            out.push(tick / self.rate);
+            out.push(PlayedTime::from_played(tick / self.rate));
             self.pending.push(tick / self.rate);
             tick += 1.0;
         }

@@ -283,7 +283,7 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
             Ok(Seconds(t.0 - 12.0))
         })
         .unwrap();
-    assert_eq!(hit.source_time().unwrap().seconds, Seconds(12.0));
+    assert_eq!(Seconds(hit.source_time().unwrap().seconds()), Seconds(12.0));
     runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     assert_eq!(hit.scheduled_ticks().next().unwrap().1.unwrap().tick, 0);
 }

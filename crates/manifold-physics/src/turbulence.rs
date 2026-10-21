@@ -81,7 +81,7 @@ impl VectorField for TurbulenceField {
 }
 
 /// How far drifting turbulence has travelled: its drift velocity (direction
-/// times Drift Speed, which a card may automate) integrated over transport
+/// times Drift Speed, which a card may automate) integrated over played
 /// time, so a Speed change bends the drift instead of jumping the swirls.
 /// A velocity seen between two points of the physics replay's grid
 /// ([`crate::clock::REPLAY_RATE`]) takes effect at the next one, and the
@@ -101,42 +101,24 @@ pub struct TurbulenceDrift {
     velocity: [f64; 3],
     /// The velocity to take effect at a grid point not yet reached.
     pending: Option<(f64, [f64; 3])>,
-    /// The part of the tempo-edit shift sum these times already follow.
-    followed_shift: f64,
 }
 
 impl TurbulenceDrift {
-    /// Follow tempo edits, as [`crate::clock::SimulationClock::follow_tempo_shift`]
-    /// does: the drift continues where it stood.
-    pub fn follow_tempo_shift(&mut self, total: f64) {
-        let by = total - self.followed_shift;
-        if by == 0.0 || !by.is_finite() {
-            return;
-        }
-        self.followed_shift = total;
-        if let Some(last) = &mut self.last {
-            *last += by;
-        }
-        self.at += by;
-        if let Some((at, _)) = &mut self.pending {
-            *at += by;
-        }
-    }
-
-    /// The offset travelled by `transport`; `velocity` (m/s) takes effect at
+    /// The offset travelled by `played`; `velocity` (m/s) takes effect at
     /// the next replay grid point at or after it.
-    pub fn advance(&mut self, transport: f64, velocity: [f64; 3]) -> [f64; 3] {
+    pub fn advance(&mut self, played: crate::PlayedTime, velocity: [f64; 3]) -> [f64; 3] {
+        let transport = played.seconds();
         let last = match self.last {
             Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => last,
             _ => {
-                *self = Self { last: Some(transport), at: transport, travelled: [0.0; 3], velocity, pending: None, followed_shift: self.followed_shift };
+                *self = Self { last: Some(transport), at: transport, travelled: [0.0; 3], velocity, pending: None };
                 return [0.0; 3];
             }
         };
         // A step back inside the tolerance holds still.
         let transport = transport.max(last);
         self.last = Some(transport);
-        let next = crate::clock::next_replay_point(transport);
+        let next = crate::clock::next_replay_point(crate::PlayedTime::from_played(transport)).seconds();
         if let Some((at, held)) = self.pending.take_if(|(at, _)| *at < next) {
             self.commit(at, held);
         }
@@ -160,7 +142,7 @@ impl TurbulenceDrift {
 
     /// Start again from zero at the next evaluation.
     pub fn restart(&mut self) {
-        *self = Self { followed_shift: self.followed_shift, ..Self::default() };
+        *self = Self::default();
     }
 }
 
@@ -339,11 +321,11 @@ mod tests {
         let speed = |t: f64| if t < 0.5 { 2.0 } else { 6.0 + 4.0 * (t - 0.5) };
         let fly = |fps: f64| {
             let mut drift = TurbulenceDrift::default();
-            drift.advance(0.0, [speed(0.0), 0.0, 0.0]);
+            drift.advance(crate::PlayedTime::from_played(0.0), [speed(0.0), 0.0, 0.0]);
             let mut previous = (0.0, 0.0);
             let (mut ticks, mut grid) = (Vec::new(), Vec::new());
             for (t, tick) in evaluations(fps) {
-                let offset = drift.advance(t, [speed(t), 0.0, 0.0])[0];
+                let offset = drift.advance(crate::PlayedTime::from_played(t), [speed(t), 0.0, 0.0])[0];
                 let step = offset - previous.1;
                 assert!((0.0..=8.0 * (t - previous.0) + 1e-12).contains(&step), "no jump at {t}: {step}");
                 previous = (t, offset);
@@ -372,11 +354,11 @@ mod tests {
         let half = f64::from_bits(reference.1[119].1);
         assert!((half - 1.0).abs() < 0.01, "{half}");
         let mut drift = TurbulenceDrift::default();
-        drift.advance(0.0, [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(1.0, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(0.25, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
+        drift.advance(crate::PlayedTime::from_played(0.0), [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(1.0), [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25), [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
         // Rounding below the clock's seek tolerance holds, as the clock does.
-        assert_eq!(drift.advance(0.25 - 1e-12, [5.0, 0.0, 0.0]), [0.0; 3]);
-        assert_eq!(drift.advance(0.75, [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25 - 1e-12), [5.0, 0.0, 0.0]), [0.0; 3]);
+        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.75), [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
     }
 }

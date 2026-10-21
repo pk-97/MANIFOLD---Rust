@@ -382,8 +382,8 @@ pub struct Coupling {
     epochs: u64,
     /// This frame's compute failed; nothing is published to the pair.
     failed: bool,
-    /// Transport of the last frame the pair advanced at.
-    transport: Option<f64>,
+    /// Played time of the last frame the pair advanced at.
+    transport: Option<manifold_core::PlayedTime>,
     /// This frame runs several coupled ticks, exchanging with Box3D
     /// between them.
     exchange: Option<Exchange>,
@@ -588,8 +588,7 @@ impl Primitive for MatterDomain {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
-        self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
-        self.clock.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
+        self.clock.set_played_target(ctx.sim_step.played_target);
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
@@ -599,13 +598,13 @@ impl Primitive for MatterDomain {
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
-            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
+            self.clock.observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Matter") {
-                Ok(field) => self.fields.observe_sample(&self.clock, ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.fields.observe_sample(&self.clock, ctx.played(), field.as_ref()),
                 Err(error) => ctx.error(error),
             }
-            self.bodies.observe_sample(&self.clock, ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
-            self.coupled.scenes.observe_staged(&self.clock, ctx.time.seconds.0);
+            self.bodies.observe_sample(&self.clock, ctx.played(), (!role_pending).then_some(&roles[..]));
+            self.coupled.scenes.observe_staged(&self.clock, ctx.played());
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -768,15 +767,15 @@ impl PhysicsNode for MatterDomain {
     /// start of the next settled rigid tick).
     fn physics_impulse_stamp(
         &self,
-        transport: manifold_core::Seconds,
+        played: manifold_core::PlayedTime,
         sequence: u64,
         step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if !self.physics_impulse_readiness()? {
             return Err("Matter impulses: the liquid is still preparing; fire waits for it".into());
         }
-        let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
+        let mut stamp = self.impulses.stamp(played, sequence)?;
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(played, manifold_water_rigid::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -803,8 +802,7 @@ impl PhysicsNode for MatterDomain {
 inventory::submit! { PhysicsNodeRegistration::new::<MatterDomain>() }
 
 impl TickSampled for MatterDomain {
-    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
-        self.clock.follow_tempo_shift(tempo_shift);
+    fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
         if self.coupled.mode {
@@ -867,7 +865,7 @@ impl MatterDomain {
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         self.coupled.walls = DomainWalls::of(&layout, closed_faces(ctx.params));
-        if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
+        if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
@@ -907,7 +905,7 @@ impl MatterDomain {
         self.setup = Some(setup);
         self.layout = Some(layout);
         let frame = self.clock.advance(
-            ctx.time.seconds.0,
+            ctx.played(),
             ctx.sim_step.interval.0,
             speed,
             ctx.scalar_or_param("reset", 0.0),
@@ -929,7 +927,7 @@ impl MatterDomain {
             self.coupled.scenes.settle(&self.clock, &frame, scene);
             self.coupled.scenes.prune_before(owner.completed());
         }
-        self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
+        self.impulses.observe_frame(ctx.played(), &frame)?;
         self.bodies.settle(roles, &self.clock, &frame);
         let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
@@ -1014,7 +1012,7 @@ impl MatterDomain {
             // runs this frame's ticks.
             display_time = owner.completed_time().0;
         }
-        self.coupled.transport = Some(ctx.time.seconds.0);
+        self.coupled.transport = Some(ctx.played());
         let field = self
             .fields
             .prepare(lattice.force_lattice(), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
@@ -1064,7 +1062,7 @@ impl MatterDomain {
     /// the liquid's clock, and build a new rigid owner (restarting the pair)
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
-    fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
+    fn observe_rigid(&mut self, played: manifold_core::PlayedTime, speed: f32) -> Result<bool, String> {
         let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, step, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
@@ -1076,7 +1074,7 @@ impl MatterDomain {
                 observation.speed
             ));
         }
-        if (observation.transport.0 - transport).abs() > 1e-9 {
+        if (observation.transport.seconds() - played.seconds()).abs() > 1e-9 {
             return Err("Matter coupling: rigid observation transport does not match liquid transport".into());
         }
         CoupledRigidInputs { scene: &observation.inputs, colliders: *colliders, density: f64::from(WATER_DENSITY) }
@@ -1145,19 +1143,19 @@ impl MatterDomain {
 #[cfg(test)]
 mod sim_rate_tests {
     use super::*;
-    use manifold_core::Seconds;
+    use manifold_core::{PlayedTime, Seconds};
     use manifold_physics::{clock::SimulationClock, stepping::StepInterval};
 
     #[test]
     fn matter_interval_schedule_matches_separate_speed_history_frames() {
         let run = |grouped| {
             let mut clock = SimulationClock::default();
-            clock.advance(0.0, TICK, 0.25, 0.0, false, true);
-            clock.observe_speed(TICK, 4.0);
+            clock.advance(PlayedTime::from_played(0.0), TICK, 0.25, 0.0, false, true);
+            clock.observe_speed(PlayedTime::from_played(TICK), 4.0);
             let mut schedule = Vec::new();
             let mut result = Vec::new();
             for transport in if grouped { vec![2.0 * TICK] } else { vec![TICK, 2.0 * TICK] } {
-                let frame = clock.advance(transport, TICK, 4.0, 0.0, false, true);
+                let frame = clock.advance(PlayedTime::from_played(transport), TICK, 4.0, 0.0, false, true);
                 schedule_intervals(&mut schedule, &frame, 100, 0.0625);
                 for record in &schedule {
                     result.push((record.interval(), record.timing.iterations,
@@ -1179,9 +1177,9 @@ mod sim_rate_tests {
     #[test]
     fn matter_clock_outputs_follow_interval_prefix_and_clear_on_reset() {
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, TICK, 0.25, 0.0, false, true);
-        clock.observe_speed(TICK, 4.0);
-        let frame = clock.advance(2.0 * TICK, TICK, 4.0, 0.0, false, true);
+        clock.advance(PlayedTime::from_played(0.0), TICK, 0.25, 0.0, false, true);
+        clock.observe_speed(PlayedTime::from_played(TICK), 4.0);
+        let frame = clock.advance(PlayedTime::from_played(2.0 * TICK), TICK, 4.0, 0.0, false, true);
         let mut domain = MatterDomain::new();
         assert!(schedule_intervals(&mut domain.schedule, &frame, 100, 0.0625));
         let first = domain.schedule[0];
@@ -1201,7 +1199,7 @@ mod sim_rate_tests {
             assert_eq!(Primitive::substep_host_sync(&domain, iteration), iteration == 25);
         }
         assert!(Primitive::substep_clock_interval(&domain, 153).is_none());
-        let held = clock.advance(2.0 * TICK, TICK, 4.0, 0.0, false, true);
+        let held = clock.advance(PlayedTime::from_played(2.0 * TICK), TICK, 4.0, 0.0, false, true);
         let capacity = domain.schedule.capacity();
         schedule_intervals(&mut domain.schedule, &held, 100, 0.0625);
         assert!(domain.schedule.is_empty());
@@ -1266,7 +1264,7 @@ mod sim_rate_tests {
                 let mut clock = SimulationClock::default();
                 let mut result = Vec::new();
                 for frame in 0..=60 {
-                    let accepted = clock.advance(f64::from(frame) / 60.0, rate.interval(), 1.0, 0.0, false, offline);
+                    let accepted = clock.advance(PlayedTime::from_played(f64::from(frame) / 60.0), rate.interval(), 1.0, 0.0, false, offline);
                     for ordinal in 0..u64::from(accepted.ticks) {
                         let interval = accepted.interval(ordinal).unwrap().duration().0 as f32;
                         let steps = substeps_for_interval(interval, 34);
@@ -1292,8 +1290,8 @@ mod sim_rate_tests {
         use manifold_water_rigid::node::PhysicsNode;
         let mut domain = MatterDomain::new();
         assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
-        let frame = SimulationClock::default().advance(0.0, TICK, 1.0, 0.0, false, false);
-        domain.impulses.observe_frame(0.0, &frame).unwrap();
+        let frame = SimulationClock::default().advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
+        domain.impulses.observe_frame(PlayedTime::from_played(0.0), &frame).unwrap();
         assert_eq!(domain.physics_impulse_readiness(), Ok(true));
         domain.role_pending = true;
         assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role is still preparing");

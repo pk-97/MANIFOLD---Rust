@@ -83,11 +83,12 @@ fn fly(start: &[Particle], times: &[f64], speed: fn(f64) -> f32, step: SimStep) 
     let (mut previous, mut ran, mut costs) = (0.0, Vec::new(), Vec::new());
     for &now in times {
         let mut starts = Vec::new();
-        forces_node.request_physics_samples(previous, now, 0.0, &mut starts);
-        for at in starts {
+        forces_node.request_physics_samples(step.to_played(Seconds(previous)), step.to_played(Seconds(now)), &mut starts);
+        for played in starts {
+            let at = step.to_transport(played).0;
             Backend::cpu_values_mut(&mut h.backend).set(field_slot, field(at));
             let knob = params(&[("speed", speed(at))]);
-            let (_, errors) = h.run_at(&mut forces_node, &[("acceleration_field", field_slot)], &[], &knob, at, step.authored_sample());
+            let (_, errors) = h.run_at(&mut forces_node, &[("acceleration_field", field_slot)], &[], &knob, at, step.authored_sample().at_played(played));
             assert!(errors.is_empty(), "{errors:?}");
         }
         Backend::cpu_values_mut(&mut h.backend).set(field_slot, field(now));

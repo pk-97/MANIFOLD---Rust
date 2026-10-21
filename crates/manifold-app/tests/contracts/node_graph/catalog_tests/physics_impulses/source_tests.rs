@@ -20,7 +20,7 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
             .contains("outputs changed")
     );
     assert_eq!(
-        manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        Seconds(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds()),
         Seconds::ZERO
     );
     runtime.execute_frame(time(0.1));
@@ -115,7 +115,7 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     assert_eq!(
         node::get(runtime.graph.get_node(world).unwrap().node.as_ref())
             .expect("native world fixture")
-            .physics_impulse_stamp(Seconds(10.6), 5, Default::default())
+            .physics_impulse_stamp(manifold_core::PlayedTime::from_played(10.6), 5, Default::default())
             .unwrap()
             .time
             .0,
@@ -142,7 +142,7 @@ fn scene_impulse_source_lands_old_capture_at_the_anchor_and_rejects_pending_capt
             .contains("acknowledge")
     );
     assert_eq!(
-        manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        Seconds(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds()),
         Seconds(1.1)
     );
     hit.clear();
@@ -152,9 +152,9 @@ fn scene_impulse_source_lands_old_capture_at_the_anchor_and_rejects_pending_capt
         .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.05), 1)
         .unwrap();
-    assert_eq!(hit.source_time().unwrap().seconds, Seconds(1.1));
+    assert_eq!(Seconds(hit.source_time().unwrap().seconds()), Seconds(1.1));
     assert_eq!(
-        manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        Seconds(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds()),
         Seconds(1.1)
     );
     hit.clear();

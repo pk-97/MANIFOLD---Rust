@@ -4,7 +4,7 @@
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::*;
-use manifold_core::{Beats, Seconds, PresetTypeId};
+use manifold_core::{Beats, PlayedTime, Seconds, PresetTypeId};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::audio_features::{
@@ -62,7 +62,7 @@ impl EffectNode for TickedLiquid {
         if !ctx.sim_step.authored_sample_only {
             return;
         }
-        let now = ctx.time.seconds.0;
+        let now = ctx.played().seconds();
         let reached = self.1.partition_point(|&tick| tick <= now);
         if reached == 0 {
             return;
@@ -80,10 +80,11 @@ impl EffectNode for TickedLiquid {
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedLiquid {
     /// Like the liquid's field history: request each tick start in
     /// `(from, until]`; the first sample at or after it records that tick.
-    fn request_physics_samples(&mut self, from: f64, until: f64, _tempo_shift: f64, out: &mut Vec<f64>) {
+    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+        let (from, until) = (from.seconds(), until.seconds());
         let mut tick = (from * TICK_RATE + 1e-9).floor() + 1.0;
         while tick / TICK_RATE <= until + 1e-12 {
-            out.push(tick / TICK_RATE);
+            out.push(PlayedTime::from_played(tick / TICK_RATE));
             self.1.push(tick / TICK_RATE);
             tick += 1.0;
         }

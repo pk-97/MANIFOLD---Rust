@@ -1084,7 +1084,8 @@ impl GeneratorRenderer {
             if !self.waiting_fires.is_empty()
                 && let Some(layer) = layers.get(layer_index as usize)
             {
-                self.land_waiting_fires(layer, project_tempo);
+                let frame = self.sim_step.played_at(manifold_core::Seconds(time));
+                self.land_waiting_fires(layer, project_tempo, frame);
             }
         }
         if !self.waiting_fires.is_empty() {

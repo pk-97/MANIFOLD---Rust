@@ -14,7 +14,7 @@ use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
 use manifold_core::layer::Layer;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::project::Project;
-use manifold_core::{tempo::TempoMap, units::Bpm, Beats, PresetTypeId, Seconds};
+use manifold_core::{tempo::TempoMap, units::Bpm, Beats, PlayedTime, PresetTypeId, Seconds};
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, SimStep};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -79,10 +79,9 @@ impl EffectNode for TickedClock {
         &PARAMS
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let now = ctx.time.seconds.0;
+        let now = ctx.played();
         let speed = ctx.scalar_or_param("speed", 1.0);
-        self.1.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
-        self.1.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
+        self.1.set_played_target(ctx.sim_step.played_target);
         if ctx.sim_step.authored_sample_only {
             SAMPLES.with_borrow_mut(|samples| *samples += 1);
             self.1.observe_speed(now, speed);
@@ -99,9 +98,8 @@ impl EffectNode for TickedClock {
 }
 
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedClock {
-    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
-        self.1.follow_tempo_shift(tempo_shift);
-        self.1.tick_starts(from, until, |transport| out.push(transport));
+    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+        self.1.tick_starts(from, until, |played| out.push(played));
     }
 }
 
@@ -322,6 +320,11 @@ fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item =
             &mut FireMeterCapture::default(),
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
+        // The frame's step first, as the host sets it: hops become played
+        // time with its tempo shift.
+        let step = if offline { SimStep::export(Seconds(TICK)) } else { SimStep::live(Seconds(TICK)) };
+        let target = target.map(|target| PlayedTime::from_transport(Seconds(target), Seconds(tempo_shift)));
+        runtime.set_sim_step(step.with_played_target(target).with_tempo_shift(Seconds(tempo_shift)));
         runtime.set_project_tempo(Some(&tempo));
         runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);
@@ -329,8 +332,6 @@ fn play_frames(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item =
             TICKS.with_borrow_mut(Vec::clear);
             SAMPLES.with_borrow_mut(|samples| *samples = 0);
         }
-        let step = if offline { SimStep::export(Seconds(TICK)) } else { SimStep::live(Seconds(TICK)) };
-        runtime.set_sim_step(step.with_transport_target(target.map(Seconds)).with_tempo_shift(Seconds(tempo_shift)));
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
             beats: beat,

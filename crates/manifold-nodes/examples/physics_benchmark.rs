@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use manifold_core::Seconds;
+use manifold_core::PlayedTime;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_water_rigid::physics::{MAX_BODIES, RigidBody, RigidSimulation, SimStep};
 use manifold_node_engine::scene::transform::Transform;
@@ -85,7 +85,7 @@ fn advance(
         columns,
         layout,
         [0.0, gravity_y, 0.0],
-        Seconds(frame),
+        PlayedTime::from_played(frame),
         1.0,
         reset,
     )

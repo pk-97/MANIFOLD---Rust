@@ -1,4 +1,4 @@
-use manifold_core::Seconds;
+use manifold_core::{PlayedTime, Seconds};
 use manifold_physics::input::EventStamp;
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
@@ -25,7 +25,7 @@ fn one_body(position: [f32; 3]) -> [Option<RigidBody>; MAX_BODIES] {
 
 fn initialize(simulation: &mut RigidSimulation, bodies: &[Option<RigidBody>; MAX_BODIES]) {
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
 }
 
@@ -55,16 +55,16 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     assert!(simulation
-        .impulse_stamp(Seconds::ZERO, 0)
+        .impulse_stamp(PlayedTime::ZERO, 0)
         .expect_err("stamp before initialization")
         .contains("epoch"));
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(5.0), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(5.0), 1.0, 0.0)
         .unwrap();
     let epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(
-        simulation.impulse_stamp(Seconds(5.0), 1).unwrap(),
+        simulation.impulse_stamp(PlayedTime::from_played(5.0), 1).unwrap(),
         EventStamp {
             epoch,
             time: Seconds::ZERO,
@@ -73,20 +73,20 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
     );
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(6.0), 2.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
-        simulation.impulse_stamp(Seconds(6.0), 2).unwrap().time,
+        simulation.impulse_stamp(PlayedTime::from_played(6.0), 2).unwrap().time,
         Seconds(1.0)
     );
     simulation
-        .advance(bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
-        simulation.impulse_stamp(Seconds(6.0), 3).unwrap().time,
+        simulation.impulse_stamp(PlayedTime::from_played(6.0), 3).unwrap().time,
         Seconds(1.0)
     );
-    assert!(simulation.impulse_stamp(Seconds(6.0 + 1e-9), 4).is_err());
+    assert!(simulation.impulse_stamp(PlayedTime::from_played(6.0 + 1e-9), 4).is_err());
 }
 
 #[test]
@@ -94,26 +94,26 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
     let mut bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
-    assert!(simulation.impulse_stamp(Seconds::ZERO, 0).is_ok());
+    assert!(simulation.impulse_stamp(PlayedTime::ZERO, 0).is_ok());
 
-    simulation.hold_pending(Seconds(1.0));
-    assert!(simulation.impulse_stamp(Seconds(1.0), 1).is_err());
+    simulation.hold_pending(PlayedTime::from_played(1.0));
+    assert!(simulation.impulse_stamp(PlayedTime::from_played(1.0), 1).is_err());
 
     let body = bodies[0].as_mut().unwrap();
     body.shape = (body.shape + 1) % 5;
     simulation.set_step(SimStep::default().authored_sample());
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(2.0), 1.0, 0.0)
         .unwrap();
     simulation.set_step(SimStep::default());
-    assert!(simulation.impulse_stamp(Seconds(2.0), 2).is_err());
+    assert!(simulation.impulse_stamp(PlayedTime::from_played(2.0), 2).is_err());
 
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0), 1.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(2.0), 1.0, 0.0)
         .unwrap();
-    let stamp = simulation.impulse_stamp(Seconds(2.0), 3).unwrap();
+    let stamp = simulation.impulse_stamp(PlayedTime::from_played(2.0), 3).unwrap();
     assert_eq!(stamp.time, Seconds::ZERO);
 }
 
@@ -139,7 +139,7 @@ fn rigid_impulses_multiple_hits_sum_into_native_position() {
     }
 
     simulation
-        .advance(bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[0].pos[0] > 0.01,
@@ -180,11 +180,11 @@ fn rigid_impulses_half_open_boundary_and_late_assignment() {
     assert_eq!(planned.tick, 1);
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 0.0)
         .unwrap();
     let applied = receipts(&mut simulation);
     assert_eq!(applied.len(), 1);
@@ -194,7 +194,7 @@ fn rigid_impulses_half_open_boundary_and_late_assignment() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     initialize(&mut late, &bodies);
     let epoch = late.impulse_epoch().unwrap();
-    late.advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+    late.advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     late.enqueue_impulse(
         stamp(epoch, 0.25 * DT, 0),
@@ -207,7 +207,7 @@ fn rigid_impulses_half_open_boundary_and_late_assignment() {
         ),
     )
     .unwrap();
-    late.advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+    late.advance(bodies, [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 0.0)
         .unwrap();
     let applied = receipts(&mut late);
     assert_eq!(applied.len(), 1);
@@ -236,7 +236,7 @@ fn rigid_impulses_capture_field_and_targets_by_value() {
     targets.bodies = 0;
     assert!(targets.is_empty());
     simulation
-        .advance(bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[0] > 0.02);
     let applied = receipts(&mut simulation);
@@ -262,7 +262,7 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 1.0)
         .unwrap();
     let second_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(second_epoch, first_epoch + 1);
@@ -279,12 +279,12 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
         )
         .is_err());
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 1.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 1.0)
         .unwrap();
     let third_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(third_epoch, second_epoch + 1);
@@ -316,7 +316,7 @@ fn rigid_impulses_target_body_and_copies_in_one_batch() {
             1.25,
             16.0,
             [0.0; 3],
-            Seconds::ZERO,
+            PlayedTime::ZERO,
             1.0,
             0.0,
         )
@@ -343,7 +343,7 @@ fn rigid_impulses_target_body_and_copies_in_one_batch() {
             1.25,
             16.0,
             [0.0; 3],
-            Seconds(DT),
+            PlayedTime::from_played(DT),
             1.0,
             0.0,
         )
@@ -383,15 +383,15 @@ fn rigid_impulses_pause_retains_pending_input() {
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 0.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::ZERO, 0.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 0.0)
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
@@ -420,7 +420,7 @@ fn rigid_impulses_high_velocity_applies_once_across_microsteps() {
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation
@@ -456,14 +456,14 @@ fn rigid_impulses_full_history_refuses_one_hit_and_keeps_stepping() {
     assert!(error.contains("refused"), "{error}");
     // One refusal latches nothing: the world keeps stepping and every
     // admitted hit lands once.
-    simulation.advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0).unwrap();
+    simulation.advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
     assert_eq!(simulation.impulse_readiness(), Ok(true));
     // Undrained receipts still hold their slots.
     assert!(simulation.enqueue_impulse(stamp(epoch, DT, 257), payload([0.0; 3], targets)).is_err());
     assert_eq!(receipts(&mut simulation).len(), 256);
     // Drained, the history frees and the next hit is admitted and lands once.
     simulation.enqueue_impulse(stamp(epoch, DT, 258), payload([0.0; 3], targets)).unwrap();
-    simulation.advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0).unwrap();
+    simulation.advance(bodies, [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 0.0).unwrap();
     let landed: Vec<_> = receipts(&mut simulation).iter().map(|event| event.source.sequence).collect();
     assert_eq!(landed, [258]);
 }
@@ -499,7 +499,7 @@ fn rigid_impulses_invalid_target_preserves_producer_sequence() {
         )
         .unwrap();
     simulation
-        .advance(bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
@@ -527,15 +527,15 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
         )
         .unwrap();
     assert!(simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .is_err());
     assert_eq!(receipts(&mut simulation).len(), 1);
     assert!(simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 0.0)
         .is_err());
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 1.0)
         .unwrap();
     let second_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(second_epoch, first_epoch + 1);
@@ -552,7 +552,7 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
         )
         .unwrap();
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
+        .advance(bodies, [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 1.0)
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
@@ -566,7 +566,7 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
     initialize(&mut simulation, &bodies);
     let strike = |simulation: &mut RigidSimulation, transport: f64, sequence: u64| {
         let stamp = simulation
-            .impulse_stamp(Seconds(transport), sequence)
+            .impulse_stamp(PlayedTime::from_played(transport), sequence)
             .unwrap();
         let targets = RigidImpulseTargets {
             bodies: 1,
@@ -577,16 +577,16 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
             .unwrap();
     };
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     // Paused: the transport repeats.
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0)
         .unwrap();
     strike(&mut simulation, DT, 0);
     // Simulation Speed 0 while the transport keeps running.
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 0.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(2.0 * DT), 0.0, 0.0)
         .unwrap();
     strike(&mut simulation, 2.0 * DT, 1);
     assert_eq!(
@@ -613,7 +613,7 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
             .advance(
                 bodies.clone(),
                 [0.0; 3],
-                Seconds(frame as f64 * DT),
+                PlayedTime::from_played(frame as f64 * DT),
                 1.0,
                 0.0,
             )
@@ -648,7 +648,7 @@ fn explosion_impulse_lands_once_per_fire() {
     let mut landed = Vec::new();
     for frame in 1..=6 {
         simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], PlayedTime::from_played(frame as f64 * DT), 1.0, 0.0)
             .unwrap();
         landed.extend(receipts(&mut simulation));
         // 8 × (1 − 1.5 / 3): outward along +x, no matter how many ticks follow.

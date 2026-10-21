@@ -566,8 +566,7 @@ impl Primitive for GpuFlipDomain {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
-        self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
-        self.clock.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
+        self.clock.set_played_target(ctx.sim_step.played_target);
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
@@ -577,13 +576,13 @@ impl Primitive for GpuFlipDomain {
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
-            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
+            self.clock.observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Liquid") {
-                Ok(field) => self.fields.observe_sample(&self.clock, ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.fields.observe_sample(&self.clock, ctx.played(), field.as_ref()),
                 Err(error) => ctx.error(error),
             }
-            self.bodies.observe_sample(&self.clock, ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
-            self.coupled.scenes.observe_staged(&self.clock, ctx.time.seconds.0);
+            self.bodies.observe_sample(&self.clock, ctx.played(), (!role_pending).then_some(&roles[..]));
+            self.coupled.scenes.observe_staged(&self.clock, ctx.played());
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -752,15 +751,15 @@ impl PhysicsNode for GpuFlipDomain {
     /// it lands on the first tick of the next frame.
     fn physics_impulse_stamp(
         &self,
-        transport: manifold_core::Seconds,
+        played: manifold_core::PlayedTime,
         sequence: u64,
         step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if !self.physics_impulse_readiness()? {
             return Err("GPU FLIP impulses: the liquid is still preparing; fire waits for it".into());
         }
-        let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
+        let mut stamp = self.impulses.stamp(played, sequence)?;
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(played, manifold_water_rigid::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -787,8 +786,7 @@ impl PhysicsNode for GpuFlipDomain {
 inventory::submit! { PhysicsNodeRegistration::new::<GpuFlipDomain>() }
 
 impl TickSampled for GpuFlipDomain {
-    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
-        self.clock.follow_tempo_shift(tempo_shift);
+    fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
         if self.coupled.mode {
@@ -831,7 +829,7 @@ impl GpuFlipDomain {
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         self.coupled.walls = DomainWalls::of(&geometry.layout, closed_faces(ctx.params));
-        if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
+        if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
@@ -872,7 +870,7 @@ impl GpuFlipDomain {
         self.setup = Some(geometry.setup);
         self.layout = Some(geometry.layout);
         let frame = self.clock.advance(
-            ctx.time.seconds.0,
+            ctx.played(),
             ctx.sim_step.interval.0,
             speed,
             ctx.scalar_or_param("reset", 0.0),
@@ -899,7 +897,7 @@ impl GpuFlipDomain {
             self.coupled.scenes.settle(&self.clock, &frame, scene);
             self.coupled.scenes.prune_before(owner.completed());
         }
-        self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
+        self.impulses.observe_frame(ctx.played(), &frame)?;
         self.bodies.settle(roles, &self.clock, &frame);
         let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
@@ -1014,7 +1012,7 @@ impl GpuFlipDomain {
     /// the water's clock, and build a new rigid owner (restarting the pair)
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
-    fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
+    fn observe_rigid(&mut self, played: manifold_core::PlayedTime, speed: f32) -> Result<bool, String> {
         let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, step, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
@@ -1026,7 +1024,7 @@ impl GpuFlipDomain {
                 observation.speed
             ));
         }
-        if (observation.transport.0 - transport).abs() > 1e-9 {
+        if (observation.transport.seconds() - played.seconds()).abs() > 1e-9 {
             return Err("GPU FLIP coupling: rigid observation transport does not match water transport".into());
         }
         CoupledRigidInputs { scene: &observation.inputs, colliders: *colliders, density: f64::from(WATER_DENSITY) }
@@ -1113,6 +1111,7 @@ const _: () = assert!(ROLE_PORTS.len() == MAX_FLUID_ROLES);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PlayedTime;
 
     fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<GpuFlipGeometry, String> {
         let read = |name: &str, default: f32| match name {
@@ -1129,8 +1128,8 @@ mod tests {
     fn gpu_flip_domain_later_ticks_get_their_own_obstacle_bound() {
         use manifold_physics::clock::SimulationClock;
         let mut clock = SimulationClock::default();
-        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
-        let frame = clock.advance(1.0, 0.5, 1.0, 0.0, false, true);
+        clock.advance(PlayedTime::from_played(0.0), 0.5, 1.0, 0.0, false, true);
+        let frame = clock.advance(PlayedTime::from_played(1.0), 0.5, 1.0, 0.0, false, true);
         assert!(frame.ticks >= 2, "the fixture needs a later tick");
         let mut domain = GpuFlipDomain::new();
         domain.scheduled_frame = Some(frame);
@@ -1153,8 +1152,8 @@ mod tests {
         use manifold_physics::clock::{SimulationClock, TICK};
         let mut domain = GpuFlipDomain::new();
         assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
-        let frame = SimulationClock::default().advance(0.0, TICK, 1.0, 0.0, false, false);
-        domain.impulses.observe_frame(0.0, &frame).unwrap();
+        let frame = SimulationClock::default().advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
+        domain.impulses.observe_frame(PlayedTime::from_played(0.0), &frame).unwrap();
         assert_eq!(domain.physics_impulse_readiness(), Ok(true));
         domain.holding = true;
         assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role or the field is still preparing");

@@ -1,4 +1,5 @@
 use super::*;
+use manifold_physics::PlayedTime;
 use crate::clock::LiquidClock;
 use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 use manifold_core::Seconds;
@@ -15,13 +16,13 @@ fn lattice() -> ForceLattice {
 
 /// One display frame at `transport`: advance the clock, then the impulses.
 fn frame(clock: &mut LiquidClock, impulses: &mut LiquidImpulses, transport: f64, _interval: f64, speed: f32) -> ClockFrame {
-    let frame = clock.advance(transport, TICK, speed, 0.0, false, false);
-    impulses.observe_frame(transport, &frame).unwrap();
+    let frame = clock.advance(PlayedTime::from_played(transport), TICK, speed, 0.0, false, false);
+    impulses.observe_frame(PlayedTime::from_played(transport), &frame).unwrap();
     frame
 }
 
 fn hit(impulses: &mut LiquidImpulses, transport: f64, sequence: u64, x: f32) -> TickStamp {
-    let stamp = impulses.stamp(transport, sequence).unwrap();
+    let stamp = impulses.stamp(PlayedTime::from_played(transport), sequence).unwrap();
     impulses
         .enqueue(stamp, fluid(FieldValue::uniform([x, 0.0, 0.0]).unwrap()), None)
         .unwrap()
@@ -64,9 +65,9 @@ impl Rig {
     /// The domain's replay sample at `time`: Speed first, then the field.
     fn observe(&mut self, time: f64, field: &dyn Fn(f64) -> FieldValue) {
         if let Some(speed) = self.speed {
-            self.clock.observe_speed(time, speed(time));
+            self.clock.observe_speed(PlayedTime::from_played(time), speed(time));
         }
-        self.fields.observe_sample(&self.clock, time, Some(&field(time)));
+        self.fields.observe_sample(&self.clock, PlayedTime::from_played(time), Some(&field(time)));
     }
 
     fn frame(
@@ -79,7 +80,11 @@ impl Rig {
     ) -> Result<(ClockFrame, FieldFrame), String> {
         if let Some(last) = self.last.filter(|&last| transport > last) {
             self.times.clear();
-            self.fields.request_samples(&self.clock, last, transport, &mut self.times);
+            {
+                let mut played = Vec::new();
+                self.fields.request_samples(&self.clock, PlayedTime::from_played(last), PlayedTime::from_played(transport), &mut played);
+                self.times.extend(played.into_iter().map(PlayedTime::seconds));
+            }
             let mut times = std::mem::take(&mut self.times);
             for &time in times.iter().filter(|&&time| time < transport) {
                 self.observe(time, field);
@@ -90,8 +95,8 @@ impl Rig {
         }
         self.last = Some(transport);
         let speed = self.speed.map_or(speed, |speed| speed(transport));
-        let frame = self.clock.advance(transport, interval, speed, 0.0, false, offline);
-        self.impulses.observe_frame(transport, &frame)?;
+        let frame = self.clock.advance(PlayedTime::from_played(transport), interval, speed, 0.0, false, offline);
+        self.impulses.observe_frame(PlayedTime::from_played(transport), &frame)?;
         let laid = self.fields.prepare(lattice(), Some(&field(transport)), &self.clock, &frame, &self.impulses)?;
         Ok((frame, laid))
     }
@@ -270,7 +275,7 @@ fn liquid_forces_per_tick_keep_fixed_intervals_under_overload() {
             let interval = frame.interval(offset as u64).unwrap();
             assert!((interval.start.0 - (completed + offset as f64 * TICK)).abs() < 1e-12);
             assert!((interval.duration().0 - TICK).abs() < 1e-12, "frame {step}: fixed interval");
-            assert_eq!(lattice, expected(starts[offset]), "frame {step}: authored interval start");
+            assert_eq!(lattice, expected(starts[offset].seconds()), "frame {step}: authored interval start");
         }
         completed = frame.plan.end.0;
         dropped = frame.dropped_seconds;
@@ -342,8 +347,8 @@ fn export_hits_match_live_project_interval_times_and_lattices() {
         let mut impulses = LiquidImpulses::default();
         let mut fields = LiquidFields::default();
         if split { fields.split_live_hits(); }
-        let first = clock.advance(0.0, TICK, 1.0, 0.0, false, offline);
-        impulses.observe_frame(0.0, &first).unwrap();
+        let first = clock.advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, offline);
+        impulses.observe_frame(PlayedTime::from_played(0.0), &first).unwrap();
         let epoch = impulses.epoch().unwrap();
         for (sequence, time) in [0.0, 0.02, 0.06, 0.1, 0.4, 0.5, 0.99].into_iter().enumerate() {
             impulses.hits.queue_mut().unwrap().enqueue(
@@ -354,8 +359,8 @@ fn export_hits_match_live_project_interval_times_and_lattices() {
         let mut result = Vec::new();
         for index in 1..=fps {
             let transport = index as f64 * (1.0 / fps as f64);
-            let frame = clock.advance(transport, TICK, 1.0, 0.0, false, offline);
-            impulses.observe_frame(transport, &frame).unwrap();
+            let frame = clock.advance(PlayedTime::from_played(transport), TICK, 1.0, 0.0, false, offline);
+            impulses.observe_frame(PlayedTime::from_played(transport), &frame).unwrap();
             let prepared = fields.prepare(lattice(), None, &clock, &frame, &impulses).unwrap();
             if split {
                 for hit in &fields.live_hits {
@@ -389,7 +394,7 @@ fn liquid_impulse_failed_frame_discards() {
     let mut impulses = LiquidImpulses::default();
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
-    let stamp = impulses.stamp(TICK, 1).unwrap();
+    let stamp = impulses.stamp(PlayedTime::from_played(TICK), 1).unwrap();
     impulses
         .enqueue(stamp, fluid(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()), None)
         .unwrap();
@@ -552,7 +557,7 @@ fn liquid_impulse_held_clock_discards() {
         frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
         let paused = frame(&mut clock, &mut impulses, transport, TICK, speed);
         assert!(paused.held);
-        let stamp = impulses.stamp(transport, 1).unwrap();
+        let stamp = impulses.stamp(PlayedTime::from_played(transport), 1).unwrap();
         impulses
             .enqueue(stamp, fluid(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()), None)
             .unwrap();
@@ -575,20 +580,20 @@ fn liquid_impulse_restart_cancels() {
     let mut impulses = LiquidImpulses::default();
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     assert_eq!(impulses.epoch(), Some(1));
-    let stamp = impulses.stamp(0.0, 1).unwrap();
+    let stamp = impulses.stamp(PlayedTime::from_played(0.0), 1).unwrap();
     impulses
         .enqueue(stamp, fluid(FieldValue::uniform([1.0; 3]).unwrap()), None)
         .unwrap();
-    let restart = clock.advance(TICK, TICK, 1.0, 1.0, false, false);
-    impulses.observe_frame(TICK, &restart).unwrap();
+    let restart = clock.advance(PlayedTime::from_played(TICK), TICK, 1.0, 1.0, false, false);
+    impulses.observe_frame(PlayedTime::from_played(TICK), &restart).unwrap();
     assert_eq!(impulses.epoch(), Some(2));
     let error = impulses
         .enqueue(EventStamp { sequence: 2, ..stamp }, fluid(FieldValue::uniform([1.0; 3]).unwrap()), None)
         .unwrap_err();
     assert!(error.contains("restarted"), "{error}");
     for i in 2..5 {
-        let frame = clock.advance(i as f64 * TICK, TICK, 1.0, 1.0, false, false);
-        impulses.observe_frame(i as f64 * TICK, &frame).unwrap();
+        let frame = clock.advance(PlayedTime::from_played(i as f64 * TICK), TICK, 1.0, 1.0, false, false);
+        impulses.observe_frame(PlayedTime::from_played(i as f64 * TICK), &frame).unwrap();
         assert_eq!(impulses.impulse_tick(), None);
     }
     assert!(receipts(&mut impulses).is_empty());
@@ -598,9 +603,9 @@ fn liquid_impulse_restart_cancels() {
 fn liquid_impulse_refusals_are_named() {
     let mut clock = LiquidClock::default();
     let mut impulses = LiquidImpulses::default();
-    assert!(impulses.stamp(0.0, 0).unwrap_err().contains("not started"));
+    assert!(impulses.stamp(PlayedTime::from_played(0.0), 0).unwrap_err().contains("not started"));
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
-    let stamp = impulses.stamp(0.0, 0).unwrap();
+    let stamp = impulses.stamp(PlayedTime::from_played(0.0), 0).unwrap();
     let rigid = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0; 3]).unwrap(),
         target: ImpulseTarget::Rigid(RigidImpulseTargets { bodies: 1, copies: false }),
@@ -619,7 +624,7 @@ fn liquid_impulse_full_history_refuses_one_hit_then_frees() {
     for sequence in 0..IMPULSE_CAPACITY as u64 {
         hit(&mut impulses, 0.0, sequence, 1.0);
     }
-    let stamp = impulses.stamp(0.0, 1000).unwrap();
+    let stamp = impulses.stamp(PlayedTime::from_played(0.0), 1000).unwrap();
     let error = impulses
         .enqueue(stamp, fluid(FieldValue::uniform([1.0; 3]).unwrap()), None)
         .unwrap_err();

@@ -266,13 +266,13 @@ impl TickForces {
 
     /// Each boundary a not-yet-run tick may start at under `clock` in
     /// `(from, until]`.
-    pub fn request_samples(&mut self, clock: &SimulationClock, from: f64, until: f64, out: &mut Vec<f64>) {
+    pub fn request_samples(&mut self, clock: &SimulationClock, from: crate::PlayedTime, until: crate::PlayedTime, out: &mut Vec<crate::PlayedTime>) {
         self.samples.request(clock, from, until, out);
     }
 
-    /// A history replay sample of the field at transport `now`, after
+    /// A history replay sample of the field at played time `now`, after
     /// `clock` observed this sample's Speed.
-    pub fn observe_sample(&mut self, clock: &SimulationClock, now: f64, field: Option<&FieldValue>) {
+    pub fn observe_sample(&mut self, clock: &SimulationClock, now: crate::PlayedTime, field: Option<&FieldValue>) {
         self.samples.observe(clock, now, field);
     }
 

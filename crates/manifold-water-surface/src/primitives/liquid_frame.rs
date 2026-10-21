@@ -206,7 +206,7 @@ impl Primitive for LiquidFrame {
         let cursor_frame = (!offline && ctx.scalar_or_param("display_cursor", 0.0) >= 0.5).then(|| CursorFrame {
             epoch,
             requested: display_time,
-            transport: ctx.time.seconds.0,
+            transport: ctx.played(),
             dropped: f64::from(ctx.scalar_or_param("dropped_seconds", 0.0)),
         });
         let particles = ctx.inputs.array("particles");

@@ -1,6 +1,6 @@
 //! Host access to scene snapshots and events supplied by runtime extensions.
 
-use manifold_core::{NodeId, id::EffectId};
+use manifold_core::{Beats, NodeId, PlayedTime, id::EffectId};
 
 use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::{ImpulseFire, SceneImpulseDiagnostics}};
 use super::{ModifierPreviewContext, PresetRuntime};
@@ -84,17 +84,30 @@ impl PresetRuntime {
             .any(|extension| extension.is_scene_impulse_param(param))
     }
 
-    /// One extension owns each impulse param; the Fire goes to it alone, so
-    /// its refusal is this Fire's answer and never stops another Fire.
+    /// A Fire at transport `source`: it becomes played time with this frame's
+    /// tempo shift here, as it arrives.
     pub fn fire_scene_impulse(
         &mut self,
         param: &str,
         source: FrameTime,
         next_sequence: &mut u64,
     ) -> Result<ImpulseFire, String> {
+        let played = self.executor.sim_step().to_played(source.seconds);
+        self.fire_scene_impulse_played(param, played, source.beats, next_sequence)
+    }
+
+    /// One extension owns each impulse param; the Fire goes to it alone, so
+    /// its refusal is this Fire's answer and never stops another Fire.
+    pub fn fire_scene_impulse_played(
+        &mut self,
+        param: &str,
+        source: PlayedTime,
+        beats: Beats,
+        next_sequence: &mut u64,
+    ) -> Result<ImpulseFire, String> {
         let (extensions, mut context) = self.extension_context();
         match extensions.iter_mut().find(|extension| extension.is_scene_impulse_param(param)) {
-            Some(owner) => owner.fire_scene_impulse(&mut context, param, source, next_sequence),
+            Some(owner) => owner.fire_scene_impulse(&mut context, param, source, beats, next_sequence),
             None => Ok(ImpulseFire::NotImpulse),
         }
     }

@@ -1,11 +1,11 @@
 //! Host parameter events backed by authored scene-space field graphs.
 use ahash::{AHashMap, AHashSet};
-use manifold_core::NodeId;
+use manifold_core::{Beats, NodeId, PlayedTime};
 use manifold_core::scene_impulse::ImpulseFire;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 
 use super::{WaterRuntime, WaterRuntimeState};
-use {manifold_node_engine::exec::effect_node::FrameTime, crate::runtime::physics_impulses::CapturedSceneImpulse, crate::runtime::physics_impulses::PreparedSceneImpulse};
+use {crate::runtime::physics_impulses::CapturedSceneImpulse, crate::runtime::physics_impulses::PreparedSceneImpulse};
 use manifold_node_engine::load::expand::{SceneModifierExpandError, SceneModifierImpulseRoute};
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, persistence::PrimitiveRegistry};
 
@@ -137,7 +137,8 @@ impl WaterRuntime<'_> {
     pub fn fire_scene_impulse(
         &mut self,
         param: &str,
-        source: FrameTime,
+        source: PlayedTime,
+        beats: Beats,
         next_sequence: &mut u64,
     ) -> Result<ImpulseFire, String> {
         if !self.water.is_scene_impulse_param(param) {
@@ -175,10 +176,11 @@ impl WaterRuntime<'_> {
                 let admitted = self
                     .impulse_recipients_ready(&route.prepared)
                     .and_then(|_| {
-                        self.capture_scene_impulse_at_source(
+                        self.capture_scene_impulse_at_played(
                             &mut route.prepared,
                             &mut route.captured,
                             source,
+                            beats,
                             first + offset as u64,
                         )
                     })

@@ -52,7 +52,7 @@ impl Default for RigidSceneInputs {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RigidSceneObservation {
     pub inputs: RigidSceneInputs,
-    pub transport: Seconds,
+    pub transport: manifold_core::PlayedTime,
     pub speed: f32,
     pub reset: f32,
 }
@@ -366,6 +366,7 @@ impl RigidSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PlayedTime;
     use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::{ResolvedRigidImpulse, SimStep};
     use manifold_physics::input::{AppliedEvent, EventStamp};
@@ -621,7 +622,7 @@ mod tests {
                 inputs.copy_columns,
                 inputs.layout,
                 inputs.gravity,
-                Seconds::ZERO,
+                PlayedTime::ZERO,
                 1.0,
                 0.0,
                 inputs.acceleration_field.clone(),
@@ -631,7 +632,7 @@ mod tests {
         ordinary
             .enqueue_impulse(
                 ordinary
-                    .impulse_stamp(Seconds::ZERO, 1)
+                    .impulse_stamp(PlayedTime::ZERO, 1)
                     .expect("ordinary observation accepted"),
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
@@ -669,7 +670,7 @@ mod tests {
         worker
             .enqueue_impulse(
                 worker
-                    .impulse_stamp(Seconds::ZERO, 1)
+                    .impulse_stamp(PlayedTime::ZERO, 1)
                     .expect("worker observation accepted"),
                 ResolvedRigidImpulse {
                     field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),

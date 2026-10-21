@@ -29,7 +29,7 @@ use manifold_gpu::GpuBuffer;
 use manifold_nodes_physics::force_lattice::{LatticeBuffers, LatticeUpload};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::{Admission, TickHits, HIT_CAPACITY};
-use manifold_physics::{FieldValue, TickStamp, VectorField};
+use manifold_physics::{FieldValue, PlayedTime, TickStamp, VectorField};
 
 use crate::clock::{ClockFrame, LiquidClock};
 use crate::coupling::LiquidRigidOwner;
@@ -92,11 +92,11 @@ impl Default for LiquidImpulses {
 impl LiquidImpulses {
     /// Begin this frame's ticks. A restart opens a new epoch and cancels every
     /// unread event of the old one.
-    pub fn observe_frame(&mut self, transport: f64, frame: &ClockFrame) -> Result<(), String> {
+    pub fn observe_frame(&mut self, played: PlayedTime, frame: &ClockFrame) -> Result<(), String> {
         if frame.restarted {
             self.combined.clear();
         }
-        self.hits.observe_frame(transport, frame)
+        self.hits.observe_frame(played, frame)
     }
 
     /// This frame's ticks are encoded: its hits are applied.
@@ -116,8 +116,8 @@ impl LiquidImpulses {
 
     /// Stamp a hit at the simulated time of the frame last observed: it lands
     /// on the next frame's first tick.
-    pub fn stamp(&self, transport: f64, sequence: u64) -> Result<EventStamp, String> {
-        self.hits.stamp(transport, sequence)
+    pub fn stamp(&self, played: PlayedTime, sequence: u64) -> Result<EventStamp, String> {
+        self.hits.stamp(played, sequence)
     }
 
     /// Whether hits are refused because the clock broke; cleared by a restart.
@@ -144,7 +144,7 @@ impl LiquidImpulses {
         }
         let mut planned = None;
         if let Some((targets, owner)) = rigid {
-            let rigid_stamp = owner.rigid().impulse_stamp(owner.completed_time(), stamp.sequence)?;
+            let rigid_stamp = owner.rigid().worker_impulse_stamp(owner.completed_time(), stamp.sequence)?;
             planned = Some(owner.rigid_mut().enqueue_impulse(
                 rigid_stamp,
                 ResolvedRigidImpulse { field: impulse.field.clone(), targets },
@@ -254,15 +254,15 @@ impl LiquidFields {
         self.finish(lattice, impulses)
     }
 
-    /// The transport times the history replay must sample before the next
+    /// The played times the history replay must sample before the next
     /// frame: each boundary a tick may start at under `clock`, in `(from, until]`.
-    pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
+    pub fn request_samples(&mut self, clock: &LiquidClock, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
         self.forces.request_samples(clock, from, until, out);
     }
 
-    /// A history replay sample of the field at transport `now`, after `clock`
+    /// A history replay sample of the field at played time `now`, after `clock`
     /// observed this sample's Speed.
-    pub fn observe_sample(&mut self, clock: &LiquidClock, now: f64, field: Option<&FieldValue>) {
+    pub fn observe_sample(&mut self, clock: &LiquidClock, now: PlayedTime, field: Option<&FieldValue>) {
         self.forces.observe_sample(clock, now, field);
     }
 

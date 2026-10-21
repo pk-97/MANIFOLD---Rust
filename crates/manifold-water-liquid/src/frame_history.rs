@@ -611,7 +611,7 @@ mod tests {
         fn run(&mut self, clock: &mut SimulationClock, fps: f64, hz: f64, speed: f32, frames: usize, start: usize) -> Vec<(manifold_physics::clock::ClockFrame, Option<Presentation>)> {
             (start..start + frames)
                 .map(|f| {
-                    let frame = clock.advance(f as f64 / fps, 1.0 / hz, speed, 0.0, false, false);
+                    let frame = clock.advance(manifold_physics::PlayedTime::from_played(f as f64 / fps), 1.0 / hz, speed, 0.0, false, false);
                     let shown = self.live_frame(layout(frame.epoch), frame.simulation_time, true, frame.display_time);
                     (frame, shown)
                 })

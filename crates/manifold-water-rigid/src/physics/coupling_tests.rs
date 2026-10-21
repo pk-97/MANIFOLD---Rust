@@ -542,7 +542,7 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], PlayedTime::ZERO, 1.0, 0.0)
         .unwrap();
     let handle = simulation.handles[0].unwrap();
     let world = simulation.world.as_ref().unwrap();

@@ -32,7 +32,7 @@ pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_c
 
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
-pub use units::{Beats, Bpm, Seconds};
+pub use units::{Beats, Bpm, PlayedTime, Seconds};
 
 /// Stable identifier for a single parameter slot.
 ///

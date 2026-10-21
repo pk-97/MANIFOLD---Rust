@@ -76,10 +76,20 @@ impl RigidSimulation {
     }
 
     /// Capture an impulse timestamp from the observation that was accepted for
-    /// this exact transport value. Native time is authored time, so paused
+    /// this exact played time. Native time is authored time, so paused
     /// observations retain their current clock without extrapolation.
-    pub fn impulse_stamp(&self, transport: Seconds, sequence: u64) -> Result<EventStamp, String> {
-        if !transport.0.is_finite() {
+    pub fn impulse_stamp(&self, played: manifold_core::PlayedTime, sequence: u64) -> Result<EventStamp, String> {
+        self.impulse_stamp_at(played.seconds(), sequence)
+    }
+
+    /// [`Self::impulse_stamp`] for a coupled worker, whose accepted
+    /// observation is the simulation time its owner accepted.
+    pub fn worker_impulse_stamp(&self, accepted: Seconds, sequence: u64) -> Result<EventStamp, String> {
+        self.impulse_stamp_at(accepted.0, sequence)
+    }
+
+    fn impulse_stamp_at(&self, observed: f64, sequence: u64) -> Result<EventStamp, String> {
+        if !observed.is_finite() {
             return Err("Physics: impulse transport must be finite".into());
         }
         let Some(epoch) = self.impulse_epoch else {
@@ -91,7 +101,7 @@ impl RigidSimulation {
         let Some((accepted_transport, native_time)) = self.accepted_observation else {
             return Err("Physics: no successfully accepted observation at this transport".into());
         };
-        if accepted_transport != transport.0 {
+        if accepted_transport != observed {
             return Err(
                 "Physics: impulse transport does not match the accepted observation".into(),
             );

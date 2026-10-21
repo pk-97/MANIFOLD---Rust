@@ -364,13 +364,13 @@ fn placement_target_stands_until_a_frame_takes_it() {
         clock.seek_playing(Seconds(0.2137));
         assert!(clock.time().0 >= 0.2137);
         clock.advance(1);
-        assert_eq!(clock.placement_target(), Some(Seconds(0.2137)), "{fps} fps");
-        assert_eq!(clock.take_placement_target(), Some(Seconds(0.2137)), "{fps} fps");
+        assert_eq!(clock.played_target(), Some(PlayedTime::from_played(0.2137)), "{fps} fps");
+        assert_eq!(clock.take_played_target(), Some(PlayedTime::from_played(0.2137)), "{fps} fps");
         clock.advance(1);
-        assert_eq!(clock.take_placement_target(), None, "{fps} fps: one frame takes it");
+        assert_eq!(clock.take_played_target(), None, "{fps} fps: one frame takes it");
         clock.locate(Seconds(0.9137));
         clock.locate(clock.time());
         clock.advance(1);
-        assert_eq!(clock.take_placement_target(), Some(Seconds(0.9137)), "{fps} fps: play after a seek keeps its target");
+        assert_eq!(clock.take_played_target(), Some(PlayedTime::from_played(0.9137)), "{fps} fps: play after a seek keeps its target");
     }
 }

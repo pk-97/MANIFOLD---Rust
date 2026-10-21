@@ -14,7 +14,7 @@ use manifold_physics::clock::{LiveLoad, SimulationClock};
 use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, TickForces};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::TickHits;
-use manifold_physics::{FieldValue, Seconds, TickStamp, VectorField};
+use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
 
 use crate::force_lattice::{felt_field, LatticeBuffers, LatticeUpload};
 use crate::hits::{TakesHits, TakesHitsRegistration};
@@ -86,8 +86,7 @@ manifold_node_engine::primitive! {
 }
 
 impl TickSampled for SwarmForces {
-    fn request_physics_samples(&mut self, from: f64, until: f64, tempo_shift: f64, out: &mut Vec<f64>) {
-        self.clock.follow_tempo_shift(tempo_shift);
+    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
         self.forces.request_samples(&self.clock, from, until, out);
     }
 }
@@ -110,13 +109,13 @@ impl TakesHits for SwarmForces {
 
     /// A hit is stamped at the fire's own simulated time, so it lands on the
     /// tick whose interval holds that time, the same tick at any frame rate.
-    fn hit_stamp(&self, transport: Seconds, sequence: u64, step: SimStep) -> Result<EventStamp, String> {
+    fn hit_stamp(&self, played: PlayedTime, sequence: u64, step: SimStep) -> Result<EventStamp, String> {
         if !self.hit_readiness()? {
             return Err("Swarm impulses: the swarm has not started; fire waits for it".into());
         }
-        let mut stamp = self.hits.stamp(transport.0, sequence)?;
+        let mut stamp = self.hits.stamp(played, sequence)?;
         let load = step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget });
-        stamp.time = Seconds(self.clock.simulation_at(transport.0, load));
+        stamp.time = Seconds(self.clock.simulation_at(played, load));
         Ok(stamp)
     }
 
@@ -151,7 +150,7 @@ impl SwarmForces {
         let lattice = Self::lattice(ctx)?;
         let field = felt_field(ctx, "Swarm Forces")?;
         let frame = self.clock.advance(
-            ctx.time.seconds.0,
+            ctx.played(),
             ctx.sim_step.interval.0,
             ctx.scalar_or_param("speed", 1.0),
             ctx.scalar_or_param("reset", 0.0),
@@ -160,7 +159,7 @@ impl SwarmForces {
         );
         // Hits follow the clock before anything else can fail, so a refused
         // frame never leaves them a frame behind it.
-        self.hits.observe_frame(ctx.time.seconds.0, &frame)?;
+        self.hits.observe_frame(ctx.played(), &frame)?;
         if frame.numerical_error {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
@@ -274,14 +273,13 @@ impl Primitive for SwarmForces {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(ctx.sim_step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget }));
-        self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
-        self.clock.follow_tempo_shift(ctx.sim_step.tempo_shift.0);
+        self.clock.set_played_target(ctx.sim_step.played_target);
         // A physics sample reads the field at a tick's start; it never
         // advances time.
         if ctx.sim_step.authored_sample_only {
-            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
+            self.clock.observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Swarm Forces") {
-                Ok(field) => self.forces.observe_sample(&self.clock, ctx.time.seconds.0, field.as_ref()),
+                Ok(field) => self.forces.observe_sample(&self.clock, ctx.played(), field.as_ref()),
                 Err(error) => ctx.error(error),
             }
             return;
@@ -382,9 +380,9 @@ mod tests {
         /// start, then the frame runs.
         fn frame(&mut self, from: f64, until: f64, params: &[(&'static str, f32)]) -> Frame {
             let mut starts = Vec::new();
-            self.node.request_physics_samples(from, until, self.step.tempo_shift.0, &mut starts);
+            self.node.request_physics_samples(self.step.to_played(Seconds(from)), self.step.to_played(Seconds(until)), &mut starts);
             for start in starts {
-                assert!(self.run(start, params, self.step.authored_sample()).is_empty());
+                assert!(self.run(self.step.to_transport(start).0, params, self.step.authored_sample().at_played(start)).is_empty());
             }
             let errors = self.run(until, params, self.step);
             assert!(errors.is_empty(), "{errors:?}");
@@ -395,7 +393,7 @@ mod tests {
 
         /// Fire a scene hit at transport `at`, as the impulse runtime does.
         fn fire(&mut self, at: f64, sequence: u64, field: FieldValue) {
-            let stamp = self.node.hit_stamp(Seconds(at), sequence, self.step).expect("the swarm takes hits");
+            let stamp = self.node.hit_stamp(self.step.to_played(Seconds(at)), sequence, self.step).expect("the swarm takes hits");
             self.node.enqueue_hit(stamp, field).expect("the hit is queued");
         }
 

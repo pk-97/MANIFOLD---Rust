@@ -632,6 +632,7 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_physics::PlayedTime;
 
     const OPEN: DomainWalls = DomainWalls { min: [0.0; 3], size: [0.0; 3], closed: 0 };
 
@@ -861,17 +862,21 @@ mod tests {
                 let transport = index as f64 / fps;
                 if let Some(last) = last {
                     times.clear();
-                    scenes.request(&clock, last, transport, &mut times);
-                    for &time in times.iter().filter(|&&time| time < transport) {
-                        scenes.observe(&clock, time, Some(&scene_at(time)));
+                    {
+                        let mut played = Vec::new();
+                        scenes.request(&clock, PlayedTime::from_played(last), PlayedTime::from_played(transport), &mut played);
+                        times.extend(played.into_iter().map(PlayedTime::seconds));
                     }
-                    scenes.observe(&clock, transport, Some(&scene_at(transport)));
+                    for &time in times.iter().filter(|&&time| time < transport) {
+                        scenes.observe(&clock, PlayedTime::from_played(time), Some(&scene_at(time)));
+                    }
+                    scenes.observe(&clock, PlayedTime::from_played(transport), Some(&scene_at(transport)));
                 }
                 last = Some(transport);
                 // The previous display frame leaves its accepted interval
                 // pending; it is exchanged once its end sample is present.
                 owner.settle_ready(scenes.endpoint(owner.completed() + 1), |_| true, no_reaction).unwrap();
-                let frame = clock.advance(transport, 1.0 / fps, 1.0, 0.0, false, false);
+                let frame = clock.advance(PlayedTime::from_played(transport), 1.0 / fps, 1.0, 0.0, false, false);
                 assert_eq!(frame.dropped_seconds, 0.0, "{fps} fps dropped time");
                 if index > 0 {
                     assert_eq!(frame.ticks, 1, "{fps} fps accepted one live interval");
@@ -919,7 +924,7 @@ mod tests {
         let colliders = RigidImpulseTargets { bodies: 1, copies: false };
         let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, 1, None)?;
         let (mut clock, mut scenes) = (LiquidClock::default(), TickSamples::default());
-        let frame = clock.advance(0.0, TICK, speed(0.0), 0.0, false, offline);
+        let frame = clock.advance(PlayedTime::from_played(0.0), TICK, speed(0.0), 0.0, false, offline);
         scenes.settle(&clock, &frame, Some(&scene_at(0.0)));
         let (mut times, mut rows, mut previous) = (Vec::new(), Vec::new(), 0.0);
         let settle = |owner: &mut LiquidRigidOwner, scenes: &TickSamples<RigidSceneInputs>| -> Result<(), String> {
@@ -932,7 +937,11 @@ mod tests {
         for index in 1..=2 * fps {
             let now = f64::from(index) / f64::from(fps);
             times.clear();
-            scenes.request(&clock, previous, now, &mut times);
+            {
+                let mut played = Vec::new();
+                scenes.request(&clock, PlayedTime::from_played(previous), PlayedTime::from_played(now), &mut played);
+                times.extend(played.into_iter().map(PlayedTime::seconds));
+            }
             let mut grid = (previous * 240.0).floor() + 1.0;
             while grid / 240.0 < now {
                 times.push(grid / 240.0);
@@ -944,11 +953,11 @@ mod tests {
             times.push(now);
             for &time in &times {
                 scenes.stage(Some(&scene_at(time)));
-                clock.observe_speed(time, speed(time));
-                scenes.observe_staged(&clock, time);
+                clock.observe_speed(PlayedTime::from_played(time), speed(time));
+                scenes.observe_staged(&clock, PlayedTime::from_played(time));
             }
             settle(&mut owner, &scenes)?;
-            let frame = clock.advance(now, TICK, speed(now), 0.0, false, offline);
+            let frame = clock.advance(PlayedTime::from_played(now), TICK, speed(now), 0.0, false, offline);
             scenes.settle(&clock, &frame, Some(&scene_at(now)));
             for ordinal in 0..u64::from(frame.ticks) {
                 if ordinal > 0 {

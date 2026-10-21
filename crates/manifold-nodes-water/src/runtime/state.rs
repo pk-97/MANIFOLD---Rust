@@ -6,22 +6,30 @@ use manifold_node_engine::exec::{effect_node::FrameTime, execution_plan::Executi
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::runtime::extensions::{RuntimeContext, RuntimeExtension, RuntimeRegistration};
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
+use manifold_core::{Beats, PlayedTime};
 
 use super::physics_sampling::{PhysicsInputSnapshot, physics_sample_steps};
 use super::scene_impulses::SceneImpulses;
+
+/// A frame the replay holds, on played time: a tempo edit never moves it.
+/// Its transport seconds are derived from the current step when needed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HeldFrame {
+    pub(crate) played: PlayedTime,
+    pub(crate) beats: Beats,
+    pub(crate) frame_count: i64,
+}
 
 pub(crate) struct WaterRuntimeState {
     pub(crate) impulse_identity: Arc<()>,
     pub(crate) scene_impulses: SceneImpulses,
     pub(crate) sample_steps: Option<Vec<bool>>,
     pub(crate) input_snapshot: Option<PhysicsInputSnapshot>,
-    pub(crate) last_frame_time: Option<FrameTime>,
+    pub(crate) last_frame_time: Option<HeldFrame>,
     /// Where the next replay opens instead of at the last frame: the target of
     /// a jump the last frame landed on, sampled there first.
-    pub(crate) replay_from: Option<FrameTime>,
+    pub(crate) replay_from: Option<HeldFrame>,
     pub(crate) project_tempo: Option<ProjectTempo>,
-    /// The engine's tempo-edit total these transport times already follow.
-    pub(crate) followed_shift: f64,
 }
 
 impl RuntimeExtension for WaterRuntimeState {
@@ -63,10 +71,11 @@ impl RuntimeExtension for WaterRuntimeState {
         &mut self,
         runtime: &mut RuntimeContext<'_>,
         param: &str,
-        source: FrameTime,
+        source: PlayedTime,
+        beats: Beats,
         next_sequence: &mut u64,
     ) -> Result<manifold_core::scene_impulse::ImpulseFire, String> {
-        super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(param, source, next_sequence)
+        super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(param, source, beats, next_sequence)
     }
 
     fn drain_scene_impulse_diagnostics(
@@ -93,8 +102,8 @@ impl RuntimeExtension for WaterRuntimeState {
         water.sample_physics_history(time, step);
     }
 
-    fn after_frame(&mut self, graph: &Graph, time: FrameTime) {
-        Self::after_frame(self, graph, time);
+    fn after_frame(&mut self, graph: &Graph, time: FrameTime, played: PlayedTime) {
+        Self::after_frame(self, graph, time, played);
     }
     fn reset(&mut self) {
         Self::reset(self);
@@ -107,8 +116,8 @@ impl RuntimeExtension for WaterRuntimeState {
         runtime: &mut RuntimeContext<'_>,
         instance: Option<&manifold_core::effects::PresetInstance>,
     ) {
-        self.follow_tempo_shift(runtime.executor.sim_step().tempo_shift.0);
-        Self::set_source_instance(self, runtime.graph, instance);
+        let tempo_shift = runtime.executor.sim_step().tempo_shift;
+        Self::set_source_instance(self, runtime.graph, instance, tempo_shift);
     }
 
     fn prepare_modifiers(
@@ -166,29 +175,11 @@ impl WaterRuntimeState {
             last_frame_time: None,
             replay_from: None,
             project_tempo: None,
-            followed_shift: 0.0,
         })
     }
 
-    /// A tempo edit kept the beat and moved its seconds: every transport
-    /// time held here moves with it, once, so the replay continues from the
-    /// time already simulated. `total` is the sum of every edit's move.
-    pub(crate) fn follow_tempo_shift(&mut self, total: f64) {
-        let by = total - self.followed_shift;
-        if by == 0.0 || !by.is_finite() {
-            return;
-        }
-        self.followed_shift = total;
-        for time in [&mut self.last_frame_time, &mut self.replay_from].into_iter().flatten() {
-            time.seconds.0 += by;
-        }
-        if let Some(inputs) = &mut self.input_snapshot {
-            inputs.shift_hops(by);
-        }
-    }
-
-    pub(crate) fn after_frame(&mut self, graph: &Graph, time: FrameTime) {
-        self.last_frame_time = Some(time);
+    pub(crate) fn after_frame(&mut self, graph: &Graph, time: FrameTime, played: PlayedTime) {
+        self.last_frame_time = Some(HeldFrame { played, beats: time.beats, frame_count: time.frame_count });
         self.observe_impulse_setup(graph);
     }
 

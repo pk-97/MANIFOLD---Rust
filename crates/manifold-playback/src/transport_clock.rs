@@ -8,7 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use manifold_core::Seconds;
+use manifold_core::{PlayedTime, Seconds};
 
 /// A frame's beat is taken this many frames after its time, so an edge that
 /// sits exactly on a frame always counts as reached on that frame (D14).
@@ -69,8 +69,8 @@ pub struct TransportClock {
     /// Net frames the index moved on the last advance.
     last_advance: i64,
     /// The frame the newest placement no frame has rendered yet landed on,
-    /// and the time it aimed at.
-    placed: Option<(i64, Seconds)>,
+    /// and the played time it aimed at, which no tempo edit moves.
+    placed: Option<(i64, PlayedTime)>,
     /// The sum of every tempo edit's move of the frame time.
     tempo_shift: f64,
 }
@@ -154,8 +154,8 @@ impl TransportClock {
 
     /// Tempo edit: the same beat now sits at `t`. Move to the first frame at
     /// or after it, no hold, and no jump: no placement target, and the move
-    /// adds to [`Self::tempo_shift`], so physics shifts the times it keeps
-    /// and continues. A placement no frame has rendered moves with it.
+    /// adds to [`Self::tempo_shift`], so played time stands still and physics
+    /// continues. A placement no frame has rendered moves with it.
     pub fn relocate(&mut self, t: Seconds) {
         if t.0.is_finite() {
             let before = self.time().0;
@@ -164,16 +164,22 @@ impl TransportClock {
             self.last_advance = 0;
             let moved = self.time().0 - before;
             self.tempo_shift += moved;
-            if let Some((index, target)) = &mut self.placed {
+            if let Some((index, _)) = &mut self.placed {
                 *index = self.index;
-                target.0 += moved;
             }
         }
     }
 
-    /// The sum of every tempo edit's move of the frame time so far.
+    /// The sum of every tempo edit's move of the frame time so far: what
+    /// converts a transport stamp to played time at a seam.
     pub fn tempo_shift(&self) -> Seconds {
         Seconds(self.tempo_shift)
+    }
+
+    /// The frame time less every tempo edit's move: the clock physics runs
+    /// on, which a tempo edit never moves.
+    pub fn played_time(&self) -> PlayedTime {
+        PlayedTime::from_transport(self.time(), self.tempo_shift())
     }
 
     /// External-authority locate: nearest frame, no hold (D4).
@@ -199,22 +205,22 @@ impl TransportClock {
         // at that frame's own time: the seek's target still stands.
         let target = match self.placed {
             Some((index, held)) if index == self.index && target == self.time() => held,
-            _ => target,
+            _ => PlayedTime::from_transport(target, self.tempo_shift()),
         };
         self.placed = Some((self.index, target));
     }
 
-    /// The time the newest placement (a seek, play from a cue, a locate)
-    /// aimed at, until a frame renders it, however far the transport moved
-    /// since. Physics starts its tick grid there after a jump, so the grid
-    /// is the same at any frame rate.
-    pub fn placement_target(&self) -> Option<Seconds> {
+    /// The played time the newest placement (a seek, play from a cue, a
+    /// locate) aimed at, until a frame renders it, however far the transport
+    /// moved since. Physics starts its tick grid there after a jump, so the
+    /// grid is the same at any frame rate.
+    pub fn played_target(&self) -> Option<PlayedTime> {
         self.placed.map(|(_, target)| target)
     }
 
     /// The placement target for the frame being rendered, once: later frames
     /// get none.
-    pub fn take_placement_target(&mut self) -> Option<Seconds> {
+    pub fn take_played_target(&mut self) -> Option<PlayedTime> {
         self.placed.take().map(|(_, target)| target)
     }
 

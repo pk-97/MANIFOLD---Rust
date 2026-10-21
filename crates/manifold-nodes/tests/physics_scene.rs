@@ -88,7 +88,7 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
 
 #[test]
 fn physics_boxes_contacts_deflect_the_pile_sideways() {
-    use manifold_core::Seconds;
+    use manifold_core::PlayedTime;
     use manifold_water_rigid::physics::{MAX_BODIES, RigidBody, RigidSimulation};
     use manifold_node_engine::scene::transform::Transform;
 
@@ -133,7 +133,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
             scalar(121, "copy_columns"),
             scalar(121, "copy_layout"),
             [0.0, -9.81, 0.0],
-            Seconds(f64::from(frame) / 60.0),
+            PlayedTime::from_played(f64::from(frame) / 60.0),
             1.0,
             0.0,
         )
