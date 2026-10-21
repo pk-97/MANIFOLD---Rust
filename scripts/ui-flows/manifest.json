@@ -20,6 +20,15 @@
     "crates/manifold-app/src/scene_gizmo.rs": [
       "scene-preview-gizmo-drag"
     ],
+    "crates/manifold-app/src/setup_check.rs": [
+      "scene-setup-check"
+    ],
+    "crates/manifold-nodes-scene/src/node_graph/scene_vm/setup_check.rs": [
+      "scene-setup-check"
+    ],
+    "crates/manifold-core/src/liquid_setup.rs": [
+      "scene-setup-check"
+    ],
     "crates/manifold-ui/src/chrome/diff.rs": [
       "rack-bypass",
       "rack-wet-dry"
@@ -466,8 +475,11 @@
     "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
+    "scene-setup-check": "fluidauthoring",
+    "scene-water-domain-size": "fluidauthoring",
     "scene-physics-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
+    "scene-value-box-fits": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-switch": "gltfscene",
     "scene-physics-duplicate-count": "gltfscene",

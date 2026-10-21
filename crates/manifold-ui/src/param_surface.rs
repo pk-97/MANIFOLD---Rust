@@ -193,6 +193,11 @@ pub struct RowSpec {
     /// This is presentation state; `disabled` remains reserved for controls
     /// that cannot be edited at all.
     pub inactive_reason: Option<String>,
+    /// The setup check found this row's shape does not fit its liquid's
+    /// domain; the line says what the solver changed. Drawn in warning
+    /// colour under the row. The app projection is the only place that
+    /// fills it, from `SceneVm::problems`.
+    pub setup_warning: Option<String>,
     /// The control's scene descriptor (role and control group) when the
     /// lookup has one. The Scene tab groups and filters its rows by it.
     pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,

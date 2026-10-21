@@ -69,7 +69,7 @@ Peter, 2026-10-01: GPU FLIP is a specialised solver (DECOMPOSING_GENERATORS.md s
 
 A role of kind Inflow or Outflow reaches the step as a region row (`regions`, `region_count` from `node.gpu_flip_domain`), sharing the bodies' shapes and atlas; it is not a solid. Ported from FLIP Fluids `fluidsimulation.cpp`:
 
-- **Pool.** The domain's Particle Capacity is the slot count `liquid_fill` allocates, 0 meaning the fill's count. No upper bound past the exact-count refusal (section 5). A full pool emits nothing and shows as the live count reaching the slots.
+- **Pool.** The domain sizes the slot count `liquid_fill` allocates; nobody sets it. Without an Inflow it is the fill's count. With an Inflow, enabled or not, it is one slot per half-cell site of the domain up to `AUTO_INFLOW_SLOTS` (2²⁰, about 1 GB of particle buffers; `GpuFlipGeometry::with_inflow`), so switching an inflow on never restarts the water. A full pool emits nothing; the step tallies births and refused births (stats words 28 and 29) and the setup check shows Pool Full on the water.
 - **Emit.** At step end, after movement, marker removal and survivor compaction, `emit_flags` marks each half-cell site (eight a cell, the fill's lattice) inside an inflow, outside the solid, with no live particle in its half cell (`_addNewFluidCells` 8566-8603, `_addNewFluidCellsThread` 8771-8811). The scan ranks them and `emit_write` writes each at the live count plus its rank, the live count being the compacted prefix's end. The following step sorts and transfers them. Deterministic, no atomics. Where the inflow holds a site deeper than a cell, its particle moves uniformly up to Inflow Jitter / 4 cells each way (`_jitterMarkerParticlePosition` 4409, factor 0 by default as the engine's), hashed from site and substep; id slot + 1.
 - **Constrained velocity.** A particle inside an inflow takes the inflow's velocity plus Inherit Motion's share of its rigid motion (`_constrainMarkerParticleVelocities` 7397-7451), after the transfer back to particles, and valid faces (weight above 0) inside an inflow take no body force (`_getInflowConstrainedVelocityComponents` 6112, before the body forces); nothing pins faces after the solve, as the engine's `_constrainVelocityFields` touches solids only.
 - **Drain.** A particle whose moved position an outflow holds below zero dies (radius 0, 9011-9031); the next sort drops it. Inverted outflows are not supported.
@@ -141,7 +141,7 @@ The count changes only with this rule re-run, on the same fixtures, with the new
 Every limit is a named refusal at build; nothing is clamped silently.
 
 - Any lattice side from 1 to 1024 runs, odd sides included; outside that the solver refuses by name (`lattice_refusal`, "GPU FLIP: every lattice side must be 1 to 1024 … Lower Resolution.").
-- More particle slots than a count carries exactly (2²⁴), the fill or Particle Capacity whichever is larger: refused by name; Resolution 256 is refused by it.
+- More particle slots than a count carries exactly (2²⁴) in the fill: refused by name; Resolution 256 is refused by it.
 - Resolution and Domain Size apply at runtime: the step's lattice arrays are its own storage, reallocated when the lattice changes (`gpu_flip_resolution_card_resizes_at_runtime`).
 - Every array covers every dispatch before the GPU sees it: the step's one extent rule in `node_graph/liquid/extent.rs` sizes its inner arrays with the functions it dispatches with, walked at even and odd lattices (`gpu_flip_*_cover_every_dispatch`, `gpu_flip_any_resolution_walks_on_the_built_graph`).
 

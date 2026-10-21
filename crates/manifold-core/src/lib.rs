@@ -47,6 +47,7 @@ pub mod group_edit;
 pub mod id;
 pub mod layer;
 pub mod fluid_domain;
+pub mod liquid_setup;
 pub mod physics_gizmo;
 pub mod physics_body_slots;
 pub mod liquid_domain;

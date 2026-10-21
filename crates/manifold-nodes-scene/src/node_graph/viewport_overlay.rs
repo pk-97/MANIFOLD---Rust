@@ -68,17 +68,40 @@ const GRID_AXIS_X_COLOR: [u8; 4] = [180, 70, 70, 255];
 const GRID_AXIS_Z_COLOR: [u8; 4] = [70, 90, 180, 255];
 const FRUSTUM_COLOR: [u8; 4] = [230, 200, 60, 255];
 const LIGHT_COLOR: [u8; 4] = [255, 225, 140, 255];
+/// A liquid domain's box.
+pub const DOMAIN_BOX_COLOR: [u8; 4] = FRUSTUM_COLOR;
 
-/// Wireframe bounds for a selected fluid domain. The layout is already in
-/// scene world-space, so these are the exact translated rectangular bounds;
-/// no scene-object transform is applied.
-pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
+/// The part of the segment `a`..`b` in front of `camera`'s near plane, or
+/// `None` when it lies wholly behind. A line passing beside and behind the
+/// camera keeps its far end exactly where an unclipped point projects.
+pub fn clip_to_near(camera: &Camera, a: [f32; 3], b: [f32; 3]) -> Option<([f32; 3], [f32; 3])> {
+    let depth = |p: [f32; 3]| (0..3).map(|i| (p[i] - camera.pos[i]) * camera.fwd[i]).sum::<f32>();
+    let toward = |from: [f32; 3], to: [f32; 3], t: f32| [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t);
+    let near = camera.near.max(1e-4);
+    let (da, db) = (depth(a), depth(b));
+    match (da < near, db < near) {
+        (true, true) => None,
+        (true, false) => Some((toward(a, b, (near - da) / (db - da)), b)),
+        (false, true) => Some((a, toward(b, a, (near - db) / (da - db)))),
+        (false, false) => Some((a, b)),
+    }
+}
+
+/// Wireframe bounds for a fluid domain, in `color`. The layout is already
+/// in scene world-space, so these are the exact translated rectangular
+/// bounds; no scene-object transform is applied.
+pub fn fluid_domain_lines(layout: FluidDomainLayout, color: [u8; 4]) -> [WorldLine; 12] {
     let min = layout.min;
     let max = [
         min[0] + layout.size[0],
         min[1] + layout.size[1],
         min[2] + layout.size[2],
     ];
+    box_lines(min, max, color)
+}
+
+/// The twelve edges of the world box `min`..`max`, in `color`.
+pub fn box_lines(min: [f32; 3], max: [f32; 3], color: [u8; 4]) -> [WorldLine; 12] {
     let corners = [
         [min[0], min[1], min[2]],
         [max[0], min[1], min[2]],
@@ -89,7 +112,7 @@ pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
         [max[0], max[1], max[2]],
         [min[0], max[1], max[2]],
     ];
-    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color: FRUSTUM_COLOR };
+    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color };
     [
         edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 0),
         edge(4, 5), edge(5, 6), edge(6, 7), edge(7, 4),
@@ -491,7 +514,7 @@ mod tests {
             size: [5.0, 6.0, 7.0],
             cells: [8, 8, 8],
             cell_size: 1.0,
-        });
+        }, DOMAIN_BOX_COLOR);
         assert_eq!(lines.len(), 12);
         let min = [2.0, -3.0, 4.0];
         let max = [7.0, 3.0, 11.0];

@@ -183,7 +183,7 @@ impl ScenePanel {
         inner_w: f32,
         mut cy: f32,
         vm: &SceneSetupVm,
-        selected: &SceneSelection,
+        selected: &[SceneSelection],
     ) -> f32 {
         for group in SceneGroup::ORDER {
             // Lights are listed inside Lighting, never as rows of their own.
@@ -289,7 +289,7 @@ impl ScenePanel {
         mut cy: f32,
         vm: &SceneSetupVm,
         items: &[&SceneItemVm],
-        selected: &SceneSelection,
+        selected: &[SceneSelection],
     ) -> f32 {
         let expanded = self.expanded_groups.get(&vm.layer_id).cloned().unwrap_or_default();
         for item in items {
@@ -393,10 +393,10 @@ impl ScenePanel {
         (inner_x, inner_w, indent): (f32, f32, f32),
         cy: f32,
         item: &SceneItemVm,
-        selected: &SceneSelection,
+        selected: &[SceneSelection],
         eye: EyeSlot,
     ) -> f32 {
-        let is_selected = &item.selection == selected;
+        let is_selected = selected.contains(&item.selection);
         let x = inner_x + indent;
         let key = outliner_row_key(&item.selection);
         let icon = tree.add_label(

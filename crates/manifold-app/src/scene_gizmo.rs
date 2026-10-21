@@ -18,8 +18,8 @@ use manifold_node_engine::param_binding::convert_param_value;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, ShapeOwner, ShapeWrite};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
-    GizmoDrag, GizmoMode, GizmoTarget, GizmoTargetId, GizmoTargetKind, HandleValues, HandleWrite, gizmo_target_for,
-    gizmo_targets, pick_axis, pick_target,
+    GizmoDrag, GizmoMode, GizmoSelection, GizmoTarget, GizmoTargetId, GizmoTargetKind, HandleValues, HandleWrite, SelectionWrite,
+    gizmo_target_for, gizmo_targets, pick_axis, pick_target, selection_writes, toggle_pick,
 };
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
@@ -27,7 +27,7 @@ use manifold_ui::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
 use crate::app_render::UnboundNodeParamDrag;
 use crate::content_command::ContentCommand;
 use crate::ui_bridge::DispatchCtx;
-use crate::ui_bridge::scrub::{ResolvedScrub, begin_param_triple, commit_param_triple, dispatch_scrub, move_param_triple};
+use crate::ui_bridge::scrub::{ResolvedScrub, begin_param_group, commit_param_group, dispatch_scrub, move_param_group};
 
 /// Build the authored graph snapshot used by the viewport scene VM.
 ///
@@ -50,10 +50,15 @@ pub(crate) fn project_authored_params(
     if !matches!(target, GraphTarget::Generator(_)) {
         return Some(());
     }
-    let Some(metadata) = def.preset_metadata.as_mut() else {
+    let Some(owner) = project.graph_target_owner(target) else {
         return Some(());
     };
-    let Some(owner) = project.graph_target_owner(target) else {
+    fold_card_values(def, owner)
+}
+
+/// Fold `owner`'s card values into the node params their bindings drive.
+pub(crate) fn fold_card_values(def: &mut EffectGraphDef, owner: &manifold_core::effects::PresetInstance) -> Option<()> {
+    let Some(metadata) = def.preset_metadata.as_mut() else {
         return Some(());
     };
 
@@ -174,8 +179,47 @@ impl Knob {
 pub(crate) struct GizmoGesture {
     layer: LayerId,
     drag: GizmoDrag,
-    knobs: Vec<Knob>,
+    kind: GestureKind,
     moved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum GestureKind {
+    /// One shape's handle, through the knobs of the params it writes.
+    Shape(Vec<Knob>),
+    /// The selection's handle: every member param it can write, scrubbed
+    /// together as one gesture and one undo entry.
+    Selection(Box<SelectionGesture>),
+}
+
+/// The members of a selection drag and the knob behind each param they
+/// can write, held as they were at the press.
+#[derive(Debug, Clone, PartialEq)]
+struct SelectionGesture {
+    members: Vec<GizmoTarget>,
+    params: Vec<MemberParam>,
+    /// Card values at the press, in the group scrub's card order.
+    card_base: Vec<f32>,
+    /// Unbound node values at the press, in the group scrub's node order.
+    node_base: Vec<f32>,
+    cards: Vec<f32>,
+    nodes: Vec<f32>,
+    writes: Vec<SelectionWrite>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct MemberParam {
+    member: usize,
+    id: String,
+    knob: Knob,
+    slot: Slot,
+}
+
+/// Where a member param sits in the group scrub.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Slot {
+    Card(usize),
+    Node(usize),
 }
 
 impl GizmoGesture {
@@ -191,57 +235,112 @@ impl GizmoGesture {
             .map(|param| knob(&ctx.project, &target, &param.write))
             .collect::<Option<Vec<_>>>()
             .ok_or("This handle's parameter has no control to drag")?;
-        let gesture = Self { layer, drag, knobs, moved: false };
-        match (&gesture.drag.handle().write, gesture.knobs.as_slice()) {
+        match (&drag.handle().write, knobs.as_slice()) {
             (HandleWrite::Direction { .. }, [Knob::Card { id: x, .. }, Knob::Card { id: y, .. }, Knob::Card { id: z, .. }]) => {
-                if !begin_param_triple(ctx, target, [x.clone(), y.clone(), z.clone()]) {
+                if !begin_param_group(ctx, target, vec![x.clone(), y.clone(), z.clone()], Vec::new(), "Turn direction") {
                     return Err("This direction cannot be turned here".into());
                 }
             }
             (HandleWrite::Linear { .. } | HandleWrite::Angle(_), [Knob::Card { id, .. }]) => {
-                dispatch_scrub(&gesture.card_ref(id), &ScrubPhase::Begin, ctx);
+                dispatch_scrub(&card_ref(&layer, id), &ScrubPhase::Begin, ctx);
                 if !matches!(&ctx.scrub.active, Some(ResolvedScrub::Param { param_id, .. }) if param_id == id) {
                     return Err("This handle's control is locked".into());
                 }
             }
             (HandleWrite::Linear { param, .. } | HandleWrite::Angle(param), [Knob::Node(addr)]) => {
-                let catalog = crate::ui_bridge::generator_catalog_default(&ctx.project, &gesture.layer)
-                    .ok_or("Generator graph is unavailable")?;
-                let pre_drag_value = ctx
-                    .project
-                    .graph_for_target(&target, Some(&catalog))
-                    .and_then(|def| crate::editor_bridge::node_param_value(def, &addr.scope_path, addr.node_doc_id, &addr.param_id));
-                let current = pre_drag_value.clone().unwrap_or(SerializedParamValue::Float { value: param.value });
+                let drag = node_drag(ctx, &layer, addr, param.value).ok_or("Generator graph is unavailable")?;
                 ctx.scrub.check_single_active_on_begin("gizmo-node-param");
-                ctx.scrub.active = Some(ResolvedScrub::UnboundNodeParam(Box::new(UnboundNodeParamDrag::new(
-                    target,
-                    addr.scope_path.clone(),
-                    addr.node_doc_id,
-                    addr.param_id.clone(),
-                    catalog,
-                    pre_drag_value,
-                    current,
-                ))));
+                ctx.scrub.active = Some(ResolvedScrub::UnboundNodeParam(Box::new(drag)));
             }
             (HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. }, _) => {
                 return Err("A direction turns only through its card controls".into());
             }
+            (HandleWrite::Selection { .. }, _) => return Err("The selection's handle moves through its members".into()),
         }
-        Ok(gesture)
+        Ok(Self { layer, drag, kind: GestureKind::Shape(knobs), moved: false })
     }
 
-    fn card_ref(&self, id: &ParamId) -> ValueRef {
-        ValueRef::Param(GraphParamTarget::GeneratorOf(self.layer.clone()), id.clone())
+    /// Begin dragging the selection's handle over `members`: every param a
+    /// member can write, through its knob, as one gesture. A wired or
+    /// macro-locked param, and an unplaced member, stay put. `Err` carries
+    /// why nothing can move.
+    pub(crate) fn begin_selection(ctx: &mut DispatchCtx, layer: LayerId, drag: GizmoDrag, members: Vec<GizmoTarget>) -> Result<Self, String> {
+        let target = GraphTarget::Generator(layer.clone());
+        let (mut params, mut cards, mut nodes) = (Vec::new(), Vec::<ParamId>::new(), Vec::new());
+        let (mut card_base, mut node_base) = (Vec::new(), Vec::new());
+        for (member, shape) in members.iter().enumerate().filter(|(_, shape)| !shape.unplaced) {
+            for param in shape.handles.iter().flat_map(|handle| handle.write.params()) {
+                if param.wired || params.iter().any(|seen: &MemberParam| seen.member == member && seen.id == param.id) {
+                    continue;
+                }
+                let Some(knob) = knob(&ctx.project, &target, &param.write) else { continue };
+                let slot = match &knob {
+                    Knob::Card { id, .. } => {
+                        if crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()).is_some() {
+                            continue;
+                        }
+                        match cards.iter().position(|card| card == id) {
+                            Some(at) => Slot::Card(at),
+                            None => {
+                                let Some(base) = ctx.project.with_preset_graph(&target, |inst| inst.get_base_param(id.as_ref())) else {
+                                    continue;
+                                };
+                                cards.push(id.clone());
+                                card_base.push(base);
+                                Slot::Card(cards.len() - 1)
+                            }
+                        }
+                    }
+                    Knob::Node(addr) => {
+                        let Some(drag) = node_drag(ctx, &layer, addr, param.value) else { continue };
+                        nodes.push(drag);
+                        node_base.push(param.value);
+                        Slot::Node(nodes.len() - 1)
+                    }
+                };
+                params.push(MemberParam { member, id: param.id.clone(), knob, slot });
+            }
+        }
+        if params.is_empty() {
+            return Err("Nothing selected can move here".into());
+        }
+        let label = match drag.mode {
+            GizmoMode::Move => "Move selection",
+            GizmoMode::Rotate => "Turn selection",
+            GizmoMode::Scale => "Scale selection",
+        };
+        if !begin_param_group(ctx, target, cards, nodes, label) {
+            return Err("The selection cannot move here".into());
+        }
+        let selection = SelectionGesture {
+            members,
+            params,
+            cards: card_base.clone(),
+            nodes: node_base.clone(),
+            card_base,
+            node_base,
+            writes: Vec::new(),
+        };
+        Ok(Self { layer, drag, kind: GestureKind::Selection(Box::new(selection)), moved: false })
     }
 
     /// Move the handle with the pointer at `cur` (render pixels of `view`):
     /// a live, non-undoable write through each knob.
     pub(crate) fn drag_to(&mut self, ctx: &mut DispatchCtx, view: &GizmoView, cur: (f32, f32)) {
         let Some(values) = self.drag.update(view, cur) else { return };
-        match (values, self.knobs.as_slice()) {
+        let knobs = match (&mut self.kind, values) {
+            (GestureKind::Shape(knobs), _) => knobs,
+            (GestureKind::Selection(selection), HandleValues::One(amount)) => {
+                selection.move_to(ctx, self.drag.mode, self.drag.axis, amount);
+                self.moved = true;
+                return;
+            }
+            (GestureKind::Selection(_), HandleValues::Three(_)) => return,
+        };
+        match (values, knobs.as_slice()) {
             (HandleValues::One(value), [knob @ Knob::Card { id, .. }]) => {
                 if let Some(card) = knob.card_value(value) {
-                    dispatch_scrub(&self.card_ref(id), &ScrubPhase::Move(ScrubValue::Scalar(card)), ctx);
+                    dispatch_scrub(&card_ref(&self.layer, id), &ScrubPhase::Move(ScrubValue::Scalar(card)), ctx);
                 }
             }
             (HandleValues::One(value), [Knob::Node(_)]) => {
@@ -258,7 +357,7 @@ impl GizmoGesture {
             }
             (HandleValues::Three(values), [x, y, z]) => {
                 if let (Some(x), Some(y), Some(z)) = (x.card_value(values[0]), y.card_value(values[1]), z.card_value(values[2])) {
-                    move_param_triple(ctx, [x, y, z]);
+                    move_param_group(ctx, &[x, y, z], &[]);
                 }
             }
             (HandleValues::One(_) | HandleValues::Three(_), _) => return,
@@ -268,9 +367,13 @@ impl GizmoGesture {
 
     /// Release: one undo entry for the whole drag.
     pub(crate) fn commit(self, ctx: &mut DispatchCtx) {
-        match self.knobs.as_slice() {
+        let knobs = match &self.kind {
+            GestureKind::Shape(knobs) => knobs.as_slice(),
+            GestureKind::Selection(_) => return commit_param_group(ctx),
+        };
+        match knobs {
             [Knob::Card { id, .. }] => {
-                dispatch_scrub(&self.card_ref(id), &ScrubPhase::Commit, ctx);
+                dispatch_scrub(&card_ref(&self.layer, id), &ScrubPhase::Commit, ctx);
             }
             [Knob::Node(_)] => {
                 if let Some(ResolvedScrub::UnboundNodeParam(drag)) = ctx.scrub.active.take()
@@ -280,9 +383,48 @@ impl GizmoGesture {
                     ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(drag.into_command())));
                 }
             }
-            _ => commit_param_triple(ctx),
+            _ => commit_param_group(ctx),
         }
     }
+}
+
+impl SelectionGesture {
+    /// Every member's params with the handle dragged by `amount`, each from
+    /// its value at the press, written live through the group scrub.
+    fn move_to(&mut self, ctx: &mut DispatchCtx, mode: GizmoMode, axis: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis, amount: f32) {
+        selection_writes(&self.members, mode, axis, amount, &mut self.writes);
+        self.cards.copy_from_slice(&self.card_base);
+        self.nodes.copy_from_slice(&self.node_base);
+        for write in &self.writes {
+            let Some(param) = self.params.iter().find(|param| param.member == write.member && param.id == write.param.id) else { continue };
+            match param.slot {
+                Slot::Card(at) => {
+                    if let Some(card) = param.knob.card_value(write.value) {
+                        self.cards[at] = card;
+                    }
+                }
+                Slot::Node(at) => self.nodes[at] = write.value,
+            }
+        }
+        move_param_group(ctx, &self.cards, &self.nodes);
+    }
+}
+
+fn card_ref(layer: &LayerId, id: &ParamId) -> ValueRef {
+    ValueRef::Param(GraphParamTarget::GeneratorOf(layer.clone()), id.clone())
+}
+
+/// An unbound node param scrub on `layer`'s generator graph from its value
+/// now (`shown` when the key is absent). `None` without a graph.
+fn node_drag(ctx: &DispatchCtx, layer: &LayerId, addr: &ParamAddr, shown: f32) -> Option<UnboundNodeParamDrag> {
+    let target = GraphTarget::Generator(layer.clone());
+    let catalog = crate::ui_bridge::generator_catalog_default(&ctx.project, layer)?;
+    let pre_drag_value = ctx
+        .project
+        .graph_for_target(&target, Some(&catalog))
+        .and_then(|def| crate::editor_bridge::node_param_value(def, &addr.scope_path, addr.node_doc_id, &addr.param_id));
+    let current = pre_drag_value.clone().unwrap_or(SerializedParamValue::Float { value: shown });
+    Some(UnboundNodeParamDrag::new(target, addr.scope_path.clone(), addr.node_doc_id, addr.param_id.clone(), catalog, pre_drag_value, current))
 }
 
 pub(crate) use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoView;
@@ -290,34 +432,55 @@ pub(crate) use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoView;
 /// What a left press on a gizmo host did.
 #[derive(Debug)]
 pub(crate) enum GizmoPress {
-    /// A handle of the selected shape took the press: `Some` when its drag
-    /// began. A locked handle, or one whose drag cannot begin, still takes
-    /// the press, so it never falls through to what lies under it.
-    Handle(Option<GizmoGesture>),
-    /// No handle there: the shape picked under the pointer, if any. A pick
-    /// has already selected its item in the Scene panel.
-    Picked(Option<GizmoTargetId>),
+    /// The selection's handle took the press: `Some` when its drag began.
+    /// A locked handle, or one whose drag cannot begin, still takes the
+    /// press, so it never falls through to what lies under it.
+    Handle(Option<Box<GizmoGesture>>),
+    /// No handle there: the selection after the pick, or `None` for a press
+    /// on empty space. A pick has already selected its items in the Scene
+    /// panel.
+    Picked(Option<Vec<GizmoTargetId>>),
 }
 
-/// One press on any gizmo host (REALTIME_3D_DESIGN.md D7a): the selected
-/// shape's handles first, then a pick. `scene` is the host's `SceneVm` of
-/// `layer`'s authored graph.
+/// Where a press landed: the picture it landed on, the point in that
+/// render's pixels, and whether Shift extends the selection.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PressAt<'a> {
+    pub view: &'a GizmoView,
+    pub point: (f32, f32),
+    pub extend: bool,
+}
+
+/// One press on any gizmo host (REALTIME_3D_DESIGN.md D7a): the
+/// selection's one handle set first, then a pick. With `at.extend` (Shift)
+/// the pick adds its shape to the selection or takes it out. `scene` is the
+/// host's `SceneVm` of `layer`'s authored graph and `selection` was built
+/// over it.
 pub(crate) fn press(
     ctx: &mut DispatchCtx,
     layer: &LayerId,
     scene: &SceneVm,
-    selected: Option<&GizmoTargetId>,
+    selection: &GizmoSelection,
     mode: GizmoMode,
-    view: &GizmoView,
-    point: (f32, f32),
+    at: PressAt<'_>,
 ) -> GizmoPress {
-    if let Some(id) = selected
-        && let Some(target) = gizmo_target_for(scene, id)
+    let PressAt { view, point, extend } = at;
+    if let Some(target) = selection.handles.clone()
         && let Some(axis) = pick_axis(mode, &target, view, point)
     {
         // D8: a locked handle draws gray and refuses the drag.
         if target.handle(mode, axis).is_none_or(|handle| handle.write.locked()) {
             return GizmoPress::Handle(None);
+        }
+        if selection.selected.len() > 1 {
+            let Some(drag) = GizmoDrag::begin(target, mode, axis, view, point) else { return GizmoPress::Handle(None) };
+            return GizmoPress::Handle(match GizmoGesture::begin_selection(ctx, layer.clone(), drag, selection.selected.clone()) {
+                Ok(gesture) => Some(Box::new(gesture)),
+                Err(message) => {
+                    ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(message));
+                    None
+                }
+            });
         }
         let target = if target.unplaced {
             match place(ctx, layer, &target) {
@@ -329,18 +492,43 @@ pub(crate) fn press(
         };
         let Some(drag) = GizmoDrag::begin(target, mode, axis, view, point) else { return GizmoPress::Handle(None) };
         return GizmoPress::Handle(match GizmoGesture::begin(ctx, layer.clone(), drag) {
-            Ok(gesture) => Some(gesture),
+            Ok(gesture) => Some(Box::new(gesture)),
             Err(message) => {
                 ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(message));
                 None
             }
         });
     }
-    let picked = pick_target(scene, view, point);
-    if let Some(selection) = picked.as_ref().and_then(|id| gizmo_target_for(scene, id)).as_ref().and_then(|target| scene_selection(scene, target)) {
-        ctx.ui.scene_setup_panel.set_selection(layer.clone(), selection);
+    let Some(picked) = pick_target(scene, view, point) else { return GizmoPress::Picked(None) };
+    let next = toggle_pick(&selection.ids(), picked, extend);
+    select_in_panel(ctx, layer, scene, &next);
+    GizmoPress::Picked(Some(next))
+}
+
+/// The Scene panel follows the gizmo selection `ids`: the items their
+/// shapes belong to, the last shape's item the one whose card shows.
+pub(crate) fn select_in_panel(ctx: &mut DispatchCtx, layer: &LayerId, scene: &SceneVm, ids: &[GizmoTargetId]) {
+    let mut items: Vec<SceneSelection> = Vec::new();
+    for item in ids.iter().filter_map(|id| gizmo_target_for(scene, id)).filter_map(|target| scene_selection(scene, &target)) {
+        items.retain(|other| *other != item);
+        items.push(item);
     }
-    GizmoPress::Picked(picked)
+    ctx.ui.scene_setup_panel.select_items(layer.clone(), items);
+}
+
+/// The shapes the Scene panel's selected `items` show: for each item, its
+/// shapes in `picked`, else its first declared shape.
+pub(crate) fn selected_targets(scene: &SceneVm, items: &[SceneSelection], picked: &[GizmoTargetId]) -> Vec<GizmoTarget> {
+    let mut out = Vec::new();
+    for item in items {
+        let belongs = |target: &GizmoTarget| scene_selection(scene, target).as_ref() == Some(item);
+        let before = out.len();
+        out.extend(picked.iter().filter_map(|id| gizmo_target_for(scene, id)).filter(belongs));
+        if out.len() == before {
+            out.extend(gizmo_targets(scene).find(belongs));
+        }
+    }
+    out
 }
 
 /// D8 entry state: the shape's `via` transform is unwired, so the first
@@ -384,16 +572,6 @@ pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<S
         | GizmoTargetKind::Collider
         | GizmoTargetKind::Swarm => target.row.map(SceneSelection::Object),
     }
-}
-
-/// The shape whose handles show for the Scene panel's `selection`: `picked`
-/// when it belongs to that item, else the item's first declared shape.
-pub(crate) fn selected_target(scene: &SceneVm, selection: &SceneSelection, picked: Option<&GizmoTargetId>) -> Option<GizmoTarget> {
-    let belongs = |target: &GizmoTarget| scene_selection(scene, target).as_ref() == Some(selection);
-    picked
-        .and_then(|id| gizmo_target_for(scene, id))
-        .filter(belongs)
-        .or_else(|| gizmo_targets(scene).find(belongs))
 }
 
 /// The knob behind `write`: a host card, a card bound to the node param, or
@@ -552,6 +730,207 @@ mod tests {
 
     fn base(project: &Project, layer: &LayerId, id: &str) -> f32 {
         project.graph_target_owner(&GraphTarget::Generator(layer.clone())).unwrap().get_base_param(id)
+    }
+
+    /// A press at `point` with the shapes `selected` selected, as a host
+    /// presses; `extend` is Shift.
+    fn tap(ctx: &mut DispatchCtx, layer: &LayerId, scene: &SceneVm, selected: &[GizmoTargetId], extend: bool, view: &GizmoView, point: (f32, f32)) -> GizmoPress {
+        let selection = GizmoSelection::of_ids(scene, selected);
+        press(ctx, layer, scene, &selection, GizmoMode::Move, PressAt { view, point, extend })
+    }
+
+    /// The water's domain box and its fill column.
+    fn domain_and_column(project: &Project, layer: &LayerId) -> (GizmoTarget, GizmoTarget) {
+        let scene = scene(project, layer);
+        let domain = target(project, layer, GizmoTargetKind::FluidDomain);
+        let column = gizmo_targets(&scene)
+            .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
+            .expect("the GPU FLIP family wires an Initial Fill column");
+        (domain, column)
+    }
+
+    /// BUG-6u36g, as Peter hit it: with Water 1's fill column picked, a
+    /// click on the domain box's edge moves the handles to the domain. The
+    /// box was picked by its centre alone, so its edges took no click.
+    #[test]
+    fn the_domain_box_is_picked_by_its_edge_after_the_fill_column() {
+        let (mut project, layer) = fluid_project(false);
+        let (domain, column) = domain_and_column(&project, &layer);
+        let scene = scene(&project, &layer);
+        let view = GizmoView::new(camera(), W, H);
+        let mut rig = Rig::new(&layer);
+        let picked = rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, &[], false, &view, px(column.origin)));
+        assert!(matches!(&picked, GizmoPress::Picked(Some(ids)) if *ids == [column.id.clone()]), "the column is picked first: {picked:?}");
+        // The domain's near left edge, halfway up: far from either centre,
+        // so a pick by centres alone finds nothing here.
+        let edge = px([-2.0, 2.0, 2.0]);
+        for centre in [domain.origin, column.origin] {
+            let (x, y) = px(centre);
+            let far = (x - edge.0).hypot(y - edge.1) > manifold_nodes_scene::node_graph::viewport_gizmo::PICK_RADIUS_PT;
+            assert!(far, "the edge is clear of the centre at {centre:?}");
+        }
+        let picked = rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, std::slice::from_ref(&column.id), false, &view, edge));
+        assert!(matches!(&picked, GizmoPress::Picked(Some(ids)) if *ids == [domain.id.clone()]), "the domain box takes the click: {picked:?}");
+        assert_eq!(
+            selected_targets(&scene, &[SceneSelection::Object(domain.row.unwrap())], std::slice::from_ref(&domain.id)).pop().map(|t| t.id),
+            Some(domain.id),
+            "the domain's handles show"
+        );
+    }
+
+    /// Shift-click adds a shape to the selection, a second Shift-click on
+    /// it takes it out, and a plain click selects one.
+    #[test]
+    fn shift_click_adds_and_removes_a_shape() {
+        let (mut project, layer) = fluid_project(false);
+        let (domain, column) = domain_and_column(&project, &layer);
+        let scene = scene(&project, &layer);
+        let view = GizmoView::new(camera(), W, H);
+        let mut rig = Rig::new(&layer);
+        let mut tap_at = |selected: &[GizmoTargetId], extend: bool, point: (f32, f32)| match rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, selected, extend, &view, point)) {
+            GizmoPress::Picked(Some(ids)) => ids,
+            other => panic!("a pick, got {other:?}"),
+        };
+        let edge = px([-2.0, 2.0, 2.0]);
+        let both = tap_at(std::slice::from_ref(&domain.id), true, px(column.origin));
+        assert_eq!(both, [domain.id.clone(), column.id.clone()], "Shift adds");
+        let one = tap_at(&both, true, edge);
+        assert_eq!(one, std::slice::from_ref(&column.id), "Shift on a selected shape takes it out");
+        assert_eq!(tap_at(&both, false, edge), std::slice::from_ref(&domain.id), "a plain click selects one");
+    }
+
+    /// One handle set moves the whole selection: a bound card and an
+    /// unbound node param, one undo entry for both, and undo puts both back.
+    #[test]
+    fn the_selection_moves_as_one_undo_step() {
+        let (mut local, layer) = fluid_project(true);
+        let mut content = local.clone();
+        let (domain, column) = domain_and_column(&local, &layer);
+        let scene = scene(&local, &layer);
+        let view = GizmoView::new(camera(), W, H);
+        let selection = GizmoSelection::of_ids(&scene, &[domain.id.clone(), column.id.clone()]);
+        let group = selection.handles.clone().expect("one handle set for the selection");
+        let grip = group.grip(GizmoMode::Move, GizmoAxis::X, &view).expect("the selection's X handle");
+        let column_x = shape_value(&local, &layer, &column, "pos_x");
+        let mut rig = Rig::new(&layer);
+        rig.with_ctx(&mut local, |ctx| {
+            let at = PressAt { view: &view, point: px(grip), extend: false };
+            let GizmoPress::Handle(Some(mut gesture)) = press(ctx, &layer, &scene, &selection, GizmoMode::Move, at) else {
+                panic!("the selection's handle takes the press")
+            };
+            gesture.drag_to(ctx, &view, px(plus(grip, [0.5, 0.0, 0.0])));
+            gesture.drag_to(ctx, &view, px(plus(grip, [1.0, 0.0, 0.0])));
+            gesture.commit(ctx);
+            assert!(ctx.scrub.active.is_none(), "release ends the scrub");
+        });
+        let mut service = EditingService::new();
+        assert_eq!(rig.apply(&mut service, &mut content), 1, "one undo entry for the whole selection");
+        for project in [&local, &content] {
+            assert!((base(project, &layer, "domain_x") - 2.5).abs() < 1e-3, "the domain's card moved one unit");
+            assert!((shape_value(project, &layer, &column, "pos_x") - column_x - 1.0).abs() < 1e-3, "the column moved one unit");
+        }
+        assert!(service.undo(&mut content));
+        assert_eq!(base(&content, &layer, "domain_x"), 1.5);
+        assert!((shape_value(&content, &layer, &column, "pos_x") - column_x).abs() < 1e-6, "one undo puts both back");
+    }
+
+    /// The GPU FLIP water as it ships: no transform on the domain port, so
+    /// Domain Size alone sizes the solver's cube. `bound` puts Domain Size
+    /// on a card, as the inserted water's Simulation group does.
+    fn cube_project(bound: bool) -> (Project, LayerId) {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer(
+            "Fluid",
+            LayerType::Generator,
+            PresetTypeId::from_string("WaterDamBreakGpuFlip".to_string()),
+        );
+        let layer_id = project.timeline.layers[index].layer_id.clone();
+        let mut def: EffectGraphDef = serde_json::from_str(GPU_FLIP_WATER).unwrap();
+        if bound {
+            let domain = def
+                .nodes
+                .iter()
+                .filter_map(|node| node.group.as_ref())
+                .flat_map(|group| group.nodes.iter())
+                .find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+                .expect("GPU FLIP domain")
+                .node_id
+                .clone();
+            let metadata = def.preset_metadata.as_mut().unwrap();
+            metadata.params.push(ParamSpecDef {
+                id: "domain_size_card".into(),
+                name: "Domain Size".into(),
+                min: 0.5,
+                max: 20.0,
+                default_value: 4.0,
+                ..ParamSpecDef::default()
+            });
+            metadata.bindings.push(BindingDef {
+                id: "domain_size_card".into(),
+                label: "Domain Size".into(),
+                default_value: 4.0,
+                target: BindingTarget::Node { node_id: domain, param: "domain_size".into() },
+                convert: ParamConvert::Float,
+                user_added: false,
+                scale: 1.0,
+                offset: 0.0,
+                default_mirrors_node_param: false,
+            });
+        }
+        let generator = project.timeline.layers[index].gen_params_mut().unwrap();
+        generator.graph = Some(def);
+        generator.refresh_manifest_from_graph();
+        (project, layer_id)
+    }
+
+    /// BUG-6u36g, as Peter hit it on an inserted water: the domain cube had
+    /// no target at all. It takes a click on its own edge, and its one
+    /// uniform scale handle writes Domain Size as one undo step.
+    #[test]
+    fn an_unwired_domain_cube_is_picked_and_scales_its_domain_size() {
+        for bound in [false, true] {
+            unwired_domain_cube(bound);
+        }
+    }
+
+    fn unwired_domain_cube(bound: bool) {
+        let (mut local, layer) = cube_project(bound);
+        let mut content = local.clone();
+        let domain = target(&local, &layer, GizmoTargetKind::FluidDomain);
+        let size = shape_value(&local, &layer, &domain, "scale_x");
+        assert_eq!(domain.origin, [0.0, size * 0.5, 0.0], "the cube sits on the floor at the origin");
+        assert!(domain.handle(GizmoMode::Move, GizmoAxis::X).is_some_and(|h| h.write.locked()), "nothing positions the cube");
+        assert!(domain.handle(GizmoMode::Scale, GizmoAxis::X).is_none(), "a cube has no side of its own");
+        let Some(ShapeWrite::Node(addr)) = domain.handle(GizmoMode::Scale, GizmoAxis::Uniform).map(|h| h.write.params()[0].write.clone())
+        else {
+            panic!("the cube scales through a node param")
+        };
+        assert_eq!(addr.param_id, "domain_size");
+
+        let scene = scene(&local, &layer);
+        let view = GizmoView::new(camera(), W, H);
+        let mut rig = Rig::new(&layer);
+        let edge = px([0.0, size, size * 0.5]);
+        let picked = rig.with_ctx(&mut local, |ctx| tap(ctx, &layer, &scene, &[], false, &view, edge));
+        assert!(matches!(&picked, GizmoPress::Picked(Some(ids)) if *ids == [domain.id.clone()]), "the cube's top edge picks it: {picked:?}");
+
+        // The uniform handle runs along the diagonal.
+        let along = |d: f32| px(plus(domain.origin, GizmoAxis::Uniform.unit().map(|c| c * d)));
+        rig.drag(&mut local, &layer, &domain, GizmoMode::Scale, GizmoAxis::Uniform, along(1.0), along(1.25));
+        let mut service = EditingService::new();
+        assert_eq!(rig.apply(&mut service, &mut content), 1, "one undo entry for the drag");
+        for project in [&local, &content] {
+            let grown = shape_value(project, &layer, &domain, "scale_x");
+            assert!((grown - size * 1.25).abs() < 1e-3, "bound {bound}: a quarter farther out scales Domain Size a quarter up, got {grown}");
+            if bound {
+                assert!((base(project, &layer, "domain_size_card") - size * 1.25).abs() < 1e-3, "the slider's card moves with it");
+            }
+        }
+        assert!(service.undo(&mut content));
+        assert_eq!(shape_value(&content, &layer, &domain, "scale_x"), size);
+        if bound {
+            assert_eq!(base(&content, &layer, "domain_size_card"), size);
+        }
     }
 
     fn fluid_project(bound: bool) -> (Project, LayerId) {
@@ -777,7 +1156,7 @@ mod tests {
         let scene = scene(&project, &layer);
         let grip = force.grip(GizmoMode::Move, GizmoAxis::X, &view).unwrap();
         let mut rig = Rig::new(&layer);
-        let pressed = rig.with_ctx(&mut project, |ctx| press(ctx, &layer, &scene, Some(&force.id), GizmoMode::Move, &view, px(grip)));
+        let pressed = rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, std::slice::from_ref(&force.id), false, &view, px(grip)));
         assert!(matches!(pressed, GizmoPress::Handle(None)), "the locked handle takes the press and refuses it: {pressed:?}");
         assert!(rig.rx.try_iter().next().is_none(), "nothing reaches the content thread");
     }
@@ -839,8 +1218,9 @@ mod tests {
         let before = shape_value(&local, &layer, &force, "center_x");
         let mut rig = Rig::new(&layer);
         let scene = scene(&local, &layer);
-        let picked = rig.with_ctx(&mut local, |ctx| press(ctx, &layer, &scene, None, GizmoMode::Move, &view, px(force.origin)));
-        let GizmoPress::Picked(Some(id)) = picked else { panic!("the force is picked, got {picked:?}") };
+        let picked = rig.with_ctx(&mut local, |ctx| tap(ctx, &layer, &scene, &[], false, &view, px(force.origin)));
+        let GizmoPress::Picked(Some(mut ids)) = picked else { panic!("the force is picked, got {picked:?}") };
+        let id = ids.pop().unwrap();
         assert_eq!(id, force.id);
         // REALTIME_3D D9: a pick is UI state only; nothing reaches the
         // content thread, so the output render cannot change.
@@ -848,7 +1228,7 @@ mod tests {
 
         let grip = force.grip(GizmoMode::Move, GizmoAxis::X, &view).unwrap();
         rig.with_ctx(&mut local, |ctx| {
-            let GizmoPress::Handle(Some(mut gesture)) = press(ctx, &layer, &scene, Some(&id), GizmoMode::Move, &view, px(grip)) else {
+            let GizmoPress::Handle(Some(mut gesture)) = tap(ctx, &layer, &scene, std::slice::from_ref(&id), false, &view, px(grip)) else {
                 panic!("the move handle takes the press")
             };
             gesture.drag_to(ctx, &view, px(plus(grip, [1.0, 0.0, 0.0])));
@@ -870,7 +1250,7 @@ mod tests {
         let ShapeOwner::Force(node) = &force.id.owner else { panic!("a force owner") };
         let scene = scene(&project, &layer);
         assert_eq!(scene_selection(&scene, &force), Some(SceneSelection::Force(node.clone())));
-        let found = selected_target(&scene, &SceneSelection::Force(node.clone()), None).expect("the force's shape");
+        let found = selected_targets(&scene, &[SceneSelection::Force(node.clone())], &[]).pop().expect("the force's shape");
         assert_eq!(found.id, force.id);
 
         let (fluid, fluid_layer) = fluid_project(false);
@@ -882,11 +1262,11 @@ mod tests {
             .find(|t| t.id.owner == domain.id.owner && t.id.shape != domain.id.shape)
             .expect("the GPU FLIP family wires an Initial Fill column");
         assert_eq!(
-            selected_target(&scene, &SceneSelection::Object(row), Some(&column.id)).map(|t| t.id),
+            selected_targets(&scene, &[SceneSelection::Object(row)], std::slice::from_ref(&column.id)).pop().map(|t| t.id),
             Some(column.id.clone()),
             "a picked shape of the selected item keeps its handles"
         );
-        assert_eq!(selected_target(&scene, &SceneSelection::Object(row), None).map(|t| t.id), gizmo_targets(&scene).find(|t| t.row == Some(row)).map(|t| t.id));
+        assert_eq!(selected_targets(&scene, &[SceneSelection::Object(row)], &[]).pop().map(|t| t.id), gizmo_targets(&scene).find(|t| t.row == Some(row)).map(|t| t.id));
     }
 
     /// The Swarm template on a generator layer, its box moved off the scene
@@ -934,12 +1314,13 @@ mod tests {
 
         let view = GizmoView::new(camera(), W, H);
         let mut rig = Rig::new(&layer);
-        let picked = rig.with_ctx(&mut project, |ctx| press(ctx, &layer, &scene, None, GizmoMode::Move, &view, px(swarm.origin)));
-        let GizmoPress::Picked(Some(id)) = picked else { panic!("the swarm box is picked, got {picked:?}") };
+        let picked = rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, &[], false, &view, px(swarm.origin)));
+        let GizmoPress::Picked(Some(mut ids)) = picked else { panic!("the swarm box is picked, got {picked:?}") };
+        let id = ids.pop().unwrap();
         assert_eq!(id, swarm.id);
         let picked = gizmo_target_for(&scene, &id).expect("the picked target");
         assert_eq!(scene_selection(&scene, &picked), Some(SceneSelection::Object(row)));
-        assert_eq!(selected_target(&scene, &SceneSelection::Object(row), Some(&id)).map(|t| t.id), Some(id));
+        assert_eq!(selected_targets(&scene, &[SceneSelection::Object(row)], std::slice::from_ref(&id)).pop().map(|t| t.id), Some(id));
     }
 
     /// The authored doc id of the root node named `node_id`.

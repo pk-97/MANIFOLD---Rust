@@ -1053,6 +1053,7 @@
                     disabled: None,
                     material_role: None,
                     inactive_reason: None,
+                    setup_warning: None,
                     scene: None,
                     limit: Default::default(),
                 },
@@ -1802,4 +1803,60 @@
             assert!(consumed, "{}: click consumed", case.name);
             assert!((case.expect)(&panel, id, &actions), "{}: click emitted {actions:?}", case.name);
         }
+    }
+
+    /// BUG-mqgsi: the outliner keeps a selection beside its active item, as
+    /// Blender's does. Shift-click adds a row (it becomes the active one)
+    /// or takes a selected row out; a plain click selects one row; clearing
+    /// leaves nothing selected and the active item's card showing.
+    #[test]
+    fn shift_click_adds_and_removes_outliner_rows() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(azalea_shaped_vm()));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let layer = LayerId::new("layer-1");
+        let row = |panel: &ScenePanel, sel: &SceneSelection| panel.outliner_row_ids.iter().find(|(_, s)| s == sel).map(|(id, _)| *id).unwrap();
+        let click = |panel: &mut ScenePanel, tree: &mut UITree, sel: SceneSelection, shift: bool| {
+            let node_id = row(panel, &sel);
+            let modifiers = Modifiers { shift, ..Modifiers::default() };
+            let (consumed, actions) = panel.handle_event(&UIEvent::Click { node_id, pos: Vec2::ZERO, modifiers }, tree);
+            assert!(consumed && matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupSelectionChanged(_))]));
+            tree.clear();
+            panel.build_docked(tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        };
+        let highlighted = |panel: &ScenePanel, tree: &UITree| -> Vec<SceneSelection> {
+            panel
+                .outliner_row_ids
+                .iter()
+                .filter(|(_, sel)| !matches!(sel, SceneSelection::OutlinerFold(_)))
+                .filter(|(id, _)| tree.get_node(*id).is_some_and(|node| node.style.bg_color != Color32::TRANSPARENT))
+                .map(|(_, sel)| sel.clone())
+                .collect()
+        };
+        let (azalea, world) = (SceneSelection::Object(40), SceneSelection::World);
+        assert_eq!(panel.live_selected(), std::slice::from_ref(&azalea), "the active item alone is selected");
+
+        click(&mut panel, &mut tree, world.clone(), true);
+        assert_eq!(panel.live_selected(), [azalea.clone(), world.clone()]);
+        assert_eq!(panel.selection.get(&layer), Some(&world), "the added row is the active one");
+        assert_eq!(highlighted(&panel, &tree).len(), 2, "both rows highlight");
+
+        click(&mut panel, &mut tree, azalea.clone(), true);
+        assert_eq!(panel.live_selected(), std::slice::from_ref(&world), "Shift on a selected row takes it out");
+        assert_eq!(highlighted(&panel, &tree), std::slice::from_ref(&world));
+
+        click(&mut panel, &mut tree, azalea.clone(), true);
+        click(&mut panel, &mut tree, world.clone(), false);
+        assert_eq!(panel.live_selected(), std::slice::from_ref(&world), "a plain click selects one row");
+
+        let version = panel.selection_version();
+        panel.clear_selected(layer.clone());
+        assert!(panel.live_selected().is_empty());
+        assert_eq!(panel.selection.get(&layer), Some(&world), "the card keeps showing");
+        assert!(panel.selection_version() > version, "the planner sees the change");
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert!(highlighted(&panel, &tree).is_empty(), "no row highlights");
     }

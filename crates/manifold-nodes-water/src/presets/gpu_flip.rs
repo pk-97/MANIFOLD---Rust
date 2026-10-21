@@ -939,7 +939,7 @@ pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplat
             domain.clone(),
             Some("Simulation"),
             stamped(&domain.type_id, &|name| {
-                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "domain_size" | "emission" | "inflow_speed")
+                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "emission" | "inflow_speed")
             }),
         ),
         (

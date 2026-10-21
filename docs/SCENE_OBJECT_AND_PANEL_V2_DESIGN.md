@@ -238,7 +238,7 @@ the tools."
   BUG-199's own repro).
 - **Consequences, stated honestly:** one selected item at a time means cross-object A/B
   tweaking takes two clicks instead of one scroll. That trade is the point (the scroll
-  stopped working at real scene sizes), and multi-select stays in Deferred with its trigger.
+  stopped working at real scene sizes), and batch edit stays in Deferred with its trigger.
   The layout also collapses panel height to ~one item's rows — most scenes fit a 1216px
   window again, which *mitigates* BUG-199's exposure but does not fix scroll; that bug stays
   owned elsewhere.
@@ -565,9 +565,10 @@ beyond the struct emit is off-brief — stop and escalate.
 
 ## 9. Deferred (explicitly not v1, each with its revival trigger)
 
-- **Multi-select + batch edit** (shift-click outliner rows, edit common rows). Trigger: the
-  first real set-dressing session that wants to move five props at once; design the
-  batch-command semantics then.
+- **Batch edit** (edit the rows a selection has in common). Multi-select itself is built:
+  shift-click adds or removes outliner rows and gizmo picks, and one set of handles moves,
+  turns or scales the selection about its centre as one undo step; the card still shows the
+  active item alone. Trigger: the first session that wants one knob turned on five props.
 - **Per-light eye / solo** (needs an `enabled` on `node.light` + renderer skip — small but
   it touches the Light struct; not worth riding this wave). Trigger: first "kill that light
   on the break" ask.

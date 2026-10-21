@@ -528,7 +528,7 @@ fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
     // The GPU FLIP solver controls the water preset authors on its card are
     // set up once per scene: they show in the Scene tab, never on the card.
     let flip_solver = type_id == GPU_FLIP_DOMAIN_TYPE_ID
-        && matches!(param, "solve_level" | "max_iterations" | "sheet_fill_rate" | "particle_capacity");
+        && matches!(param, "solve_level" | "max_iterations" | "sheet_fill_rate");
     if flip_solver {
         return Some(setup(Simulation));
     }

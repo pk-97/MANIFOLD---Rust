@@ -53,6 +53,7 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
         liquid_domain: None,
         swarm: None,
         fluid_domain: None,
+        fluid_domain_error: None,
         fluid_domain_transform: None,
         placed_sources: Vec::new(),
     }))
@@ -78,6 +79,9 @@ fn scene_of(objects: Vec<SceneObjectVm>, shapes: Vec<SceneShapeVm>) -> SceneVm {
         physics_nodes: Vec::new(),
         scene_bounds: None,
         shapes,
+        problems: Vec::new(),
+        setup_anchors: Vec::new(),
+        setup_sites: Vec::new(),
     }
 }
 
@@ -390,16 +394,17 @@ fn lines_of(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
     lines
 }
 
-/// Grid, light markers, the accepted domain's box (a pending one draws
-/// nothing), each physics shape, then the selected handles, faded when an
-/// effect follows the scene.
+/// Grid, light markers, each physics shape and the accepted domain's box
+/// (a pending one draws nothing), faint while nothing of theirs is
+/// selected, then the selected handles, faded when an effect follows the
+/// scene.
 #[test]
-fn composition_draws_what_physics_did_then_the_selected_handles() {
+fn composition_draws_what_physics_did_faintly_then_the_selected_handles() {
     use manifold_core::fluid_domain::FluidDomainLayout;
     use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
     let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
-    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
-    let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready };
+    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None };
+    let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready.clone() };
     let domains = [(NodeId::new("a"), ready), (NodeId::new("b"), pending)];
     let physics = [
         PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]),
@@ -407,27 +412,73 @@ fn composition_draws_what_physics_did_then_the_selected_handles() {
     ];
     let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (false, false, false))]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
+    let selection = GizmoSelection::new(&scene, vec![target]);
     let mut chrome = GizmoChrome {
         view: view(),
         lights: &[[0.0, 4.0, 0.0], [2.0, 1.0, -1.0]],
         domains: &domains,
+        live_columns: &[],
         physics: &physics,
-        selected: Some(&target),
+        problems: &[],
+        selection: &selection,
         mode: GizmoMode::Move,
         fade_handles: false,
     };
     let mut lines = Vec::new();
     compose_lines(&chrome, &mut lines);
-    let grid = GROUND_GRID.len();
-    assert_eq!(lines.len(), grid + 2 * 3 + 12 + 12 + 5 + 3);
+    let (grid, lights) = (GROUND_GRID.len(), 2 * 3);
+    assert_eq!(lines.len(), grid + lights + 12 + 5 + 12 + 3, "an object draws no outline of its own");
     let collider = crate::node_graph::viewport_overlay::physics_gizmo_color(PhysicsGizmoFamily::Collider);
-    assert_eq!(lines[grid + 6 + 12].color, collider, "physics shapes follow the domain box");
+    let helpers = &lines[grid + lights..lines.len() - 3];
+    assert_eq!(helpers[0].color, shown(collider, false), "physics shapes follow the lights");
+    assert!(helpers.iter().all(|line| line.color[3] == UNSELECTED_ALPHA), "nothing of theirs is selected");
     assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == 255));
 
     chrome.fade_handles = true;
     compose_lines(&chrome, &mut lines);
     assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == FADED_HANDLE_ALPHA), "handles fade");
-    assert!(lines[..lines.len() - 3].iter().all(|line| line.color[3] == 255), "what physics did never fades");
+    assert!(lines[grid + lights..lines.len() - 3].iter().all(|line| line.color[3] == UNSELECTED_ALPHA), "the helpers stay as they were");
+}
+
+/// B3: a shape the setup check finds outside its domain draws a red box in
+/// every host's composed lines, and nothing else changes.
+#[test]
+fn a_setup_problem_draws_a_red_box_in_the_composed_lines() {
+    use crate::node_graph::scene_vm::{SetupProblem, SetupProblemKind};
+    let problem = SetupProblem {
+        owner: ShapeOwner::LiquidDomain(NodeId::new("domain")),
+        kind: SetupProblemKind::ColumnOutside,
+        params: Vec::new(),
+        bounds: Some(([5.0, 0.0, 0.0], [6.0, 1.0, 1.0])),
+    };
+    let compose = |problems: &[SetupProblem]| {
+        let chrome = GizmoChrome {
+            view: view(),
+            lights: &[],
+            domains: &[],
+            live_columns: &[],
+            physics: &[],
+            problems,
+            selection: &GizmoSelection::default(),
+            mode: GizmoMode::Move,
+            fade_handles: false,
+        };
+        let mut lines = Vec::new();
+        compose_lines(&chrome, &mut lines);
+        lines
+    };
+    let plain = compose(&[]);
+    let unplaced = SetupProblem { bounds: None, ..problem.clone() };
+    assert_eq!(compose(&[unplaced]).len(), plain.len(), "a problem nothing places draws no box");
+    let flagged = compose(&[problem]);
+    assert_eq!(flagged.len(), plain.len() + 12);
+    assert!(
+        flagged.iter().zip(&plain).all(|(a, b)| a.a == b.a && a.b == b.b && a.color == b.color),
+        "the rest of the chrome is untouched"
+    );
+    let red = &flagged[plain.len()..];
+    assert!(red.iter().all(|line| line.color == PROBLEM_COLOR));
+    assert!(red.iter().flat_map(|line| [line.a, line.b]).all(|p| (5.0..=6.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1])));
 }
 
 #[test]
@@ -485,12 +536,15 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
         let eye = [3.0 * distance / 6.32, 2.5 * distance / 6.32, -distance + 5.0 * distance / 6.32];
         let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
         let view = GizmoView::new(camera, 1280, 720);
+        let selection = GizmoSelection::new(&scene, vec![target.clone()]);
         let chrome = GizmoChrome {
             view,
             lights: &[],
             domains: &[],
+            live_columns: &[],
             physics: &[],
-            selected: Some(&target),
+            problems: &[],
+            selection: &selection,
             mode: GizmoMode::Move,
             fade_handles: false,
         };
@@ -530,13 +584,15 @@ fn outline_slots_cover_an_object_or_every_part_of_its_group() {
         SceneObjectVm::Custom { index: 6 },
     ]);
     let mut slots = vec![99];
-    outline_slots(&scene, 1, &mut slots);
+    outline_slots(&scene, [1], &mut slots);
     assert_eq!(slots, [0]);
-    outline_slots(&scene, 10, &mut slots);
+    outline_slots(&scene, [10], &mut slots);
     assert_eq!(slots, [1, 2], "every part of the model, its shared slot once");
-    outline_slots(&scene, 20, &mut slots);
+    outline_slots(&scene, [20], &mut slots);
     assert_eq!(slots, [3, 4, 5], "the water body and its looks");
-    outline_slots(&scene, 7, &mut slots);
+    outline_slots(&scene, [1, 20, 10], &mut slots);
+    assert_eq!(slots, [0, 1, 2, 3, 4, 5], "a selection of several outlines each");
+    outline_slots(&scene, [7], &mut slots);
     assert!(slots.is_empty(), "no such object, no outline");
 }
 
@@ -745,19 +801,23 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
     let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let scene = scene_of(Vec::new(), vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
-    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout) })];
+    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None })];
+    let selection = GizmoSelection::new(&scene, selected.then(|| target.clone()).into_iter().collect());
     let chrome = GizmoChrome {
         view,
         lights: &[],
         domains: &domains,
+        live_columns: &[],
         physics: &[],
-        selected: selected.then_some(&target),
+        problems: &[],
+        selection: &selection,
         mode: GizmoMode::Move,
         fade_handles: false,
     };
     let mut lines = Vec::new();
     compose_lines(&chrome, &mut lines);
     let handles = if selected { lines_of(GizmoMode::Move, &target).len() } else { 0 };
+    // The accepted box stands in for the declared one: twelve edges, once.
     let base = GROUND_GRID.len() + 12;
     let lattice = lines.len() - base - handles;
     (lines, lattice)
@@ -881,4 +941,192 @@ fn pt(cam: &Camera, along: usize, face: usize, layout: &manifold_core::fluid_dom
     mid[face] = if cam.pos[face] < layout.min[face] + layout.size[face] * 0.5 { layout.min[face] + layout.size[face] } else { layout.min[face] };
     let p = cam.project_to_pixel(mid, 1280, 720).unwrap();
     (p.px, p.py)
+}
+
+/// The pixel of the midpoint of `target`'s first outline edge.
+fn edge_px(target: &GizmoTarget) -> (f32, f32) {
+    let mut first = None;
+    target.outline.for_each_edge(|a, b| {
+        first.get_or_insert(std::array::from_fn(|i| (a[i] + b[i]) * 0.5));
+    });
+    px(first.expect("the shape has an outline"))
+}
+
+/// A domain box with its fill column inside, the column off to one side:
+/// what Peter's water scene has.
+fn domain_and_column() -> (SceneVm, GizmoTarget, GizmoTarget) {
+    let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
+    let domain = node_shape(owner.clone(), 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
+    let column = node_shape(owner, 1, &decls[1], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let scene = scene_of(Vec::new(), vec![domain, column]);
+    let targets: Vec<_> = gizmo_targets(&scene).collect();
+    (scene, targets[0].clone(), targets[1].clone())
+}
+
+/// BUG-6u36g: a click on the domain box's edge, far from its centre, picks
+/// the domain; picking was by centre alone, so the box's own edges took no
+/// click and only its centre, crowded by the fill column, could.
+#[test]
+fn a_domain_box_is_picked_by_its_own_edges() {
+    let (scene, domain, column) = domain_and_column();
+    // The top edge of the box's near face.
+    let edge = px([0.0, 2.0, -7.0]);
+    let origin = px(domain.origin);
+    assert!(dist2(edge, origin).sqrt() > PICK_RADIUS_PT, "the click is far from the box's centre");
+    assert_eq!(pick_target(&scene, &view(), edge), Some(domain.id.clone()));
+    // The column's own edge picks the column, not the box around it.
+    let column_edge = px([2.5, 0.0, -9.0]);
+    assert_eq!(pick_target(&scene, &view(), column_edge), Some(column.id));
+    // Empty space inside the box, away from every edge and centre, picks nothing.
+    assert_eq!(pick_target(&scene, &view(), px([-1.4, 0.9, -10.0])), None);
+}
+
+/// A camera standing inside a domain box still picks the box by the edges
+/// in front of it: the edges running past the camera are cut at its near
+/// plane, not dropped.
+#[test]
+fn a_camera_inside_the_box_picks_it_by_the_edges_in_view() {
+    let (scene, domain, _) = domain_and_column();
+    let inside = Camera::look_at([0.0, 0.0, -8.0], [0.0, 0.0, -20.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+    let view = GizmoView::new(inside, 640, 480);
+    // A side edge that runs from behind the camera to the far wall.
+    let p = inside.project_to_pixel([3.0, 2.0, -11.0], 640, 480).unwrap();
+    assert_eq!(pick_target(&scene, &view, (p.px, p.py)), Some(domain.id));
+}
+
+/// Every kind of declared shape, alone in a scene, is picked by its own
+/// edges away from its centre: a box, a ball's rings, a direction's ray.
+#[test]
+fn every_declared_shape_is_picked_by_its_own_edges() {
+    let source = node_shape(
+        ShapeOwner::RoleSource { node: NodeId::new("inflow"), role: FluidRole::Inflow },
+        0,
+        &scene_shape("node.fluid_role_source")[0],
+        &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 1.0)],
+        &[],
+    );
+    let swarm = node_shape(
+        ShapeOwner::Swarm(NodeId::new("swarm")),
+        0,
+        &scene_shape(crate::node_graph::scene_surface::SWARM_FORCES_TYPE_ID)[0],
+        &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 4.0)],
+        &[],
+    );
+    let radial = force_shape(
+        manifest_decl(r#"{"kind": "point_radius", "center": ["center_x", "center_y", "center_z"], "radius": "radius"}"#),
+        &[("center_z", -8.0), ("radius", 2.0)],
+        [0.0; 3],
+    );
+    let vortex = force_shape(
+        manifest_decl(r#"{"kind": "axis", "origin": ["center_x", "center_y", "center_z"], "direction": ["axis_x", "axis_y", "axis_z"], "radius": "radius"}"#),
+        &[("center_z", -8.0), ("axis_y", 1.0), ("radius", 2.0)],
+        [0.0; 3],
+    );
+    for shape in [source, swarm, radial, vortex] {
+        let scene = scene_of(Vec::new(), vec![shape]);
+        let target = gizmo_targets(&scene).next().unwrap();
+        let edge = edge_px(&target);
+        assert!(dist2(edge, px(target.origin)).sqrt() > PICK_RADIUS_PT, "{:?}: the edge is away from the centre", target.kind);
+        assert_eq!(pick_target(&scene, &view(), edge), Some(target.id), "{:?} by its edge", target.kind);
+    }
+    let object = gizmo_target_for(&scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]), &object_id(1)).unwrap();
+    assert_eq!(object.outline, ShapeOutline::None, "an object's box is its transform, not its mesh: picked at its origin");
+}
+
+#[test]
+fn a_click_selects_one_and_shift_adds_or_removes() {
+    let (a, b, c) = (object_id(1), object_id(2), object_id(3));
+    assert_eq!(toggle_pick(&[a.clone(), b.clone()], c.clone(), false), std::slice::from_ref(&c), "a plain click selects only what it hits");
+    assert_eq!(toggle_pick(&[a.clone(), b.clone()], c.clone(), true), [a.clone(), b.clone(), c.clone()], "Shift adds, last");
+    assert_eq!(toggle_pick(&[a.clone(), b.clone(), c.clone()], b.clone(), true), [a.clone(), c.clone()], "Shift on a selected one removes it");
+    assert!(toggle_pick(std::slice::from_ref(&a), a.clone(), true).is_empty());
+}
+
+/// Every pickable helper draws faint; the selected ones draw bright, and
+/// only the selection has handles.
+#[test]
+fn helpers_draw_faint_the_selection_bright_with_the_only_handles() {
+    let (scene, domain, column) = domain_and_column();
+    let compose = |selection: &GizmoSelection| {
+        let chrome = GizmoChrome {
+            view: view(),
+            lights: &[],
+            domains: &[],
+            live_columns: &[],
+            physics: &[],
+            problems: &[],
+            selection,
+            mode: GizmoMode::Move,
+            fade_handles: false,
+        };
+        let mut lines = Vec::new();
+        compose_lines(&chrome, &mut lines);
+        lines.split_off(GROUND_GRID.len())
+    };
+    let none = compose(&GizmoSelection::new(&scene, Vec::new()));
+    assert_eq!(none.len(), 24, "both boxes drawn, no handles");
+    assert!(none.iter().all(|line| line.color[3] == UNSELECTED_ALPHA));
+
+    let one = compose(&GizmoSelection::new(&scene, vec![column.clone()]));
+    let (outlines, handles) = one.split_at(24);
+    assert_eq!(outlines[..12].iter().map(|line| line.color[3]).collect::<Vec<_>>(), [UNSELECTED_ALPHA; 12], "the domain stays faint");
+    assert!(outlines[12..].iter().all(|line| line.color[3] == 255), "the selected column draws bright");
+    assert_eq!(handles.len(), 3, "the column's handles, and no one else's");
+    assert!(handles.iter().all(|line| line.a == column.origin));
+
+    let both = compose(&GizmoSelection::new(&scene, vec![domain.clone(), column.clone()]));
+    let handles = &both[24..];
+    let centre: [f32; 3] = std::array::from_fn(|i| (domain.origin[i] + column.origin[i]) * 0.5);
+    assert_eq!(handles.len(), 3, "one handle set for the selection");
+    assert!(handles.iter().all(|line| line.a == centre), "at the selection's centre");
+}
+
+/// The selection's handles move every member by the same distance, turn
+/// them about the selection's centre (a box's own rotation with it), and
+/// scale positions and sizes about that centre. Locked params stay put.
+#[test]
+fn the_selection_moves_turns_and_scales_about_its_centre() {
+    let a = gizmo_target_for(&scene_with(vec![known_object(1, (-1.0, 0.0, -5.0), (false, false, false))]), &object_id(1)).unwrap();
+    let b = gizmo_target_for(&scene_with(vec![known_object(2, (1.0, 0.0, -5.0), (false, true, false))]), &object_id(2)).unwrap();
+    let members = [a, b];
+    let group = GizmoTarget::selection(&members).unwrap();
+    assert_eq!(group.origin, [0.0, 0.0, -5.0]);
+    let value = |writes: &[SelectionWrite], member: usize, id: &str| writes.iter().find(|w| w.member == member && w.param.id == id).map(|w| w.value);
+    let mut writes = Vec::new();
+
+    // Move: the same distance for each; b's wired pos_y never moves.
+    let HandleValues::One(d) = drag(&group, GizmoMode::Move, GizmoAxis::X, px(group.origin), px([1.0, 0.0, -5.0])) else { panic!("one amount") };
+    assert!((d - 1.0).abs() < 1e-3, "{d}");
+    selection_writes(&members, GizmoMode::Move, GizmoAxis::X, d, &mut writes);
+    assert!((value(&writes, 0, "pos_x").unwrap() - 0.0).abs() < 1e-3 && (value(&writes, 1, "pos_x").unwrap() - 2.0).abs() < 1e-3);
+    selection_writes(&members, GizmoMode::Move, GizmoAxis::Y, 1.0, &mut writes);
+    assert_eq!(value(&writes, 0, "pos_y"), Some(1.0));
+    assert_eq!(value(&writes, 1, "pos_y"), None, "a wired param stays put");
+
+    // Turn a quarter about Y: the pair swings round the centre and each
+    // box turns with it, the way a parent would turn them.
+    let quarter = std::f32::consts::FRAC_PI_2;
+    selection_writes(&members, GizmoMode::Rotate, GizmoAxis::Y, quarter, &mut writes);
+    let pos = |m: usize| [value(&writes, m, "pos_x").unwrap_or(members[m].origin[0]), members[m].origin[1], value(&writes, m, "pos_z").unwrap_or(members[m].origin[2])];
+    let expected = |m: usize| {
+        let o = members[m].origin;
+        let turned = rotate_about([o[0], 0.0, o[2] + 5.0], [0.0, 1.0, 0.0], quarter);
+        [turned[0], o[1], turned[2] - 5.0]
+    };
+    for m in 0..2 {
+        assert!((0..3).all(|i| (pos(m)[i] - expected(m)[i]).abs() < 1e-4), "member {m} at {:?}, expected {:?}", pos(m), expected(m));
+        let rot = ["rot_x", "rot_y", "rot_z"].map(|id| value(&writes, m, id).unwrap_or(0.0));
+        let m4 = model_matrix([0.0; 3], rot, [1.0; 3]);
+        let local_x = [m4[0][0], m4[0][1], m4[0][2]];
+        let want = rotate_about([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], quarter);
+        assert!((0..3).all(|i| (local_x[i] - want[i]).abs() < 1e-4), "member {m}'s box turned with the pair: {local_x:?} vs {want:?}");
+    }
+
+    // Scale X by two: positions spread from the centre, sizes double on X only.
+    selection_writes(&members, GizmoMode::Scale, GizmoAxis::X, 2.0, &mut writes);
+    assert_eq!((value(&writes, 0, "pos_x"), value(&writes, 1, "pos_x")), (Some(-2.0), Some(2.0)));
+    assert_eq!((value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y")), (Some(2.0), None));
+    selection_writes(&members, GizmoMode::Scale, GizmoAxis::Uniform, 0.5, &mut writes);
+    assert_eq!((value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y"), value(&writes, 0, "scale_z")), (Some(0.5), Some(0.5), Some(0.5)));
 }

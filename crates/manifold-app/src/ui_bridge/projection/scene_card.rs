@@ -476,7 +476,7 @@ mod tests {
         for (id, _) in manifold_nodes_water::presets::gpu_flip::MESHER_CONTROLS {
             assert!(!rows.iter().any(|row| row.id == id), "mesher control {id} is setup, off the card");
         }
-        for id in ["sheet_fill_rate", "solve_level", "max_iterations", "particle_capacity"] {
+        for id in ["sheet_fill_rate", "solve_level", "max_iterations"] {
             assert!(!rows.iter().any(|row| row.id.ends_with(id)), "{id} is setup, off the card");
         }
         assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Light intensity", "Rim Light intensity"]);
