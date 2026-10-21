@@ -50,6 +50,8 @@ mod scene_scale;
 mod synthetic_glbs;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod scene_import_tests;
 
 pub use bounds_probe::repair_project_embedded_scene_bounds;
 pub use merge::{MergePlan, assemble_merge_plan};
