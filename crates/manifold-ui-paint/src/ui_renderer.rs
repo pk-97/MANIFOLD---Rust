@@ -228,7 +228,9 @@ struct LineCommand {
     y1: f32,
     thickness: f32,
     antialiased: bool,
-    grid_physical_width: Option<f32>,
+    /// A timing-grid line: `thickness` is in physical pixels and the line
+    /// snaps to a whole pixel column or row at prepare time.
+    grid: bool,
     color: [f32; 4],
     depth: Depth,
     /// Immediate clip captured at draw time (lines are only ever emitted via
@@ -236,6 +238,14 @@ struct LineCommand {
     clip: Option<Rect>,
     /// Transform captured at draw time — see `RectCommand::transform`.
     transform: Affine2,
+}
+
+/// Logical centre of a grid line `physical_width` physical pixels wide whose
+/// first pixel is `coord` rounded to the pixel grid (`offset` is the origin of
+/// the pixel grid, `sf` the scale factor).
+fn snapped_grid_centre(coord: f32, offset: f32, sf: f32, physical_width: f32) -> f32 {
+    let start_px = ((coord - offset) * sf).round();
+    (start_px + physical_width * 0.5) / sf + offset
 }
 
 /// A batch of rects sharing the same scissor state.
@@ -986,7 +996,7 @@ impl UIRenderer {
             y1,
             thickness,
             antialiased: false,
-            grid_physical_width: None,
+            grid: false,
             color: color.into().0,
             depth: self.current_depth(),
             clip: self.immediate_clip,
@@ -1013,7 +1023,7 @@ impl UIRenderer {
             y1,
             thickness,
             antialiased: true,
-            grid_physical_width: None,
+            grid: false,
             color: color.into().0,
             depth: self.current_depth(),
             clip: self.immediate_clip,
@@ -1022,8 +1032,8 @@ impl UIRenderer {
     }
 
     /// Queue a timing-grid line whose width is defined in physical pixels.
-    /// The line is aligned to the same starting pixel the bitmap renderer
-    /// paints, rather than centred over two neighbouring pixels.
+    /// The renderer snaps it to a whole pixel column (or row), so a lane's
+    /// grid and its track's grid land on the same pixels.
     pub fn draw_grid_line(
         &mut self,
         x0: f32,
@@ -1039,7 +1049,7 @@ impl UIRenderer {
             y1,
             thickness: kind.physical_width(),
             antialiased: false,
-            grid_physical_width: Some(kind.physical_width()),
+            grid: true,
             color: LinearColor::from(kind.color()).0,
             depth: self.current_depth(),
             clip: self.immediate_clip,
@@ -1735,25 +1745,21 @@ impl UIRenderer {
                 let mut y0 = cmd.y0;
                 let mut x1 = cmd.x1;
                 let mut y1 = cmd.y1;
-                let thickness = if let Some(physical_width) = cmd.grid_physical_width {
-                    let sf = scale_factor as f32;
-                    let sf = sf.max(f32::EPSILON);
-                    let width = physical_width / sf;
-                    // Bitmap grid columns start at round(px) and extend to the
-                    // right. Put the oriented quad's centre half a line width
-                    // after that start, so a one-pixel line occupies one pixel.
+                let thickness = if cmd.grid {
+                    let sf = (scale_factor as f32).max(f32::EPSILON);
+                    // The one snap for every grid line: the line starts on a
+                    // whole physical pixel and extends right (or down), so a
+                    // one-pixel line occupies exactly one pixel.
                     if (x1 - x0).abs() <= (y1 - y0).abs() {
-                        let start_px = ((x0 - offset_x) * sf).round();
-                        let centre = (start_px + physical_width * 0.5) / sf + offset_x;
+                        let centre = snapped_grid_centre(x0, offset_x, sf, cmd.thickness);
                         x0 = centre;
                         x1 = centre;
                     } else {
-                        let start_px = ((y0 - offset_y) * sf).round();
-                        let centre = (start_px + physical_width * 0.5) / sf + offset_y;
+                        let centre = snapped_grid_centre(y0, offset_y, sf, cmd.thickness);
                         y0 = centre;
                         y1 = centre;
                     }
-                    width
+                    cmd.thickness / sf
                 } else {
                     cmd.thickness
                 };
@@ -2234,6 +2240,17 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
+
+    /// A track's grid line and a lane's line that differ by less than half a
+    /// pixel snap to the same physical column.
+    #[test]
+    fn grid_lines_within_a_pixel_share_a_column() {
+        let (offset, sf) = (3.0, 2.0);
+        let track = snapped_grid_centre(60.0, offset, sf, 1.0);
+        let lane = snapped_grid_centre(60.2, offset, sf, 1.0);
+        assert_eq!(track, lane);
+        assert!((((track - offset) * sf) - 0.5).rem_euclid(1.0).abs() < 1e-4, "centred in one pixel");
+    }
 
     /// A node with `font_family` queues its text in that installed font
     /// (the font picker's rows); a plain node stays on the UI font.

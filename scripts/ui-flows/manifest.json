@@ -495,6 +495,7 @@
     "work-browser-search": "inspector",
     "work-perform-exit": "timeline",
     "trigger-lane-sibling": "envmod",
+    "trigger-lane-assignment": "envmod",
     "card-collapse-all": "gltfscene",
     "scene-physics-shared-cards": "gltfscene"
   },
@@ -502,12 +503,7 @@
     "scene-forces-controls": {
       "scene": "physicsscene",
       "bug": "BUG-gm08t",
-      "reason": "step 35: the Assign picker shows no tick after assigning. sync_project_data reads clip trigger assignments (Effects part) but PROJECT_SYNC_PARTS has no Effects, so an assign never refreshes the picker or the trigger lane header (INV-16). Fix shape is a UI_INVALIDATION section 4 design call."
-    },
-    "trigger-lane-assignment": {
-      "scene": "envmod",
-      "bug": "BUG-gm08t",
-      "reason": "step 16: same root as scene-forces-controls; after an unassign the picker and the trigger lane header stay stale, so the re-assign click lands on the stale header button."
+      "reason": "step 38: the Trigger 1 header button sits at y 671, the flow expects 685 (the picker tick and the label now refresh). Unproven whether the flow expectation or the scene setup layout moved."
     },
     "work-slider-grab": {
       "scene": "inspector",

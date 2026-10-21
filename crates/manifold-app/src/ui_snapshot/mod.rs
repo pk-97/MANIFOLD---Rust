@@ -969,7 +969,7 @@ fn run_group_demo(want_dump: bool) {
 /// `render_ui_scene` overrides it per scene name — see the `hairlineclips`
 /// far-zoom case).
 fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
-    sync_project_all(ui, &data.project, data.active, &data.selection);
+    sync_project_all(ui, &data.project, &data.selection);
     // Configure the inspector (tabs + the active layer's effect/gen cards) from
     // the selection — the live app calls this whenever the active layer changes.
     // Without it the inspector stays on its default Master view, so the selected
@@ -1659,7 +1659,7 @@ mod editor_window_harness {
             }
             _ => None,
         };
-        sync_project_all(&mut ui_root, &project, active_idx, &selection);
+        sync_project_all(&mut ui_root, &project, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);
         crate::ui_bridge::sync_audio_dock(&mut ui_root, &project);
         ui_root.build_inspector_in(EditorRegion::CardLane.id(), layout.card_viewport);

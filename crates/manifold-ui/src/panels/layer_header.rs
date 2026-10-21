@@ -11,6 +11,7 @@ use crate::tree::UITree;
 use manifold_foundation::LayerId;
 use crate::types::note_number_to_name;
 use std::time::Instant;
+mod trigger_labels;
 
 // Stable keys for the host-owned top chrome (background + recording controls).
 const KEY_BG: u64 = 80_001;
@@ -2581,7 +2582,6 @@ impl LayerHeaderPanel {
             self.cached_colors[i] = layer.color;
         }
 
-        // Swap layers back
         self.layers = layers_snapshot;
 
         // Insert indicator (hidden off-screen)

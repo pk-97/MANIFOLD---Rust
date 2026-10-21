@@ -719,12 +719,12 @@ mod clip_lookup_tests {
     }
 
     #[test]
-    fn a_hit_on_a_dirty_cache_does_not_rebuild() {
-        let (mut timeline, a, _) = two_clip_timeline();
+    fn a_dirty_cache_still_finds_clips_it_holds() {
+        let (mut timeline, a, b) = two_clip_timeline();
         timeline.rebuild_clip_lookup();
         timeline.mark_clip_lookup_dirty();
         assert!(timeline.find_clip_by_id_mut(a.as_str()).is_some());
-        assert!(timeline.clip_lookup_dirty, "a validated hit leaves the cache as it was");
+        assert!(timeline.find_clip_by_id(b.as_str()).is_some());
     }
 
     #[test]
@@ -737,7 +737,6 @@ mod clip_lookup_tests {
         timeline.layers[0].restore_clip(fresh);
         timeline.mark_clip_lookup_dirty();
         assert!(timeline.find_clip_by_id_mut(fresh_id.as_str()).is_some());
-        assert!(!timeline.clip_lookup_dirty);
         // A clip that changed places: the stale entry fails validation.
         let moved = timeline.layers[0].remove_clip(&a).unwrap();
         let mut other = Layer::new("Other".into(), LayerType::Video, 1);

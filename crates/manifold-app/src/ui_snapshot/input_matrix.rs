@@ -144,7 +144,7 @@ fn project(ui: &mut UIRoot, data: &mut SceneData, which: Projection) {
     match which {
         Projection::ProjectSync => {
             crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
-            crate::ui_bridge::sync_project_all(ui, &data.project, data.active, &data.selection);
+            crate::ui_bridge::sync_project_all(ui, &data.project, &data.selection);
         }
         Projection::InspectorSync => crate::ui_bridge::sync_inspector_data(
             ui,

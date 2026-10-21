@@ -67,7 +67,7 @@
       "point_drag_1s": {
         "ChromeLayout": 9,
         "ClipProjection": 2,
-        "FrameAlloc": 2136,
+        "FrameAlloc": 2016,
         "InspectorSync": 3,
         "LanePreviewUpdate": 58,
         "LaneProjection": 5,
@@ -97,7 +97,7 @@
         "ChromeLayout": 12,
         "ClipPreviewUpdate": 32,
         "ClipProjection": 2,
-        "FrameAlloc": 2702,
+        "FrameAlloc": 2634,
         "InspectorSync": 3,
         "LaneProjection": 5,
         "OverviewRepaint": 34,
