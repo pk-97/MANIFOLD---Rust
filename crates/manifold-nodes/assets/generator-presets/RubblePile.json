@@ -159,7 +159,7 @@
           "type": "Float",
           "value": 0.10000000149011612
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -302,7 +302,7 @@
           "type": "Float",
           "value": 0.03999999910593033
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -458,7 +458,7 @@
           "type": "Float",
           "value": 0.2800000011920929
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -570,7 +570,7 @@
           "type": "Float",
           "value": 0.2800000011920929
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -1810,8 +1810,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_0",
+      "fromNode": 101,
+      "fromPort": "pose",
       "toNode": 104,
       "toPort": "transform"
     },
@@ -1858,14 +1858,14 @@
       "toPort": "object_1"
     },
     {
-      "fromNode": 40,
-      "fromPort": "instances_0",
+      "fromNode": 121,
+      "fromPort": "instances",
       "toNode": 124,
       "toPort": "instances"
     },
     {
-      "fromNode": 40,
-      "fromPort": "active_count_0",
+      "fromNode": 121,
+      "fromPort": "active_count",
       "toNode": 124,
       "toPort": "instance_count"
     },
@@ -1900,8 +1900,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_1",
+      "fromNode": 141,
+      "fromPort": "pose",
       "toNode": 144,
       "toPort": "transform"
     },
@@ -1942,8 +1942,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_2",
+      "fromNode": 161,
+      "fromPort": "pose",
       "toNode": 164,
       "toPort": "transform"
     },

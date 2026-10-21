@@ -74,7 +74,7 @@ pub enum PortType {
     /// [`RenderMode`](crate::node_graph::render_mode::RenderMode) — the
     /// scene-wide viewport shading mode (Rendered/Solid/Wireframe/Points,
     /// SCENE_RENDER_MODE_DESIGN.md D2). Produced by `node.render_mode`,
-    /// consumed by `render_scene`'s optional `render_mode` input. Same
+    /// consumed by `render_scene`'s optional `render_mode_in` input. Same
     /// CPU-struct lifetime model as `Camera` / `Light` / `Material` /
     /// `Transform` / `Atmosphere`; unwired = Rendered = byte-identical to
     /// no render_mode.

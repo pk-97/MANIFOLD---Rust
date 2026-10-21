@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
-use crate::scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef};
+use crate::scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef, SceneNodeRefExt};
 
 /// Schema version for graph-topology-only documents (no preset
 /// metadata). Default for per-instance graph overrides and the 25

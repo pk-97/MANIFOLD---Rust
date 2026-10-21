@@ -227,9 +227,9 @@ pub struct SkinVm {
 pub struct SceneObjectKnownRow {
     /// A virtual parent for the material draws of one imported static model.
     pub is_group: bool,
-    /// Children follow their parent in `SceneVm.objects`; indices still refer
-    /// to the physical render slots used by graph editing commands.
-    pub parent_group_id: Option<u32>,
+    /// Children follow their parent in `SceneVm.objects`. The parent row's
+    /// address; `None` for a top-level row.
+    pub parent: Option<SceneNodeRef>,
     pub index: usize,
     /// Stable selection identity: the group id for a virtual parent, otherwise
     /// the `node.scene_object`'s own doc id — the address
@@ -239,6 +239,9 @@ pub struct SceneObjectKnownRow {
     pub object_node_id: u32,
     /// The stable identity behind `object_node_id`.
     pub object: NodeId,
+    /// The row's address: the scene object, or the group for a virtual parent.
+    /// Panel selection, keys and every scene action name the row by it.
+    pub address: SceneNodeRef,
     /// Where the row sits, from the scene object model.
     pub kind: SceneObjectRowKind,
     /// The nodes whose controls the row owns beyond its object, transform,
@@ -252,6 +255,9 @@ pub struct SceneObjectKnownRow {
     /// wired directly to `object_k` (D1's first-class "hand-built graph, no
     /// group" case).
     pub group_node_id: Option<u32>,
+    /// The node the row's modifier chain hangs off: its group, else the
+    /// object itself. Every object-modifier edit names it.
+    pub modifier_owner: SceneNodeRef,
     pub name: String,
     pub visible_addr: ParamAddr,
     pub visible_value: bool,
@@ -475,6 +481,8 @@ pub struct LightRow {
     pub index: usize,
     pub node_doc_id: u32,
     pub node: NodeId,
+    /// The light's address.
+    pub address: SceneNodeRef,
     /// Display name (SCENE_SURFACES D11 (Lights)): node `title`, else the
     /// handle humanised, else `"Light N"`, 1-based like the add-light gesture.
     pub name: String,
@@ -690,7 +698,7 @@ impl SceneVm {
         let world_nodes = world_nodes(&root, scene_node, &environment, &atmosphere);
         let physics_nodes = physics_nodes(&root);
         let (shapes, problems, setup_anchors, setup_sites) = shapes::trace_shapes(&root, def, &objects);
-        let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
+        let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
 
@@ -935,9 +943,6 @@ fn trace_objects(
     models: &[SceneObjectModel],
 ) -> (Vec<SceneObjectVm>, u64, bool) {
     let objects = param_f32(scene_node, "objects", 0.0).max(0.0) as usize;
-    let doc_of = |reference: &SceneNodeRef| {
-        models.iter().find(|model| &model.object == reference).and_then(|model| model.doc_path.last().copied())
-    };
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
     // (anchor slot, row): a child sorts with its parent's block.
@@ -963,8 +968,7 @@ fn trace_objects(
                 }
                 let mut row = row;
                 if let SceneObjectVm::Known(known) = &mut row {
-                    let parent = model.parent.as_ref().and_then(doc_of);
-                    shape_row_for_kind(root, model, known, parent);
+                    shape_row_for_kind(root, model, known);
                 }
                 out.push((anchor, row));
             }
@@ -987,7 +991,9 @@ fn trace_objects(
                 parent.controls = model.controls.clone();
                 parent.object_node_id = group_node.id;
                 parent.object = group_node.node_id.clone();
+                parent.address = model.object.clone();
                 parent.group_node_id = Some(group_node.id);
+                parent.modifier_owner = model.object.clone();
                 parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
                 parent.visible_addr.param_id = "parent_visible".into();
                 parent.visible_value = inner.node(parent.visible_addr.node_doc_id)
@@ -1013,9 +1019,9 @@ fn trace_objects(
                 // A placed fluid source: its own row under the water it feeds,
                 // named by its role. The model reads no values, so the role is
                 // read here.
-                let Some(water) = model.parent.as_ref().and_then(doc_of) else { continue };
+                let Some(water) = model.parent.as_ref() else { continue };
                 let Some((_, SceneObjectVm::Known(row))) =
-                    out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if row.object_node_id == water))
+                    out.iter_mut().find(|(_, row)| matches!(row, SceneObjectVm::Known(row) if &row.address == water))
                 else {
                     continue;
                 };
@@ -1053,6 +1059,20 @@ fn trace_objects(
 }
 
 /// The level holding the node at `doc_path` (group doc ids, then its own).
+/// The address of the node at `doc_path` (document ids, root first).
+fn doc_path_ref(root: &Level<'_>, doc_path: &[u32]) -> Option<SceneNodeRef> {
+    let (last, groups) = doc_path.split_last()?;
+    let mut level = Level { nodes: root.nodes, wires: root.wires };
+    let mut scope = Vec::with_capacity(groups.len());
+    for id in groups {
+        let group = level.node(*id)?;
+        scope.push(group.node_id.clone());
+        let body = group.group.as_deref()?;
+        level = Level { nodes: &body.nodes, wires: &body.wires };
+    }
+    Some(SceneNodeRef { scope, node: level.node(*last)?.node_id.clone() })
+}
+
 fn locate_doc_path<'a>(root: &Level<'a>, doc_path: &[u32]) -> Option<(Level<'a>, &'a EffectGraphNode)> {
     let (last, groups) = doc_path.split_last()?;
     let mut level = Level { nodes: root.nodes, wires: root.wires };
@@ -1079,13 +1099,13 @@ fn trace_model_object(
 /// What a row's kind takes away or adds: Water's real object answers for the
 /// whole family, a look keeps only its look, an imported model's part leaves
 /// its body to the model row.
-fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObjectKnownRow, parent: Option<u32>) {
+fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObjectKnownRow) {
     match model.kind {
         SceneObjectRowKind::PhysicsParent => {
             // Its object identity stays the scene object's doc id so
             // selection, rename and deletion address the render slot.
             row.is_group = true;
-            row.parent_group_id = None;
+            row.parent = None;
             // The family's eye is `parent_visible`, and it shows the water as
             // drawn: hidden by either flag. A water saved hidden by its own
             // `visible` (built before it read as Water) reads hidden, and
@@ -1099,7 +1119,7 @@ fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObj
             }
         }
         SceneObjectRowKind::LookChild => {
-            row.parent_group_id = parent;
+            row.parent = model.parent.clone();
             row.transform = None;
             row.transform_chain.clear();
             row.transform_chain_parseable = false;
@@ -1114,8 +1134,8 @@ fn shape_row_for_kind(root: &Level, model: &SceneObjectModel, row: &mut SceneObj
             row.fluid_domain_transform = None;
         }
         SceneObjectRowKind::Object => {
-            if parent.is_some() {
-                row.parent_group_id = parent;
+            if model.parent.is_some() {
+                row.parent = model.parent.clone();
                 row.physics = None;
                 row.physics_imported = false;
             }
@@ -1175,22 +1195,13 @@ fn walk_transform_chain(
             transform_vm = Some(trace_transform(&current_level, sp, n.id));
             break;
         }
-        if n.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID && port == "pose" {
-            cursor = group_body_id(&current_level)
-                .and_then(|id| current_level.producer(id, "transform"));
-            parseable = false;
-            continue;
-        }
-        if n.type_id == "node.physics_world" {
-            // A pose is paired with one description input. Follow that body's
+        if n.type_id == "node.rigid_body" {
+            // A pose is the body's simulated transform. Follow the body's
             // authored transform for editing; the live simulated pose is not a
             // project value and must never be written back by the scene panel.
-            cursor = port.strip_prefix("pose_")
-                .and_then(|index| current_level.producer(n.id, &format!("body_{index}")));
-            parseable = false; // transform modifiers must not splice across the solver.
-            continue;
-        }
-        if n.type_id == "node.rigid_body" {
+            if port == "pose" {
+                parseable = false; // transform modifiers must not splice across the solver.
+            }
             cursor = current_level.producer(n.id, "transform");
             continue;
         }
@@ -1263,12 +1274,8 @@ fn mesh_source_is_gltf(level: &Level<'_>, object_id: u32) -> bool {
 }
 
 fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
-    let (world_id, port) = level.producer(object_id, "transform")?;
-    let world = level.node(world_id)?;
-    if world.type_id != "node.physics_world" { return None; }
-    let input = format!("body_{}", port.strip_prefix("pose_")?);
-    let (body_id, _) = level.producer(world_id, &input)?;
-    (level.node(body_id)?.type_id == "node.rigid_body").then_some(body_id)
+    let (body_id, port) = level.producer(object_id, "transform")?;
+    (port == "pose" && level.node(body_id)?.type_id == "node.rigid_body").then_some(body_id)
 }
 
 /// Resolve the editable domain transform and derive bounds only from a
@@ -1469,10 +1476,15 @@ fn trace_scene_object(
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
         is_group: false,
-        parent_group_id: None,
+        parent: None,
         index: k,
         object_node_id,
         object: node.node_id.clone(),
+        address: model.object.clone(),
+        modifier_owner: {
+            let owner_path = if group_node_id.is_some() { &model.doc_path[..model.doc_path.len().saturating_sub(1)] } else { &model.doc_path[..] };
+            doc_path_ref(root, owner_path).unwrap_or_else(|| model.object.clone())
+        },
         kind: model.kind,
         controls: model.controls.clone(),
         capabilities: model.capabilities,
@@ -1580,6 +1592,7 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
                         index: k,
                         node_doc_id: node_id,
                         node: node.node_id.clone(),
+                        address: SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() },
                         name: light_display_name(node, k),
                     }))
                 }

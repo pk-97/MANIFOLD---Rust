@@ -70,7 +70,7 @@ impl RenderScene {
             // aux gate below.
             let points_active = draws.iter().any(|d| d.points);
             self.ensure_msaa_targets(gpu.device, width, height, points_active);
-            if depth_wired || wants_shafts_now {
+            if depth_wired || wants_shafts_now || self.gizmo_depth_wanted {
                 self.ensure_depth_resolve_scratch(gpu.device, width, height);
             }
             // GBUFFER_DESIGN.md section 2 D1/D5 (P2): the velocity aux-MRT
@@ -267,6 +267,11 @@ impl RenderScene {
                 if !depth_wired {
                     self.ensure_shaft_depth_internal(gpu.device, width, height);
                 }
+            }
+            // The editor's gizmo lines test against this frame's depth: keep the
+            // internal copy whether or not `depth` is wired.
+            if self.gizmo_depth_wanted {
+                self.ensure_shaft_depth_internal(gpu.device, width, height);
             }
             // Rotate + (re)size the light ring buffer, then write this
             // frame's light data into the current ring slot. Rotating across

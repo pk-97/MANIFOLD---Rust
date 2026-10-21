@@ -4,37 +4,7 @@
 
 use crate::ui_root::UIRoot;
 use manifold_core::project::Project;
-
-/// Resolve a UI snapshot's document id into the stable graph address used by
-/// content commands: the first node with that id, root level first. Document
-/// ids repeat across group levels in hand-authored presets, so only ids the
-/// editing commands minted (unique across the document) resolve reliably.
-pub(crate) fn scene_node_ref_for_doc_id(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    wanted: u32,
-) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
-    fn visit(
-        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
-        wanted: u32,
-        scope: &mut Vec<manifold_core::NodeId>,
-    ) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
-        for node in nodes {
-            if node.id == wanted && !node.node_id.is_empty() {
-                return Some(manifold_core::scene_modifier_preset::SceneNodeRef {
-                    scope: scope.clone(), node: node.node_id.clone(),
-                });
-            }
-            if let Some(group) = &node.group && !node.node_id.is_empty() {
-                scope.push(node.node_id.clone());
-                let found = visit(&group.nodes, wanted, scope);
-                scope.pop();
-                if found.is_some() { return found; }
-            }
-        }
-        None
-    }
-    visit(&def.nodes, wanted, &mut Vec::new())
-}
+use manifold_core::SceneNodeRef;
 
 /// Every liquid domain behind a scene object, named after its water.
 pub(crate) fn fluid_domains(
@@ -44,7 +14,7 @@ pub(crate) fn fluid_domains(
     for object in &scene.objects {
         let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
         let Some(domain) = &row.liquid_domain else { continue; };
-        let rows = std::iter::once(row.object_node_id).chain(row.parent_group_id);
+        let rows = std::iter::once(row.address.clone()).chain(row.parent.clone());
         match result.iter_mut().find(|option| option.node == domain.node) {
             Some(option) => option.rows.extend(rows),
             None => result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
@@ -71,7 +41,7 @@ pub(crate) fn fluid_role_rows(
                 targets => format!("Targets: {} fluids", targets.len()),
             };
             manifold_ui::panels::scene_setup_panel::FluidRoleRow {
-                source_node_id: role.source_doc_id, name: role.name, target_label,
+                source: role.source, name: role.name, target_label,
             }
         }).collect()
     })
@@ -102,9 +72,8 @@ pub(crate) fn world_and_physics_nodes(
 
 /// The Scene tab tree's items (SCENE_SURFACES D8) from the scene items and
 /// the panel rows already projected from the same `SceneVm`. Lights and
-/// objects pair with their Known rows in order, since `scene_items` lists
-/// exactly those, in that order. `object_ids` are each Known object's
-/// filtered control ids; every other item owns its nodes' controls.
+/// objects pair with their Known rows by the node the item names. `object_ids` are each
+/// Known object's filtered control ids; every other item owns its nodes' controls.
 ///
 /// One Lighting item follows Camera: it takes the Camera's and World's
 /// lighting controls (a Lighting-band row such as exposure, and every
@@ -113,26 +82,22 @@ pub(crate) fn world_and_physics_nodes(
 pub(crate) fn scene_item_vms(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
-    objects: &[manifold_ui::panels::scene_setup_panel::ObjectRowVm],
-    lights: &[manifold_ui::panels::scene_setup_panel::LightRowVm],
+    objects: &[(SceneNodeRef, Option<SceneNodeRef>)],
+    lights: &[SceneNodeRef],
     object_ids: Vec<Vec<String>>,
     scene_of: &dyn Fn(&str) -> Option<manifold_core::scene_surface::SceneParamDesc>,
 ) -> Vec<manifold_ui::panels::scene_setup_panel::SceneItemVm> {
     use manifold_core::scene_surface::{CardBand, ControlGroup, SceneItemKind};
     use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
-    use manifold_ui::panels::scene_setup_panel::{LightRowVm, ObjectRowVm, SceneItemVm, SceneSelection};
+    use manifold_ui::panels::scene_setup_panel::{SceneItemVm, SceneSelection};
     let lighting_row = |id: &String| {
         scene_of(id).is_some_and(|scene| scene.band == Some(CardBand::Lighting) || scene.group == ControlGroup::Environment)
     };
-    let mut known_objects = objects.iter().filter_map(|object| match object {
-        ObjectRowVm::Known(row) => Some((row.object_node_id, row.parent_group_id)),
-        ObjectRowVm::Custom { .. } => None,
-    });
-    let mut known_lights = lights.iter().filter_map(|light| match light {
-        LightRowVm::Known(row) => Some(row.node_doc_id),
-        LightRowVm::Custom { .. } => None,
-    });
-    let mut object_ids = object_ids.into_iter();
+    // An item finds its row by the node it names; the order of the two lists
+    // is never relied on. `object_ids` runs parallel to the Known object rows.
+    let known_objects = objects;
+    let known_lights = lights;
+    let mut object_ids: Vec<Option<Vec<String>>> = object_ids.into_iter().map(Some).collect();
     let mut lighting_ids = Vec::new();
     let mut out: Vec<SceneItemVm> = items
         .iter()
@@ -147,14 +112,18 @@ pub(crate) fn scene_item_vms(
             let (selection, parent, parameter_ids) = match &item.id {
                 SceneItemId::Camera => (SceneSelection::Camera, None, owned()),
                 SceneItemId::World => (SceneSelection::World, None, owned()),
-                SceneItemId::Light(_) => (SceneSelection::Light(known_lights.next()?), None, owned()),
-                SceneItemId::Object(_) => {
-                    let (id, parent) = known_objects.next()?;
-                    (SceneSelection::Object(id), parent, object_ids.next()?)
+                SceneItemId::Light(id) => {
+                    let light = known_lights.iter().find(|light| &light.node == id)?;
+                    (SceneSelection::Light(light.clone()), None, owned())
+                }
+                SceneItemId::Object(id) => {
+                    let at = known_objects.iter().position(|(row, _)| &row.node == id)?;
+                    let (row, parent) = &known_objects[at];
+                    (SceneSelection::Object(row.clone()), parent.clone(), object_ids.get_mut(at)?.take()?)
                 }
                 SceneItemId::Force(id) => (SceneSelection::Force(id.clone()), None, Vec::new()),
                 SceneItemId::Physics(id) => (SceneSelection::Physics(id.clone()), None, owned()),
-                SceneItemId::Source { node, water } => (SceneSelection::Source(node.clone()), Some(*water), owned()),
+                SceneItemId::Source { node, water } => (SceneSelection::Source(node.clone()), Some(water.clone()), owned()),
             };
             Some(SceneItemVm { kind: item.kind, selection, name: item.name.clone(), parent, parameter_ids })
         })
@@ -646,6 +615,42 @@ mod ownership_tests {
         assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["grouped_domain"])), vec!["1_intensity"]);
     }
 
+    /// Items find their rows by the node they name, not by list order: the
+    /// rows arrive reversed and every item still takes its own row's controls.
+    #[test]
+    fn scene_items_pair_with_rows_by_node_not_by_order() {
+        use manifold_core::SceneNodeRef;
+        use manifold_nodes_scene::node_graph::scene_items::{SceneItemId, scene_items};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_ui::panels::scene_setup_panel::SceneSelection;
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let vm = SceneVm::from_def(&def).expect("a scene");
+        let items = scene_items(&def, &vm);
+        let mut rows: Vec<(SceneNodeRef, Option<SceneNodeRef>, String)> = vm
+            .objects
+            .iter()
+            .filter_map(|object| match object {
+                SceneObjectVm::Known(row) => Some((row.address.clone(), row.parent.clone(), row.address.node.as_str().to_string())),
+                SceneObjectVm::Custom { .. } => None,
+            })
+            .collect();
+        assert!(rows.len() >= 2, "the fixture has several objects");
+        rows.reverse();
+        let objects: Vec<_> = rows.iter().map(|(node, parent, _)| (node.clone(), parent.clone())).collect();
+        let object_ids: Vec<Vec<String>> = rows.iter().map(|(_, _, name)| vec![format!("controls-of-{name}")]).collect();
+        let tree = scene_item_vms(Some(&def), &items, &objects, &[], object_ids, &|_| None);
+        let mut paired = 0;
+        for item in &items {
+            let SceneItemId::Object(leaf) = &item.id else { continue };
+            let shown = tree.iter().find(|shown| shown.name == item.name && matches!(&shown.selection, SceneSelection::Object(_))).expect("the object item is listed");
+            assert!(matches!(&shown.selection, SceneSelection::Object(node) if &node.node == leaf), "{} selects its own row", item.name);
+            let (_, _, name) = rows.iter().find(|(node, _, _)| &node.node == leaf).unwrap();
+            assert_eq!(shown.parameter_ids, vec![format!("controls-of-{name}")], "{} takes its own row's controls", item.name);
+            paired += 1;
+        }
+        assert!(paired >= 2);
+    }
+
     /// Every scene item with the nodes it owns (`scene_items`), and the
     /// material it may share.
     fn scene_items(def: &EffectGraphDef) -> Vec<(String, Vec<NodeId>, Option<NodeId>)> {
@@ -892,7 +897,7 @@ mod ownership_tests {
 
     #[test]
     fn gpu_flip_obstacle_keeps_fluid_role_with_scene_modifier() {
-        use manifold_core::{NodeId, SceneNodeRef};
+        use manifold_core::{NodeId, SceneNodeRef, SceneNodeRefExt as _};
         use manifold_core::scene_modifier_preset::SceneTargetSelection;
         use manifold_nodes_scene::node_graph::{scene_modifier_authoring, scene_vm::SceneObjectVm, scene_vm::SceneVm};
         let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
@@ -996,7 +1001,7 @@ mod ownership_tests {
                 SceneObjectVm::Known(row) if row.name == "Water" => Some(row),
                 _ => None,
             }).expect("Water parent");
-            assert!(water.is_group && water.parent_group_id.is_none(), "{preset}: real Water parent");
+            assert!(water.is_group && water.parent.is_none(), "{preset}: real Water parent");
 
             // Collapsing or expanding the family leaves the parent's own
             // simulation and shared gate controls intact.
@@ -1008,7 +1013,7 @@ mod ownership_tests {
                 "{preset}: parent simulation controls");
 
             let children: Vec<_> = vm.objects.iter().filter_map(|object| match object {
-                SceneObjectVm::Known(row) if row.parent_group_id == Some(water.object_node_id) => Some(row),
+                SceneObjectVm::Known(row) if row.parent.as_ref() == Some(&water.address) => Some(row),
                 _ => None,
             }).collect();
             // The Dam Break adds Physics View's dots after the three looks.

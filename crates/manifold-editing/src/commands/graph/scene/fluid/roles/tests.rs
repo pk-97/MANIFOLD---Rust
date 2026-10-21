@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::commands::graph::test_support::{graph_of, project_with_graph};
+use crate::commands::graph::test_support::*;
 use manifold_core::effect_graph_def::{
     BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
@@ -258,7 +258,7 @@ fn run_command(
         },
         node: NodeId::new(if nested { "nested_fluid" } else { "fluid" }),
     };
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -328,7 +328,7 @@ fn scene_physics_assign_role_platonic_wires_visible_mesh_source() {
         .unwrap()
         .type_id = "node.platonic_solid_mesh".into();
     let (mut project, effect) = project_with_graph(graph.clone());
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -402,7 +402,7 @@ fn scene_physics_assign_role_nested_domain_creates_typed_boundary() {
 fn scene_physics_assign_role_rejects_invalid_role_atomically() {
     let graph = cube_graph(false);
     let (mut project, effect) = project_with_graph(graph.clone());
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -423,7 +423,7 @@ fn scene_physics_assign_role_rejects_invalid_role_atomically() {
 fn scene_physics_assign_role_imported_preserves_binding_parent_pose_and_parts() {
     let graph = imported_compound_graph(false);
     let (mut project, effect) = project_with_graph(graph.clone());
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -488,7 +488,7 @@ fn scene_physics_assign_role_repeated_assignments_use_distinct_source_ports() {
     let graph = imported_compound_graph(false);
     let (mut project, effect) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(effect.clone());
-    let mut first = AssignSceneFluidRoleCommand::new(
+    let mut first = assign_role(&project, 
         target.clone(),
         0,
         0,
@@ -506,7 +506,7 @@ fn scene_physics_assign_role_repeated_assignments_use_distinct_source_ports() {
         "rejected: {:?}",
         first.rejection_reason()
     );
-    let mut second = AssignSceneFluidRoleCommand::new(
+    let mut second = assign_role(&project, 
         target,
         0,
         0,
@@ -557,7 +557,7 @@ fn scene_physics_assign_role_two_fluids_share_boundary_without_collisions() {
     let (mut project, effect) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(effect.clone());
     let scope = vec![NodeId::new("domain_group")];
-    let mut first = AssignSceneFluidRoleCommand::new(
+    let mut first = assign_role(&project, 
         target.clone(),
         0,
         0,
@@ -575,7 +575,7 @@ fn scene_physics_assign_role_two_fluids_share_boundary_without_collisions() {
         "rejected: {:?}",
         first.rejection_reason()
     );
-    let mut second = AssignSceneFluidRoleCommand::new(
+    let mut second = assign_role(&project, 
         target,
         0,
         0,
@@ -708,7 +708,7 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
             .wires
             .clone();
         let (mut project, effect) = project_with_graph(graph.clone());
-        let mut command = AssignSceneFluidRoleCommand::new(
+        let mut command = assign_role(&project, 
             GraphTarget::Effect(effect.clone()),
             0,
             0,
@@ -798,7 +798,7 @@ fn scene_physics_assign_role_rejects_duplicate_target_input_sentinels_atomically
         ]);
     let (mut project, effect) = project_with_graph(graph.clone());
     let before = serde_json::to_value(&project).unwrap();
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -834,7 +834,7 @@ fn scene_physics_assign_role_rejects_duplicate_source_output_sentinels_atomicall
         ]);
     let (mut project, effect) = project_with_graph(graph.clone());
     let before = serde_json::to_value(&project).unwrap();
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect),
         0,
         0,
@@ -867,7 +867,7 @@ fn scene_physics_assign_role_rejects_nonshared_compound_pose_atomically() {
         .retain(|wire| !(wire.to_node == 16 && wire.to_port == "parent_transform"));
     let original = graph.clone();
     let (mut project, effect) = project_with_graph(graph.clone());
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -921,7 +921,7 @@ fn scene_physics_assign_role_reaches_gpu_domain_two_groups_deep() {
     body.nodes.retain(|node| node.id != 31);
     body.nodes.push(live_matter_group(33, 34));
     let (mut project, effect) = project_with_graph(graph.clone());
-    let mut command = AssignSceneFluidRoleCommand::new(
+    let mut command = assign_role(&project, 
         GraphTarget::Effect(effect.clone()),
         0,
         0,
@@ -955,7 +955,7 @@ fn scene_physics_assign_role_refuses_object_holding_nested_gpu_domain() {
     let object = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap();
     object.group.as_deref_mut().unwrap().nodes.push(live_matter_group(16, 17));
     assert_eq!(
-        scene_fluid_role_eligibility(&graph, 0, 0),
+        role_eligibility(&graph, 0, 0),
         Err("Assign Fluid Role cannot target a group containing a liquid domain".to_string())
     );
 }

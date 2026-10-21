@@ -294,7 +294,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             RootAction::SceneItemMove(delta) => {
                 if let Some(item) = ctx.ui.scene_setup_panel.selected_scene_item() {
                     ContentCommand::send(ctx.content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Move {
-                        layer: item.layer_id, scene: item.scene, index: item.index, delta: *delta,
+                        layer: item.layer_id, item: item.item, delta: *delta,
                         kind: if item.is_light { crate::scene_item_transfer::SceneItemKind::Light } else { crate::scene_item_transfer::SceneItemKind::Object },
                     }));
                 }

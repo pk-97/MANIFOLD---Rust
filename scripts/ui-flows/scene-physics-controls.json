@@ -1,7 +1,7 @@
 [
   {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button","under_name":"inspector"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value","text":"Ground"}},"check":"Exists"}},
-  {"Assert":{"selector":{"Query":{"text":"Density"}},"check":"Exists"}},
+  {"Assert":{"selector":{"Query":{"text":"Mass"}},"check":"Exists"}},
   {"Assert":{"selector":{"Query":{"text":"Friction"}},"check":"Exists"}},
   {"Assert":{"selector":{"Query":{"text":"Bounce"}},"check":"Exists"}},
   "Snapshot",

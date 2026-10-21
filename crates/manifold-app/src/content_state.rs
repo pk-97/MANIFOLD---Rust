@@ -101,7 +101,7 @@ pub struct ModifierSelectionUpdate {
 pub struct ObjectModifierSelectionUpdate {
     pub sequence: u64,
     pub layer_id: LayerId,
-    pub owner_id: u32,
+    pub owner: manifold_core::SceneNodeRef,
     pub node_doc_id: u32,
 }
 

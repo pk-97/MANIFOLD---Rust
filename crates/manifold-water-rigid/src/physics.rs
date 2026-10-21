@@ -34,6 +34,8 @@ mod test_scene;
 #[cfg(test)]
 mod tests;
 mod worker;
+#[cfg(test)]
+mod world_edit_tests;
 
 use body_history::PackedRows;
 use copy_group::{validate_copy_prototype, CopyGroup};
@@ -152,9 +154,9 @@ pub struct RigidBody {
     pub fragment_parent: Option<usize>,
     pub shape: u32,
     pub kind: u32,
-    /// kg/m³. The mass is this times the installed hull's volume, so it
-    /// follows the body's size.
-    pub density: f32,
+    /// kg: the mass the card sets, whatever the body's size. Where the engine
+    /// needs a density it derives it from the installed hull's volume.
+    pub mass: f32,
     pub friction: f32,
     pub bounce: f32,
     pub collider: Option<Arc<ColliderGeometry>>,
@@ -224,7 +226,7 @@ impl Default for RigidBody {
             fragment_parent: None,
             shape: 1,
             kind: 1,
-            density: DEFAULT_DENSITY,
+            mass: DEFAULT_MASS_KG,
             friction: 0.5,
             bounce: 0.15,
             collider: None,
@@ -234,17 +236,17 @@ impl Default for RigidBody {
     }
 }
 
-/// A rigid body's density when none is set, kg/m³: wood, which floats.
-pub const DEFAULT_DENSITY: f32 = 600.0;
+/// A rigid body's mass when none is set, kg: a cubic metre of wood, which floats.
+pub const DEFAULT_MASS_KG: f32 = 600.0;
 
 impl RigidBody {
-    /// Box3D's config for this body whose installed hulls hold `volume` m³.
-    fn config(&self, volume: f32) -> BodyConfig {
-        self.config_at(pose_from_transform(self.transform), volume)
+    /// Box3D's config for this body.
+    fn config(&self) -> BodyConfig {
+        self.config_at(pose_from_transform(self.transform))
     }
 
     /// [`Self::config`] at `pose` instead of the authored transform.
-    fn config_at(&self, pose: manifold_physics::BodyPose, volume: f32) -> BodyConfig {
+    fn config_at(&self, pose: manifold_physics::BodyPose) -> BodyConfig {
         BodyConfig {
             kind: match self.kind {
                 0 => BodyKind::Fixed,
@@ -253,7 +255,7 @@ impl RigidBody {
             },
             position: pose.position,
             rotation: pose.rotation,
-            mass: self.density * volume,
+            mass: self.mass,
             friction: self.friction,
             restitution: self.bounce,
             wall: self.wall,
@@ -292,7 +294,7 @@ fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
         && left.enabled == right.enabled
         && left.shape == right.shape
         && left.kind == right.kind
-        && left.density == right.density
+        && left.mass == right.mass
         && left.friction == right.friction
         && left.bounce == right.bounce
         && left.wall == right.wall
@@ -304,6 +306,37 @@ fn same_authored_body(left: &RigidBody, right: &RigidBody) -> bool {
     same_body(left, right)
         && left.release_count == right.release_count
         && left.fragment_parent == right.fragment_parent
+}
+
+/// Whether a body slot's edit needs a fresh native world. A body entering an
+/// empty or disabled slot is installed into the live world instead
+/// (`install_added_bodies`), so it never resets the bodies already moving;
+/// removing a body, or changing an installed body's shape or scale, still
+/// rebuilds, and so does a collider change on a body that can move. A Fixed
+/// body's new collider is swapped in place (`apply_authored_edits`), so
+/// dragging a part of an imported scan never resets the world. A fragment
+/// child is always built with its parent.
+fn slot_needs_rebuild(installed: bool, old: Option<&RigidBody>, new: Option<&RigidBody>) -> bool {
+    let Some(new) = new.filter(|body| body.enabled) else {
+        return installed;
+    };
+    if !installed {
+        return new.fragment_parent.is_some();
+    }
+    !same_topology_body(old, Some(new)) && !is_fixed_collider_swap(old, new)
+}
+
+/// Whether `new` differs from `old` only by the collider of a Fixed body.
+fn is_fixed_collider_swap(old: Option<&RigidBody>, new: &RigidBody) -> bool {
+    old.is_some_and(|old| {
+        old.kind == 0
+            && new.kind == 0
+            && old.collider.is_some()
+            && new.collider.is_some()
+            && old.shape == new.shape
+            && old.transform.scale == new.transform.scale
+            && old.enabled == new.enabled
+    })
 }
 
 /// Whether two bodies need the same native geometry: a change in any of
@@ -349,9 +382,10 @@ fn scale_hulls(geometry: &ColliderGeometry, scale: [f32; 3]) -> Vec<Vec<[f32; 3]
         .collect()
 }
 
-/// Install `body` and give it its density times the volume of the hulls
-/// Box3D installed; returns the handle and that volume. A scale or shape
-/// change rebuilds the world, so the volume holds for the install's life.
+/// Install `body` with its card mass; returns the handle and the volume of
+/// the hulls Box3D installed, which a fragment's density derives from. A scale
+/// or shape change rebuilds the world, so the volume holds for the install's
+/// life.
 fn add_body_geometry(
     world: &mut PhysicsWorld,
     body: &RigidBody,
@@ -367,18 +401,14 @@ fn add_copy(
 ) -> Result<(BodyHandle, f32), String> {
     let handle = if let Some(geometry) = prototype.collider.as_ref() {
         let scaled = scale_hulls(geometry, prototype.transform.scale);
-        world.add_hulls(&scaled, prototype.config_at(pose, 1.0))
+        world.add_hulls(&scaled, prototype.config_at(pose))
     } else {
         let points = platonic_points(prototype.shape);
         let scaled = scale_platonic_points(points, prototype.transform.scale);
-        world.add_hull(&scaled[..points.len()], prototype.config_at(pose, 1.0))
+        world.add_hull(&scaled[..points.len()], prototype.config_at(pose))
     }
     .map_err(|error| error.to_string())?;
-    let volume = installed_volume(world, handle)?;
-    world
-        .update_body(handle, prototype.config_at(pose, volume), false)
-        .map_err(|error| error.to_string())?;
-    Ok((handle, volume))
+    Ok((handle, installed_volume(world, handle)?))
 }
 
 /// How many copies each group makes from the world's pool of `MAX_COPIES`,
@@ -454,7 +484,7 @@ pub struct RigidSimulation {
     // body count.
     handles: Vec<Option<BodyHandle>>,
     descriptions: Vec<Option<RigidBody>>,
-    /// Each installed body's hull volume, m³; its mass is density times this.
+    /// Each installed body's hull volume, m³: a fragment's mass is its parent's mass over the parent's volume, times this.
     volumes: Vec<f32>,
     bullet_enabled: Vec<bool>,
     /// Paused authoring edits remain visible while older preview ticks drain.
@@ -779,10 +809,9 @@ impl RigidSimulation {
             }
         }
         let topology_changed = bodies.len() != self.descriptions.len()
-            || bodies
-                .iter()
-                .zip(self.descriptions.iter())
-                .any(|(a, b)| !same_topology_body(a.as_ref(), b.as_ref()));
+            || bodies.iter().zip(self.descriptions.iter()).enumerate().any(|(slot, (new, old))| {
+                slot_needs_rebuild(self.handles.get(slot).is_some_and(Option::is_some), old.as_ref(), new.as_ref())
+            });
         // A sample behind the last frame is a seek back, except the replay
         // opening at an owed origin: the frame that started that grid landed
         // past it, and the opening samples the span it skipped, Speed at its
@@ -1288,6 +1317,38 @@ impl RigidSimulation {
         Ok(())
     }
 
+    /// Put every enabled body that has no native body yet into the live
+    /// world at its authored pose, at the tick start that first sees it.
+    /// Bodies already moving keep their state.
+    fn install_added_bodies(&mut self, bodies: &[Option<RigidBody>]) -> Result<(), String> {
+        let world = self.world.as_mut().expect("world constructed above");
+        let mut added = false;
+        for (slot, body) in bodies.iter().enumerate() {
+            let Some(body) = body.as_ref().filter(|body| body.enabled && body.fragment_parent.is_none()) else {
+                continue;
+            };
+            if self.handles[slot].is_some() {
+                continue;
+            }
+            let (handle, volume) = add_body_geometry(world, body)?;
+            self.handles[slot] = Some(handle);
+            self.volumes[slot] = volume;
+            self.bullet_enabled[slot] = false;
+            self.deferred_animated_edit[slot] = None;
+            self.fragment_active[slot] = true;
+            self.descriptions[slot] = Some(body.clone());
+            added = true;
+        }
+        if added {
+            self.field_handles.clear();
+            self.field_handles.extend(self.handles.iter().flatten().copied());
+            for state in &self.groups {
+                self.field_handles.extend(state.handles[..state.active].iter().flatten().copied());
+            }
+        }
+        Ok(())
+    }
+
     /// Bring every installed body and copy in line with this frame's
     /// authored description: contact properties, kind and teleports.
     fn apply_authored_edits(
@@ -1297,6 +1358,7 @@ impl RigidSimulation {
         stationary_edit: bool,
         due_steps: usize,
     ) -> Result<(), String> {
+        self.install_added_bodies(bodies)?;
         let world = self.world.as_mut().expect("world constructed above");
         for (i, body) in bodies.iter().enumerate() {
             let (Some(body), Some(handle)) = (body, self.handles[i]) else {
@@ -1304,6 +1366,14 @@ impl RigidSimulation {
             };
             let old = self.descriptions[i].as_ref();
             if old.is_none_or(|old| !same_body(old, body)) {
+                if let (Some(old), Some(geometry)) = (old, body.collider.as_ref())
+                    && !same_collider(old, body)
+                {
+                    world
+                        .replace_hulls(handle, &scale_hulls(geometry, body.transform.scale), body.config())
+                        .map_err(|e| e.to_string())?;
+                    self.volumes[i] = installed_volume(world, handle)?;
+                }
                 let pose_changed = old.is_none_or(|old| old.transform != body.transform);
                 let animated_edit = body.kind == 2 && stationary_edit && pose_changed;
                 if animated_edit && due_steps > 0 {
@@ -1315,7 +1385,7 @@ impl RigidSimulation {
                 let move_pose =
                     pose_changed && (body.kind != 2 || (animated_edit && due_steps == 0));
                 world
-                    .update_body(handle, body.config(self.volumes[i]), move_pose)
+                    .update_body(handle, body.config(), move_pose)
                     .map_err(|e| e.to_string())?;
                 if body.kind == 1 && old.is_some_and(|old| old.kind != 1) {
                     world.set_bullet(handle, false).map_err(|e| e.to_string())?;
@@ -1691,11 +1761,11 @@ impl RigidSimulation {
             };
             let body = body.as_ref().expect("fragment description exists");
             // A piece is the parent's material: its own volume at the
-            // parent's density.
-            let mut config = body.config(self.volumes[index]);
+            // parent's density (its card mass over its hull volume).
+            let mut config = body.config();
             config.position = parent_pose.position;
             config.rotation = parent_pose.rotation;
-            config.mass = parent.density * self.volumes[index];
+            config.mass = parent.mass * self.volumes[index] / self.volumes[parent_index];
             config.friction = parent.friction;
             config.restitution = parent.bounce;
             world
@@ -1725,7 +1795,7 @@ impl RigidSimulation {
                 self.descriptions[parent_index]
                     .as_ref()
                     .is_none_or(|previous| {
-                        previous.density != parent.density
+                        previous.mass != parent.mass
                             || previous.friction != parent.friction
                             || previous.bounce != parent.bounce
                     });
@@ -1742,8 +1812,8 @@ impl RigidSimulation {
                 let Some(handle) = self.handles[index] else {
                     continue;
                 };
-                let mut config = body.config(self.volumes[index]);
-                config.mass = parent.density * self.volumes[index];
+                let mut config = body.config();
+                config.mass = parent.mass * self.volumes[index] / self.volumes[parent_index];
                 config.friction = parent.friction;
                 config.restitution = parent.bounce;
                 self.world
@@ -1812,7 +1882,7 @@ impl RigidSimulation {
             }
             if let Some(handle) = self.handles[index] {
                 world
-                    .update_body(handle, edit.body.config(self.volumes[index]), true)
+                    .update_body(handle, edit.body.config(), true)
                     .map_err(|e| e.to_string())?;
             }
             *edit_time = None;
@@ -1833,7 +1903,7 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .update_body(handle, prototype.config_at(placed.rest(state.width, index), state.volume), true)
+                    .update_body(handle, prototype.config_at(placed.rest(state.width, index)), true)
                     .map_err(|e| e.to_string())?;
             }
             state.arrangement = Some(placed);
@@ -2102,7 +2172,7 @@ impl RigidSimulation {
             self.world
                 .as_mut()
                 .expect("world constructed above")
-                .set_animated_target(handle, target.config(self.volumes[i]), dt)
+                .set_animated_target(handle, target.config(), dt)
                 .map_err(|e| e.to_string())?;
         }
         for (group, prototype) in groups.iter().enumerate() {
@@ -2121,7 +2191,7 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .set_animated_target(handle, prototype.config_at(placed.rest(state.width, index), state.volume), dt)
+                    .set_animated_target(handle, prototype.config_at(placed.rest(state.width, index)), dt)
                     .map_err(|e| e.to_string())?;
             }
         }

@@ -1,4 +1,4 @@
-use manifold_node_engine::mesh::PLATONIC_SHAPES;
+use manifold_node_engine::mesh::{InstanceTransform, PLATONIC_SHAPES};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -103,7 +103,7 @@ fn same_optional_selection(left: Option<MeshSelection>, right: Option<MeshSelect
 manifold_node_engine::primitive! {
  name: RigidBodyNode,
  type_id: "node.rigid_body",
- purpose: "Describe a rigid body's shape, starting transform, motion type, density and contact properties; Box3D gives it density times its installed hull volume as mass. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+ purpose: "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
  inputs: {
   transform: Transform required,
   source: MeshSource optional,
@@ -172,7 +172,7 @@ manifold_node_engine::primitive! {
   part_61: Transform optional,
   part_62: Transform optional,
   part_63: Transform optional,
-  density: ScalarF32 optional,
+  mass: ScalarF32 optional,
   friction: ScalarF32 optional,
   bounce: ScalarF32 optional,
   release_count: ScalarF32 optional,
@@ -183,13 +183,14 @@ manifold_node_engine::primitive! {
   copy_turn_x: ScalarF32 optional,
   copy_turn_y: ScalarF32 optional,
   copy_turn_z: ScalarF32 optional,
+  acceleration: VectorField optional,
  },
- outputs: { body: RigidBody, shape: ScalarF32, },
+ outputs: { body: RigidBody, shape: ScalarF32, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, },
 params: [
 ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("shape"), label: "Shape", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 4.0)), enum_values: PLATONIC_SHAPES },
 ParamDef { name: Cow::Borrowed("motion"), label: "Body Type", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 2.0)), enum_values: &["Fixed", "Moving", "Animated"] },
-ParamDef { name: Cow::Borrowed("density"), label: "Density", ty: ParamType::Float, default: ParamValue::Float(crate::physics::DEFAULT_DENSITY), range: Some((1.0, 25_000.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("mass"), label: "Mass", ty: ParamType::Float, default: ParamValue::Float(crate::physics::DEFAULT_MASS_KG), range: Some((0.1, 100_000.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.5), range: Some((0.0, 1.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("bounce"), label: "Bounce", ty: ParamType::Float, default: ParamValue::Float(0.15), range: Some((0.0, 1.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("release_count"), label: "Break Apart", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1_000_000.0)), enum_values: &[] },
@@ -217,10 +218,10 @@ ParamDef { name: Cow::Borrowed("copy_turn_y"), label: "Copy Turn Y", ty: ParamTy
 ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
- summary: "Give an object density, friction and bounce, then connect it to a Physics World.",
+ summary: "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
  category: Geometry3D, role: Source,
  aliases: ["physics body", "rigid body", "collider"],
  boundary_reason: NonGpu,
@@ -307,7 +308,7 @@ impl Primitive for RigidBodyNode {
                 fragment_parent,
                 shape: selector("shape"),
                 kind: selector("motion"),
-                density: ctx.scalar_or_param("density", crate::physics::DEFAULT_DENSITY),
+                mass: ctx.scalar_or_param("mass", crate::physics::DEFAULT_MASS_KG),
                 friction: ctx.scalar_or_param("friction", 0.5),
                 bounce: ctx.scalar_or_param("bounce", 0.15),
                 collider: self.collider.clone(),
@@ -527,7 +528,7 @@ impl Primitive for RigidBodyNode {
             fragment_parent,
             shape: selector("shape"),
             kind: selector("motion"),
-            density: ctx.scalar_or_param("density", crate::physics::DEFAULT_DENSITY),
+            mass: ctx.scalar_or_param("mass", crate::physics::DEFAULT_MASS_KG),
             friction: ctx.scalar_or_param("friction", 0.5),
             bounce: ctx.scalar_or_param("bounce", 0.15),
             collider: self.collider.clone(),
@@ -540,6 +541,9 @@ impl Primitive for RigidBodyNode {
             .set_scalar("shape", ParamValue::Float(shape as f32));
     }
 }
+
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+mod extent;
 
 #[cfg(test)]
 mod tests {

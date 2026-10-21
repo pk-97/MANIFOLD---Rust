@@ -17,14 +17,17 @@ fn filled_slots(graph: &EffectGraphDef, world: u32) -> Vec<u32> {
         .wires
         .iter()
         .filter(|wire| wire.to_node == world)
-        .filter_map(|wire| wire.to_port.strip_prefix("body_")?.parse().ok())
+        .filter_map(|wire| match manifold_core::physics_members::member_input(&wire.to_port) {
+            Some((manifold_core::physics_members::Family::Body, slot)) => Some(slot),
+            _ => None,
+        })
         .collect();
     slots.sort_unstable();
     slots
 }
 
 fn enable(project: &Project, target: &GraphTarget, default: &EffectGraphDef) -> EnableSceneObjectPhysicsCommand {
-    EnableSceneObjectPhysicsCommand::new(project, target.clone(), 0, 0, &body_params(), &[], default)
+    enable_cmd(project, target.clone(), 0, 0, &body_params(), &[], default)
         .expect("the imported model takes physics")
 }
 
@@ -68,7 +71,7 @@ fn physics_boundary_rigid_enable() {
     assert_eq!(graph_of_generator(&project, &layer), &enabled, "redo reuses the prepared ids");
 
     // A second enable on the same object refuses before submission.
-    let refused = EnableSceneObjectPhysicsCommand::new(&project, target, 0, 0, &body_params(), &[], &graph)
+    let refused = enable_cmd(&project, target, 0, 0, &body_params(), &[], &graph)
         .expect_err("physics is already on");
     assert_eq!(refused.message, "Selected object already has standard physics enabled");
 }
@@ -76,7 +79,7 @@ fn physics_boundary_rigid_enable() {
 #[test]
 fn physics_boundary_rigid_shared_world() {
     let (mut project, layer, target, graph) = enabled_photoscan();
-    let copy = DuplicateSceneObjectCommand::new(&project, target.clone(), vec![], 0, 0, 1, &graph);
+    let copy = duplicate_copies(&project, target.clone(), vec![], 0, 0, 1, &graph);
     let mut copy = copy.expect("a physics object copies");
     copy.execute(&mut project);
     assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
@@ -129,7 +132,7 @@ fn physics_boundary_rigid_duplicate_paused() {
     let paused = graph_of_generator(&project, &layer).clone();
     let world_before = paused.nodes.iter().find(|node| node.id == world_id).unwrap().clone();
 
-    let mut copy = DuplicateSceneObjectCommand::new(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
+    let mut copy = duplicate_copies(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
     copy.execute(&mut project);
     assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
     let copied = graph_of_generator(&project, &layer).clone();
@@ -152,7 +155,7 @@ fn physics_boundary_rigid_duplicate_paused() {
 fn physics_boundary_rigid_duplicate_count() {
     let (mut project, layer, target, graph) = enabled_photoscan();
     let before = project.graph_target_owner(&target).unwrap().clone();
-    let mut copies = DuplicateSceneObjectCommand::new(&project, target.clone(), vec![], 0, 0, 3, &graph).unwrap();
+    let mut copies = duplicate_copies(&project, target.clone(), vec![], 0, 0, 3, &graph).unwrap();
     copies.execute(&mut project);
     assert!(copies.was_applied(), "{:?}", copies.rejection_reason());
     let def = graph_of_generator(&project, &layer).clone();
@@ -198,11 +201,11 @@ fn physics_boundary_rigid_duplicate_count_refuses_a_full_world() {
         def.wires.push(super::super::scene_build_wire(999, "body", world, &format!("body_{slot}")));
     }
     let full = def.clone();
-    let refused = DuplicateSceneObjectCommand::new(&project, target.clone(), vec![], 0, 0, 3, &graph)
+    let refused = duplicate_copies(&project, target.clone(), vec![], 0, 0, 3, &graph)
         .expect_err("three copies cannot fit in two free slots");
     assert_eq!(refused.message, "The Physics World has 2 free body slots; 3 copies need 3");
     assert_eq!(graph_of_generator(&project, &layer), &full);
-    let mut two = DuplicateSceneObjectCommand::new(&project, target, vec![], 0, 0, 2, &graph).unwrap();
+    let mut two = duplicate_copies(&project, target, vec![], 0, 0, 2, &graph).unwrap();
     two.execute(&mut project);
     assert!(two.was_applied(), "{:?}", two.rejection_reason());
     let result = graph_of_generator(&project, &layer);
@@ -270,7 +273,7 @@ fn physics_boundary_rigid_duplicate_leaves_ableton_mappings_on_the_source() {
         status: AbletonMappingStatus::Active,
     }]);
 
-    let mut copy = DuplicateSceneObjectCommand::new(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
+    let mut copy = duplicate_copies(&project, target.clone(), vec![], 0, 0, 1, &graph).unwrap();
     copy.execute(&mut project);
     assert!(copy.was_applied(), "{:?}", copy.rejection_reason());
     let copied = density_bindings(&project).into_iter().find(|id| *id != source).expect("the copy binds its Density");

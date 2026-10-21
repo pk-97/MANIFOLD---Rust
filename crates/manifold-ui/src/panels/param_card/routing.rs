@@ -85,7 +85,7 @@ impl ParamCardPanel {
                         return vec![PanelAction::Project(
                             crate::panels::ProjectAction::SceneSetupRemoveModifier(
                                 m.layer_id.clone(),
-                                m.group_node_id.unwrap_or(m.object_id),
+                                m.owner.clone(),
                                 m.node_doc_id,
                             ),
                         )];
@@ -176,26 +176,6 @@ impl ParamCardPanel {
             // no toggle, no drawer, no OSC copy. The greyed label says why.
             if self.rows.get(row).is_some_and(|r| r.spec.disabled.is_some()) {
                 return Vec::new();
-            }
-            // SCENE_MODIFIER_FRAMEWORK D4: a modifier card's toggle row is a
-            // REAL scene write — one undoable param write through
-            // `SceneSetupParamChanged` (INV-M7), addressed by the row's
-            // ParamAddr sidecar, never the plain manifest-param toggle wire.
-            if role == RowRole::ToggleBtn
-                && self.row_host.toggle_ids[row].as_ref().is_some_and(|ids| ids.kind == crate::param_surface::RowKind::Switch)
-                && let (Some(m), Some(addr)) = (&self.modifier, &self.rows[row].scene_addr)
-            {
-                let current = self.rows[row].value.base;
-                let next = if current > 0.5 { 0.0 } else { 1.0 };
-                return vec![PanelAction::Project(
-                    crate::panels::ProjectAction::SceneSetupParamChanged(
-                        m.layer_id.clone(),
-                        addr.scope_path.clone(),
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        next,
-                    ),
-                )];
             }
             let target = self.param_target();
             // A scene card's fold is a saved choice (SCENE_SURFACES_DESIGN.md

@@ -24,9 +24,8 @@ impl AppInputHost<'_> {
             match SceneItemClipboard::capture(
                 &self.project,
                 &item.layer_id,
-                item.scene,
                 kind,
-                item.index,
+                &item.item,
             ) {
                 Ok(clipboard) => {
                     self.ui_root.scene_item_clipboard = Some(clipboard);
@@ -57,9 +56,9 @@ impl AppInputHost<'_> {
                 ContentCommand::send(
                     self.content_tx,
                     ContentCommand::SceneItem(if item.is_light {
-                        SceneItemAction::DuplicateLight { layer: item.layer_id, scene: item.scene, index: item.index }
+                        SceneItemAction::DuplicateLight { layer: item.layer_id, light: item.item }
                     } else {
-                        SceneItemAction::DuplicateObject { layer: item.layer_id, scene: item.scene, index: item.index, copies: 1 }
+                        SceneItemAction::DuplicateObject { layer: item.layer_id, object: item.item, copies: 1 }
                     }),
                 );
             }
@@ -100,13 +99,12 @@ impl AppInputHost<'_> {
                     self.content_tx,
                     ContentCommand::SceneItem(SceneItemAction::Move {
                         layer: item.layer_id,
-                        scene: item.scene,
                         kind: if item.is_light {
                             SceneItemKind::Light
                         } else {
                             SceneItemKind::Object
                         },
-                        index: item.index,
+                        item: item.item,
                         delta,
                     }),
                 );

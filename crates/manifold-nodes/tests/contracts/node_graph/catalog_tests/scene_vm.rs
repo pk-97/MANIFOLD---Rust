@@ -84,13 +84,13 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
             let vm = SceneVm::from_def(def.as_ref()).expect("water family scene resolves");
             let family: Vec<_> = vm.objects.iter().filter_map(|object| match object {
                 SceneObjectVm::Known(row)
-                    if row.name == "Water" || row.parent_group_id.is_some() => Some(row),
+                    if row.name == "Water" || row.parent.is_some() => Some(row),
                 _ => None,
             }).collect();
             assert_eq!(family.iter().filter(|row| row.name == "Water").count(), 1, "{preset}");
             let water = family.iter().find(|row| row.name == "Water").expect("Water row");
             assert!(water.is_group, "{preset}: Water is the physical family parent");
-            assert!(water.parent_group_id.is_none());
+            assert!(water.parent.is_none());
             assert!(water.group_node_id.is_some());
             assert!(water.look_node().is_none());
             assert_eq!(water.visible_addr.param_id, "parent_visible");
@@ -116,7 +116,7 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
                     "{preset}: the Water row owns {switch}");
             }
             for row in family.iter().filter(|row| row.name != "Water") {
-                assert_eq!(row.parent_group_id, Some(water.object_node_id), "{preset}: {} parent", row.name);
+                assert_eq!(row.parent, Some(water.address.clone()), "{preset}: {} parent", row.name);
                 assert!(row.look_node().is_some(), "{preset}: {} owns its platonic mesh", row.name);
                 assert!(row.liquid_domain.is_none(), "{preset}: {} has no fluid domain", row.name);
                 assert_eq!(row.control_nodes(), row.look_node().into_iter().collect::<Vec<_>>(), "{preset}: {} owns only its look", row.name);
@@ -212,8 +212,7 @@ fn assert_rows_share_owner(label: &str, def: &EffectGraphDef) -> usize {
         assert_eq!(row.kind, model.kind, "{label}: {} kind", row.name);
         assert_eq!(row.capabilities, model.capabilities, "{label}: {} capabilities", row.name);
         assert_eq!(row.controls, model.controls, "{label}: {} controls", row.name);
-        let parent = model.parent.as_ref().map(|parent| doc_id(def, parent).expect("the parent resolves"));
-        assert_eq!(row.parent_group_id, parent, "{label}: {} parent", row.name);
+        assert_eq!(row.parent, model.parent, "{label}: {} parent", row.name);
         checked += 1;
     }
     checked

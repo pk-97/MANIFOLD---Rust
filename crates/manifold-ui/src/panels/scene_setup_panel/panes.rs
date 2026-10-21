@@ -139,17 +139,37 @@ impl ScenePanel {
             );
             cy += ROW_H + ROW_GAP;
         }
-        self.show_gizmos_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            toggle_btn_style(self.show_gizmos),
-            "Show gizmos",
-            KEY_SHOW_GIZMOS,
-        ));
+        let render_mode = self.render_mode_label();
+        let buttons = 2 + usize::from(render_mode.is_some());
+        let w = (inner_w - GAP * (buttons - 1) as f32) / buttons as f32;
+        let show = tree.add_button_keyed(
+            Some(self.content_parent), inner_x, cy, w, ROW_H,
+            toggle_btn_style(self.show_gizmos), "Show gizmos", KEY_SHOW_GIZMOS,
+        );
+        self.show_gizmos_id = Some(show);
+        let mode = tree.add_button_keyed(
+            Some(self.content_parent), inner_x + (w + GAP), cy, w, ROW_H,
+            btn_style(), &format!("Gizmos: {}", self.gizmo_draw_mode.label()), KEY_GIZMO_MODE,
+        );
+        tree.set_name(mode, "scene_setup.gizmo_mode");
+        self.gizmo_mode_id = Some(mode);
+        if let Some(label) = render_mode {
+            let render = tree.add_button_keyed(
+                Some(self.content_parent), inner_x + (w + GAP) * 2.0, cy, w, ROW_H,
+                btn_style(), &label, KEY_RENDER_MODE,
+            );
+            tree.set_name(render, "scene_setup.render_mode");
+            self.render_mode_id = Some(render);
+        }
         cy + ROW_H + ROW_GAP
+    }
+
+    /// The Render Mode row's pick list, anchored under its header button: the
+    /// scene's own manifest param, opened through the shared pick-list action.
+    pub(super) fn render_mode_pick_list(&self, button: NodeId) -> Option<PanelAction> {
+        let row = self.render_mode_row()?;
+        let target = GraphParamTarget::GeneratorOf(self.live_layer_id()?.clone());
+        crate::panels::param_slider_shared::pick_list_action(target, row.id.clone(), &row.spec, row.value.base, button)
     }
 
     fn build_tree_pane(&mut self, tree: &mut UITree, body: Rect, top: f32, vm: &SceneSetupVm, selected: &SceneSelection) {

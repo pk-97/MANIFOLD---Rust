@@ -1,10 +1,8 @@
-# Scene Render Mode — wireframe / solid / points as a scene modifier card
+# Scene Render Mode — wireframe / solid / points
 
-**Status:** SHIPPED — P1–P3 (2026-09-16, k3 lead / k27 lanes). Owed: VD bead — modifier round-trip verified L1, L3 journey open. Card rows + gates are the cited contract.
-**Prerequisites:** none — the file-authored scene-modifier regime this design
-rides is on main (`assets/scene-modifier-presets/SceneFog.json` et al.).
-Lifecycle: contract — D2/D5/D6, INV-R1..R5 and the card-row shape are cited by
-`render_mode.rs`, the `node.render_mode` atom, and `render_scene`'s mode match.
+**Status:** the modifier card is gone (BUG-nn1ty: it never worked). Render mode is the `render_mode` param on `render_scene` (Rendered, Solid, Wireframe, Points), a row in the Scene panel header; a `RenderMode` value wired into the `render_mode` port still wins. The recipe `RenderMode.json`, its catalog entry and the `SceneEndpoint::RenderMode` endpoint are deleted. D2/D5/D6 and INV-R1..R5 remain the contract; D1, D3 and the card-row sections describe the deleted modifier.
+**Prerequisites:** none.
+Lifecycle: contract — D2/D5/D6, INV-R1..R5 are cited by `render_mode.rs`, the `node.render_mode` atom, and `render_scene`'s mode match.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Render modes — Blender's viewport shading modes (wireframe, solid, points) —
@@ -162,7 +160,7 @@ without the port load byte-identical (unwired default).
 
 ## 4. Invariants & enforcement
 
-- **INV-R1 — Unwired `render_mode` input, or mode = Rendered, is pixel-identical
+- **INV-R1 — Unwired `render_mode_in` input, or mode = Rendered, is pixel-identical
   to today.** Enforcement: `render_mode.rs` test `default_is_rendered` (struct
   default) + a headless-render parity test in `render_scene/tests.rs`
   (same scene, port unwired vs wired-with-Rendered, buffers compared).

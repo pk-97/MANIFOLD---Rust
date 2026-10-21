@@ -554,6 +554,41 @@ fn write_value(
 /// Room for text inside a card slider's value box.
 pub(crate) const CARD_VALUE_TEXT_W: f32 = crate::slider::VALUE_BOX_W - 4.0;
 
+thread_local! {
+    /// The (font size, measurer) whose number glyphs are already measured.
+    static GLYPHS_WARM: std::cell::Cell<(u16, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Width of a value string as the sum of its digits, point and sign (each
+/// glyph measured once, then served from the measurer's cache) plus its unit
+/// tail measured whole. A dragged value changes its text every frame; measuring
+/// the whole string would miss the cache every frame.
+fn value_text_width(measure: &dyn crate::text::TextMeasure, text: &str, font_size: u16) -> f32 {
+    let weight = crate::color::FONT_WEIGHT_DEFAULT;
+    let measurer_key = (font_size, measure as *const dyn crate::text::TextMeasure as *const () as usize);
+    if GLYPHS_WARM.get() != measurer_key {
+        // All number glyphs at once, so a drag never meets a new digit.
+        let mut glyph = [0u8; 4];
+        for ch in "0123456789.-+".chars() {
+            measure.measure_text(ch.encode_utf8(&mut glyph), font_size, weight);
+        }
+        GLYPHS_WARM.set(measurer_key);
+    }
+    let split = text
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))
+        .unwrap_or(text.len());
+    let (number, tail) = text.split_at(split);
+    let mut glyph = [0u8; 4];
+    let mut width = 0.0;
+    for ch in number.chars() {
+        width += measure.measure_text(ch.encode_utf8(&mut glyph), font_size, weight).x;
+    }
+    if !tail.is_empty() {
+        width += measure.measure_text(tail, font_size, weight).x;
+    }
+    width
+}
+
 /// [`param_value_text`] that fits `max_width` as `measure` measures it, so a
 /// value box never clips a digit. Precision goes first (fewer decimals, then
 /// none), then a compact thousands form that keeps the unit, and the unit
@@ -575,7 +610,7 @@ pub fn param_value_text_fit<'a>(
     if let Some(labels) = value_labels {
         return &labels[label_index(val, min, labels.len())];
     }
-    let fits = |text: &str| measure.measure_text(text, font_size, crate::color::FONT_WEIGHT_DEFAULT).x <= max_width;
+    let fits = |text: &str| value_text_width(measure, text, font_size) <= max_width;
     for with_unit in [true, false] {
         for decimals in [2, 1, 0] {
             write_value(buf, val, whole_numbers, is_angle, unit, decimals, with_unit);
@@ -839,14 +874,38 @@ mod value_fit_tests {
         assert_eq!(fit(4.0, false, metres), "4.00 m", "a short value keeps everything");
         assert_eq!(fit(12345.5, false, metres), "12345.5 m", "one decimal fits where two do not");
         assert_eq!(fit(123_456_792.0, false, metres), "123.5M m", "compact form keeps the unit");
-        assert_eq!(fit(600.0, true, Some(Unit::KilogramsPerCubicMetre)), "600 kg/m³");
+        assert_eq!(fit(600.0, true, Some(Unit::Kilograms)), "600 kg");
     }
 
     /// Only when nothing with the unit fits does the unit go; the leading
     /// digit never does.
     #[test]
     fn a_value_that_cannot_hold_its_unit_drops_it_last() {
-        assert_eq!(fit(1000.0, true, Some(Unit::KilogramsPerCubicMetre)), "1000");
         assert_eq!(fit(100_000_000.0, true, Some(Unit::MillionCells)), "100000000");
+    }
+
+    struct Recording(std::cell::RefCell<std::collections::HashSet<String>>);
+
+    impl crate::text::TextMeasure for Recording {
+        fn measure_text(&self, text: &str, font_size: u16, _weight: crate::node::FontWeight) -> crate::node::Vec2 {
+            self.0.borrow_mut().insert(text.to_owned());
+            crate::node::Vec2::new(text.chars().count() as f32 * font_size as f32 * 0.6, font_size as f32)
+        }
+    }
+
+    /// A dragged value rewrites its text every frame; the fit must keep asking
+    /// the measurer about the same few glyphs and unit tails, or every drag
+    /// frame misses the measure cache.
+    #[test]
+    fn dragging_a_value_measures_only_glyphs_and_unit_tails() {
+        let measure = Recording(Default::default());
+        let mut buf = ParamValueText::default();
+        for step in 0..400 {
+            let val = step as f32 * 0.37 - 20.0;
+            param_value_text_fit(&mut buf, val, -20.0, false, false, None, Some(Unit::Metres), &measure, FONT_SIZE, CARD_VALUE_TEXT_W);
+        }
+        let seen = measure.0.borrow();
+        assert!(seen.len() <= 16, "{} distinct strings measured: {seen:?}", seen.len());
+        assert!(seen.iter().all(|text| text.chars().count() <= 2), "{seen:?}");
     }
 }

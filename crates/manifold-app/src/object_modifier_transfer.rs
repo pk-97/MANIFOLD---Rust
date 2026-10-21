@@ -13,7 +13,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_core::{GraphTarget, LayerId, NodeId};
+use manifold_core::{GraphTarget, LayerId, NodeId, SceneNodeRef, SceneNodeRefExt};
 use manifold_editing::command::Command;
 
 const MESH_MODIFIER_TYPES: &[&str] = &[
@@ -30,7 +30,7 @@ const MESH_MODIFIER_TYPES: &[&str] = &[
 pub(crate) struct ObjectModifierClipboard {
     host: Box<PresetInstance>,
     graph: Box<EffectGraphDef>,
-    owner_id: u32,
+    owner: SceneNodeRef,
     node_doc_id: u32,
     node: EffectGraphNode,
     scope_path: Vec<u32>,
@@ -41,7 +41,7 @@ impl ObjectModifierClipboard {
     pub(crate) fn capture(
         project: &Project,
         layer: &LayerId,
-        owner_id: u32,
+        owner: &SceneNodeRef,
         node_doc_id: u32,
     ) -> Result<Self, String> {
         let target = GraphTarget::Generator(layer.clone());
@@ -50,7 +50,7 @@ impl ObjectModifierClipboard {
             .ok_or("Generator is no longer available")?;
         let graph = crate::graph_target::resolve(project, &target)
             .ok_or("Generator graph is unavailable")?;
-        let (scope_path, nodes, wires) = owner_level(&graph, owner_id)?;
+        let (scope_path, nodes, wires) = owner_level(&graph, owner)?;
         let node = nodes
             .iter()
             .find(|node| node.id == node_doc_id)
@@ -59,7 +59,7 @@ impl ObjectModifierClipboard {
         if !MESH_MODIFIER_TYPES.contains(&node.type_id.as_str()) {
             return Err("Selected node is not an object modifier".into());
         }
-        if !modifier_chain(&graph, owner_id)?.contains(&node_doc_id) {
+        if !modifier_chain(&graph, owner)?.contains(&node_doc_id) {
             return Err("Selected node is not in the object's modifier chain".into());
         }
         if node.node_id.is_empty() {
@@ -86,7 +86,7 @@ impl ObjectModifierClipboard {
         Ok(Self {
             host: Box::new(host.clone()),
             graph: Box::new((*graph).clone()),
-            owner_id,
+            owner: owner.clone(),
             node_doc_id,
             node,
             scope_path,
@@ -99,31 +99,59 @@ impl ObjectModifierClipboard {
 pub(crate) enum ObjectModifierAction {
     Add {
         layer_id: LayerId,
-        owner_id: u32,
+        owner: SceneNodeRef,
         type_id: String,
         after: Option<u32>,
     },
     Paste {
         layer_id: LayerId,
-        owner_id: u32,
+        owner: SceneNodeRef,
         after: Option<u32>,
         clipboard: Box<ObjectModifierClipboard>,
     },
     Duplicate {
         layer_id: LayerId,
-        owner_id: u32,
+        owner: SceneNodeRef,
         node_doc_id: u32,
     },
 }
 
 type ObjectModifierLevel<'a> = (Vec<u32>, &'a [EffectGraphNode], &'a [EffectGraphWire]);
 
-fn owner_level(graph: &EffectGraphDef, owner_id: u32) -> Result<ObjectModifierLevel<'_>, String> {
-    let owner = graph
-        .nodes
-        .iter()
-        .find(|node| node.id == owner_id)
-        .ok_or("Object modifier owner is no longer available")?;
+fn level_at<'a>(graph: &'a EffectGraphDef, scope: &[u32]) -> Option<(&'a [EffectGraphNode], &'a [EffectGraphWire])> {
+    let mut nodes = graph.nodes.as_slice();
+    let mut wires = graph.wires.as_slice();
+    for id in scope {
+        let body = nodes.iter().find(|node| node.id == *id)?.group.as_deref()?;
+        nodes = &body.nodes;
+        wires = &body.wires;
+    }
+    Some((nodes, wires))
+}
+
+fn wires_at_scope_mut<'a>(graph: &'a mut EffectGraphDef, scope: &[u32]) -> Option<&'a mut Vec<EffectGraphWire>> {
+    let mut nodes = &mut graph.nodes;
+    let mut wires = &mut graph.wires;
+    for id in scope {
+        let body = nodes.iter_mut().find(|node| node.id == *id)?.group.as_deref_mut()?;
+        nodes = &mut body.nodes;
+        wires = &mut body.wires;
+    }
+    Some(wires)
+}
+
+/// The owner node, found by its address anywhere in the graph, with the
+/// document path to the level holding it.
+fn resolve_owner<'a>(graph: &'a EffectGraphDef, owner: &SceneNodeRef) -> Result<(Vec<u32>, &'a EffectGraphNode), String> {
+    let (scope, owner_id) = owner.resolve_doc_path(graph).ok_or("Object modifier owner is no longer available")?;
+    let (nodes, _) = level_at(graph, &scope).ok_or("Object modifier owner is no longer available")?;
+    let node = nodes.iter().find(|node| node.id == owner_id).ok_or("Object modifier owner is no longer available")?;
+    Ok((scope, node))
+}
+
+fn owner_level<'a>(graph: &'a EffectGraphDef, owner: &SceneNodeRef) -> Result<ObjectModifierLevel<'a>, String> {
+    let (owner_scope, owner) = resolve_owner(graph, owner)?;
+    let owner_id = owner.id;
     if owner.type_id == GROUP_TYPE_ID {
         let body = owner
             .group
@@ -136,10 +164,13 @@ fn owner_level(graph: &EffectGraphDef, owner_id: u32) -> Result<ObjectModifierLe
         if output.next().is_none() {
             return Err("Object modifier owner group has no output".into());
         }
-        return Ok((vec![owner_id], &body.nodes, &body.wires));
+        let mut body_scope = owner_scope;
+        body_scope.push(owner_id);
+        return Ok((body_scope, &body.nodes, &body.wires));
     }
     if owner.type_id == "node.scene_object" {
-        return Ok((Vec::new(), &graph.nodes, &graph.wires));
+        let (nodes, wires) = level_at(graph, &owner_scope).ok_or("Object modifier owner is no longer available")?;
+        return Ok((owner_scope, nodes, wires));
     }
     Err("Object modifier owner is not a scene object or object group".into())
 }
@@ -147,12 +178,12 @@ fn owner_level(graph: &EffectGraphDef, owner_id: u32) -> Result<ObjectModifierLe
 pub(crate) fn modifier_node_ids(
     project: &Project,
     layer_id: &LayerId,
-    owner_id: u32,
+    owner: &SceneNodeRef,
 ) -> Result<Vec<u32>, String> {
     let target = GraphTarget::Generator(layer_id.clone());
     let graph = crate::graph_target::resolve(project, &target)
         .ok_or("Generator graph is unavailable")?;
-    let (_, nodes, _) = owner_level(&graph, owner_id)?;
+    let (_, nodes, _) = owner_level(&graph, owner)?;
     Ok(nodes
         .iter()
         .filter(|node| MESH_MODIFIER_TYPES.contains(&node.type_id.as_str()))
@@ -160,13 +191,10 @@ pub(crate) fn modifier_node_ids(
         .collect())
 }
 
-fn modifier_chain(graph: &EffectGraphDef, owner_id: u32) -> Result<Vec<u32>, String> {
-    let (_, nodes, wires) = owner_level(graph, owner_id)?;
-    let owner = graph
-        .nodes
-        .iter()
-        .find(|node| node.id == owner_id)
-        .ok_or("Object modifier owner is no longer available")?;
+fn modifier_chain(graph: &EffectGraphDef, owner: &SceneNodeRef) -> Result<Vec<u32>, String> {
+    let (_, nodes, wires) = owner_level(graph, owner)?;
+    let (_, owner) = resolve_owner(graph, owner)?;
+    let owner_id = owner.id;
     let terminal = if owner.type_id == GROUP_TYPE_ID {
         let body = owner
             .group
@@ -215,10 +243,10 @@ fn modifier_chain(graph: &EffectGraphDef, owner_id: u32) -> Result<Vec<u32>, Str
 
 fn insertion_position(
     graph: &EffectGraphDef,
-    owner_id: u32,
+    owner: &SceneNodeRef,
     after: Option<u32>,
 ) -> Result<Option<usize>, String> {
-    let chain = modifier_chain(graph, owner_id)?;
+    let chain = modifier_chain(graph, owner)?;
     match after {
         None => Ok(None),
         Some(after) => chain
@@ -468,7 +496,7 @@ fn remap_routes(
 fn build_transfer(
     project: &Project,
     layer_id: LayerId,
-    owner_id: u32,
+    owner: SceneNodeRef,
     after: Option<u32>,
     clipboard: ObjectModifierClipboard,
     description: &'static str,
@@ -480,8 +508,8 @@ fn build_transfer(
         .clone();
     let destination_graph =
         crate::graph_target::resolve(project, &target).ok_or("Generator graph is unavailable")?;
-    let position = insertion_position(&destination_graph, owner_id, after)?;
-    let (destination_scope, destination_nodes, _) = owner_level(&destination_graph, owner_id)?;
+    let position = insertion_position(&destination_graph, &owner, after)?;
+    let (destination_scope, destination_nodes, _) = owner_level(&destination_graph, &owner)?;
     let destination_before_ids: HashSet<u32> =
         destination_nodes.iter().map(|node| node.id).collect();
     let (_, layer) = project
@@ -494,8 +522,7 @@ fn build_transfer(
         .ok_or("Generator preset is unavailable")?;
     let mut insert = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
         target.clone(),
-        Vec::new(),
-        owner_id,
+        owner.clone(),
         clipboard.node.type_id.clone(),
         position,
         manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
@@ -522,8 +549,8 @@ fn build_transfer(
         .graph
         .clone()
         .ok_or("Scratch generator graph is unavailable")?;
-    let (_, source_nodes, _) = owner_level(&clipboard.graph, clipboard.owner_id)?;
-    let (_, destination_nodes, _) = owner_level(&after_graph, owner_id)?;
+    let (_, source_nodes, _) = owner_level(&clipboard.graph, &clipboard.owner)?;
+    let (_, destination_nodes, _) = owner_level(&after_graph, &owner)?;
     let inserted_id = destination_nodes
         .iter()
         .find(|node| !destination_before_ids.contains(&node.id))
@@ -593,17 +620,8 @@ fn build_transfer(
         // Side wires are validated above. The mesh command owns the normal
         // `in`/`out` chain; side ports are copied into the destination level
         // below after the node has a fresh document identity.
-        let target_wires = if destination_scope.is_empty() {
-            &mut after_graph.wires
-        } else {
-            &mut after_graph
-                .nodes
-                .iter_mut()
-                .find(|node| node.id == destination_scope[0])
-                .and_then(|node| node.group.as_deref_mut())
-                .ok_or("Object modifier destination scope is unavailable")?
-                .wires
-        };
+        let target_wires = wires_at_scope_mut(&mut after_graph, &destination_scope)
+            .ok_or("Object modifier destination scope is unavailable")?;
         for mut wire in clipboard.side_wires.clone() {
             wire.from_node = side_wire_remap
                 .get(&wire.from_node)
@@ -638,28 +656,28 @@ pub(crate) fn build_action(
     match action {
         ObjectModifierAction::Paste {
             layer_id,
-            owner_id,
+            owner,
             after,
             clipboard,
         } => build_transfer(
             project,
             layer_id,
-            owner_id,
+            owner,
             after,
             *clipboard,
             "Paste Object Modifier",
         ),
         ObjectModifierAction::Duplicate {
             layer_id,
-            owner_id,
+            owner,
             node_doc_id,
         } => {
             let clipboard =
-                ObjectModifierClipboard::capture(project, &layer_id, owner_id, node_doc_id)?;
+                ObjectModifierClipboard::capture(project, &layer_id, &owner, node_doc_id)?;
             build_transfer(
                 project,
                 layer_id,
-                owner_id,
+                owner,
                 Some(node_doc_id),
                 clipboard,
                 "Duplicate Object Modifier",
@@ -667,7 +685,7 @@ pub(crate) fn build_action(
         }
         ObjectModifierAction::Add {
             layer_id,
-            owner_id,
+            owner,
             type_id,
             after,
         } => {
@@ -678,7 +696,7 @@ pub(crate) fn build_action(
                 .clone();
             let source_graph = crate::graph_target::resolve(project, &target)
                 .ok_or("Generator graph is unavailable")?;
-            let position = insertion_position(&source_graph, owner_id, after)?;
+            let position = insertion_position(&source_graph, &owner, after)?;
             let (_, layer) = project
                 .timeline
                 .find_layer_by_id(&layer_id)
@@ -689,8 +707,7 @@ pub(crate) fn build_action(
                 .ok_or("Generator preset is unavailable")?;
             let mut command = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
                 target,
-                Vec::new(),
-                owner_id,
+                owner,
                 type_id.clone(),
                 position,
                 manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&type_id),
@@ -731,7 +748,7 @@ mod tests {
     use manifold_editing::command::Command;
     use manifold_editing::service::EditingService;
 
-    fn fixture() -> (Project, LayerId, Vec<u32>) {
+    fn fixture() -> (Project, LayerId, Vec<SceneNodeRef>) {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
@@ -746,18 +763,17 @@ mod tests {
             .nodes
             .iter()
             .filter(|node| node.type_id == GROUP_TYPE_ID)
-            .map(|node| node.id)
+            .map(|node| SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() })
             .collect();
         (project, layer_id, owners)
     }
 
-    fn insert_modifier(project: &mut Project, layer_id: &LayerId, owner_id: u32) -> u32 {
+    fn insert_modifier(project: &mut Project, layer_id: &LayerId, owner: &SceneNodeRef) -> u32 {
         let target = GraphTarget::Generator(layer_id.clone());
         let default = crate::graph_target::owner_default(project, &target).unwrap();
         let mut command = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
             target.clone(),
-            Vec::new(),
-            owner_id,
+            owner.clone(),
             "node.twist_mesh".into(),
             None,
             manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
@@ -771,7 +787,7 @@ mod tests {
         graph
             .nodes
             .iter()
-            .find(|node| node.id == owner_id)
+            .find(|node| node.node_id == owner.node)
             .and_then(|owner| owner.group.as_deref())
             .and_then(|group| {
                 group
@@ -805,11 +821,11 @@ mod tests {
     #[test]
     fn duplicate_copies_authored_state_and_has_exact_undo_redo() {
         let (mut project, layer_id, owners) = fixture();
-        let owner_id = owners[0];
-        let node_doc_id = insert_modifier(&mut project, &layer_id, owner_id);
+        let owner = owners[0].clone();
+        let node_doc_id = insert_modifier(&mut project, &layer_id, &owner);
         let target = GraphTarget::Generator(layer_id.clone());
         let graph = crate::graph_target::resolve(&project, &target).unwrap();
-        let source_node_id = owner_level(&graph, owner_id)
+        let source_node_id = owner_level(&graph, &owner)
             .unwrap()
             .1
             .iter()
@@ -849,7 +865,7 @@ mod tests {
             &project,
             ObjectModifierAction::Duplicate {
                 layer_id: layer_id.clone(),
-                owner_id,
+                owner: owner.clone(),
                 node_doc_id,
             },
         )
@@ -865,7 +881,7 @@ mod tests {
             .graph_target_owner(&GraphTarget::Generator(layer_id.clone()))
             .unwrap();
         let after = serde_json::to_value(after_host).unwrap();
-        let (_, nodes, _) = owner_level(after_host.graph.as_ref().unwrap(), owner_id).unwrap();
+        let (_, nodes, _) = owner_level(after_host.graph.as_ref().unwrap(), &owner).unwrap();
         let copied_nodes: Vec<_> = nodes
             .iter()
             .filter(|node| node.type_id == "node.twist_mesh")
@@ -906,11 +922,11 @@ mod tests {
     #[test]
     fn paste_supports_another_object_and_layer_from_a_cut_snapshot() {
         let (mut project, source_layer, owners) = fixture();
-        let source_owner = owners[0];
+        let source_owner = owners[0].clone();
 
-        let source_doc_id = insert_modifier(&mut project, &source_layer, source_owner);
+        let source_doc_id = insert_modifier(&mut project, &source_layer, &source_owner);
         let clipboard =
-            ObjectModifierClipboard::capture(&project, &source_layer, source_owner, source_doc_id)
+            ObjectModifierClipboard::capture(&project, &source_layer, &source_owner, source_doc_id)
                 .unwrap();
         let mut destination =
             Layer::new_generator("Other layer".into(), PresetTypeId::new("Scene"), 1);
@@ -935,8 +951,7 @@ mod tests {
             &project,
             crate::scene_item_transfer::SceneItemAction::DuplicateObject {
                 layer: destination_layer.clone(),
-                scene,
-                index: 0,
+                object: manifold_core::scene_slots::object_at_slot(&destination_graph, scene, 0).expect("the destination has an object"),
                 copies: 1,
             },
         )
@@ -948,8 +963,8 @@ mod tests {
             .nodes
             .iter()
             .rfind(|node| node.type_id == GROUP_TYPE_ID)
-            .unwrap()
-            .id;
+            .map(|node| SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() })
+            .unwrap();
         // Model Cut removing the source card after capture. The clipboard must
         // retain its authored graph and host snapshots independently.
         let source_host = project
@@ -959,7 +974,7 @@ mod tests {
         let source_group = source_graph
             .nodes
             .iter_mut()
-            .find(|node| node.id == source_owner)
+            .find(|node| node.node_id == source_owner.node)
             .unwrap()
             .group
             .as_deref_mut()
@@ -973,7 +988,7 @@ mod tests {
             &project,
             ObjectModifierAction::Paste {
                 layer_id: destination_layer.clone(),
-                owner_id: destination_owner,
+                owner: destination_owner.clone(),
                 after: None,
                 clipboard: Box::new(clipboard),
             },
@@ -987,7 +1002,7 @@ mod tests {
         );
         assert!(editing.take_rejection().is_none());
         let destination_graph = crate::graph_target::resolve(&project, &destination_target).unwrap();
-        let (_, nodes, _) = owner_level(&destination_graph, destination_owner).unwrap();
+        let (_, nodes, _) = owner_level(&destination_graph, &destination_owner).unwrap();
         let copied = nodes
             .iter()
             .find(|node| node.type_id == "node.twist_mesh")
@@ -1004,7 +1019,7 @@ mod tests {
         let destination_name = destination_graph
             .nodes
             .iter()
-            .find(|node| node.id == destination_owner)
+            .find(|node| node.node_id == destination_owner.node)
             .and_then(|node| node.handle.clone())
             .expect("destination object name");
         let expected_section = format!("{destination_name} — Twist_mesh");
@@ -1014,13 +1029,37 @@ mod tests {
         );
     }
 
+    /// The owner is named by address, so one nested inside a group edits the
+    /// chain it names; a root-only id lookup misses it.
+    #[test]
+    fn add_and_duplicate_address_an_owner_nested_in_a_group() {
+        let (mut project, layer_id, owners) = fixture();
+        let target = GraphTarget::Generator(layer_id.clone());
+        let graph = crate::graph_target::resolve(&project, &target).unwrap();
+        let (group_scope, group_id) = owners[0].resolve_doc_path(&graph).unwrap();
+        let body = graph.nodes.iter().find(|node| node.id == group_id).unwrap().group.as_deref().unwrap();
+        let inner = body.nodes.iter().find(|node| node.type_id == "node.scene_object").expect("the group holds its scene object");
+        let nested = SceneNodeRef { scope: vec![owners[0].node.clone()], node: inner.node_id.clone() };
+        assert!(group_scope.is_empty() && nested.resolve_doc_path(&graph) == Some((vec![group_id], inner.id)));
+        let command = build_action(&project, ObjectModifierAction::Add { layer_id: layer_id.clone(), owner: nested.clone(), type_id: "node.twist_mesh".into(), after: None })
+            .expect("a nested owner takes a modifier");
+        let mut editing = EditingService::new();
+        editing.execute(crate::scene_modifier_edit::with_admission(command), &mut project);
+        assert!(editing.take_rejection().is_none());
+        let graph = crate::graph_target::resolve(&project, &target).unwrap();
+        let (_, nodes, _) = owner_level(&graph, &nested).unwrap();
+        let twist = nodes.iter().find(|node| node.type_id == "node.twist_mesh").expect("the modifier landed in the owner's group").id;
+        build_action(&project, ObjectModifierAction::Duplicate { layer_id, owner: nested, node_doc_id: twist })
+            .expect("a nested owner duplicates a modifier");
+    }
+
     #[test]
     fn capture_rejects_invalid_owner_unconnected_modifier_and_missing_side_input() {
         let (mut project, layer_id, owners) = fixture();
-        let owner_id = owners[0];
-        let node_doc_id = insert_modifier(&mut project, &layer_id, owner_id);
+        let owner = owners[0].clone();
+        let node_doc_id = insert_modifier(&mut project, &layer_id, &owner);
         assert!(
-            ObjectModifierClipboard::capture(&project, &layer_id, 999_999, node_doc_id).is_err()
+            ObjectModifierClipboard::capture(&project, &layer_id, &SceneNodeRef { scope: Vec::new(), node: NodeId::new("no-such-owner") }, node_doc_id).is_err()
         );
 
         let graph = project
@@ -1032,7 +1071,7 @@ mod tests {
         let group = graph
             .nodes
             .iter_mut()
-            .find(|node| node.id == owner_id)
+            .find(|node| node.node_id == owner.node)
             .unwrap()
             .group
             .as_deref_mut()
@@ -1047,13 +1086,13 @@ mod tests {
         disconnected.node_id = NodeId::new("disconnected");
         group.nodes.push(disconnected);
         assert!(
-            ObjectModifierClipboard::capture(&project, &layer_id, owner_id, 900_000)
+            ObjectModifierClipboard::capture(&project, &layer_id, &owner, 900_000)
                 .unwrap_err()
                 .contains("modifier chain")
         );
 
         let mut clipboard =
-            ObjectModifierClipboard::capture(&project, &layer_id, owner_id, node_doc_id).unwrap();
+            ObjectModifierClipboard::capture(&project, &layer_id, &owner, node_doc_id).unwrap();
         clipboard.side_wires.push(EffectGraphWire {
             from_node: 1_234_567,
             from_port: "value".into(),
@@ -1065,7 +1104,7 @@ mod tests {
                 &project,
                 ObjectModifierAction::Paste {
                     layer_id,
-                    owner_id,
+                    owner,
                     after: None,
                     clipboard: Box::new(clipboard),
                 },

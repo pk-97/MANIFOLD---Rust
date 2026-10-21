@@ -10,7 +10,7 @@
 use super::PanelAction;
 use super::{DriverConfigAction, GraphParamTarget, InspectorTab};
 use super::{browser_popup, picker_core};
-use crate::param_surface::ModifierObjectRef;
+use manifold_foundation::SceneNodeRef;
 use crate::input::Modifiers;
 use crate::node::Rect;
 use crate::types::{
@@ -221,6 +221,7 @@ pub enum ProjectAction {
     CancelExport,
     ToggleHdr,
     ToggleSplitSections,
+    ToggleExportGizmos,
     ExportXml,
     ToggleLiveRecording,
     SelectAudioInputDevice,
@@ -267,23 +268,22 @@ pub enum ProjectAction {
     /// the domain's stable id to a scoped graph reference before queuing.
     SceneSetupAssignFluidRole {
         layer_id: LayerId,
-        render_scene_node_id: u32,
-        object_index: u32,
+        object: SceneNodeRef,
         domain: NodeId,
         role: u32,
     },
-    SceneSetupRemoveFluidRole { layer_id: LayerId, source_node_id: u32 },
-    SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain: NodeId },
+    SceneSetupRemoveFluidRole { layer_id: LayerId, source: SceneNodeRef },
+    SceneSetupRetargetFluidRole { layer_id: LayerId, source: SceneNodeRef, domain: NodeId },
     /// Copy an object N times in one undo step (the header copy button sends
-    /// one): `(layer_id, render_scene_node_doc_id, source_index, copies)`.
-    SceneSetupDuplicateObject(LayerId, u32, u32, u32),
+    /// one): `(layer_id, object, copies)`.
+    SceneSetupDuplicateObject(LayerId, SceneNodeRef, u32),
     /// Duplicate one physical child mesh inside a compound scene object:
-    /// `(layer_id, render_scene_node_doc_id, physical_index)`.
-    SceneSetupDuplicateSubmesh(LayerId, u32, u32),
-    /// Enable standard imported-object physics: `(layer_id, render_scene_node_id, object_index)`.
-    SceneSetupEnablePhysics(LayerId, u32, u32),
+    /// `(layer_id, part)`.
+    SceneSetupDuplicateSubmesh(LayerId, SceneNodeRef),
+    /// Enable standard imported-object physics: `(layer_id, object)`.
+    SceneSetupEnablePhysics(LayerId, SceneNodeRef),
     /// Disable standard imported-object physics.
-    SceneSetupDisablePhysics(LayerId, u32, u32),
+    SceneSetupDisablePhysics(LayerId, SceneNodeRef),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
     /// Opens the native file dialog (`file_dialogs.rs` in manifold-app) and, on
     /// a picked `.glb`/`.gltf`, merges its objects into THIS scene via
@@ -292,38 +292,36 @@ pub enum ProjectAction {
     /// no graph editor trip required.
     SceneSetupImportModelClicked(LayerId, u32),
     /// scene-panel-ux lane: "Frame" button in properties header (Object selection).
-    /// `(layer_id, render_scene_node_doc_id, object_index)`. Computes camera focus
+    /// `(layer_id, object)`. Computes camera focus
     /// parameters to frame the selected object and writes them through the same
     /// param-change path every other slider uses.
-    SceneSetupFrameSelected(LayerId, u32, u32),
-    /// P5 "Add modifier" chip: `(layer_id, group_node_id, type_id)`.
+    SceneSetupFrameSelected(LayerId, SceneNodeRef),
+    /// P5 "Add modifier" chip: `(layer_id, owner, type_id)`.
     /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
     /// at the end of the object's stack (no position picker in v1 — D6's
     /// default: "end of stack, just before the group output").
-    SceneSetupAddModifier(LayerId, u32, String),
-    /// P5 modifier-row remove button: `(layer_id, group_node_id,
+    SceneSetupAddModifier(LayerId, SceneNodeRef, String),
+    /// P5 modifier-row remove button: `(layer_id, owner,
     /// modifier_node_id)`. Dispatches `RemoveMeshModifierCommand`.
-    SceneSetupRemoveModifier(LayerId, u32, u32),
-    /// P5 modifier-row up/down reorder: `(layer_id, group_node_id,
+    SceneSetupRemoveModifier(LayerId, SceneNodeRef, u32),
+    /// P5 modifier-row up/down reorder: `(layer_id, owner,
     /// modifier_node_id, new_position)`. Dispatches
     /// `MoveMeshModifierCommand` — `new_position` is resolved by the panel
     /// from the row's own live index in the Vm's stack order (one hop
     /// forward or back): the live count is read off the Vm.
-    SceneSetupMoveModifier(LayerId, u32, u32, u32),
-    /// per-row "✕" in the Objects section: `(layer_id,
-    /// render_scene_node_doc_id, object_index)`. Dispatches the new
+    SceneSetupMoveModifier(LayerId, SceneNodeRef, u32, u32),
+    /// per-row "✕" in the Objects section: `(layer_id, object)`. Dispatches the new
     /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupInsertTemplate`.
-    SceneSetupRemoveObject(LayerId, u32, u32),
+    SceneSetupRemoveObject(LayerId, SceneNodeRef),
     /// A placed Inflow, Drain or Collider's ✕: `(layer_id, role node)`.
     /// Removes its group and role wire as one undo entry.
     SceneSetupRemoveSource(LayerId, manifold_foundation::NodeId),
     /// Remove one physical child mesh inside a compound scene object:
-    /// `(layer_id, render_scene_node_doc_id, physical_index)`.
-    SceneSetupRemoveSubmesh(LayerId, u32, u32),
-    /// per-row "✕" in the Lights section: `(layer_id,
-    /// render_scene_node_doc_id, light_index)`. Dispatches the new
+    /// `(layer_id, part)`.
+    SceneSetupRemoveSubmesh(LayerId, SceneNodeRef),
+    /// per-row "✕" in the Lights section: `(layer_id, light)`. Dispatches the new
     /// `RemoveSceneLightCommand` — the inverse of `SceneSetupInsertTemplate`.
-    SceneSetupRemoveLight(LayerId, u32, u32),
+    SceneSetupRemoveLight(LayerId, SceneNodeRef),
     /// P4b: a project layer was selected from the Skin source dropdown.
     /// `source: None` clears the skin (the model uses its own texture).
     SceneSetupSkinSourceSet {
@@ -381,7 +379,7 @@ pub enum ProjectAction {
     SceneModifierSetTargets(
         LayerId,
         NodeId,
-        Option<Vec<crate::param_surface::ModifierObjectRef>>,
+        Option<Vec<SceneNodeRef>>,
     ),
     /// Replace the complete ordered scene-modifier stack for one layer.
     /// Stable modifier node ids are the domain address; card positions are UI only.
@@ -393,15 +391,15 @@ pub enum ProjectAction {
     /// Eligibility and numeric writes are owned by the app/editor layer.
     MaterialLookApply {
         target: super::GraphParamTarget,
-        object: ModifierObjectRef,
-        material: ModifierObjectRef,
+        object: SceneNodeRef,
+        material: SceneNodeRef,
         look: MaterialLook,
     },
     /// Apply one validated batch to existing material parameter slots.
     MaterialParamsSet {
         target: super::GraphParamTarget,
-        object: ModifierObjectRef,
-        material: ModifierObjectRef,
+        object: SceneNodeRef,
+        material: SceneNodeRef,
         kind: MaterialEditKind,
         writes: Vec<MaterialParamWrite>,
         description: String,
@@ -930,17 +928,17 @@ pub enum RootAction {
     /// editor viewport's view into this layer's scene camera. The app owns
     /// the viewport camera, so it resolves the pose and builds the command.
     SceneSetupCopyViewportCamera(LayerId),
-    /// P2 object-name click: `(layer_id, group_node_id, current_name)` — opens
+    /// P2 object-name click: `(layer_id, object, current_name)` — opens
     /// the shared inline text-input session (same mechanics as
     /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
     /// SCENE_BUILD P3 rename-sweep command, unchanged).
-    SceneSetupRenameObjectClicked(LayerId, u32, String),
-    /// P5 light-row/properties-header name click: `(layer_id, light_node_id,
+    SceneSetupRenameObjectClicked(LayerId, SceneNodeRef, String),
+    /// P5 light-row/properties-header name click: `(layer_id, light,
     /// current_name)` — same shape as [`Self::SceneSetupRenameObjectClicked`],
     /// opens the shared inline text-input session over the row's name label;
     /// commit dispatches the plain `SetNodeHandleCommand` (no group sweep —
     /// nothing downstream displays light names besides this row).
-    SceneSetupRenameLightClicked(LayerId, u32, String),
+    SceneSetupRenameLightClicked(LayerId, SceneNodeRef, String),
     /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
     /// button click — `(layer_id, group_node_id, button_node_id)`. Replaces
     /// the old 7-chip grid, each of which dispatched `SceneSetupAddModifier`
@@ -951,29 +949,27 @@ pub enum RootAction {
     /// `&UITree` in `handle_event`), listing the SAME
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
-    SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
+    SceneSetupAddModifierClicked(LayerId, SceneNodeRef, crate::node::NodeId),
     /// Any Scene tab group's "+": the app opens the one Add menu
     /// (`scene_setup_actions::add_menu`) at the clicked button, starting on
     /// that group's entries.
     SceneSetupAddClicked(LayerId, super::scene_setup_panel::SceneGroup),
     SceneSetupFluidRoleClicked {
         layer_id: LayerId,
-        render_scene_node_id: u32,
-        object_index: u32,
+        object: SceneNodeRef,
         domains: Vec<super::scene_setup_panel::FluidDomainOption>,
         button_node_id: crate::node::NodeId,
     },
     SceneSetupFluidDomainClicked {
         layer_id: LayerId,
-        render_scene_node_id: u32,
-        object_index: u32,
+        object: SceneNodeRef,
         role: u32,
         domains: Vec<super::scene_setup_panel::FluidDomainOption>,
         anchor: Rect,
     },
     SceneSetupFluidRoleTargetClicked {
         layer_id: LayerId,
-        source_node_id: u32,
+        source: SceneNodeRef,
         domains: Vec<super::scene_setup_panel::FluidDomainOption>,
         button_node_id: crate::node::NodeId,
     },
@@ -987,7 +983,7 @@ pub enum RootAction {
     PreviewSceneModifierObject(
         LayerId,
         NodeId,
-        crate::param_surface::ModifierObjectRef,
+        SceneNodeRef,
     ),
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write

@@ -1015,6 +1015,9 @@ pub struct ContentPipeline {
     /// The selection outline's requests and mask bridges (D-102).
     #[cfg(target_os = "macos")]
     outline: crate::selection_outline::OutlineCapture,
+    /// The gizmo overlay's lines, draw mode and pass (BUG-b36b8 gizmo draw modes).
+    #[cfg(target_os = "macos")]
+    gizmos: crate::gizmo_overlay::GizmoCapture,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
@@ -1192,6 +1195,8 @@ impl ContentPipeline {
             setup_fits: Default::default(),
             #[cfg(target_os = "macos")]
             outline: Default::default(),
+            #[cfg(target_os = "macos")]
+            gizmos: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
             clip_desc_scratch: Vec::new(),
@@ -2571,6 +2576,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             self.scene_viewport.request.as_ref().and_then(|request| request.modifier.clone()));
                         #[cfg(target_os = "macos")]
                         self.outline.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
+                        #[cfg(target_os = "macos")]
+                        self.gizmos.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -2596,12 +2603,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
                 generators?.write_physics_overlay(layer, domains, lights, gizmos)
             });
+            #[cfg(target_os = "macos")]
+            self.gizmos.take_frame_depth(generators, self.physics_overlay.layer());
+            #[cfg(target_os = "macos")]
+            self.gizmos.compose_output(project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref(), (self.output_w, self.output_h));
             self.setup_fits.record(project, stamps, |domains, not_made, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, &mut *each)));
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,
                 generators, &mut self.physics_overlay, &mut self.scene_viewport)
             {
+                copy.compose_gizmos(&mut self.gizmos, project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref());
                 self.copy_scene_viewport(&mut gen_enc, copy);
             }
             // Capture: downscale the watched generator's node output into the
@@ -3415,11 +3427,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     (0.0, 0.0, target.width as f32, target.height as f32),
                     manifold_gpu::GpuLoadAction::Clear,
                 );
+                // Editing chrome on the preview only, never in the output.
+                self.gizmos.draw_output(native_device, &mut native_enc, target, self.physics_overlay.frames[self.write_surface_index].as_ref());
             }
 
             // An effect scene's viewport frame goes to the viewport bridge
             // (D7a), beside the output, never into it (D9).
             if let Some(copy) = self.scene_viewport.observe_effect(&*self.compositor, self.write_surface_index, frame_count) {
+                copy.compose_gizmos(&mut self.gizmos, project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref());
                 self.copy_scene_viewport(&mut native_enc, copy);
             }
 

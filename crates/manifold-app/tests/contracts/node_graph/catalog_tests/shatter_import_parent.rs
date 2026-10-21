@@ -43,11 +43,11 @@
             .clips
             .push(manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0)));
         let target = GraphTarget::Generator(project.timeline.layers[layer_index].layer_id.clone());
+        let first = manifold_core::scene_slots::object_at_slot(&imported, render.id, 0).expect("the import has an object");
         let mut enable = EnableSceneObjectPhysicsCommand::new(
             &project,
             target,
-            render.id,
-            0,
+            first,
             &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
             &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
             &imported,

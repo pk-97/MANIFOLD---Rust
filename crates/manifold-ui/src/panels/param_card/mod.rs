@@ -616,8 +616,8 @@ impl ParamCardPanel {
             return crate::param_surface::stable_key(&format!(
                 "scene_object_modifier:{}:{}:{}:{}",
                 m.layer_id,
-                m.object_id,
-                m.group_node_id.unwrap_or(m.object_id),
+                crate::panels::scene_setup_panel::ref_text(&m.object),
+                crate::panels::scene_setup_panel::ref_text(&m.owner),
                 m.node_doc_id,
             ));
         }
@@ -1287,7 +1287,6 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                    scene_addr: None,
                     rgb_members: None,
                     modulator_stored: false,
                 },
@@ -1324,7 +1323,6 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                    scene_addr: None,
                     rgb_members: None,
                     modulator_stored: false,
                 },
@@ -1373,7 +1371,6 @@ pub(super) mod tests {
                 ableton_range: None,
                 mappable: false,
             },
-            scene_addr: None,
             rgb_members: None,
             modulator_stored: false,
         });
@@ -1410,7 +1407,6 @@ pub(super) mod tests {
                 ableton_range: None,
                 mappable: false,
             },
-            scene_addr: None,
             rgb_members: None,
             modulator_stored: false,
         });
@@ -1648,7 +1644,6 @@ pub(super) mod tests {
                 ableton_range: None,
                 mappable: false,
             },
-            scene_addr: None,
             rgb_members: None,
             modulator_stored: false,
         });
@@ -3483,7 +3478,6 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                scene_addr: None,
                 rgb_members: None,
                 modulator_stored: false,
                 },
@@ -3520,7 +3514,6 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                scene_addr: None,
                 rgb_members: None,
                 modulator_stored: false,
                 },
@@ -3557,7 +3550,6 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                scene_addr: None,
                 rgb_members: None,
                 modulator_stored: false,
                 },

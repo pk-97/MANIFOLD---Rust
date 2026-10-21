@@ -144,6 +144,7 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         vsync_enabled,
         export_hdr,
         split_at_markers,
+        export_gizmos,
         video_library_paths,
         video_player_pool_size,
         max_layers,
@@ -185,7 +186,7 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         audio_triggers_collapsed,
     } = settings;
     fp.put(Part::Settings, physics);
-    fp.put(Part::Settings, &(output_width, output_height, frame_rate, vsync_enabled, export_hdr, split_at_markers));
+    fp.put(Part::Settings, &(output_width, output_height, frame_rate, vsync_enabled, export_hdr, split_at_markers, export_gizmos));
     fp.put(Part::Media, &(video_library_paths, video_player_pool_size));
     fp.put(Part::Settings, &(max_layers, default_recording_layer, time_signature_numerator, time_signature_denominator));
     fp.tick(TickSlot::Bpm, bpm);

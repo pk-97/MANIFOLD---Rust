@@ -145,7 +145,9 @@ fn duplicate_imported_object(
 ) {
     let (scope, render_id, _) = render_scene(project, layer_id);
     let default = host_graph(project, layer_id).clone();
-    let command = DuplicateSceneObjectCommand::new(project, GraphTarget::Generator(layer_id.clone()), scope, render_id, 0, 1, &default)
+    let first = manifold_core::scene_slots::object_at_slot(&default, render_id, 0).expect("the import has an object");
+    assert!(scope.is_empty(), "the imported scene sits at the root");
+    let command = DuplicateSceneObjectCommand::new(project, GraphTarget::Generator(layer_id.clone()), first, 1, &default)
         .expect("the imported object copies");
     service.execute(with_admission(Box::new(command)), project);
 }
@@ -157,13 +159,10 @@ fn remove_object(
     index: u32,
 ) {
     let (scope, render_id, _) = render_scene(project, layer_id);
-    let command = RemoveSceneObjectCommand::new(
-        GraphTarget::Generator(layer_id.clone()),
-        scope,
-        render_id,
-        index,
-        host_graph(project, layer_id).clone(),
-    );
+    let graph = host_graph(project, layer_id).clone();
+    assert!(scope.is_empty(), "the imported scene sits at the root");
+    let object = manifold_core::scene_slots::object_at_slot(&graph, render_id, index).expect("the slot holds an object");
+    let command = RemoveSceneObjectCommand::new(GraphTarget::Generator(layer_id.clone()), object, graph);
     service.execute(with_admission(Box::new(command)), project);
 }
 

@@ -54,7 +54,7 @@ impl CopyGroup {
 
     /// Copy `index`'s Box3D config at `pose` with `prototype`'s contact properties.
     pub fn config(&self, prototype: &RigidBody, pose: BodyPose) -> BodyConfig {
-        prototype.config_at(pose, self.volume)
+        prototype.config_at(pose)
     }
 
     /// Publish `arrangement`'s first `count` rest poses, growing storage

@@ -104,30 +104,33 @@ impl ScenePanel {
 }
 
 const OUTLINER_KEY_BASE: u64 = 90_000_000;
-const OUTLINER_EYE_KEY_BASE: u64 = 91_000_000;
 const GROUP_HEADER_KEY_BASE: u64 = 93_000_000;
 const GROUP_ADD_KEY_BASE: u64 = 93_000_100;
 const KEY_PHYSICS_ENABLE: u64 = 93_000_200;
 
 /// Stable row key from the selection identity: Camera and World are fixed,
-/// lights and objects key off their doc id, forces and physics off their
-/// stable node id.
+/// everything else keys off its stable address.
 fn outliner_row_key(sel: &SceneSelection) -> u64 {
     match sel {
         SceneSelection::Camera => OUTLINER_KEY_BASE,
         SceneSelection::World => OUTLINER_KEY_BASE + 1,
         SceneSelection::Lighting => OUTLINER_KEY_BASE + 2,
         SceneSelection::OutlinerFold(group) => GROUP_HEADER_KEY_BASE + *group as u64,
-        SceneSelection::Light(id) => OUTLINER_KEY_BASE + 4 + (*id as u64) * 2,
-        SceneSelection::Object(id) => OUTLINER_KEY_BASE + 5 + (*id as u64) * 2,
+        SceneSelection::Light(id) => crate::param_surface::stable_key(&format!("scene.light.{}", ref_text(id))),
+        SceneSelection::Object(id) => crate::param_surface::stable_key(&format!("scene.object.{}", ref_text(id))),
         SceneSelection::Force(id) => crate::param_surface::stable_key(&format!("scene.force.{id}")),
         SceneSelection::Physics(id) => crate::param_surface::stable_key(&format!("scene.physics.{id}")),
         SceneSelection::Source(id) => crate::param_surface::stable_key(&format!("scene.source.{id}")),
     }
 }
 
-fn outliner_group_toggle_key(group_id: u32) -> u64 {
-    (1_u64 << 62) | group_id as u64
+/// The visibility eye of an object row: the whole hash, so two rows never share a widget.
+pub(super) fn outliner_eye_key(object: &SceneNodeRef) -> u64 {
+    crate::param_surface::stable_key(&format!("scene.eye.{}", ref_text(object)))
+}
+
+fn outliner_group_toggle_key(group: &SceneNodeRef) -> u64 {
+    crate::param_surface::stable_key(&format!("scene.group_toggle.{}", ref_text(group)))
 }
 
 /// Selected rows take a low-alpha wash of the app-wide selection colour,
@@ -293,16 +296,16 @@ impl ScenePanel {
     ) -> f32 {
         let expanded = self.expanded_groups.get(&vm.layer_id).cloned().unwrap_or_default();
         for item in items {
-            let SceneSelection::Object(id) = item.selection else { continue };
+            let SceneSelection::Object(id) = &item.selection else { continue };
             let Some(row) = vm.objects.iter().find_map(|object| match object {
-                ObjectRowVm::Known(row) if row.object_node_id == id => Some(row.as_ref()),
+                ObjectRowVm::Known(row) if row.node == *id => Some(row.as_ref()),
                 _ => None,
             }) else {
                 continue;
             };
             let eye = EyeSlot::Live(row.visible.clone());
             let indent = if row.is_group {
-                let open = expanded.contains(&id);
+                let open = expanded.contains(id);
                 let toggle = tree.add_button_keyed(
                     Some(self.content_parent),
                     inner_x,
@@ -314,10 +317,10 @@ impl ScenePanel {
                     outliner_group_toggle_key(id),
                 );
                 tree.set_name(toggle, "scene_setup.objects.group_toggle");
-                self.group_toggle_ids.push((toggle, id));
+                self.group_toggle_ids.push((toggle, id.clone()));
                 STEP_W
-            } else if let Some(parent) = item.parent {
-                if !expanded.contains(&parent) {
+            } else if let Some(parent) = &item.parent {
+                if !expanded.contains(parent) {
                     continue;
                 }
                 STEP_W
@@ -327,19 +330,19 @@ impl ScenePanel {
             cy = self.build_tree_row(tree, (inner_x, inner_w, indent), cy, item, selected, eye);
             // A water's Inflow, Drain and Collider rows sit under it after its
             // other children, at their indent, and fold with them (D-94).
-            let owner = item.parent.unwrap_or(id);
+            let owner = item.parent.clone().unwrap_or_else(|| id.clone());
             let child_of_owner =
-                |other: &SceneItemVm| matches!(other.selection, SceneSelection::Object(_)) && other.parent == Some(owner);
+                |other: &SceneItemVm| matches!(other.selection, SceneSelection::Object(_)) && other.parent.as_ref() == Some(&owner);
             let last_of_owner = match item.parent {
                 Some(_) => !items
                     .iter()
                     .skip_while(|other| !std::ptr::eq(**other, *item))
                     .skip(1)
                     .any(|other| child_of_owner(other)),
-                None => (!row.is_group || expanded.contains(&id)) && !items.iter().any(|other| child_of_owner(other)),
+                None => (!row.is_group || expanded.contains(id)) && !items.iter().any(|other| child_of_owner(other)),
             };
             if last_of_owner {
-                for source in items.iter().filter(|source| matches!(source.selection, SceneSelection::Source(_)) && source.parent == Some(owner)) {
+                for source in items.iter().filter(|source| matches!(source.selection, SceneSelection::Source(_)) && source.parent.as_ref() == Some(&owner)) {
                     cy = self.build_tree_row(tree, (inner_x, inner_w, STEP_W), cy, source, selected, EyeSlot::Empty);
                 }
             }
@@ -358,7 +361,7 @@ impl ScenePanel {
     fn build_physics_empty(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
         let candidate = vm.objects.iter().find_map(|object| match object {
             ObjectRowVm::Known(row)
-                if row.physics_available && !row.physics_enabled && (row.parent_group_id.is_none() || row.is_group) =>
+                if row.physics_available && !row.physics_enabled && (row.parent.is_none() || row.is_group) =>
             {
                 Some(row.as_ref())
             }
@@ -380,7 +383,7 @@ impl ScenePanel {
                 KEY_PHYSICS_ENABLE,
             );
             tree.set_name(button, "scene_tree.physics.enable");
-            self.physics_enable_id = Some((button, row.index));
+            self.physics_enable_id = Some((button, row.node.clone()));
             cy += ROW_H;
         }
         cy
@@ -422,7 +425,7 @@ impl ScenePanel {
         tree.set_name(row, "scene_tree.item");
         self.outliner_row_ids.push((row, item.selection.clone()));
         if let EyeSlot::Live(value) = eye {
-            let SceneSelection::Object(id) = item.selection else { return cy + ROW_H };
+            let SceneSelection::Object(id) = &item.selection else { return cy + ROW_H };
             let eye_id = tree.add_button_keyed(
                 Some(self.content_parent),
                 inner_x + inner_w - STEP_W,
@@ -431,7 +434,7 @@ impl ScenePanel {
                 ROW_H,
                 if value.driven { driven_label_style() } else { btn_style() },
                 eye_glyph(value.value),
-                OUTLINER_EYE_KEY_BASE + id as u64,
+                outliner_eye_key(id),
             );
             tree.set_name(eye_id, format!("scene_setup.object_eye.{}", value.addr.node_doc_id));
             if !value.driven {
@@ -465,11 +468,10 @@ impl ScenePanel {
             add(SceneGroup::Lighting)
         } else if self.add_force_id == Some(node_id) {
             add(SceneGroup::Forces)
-        } else if let Some((_, index)) = self.physics_enable_id.filter(|(id, _)| *id == node_id) {
+        } else if let Some((_, object)) = self.physics_enable_id.as_ref().filter(|(id, _)| *id == node_id) {
             Some(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
                 vm.layer_id.clone(),
-                vm.scene_root_node_id,
-                index as u32,
+                object.clone(),
             )))
         } else {
             None

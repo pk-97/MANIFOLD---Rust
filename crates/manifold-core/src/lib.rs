@@ -52,6 +52,8 @@ pub mod fluid_domain;
 pub mod liquid_setup;
 pub mod physics_gizmo;
 pub mod physics_body_slots;
+pub mod physics_members;
+pub mod scene_variadic;
 pub mod liquid_domain;
 pub mod macro_bank;
 pub mod marker;
@@ -75,6 +77,7 @@ pub mod scene_exposure;
 pub mod scene_graph_edit;
 pub mod scene_template;
 pub mod scene_object_model;
+pub mod scene_slots;
 pub mod scene_world_controls;
 pub mod scene_index;
 pub mod scene_impulse;
@@ -102,7 +105,7 @@ pub use graph_target::GraphTarget;
 pub use scene_modifier_preset::{
     validate_scene_modifier_schema, SceneAxis, SceneContextValue, SceneEndpoint,
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneModifierRecipe,
-    SceneModifierSchemaError, SceneModifierStageDef, SceneNodeInitializer, SceneNodeRef,
+    SceneModifierSchemaError, SceneModifierStageDef, SceneNodeInitializer, SceneNodeRef, SceneNodeRefExt,
     SceneParamCalibration, SceneScalarExpr, SceneStageInput, SceneStageOutput, SceneStageScope,
     SceneStageSource, SceneTargetSelection, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
     SCENE_MODIFIER_RECIPE_VERSION,

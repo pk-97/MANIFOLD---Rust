@@ -115,15 +115,15 @@
         "cardVisible": true
       },
       {
-        "id": "box_density",
-        "name": "Box Density",
+        "id": "box_mass",
+        "name": "Box Mass",
         "min": 1.0,
-        "max": 2000.0,
-        "defaultValue": 500.0,
+        "max": 1000.0,
+        "defaultValue": 62.5,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
-        "formatString": "F0",
+        "formatString": "F1",
         "section": "Box",
         "cardVisible": true
       },
@@ -319,13 +319,13 @@
         }
       },
       {
-        "id": "box_density",
-        "label": "Box Density",
-        "defaultValue": 500.0,
+        "id": "box_mass",
+        "label": "Box Mass",
+        "defaultValue": 62.5,
         "target": {
           "kind": "node",
           "nodeId": "box_body",
-          "param": "density"
+          "param": "mass"
         },
         "convert": {
           "type": "Float"
@@ -4173,9 +4173,9 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
-          "value": 500.0
+          "value": 62.5
         },
         "friction": {
           "type": "Float",
@@ -4510,8 +4510,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 70,
-      "fromPort": "pose_0",
+      "fromNode": 72,
+      "fromPort": "pose",
       "toNode": 75,
       "toPort": "transform"
     },

@@ -13,18 +13,24 @@ fn cam_looking_down_neg_z(pos: [f32; 3]) -> Camera {
     Camera::look_at(pos, [pos[0], pos[1], pos[2] - 1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0)
 }
 
+fn object_ref(id: u32) -> manifold_core::SceneNodeRef {
+    manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new(format!("object{id}")) }
+}
+
 fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> SceneObjectVm {
     let addr = |n: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: n.to_string() };
     SceneObjectVm::Known(Box::new(crate::node_graph::scene_vm::SceneObjectKnownRow {
         is_group: false,
-        parent_group_id: None,
+        parent: None,
         index: 0,
         object_node_id: id,
         object: NodeId::new(format!("object{id}")),
+        address: object_ref(id),
         kind: Default::default(),
         controls: Vec::new(),
         capabilities: manifold_core::scene_object_model::SceneObjectCapabilities { transform: true, ..Default::default() },
         group_node_id: None,
+        modifier_owner: object_ref(id),
         name: "Obj".to_string(),
         visible_addr: addr("visible"),
         visible_value: true,
@@ -86,7 +92,7 @@ fn scene_of(objects: Vec<SceneObjectVm>, shapes: Vec<SceneShapeVm>) -> SceneVm {
 }
 
 fn object_id(id: u32) -> GizmoTargetId {
-    GizmoTargetId { owner: ShapeOwner::Object(id), shape: 0 }
+    GizmoTargetId { owner: ShapeOwner::Object(object_ref(id)), shape: 0 }
 }
 
 /// A node shape whose params live on node 77, valued from `values` by id.
@@ -101,7 +107,7 @@ fn node_shape(owner: ShapeOwner, index: usize, decl: &SceneShapeDecl, values: &[
             wired: wired.contains(&id),
         })
         .collect();
-    SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(4), pickable: true }
+    SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(object_ref(4)), pickable: true }
 }
 
 /// A force shape over host card params named `host_<id>`.
@@ -184,7 +190,7 @@ fn child_gizmo_composes_parent_origin_axes_and_drag_units() {
     t.scale_value = (2.0, 1.0, 1.0);
     let mut child = known_object(8, (1.0, 0.0, 0.0), (false, false, false));
     let SceneObjectVm::Known(c) = &mut child else { unreachable!() };
-    c.parent_group_id = Some(7);
+    c.parent = Some(object_ref(7));
     let scene = scene_with(vec![parent, child]);
     let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
     assert!((target.origin[0] - 2.0).abs() < 1e-5);
@@ -349,7 +355,7 @@ fn plane_rotate_writes_a_unit_normal() {
         via: None,
         extent_limit: None,
     };
-    let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Object(1), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
+    let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Object(object_ref(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
     let o = px(target.origin);
     let HandleValues::Three(n) = drag(&target, GizmoMode::Rotate, GizmoAxis::X, (o.0 + 80.0, o.1 + 10.0), (o.0 + 10.0, o.1 - 80.0)) else {
         panic!("three values")
@@ -571,7 +577,7 @@ fn outline_slots_cover_an_object_or_every_part_of_its_group() {
     let row = |id: u32, index: usize, group: Option<u32>, is_group: bool| {
         let SceneObjectVm::Known(mut row) = known_object(id, (0.0, 0.0, 0.0), (false, false, false)) else { unreachable!() };
         row.index = index;
-        row.parent_group_id = group;
+        row.parent = group.map(object_ref);
         row.is_group = is_group;
         SceneObjectVm::Known(row)
     };
@@ -589,15 +595,15 @@ fn outline_slots_cover_an_object_or_every_part_of_its_group() {
         SceneObjectVm::Custom { index: 6 },
     ]);
     let mut slots = vec![99];
-    outline_slots(&scene, [1], &mut slots);
+    outline_slots(&scene, &[1].map(object_ref), &mut slots);
     assert_eq!(slots, [0]);
-    outline_slots(&scene, [10], &mut slots);
+    outline_slots(&scene, &[10].map(object_ref), &mut slots);
     assert_eq!(slots, [1, 2], "every part of the model, its shared slot once");
-    outline_slots(&scene, [20], &mut slots);
+    outline_slots(&scene, &[20].map(object_ref), &mut slots);
     assert_eq!(slots, [3, 4, 5], "the water body and its looks");
-    outline_slots(&scene, [1, 20, 10], &mut slots);
+    outline_slots(&scene, &[1, 20, 10].map(object_ref), &mut slots);
     assert_eq!(slots, [0, 1, 2, 3, 4, 5], "a selection of several outlines each");
-    outline_slots(&scene, [7], &mut slots);
+    outline_slots(&scene, &[7].map(object_ref), &mut slots);
     assert!(slots.is_empty(), "no such object, no outline");
 }
 
@@ -754,7 +760,7 @@ fn handles_under_a_scaled_parent_keep_their_size_and_param_units() {
         p.transform.as_mut().unwrap().scale_value = (parent_scale, parent_scale, parent_scale);
         let mut child = known_object(8, (0.5, 0.0, 0.0), (false, false, false));
         let SceneObjectVm::Known(c) = &mut child else { unreachable!() };
-        c.parent_group_id = Some(7);
+        c.parent = Some(object_ref(7));
         let scene = scene_with(vec![parent, child]);
         let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
         let camera = Camera::look_at([2.0, 1.5, 0.0], target.origin, [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);

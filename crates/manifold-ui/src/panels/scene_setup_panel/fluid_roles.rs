@@ -31,7 +31,7 @@ impl ScenePanel {
                         ROW_H,
                         btn_style(),
                         &role.target_label,
-                        obj_key(role.source_node_id as usize, OBJ_OFF_FLUID_ROLE_TARGET),
+                        crate::param_surface::stable_key(&format!("scene.fluid_role.target.{}", ref_text(&role.source))),
                     );
                     let remove = tree.add_button_keyed(
                         Some(self.content_parent),
@@ -41,20 +41,20 @@ impl ScenePanel {
                         ROW_H,
                         btn_style(),
                         "×",
-                        obj_key(role.source_node_id as usize, OBJ_OFF_FLUID_ROLE_REMOVE),
+                        crate::param_surface::stable_key(&format!("scene.fluid_role.remove.{}", ref_text(&role.source))),
                     );
                     tree.set_name(
                         target,
-                        format!("scene_setup.fluid_role.{}.target", role.source_node_id),
+                        format!("scene_setup.fluid_role.{}.target", ref_text(&role.source)),
                     );
                     tree.set_name(
                         remove,
-                        format!("scene_setup.fluid_role.{}.remove", role.source_node_id),
+                        format!("scene_setup.fluid_role.{}.remove", ref_text(&role.source)),
                     );
                     self.fluid_role_target_ids
-                        .push((target, role.source_node_id));
+                        .push((target, role.source.clone()));
                     self.fluid_role_remove_ids
-                        .push((remove, role.source_node_id));
+                        .push((remove, role.source.clone()));
                     y += ROW_H + ROW_GAP;
                 }
             }
@@ -80,10 +80,10 @@ impl ScenePanel {
                 ROW_H,
                 btn_style(),
                 "+ Fluid Role",
-                obj_key(row.object_node_id as usize, OBJ_OFF_FLUID_ROLE),
+                obj_key(self.row_key(&row.node), OBJ_OFF_FLUID_ROLE),
             );
             tree.set_name(button, "scene_setup.properties.add_fluid_role");
-            self.object_fluid_role_ids.push((button, row.index));
+            self.object_fluid_role_ids.push((button, row.node.clone()));
             y += ROW_H + ROW_GAP;
         }
         y

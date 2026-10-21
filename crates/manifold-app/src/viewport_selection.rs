@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
 use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoSelection, GizmoTargetId};
-use manifold_ui::panels::scene_setup_panel::SceneSelection;
 
 /// The editor viewport's drawn selection and what it was built from.
 pub struct ViewportSelection {
@@ -29,10 +28,7 @@ impl ViewportSelection {
 
     /// The outline slots of every selected scene object.
     pub fn outline(&self, out: &mut Vec<u32>) {
-        let objects = self.selection.selected.iter().filter_map(|target| match crate::scene_gizmo::scene_selection(&self.scene, target) {
-            Some(SceneSelection::Object(object)) => Some(object),
-            _ => None,
-        });
+        let objects = self.selection.selected.iter().filter_map(|target| crate::scene_gizmo::selected_object(&self.scene, target));
         crate::selection_outline::outline_slots(&self.scene, objects, out);
     }
 }

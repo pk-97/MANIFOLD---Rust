@@ -36713,7 +36713,7 @@
           "type": "Atmosphere"
         },
         {
-          "name": "render_mode",
+          "name": "render_mode_in",
           "required": false,
           "type": "RenderMode"
         },
@@ -36796,6 +36796,22 @@
             "64"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Rendered",
+            "Solid",
+            "Wireframe",
+            "Points"
+          ],
+          "label": "Render Mode",
+          "name": "render_mode",
+          "range": [
+            "0",
+            "3"
+          ],
+          "type": "enum"
         },
         {
           "default": "false",
@@ -38075,7 +38091,7 @@
           "type": "Transform"
         },
         {
-          "name": "density",
+          "name": "mass",
           "required": false,
           "type": "f32"
         },
@@ -38128,6 +38144,11 @@
           "name": "copy_turn_z",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "acceleration",
+          "required": false,
+          "type": "VectorField"
         }
       ],
       "label": "Rigid Body",
@@ -38138,6 +38159,19 @@
         },
         {
           "name": "shape",
+          "type": "f32"
+        },
+        {
+          "name": "pose",
+          "type": "Transform"
+        },
+        {
+          "capacity": "none",
+          "name": "instances",
+          "type": "Array"
+        },
+        {
+          "name": "active_count",
           "type": "f32"
         }
       ],
@@ -38182,11 +38216,11 @@
         },
         {
           "default": "600",
-          "label": "Density",
-          "name": "density",
+          "label": "Mass",
+          "name": "mass",
           "range": [
-            "1",
-            "25000"
+            "0.1",
+            "100000"
           ],
           "type": "float"
         },
@@ -38417,10 +38451,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Describe a rigid body's shape, starting transform, motion type, density and contact properties; Box3D gives it density times its installed hull volume as mass. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Give an object density, friction and bounce, then connect it to a Physics World.",
+      "summary": "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
       "type_id": "node.rigid_body"
     },
     {
@@ -57275,6 +57309,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "8_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
           "default": "1",
           "id": "8_rt_shadows",
           "max": "1",
@@ -63101,6 +63142,13 @@
           "max": "20",
           "min": "0",
           "name": "Size"
+        },
+        {
+          "default": "0",
+          "id": "19_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -76553,6 +76601,13 @@
         },
         {
           "default": "0",
+          "id": "1019_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "1019_rt_enabled",
           "max": "1",
           "min": "0",
@@ -80495,6 +80550,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -80551,10 +80613,10 @@
         },
         {
           "default": "600",
-          "id": "101_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "101_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.6",
@@ -82770,10 +82832,10 @@
         },
         {
           "default": "600",
-          "id": "121_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "121_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.25",
@@ -85080,10 +85142,10 @@
         },
         {
           "default": "600",
-          "id": "141_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "141_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.2",
@@ -87299,10 +87361,10 @@
         },
         {
           "default": "600",
-          "id": "161_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "161_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.2",
@@ -90066,6 +90128,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -90122,10 +90191,10 @@
         },
         {
           "default": "600",
-          "id": "101_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "101_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.55",
@@ -92341,10 +92410,10 @@
         },
         {
           "default": "600",
-          "id": "111_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "111_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.55",
@@ -94560,10 +94629,10 @@
         },
         {
           "default": "600",
-          "id": "121_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "121_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.55",
@@ -96779,10 +96848,10 @@
         },
         {
           "default": "600",
-          "id": "131_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "131_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.55",
@@ -98998,10 +99067,10 @@
         },
         {
           "default": "600",
-          "id": "141_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "141_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.55",
@@ -101217,10 +101286,10 @@
         },
         {
           "default": "600",
-          "id": "151_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "151_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.55",
@@ -104002,6 +104071,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -104058,10 +104134,10 @@
         },
         {
           "default": "600",
-          "id": "101_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "101_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.6",
@@ -106277,10 +106353,10 @@
         },
         {
           "default": "600",
-          "id": "121_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "121_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "32",
@@ -108566,10 +108642,10 @@
         },
         {
           "default": "600",
-          "id": "141_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "141_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.2",
@@ -110785,10 +110861,10 @@
         },
         {
           "default": "600",
-          "id": "161_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density"
+          "id": "161_mass",
+          "max": "100000",
+          "min": "0.1",
+          "name": "Mass"
         },
         {
           "default": "0.2",
@@ -115463,6 +115539,13 @@
         },
         {
           "default": "0",
+          "id": "20_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "20_rt_enabled",
           "max": "1",
           "min": "0",
@@ -118620,6 +118703,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -121538,6 +121628,13 @@
           "max": "20",
           "min": "0",
           "name": "Size"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -124824,6 +124921,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -139193,6 +139297,13 @@
         },
         {
           "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -149118,6 +149229,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -160420,11 +160538,11 @@
           "name": "Seed"
         },
         {
-          "default": "500",
-          "id": "box_density",
-          "max": "2000",
+          "default": "62.5",
+          "id": "box_mass",
+          "max": "1000",
           "min": "1",
-          "name": "Box Density"
+          "name": "Box Mass"
         },
         {
           "default": "1",
@@ -163232,6 +163350,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -173055,6 +173180,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",
@@ -189573,6 +189705,13 @@
         },
         {
           "default": "0",
+          "id": "463_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
+        },
+        {
+          "default": "0",
           "id": "463_rt_enabled",
           "max": "1",
           "min": "0",
@@ -203838,6 +203977,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "30_render_mode",
+          "max": "3",
+          "min": "0",
+          "name": "Render Mode"
         },
         {
           "default": "0",

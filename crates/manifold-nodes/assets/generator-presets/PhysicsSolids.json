@@ -225,7 +225,7 @@
           "type": "Enum",
           "value": 0
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -339,7 +339,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -453,7 +453,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -567,7 +567,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -681,7 +681,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -795,7 +795,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -970,8 +970,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_0",
+      "fromNode": 101,
+      "fromPort": "pose",
       "toNode": 104,
       "toPort": "transform"
     },
@@ -1012,8 +1012,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_1",
+      "fromNode": 111,
+      "fromPort": "pose",
       "toNode": 114,
       "toPort": "transform"
     },
@@ -1054,8 +1054,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_2",
+      "fromNode": 121,
+      "fromPort": "pose",
       "toNode": 124,
       "toPort": "transform"
     },
@@ -1096,8 +1096,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_3",
+      "fromNode": 131,
+      "fromPort": "pose",
       "toNode": 134,
       "toPort": "transform"
     },
@@ -1138,8 +1138,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_4",
+      "fromNode": 141,
+      "fromPort": "pose",
       "toNode": 144,
       "toPort": "transform"
     },
@@ -1180,8 +1180,8 @@
       "toPort": "material"
     },
     {
-      "fromNode": 40,
-      "fromPort": "pose_5",
+      "fromNode": 151,
+      "fromPort": "pose",
       "toNode": 154,
       "toPort": "transform"
     },

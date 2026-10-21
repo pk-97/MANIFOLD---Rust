@@ -6,6 +6,37 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
+/// How scene gizmos meet the scene's depth, in the preview, the editor
+/// viewport and an export alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GizmoDrawMode {
+    /// Depth-tested: hidden behind scene geometry.
+    Occluded,
+    /// Drawn over everything, as gizmos always were.
+    #[default]
+    OnTop,
+    /// Visible parts drawn normally, hidden parts drawn faded.
+    Ghost,
+}
+
+impl GizmoDrawMode {
+    pub const ALL: [Self; 3] = [Self::Occluded, Self::OnTop, Self::Ghost];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Occluded => "Occluded",
+            Self::OnTop => "On Top",
+            Self::Ghost => "Ghost",
+        }
+    }
+
+    /// The next mode in `ALL`, wrapping.
+    pub fn next(self) -> Self {
+        Self::ALL[(Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) + 1) % Self::ALL.len()]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SurfaceRole {
@@ -48,6 +79,7 @@ pub enum ControlGroup {
     Environment,
     Fog,
     RayTracing,
+    RenderMode,
 }
 
 impl ControlGroup {
@@ -77,6 +109,7 @@ impl ControlGroup {
             Self::Environment => "Environment",
             Self::Fog => "Fog",
             Self::RayTracing => "Ray Tracing",
+            Self::RenderMode => "Render Mode",
         }
     }
 }
@@ -170,7 +203,7 @@ pub enum Unit {
     Metres,
     MetresPerSecond,
     MetresPerSecondSquared,
-    KilogramsPerCubicMetre,
+    Kilograms,
     Ev,
     Pixels,
     MillionCells,
@@ -187,7 +220,7 @@ impl Unit {
             Self::Metres => " m",
             Self::MetresPerSecond => " m/s",
             Self::MetresPerSecondSquared => " m/s²",
-            Self::KilogramsPerCubicMetre => " kg/m³",
+            Self::Kilograms => " kg",
             Self::Ev => " EV",
             Self::Pixels => " px",
             Self::MillionCells => " M cells",
@@ -433,6 +466,36 @@ pub struct SceneShapeDecl {
     /// param's limit. `None` keeps only the gizmo's smallest extent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extent_limit: Option<crate::param_range::HardLimit>,
+}
+
+
+/// The one address of a scene thing: the group path to it, then its stable
+/// node id. UI selections, gizmo owners, scene actions, commands and saved
+/// scene-modifier targets all name a scene node this way. A document id or a
+/// render-slot number is only resolved from it, on the content thread, when
+/// an edit runs against the live graph.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneNodeRef {
+    #[serde(default)]
+    pub scope: Vec<crate::NodeId>,
+    pub node: crate::NodeId,
+}
+
+impl Ord for SceneNodeRef {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.scope
+            .iter()
+            .map(crate::NodeId::as_str)
+            .cmp(other.scope.iter().map(crate::NodeId::as_str))
+            .then_with(|| self.node.as_str().cmp(other.node.as_str()))
+    }
+}
+
+impl PartialOrd for SceneNodeRef {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[cfg(test)]

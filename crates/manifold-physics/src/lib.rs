@@ -122,6 +122,16 @@ mod ffi {
             restitution: f32,
             move_pose: i32,
         ) -> i32;
+        pub fn manifold_box3d_body_replace_hulls(
+            body: u64,
+            points: *const f32,
+            point_counts: *const i32,
+            hull_count: i32,
+            max_vertex_count: i32,
+            friction: f32,
+            restitution: f32,
+            hull_out: *mut usize,
+        ) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_set_wall(body: u64, wall: i32) -> i32;
         pub fn manifold_box3d_body_set_enabled(body: u64, enabled: i32) -> i32;
@@ -926,6 +936,59 @@ impl PhysicsWorld {
             4 => Err(PhysicsError::InvalidInput("body supports at most 64 shapes")),
             _ => Err(PhysicsError::NativeFailure),
         }
+    }
+
+    /// Swap the collision hulls of a fixed body for `hulls`, leaving the body,
+    /// its pose and every other body in the world as they are. The new hulls
+    /// are cooked first, so on `Err` the body keeps its old shape.
+    pub fn replace_hulls(
+        &mut self,
+        handle: BodyHandle,
+        hulls: &[Vec<[f32; 3]>],
+        config: BodyConfig,
+    ) -> Result<(), PhysicsError> {
+        let config = validate_config(config)?;
+        if config.kind != BodyKind::Fixed {
+            return Err(PhysicsError::InvalidInput("only a fixed body's hulls can be replaced"));
+        }
+        if hulls.is_empty() || hulls.len() > MAX_BODY_HULLS {
+            return Err(PhysicsError::InvalidInput("body needs between 1 and 64 hulls"));
+        }
+        for hull in hulls {
+            if hull.len() < 4 || hull.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
+                return Err(PhysicsError::InvalidInput("hulls need at least 4 finite points"));
+            }
+        }
+        if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Hulls(_)) {
+            return Err(PhysicsError::InvalidInput("only a hull body can have its hulls replaced"));
+        }
+        let point_counts: Vec<i32> = hulls.iter().map(|hull| hull.len() as i32).collect();
+        let flat_points: Vec<f32> = hulls.iter().flatten().flatten().copied().collect();
+        let mut new_hulls = vec![0usize; hulls.len()];
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_replace_hulls(
+                native,
+                flat_points.as_ptr(),
+                point_counts.as_ptr(),
+                hulls.len() as i32,
+                128,
+                config.friction,
+                config.restitution,
+                new_hulls.as_mut_ptr(),
+            )
+        };
+        if result != 0 {
+            return Err(PhysicsError::NativeFailure);
+        }
+        let record = &mut self.bodies[handle.index as usize];
+        if let OwnedGeometry::Hulls(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Hulls(new_hulls)) {
+            for hull in old {
+                unsafe { ffi::manifold_box3d_destroy_hull(hull) };
+            }
+        }
+        native_set_wall(native, config.wall)
     }
 
     /// Enable or disable continuous collision detection for a dynamic body.

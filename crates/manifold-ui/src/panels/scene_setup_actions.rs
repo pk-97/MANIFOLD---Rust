@@ -98,15 +98,15 @@ pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSel
 fn has_initial_fill(vm: &SceneSetupVm, water: &NodeId) -> bool {
     let Some(domain) = vm.fluid_domains.iter().find(|domain| &domain.node == water) else { return false };
     vm.items.iter().any(|item| {
-        item.kind == SceneItemKind::Source(SourceRole::InitialFill) && item.parent.is_some_and(|row| domain.rows.contains(&row))
+        item.kind == SceneItemKind::Source(SourceRole::InitialFill) && item.parent.as_ref().is_some_and(|row| domain.rows.contains(row))
     })
 }
 
 fn source_water(vm: &SceneSetupVm, selected: Option<&SceneSelection>) -> Result<NodeId, &'static str> {
     let row = match selected {
-        Some(SceneSelection::Object(id)) => Some(*id),
+        Some(SceneSelection::Object(id)) => Some(id.clone()),
         Some(selection @ SceneSelection::Source(_)) => {
-            vm.items.iter().find(|item| &item.selection == selection).and_then(|item| item.parent)
+            vm.items.iter().find(|item| &item.selection == selection).and_then(|item| item.parent.clone())
         }
         _ => None,
     };

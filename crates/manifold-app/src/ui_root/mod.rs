@@ -1862,7 +1862,6 @@ mod tick_parity_tests {
                     ableton_range: None,
                     mappable: false,
                 },
-                scene_addr: None,
                 rgb_members: None,
                 modulator_stored: false,
                 audio: Default::default(),

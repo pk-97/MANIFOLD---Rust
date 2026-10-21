@@ -6,7 +6,7 @@ use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::scene_modifier_edit::insert_scene_modifier;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneNodeRefExt as _, SceneTargetSelection};
 use std::collections::{BTreeMap, BTreeSet};
 
 const PHYSICS_SOLIDS: &str = include_str!(concat!(
@@ -110,11 +110,12 @@ fn prepared(owner: &EffectGraphDef) -> EffectGraphDef {
         .unwrap()
         .def
 }
-fn target_wires<'a>(def: &'a EffectGraphDef, port: &str) -> Vec<&'a EffectGraphWire> {
-    let world = node_id(def, "physics_demo_40");
+/// The force wires on `body`: a per-body force enters on the body itself.
+fn target_wires<'a>(def: &'a EffectGraphDef, body: &str) -> Vec<&'a EffectGraphWire> {
+    let body = node_id(def, body);
     def.wires
         .iter()
-        .filter(|wire| wire.to_node == world && wire.to_port == port)
+        .filter(|wire| wire.to_node == body && wire.to_port == "acceleration")
         .collect()
 }
 fn clone_node(def: &EffectGraphDef, source: &str, id: u32, stable: &str) -> EffectGraphNode {
@@ -157,8 +158,8 @@ fn add_empty_fluid(def: &mut EffectGraphDef) {
     );
     remove_wire(
         def,
-        "physics_demo_40",
-        "pose_0",
+        "physics_demo_101",
+        "pose",
         "physics_demo_104",
         "transform",
     );
@@ -181,9 +182,9 @@ fn force_body_targets_only_selected_world_slot() {
             objects: vec![reference(&owner, "node.scene_object", "physics_demo_104")],
         },
     ));
-    assert_eq!(target_wires(&expanded, "body_acceleration_0").len(), 1);
-    for slot in 1..6 {
-        assert!(target_wires(&expanded, &format!("body_acceleration_{slot}")).is_empty());
+    assert_eq!(target_wires(&expanded, "physics_demo_101").len(), 1);
+    for body in ["physics_demo_111", "physics_demo_121", "physics_demo_131", "physics_demo_141", "physics_demo_151"] {
+        assert!(target_wires(&expanded, body).is_empty(), "{body}");
     }
 }
 
@@ -192,18 +193,19 @@ fn force_copies_target_uses_world_instances_input() {
     let mut owner = host();
     remove_wire(
         &mut owner,
-        "physics_demo_40",
-        "pose_0",
+        "physics_demo_101",
+        "pose",
         "physics_demo_104",
         "transform",
     );
     wire(
         &mut owner,
-        "physics_demo_40",
-        "instances_0",
+        "physics_demo_101",
+        "instances",
         "physics_demo_104",
         "instances",
     );
+    remove_wire(&mut owner, "physics_demo_101", "body", "physics_demo_40", "body_0");
     wire(&mut owner, "physics_demo_101", "body", "physics_demo_40", "copies_0");
     let expanded = prepared(&attach(
         &owner,
@@ -212,8 +214,8 @@ fn force_copies_target_uses_world_instances_input() {
             objects: vec![reference(&owner, "node.scene_object", "physics_demo_104")],
         },
     ));
-    assert_eq!(target_wires(&expanded, "copies_acceleration_0").len(), 1);
-    assert!(target_wires(&expanded, "body_acceleration_0").is_empty());
+    assert_eq!(target_wires(&expanded, "physics_demo_101").len(), 1, "the copy group's force enters on its body");
+    assert!(target_wires(&expanded, "physics_demo_111").is_empty());
 }
 
 #[test]
@@ -236,7 +238,7 @@ fn force_fluid_target_uses_surface_acceleration_input() {
             .count(),
         1
     );
-    assert!(target_wires(&expanded, "body_acceleration_0").is_empty());
+    assert!(target_wires(&expanded, "physics_demo_101").is_empty());
 }
 
 #[test]
@@ -300,15 +302,15 @@ fn grouped_parts_sharing_world_slot_emit_one_force_clone() {
     let mut owner = host();
     remove_wire(
         &mut owner,
-        "physics_demo_40",
-        "pose_1",
+        "physics_demo_111",
+        "pose",
         "physics_demo_114",
         "transform",
     );
     wire(
         &mut owner,
-        "physics_demo_40",
-        "pose_0",
+        "physics_demo_101",
+        "pose",
         "physics_demo_114",
         "transform",
     );
@@ -339,8 +341,8 @@ fn grouped_parts_sharing_world_slot_emit_one_force_clone() {
     };
     let mut attached = attach(&owner, "grouped_force", targets);
     let expanded = prepared(&attached);
-    assert_eq!(target_wires(&expanded, "body_acceleration_0").len(), 1);
-    assert!(target_wires(&expanded, "body_acceleration_1").is_empty());
+    assert_eq!(target_wires(&expanded, "physics_demo_101").len(), 1);
+    assert!(target_wires(&expanded, "physics_demo_111").is_empty());
     assert_eq!(
         expanded
             .nodes
@@ -358,7 +360,7 @@ fn grouped_parts_sharing_world_slot_emit_one_force_clone() {
     let saved: EffectGraphDef =
         serde_json::from_slice(&serde_json::to_vec(&attached).unwrap()).unwrap();
     assert_eq!(
-        target_wires(&prepared(&saved), "body_acceleration_0").len(),
+        target_wires(&prepared(&saved), "physics_demo_101").len(),
         1
     );
 }
@@ -408,8 +410,8 @@ fn all_objects_force_picks_up_body_added_after_attachment() {
     );
     wire(
         &mut later,
-        "physics_demo_40",
-        "pose_6",
+        "future_body",
+        "pose",
         "future_object",
         "transform",
     );
@@ -425,7 +427,7 @@ fn all_objects_force_picks_up_body_added_after_attachment() {
             manifold_core::effect_graph_def::SerializedParamValue::Float { value: 7.0 },
         );
     assert_eq!(
-        target_wires(&prepared(&later), "body_acceleration_6").len(),
+        target_wires(&prepared(&later), "future_body").len(),
         1
     );
 }
@@ -448,7 +450,7 @@ fn empty_and_nonphysical_force_targets_keep_shared_controls() {
         empty
             .wires
             .iter()
-            .all(|wire| !wire.to_port.starts_with("body_acceleration_"))
+            .all(|wire| wire.to_port != "acceleration")
     );
     let mut nonphysical = owner.clone();
     nonphysical.nodes.push(clone_node(
@@ -501,7 +503,7 @@ fn empty_and_nonphysical_force_targets_keep_shared_controls() {
         expanded
             .wires
             .iter()
-            .all(|wire| !wire.to_port.starts_with("body_acceleration_"))
+            .all(|wire| wire.to_port != "acceleration")
     );
 }
 
@@ -618,8 +620,8 @@ fn stale_target_and_ambiguous_physical_source_are_errors() {
     let mut ambiguous = host();
     wire(
         &mut ambiguous,
-        "physics_demo_40",
-        "pose_1",
+        "physics_demo_111",
+        "pose",
         "physics_demo_104",
         "parent_transform",
     );

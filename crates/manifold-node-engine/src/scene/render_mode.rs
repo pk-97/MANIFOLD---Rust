@@ -8,7 +8,7 @@
 //! on the wire; `render_scene` folds the scalars into its raster pass (fill
 //! mode + a synthesized unlit material). Unwired =
 //! [`RenderMode::default`] = `mode: Rendered` = **byte-identical to no
-//! `render_mode` input at all** — the zero-cost contract, same as fog.
+//! `render_mode_in` input at all** — the zero-cost contract, same as fog.
 //!
 //! Inert-member precedent: [`Material`](crate::node_graph::material::Material)
 //! ("metallic is unread when kind = Unlit"). One struct serves all modes;

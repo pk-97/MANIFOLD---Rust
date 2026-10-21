@@ -2,10 +2,10 @@
 //! (`docs/REALTIME_3D_DESIGN.md` D7a). Editor chrome only: the content
 //! thread reports, per output surface, the camera the panel's scene rendered
 //! through, its light positions, its accepted fluid domains and the physics
-//! shapes it simulated ([`PhysicsOverlayFrame`]); [`PreviewGizmo`] draws
-//! them with the selected item's handles through the gizmo core's one
-//! composition entry, and picks and drags through the same core and scrub
-//! path as the graph editor's viewport. Nothing here feeds the render.
+//! shapes it simulated ([`PhysicsOverlayFrame`]). The content thread draws
+//! them with the selected item's handles (`gizmo_overlay.rs`); [`PreviewGizmo`]
+//! is the UI half: it picks and drags through the same core and scrub path as
+//! the graph editor's viewport. Nothing here feeds the render.
 
 use std::sync::Arc;
 
@@ -16,8 +16,7 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoSelection, GizmoTargetId, compose_lines};
-use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoMode, GizmoSelection, GizmoTargetId};
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{Rect, Vec2};
 
@@ -51,11 +50,6 @@ pub(crate) fn share_domains(scratch: &mut [(NodeId, FluidDomainSnapshot)], share
 }
 type Lights = [[f32; 3]];
 type Gizmos = [PhysicsGizmo];
-
-/// Lines a graph-editor frame reserves up front: the ground grid, a domain
-/// box, the largest handle set, and the selected domain's cell grid at its
-/// line budget. A host buffer may still grow past it (physics shapes).
-pub(crate) const CHROME_LINES: usize = 128 + manifold_nodes_scene::node_graph::viewport_overlay::LATTICE_LINE_BUDGET;
 
 /// What one output surface's scene was rendered with.
 #[derive(Clone)]
@@ -111,10 +105,6 @@ pub(crate) struct PreviewGizmo {
     navigated: Option<GizmoView>,
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, GizmoSelection, bool)>,
-    lines: Vec<WorldLine>,
-    /// The shown scene's setup problems with what the shown frame's solvers
-    /// reported, for the red boxes.
-    problems: crate::setup_check::GizmoProblems,
     /// Render slots of the selected object, for its outline (D-102); empty
     /// while an effect moves the picture off the scene.
     outline: Vec<u32>,
@@ -141,6 +131,17 @@ impl PreviewGizmo {
     /// The render slots the selection outline covers.
     pub fn outline(&self) -> &[u32] {
         &self.outline
+    }
+
+    /// The handles to show over the shown scene: the panel's selection, the
+    /// shapes picked here and the handle mode. The content thread builds the
+    /// lines from this against the scene it renders.
+    pub fn request(
+        &self,
+        panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
+        kept: Option<&crate::gizmo_overlay::GizmoRequest>,
+    ) -> crate::gizmo_overlay::GizmoRequest {
+        crate::gizmo_overlay::GizmoRequest::panel(self.mode, panel.live_selected(), &self.picked, kept)
     }
 
     /// Moves when the mode or the picked shape changes.
@@ -184,17 +185,17 @@ impl PreviewGizmo {
         Some(self.navigated.unwrap_or(GizmoView::new(frame.camera, *width, *height)))
     }
 
-    /// The shown frame's chrome and the selected item's handles, through
-    /// the gizmo core's composition entry, with the camera to project them
-    /// through. Rebuilds the handles only when what they read moved.
-    pub fn compose(
+    /// Follow the shown frame: the selected item's handle targets for picks
+    /// and drags, and its outline slots. The gizmo lines are not made here:
+    /// the content thread builds them from the scene it renders
+    /// (`gizmo_overlay.rs`). True while a frame is shown.
+    pub fn refresh(
         &mut self,
         project: &Project,
         panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
         parts: &PartStamps,
-    ) -> Option<(&[WorldLine], GizmoView)> {
-        let view = self.view()?;
-        let (frame, _) = self.shown.as_ref()?;
+    ) -> bool {
+        let Some((frame, _)) = self.shown.as_ref() else { return false };
         let layer = frame.layer.clone();
         let target = GraphTarget::Generator(layer.clone());
         let scene = self.scene.viewport_def(project, Some(&target), parts).scene;
@@ -209,7 +210,7 @@ impl PreviewGizmo {
                 let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items, &self.picked));
                 let fade = effect_follows(project, &layer);
                 let objects = items.iter().filter(|_| !fade).filter_map(|item| match item {
-                    SceneSelection::Object(object) => Some(*object),
+                    SceneSelection::Object(object) => Some(object),
                     _ => None,
                 });
                 crate::selection_outline::outline_slots(&key.0, objects, &mut self.outline);
@@ -219,22 +220,7 @@ impl PreviewGizmo {
                 self.outline.clear();
             }
         }
-        let (frame, _) = self.shown.as_ref()?;
-        let (selection, fade_handles) = self.target.as_ref().map_or((&NO_SELECTION, &false), |(_, selection, fade)| (selection, fade));
-        self.problems.update(self.target.as_ref().map(|(key, ..)| &key.0), Some(&frame.domains));
-        let chrome = GizmoChrome {
-            view,
-            lights: &frame.lights,
-            domains: &frame.domains,
-            live_columns: &frame.live_columns,
-            physics: &frame.gizmos,
-            problems: self.problems.problems(),
-            selection,
-            mode: self.mode,
-            fade_handles: *fade_handles,
-        };
-        compose_lines(&chrome, &mut self.lines);
-        Some((&self.lines, view))
+        true
     }
 
     /// A left press at `pos` in the window; `extend` (Shift) adds the
@@ -393,7 +379,7 @@ impl manifold_ui::hit_targets::HitTargets for GizmoHitTargets<'_> {
 
 /// D-69: an enabled effect on the scene layer, a group it sits in, or the
 /// master chain moves the picture off the scene.
-fn effect_follows(project: &Project, layer: &LayerId) -> bool {
+pub(crate) fn effect_follows(project: &Project, layer: &LayerId) -> bool {
     let enabled = |effects: &[manifold_core::effects::PresetInstance]| effects.iter().any(|fx| fx.enabled);
     let mut next = Some(layer.clone());
     // A parent chain is at most every layer long.
@@ -509,47 +495,6 @@ impl PhysicsOverlayObservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_world_point_lands_on_its_pixel_in_the_preview() {
-        // A 16:9 show at 1920x1080 shown in a 320x180 preview at (10, 20).
-        let camera = Camera::orbit_perspective(0.7, 0.3, 6.0, std::f32::consts::FRAC_PI_3, 0.5, 0.0, 0.05, 200.0);
-        let (right, up, depth) = (1.0_f32, 0.5_f32, 3.0_f32);
-        let point = [0, 1, 2].map(|i| camera.pos[i] + depth * camera.fwd[i] + right * camera.right[i] + up * camera.up[i]);
-        let rect = manifold_ui::Rect::new(10.0, 20.0, 320.0, 180.0);
-        let line = WorldLine { a: point, b: point, color: [255; 4] };
-        let [x, y, ..] = crate::scene_viewport::project_line(&camera, 1920, 1080, rect, &line).unwrap();
-
-        // Hand derivation: perspective divide by depth, then NDC to the pane,
-        // y down. The horizontal extent scales with the show's aspect.
-        let half_h = (std::f32::consts::FRAC_PI_3 * 0.5).tan() * depth;
-        let ndc = [right / (half_h * 16.0 / 9.0), up / half_h];
-        let expected = [10.0 + (ndc[0] * 0.5 + 0.5) * 320.0, 20.0 + (0.5 - ndc[1] * 0.5) * 180.0];
-        assert!((x - expected[0]).abs() < 1e-3 && (y - expected[1]).abs() < 1e-3, "{x},{y} vs {expected:?}");
-    }
-
-    #[test]
-    fn a_camera_standing_inside_the_grid_keeps_every_line_along_its_view() {
-        // The show camera at (0, 2, 6) looking at the origin: every grid line
-        // running along z passes beside and behind it.
-        let camera = Camera::look_at([0.0, 2.0, 6.0], [0.0; 3], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_3, 0.05, 200.0);
-        let rect = manifold_ui::Rect::new(0.0, 0.0, 320.0, 180.0);
-        let grid = manifold_nodes_scene::node_graph::viewport_overlay::grid_lines(10.0, 1.0);
-        let along_z: Vec<_> = grid.iter().filter(|line| line.a[2] != line.b[2]).collect();
-        assert_eq!(along_z.len(), 21);
-        for line in &along_z {
-            let [x0, y0, x1, y1] = crate::scene_viewport::project_line(&camera, 1920, 1080, rect, line)
-                .unwrap_or_else(|| panic!("line {line:?} vanished"));
-            // The far end projects exactly as an unclipped point would.
-            let far = camera.project_to_pixel(line.a, 1920, 1080).unwrap();
-            assert!((x0 - far.px / 6.0).abs() < 1e-3 && (y0 - far.py / 6.0).abs() < 1e-3);
-            // The clipped near end runs toward the bottom of the picture.
-            assert!(y1.is_finite() && x1.is_finite() && y1 > y0);
-        }
-        // A line wholly behind the camera still draws nothing.
-        let behind = WorldLine { a: [-1.0, 0.0, 8.0], b: [1.0, 0.0, 8.0], color: [255; 4] };
-        assert!(crate::scene_viewport::project_line(&camera, 1920, 1080, rect, &behind).is_none());
-    }
 
     #[test]
     fn the_preview_fits_the_show_inside_the_video_area() {

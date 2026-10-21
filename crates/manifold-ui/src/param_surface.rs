@@ -23,7 +23,7 @@
 use crate::panels::GraphParamTarget;
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
 use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, AudioSendChoice};
-use manifold_foundation::{EffectId, LayerId, ParamId};
+use manifold_foundation::{EffectId, LayerId, ParamId, SceneNodeRef};
 
 /// UI-side copy of the persisted material descriptor vocabulary. The UI crate
 /// deliberately does not depend on core; the app projection performs the
@@ -240,37 +240,16 @@ pub struct RowMapping {
     pub mappable: bool,
 }
 
-/// One row's scene-graph write address (SCENE_MODIFIER_FRAMEWORK D4) — the
-/// `(scope_path, node_doc_id, param)` tuple `ProjectAction::SceneSetupParamChanged`
-/// carries. Populated ONLY by the modifier-card projection
-/// (`modifier_surfaces`, ui_bridge); every other card's rows leave it `None`
-/// and ride the plain manifest-param wires. UI-side copy of the renderer's
-/// `scene_vm::ParamAddr` shape (`ui` cannot depend on `renderer`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct SceneRowAddr {
-    pub scope_path: Vec<u32>,
-    pub node_doc_id: u32,
-    pub param_id: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifierObjectOption {
+    pub object: SceneNodeRef,
+    pub label: String,
+    pub selected: bool,
 }
 
 /// Card-level facts for one APPLIED scene modifier (SCENE_MODIFIER_FRAMEWORK
 /// section 3.7) — the chrome + write addressing an ordinary effect-shell card
 /// needs to behave as a modifier card. `None` on every non-modifier surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModifierObjectRef {
-    /// Stable object scope path in the owning scene graph.
-    pub scope: Vec<manifold_foundation::NodeId>,
-    /// Stable node identity within that scope.
-    pub node: manifold_foundation::NodeId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModifierObjectOption {
-    pub object: ModifierObjectRef,
-    pub label: String,
-    pub selected: bool,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModifierCardInfo {
     /// Stable identity of this applied modifier instance.
@@ -295,15 +274,18 @@ pub struct ModifierCardInfo {
 
 /// Stable address for one object-owned modifier card in Scene Setup.
 ///
-/// The object and group owner are structural scene identities; `node_doc_id`
-/// identifies the modifier within that object's ordered chain.  The card uses
-/// all three facts for UI identity while the existing scene modifier action
-/// uses the group owner and modifier document id for removal/reorder.
+/// The object and the chain owner are scene addresses; `node_doc_id`
+/// identifies the modifier within that owner's ordered chain. The card uses
+/// all three for UI identity; the modifier actions name the owner by address
+/// and the modifier by its id inside the owner.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectModifierCardInfo {
     pub layer_id: LayerId,
-    pub object_id: u32,
-    pub group_node_id: Option<u32>,
+    /// The object the card belongs to, by address.
+    pub object: SceneNodeRef,
+    /// The node the modifier chain hangs off: the object's group, else the
+    /// object. The modifier commands name it.
+    pub owner: SceneNodeRef,
     pub node_doc_id: u32,
 }
 
@@ -340,11 +322,6 @@ pub struct ParamRow {
     /// Driver/envelope/automation facts.
     pub modulation: RowMod,
     pub mapping: RowMapping,
-    /// The scene-graph write address for a MODIFIER card row (D4) — `Some`
-    /// only on rows the modifier projection built; the card's toggle-row
-    /// gestures turn it into `SceneSetupParamChanged` instead of a plain
-    /// manifest-param toggle.
-    pub scene_addr: Option<SceneRowAddr>,
     /// A row with a colour swatch: the three scalar params it writes as one
     /// gesture. The channels keep their own rows and bindings.
     pub rgb_members: Option<RgbMembers>,

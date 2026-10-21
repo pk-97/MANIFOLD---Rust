@@ -85,7 +85,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       }
     }
@@ -94,12 +94,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
         "Above": {
-          "name": "param_row.10_clearcoat.value"
+          "name_suffix": "_clearcoat.value"
         }
       }
     }
@@ -108,7 +108,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -120,7 +120,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_clearcoat.value"
+          "name_suffix": "_clearcoat.value"
         }
       },
       "check": {
@@ -133,7 +133,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "gesture": {
@@ -147,7 +147,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -159,7 +159,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_clearcoat.value"
+          "name_suffix": "_clearcoat.value"
         }
       },
       "check": {
@@ -180,7 +180,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -200,7 +200,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -249,12 +249,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
         "Above": {
-          "name": "param_row.10_iridescence_mode.value"
+          "name_suffix": "_iridescence_mode.value"
         }
       }
     }
@@ -263,7 +263,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_iridescence_mode.value"
+          "name_suffix": "_iridescence_mode.value"
         }
       },
       "check": {
@@ -277,7 +277,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "material.feature.remove.10_coat_mode"
+          "name_suffix": "_coat_mode", "text": "×"
         }
       }
     }
@@ -286,7 +286,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "material.feature.remove.10_coat_mode"
+          "name_suffix": "_coat_mode", "text": "×"
         }
       },
       "gesture": {
@@ -300,7 +300,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -350,7 +350,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -362,12 +362,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
         "Above": {
-          "name": "param_row.10_iridescence_mode.value"
+          "name_suffix": "_iridescence_mode.value"
         }
       }
     }
@@ -385,7 +385,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -434,12 +434,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_iridescence_mode.value"
+          "name_suffix": "_iridescence_mode.value"
         }
       },
       "check": {
         "Above": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       }
     }
@@ -448,7 +448,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -460,7 +460,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_clearcoat.value"
+          "name_suffix": "_clearcoat.value"
         }
       },
       "check": {
@@ -472,7 +472,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -486,7 +486,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       }
     }
@@ -495,7 +495,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "gesture": {
@@ -509,7 +509,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -521,7 +521,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "material.feature.remove.10_coat_mode"
+          "name_suffix": "_coat_mode", "text": "×"
         }
       }
     }
@@ -530,7 +530,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "material.feature.remove.10_coat_mode"
+          "name_suffix": "_coat_mode", "text": "×"
         }
       },
       "gesture": {
@@ -544,7 +544,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -564,7 +564,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_coat_mode.value"
+          "name_suffix": "_coat_mode.value"
         }
       },
       "check": {
@@ -614,7 +614,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       }
     }
@@ -623,7 +623,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       },
       "check": {
@@ -635,7 +635,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_weight.value"
+          "name_suffix": "_subsurface_weight.value"
         }
       },
       "check": {
@@ -647,7 +647,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       },
       "gesture": {
@@ -661,7 +661,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       },
       "check": {
@@ -673,7 +673,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_weight.value"
+          "name_suffix": "_subsurface_weight.value"
         }
       },
       "check": {
@@ -686,7 +686,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "material.feature.remove.10_subsurface_feature_mode"
+          "name_suffix": "_subsurface_feature_mode", "text": "×"
         }
       }
     }
@@ -695,7 +695,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "material.feature.remove.10_subsurface_feature_mode"
+          "name_suffix": "_subsurface_feature_mode", "text": "×"
         }
       },
       "gesture": {
@@ -709,7 +709,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       },
       "check": {
@@ -759,7 +759,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       },
       "check": {
@@ -817,7 +817,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_feature_mode.value"
+          "name_suffix": "_subsurface_feature_mode.value"
         }
       },
       "check": {
@@ -829,7 +829,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_subsurface_weight.value"
+          "name_suffix": "_subsurface_weight.value"
         }
       },
       "check": {

@@ -65,6 +65,18 @@ impl PasteNodesCommand {
         }
     }
 }
+/// A pasted group is a copy of its whole body: every stable id inside it is
+/// derived from the copy's own, so ids stay unique across the document and a
+/// redo reuses the same ones.
+fn rederive_inner_ids(node: &mut EffectGraphNode) {
+    let outer = node.node_id.clone();
+    let Some(group) = node.group.as_deref_mut() else { return };
+    for inner in &mut group.nodes {
+        inner.node_id = NodeId::new(format!("{}.{}", outer.as_str(), inner.node_id.as_str()));
+        rederive_inner_ids(inner);
+    }
+}
+
 impl Command for PasteNodesCommand {
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
@@ -110,6 +122,7 @@ impl Command for PasteNodesCommand {
                     let mut node = sn.clone();
                     node.id = *new_id;
                     node.node_id = new_node_id.clone();
+                    rederive_inner_ids(&mut node);
                     node.handle = sn.handle.as_deref().map(|h| dedup_handle(h, &mut taken));
                     node.editor_pos = Some(match sn.editor_pos {
                         Some((x, y)) => (x + offset.0, y + offset.1),

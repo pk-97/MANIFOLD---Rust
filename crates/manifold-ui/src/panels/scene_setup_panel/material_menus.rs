@@ -163,7 +163,7 @@ mod tests {
     use super::*;
 
     fn panel_with_menus(look: Option<MaterialLook>) -> (ScenePanel, NodeId, NodeId) {
-        let reference = |name: &str| ModifierObjectRef { scope: Vec::new(), node: manifold_foundation::NodeId::new(name) };
+        let reference = |name: &str| SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new(name) };
         let mut panel = ScenePanel::new();
         panel.active_material_info = Some(MaterialInspectorInfo {
             object: reference("object"),

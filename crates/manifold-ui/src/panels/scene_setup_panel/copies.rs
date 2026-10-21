@@ -20,7 +20,7 @@ pub(super) struct CopyCount {
     count: u32,
     less: Option<NodeId>,
     more: Option<NodeId>,
-    run: Option<(NodeId, usize)>,
+    run: Option<(NodeId, SceneNodeRef)>,
 }
 
 impl Default for CopyCount {
@@ -51,14 +51,15 @@ impl ScenePanel {
         mut cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
-        if !row.capabilities.duplicate || (row.parent_group_id.is_some() && !row.is_group) {
+        if !row.capabilities.duplicate || (row.parent.is_some() && !row.is_group) {
             return cy;
         }
         let count = self.copy_count.count;
         let run_w = tree.text_width(RUN_LABEL, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0;
         let value_w = STEP_W * 1.5;
         let controls_w = STEP_W * 2.0 + value_w + GAP + run_w;
-        let key = |offset| obj_key(row.object_node_id as usize, offset);
+        let ordinal = self.row_key(&row.node);
+        let key = |offset| obj_key(ordinal, offset);
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w - controls_w - GAP, ROW_H, "Copies", label_style());
         let mut x = inner_x + inner_w - controls_w;
         let less = tree.add_button_keyed(Some(self.content_parent), x, cy, STEP_W, ROW_H, btn_style(), "\u{2212}", key(OBJ_OFF_COPIES_LESS));
@@ -76,7 +77,7 @@ impl ScenePanel {
         let reason = shortfall(count, row.physics_free_body_slots);
         let run = if reason.is_none() {
             let id = tree.add_button_keyed(Some(self.content_parent), x, cy, run_w, ROW_H, btn_style(), RUN_LABEL, key(OBJ_OFF_COPIES_RUN));
-            self.copy_count.run = Some((id, row.index));
+            self.copy_count.run = Some((id, row.node.clone()));
             id
         } else {
             let style = UIStyle { text_align: TextAlign::Center, ..driven_label_style() };
@@ -103,12 +104,11 @@ impl ScenePanel {
         } else if self.copy_count.more == Some(node_id) {
             1
         } else {
-            let (_, index) = self.copy_count.run.filter(|(button, _)| *button == node_id)?;
+            let (_, object) = self.copy_count.run.clone().filter(|(button, _)| *button == node_id)?;
             let vm = self.state.as_live()?;
             return Some(vec![PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(
                 vm.layer_id.clone(),
-                vm.scene_root_node_id,
-                index as u32,
+                object,
                 self.copy_count.count,
             ))]);
         };
@@ -134,11 +134,11 @@ mod tests {
         let mut selected = None;
         for object in &mut vm.objects {
             if let ObjectRowVm::Known(row) = object
-                && row.parent_group_id.is_none()
+                && row.parent.is_none()
                 && row.capabilities.duplicate
             {
                 row.physics_free_body_slots = free_slots;
-                selected.get_or_insert(row.object_node_id);
+                selected.get_or_insert(row.node.clone());
             }
         }
         let mut panel = ScenePanel::new();
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(shown_count(&tree), "2");
         let actions = click(&mut panel, &mut tree, "scene_setup.properties.copies_run");
         assert!(matches!(actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(layer, _, _, 2))]
+            [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(layer, _, 2))]
                 if *layer == LayerId::new("layer-1")));
     }
 

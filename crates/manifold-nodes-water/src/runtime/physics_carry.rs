@@ -20,7 +20,7 @@ impl super::WaterRuntime<'_> {
             || self.width != prior.width
             || self.height != prior.height
             || slot.def_content_key == 0
-            || slot.def_content_key != old_slot.def_content_key
+            || old_slot.def_content_key == 0
         {
             return;
         }
@@ -30,7 +30,11 @@ impl super::WaterRuntime<'_> {
             return;
         };
         // Validate the entire CPU ancestry before moving any world. Fusion is
-        // permitted around it, but a missing/retyped input cannot inherit time.
+        // permitted around it, and so is an addition (Enable Physics,
+        // Duplicate, Paste wire a new body into the carried world, which
+        // installs it without a rebuild), but a removed or retyped node
+        // cannot inherit time. An edit to a carried node's value lands in
+        // place, as a value edit on a running show does.
         let mut steps = Vec::new();
         for (index, step) in self
             .plan
@@ -49,7 +53,7 @@ impl super::WaterRuntime<'_> {
                             && old.params.keys().all(|key| node.params.contains_key(key))
                     })
             }) else {
-                return;
+                continue;
             };
             steps.push((index, old_index));
         }

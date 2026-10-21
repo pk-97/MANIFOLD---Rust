@@ -36,7 +36,6 @@ const EXPECTED_STOCK_IDS: &[&str] = &[
     "OrderedRecon",
     "OrderedReconHit",
     "RadialForce",
-    "RenderMode",
     "SceneFog",
     "SceneLoop",
     "Shatter",
@@ -65,7 +64,6 @@ fn recipe_json(id: &str) -> &'static str {
             manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECONHIT_JSON
         }
         "RadialForce" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RADIALFORCE_JSON,
-        "RenderMode" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RENDERMODE_JSON,
         "SceneFog" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENEFOG_JSON,
         "SceneLoop" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENELOOP_JSON,
         "Shatter" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON,
@@ -125,7 +123,8 @@ fn physics_catalog_host() -> EffectGraphDef {
         owner.preset_metadata.as_ref().unwrap().id.clone());
     project.timeline.layers[layer].gen_params_mut().unwrap().graph = Some(owner.clone());
     let target = GraphTarget::Generator(project.timeline.layers[layer].layer_id.clone());
-    let mut enable = EnableSceneObjectPhysicsCommand::new(&project, target, scene_id, 0,
+    let first = manifold_core::scene_slots::object_at_slot(&owner, scene_id, 0).expect("the import has an object");
+    let mut enable = EnableSceneObjectPhysicsCommand::new(&project, target, first,
         &metadata_for_node_type("node.rigid_body"), &metadata_for_node_type("node.physics_world"), &owner)
         .expect("catalog Physics source takes physics");
     enable.execute(&mut project);
@@ -145,6 +144,19 @@ fn with_catalog_environment(mut owner: EffectGraphDef) -> EffectGraphDef {
         SerializedParamValue::Bool { value: true },
     );
     let scene_id = scene.id;
+    let scene_node = scene.node_id.clone();
+    // An imported scene stamps rt_enabled as a surface row; the row's value
+    // re-asserts over the node param every frame, so it carries the toggle.
+    if let Some(meta) = owner.preset_metadata.as_mut() {
+        let row = meta.bindings.iter().find_map(|binding| match &binding.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if *node_id == scene_node && param == "rt_enabled" => Some(binding.id.clone()),
+            _ => None,
+        });
+        if let Some(spec) = row.and_then(|id| meta.params.iter_mut().find(|spec| spec.id == id)) {
+            spec.default_value = 1.0;
+        }
+    }
     let environment_id = owner.nodes.iter().map(|node| node.id).max().unwrap() + 1;
     owner.wires.retain(|wire| wire.to_node != scene_id || wire.to_port != "envmap");
     owner.nodes.push(

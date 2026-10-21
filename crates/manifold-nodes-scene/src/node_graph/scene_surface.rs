@@ -227,7 +227,7 @@ fn rigid_body(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Body;
     Some(match param {
         "shape" | "motion" | "friction" | "bounce" | "collider_parts" => setup(Body),
-        "density" => setup(Body).unit(Unit::KilogramsPerCubicMetre),
+        "mass" => setup(Body).unit(Unit::Kilograms),
         "enabled" | "release_count" | "path" | "mesh_index" | "primitive_index"
         | "material_index" | "fit" | "recenter" | "translate_x" | "translate_y" | "translate_z"
         | "fragment_count" | "fragment_index" | "fragment_parent" | "compound_materials" => {
@@ -505,6 +505,7 @@ fn mesh_modifier(type_id: &str, param: &str) -> Option<SceneParamFacts> {
 fn render_scene(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::RayTracing;
     Some(match param {
+        "render_mode" => setup(ControlGroup::RenderMode),
         "rt_enabled" | "temporal_upscale" | "rt_reflections" | "rt_shadows" | "rt_ao"
         | "rt_gi" => setup(RayTracing),
         "objects" | "lights" | "rt_firefly_clamp" | "rt_denoise_feed" => hidden(RayTracing),

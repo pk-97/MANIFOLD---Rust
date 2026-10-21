@@ -118,6 +118,11 @@ impl ScenePanel {
                 crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
             }
         }
+        if let Some(node) = self.render_mode_id
+            && let Some(label) = self.render_mode_label()
+        {
+            tree.set_text(node, &label);
+        }
         self.sync_swatch_values(tree);
     }
 

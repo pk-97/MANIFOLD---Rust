@@ -166,6 +166,13 @@ impl ViewportPass for SceneViewportPass {
         }
         self.renderer.selection_mask()
     }
+    fn set_gizmo_depth(&mut self, wanted: bool) { self.renderer.set_gizmo_depth(wanted); }
+    fn gizmo_depth(&self) -> Option<&GpuTexture> {
+        if !self.last_attempt_valid {
+            return None;
+        }
+        self.renderer.gizmo_depth()
+    }
 }
 
 #[cfg(test)]

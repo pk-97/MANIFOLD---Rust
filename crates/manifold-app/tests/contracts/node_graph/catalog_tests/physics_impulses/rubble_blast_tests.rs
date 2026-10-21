@@ -57,7 +57,7 @@ fn scene_of(def: &EffectGraphDef) -> RigidSceneInputs {
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(id - 1, p)),
             billboard: false,
         },
-        density: scalar(id, "density"),
+        mass: scalar(id, "mass"),
         shape: scalar(id, "shape") as u32,
         kind: scalar(id, "motion") as u32,
         friction: scalar(id, "friction"),

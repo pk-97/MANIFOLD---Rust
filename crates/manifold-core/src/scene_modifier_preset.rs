@@ -21,39 +21,40 @@ pub use crate::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS;
 /// Version of the scene-modifier recipe ABI.
 pub const SCENE_MODIFIER_RECIPE_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SceneNodeRef {
-    #[serde(default)]
-    pub scope: Vec<NodeId>,
-    pub node: NodeId,
-}
+pub use manifold_foundation::scene_surface::SceneNodeRef;
 
-impl Ord for SceneNodeRef {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.scope
-            .iter()
-            .map(NodeId::as_str)
-            .cmp(other.scope.iter().map(NodeId::as_str))
-            .then_with(|| self.node.as_str().cmp(other.node.as_str()))
-    }
-}
-
-impl PartialOrd for SceneNodeRef {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl SceneNodeRef {
+/// The graph-side half of [`SceneNodeRef`]: the reference type lives in
+/// foundation so the UI can hold it; resolving it against a graph lives here.
+pub trait SceneNodeRefExt {
     /// The node this reference names in `def`, walking the scope group by
     /// group.
-    pub fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode> {
+    fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode>;
+
+    /// Resolve this scoped reference against a node slice.
+    fn resolve_nodes<'a>(&self, nodes: &'a [EffectGraphNode]) -> Option<&'a EffectGraphNode>;
+
+    /// Resolve this scoped reference mutably against a node slice.
+    fn resolve_nodes_mut<'a>(&self, nodes: &'a mut [EffectGraphNode]) -> Option<&'a mut EffectGraphNode>;
+
+    /// The reference as document ids: the group path, then the node's own id.
+    /// The form the id-addressed editing commands and panel rows take; a
+    /// reference that no longer names a node gives `None`.
+    fn resolve_doc_path(&self, def: &EffectGraphDef) -> Option<(Vec<u32>, u32)>;
+
+    /// The scoped reference to the node whose stable id is `node`, anywhere
+    /// in `def`. Stable ids are unique across the whole document.
+    fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef>;
+
+    /// Locate a stable node id in a node slice, including nested groups.
+    fn locate_nodes(nodes: &[EffectGraphNode], node: &NodeId) -> Option<SceneNodeRef>;
+}
+
+impl SceneNodeRefExt for SceneNodeRef {
+    fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode> {
         self.resolve_nodes(&def.nodes)
     }
 
-    /// Resolve this scoped reference against a node slice.
-    pub(crate) fn resolve_nodes<'a>(&self, nodes: &'a [EffectGraphNode]) -> Option<&'a EffectGraphNode> {
+    fn resolve_nodes<'a>(&self, nodes: &'a [EffectGraphNode]) -> Option<&'a EffectGraphNode> {
         let mut nodes = nodes;
         for group in &self.scope {
             nodes = &nodes.iter().find(|node| &node.node_id == group)?.group.as_deref()?.nodes;
@@ -61,8 +62,7 @@ impl SceneNodeRef {
         nodes.iter().find(|node| node.node_id == self.node)
     }
 
-    /// Resolve this scoped reference mutably against a node slice.
-    pub(crate) fn resolve_nodes_mut<'a>(&self, nodes: &'a mut [EffectGraphNode]) -> Option<&'a mut EffectGraphNode> {
+    fn resolve_nodes_mut<'a>(&self, nodes: &'a mut [EffectGraphNode]) -> Option<&'a mut EffectGraphNode> {
         fn descend<'a>(nodes: &'a mut [EffectGraphNode], scope: &[NodeId], node: &NodeId) -> Option<&'a mut EffectGraphNode> {
             if let Some((group, rest)) = scope.split_first() {
                 let group = nodes.iter_mut().find(|candidate| candidate.node_id == *group)?.group.as_deref_mut()?;
@@ -73,14 +73,23 @@ impl SceneNodeRef {
         descend(nodes, &self.scope, &self.node)
     }
 
-    /// The scoped reference to the node whose stable id is `node`, anywhere
-    /// in `def`. Stable ids are unique across the whole document.
-    pub fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef> {
+    fn resolve_doc_path(&self, def: &EffectGraphDef) -> Option<(Vec<u32>, u32)> {
+        let mut nodes = def.nodes.as_slice();
+        let mut scope = Vec::with_capacity(self.scope.len());
+        for group in &self.scope {
+            let group = nodes.iter().find(|node| &node.node_id == group)?;
+            scope.push(group.id);
+            nodes = &group.group.as_deref()?.nodes;
+        }
+        let node = nodes.iter().find(|node| node.node_id == self.node)?;
+        Some((scope, node.id))
+    }
+
+    fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef> {
         Self::locate_nodes(&def.nodes, node)
     }
 
-    /// Locate a stable node id in a node slice, including nested groups.
-    pub(crate) fn locate_nodes(nodes: &[EffectGraphNode], node: &NodeId) -> Option<SceneNodeRef> {
+    fn locate_nodes(nodes: &[EffectGraphNode], node: &NodeId) -> Option<SceneNodeRef> {
         fn visit(nodes: &[EffectGraphNode], wanted: &NodeId, scope: &mut Vec<NodeId>) -> Option<SceneNodeRef> {
             for candidate in nodes {
                 if &candidate.node_id == wanted {
@@ -300,7 +309,6 @@ pub enum SceneStageScope {
 pub enum SceneEndpoint {
     Camera,
     Atmosphere,
-    RenderMode,
     Transform,
     Instances,
     Vertices,

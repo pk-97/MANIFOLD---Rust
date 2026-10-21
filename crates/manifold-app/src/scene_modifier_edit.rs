@@ -961,8 +961,9 @@ mod prepared_toggle_tests {
         let mut project = Project::default();
         project.timeline.layers.push(layer);
         let target = GraphTarget::Generator(layer_id.clone());
+        let first = manifold_core::scene_slots::object_at_slot(&graph, scene_id, 0).expect("the import has an object");
         let physics = manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
-            &project, target.clone(), scene_id, 0,
+            &project, target.clone(), first,
             &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
             &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
             &graph,

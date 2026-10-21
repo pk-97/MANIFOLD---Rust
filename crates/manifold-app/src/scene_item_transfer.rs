@@ -6,8 +6,9 @@ use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, SerializedParamValue,
 };
 use manifold_core::effects::PresetInstance;
+use manifold_core::physics_members::{MEMBER_OUTPUT, WORLD_TYPE_ID, member_input};
 use manifold_core::project::Project;
-use manifold_core::{GraphTarget, LayerId, NodeId};
+use manifold_core::{GraphTarget, LayerId, NodeId, SceneNodeRef};
 use manifold_editing::command::Command;
 use manifold_editing::commands::graph::SceneFluidRoleAssignment;
 
@@ -56,9 +57,8 @@ impl SceneItemClipboard {
     pub(crate) fn capture(
         project: &Project,
         layer: &LayerId,
-        scene: u32,
         kind: SceneItemKind,
-        index: u32,
+        item: &SceneNodeRef,
     ) -> Result<Self, String> {
         let target = GraphTarget::Generator(layer.clone());
         let host = project
@@ -66,6 +66,11 @@ impl SceneItemClipboard {
             .ok_or("Scene is no longer available")?;
         let source =
             crate::graph_target::resolve(project, &target).ok_or("Scene graph is unavailable")?;
+        let slot = match kind {
+            SceneItemKind::Object => manifold_core::scene_slots::object_slot(&source, item),
+            SceneItemKind::Light => manifold_core::scene_slots::light_slot(&source, item),
+        }?;
+        let (scene, index) = (slot.render_id, slot.index);
         let output = source
             .wires
             .iter()
@@ -118,29 +123,24 @@ impl SceneItemClipboard {
                 return Err("Scene feedback must be copied in the graph editor".into());
             }
             ids.insert(id);
-            let physics_slot = if node.type_id == "node.physics_world" {
-                let slot = port
-                    .strip_prefix("pose_")
-                    .ok_or("Unsupported physics output on scene item")?
-                    .to_string();
-                let body_port = format!("body_{slot}");
-                let body_inputs: Vec<_> = source
-                    .wires
-                    .iter()
-                    .filter(|wire| wire.to_node == id && wire.to_port == body_port)
-                    .collect();
-                if body_inputs.len() != 1 {
-                    return Err("Selected Physics World body slot is missing or ambiguous".into());
+            // A body's membership is an output of the body (or of the group
+            // that holds it), so the upstream walk would miss it: take that
+            // one wire and the world it joins. The world contributes its own
+            // settings but never the other bodies' membership.
+            if let Some(member) = source.wires.iter().find(|wire| {
+                    wire.from_node == id
+                        && wire.from_port == MEMBER_OUTPUT
+                        && member_input(&wire.to_port).is_some()
+                        && source.nodes.iter().any(|n| n.id == wire.to_node && n.type_id == WORLD_TYPE_ID)
+                })
+            {
+                if !captured_wires.contains(member) {
+                    captured_wires.push(member.clone());
                 }
-                Some(slot)
-            } else {
-                None
-            };
+                pending.push((member.to_node, member.to_port.clone()));
+            }
             for wire in source.wires.iter().filter(|wire| wire.to_node == id) {
-                if let Some(slot) = &physics_slot
-                    && wire.to_port.starts_with("body_")
-                    && wire.to_port != format!("body_{slot}")
-                {
+                if node.type_id == WORLD_TYPE_ID && member_input(&wire.to_port).is_some() {
                     continue;
                 }
                 if !captured_wires.contains(wire) {
@@ -153,11 +153,11 @@ impl SceneItemClipboard {
         graph.nodes.retain(|node| ids.contains(&node.id));
         graph.wires = captured_wires;
         // Forces aimed only at this item belong to it and travel with it.
-        let item = manifold_core::SceneNodeRef {
+        let producer = manifold_core::SceneNodeRef {
             scope: Vec::new(),
             node: source.nodes.iter().find(|node| node.id == output.from_node).ok_or("Selected scene item is missing")?.node_id.clone(),
         };
-        let owned = manifold_core::scene_modifier_edit::object_modifiers(&source, &item).owned;
+        let owned = manifold_core::scene_modifier_edit::object_modifiers(&source, &producer).owned;
         graph.scene_modifiers.retain(|modifier| owned.contains(&modifier.id));
         Ok(Self {
             host: Box::new(host.clone()),
@@ -182,29 +182,25 @@ pub(crate) enum SceneItemAction {
     /// the source has physics (PHYSICS_ENGINE_BOUNDARY_DESIGN.md P6a).
     DuplicateObject {
         layer: LayerId,
-        scene: u32,
-        index: u32,
+        object: SceneNodeRef,
         copies: u32,
     },
     DuplicateLight {
         layer: LayerId,
-        scene: u32,
-        index: u32,
+        light: SceneNodeRef,
     },
     /// The object card's Physics switch (P6a): the body's own `enabled` once
     /// a body exists (off keeps its settings, D6); the first switch-on adds
     /// the body, and the shared world when there is none.
     SetPhysics {
         layer: LayerId,
-        scene: u32,
-        index: u32,
+        object: SceneNodeRef,
         enabled: bool,
     },
     Move {
         layer: LayerId,
-        scene: u32,
         kind: SceneItemKind,
-        index: u32,
+        item: SceneNodeRef,
         delta: i32,
     },
 }
@@ -385,7 +381,7 @@ fn paste(
     let mut doc_ids = HashMap::new();
     let mut node_ids = Vec::new();
     let mut added = Vec::new();
-    let mut physics_ports = HashMap::new();
+    let mut reused_nodes = HashSet::new();
     for source in &clipboard.graph.nodes {
         if source.type_id == "node.physics_world" {
             let worlds: Vec<_> = graph
@@ -401,23 +397,7 @@ fn paste(
             }
             if let Some(&world) = worlds.first() {
                 doc_ids.insert(source.id, world);
-                let mut slots = manifold_editing::commands::graph::BodySlots::of(&graph.wires, world);
-                for input in clipboard
-                    .graph
-                    .wires
-                    .iter()
-                    .filter(|w| w.to_node == source.id && w.to_port.starts_with("body_"))
-                {
-                    let slot = slots.first_free().ok_or("Physics World has no free body slots")?;
-                    slots.take(slot);
-                    let old = input.to_port.trim_start_matches("body_");
-                    for prefix in ["body_", "pose_"] {
-                        physics_ports.insert(
-                            (source.id, format!("{prefix}{old}")),
-                            format!("{prefix}{slot}"),
-                        );
-                    }
-                }
+                reused_nodes.insert(world);
                 continue;
             }
         }
@@ -474,39 +454,26 @@ fn paste(
     }
     restore_exposures(&clipboard.graph.nodes, &mut added, &stable);
     graph.nodes.extend(added);
-    for wire in &clipboard.graph.wires {
-        let mut copy = wire.clone();
-        copy.from_node = *doc_ids
-            .get(&wire.from_node)
-            .ok_or("Copied source is missing")?;
-        copy.to_node = *doc_ids
-            .get(&wire.to_node)
-            .ok_or("Copied destination is missing")?;
-        if let Some(port) = physics_ports.get(&(wire.from_node, wire.from_port.clone())) {
-            copy.from_port = port.clone();
-        }
-        if let Some(port) = physics_ports.get(&(wire.to_node, wire.to_port.clone())) {
-            copy.to_port = port.clone();
-        }
-        // A reused world keeps its scene-wide configuration; only append bodies.
-        let reused_world = clipboard
-            .graph
-            .nodes
-            .iter()
-            .any(|n| n.id == wire.to_node && n.type_id == "node.physics_world")
-            && graph
-                .wires
-                .iter()
-                .any(|w| w.to_node == copy.to_node && w.to_port == copy.to_port);
-        if !reused_world {
-            graph.wires.push(copy);
-        }
+    // The one wire copier: a shared world keeps its scene-wide setup and only
+    // takes the pasted bodies, each in the world's next free slot.
+    {
+        let doc_id = |id: u32| doc_ids.get(&id).copied();
+        let reused = |id: u32| reused_nodes.contains(&id);
+        let keep_port = |_: &EffectGraphWire| None;
+        manifold_editing::commands::graph::copy_scene_item_wires(
+            &mut graph.nodes,
+            &mut graph.wires,
+            &clipboard.graph.wires,
+            &manifold_editing::commands::graph::WireCopy { doc_id: &doc_id, reused: &reused, to_port: &keep_port },
+        )?;
     }
-    // A pasted body past the world's body count grows the count.
-    let worlds: Vec<u32> = graph.nodes.iter().filter(|node| node.type_id == "node.physics_world").map(|node| node.id).collect();
-    for world in worlds {
-        manifold_core::physics_body_slots::fit_world_bodies(&mut graph.nodes, &graph.wires, world);
-    }
+    let next_port = graph
+        .wires
+        .iter()
+        .filter(|wire| wire.to_node == scene)
+        .filter_map(|wire| wire.to_port.strip_prefix(clipboard.kind.prefix())?.parse::<u32>().ok())
+        .max()
+        .map_or(0, |last| last + 1);
     let node = graph
         .nodes
         .iter_mut()
@@ -520,7 +487,7 @@ fn paste(
     node.params.insert(
         clipboard.kind.count_param().into(),
         SerializedParamValue::Float {
-            value: (count + 1) as f32,
+            value: count.max(next_port + 1) as f32,
         },
     );
     graph.wires.push(EffectGraphWire {
@@ -529,7 +496,7 @@ fn paste(
             .ok_or("Copied scene item is missing")?,
         from_port: clipboard.port.clone(),
         to_node: scene,
-        to_port: format!("{}{count}", clipboard.kind.prefix()),
+        to_port: format!("{}{next_port}", clipboard.kind.prefix()),
     });
     if !clipboard.fluid_role_assignments.is_empty() {
         let original_group = clipboard
@@ -585,7 +552,7 @@ fn paste(
     ))
 }
 
-fn set_physics(project: &Project, layer: &LayerId, scene: u32, index: u32, enabled: bool) -> Result<Box<dyn Command>, String> {
+fn set_physics(project: &Project, layer: &LayerId, object: &SceneNodeRef, enabled: bool) -> Result<Box<dyn Command>, String> {
     use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
     use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     let mut default = crate::ui_bridge::project::generator_catalog_default(project, layer).ok_or("Scene is unavailable")?;
@@ -594,9 +561,8 @@ fn set_physics(project: &Project, layer: &LayerId, scene: u32, index: u32, enabl
     let physics = project
         .graph_for_target(&target, Some(&default))
         .and_then(SceneVm::from_def)
-        .filter(|vm| vm.scene_root_node_id == scene)
-        .and_then(|vm| vm.objects.into_iter().find_map(|object| match object {
-            SceneObjectVm::Known(row) if row.index == index as usize => row.physics,
+        .and_then(|vm| vm.objects.into_iter().find_map(|row| match row {
+            SceneObjectVm::Known(row) if row.address == *object => row.physics,
             _ => None,
         }));
     match physics {
@@ -618,8 +584,7 @@ fn set_physics(project: &Project, layer: &LayerId, scene: u32, index: u32, enabl
         None if enabled => manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
             project,
             target,
-            scene,
-            index,
+            object.clone(),
             &metadata_for_node_type("node.rigid_body"),
             &metadata_for_node_type("node.physics_world"),
             &default,
@@ -713,25 +678,27 @@ pub(crate) fn build_action(
             scene,
             clipboard,
         } => paste(project, layer, scene, *clipboard, "Paste Scene Item", CopyNaming::Deduped),
-        SceneItemAction::DuplicateObject { layer, scene, index, copies } => {
+        SceneItemAction::DuplicateObject { layer, object, copies } => {
             let target = GraphTarget::Generator(layer);
             let default = crate::graph_target::resolve(project, &target).ok_or("Scene graph is unavailable")?;
             let command = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
-                project, target.clone(), Vec::new(), scene, index, copies, &default,
+                project, target.clone(), object, copies, &default,
             )
             .map_err(|error| error.message)?;
             Ok(Box::new(command))
         }
-        SceneItemAction::SetPhysics { layer, scene, index, enabled } => set_physics(project, &layer, scene, index, enabled),
-        SceneItemAction::DuplicateLight { layer, scene, index } => {
-            let clipboard = SceneItemClipboard::capture(project, &layer, scene, SceneItemKind::Light, index)?;
+        SceneItemAction::SetPhysics { layer, object, enabled } => set_physics(project, &layer, &object, enabled),
+        SceneItemAction::DuplicateLight { layer, light } => {
+            let clipboard = SceneItemClipboard::capture(project, &layer, SceneItemKind::Light, &light)?;
+            let target = GraphTarget::Generator(layer.clone());
+            let default = crate::graph_target::resolve(project, &target).ok_or("Scene graph is unavailable")?;
+            let scene = manifold_core::scene_slots::light_slot(&default, &light)?.render_id;
             paste(project, layer, scene, clipboard, "Duplicate Scene Item", CopyNaming::Numbered)
         }
         SceneItemAction::Move {
             layer,
-            scene,
             kind,
-            index,
+            item,
             delta,
         } => {
             let target = GraphTarget::Generator(layer.clone());
@@ -742,6 +709,11 @@ pub(crate) fn build_action(
             let mut graph = crate::graph_target::resolve(project, &target)
                 .map(|graph| (*graph).clone())
                 .ok_or("Scene graph is unavailable")?;
+            let slot = match kind {
+                SceneItemKind::Object => manifold_core::scene_slots::object_slot(&graph, &item),
+                SceneItemKind::Light => manifold_core::scene_slots::light_slot(&graph, &item),
+            }?;
+            let (scene, index) = (slot.render_id, slot.index);
             let adjacent = i64::from(index) + i64::from(delta);
             if adjacent < 0 {
                 return Err("Scene item is already first".into());
@@ -821,6 +793,17 @@ mod tests {
             to_node,
             to_port: to_port.to_string(),
         }
+    }
+
+    /// The object or light filling slot `index` of scene node 1, by address.
+    fn item_at(project: &Project, layer: &LayerId, kind: SceneItemKind, index: u32) -> SceneNodeRef {
+        let target = GraphTarget::Generator(layer.clone());
+        let def = crate::graph_target::resolve(project, &target).expect("the layer has a graph");
+        match kind {
+            SceneItemKind::Object => manifold_core::scene_slots::object_at_slot(&def, 1, index),
+            SceneItemKind::Light => manifold_core::scene_slots::light_at_slot(&def, 1, index),
+        }
+        .expect("the slot holds an item")
     }
 
     fn graph(nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>) -> EffectGraphDef {
@@ -948,7 +931,7 @@ mod tests {
             .insert("objects".into(), SerializedParamValue::Float { value: 1.0 });
         let mut wires = vec![
             wire(2, "object", 1, "object_0"),
-            wire(3, "pose_0", 2, "transform"),
+            wire(4, "pose", 2, "transform"),
             wire(4, "body", 3, "body_0"),
         ];
         for slot in 1..existing_slots {
@@ -1104,16 +1087,17 @@ mod tests {
         let body1 = node(5, "body-1", "node.rigid_body", "Body 1");
         let wires = vec![
             wire(2, "object", 1, "object_0"),
-            wire(3, "pose_0", 2, "transform"),
+            wire(4, "pose", 2, "transform"),
             wire(4, "body", 3, "body_0"),
             wire(5, "body", 3, "body_1"),
         ];
         let (project, layer) =
             project_with_graph(graph(vec![render, object, world, body0, body1], wires));
-        let clipboard = SceneItemClipboard::capture(&project, &layer, 1, SceneItemKind::Object, 0)
+        let clipboard = SceneItemClipboard::capture(&project, &layer, SceneItemKind::Object, &item_at(&project, &layer, SceneItemKind::Object, 0))
             .expect("selected body should be copyable");
         let ids: HashSet<_> = clipboard.graph.nodes.iter().map(|node| node.id).collect();
         assert!(ids.contains(&4));
+        assert!(ids.contains(&3), "the world the body joins travels with it");
         assert!(!ids.contains(&5));
         assert!(
             !clipboard
@@ -1124,27 +1108,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn capture_rejects_ambiguous_physics_body_atomically() {
-        let wires = vec![
-            wire(2, "object", 1, "object_0"),
-            wire(3, "pose_0", 2, "transform"),
-            wire(4, "body", 3, "body_0"),
-            wire(5, "body", 3, "body_0"),
-        ];
-        let nodes = vec![
-            node(1, "render", "node.render_scene", "Scene"),
-            node(2, "object", "node.scene_object", "Object 0"),
-            node(3, "world", "node.physics_world", "Physics World"),
-            node(4, "body-0a", "node.rigid_body", "Body 0 A"),
-            node(5, "body-0b", "node.rigid_body", "Body 0 B"),
-        ];
-        let (project, layer) = project_with_graph(graph(nodes, wires));
-        let result = SceneItemClipboard::capture(&project, &layer, 1, SceneItemKind::Object, 0);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("ambiguous"));
-    }
-
     /// D11: Duplicate names the copy "<name> N", the first free N from 2;
     /// Paste keeps the clone helper's `_N` names.
     #[test]
@@ -1153,11 +1116,11 @@ mod tests {
         let layer = add_transfer_layer(&mut project, "Scene", "dup", false);
         let mut editing = EditingService::new();
         for _ in 0..2 {
-            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), scene: 1, index: 0, copies: 1 };
+            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), object: item_at(&project, &layer, SceneItemKind::Object, 0), copies: 1 };
             editing.execute(build_action(&project, action).unwrap(), &mut project);
             assert!(editing.take_rejection().is_none());
         }
-        let clipboard = SceneItemClipboard::capture(&project, &layer, 1, SceneItemKind::Object, 0).unwrap();
+        let clipboard = SceneItemClipboard::capture(&project, &layer, SceneItemKind::Object, &item_at(&project, &layer, SceneItemKind::Object, 0)).unwrap();
         let paste = SceneItemAction::Paste { layer: layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
         editing.execute(build_action(&project, paste).unwrap(), &mut project);
         assert!(editing.take_rejection().is_none());
@@ -1174,7 +1137,11 @@ mod tests {
 
     #[test]
     fn move_swaps_scene_slots_without_changing_item_identity() {
-        let nodes = vec![node(1, "render", "node.render_scene", "Scene")];
+        let nodes = vec![
+            node(1, "render", "node.render_scene", "Scene"),
+            node(10, "first", "node.scene_object", "First"),
+            node(11, "second", "node.scene_object", "Second"),
+        ];
         let wires = vec![
             wire(10, "object", 1, "object_0"),
             wire(11, "object", 1, "object_1"),
@@ -1182,13 +1149,13 @@ mod tests {
         let (mut project, layer) = project_with_graph(graph(nodes, wires));
         // The two upstream node ids need not be reachable for a reorder; the
         // operation intentionally swaps only the scene output ports.
+        let first = item_at(&project, &layer, SceneItemKind::Object, 0);
         let mut command = build_action(
             &project,
             SceneItemAction::Move {
                 layer,
-                scene: 1,
                 kind: SceneItemKind::Object,
-                index: 0,
+                item: first,
                 delta: 1,
             },
         )
@@ -1271,7 +1238,7 @@ mod tests {
             DriverWaveform::Sine,
         )]);
         let clipboard =
-            SceneItemClipboard::capture(&project, &source_layer, 1, SceneItemKind::Object, 0)
+            SceneItemClipboard::capture(&project, &source_layer, SceneItemKind::Object, &item_at(&project, &source_layer, SceneItemKind::Object, 0))
                 .expect("source object should copy");
         let copied_material = material_node(&clipboard.graph, "source");
         assert_eq!(
@@ -1378,7 +1345,7 @@ mod tests {
         let destination_layer =
             add_transfer_layer(&mut project, "Destination", "light-destination", true);
         let clipboard =
-            SceneItemClipboard::capture(&project, &source_layer, 1, SceneItemKind::Light, 0)
+            SceneItemClipboard::capture(&project, &source_layer, SceneItemKind::Light, &item_at(&project, &source_layer, SceneItemKind::Light, 0))
                 .expect("light should copy");
         let source_light_id = clipboard
             .graph
@@ -1426,6 +1393,114 @@ mod tests {
         }));
     }
 
+    /// A whole physics object: the authored transform feeds a body, the body
+    /// shapes the mesh and joins the world's slot 0, and the object reads the
+    /// body's pose. `with_force` adds a per-body force on the body.
+    fn physics_object_scene(with_force: bool) -> EffectGraphDef {
+        let mut nodes = vec![
+            node(1, "p-render", "node.render_scene", "Scene"),
+            node(2, "p-object", "node.scene_object", "Cube"),
+            node(3, "p-material", "node.pbr_material", "Cube Material"),
+            node(4, "p-mesh", "node.platonic_solid_mesh", "Cube Mesh"),
+            node(5, "p-transform", "node.transform_3d", "Cube Transform"),
+            node(6, "p-body", "node.rigid_body", "Cube Body"),
+            node(7, "p-world", "node.physics_world", "Physics World"),
+        ];
+        nodes[0].params.insert("objects".into(), SerializedParamValue::Float { value: 1.0 });
+        let mut wires = vec![
+            wire(5, "transform", 6, "transform"),
+            wire(6, "shape", 4, "shape"),
+            wire(4, "vertices", 2, "vertices"),
+            wire(3, "out", 2, "material"),
+            wire(6, "pose", 2, "transform"),
+            wire(2, "object", 1, "object_0"),
+            wire(6, "body", 7, "body_0"),
+        ];
+        if with_force {
+            nodes.push(node(8, "p-force", "node.uniform_vector_field", "Wind"));
+            wires.push(wire(8, "out", 6, "acceleration"));
+        }
+        graph(nodes, wires)
+    }
+
+    fn graph_in(project: &Project, layer: &LayerId) -> EffectGraphDef {
+        project
+            .graph_target_owner(&GraphTarget::Generator(layer.clone()))
+            .unwrap()
+            .graph
+            .clone()
+            .unwrap()
+    }
+
+    /// The graph with every id dropped: each wire as `type.port > type.port`
+    /// and each node as its type, sorted, so two copies of one object compare.
+    fn shape_of(graph: &EffectGraphDef) -> Vec<String> {
+        let type_of = |id: u32| graph.nodes.iter().find(|node| node.id == id).map(|node| node.type_id.clone()).unwrap();
+        let mut shape: Vec<String> = graph.nodes.iter().map(|node| format!("node {}", node.type_id)).collect();
+        shape.extend(graph.wires.iter().map(|wire| {
+            format!("{}.{} > {}.{}", type_of(wire.from_node), wire.from_port, type_of(wire.to_node), wire.to_port)
+        }));
+        shape.sort();
+        shape
+    }
+
+    #[test]
+    fn paste_gives_the_copy_its_own_per_body_force() {
+        let (mut project, layer) = project_with_graph(physics_object_scene(true));
+        let clipboard = SceneItemClipboard::capture(&project, &layer, SceneItemKind::Object, &item_at(&project, &layer, SceneItemKind::Object, 0)).unwrap();
+        let paste = SceneItemAction::Paste { layer: layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
+        let mut editing = EditingService::new();
+        editing.execute(build_action(&project, paste).unwrap(), &mut project);
+        assert!(editing.take_rejection().is_none());
+        let pasted = graph_in(&project, &layer);
+        let bodies: Vec<u32> = pasted.nodes.iter().filter(|n| n.type_id == "node.rigid_body").map(|n| n.id).collect();
+        assert_eq!(bodies.len(), 2);
+        for body in bodies {
+            assert!(
+                pasted.wires.iter().any(|w| w.to_node == body && w.to_port == "acceleration"),
+                "body {body} has its force"
+            );
+            assert!(
+                pasted.wires.iter().any(|w| w.from_node == body && w.from_port == "body" && w.to_node == 7),
+                "body {body} joined the world"
+            );
+        }
+        let slots: BTreeSet<_> = pasted.wires.iter().filter(|w| w.to_node == 7).map(|w| w.to_port.clone()).collect();
+        assert_eq!(slots, BTreeSet::from(["body_0".to_string(), "body_1".to_string()]));
+    }
+
+    #[test]
+    fn duplicate_and_paste_of_a_physics_object_make_the_same_graph() {
+        for with_force in [false, true] {
+            let (mut duplicated, dup_layer) = project_with_graph(physics_object_scene(with_force));
+            let mut editing = EditingService::new();
+            let action = SceneItemAction::DuplicateObject { layer: dup_layer.clone(), object: item_at(&duplicated, &dup_layer, SceneItemKind::Object, 0), copies: 1 };
+            editing.execute(build_action(&duplicated, action).unwrap(), &mut duplicated);
+            assert!(editing.take_rejection().is_none());
+
+            let (mut pasted, paste_layer) = project_with_graph(physics_object_scene(with_force));
+            let clipboard = SceneItemClipboard::capture(&pasted, &paste_layer, SceneItemKind::Object, &item_at(&pasted, &paste_layer, SceneItemKind::Object, 0)).unwrap();
+            let action = SceneItemAction::Paste { layer: paste_layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
+            editing.execute(build_action(&pasted, action).unwrap(), &mut pasted);
+            assert!(editing.take_rejection().is_none());
+
+            let (from_duplicate, from_paste) = (graph_in(&duplicated, &dup_layer), graph_in(&pasted, &paste_layer));
+            assert_eq!(shape_of(&from_duplicate), shape_of(&from_paste), "with_force {with_force}");
+            assert!(from_paste.wires.iter().any(|w| w.to_node == 7 && w.to_port == "body_1"));
+            if with_force {
+                // Each body has a force of its own: editing the copy's wind
+                // never moves the original.
+                let sources: BTreeSet<u32> = from_duplicate
+                    .wires
+                    .iter()
+                    .filter(|w| w.to_port == "acceleration")
+                    .map(|w| w.from_node)
+                    .collect();
+                assert_eq!(sources.len(), 2, "the duplicate has its own force node");
+            }
+        }
+    }
+
     #[test]
     fn paste_physics_merges_one_body_and_rejects_full_destination_atomically() {
         let source_graph = physics_graph(1);
@@ -1433,9 +1508,8 @@ mod tests {
         let clipboard = SceneItemClipboard::capture(
             &source_project,
             &source_layer,
-            1,
             SceneItemKind::Object,
-            0,
+            &item_at(&source_project, &source_layer, SceneItemKind::Object, 0),
         )
         .expect("physics body should copy");
         let destination_layer = add_transfer_layer(
@@ -1470,7 +1544,11 @@ mod tests {
             .unwrap();
         assert!(merged.wires.iter().any(|wire| wire.to_port == "body_0"));
         assert!(merged.wires.iter().any(|wire| wire.to_port == "body_1"));
-        assert!(merged.wires.iter().any(|wire| wire.from_port == "pose_1"));
+        assert_eq!(
+            merged.wires.iter().filter(|wire| wire.from_port == "pose" && wire.to_port == "transform").count(),
+            2,
+            "each object reads its own body's pose"
+        );
         assert_eq!(
             merged
                 .wires
@@ -1547,5 +1625,77 @@ mod tests {
             .unwrap(),
             before
         );
+    }
+
+    /// A duplicate queued for the last object, then a remove of the first that
+    /// shifts every slot: the duplicate still copies the object it named. One
+    /// queued for the removed object refuses with a reason.
+    #[test]
+    fn a_queued_duplicate_acts_on_the_object_it_named_after_a_remove() {
+        let mut project = Project::default();
+        let layer = add_transfer_layer(&mut project, "Scene", "queued", false);
+        let mut editing = EditingService::new();
+        for _ in 0..2 {
+            let first = item_at(&project, &layer, SceneItemKind::Object, 0);
+            let action = SceneItemAction::DuplicateObject { layer: layer.clone(), object: first, copies: 1 };
+            editing.execute(build_action(&project, action).unwrap(), &mut project);
+            assert!(editing.take_rejection().is_none());
+        }
+        let handles = |project: &Project| -> Vec<String> {
+            let target = GraphTarget::Generator(layer.clone());
+            let def = crate::graph_target::resolve(project, &target).unwrap();
+            let mut names: Vec<String> =
+                def.nodes.iter().filter(|n| n.type_id == "node.scene_object").filter_map(|n| n.handle.clone()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(handles(&project), ["Object 0", "Object 0 2", "Object 0 3"]);
+        let first = item_at(&project, &layer, SceneItemKind::Object, 0);
+        let last = item_at(&project, &layer, SceneItemKind::Object, 2);
+        let queued = SceneItemAction::DuplicateObject { layer: layer.clone(), object: last, copies: 1 };
+        let queued_for_removed = SceneItemAction::DuplicateObject { layer: layer.clone(), object: first.clone(), copies: 1 };
+
+        let target = GraphTarget::Generator(layer.clone());
+        let default = (*crate::graph_target::resolve(&project, &target).unwrap()).clone();
+        let remove = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(target, first, default);
+        editing.execute(Box::new(remove), &mut project);
+        assert!(editing.take_rejection().is_none());
+        assert_eq!(handles(&project), ["Object 0 2", "Object 0 3"]);
+
+        editing.execute(build_action(&project, queued).unwrap(), &mut project);
+        assert!(editing.take_rejection().is_none());
+        assert_eq!(
+            handles(&project),
+            ["Object 0 2", "Object 0 3", "Object 0 3 2"],
+            "the copy is of the last object, which moved to slot 1"
+        );
+        let refusal = build_action(&project, queued_for_removed).expect_err("the removed object cannot be copied");
+        assert!(refusal.contains("no longer"), "{refusal}");
+    }
+
+    /// A compound import wires two objects while the scene's count says one.
+    /// Paste puts its copy on the next free physical port, not on the port the
+    /// count names (BUG-vglg.6).
+    #[test]
+    fn paste_after_a_compound_import_takes_the_next_physical_port() {
+        let mut graph = transfer_graph("compound", false);
+        graph.nodes.push(node(6, "compound-part", "node.scene_object", "Part 2"));
+        graph.wires.push(wire(6, "object", 1, "object_1"));
+        let (mut project, layer) = project_with_graph(graph);
+        let first = item_at(&project, &layer, SceneItemKind::Object, 0);
+        let clipboard = SceneItemClipboard::capture(&project, &layer, SceneItemKind::Object, &first).unwrap();
+        let paste = SceneItemAction::Paste { layer: layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
+        let mut editing = EditingService::new();
+        editing.execute(build_action(&project, paste).unwrap(), &mut project);
+        assert!(editing.take_rejection().is_none());
+
+        let target = GraphTarget::Generator(layer);
+        let def = crate::graph_target::resolve(&project, &target).unwrap();
+        let mut ports: Vec<String> =
+            def.wires.iter().filter(|w| w.to_node == 1 && w.to_port.starts_with("object_")).map(|w| w.to_port.clone()).collect();
+        ports.sort();
+        assert_eq!(ports, ["object_0", "object_1", "object_2"], "every object has its own port");
+        let scene = def.nodes.iter().find(|n| n.id == 1).unwrap();
+        assert_eq!(scene.params.get("objects"), Some(&SerializedParamValue::Float { value: 3.0 }));
     }
 }

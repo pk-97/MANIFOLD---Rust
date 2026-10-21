@@ -754,38 +754,22 @@ pub(crate) fn composite_main_ui_frame(
         );
     }
 
-    // Pass 3b: the Scene panel's gizmos over the show picture, through the
-    // camera that rendered it (REALTIME_3D_DESIGN.md D7a). Editor chrome only.
+    // Pass 3b: the selected object's outline over the show picture (D-102).
+    // The gizmo lines are already in the picture: the content thread draws
+    // them through the gizmo pass, depth-tested (`gizmo_overlay.rs`).
     if let Some(gizmos) = gizmos
         && video.is_some()
         && let Some(fit) = fit
+        && let Some((outline, mask)) = gizmos.outline
     {
-        // The selected object's outline under the lines (D-102).
-        if let Some((outline, mask)) = gizmos.outline {
-            outline.draw(&mut encoder, offscreen, mask, (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf), sf);
-        }
-        ui_renderer.begin_frame();
-        ui_renderer.push_immediate_clip(fit.x, fit.y, fit.width, fit.height);
-        let view = gizmos.view;
-        crate::scene_viewport::draw_world_lines(ui_renderer, fit, &view.camera, view.width, view.height, gizmos.lines);
-        ui_renderer.pop_immediate_clip();
-        let (logical_w, logical_h) = (
-            (offscreen.width as f64 / scale_factor) as u32,
-            (offscreen.height as f64 / scale_factor) as u32,
-        );
-        if ui_renderer.prepare(device, logical_w, logical_h, scale_factor) {
-            ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-        }
+        outline.draw(&mut encoder, offscreen, mask, (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf), sf);
     }
 
     encoder.commit();
 }
 
-/// The Scene panel's gizmo overlay for one main-window frame: the preview
-/// host's composed lines and the camera and output size of the frame shown.
+/// The Scene panel's overlay for one main-window frame.
 pub(crate) struct MainGizmos<'a> {
-    pub lines: &'a [manifold_nodes_scene::node_graph::viewport_overlay::WorldLine],
-    pub view: crate::scene_gizmo::GizmoView,
     /// The selection outline pass and the shown picture's mask (D-102).
     pub outline: Option<(&'a crate::selection_outline::SelectionOutline, &'a manifold_gpu::GpuTexture)>,
 }

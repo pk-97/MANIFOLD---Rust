@@ -15,6 +15,7 @@ use manifold_core::types::LayerType;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, insert_scene_template};
 
+mod addressing;
 mod clip_string_overrides;
 mod force_targets;
 mod rigid_boundary;
@@ -79,7 +80,7 @@ fn scene_insertions_allocate_ids_across_nested_groups() {
                 (0.0, 0.0), Vec::new(), mirror_catalog_default())),
             2 => Box::new(AddSceneFogCommand::new(target, vec![], 0,
                 (0.0, 0.0), Vec::new(), mirror_catalog_default())),
-            _ => Box::new(AddObjectTransformCommand::new(target, vec![1], 100,
+            _ => Box::new(add_transform(&project, target, vec![1], 100,
                 (0.0, 0.0), mirror_catalog_default())),
         };
         command.execute(&mut project);
@@ -212,7 +213,7 @@ fn physics_scene_graph() -> EffectGraphDef {
         wire(101, "shape", 102, "shape"),
         wire(102, "vertices", 104, "vertices"),
         wire(103, "out", 104, "material"),
-        wire(40, "pose_0", 104, "transform"),
+        wire(101, "pose", 104, "transform"),
         wire(104, "object", 0, "object_0"),
     ]);
     def
@@ -363,7 +364,7 @@ fn builtin_scene_object_with_fluid_role(mesh_type: &str) -> EffectGraphDef {
 fn builtin_scene_object_physics_uses_live_mesh_source_and_undoes_exactly() {
     for mesh_type in ["node.cube_mesh", "node.platonic_solid_mesh"] {
         let graph = builtin_scene_object_graph(mesh_type);
-        assert!(scene_object_physics_eligibility(&graph, 0, 0).is_ok());
+        assert!(physics_eligibility(&graph, 0, 0).is_ok());
         let (mut project, fx) = project_with_graph(graph.clone());
         let target = GraphTarget::Effect(fx.clone());
         let mut enable = enable_physics(&project, 
@@ -395,7 +396,7 @@ fn builtin_scene_object_physics_uses_live_mesh_source_and_undoes_exactly() {
 fn builtin_scene_object_physics_rejects_assigned_fluid_role_atomically() {
     let graph = builtin_scene_object_with_fluid_role("node.cube_mesh");
     let (mut project, fx) = project_with_graph(graph.clone());
-    assert!(scene_object_physics_eligibility(&graph, 0, 0).is_err());
+    assert!(physics_eligibility(&graph, 0, 0).is_err());
     let mut enable = enable_physics(&project, 
         GraphTarget::Effect(fx.clone()),
         0,
@@ -439,7 +440,7 @@ fn scene_physics_refuses_enable_physics_on_water() {
         };
         let water = slot_of(if name == "WaterDamBreakGpuFlip" { "water_family" } else { "water_object" })
             .expect("the preset's water object has a slot");
-        let refusal = scene_object_physics_eligibility(&graph, scene.id, water)
+        let refusal = physics_eligibility(&graph, scene.id, water)
             .expect_err("water must refuse Enable Physics");
         assert!(refusal.starts_with(WATER), "{name}: {refusal}");
 
@@ -457,7 +458,7 @@ fn scene_physics_refuses_enable_physics_on_water() {
 
         let objects = graph.wires.iter().filter(|wire| wire.to_node == scene.id && wire.to_port.starts_with("object_")).count();
         for slot in (0..objects as u32).filter(|&slot| slot != water) {
-            if let Err(reason) = scene_object_physics_eligibility(&graph, scene.id, slot) {
+            if let Err(reason) = physics_eligibility(&graph, scene.id, slot) {
                 assert!(!reason.starts_with(WATER), "{name} slot {slot} is not water: {reason}");
             }
         }
@@ -583,7 +584,7 @@ fn compound_submesh_remove_and_duplicate_preserve_boundary_shape_and_undo() {
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
 
-    let mut remove = RemoveSceneSubmeshCommand::new(target.clone(), 0, 1, graph.clone());
+    let mut remove = remove_submesh(&project, target.clone(), 0, 1, graph.clone());
     remove.execute(&mut project);
     assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
     let removed = graph_of(&project, &fx);
@@ -595,7 +596,7 @@ fn compound_submesh_remove_and_duplicate_preserve_boundary_shape_and_undo() {
     remove.undo(&mut project);
     assert_eq!(graph_of(&project, &fx), &graph);
 
-    let mut duplicate = DuplicateSceneSubmeshCommand::new(target, 0, 1, graph.clone());
+    let mut duplicate = duplicate_submesh(&project, target, 0, 1, graph.clone());
     duplicate.execute(&mut project);
     assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
     let duplicated = graph_of(&project, &fx);
@@ -621,7 +622,7 @@ fn compound_submesh_remove_and_duplicate_preserve_boundary_shape_and_undo() {
     assert_eq!(body.params.get("compound_materials"), Some(&SerializedParamValue::Table { rows: vec![vec![0.0, -1.0], vec![1.0, -1.0]] }));
     assert_eq!(group.wires.iter().filter(|wire| wire.to_node == body.id && wire.to_port.starts_with("part_")).count(), 2);
     let before = physics.clone();
-    let mut remove_first = RemoveSceneSubmeshCommand::new(GraphTarget::Effect(fx.clone()), 0, 0, graph.clone());
+    let mut remove_first = remove_submesh(&project, GraphTarget::Effect(fx.clone()), 0, 0, graph.clone());
     remove_first.execute(&mut project);
     assert!(remove_first.was_applied(), "{:?}", remove_first.rejection_reason());
     let remaining = graph_of(&project, &fx);
@@ -639,9 +640,9 @@ fn nested_scene_object_rename_finds_child_by_doc_id_and_preserves_group_name() {
     let graph = compound_imported_group_scene_graph();
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
-    let mut rename = RenameSceneObjectCommand::new(
+    let mut rename = rename_object(&project, 
         target,
-        Vec::new(),
+        vec![10],
         16,
         "Imported Part 2 Renamed".into(),
         graph.clone(),
@@ -687,7 +688,7 @@ fn compound_parent_rename_keeps_each_child_name_and_duplicate_fans_out_parent_vi
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
 
-    let mut rename = RenameSceneObjectCommand::new(target.clone(), Vec::new(), 10, "Compound Renamed".into(), graph.clone());
+    let mut rename = rename_object(&project, target.clone(), Vec::new(), 10, "Compound Renamed".into(), graph.clone());
     rename.execute(&mut project);
     let renamed = graph_of(&project, &fx);
     let group = renamed.nodes.iter().find(|node| node.id == 10).unwrap();
@@ -698,7 +699,7 @@ fn compound_parent_rename_keeps_each_child_name_and_duplicate_fans_out_parent_vi
     rename.undo(&mut project);
     assert_eq!(graph_of(&project, &fx), &graph);
 
-    let mut duplicate = DuplicateSceneSubmeshCommand::new(target, 0, 1, graph.clone());
+    let mut duplicate = duplicate_submesh(&project, target, 0, 1, graph.clone());
     duplicate.execute(&mut project);
     assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
     let duplicated = graph_of(&project, &fx);
@@ -772,8 +773,9 @@ fn imported_physics_reuses_legacy_input_and_roundtrips_with_extra_input() {
     let enabled = graph_of(&project, &fx).clone();
     let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
     assert_eq!(group.nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID).count(), 1);
+    let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap().id;
     assert!(group.wires.iter().any(|wire| {
-        wire.from_node == 6
+        wire.from_node == body
             && wire.from_port == "pose"
             && wire.to_node == 14
             && wire.to_port == "transform"
@@ -820,7 +822,7 @@ fn imported_physics_reuses_legacy_input_and_roundtrips_with_extra_input() {
     assert_eq!(graph_of(&project, &fx), &duplicated);
     duplicate.undo(&mut project);
 
-    let mut remove = RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
+    let mut remove = remove_object(&project, target.clone(), vec![], 0, 0, graph.clone());
     remove.execute(&mut project);
     assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
     let removed = graph_of(&project, &fx).clone();
@@ -888,7 +890,7 @@ fn imported_physics_enable_group_roundtrips_shared_world_and_bindings() {
     let world = enabled.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("shared world");
     assert!(enabled.wires.iter().any(|wire| wire.from_node == 10 && wire.to_node == world.id && wire.to_port == "body_0"));
     let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
-    assert!(group.interface.inputs.iter().any(|port| port.name == "pose"));
+    assert!(!group.interface.inputs.iter().any(|port| port.name == "pose"), "no pose input crosses the group boundary");
     assert!(group.interface.outputs.iter().any(|port| port.name == "body"));
     let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
     assert_eq!(body.params.get("collider_parts"), Some(&SerializedParamValue::Int { value: 32 }));
@@ -929,7 +931,7 @@ fn imported_group_physics_duplicate_remove_uses_fresh_world_slot() {
     let duplicated = graph_of(&project, &fx).clone();
     let world = duplicated.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
     assert_eq!(duplicated.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 2);
-    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 1, graph);
+    let mut remove = remove_object(&project, target, vec![], 0, 1, graph);
     remove.execute(&mut project);
     assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
     let removed = graph_of(&project, &fx);
@@ -949,7 +951,7 @@ fn compound_group_duplicate_and_remove_compacts_all_material_outputs() {
     assert_eq!(duplicated.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 4.0 }));
     assert!(duplicated.wires.iter().any(|wire| wire.from_port == "object" && wire.to_port == "object_2"));
     assert!(duplicated.wires.iter().any(|wire| wire.from_port == "object_1" && wire.to_port == "object_3"));
-    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 0, graph);
+    let mut remove = remove_object(&project, target, vec![], 0, 0, graph);
     remove.execute(&mut project);
     assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
     let removed = graph_of(&project, &fx);
@@ -977,7 +979,7 @@ fn compound_group_physics_duplicate_and_remove_keeps_one_body_per_group() {
     assert_eq!(duplicated.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 2);
     assert!(duplicated.wires.iter().any(|wire| wire.to_port == "object_2"));
     assert!(duplicated.wires.iter().any(|wire| wire.to_port == "object_3"));
-    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 2, graph);
+    let mut remove = remove_object(&project, target, vec![], 0, 2, graph);
     remove.execute(&mut project);
     assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
     let removed = graph_of(&project, &fx);
@@ -1000,7 +1002,7 @@ fn imported_physics_rejects_unsupported_source_and_conflicting_group_atomically(
 
     let mut conflict = imported_group_scene_graph();
     let group = conflict.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
-    group.interface.inputs.push(InterfacePortDef { name: "pose".into(), port_type: "Transform".into() });
+    group.interface.outputs.push(InterfacePortDef { name: "body".into(), port_type: "RigidBody".into() });
     let (mut project, fx) = project_with_graph(conflict.clone());
     let mut command = enable_physics(&project, GraphTarget::Effect(fx.clone()), 0, 0, body_params(), conflict.clone());
     command.execute(&mut project);
@@ -1406,7 +1408,7 @@ fn duplicate_loose_scene_object_clones_private_chain_and_keeps_shared_inputs() {
 fn remove_loose_scene_object_deletes_private_chain_and_preserves_shared_chain() {
     let fixture = loose_scene_object_graph();
     let (mut project, fx) = project_with_graph(fixture.clone());
-    let mut command = RemoveSceneObjectCommand::new(
+    let mut command = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -1437,7 +1439,7 @@ fn remove_scene_object_middle_deletes_group_and_renumbers_survivors() {
     let (mut project, fx) = project_with_graph(fixture);
     let before = graph_of(&project, &fx).clone();
 
-    let mut cmd = RemoveSceneObjectCommand::new(
+    let mut cmd = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -1515,7 +1517,7 @@ fn scene_modifier_explicit_object_delete_rejects_without_history_or_mutation() {
     };
     let before = graph.clone();
     let version = host.graph_structure_version;
-    let command = RemoveSceneObjectCommand::new(owner_target.clone(), vec![], 0, 0, before.clone());
+    let command = remove_object(&project, owner_target.clone(), vec![], 0, 0, before.clone());
     let mut undo = crate::undo::UndoRedoManager::new();
     assert!(!undo.execute(Box::new(command), &mut project));
     let host = project.graph_target_owner(&owner_target).unwrap();
@@ -1526,7 +1528,7 @@ fn scene_modifier_explicit_object_delete_rejects_without_history_or_mutation() {
     graph.scene_modifiers[0].targets = SceneTargetSelection::AllObjects;
     let all_objects = graph.clone();
     let command =
-        RemoveSceneObjectCommand::new(owner_target.clone(), vec![], 0, 0, all_objects.clone());
+        remove_object(&project, owner_target.clone(), vec![], 0, 0, all_objects.clone());
     assert!(undo.execute(Box::new(command), &mut project));
     assert!(undo.undo(&mut project));
     assert_eq!(
@@ -1570,7 +1572,7 @@ fn sky_sun_follows_scene_light_add_and_remove() {
     let (first, second) = (light_at(&def, "light_0").unwrap(), light_at(&def, "light_1").unwrap());
     assert_eq!(sky_sun(&def), Some(first), "the first Sun light feeds the sky");
 
-    let mut remove = RemoveSceneLightCommand::new(GraphTarget::Effect(fx.clone()), vec![], 0, 0, mirror_catalog_default());
+    let mut remove = remove_light(&project, GraphTarget::Effect(fx.clone()), vec![], 0, 0, mirror_catalog_default());
     remove.execute(&mut project);
     let after = graph_of(&project, &fx);
     assert!(!after.wires.iter().any(|w| w.from_node == first || w.to_node == first), "no wire outlives the light");
@@ -1594,7 +1596,7 @@ fn remove_scene_light_only_light_removes_node_and_zeroes_count() {
         .expect("light node present")
         .id;
 
-    let mut cmd = RemoveSceneLightCommand::new(
+    let mut cmd = remove_light(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -1662,18 +1664,21 @@ fn duplicate_physics_scene_object_clones_complete_chain_and_undo_redo() {
     assert!(def.wires.iter().any(|wire| {
         wire.from_node == clone.id && wire.to_node == 0 && wire.to_port == "object_1"
     }));
-    assert!(def.wires.iter().any(|wire| {
-        wire.from_node == 40
-            && wire.from_port == "pose_1"
-            && wire.to_node != 104
-            && wire.to_port == "transform"
-    }));
     let cloned_body = def
         .wires
         .iter()
         .find(|wire| wire.to_node == 40 && wire.to_port == "body_1")
         .expect("new physics body slot");
     assert_ne!(cloned_body.from_node, 101);
+    assert!(
+        def.wires.iter().any(|wire| {
+            wire.from_node == cloned_body.from_node
+                && wire.from_port == "pose"
+                && wire.to_node == clone.id
+                && wire.to_port == "transform"
+        }),
+        "the copy's object reads its own body's pose"
+    );
     assert!(def.wires.iter().any(|wire| {
         wire.from_node == cloned_body.from_node
             && wire.from_port == "shape"
@@ -1716,7 +1721,7 @@ fn duplicate_physics_scene_object_clones_complete_chain_and_undo_redo() {
 fn remove_physics_scene_object_deletes_owned_chain_and_preserves_world() {
     let (mut project, fx) = project_with_graph(physics_scene_graph());
     let before = graph_of(&project, &fx).clone();
-    let mut command = RemoveSceneObjectCommand::new(
+    let mut command = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -1758,8 +1763,8 @@ fn physics_scene_commands_reject_shared_pose_atomically() {
     shared.handle = Some("Shared Cube".to_string());
     graph.nodes.push(shared);
     graph.wires.push(EffectGraphWire {
-        from_node: 40,
-        from_port: "pose_0".to_string(),
+        from_node: 101,
+        from_port: "pose".to_string(),
         to_node: 200,
         to_port: "transform".to_string(),
     });
@@ -1778,7 +1783,7 @@ fn physics_scene_commands_reject_shared_pose_atomically() {
     assert!(duplicate.rejection_reason().is_some());
     assert_eq!(graph_of(&project, &fx), &before);
 
-    let mut remove = RemoveSceneObjectCommand::new(
+    let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -2178,7 +2183,7 @@ fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
         wire.from_node == 300 && wire.to_node == clone_body && wire.to_port == "density"
     }));
 
-    let mut remove = RemoveSceneObjectCommand::new(
+    let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         0,
@@ -2252,7 +2257,7 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
         duplicate.undo(&mut project);
         assert_eq!(graph_of(&project, &fx), &graph);
 
-        let mut remove = RemoveSceneObjectCommand::new(
+        let mut remove = remove_object(&project, 
             GraphTarget::Effect(fx.clone()),
             vec![],
             30,
@@ -2546,7 +2551,7 @@ fn nonphysical_object_coexists_with_physics_world_through_duplicate_remove_undo_
     duplicate.execute(&mut project);
     assert_eq!(body_wires(&project), before_bodies);
 
-    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 30, 7, mirror_catalog_default());
+    let mut remove = remove_object(&project, target, vec![], 30, 7, mirror_catalog_default());
     remove.execute(&mut project);
     assert!(remove.was_applied(), "bare nonphysical object is removable");
     assert_eq!(body_wires(&project), before_bodies);
@@ -2566,7 +2571,7 @@ fn shipped_physics_copies_refuse_partial_scene_edits() {
     let mut graph = graph;
     graph
         .wires
-        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count_0"));
+        .retain(|wire| !(wire.from_node == 121 && wire.from_port == "active_count"));
     let (mut project, fx) = project_with_graph(graph.clone());
     let mut duplicate = duplicate_object(&project, 
         GraphTarget::Effect(fx.clone()),
@@ -2578,7 +2583,7 @@ fn shipped_physics_copies_refuse_partial_scene_edits() {
     duplicate.execute(&mut project);
     assert!(!duplicate.was_applied());
     assert_eq!(graph_of(&project, &fx), &graph);
-    let mut remove = RemoveSceneObjectCommand::new(
+    let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         30,
@@ -2599,7 +2604,7 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
                 "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
             )),
             0,
-            vec![("pose_0", "transform")],
+            vec![(101, "pose", "transform")],
         ),
         (
             include_str!(concat!(
@@ -2608,24 +2613,24 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
             )),
             1,
             vec![
-                ("instances_0", "instances"),
-                ("active_count_0", "instance_count"),
-                ("", "copies_0"),
+                (121, "instances", "instances"),
+                (121, "active_count", "instance_count"),
+                (0, "", "copies_0"),
             ],
         ),
     ] {
         let mut graph: EffectGraphDef = serde_json::from_str(source).unwrap();
         graph.wires.retain(|wire| {
-            !detached_outputs.iter().any(|(from_port, to_port)| {
+            !detached_outputs.iter().any(|(from_node, from_port, to_port)| {
                 if *to_port == "copies_0" {
                     wire.to_node == 40 && wire.to_port == "copies_0"
                 } else {
-                    wire.from_node == 40 && wire.from_port == *from_port && wire.to_port == *to_port
+                    wire.from_node == *from_node && wire.from_port == *from_port && wire.to_port == *to_port
                 }
             })
         });
         let (mut project, fx) = project_with_graph(graph.clone());
-        let mut remove = RemoveSceneObjectCommand::new(
+        let mut remove = remove_object(&project, 
             GraphTarget::Effect(fx.clone()),
             vec![],
             30,
@@ -2661,7 +2666,7 @@ fn shipped_physics_copies_remove_as_one_owned_object_and_undoes() {
         Some("Duplicate Object cannot duplicate a Physics World copies object")
     );
     assert_eq!(graph_of(&project, &fx), &graph);
-    let mut remove = RemoveSceneObjectCommand::new(
+    let mut remove = remove_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         30,
@@ -3040,7 +3045,7 @@ fn rename_scene_object_command_renames_group_and_sweeps_section_and_undo_restore
     );
 
     let before = graph_of(&project, &fx).clone();
-    let mut cmd = RenameSceneObjectCommand::new(
+    let mut cmd = rename_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         group_id,
@@ -3110,7 +3115,7 @@ fn rename_scene_object_command_ungrouped_renames_bare_node_and_undo_restores() {
     let (mut project, fx) = project_with_graph(fixture);
     let before = graph_of(&project, &fx).clone();
 
-    let mut cmd = RenameSceneObjectCommand::new(
+    let mut cmd = rename_object(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         object_ids[0],
@@ -3149,7 +3154,7 @@ fn set_node_handle_command_renames_light_and_undo_restores() {
         .unwrap()
         .id;
 
-    let mut cmd = SetNodeHandleCommand::new(
+    let mut cmd = set_handle(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         light_id,
@@ -3481,7 +3486,7 @@ fn add_object_transform_then_gizmo_param_drag_round_trips_undo_redo() {
     let (mut project, fx) = project_with_graph(scene_object_graph());
     let before = graph_of(&project, &fx).clone();
 
-    let mut add_cmd = AddObjectTransformCommand::new(
+    let mut add_cmd = add_transform(&project, 
         GraphTarget::Effect(fx.clone()),
         vec![],
         1,
@@ -3894,7 +3899,7 @@ fn scene_item_add_commands_spawn_node_and_wire_port() {
         SpawnCase {
             name: "object transform",
             fixture: scene_object_graph,
-            build: |t| Box::new(AddObjectTransformCommand::new(t, vec![], 1, (5.0, 6.0), mirror_catalog_default())),
+            build: |t| Box::new(AddObjectTransformCommand::new(t, node_at(&scene_object_graph(), &[], 1), (5.0, 6.0), mirror_catalog_default())),
             node_type: "node.transform_3d",
             editor_pos: (5.0, 6.0),
             wire: ("transform", 1, "transform"),

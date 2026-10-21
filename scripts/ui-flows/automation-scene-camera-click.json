@@ -1,7 +1,7 @@
 [
-  { "ScrollTo": { "target": { "Query": { "name": "param_row.5_distance.value", "nth": 0 } } } },
+  { "ScrollTo": { "target": { "Query": { "name": "param_row.3_distance.value", "nth": 0 } } } },
   { "Pointer": {
-    "target": { "Query": { "name": "param_row.5_distance.value", "nth": 0 } },
+    "target": { "Query": { "name": "param_row.3_distance.value", "nth": 0 } },
     "gesture": "RightClick"
   } },
   { "Pointer": {

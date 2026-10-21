@@ -83,7 +83,8 @@
 
         let (render_id, index) = obstacle_slot(&def);
         let (mut project, target) = project_with(&def, preset);
-        let mut remove = RemoveSceneObjectCommand::new(target.clone(), vec![], render_id, index, def);
+        let obstacle = manifold_core::scene_slots::object_at_slot(&def, render_id, index).expect("the obstacle object");
+        let mut remove = RemoveSceneObjectCommand::new(target.clone(), obstacle, def);
         remove.execute(&mut project);
         assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
         project
@@ -157,7 +158,8 @@
             serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
         let (render_id, index) = obstacle_slot(&def);
         let (project, target) = project_with(&def, "WaterDamBreakGpuFlip");
-        let refused = EnableSceneObjectPhysicsCommand::new(&project, target, render_id, index, &[], &[], &def)
+        let obstacle = manifold_core::scene_slots::object_at_slot(&def, render_id, index).expect("the obstacle object");
+        let refused = EnableSceneObjectPhysicsCommand::new(&project, target, obstacle, &[], &[], &def)
             .expect_err("a collider obstacle refuses before submission");
         let reason = refused.message;
         assert!(reason.contains("Fluid Role"), "{reason}");

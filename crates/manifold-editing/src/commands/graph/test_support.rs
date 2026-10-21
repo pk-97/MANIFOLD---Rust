@@ -213,7 +213,7 @@ pub(super) fn enable_physics(
     body: Vec<manifold_core::scene_exposure::NodeParamMetadata>,
     default: EffectGraphDef,
 ) -> Prepared<EnableSceneObjectPhysicsCommand> {
-    EnableSceneObjectPhysicsCommand::new(project, target, render, index, &body, &[], &default).into()
+    enable_cmd(project, target, render, index, &body, &[], &default).into()
 }
 
 /// One copy of render slot `index` of scene `render`, prepared now.
@@ -225,7 +225,7 @@ pub(super) fn duplicate_object(
     index: u32,
     default: EffectGraphDef,
 ) -> Prepared<DuplicateSceneObjectCommand> {
-    DuplicateSceneObjectCommand::new(project, target, scope, render, index, 1, &default).into()
+    duplicate_copies(project, target, scope, render, index, 1, &default).into()
 }
 
 pub(super) fn project_with_graph(def: EffectGraphDef) -> (Project, EffectId) {
@@ -524,4 +524,136 @@ pub(super) fn scene_param_meta(
         unit: None,
         limit: Default::default(),
     }
+}
+
+// ---- Scene addresses for tests ----
+//
+// Commands take a `SceneNodeRef`. Tests built around fixture slots and doc ids
+// name the item the way the fixture does and resolve it against the graph the
+// command will run on (the project's live graph, else `default`).
+
+fn live_graph<'a>(project: &'a Project, target: &GraphTarget, default: &'a EffectGraphDef) -> &'a EffectGraphDef {
+    project.graph_for_target(target, Some(default)).unwrap_or(default)
+}
+
+fn nowhere() -> manifold_core::SceneNodeRef {
+    manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new("no-such-node") }
+}
+
+/// The node with document id `id` inside the groups `scope` (document ids).
+pub(super) fn node_at(def: &EffectGraphDef, scope: &[u32], id: u32) -> manifold_core::SceneNodeRef {
+    let mut nodes = def.nodes.as_slice();
+    let mut stable = Vec::new();
+    for group_id in scope {
+        let Some(group) = nodes.iter().find(|node| node.id == *group_id) else { return nowhere() };
+        stable.push(group.node_id.clone());
+        let Some(body) = group.group.as_deref() else { return nowhere() };
+        nodes = body.nodes.as_slice();
+    }
+    match nodes.iter().find(|node| node.id == id) {
+        Some(node) => manifold_core::SceneNodeRef { scope: stable, node: node.node_id.clone() },
+        None => nowhere(),
+    }
+}
+
+/// The object filling `render`'s slot `index`; a slot with no object answers
+/// an address that resolves to nothing.
+pub(super) fn object_at(def: &EffectGraphDef, render: u32, index: u32) -> manifold_core::SceneNodeRef {
+    manifold_core::scene_slots::object_at_slot(def, render, index).unwrap_or_else(nowhere)
+}
+
+/// The light wired to `render`'s slot `index`.
+pub(super) fn light_at(def: &EffectGraphDef, render: u32, index: u32) -> manifold_core::SceneNodeRef {
+    manifold_core::scene_slots::light_at_slot(def, render, index).unwrap_or_else(nowhere)
+}
+
+pub(super) fn remove_object(
+    project: &Project, target: GraphTarget, _scope: Vec<u32>, render: u32, index: u32, default: EffectGraphDef,
+) -> RemoveSceneObjectCommand {
+    let object = object_at(live_graph(project, &target, &default), render, index);
+    RemoveSceneObjectCommand::new(target, object, default)
+}
+
+pub(super) fn remove_submesh(
+    project: &Project, target: GraphTarget, render: u32, index: u32, default: EffectGraphDef,
+) -> RemoveSceneSubmeshCommand {
+    let part = object_at(live_graph(project, &target, &default), render, index);
+    RemoveSceneSubmeshCommand::new(target, part, default)
+}
+
+pub(super) fn duplicate_submesh(
+    project: &Project, target: GraphTarget, render: u32, index: u32, default: EffectGraphDef,
+) -> DuplicateSceneSubmeshCommand {
+    let part = object_at(live_graph(project, &target, &default), render, index);
+    DuplicateSceneSubmeshCommand::new(target, part, default)
+}
+
+pub(super) fn remove_light(
+    project: &Project, target: GraphTarget, _scope: Vec<u32>, render: u32, index: u32, default: EffectGraphDef,
+) -> RemoveSceneLightCommand {
+    let light = light_at(live_graph(project, &target, &default), render, index);
+    RemoveSceneLightCommand::new(target, light, default)
+}
+
+pub(super) fn rename_object(
+    project: &Project, target: GraphTarget, scope: Vec<u32>, id: u32, name: String, default: EffectGraphDef,
+) -> RenameSceneObjectCommand {
+    let object = node_at(live_graph(project, &target, &default), &scope, id);
+    RenameSceneObjectCommand::new(target, object, name, default)
+}
+
+pub(super) fn set_handle(
+    project: &Project, target: GraphTarget, scope: Vec<u32>, id: u32, name: String, default: EffectGraphDef,
+) -> SetNodeHandleCommand {
+    let node = node_at(live_graph(project, &target, &default), &scope, id);
+    SetNodeHandleCommand::new(target, node, name, default)
+}
+
+pub(super) fn add_transform(
+    project: &Project, target: GraphTarget, scope: Vec<u32>, id: u32, pos: (f32, f32), default: EffectGraphDef,
+) -> AddObjectTransformCommand {
+    let object = node_at(live_graph(project, &target, &default), &scope, id);
+    AddObjectTransformCommand::new(target, object, pos, default)
+}
+
+pub(super) fn enable_cmd(
+    project: &Project,
+    target: GraphTarget,
+    render: u32,
+    index: u32,
+    body: &[manifold_core::scene_exposure::NodeParamMetadata],
+    world: &[manifold_core::scene_exposure::NodeParamMetadata],
+    default: &EffectGraphDef,
+) -> Result<EnableSceneObjectPhysicsCommand, manifold_core::scene_graph_edit::SceneGraphEditError> {
+    let object = object_at(live_graph(project, &target, default), render, index);
+    EnableSceneObjectPhysicsCommand::new(project, target, object, body, world, default)
+}
+
+pub(super) fn duplicate_copies(
+    project: &Project, target: GraphTarget, _scope: Vec<u32>, render: u32, index: u32, copies: u32, default: &EffectGraphDef,
+) -> Result<DuplicateSceneObjectCommand, manifold_core::scene_graph_edit::SceneGraphEditError> {
+    let object = object_at(live_graph(project, &target, default), render, index);
+    DuplicateSceneObjectCommand::new(project, target, object, copies, default)
+}
+
+pub(super) fn assign_role(
+    project: &Project,
+    target: GraphTarget,
+    render: u32,
+    index: u32,
+    domain: manifold_core::SceneNodeRef,
+    role: u32,
+    metadata: Vec<manifold_core::scene_exposure::NodeParamMetadata>,
+    default: EffectGraphDef,
+) -> AssignSceneFluidRoleCommand {
+    let object = object_at(live_graph(project, &target, &default), render, index);
+    AssignSceneFluidRoleCommand::new(target, object, domain, role, metadata, default)
+}
+
+pub(super) fn physics_eligibility(def: &EffectGraphDef, render: u32, index: u32) -> Result<(), String> {
+    scene_object_physics_eligibility(def, manifold_core::scene_slots::SceneSlot { render_id: render, index })
+}
+
+pub(super) fn role_eligibility(def: &EffectGraphDef, render: u32, index: u32) -> Result<(), String> {
+    scene_fluid_role_eligibility(def, manifold_core::scene_slots::SceneSlot { render_id: render, index })
 }

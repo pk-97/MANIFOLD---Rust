@@ -91,7 +91,7 @@ impl RenderScene {
         // is used for BOTH the graph consumer and the march (one resolve,
         // two readers).
         let depth_resolve_target = graph_depth_resolve_target
-            .or(if wants_shafts_now { self.shaft_depth_internal.as_ref() } else { None });
+            .or(if wants_shafts_now || self.gizmo_depth_wanted { self.shaft_depth_internal.as_ref() } else { None });
         // GBUFFER_DESIGN.md section 2 D1/D5 (P2): same lazy rule as `depth` —
         // `None` when unwired, costing zero new bytes (I1).
         let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
@@ -706,6 +706,16 @@ impl RenderScene {
             ctx.gpu_encoder().native_enc.copy_depth_to_float(
                 self.depth_resolve_scratch.as_ref().expect("native resolve ensured"), output,
             );
+        }
+        // The editor's gizmo lines read the internal copy; a wired `depth`
+        // output is copied there so both readers see the same frame.
+        if self.gizmo_depth_wanted
+            && let (Some(output), Some(internal)) = (depth_resolve_target, self.shaft_depth_internal.as_ref())
+        {
+            if graph_depth_resolve_target.is_some() {
+                ctx.gpu_encoder().native_enc.copy_texture_to_texture(output, internal, internal.width, internal.height, 1);
+            }
+            self.gizmo_depth_ready = true;
         }
 
         // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the snapshot + Pass B

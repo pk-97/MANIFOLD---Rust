@@ -30,8 +30,8 @@ pub(super) fn add_water(project: &mut Project, layer: &LayerId, _render: u32, ed
     let pending = selection.capture(project);
     editing.execute(command, &mut *project);
     assert_eq!(editing.take_rejection(), None);
-    let Some(crate::edit_selection::EditSelection::Object { object_id, .. }) = pending.resolve(project) else { panic!("water selection") };
-    assert!(rows(&effective_def(project, layer)).iter().any(|row| row.object_node_id == object_id && row.is_group && row.liquid_domain.is_some()));
+    let Some(crate::edit_selection::EditSelection::Object { object, .. }) = pending.resolve(project) else { panic!("water selection") };
+    assert!(rows(&effective_def(project, layer)).iter().any(|row| row.address == object && row.is_group && row.liquid_domain.is_some()));
     assert!(rx.is_empty());
 }
 
@@ -110,7 +110,7 @@ fn water_family_add_undo_redo() {
             assert_eq!(row.name, format!("Water {}{suffix}", insertion + 1));
         }
         for child in &family[1..] {
-            assert_eq!(child.parent_group_id, Some(family[0].object_node_id), "{} is a Water child row", child.name);
+            assert_eq!(child.parent, Some(family[0].address.clone()), "{} is a Water child row", child.name);
         }
         let group_id = family[0].group_node_id.unwrap();
         for (offset, port) in ["object", "object_1", "object_2", "object_3", "object_4"].into_iter().enumerate() {
@@ -174,7 +174,7 @@ fn water_family_add_through_content_admission_discovers_children() {
     let family = rows(&effective_def(&project, &layer));
     let water = family.iter().find(|row| row.is_group && row.liquid_domain.is_some()
         && row.index >= initial_objects).expect("new Water parent");
-    let children: Vec<_> = family.iter().filter(|row| row.parent_group_id == Some(water.object_node_id)
+    let children: Vec<_> = family.iter().filter(|row| row.parent.as_ref() == Some(&water.address)
         && (initial_objects..initial_objects + 4).contains(&row.index)).collect();
     assert_eq!(children.len(), 3);
     assert!(children.iter().all(|row| row.look_node().is_some()));
@@ -190,7 +190,7 @@ fn water_family_visibility_round_trip() {
     let def = effective_def(&project, &layer);
     let families = rows(&def);
     for water in families.iter().filter(|row| row.is_group && row.liquid_domain.is_some()) {
-        let children: Vec<_> = families.iter().filter(|row| row.parent_group_id == Some(water.object_node_id)).collect();
+        let children: Vec<_> = families.iter().filter(|row| row.parent.as_ref() == Some(&water.address)).collect();
         // Three looks, then Physics View's dots.
         assert_eq!(children.len(), 4);
         let child = children[0];
@@ -215,7 +215,7 @@ fn water_family_visibility_round_trip() {
     let mut reloaded = manifold_io::loader::load_project_from_json(&saved).expect("real project load pipeline");
     let after = effective_def(&reloaded, &layer);
     let water = families.iter().find(|row| row.is_group && row.liquid_domain.is_some()).unwrap();
-    let foam = families.iter().find(|row| row.parent_group_id == Some(water.object_node_id)).unwrap();
+    let foam = families.iter().find(|row| row.parent.as_ref() == Some(&water.address)).unwrap();
     assert_eq!(family_value(&reloaded, &layer, foam, "visible"), 0.0);
     assert_eq!(family_value(&reloaded, &layer, water, "parent_visible"), 1.0);
     let whitewater = water.control_nodes().into_iter().find(|node| manifold_core::scene_modifier_preset::SceneNodeRef::locate(&after, node)
@@ -261,7 +261,7 @@ fn water_family_delete_undo() {
     let def = effective_def(&project, &layer);
     let source = rows(&def).into_iter().find(|row| row.index == source_slot as usize).unwrap();
     let domain = water.liquid_domain.clone().unwrap();
-    editing.execute(Box::new(AssignSceneFluidRoleCommand::new(target.clone(), render, source_slot,
+    editing.execute(Box::new(AssignSceneFluidRoleCommand::new(target.clone(), source.address.clone(),
         domain, 0, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"), def)), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let before = effective_def(&project, &layer);
@@ -273,15 +273,14 @@ fn water_family_delete_undo() {
     let instance_before = serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap();
 
     // Stale selection rejection must not partially detach roles or remove slots.
-    let mut stale = RemoveSceneObjectCommand::new(target.clone(), vec![], render, water.index as u32, before.clone())
-        .with_expected_source(NodeId::new("not-the-selected-water"));
+    let gone = manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new("not-the-selected-water") };
+    let mut stale = RemoveSceneObjectCommand::new(target.clone(), gone, before.clone());
     stale.execute(&mut project);
     assert!(!stale.was_applied());
     assert!(stale.rejection_reason().is_some());
     assert_eq!(serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap(), instance_before);
 
-    editing.execute(Box::new(RemoveSceneObjectCommand::new(target.clone(), vec![], render,
-        water.index as u32, before.clone())), &mut project);
+    editing.execute(Box::new(RemoveSceneObjectCommand::new(target.clone(), water.address.clone(), before.clone())), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let deleted = effective_def(&project, &layer);
     assert_eq!(objects_param(&project, &layer, render) as u32, source_slot + 1 - 5);
@@ -324,10 +323,10 @@ fn water_family_recognizers_agree() {
         let before = effective_def(project, layer);
         let rows = rows(&before);
         assert!(rows.iter().any(|row| row.kind == SceneObjectRowKind::PhysicsParent && row.liquid_domain.is_some()), "{label}: a water");
-        for row in rows.iter().filter(|row| row.parent_group_id.is_none()) {
+        for row in rows.iter().filter(|row| row.parent.is_none()) {
             let mut renamed = project.clone();
             editing.execute(super::water_family_actions::panel_rename_command(
-                &renamed, layer, row.object_node_id, "Recognizer probe"), &mut renamed);
+                &renamed, layer, &row.address, "Recognizer probe"), &mut renamed);
             assert_eq!(editing.take_rejection(), None);
             let after = effective_def(&renamed, layer);
             let changed_groups = before.nodes.iter().filter(|node| node.group.is_some())
@@ -425,7 +424,7 @@ fn visibility_rename_round_trip(preset: &'static str) {
     let initial = effective_def(&project, &layer);
     let initial_rows = rows(&initial);
     for water in initial_rows.iter().filter(|row| row.is_group && row.liquid_domain.is_some()) {
-        let children: Vec<_> = initial_rows.iter().filter(|row| row.parent_group_id == Some(water.object_node_id)).collect();
+        let children: Vec<_> = initial_rows.iter().filter(|row| row.parent.as_ref() == Some(&water.address)).collect();
         let spray = children[1];
         for (row, value) in [(spray, 0.0), (water, 0.0), (water, 1.0)] {
             editing.execute(apply_scene_param_write(&project, &layer, row.visible_addr.scope_path.clone(),
@@ -437,7 +436,7 @@ fn visibility_rename_round_trip(preset: &'static str) {
         let before_instance = serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap();
         let name = format!("Lake {}", water.object_node_id);
         editing.execute(super::water_family_actions::panel_rename_command(&project, &layer,
-            water.object_node_id, &name), &mut project);
+            &water.address, &name), &mut project);
         let renamed = effective_def(&project, &layer);
         assert_eq!(renamed.nodes.iter().find(|node| Some(node.id) == water.group_node_id).unwrap().handle.as_deref(), Some(name.as_str()));
         let after_rows = rows(&renamed);
@@ -467,11 +466,11 @@ fn visibility_rename_round_trip(preset: &'static str) {
             assert_eq!(serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap(), renamed_instance);
         }
         editing.execute(super::water_family_actions::panel_rename_command(&project, &layer,
-            spray.object_node_id, &format!("Mist {}", spray.object_node_id)), &mut project);
+            &spray.address, &format!("Mist {}", spray.object_node_id)), &mut project);
         let child_renamed = effective_def(&project, &layer);
         let after = rows(&child_renamed).into_iter().find(|row| row.object == spray.object).unwrap();
         assert_eq!(after.look_node(), spray.look_node());
-        assert_eq!(after.parent_group_id, spray.parent_group_id);
+        assert_eq!(after.parent, spray.parent);
         assert!(after.liquid_domain.is_none(), "a renamed look simulates nothing");
         assert_eq!(after.control_nodes(), after.look_node().into_iter().collect::<Vec<_>>(), "a look owns only its look mesh");
         assert_eq!(family_value(&project, &layer, spray, "visible"), 0.0);
@@ -487,7 +486,7 @@ fn visibility_rename_round_trip(preset: &'static str) {
     }
     for water in rows(&before_reload).iter().filter(|row| row.is_group && row.liquid_domain.is_some()) {
         let family = rows(&before_reload);
-        let spray = family.iter().find(|row| row.parent_group_id == Some(water.object_node_id) && row.name.starts_with("Mist ")).unwrap();
+        let spray = family.iter().find(|row| row.parent.as_ref() == Some(&water.address) && row.name.starts_with("Mist ")).unwrap();
         assert_eq!(family_value(&reloaded, &layer, spray, "visible"), 0.0);
         assert_eq!(family_value(&reloaded, &layer, water, "parent_visible"), 1.0);
         let size = binding(&before_reload, spray.look_node().as_ref().unwrap(), "radius");
@@ -564,4 +563,71 @@ fn physics_boundary_insert_capacity_rejects() {
     let refused = insert_water(&project, &layer, render).expect_err("no room for five objects");
     assert!(refused.contains("no free slots"), "{refused}");
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
+}
+
+/// Two roles whose document ids are equal (they sit in different object
+/// groups): the Remove action carries the second role's address and acts on
+/// the second, never on the first (BUG-m5ep).
+#[test]
+fn fluid_role_remove_acts_on_the_second_of_two_roles_with_equal_doc_ids() {
+    use manifold_editing::commands::graph::{AssignSceneFluidRoleCommand, scene_fluid_role_assignments};
+    let (mut project, layer, render) = water_project();
+    let target = GraphTarget::Generator(layer.clone());
+    let mut editing = EditingService::new();
+    add_water(&mut project, &layer, render, &mut editing);
+    let domain = rows(&effective_def(&project, &layer)).into_iter().find_map(|row| row.liquid_domain.clone()).unwrap();
+    let mut groups = Vec::new();
+    for _ in 0..2 {
+        let def = effective_def(&project, &layer);
+        let slot = objects_param(&project, &layer, render) as u32;
+        let add = crate::scene_insert::prepare(
+            &project, &target, &def, &[], render,
+            manifold_nodes_scene::node_graph::scene_templates::object_template(slot, (0.0, 0.0)),
+        ).unwrap();
+        editing.execute(Box::new(add), &mut project);
+        let def = effective_def(&project, &layer);
+        let source = rows(&def).into_iter().find(|row| row.index == slot as usize).unwrap();
+        editing.execute(Box::new(AssignSceneFluidRoleCommand::new(
+            target.clone(), source.address.clone(), domain.clone(), 0,
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"), def,
+        )), &mut project);
+        assert_eq!(editing.take_rejection(), None);
+        groups.push(source.group_node_id.unwrap());
+    }
+
+    // Give the second group's role the first one's document id (ids are
+    // unique only inside their own group).
+    let def = effective_def(&project, &layer);
+    let first_id = scene_fluid_role_assignments(&def, groups[0]).unwrap()[0].source_doc_id;
+    let second_id = scene_fluid_role_assignments(&def, groups[1]).unwrap()[0].source_doc_id;
+    if first_id != second_id {
+        let graph = project.graph_target_owner_mut(&target).unwrap().graph.as_mut().unwrap();
+        let body = graph.nodes.iter_mut().find(|node| node.id == groups[1]).unwrap().group.as_deref_mut().unwrap();
+        assert!(!body.nodes.iter().any(|node| node.id == first_id), "the first role's id is free in the second group");
+        body.nodes.iter_mut().find(|node| node.id == second_id).unwrap().id = first_id;
+        for wire in &mut body.wires {
+            if wire.from_node == second_id { wire.from_node = first_id; }
+            if wire.to_node == second_id { wire.to_node = first_id; }
+        }
+    }
+    let def = effective_def(&project, &layer);
+    let first = scene_fluid_role_assignments(&def, groups[0]).unwrap().remove(0);
+    let second = scene_fluid_role_assignments(&def, groups[1]).unwrap().remove(0);
+    assert_eq!(first.source_doc_id, second.source_doc_id, "the two roles share a document id");
+    assert_ne!(first.source, second.source, "their addresses differ");
+
+    let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    dispatch_project(
+        &ProjectAction::SceneSetupRemoveFluidRole { layer_id: layer.clone(), source: second.source.clone() },
+        &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state,
+        &mut ui, &mut selection, &mut active, &mut prefs, Default::default(),
+    );
+    let ContentCommand::ExecuteOnContent(command) = rx.try_recv().unwrap() else { panic!("role removal runs on content") };
+    editing.execute(command, &mut project);
+    assert_eq!(editing.take_rejection(), None);
+
+    let after = effective_def(&project, &layer);
+    assert_eq!(scene_fluid_role_assignments(&after, groups[0]).unwrap().len(), 1, "the first role stays");
+    assert!(scene_fluid_role_assignments(&after, groups[1]).unwrap().is_empty(), "the second role goes");
 }

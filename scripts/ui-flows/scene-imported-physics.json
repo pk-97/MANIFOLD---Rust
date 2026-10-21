@@ -54,7 +54,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density"
+          "text": "Mass"
         }
       },
       "check": "Exists"
@@ -420,7 +420,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density"
+          "text": "Mass"
         }
       },
       "check": {
@@ -458,7 +458,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density"
+          "text": "Mass"
         }
       },
       "check": "Exists"

@@ -186,11 +186,13 @@
       "after_open_half_second": {},
       "open_click": {
         "ChromeLayout": 1,
+        "ClipProjection": 1,
         "EditorTreeBuild": 3,
-        "FrameAlloc": 2141,
+        "FrameAlloc": 2149,
         "InspectorSync": 1,
+        "LaneProjection": 1,
         "ProjectSync": 1,
-        "TextMeasureMiss": 8,
+        "TextMeasureMiss": 21,
         "TriggerCatalogProjection": 1,
         "ValuePush": 1
       }

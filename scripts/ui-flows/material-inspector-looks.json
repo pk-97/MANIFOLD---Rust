@@ -97,7 +97,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value", "nth": 0
         }
       }
     }
@@ -106,7 +106,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value", "nth": 0
         }
       },
       "check": {
@@ -118,7 +118,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_clearcoat.value"
+          "name_suffix": "_clearcoat.value"
         }
       },
       "check": {
@@ -139,7 +139,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value", "nth": 0
         }
       },
       "check": {
@@ -160,7 +160,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value", "nth": 0
         }
       },
       "check": {
@@ -222,7 +222,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value", "nth": 0
         }
       },
       "check": {
@@ -242,7 +242,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value", "nth": 0
         }
       },
       "check": {

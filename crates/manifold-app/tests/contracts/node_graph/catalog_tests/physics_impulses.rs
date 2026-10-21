@@ -22,6 +22,7 @@ use std::{borrow::Cow, cell::Cell};
 mod source_tests;
 mod scene_routes_tests;
 mod rubble_blast_tests;
+mod world_edit_tests;
 
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }
@@ -480,20 +481,32 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
     second.id = 14;
     second.node_id = NodeId::new("world_b");
     def.nodes.push(second);
-    def.wires
-        .push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: 4,
+    // A body belongs to one world: part_b's body moves into the second.
+    let mut moved = def.nodes.iter().find(|node| node.id == 5).unwrap().clone();
+    moved.id = 15;
+    moved.node_id = NodeId::new("body_c");
+    def.nodes.push(moved);
+    def.wires.extend([
+        manifold_core::effect_graph_def::EffectGraphWire {
+            from_node: 3,
+            from_port: "transform".into(),
+            to_node: 15,
+            to_port: "transform".into(),
+        },
+        manifold_core::effect_graph_def::EffectGraphWire {
+            from_node: 15,
             from_port: "body".into(),
             to_node: 14,
             to_port: "body_0".into(),
-        });
+        },
+    ]);
     let wire = def
         .wires
         .iter_mut()
         .find(|wire| wire.to_node == 9 && wire.to_port == "transform")
         .unwrap();
-    wire.from_node = 14;
-    wire.from_port = "pose_0".into();
+    wire.from_node = 15;
+    wire.from_port = "pose".into();
     let mut runtime = runtime(&def);
     runtime.execute_frame(time(0.0));
     let second = runtime

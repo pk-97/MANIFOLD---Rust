@@ -36,7 +36,7 @@
 
 use std::sync::LazyLock;
 
-use manifold_core::NodeId;
+use manifold_core::{NodeId, SceneNodeRef};
 use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_foundation::param_range::HardLimit;
@@ -233,7 +233,7 @@ pub struct GizmoTarget {
     pub unplaced: bool,
     pub pickable: bool,
     /// The scene panel row this target selects, if any.
-    pub row: Option<u32>,
+    pub row: Option<SceneNodeRef>,
     /// The declared direction, drawn as a line from the origin.
     pub direction: Option<[f32; 3]>,
     /// The shape's own edges in world space: what draws and what is picked.
@@ -395,7 +395,7 @@ impl GizmoTarget {
             world_axes,
             unplaced: shape.params.iter().any(|param| param.write == ShapeWrite::Unplaced),
             pickable: shape.pickable,
-            row: shape.row,
+            row: shape.row.clone(),
             direction,
             outline: outline(shape, kind, origin, to_world),
             handles,
@@ -1034,12 +1034,12 @@ pub fn rotate_drag_delta(
     Some(d)
 }
 
-/// The render slots that draw the scene objects `object_node_ids`, for
+/// The render slots that draw the scene objects `objects`, for
 /// their selection outline (D-102): each one's own slot, plus every part's
 /// for a group row. A Water row is a group and a real render slot, its looks
 /// the parts; an imported model's group row shares its first part's slot.
 /// Written into `out`, sorted and deduplicated.
-pub fn outline_slots(scene: &SceneVm, object_node_ids: impl IntoIterator<Item = u32>, out: &mut Vec<u32>) {
+pub fn outline_slots<'a>(scene: &SceneVm, objects: impl IntoIterator<Item = &'a SceneNodeRef>, out: &mut Vec<u32>) {
     let rows = || {
         scene.objects.iter().filter_map(|object| match object {
             SceneObjectVm::Known(row) => Some(row),
@@ -1047,11 +1047,11 @@ pub fn outline_slots(scene: &SceneVm, object_node_ids: impl IntoIterator<Item = 
         })
     };
     out.clear();
-    for object_node_id in object_node_ids {
-        for row in rows().filter(|row| row.object_node_id == object_node_id) {
+    for object in objects {
+        for row in rows().filter(|row| &row.address == object) {
             out.push(row.index as u32);
             if row.is_group {
-                out.extend(rows().filter(|part| part.parent_group_id == Some(object_node_id) && !part.is_group).map(|part| part.index as u32));
+                out.extend(rows().filter(|part| part.parent.as_ref() == Some(object) && !part.is_group).map(|part| part.index as u32));
             }
         }
     }

@@ -94,4 +94,10 @@ pub trait ViewportPass: Send {
     fn selection_mask(&self) -> Option<&GpuTexture> {
         None
     }
+    /// The gizmo-depth request, as on the scene node
+    /// ([`crate::exec::effect_node::EffectNode::set_gizmo_depth`]).
+    fn set_gizmo_depth(&mut self, _wanted: bool) {}
+    fn gizmo_depth(&self) -> Option<&GpuTexture> {
+        None
+    }
 }

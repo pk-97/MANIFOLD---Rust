@@ -240,7 +240,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by any number of shar… |
 | Repeat Outline (rings) | `node.repeat_outline` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
 | Revolve Curve | `node.revolve_curve` | Source | Spins a 2D profile curve around a vertical axis to build a solid of revolution — a lathe. The classic way to build vases, columns, and bells from a cross-secti… |
-| Rigid Body | `node.rigid_body` | Source | Give an object density, friction and bounce, then connect it to a Physics World. |
+| Rigid Body | `node.rigid_body` | Source | Give an object a mass in kg, friction and bounce, then connect it to a Physics World. |
 | Ripple | `node.ripple_mesh` | Filter | Pushes every vertex along its normal by a sine wave indexed by position along an axis, making a mesh ripple like water or sheet metal. |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
@@ -578,7 +578,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 369 |
+| `Lantern` | Lantern | generator | Geometry | 370 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -594,36 +594,36 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
-| `Ocean` | Ocean | generator | Sim | 363 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2360 |
+| `Ocean` | Ocean | generator | Sim | 364 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2361 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1339 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1997 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1340 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1998 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `RubblePile` | Rubble Pile | generator | Geometry | 1346 |
-| `Scene` | Scene | generator | Geometry | 368 |
+| `RubblePile` | Rubble Pile | generator | Geometry | 1347 |
+| `Scene` | Scene | generator | Geometry | 369 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
-| `Swarm` | Swarm | generator | Geometry | 407 |
-| `SwarmCloud` | Swarm Cloud | generator | Geometry | 416 |
+| `Swarm` | Swarm | generator | Geometry | 408 |
+| `SwarmCloud` | Swarm Cloud | generator | Geometry | 417 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2061 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1415 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2016 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1393 |
-| `WaterInScan` | Water in a Photoscan | generator | Sim | 2061 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2344 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1070 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2062 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1416 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2017 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1394 |
+| `WaterInScan` | Water in a Photoscan | generator | Sim | 2062 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2345 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

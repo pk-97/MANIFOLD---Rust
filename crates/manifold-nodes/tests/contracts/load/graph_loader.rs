@@ -576,6 +576,13 @@ mod tests {
         doc["wires"].as_array_mut().unwrap().retain(|w| w["toPort"] != "sun");
         // Saved before copy groups: the world's one group has unnumbered ports.
         let world_id = doc["nodes"][world]["id"].clone();
+        // The copies body's alias outputs were the world's own ports.
+        for wire in doc["wires"].as_array_mut().unwrap() {
+            if wire["fromPort"] == "instances" || wire["fromPort"] == "active_count" {
+                wire["fromNode"] = world_id.clone();
+                wire["fromPort"] = format!("{}_0", wire["fromPort"].as_str().unwrap()).into();
+            }
+        }
         for wire in doc["wires"].as_array_mut().unwrap() {
             for (node, port) in [("toNode", "toPort"), ("fromNode", "fromPort")] {
                 let numbered = ["copies_0", "copies_acceleration_0", "instances_0", "active_count_0"];

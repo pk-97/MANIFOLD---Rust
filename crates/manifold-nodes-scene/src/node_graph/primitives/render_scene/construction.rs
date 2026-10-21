@@ -62,6 +62,8 @@ impl RenderScene {
             rendered_camera: None,
             rendered_lights: Vec::new(),
             selection: Default::default(),
+            gizmo_depth_wanted: false,
+            gizmo_depth_ready: false,
             prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,
@@ -246,7 +248,7 @@ impl RenderScene {
         // Optional scene-wide render mode (SCENE_RENDER_MODE_DESIGN.md D2).
         // Unwired = Rendered, byte-identical to no render_mode.
         inputs.push(NodePort {
-            name: std::borrow::Cow::Borrowed("render_mode"),
+            name: std::borrow::Cow::Borrowed("render_mode_in"),
             ty: PortType::RenderMode,
             kind: PortKind::Input,
             required: false,
@@ -291,6 +293,16 @@ impl RenderScene {
                 default: ParamValue::Float(DEFAULT_LIGHTS as f32),
                 range: Some((0.0, LIGHT_SLIDER_MAX as f32)),
                 enum_values: &[],
+            },
+            // Scene-wide shading mode (SCENE_RENDER_MODE_DESIGN.md): Rendered,
+            // Solid, Wireframe, Points. A wired `render_mode_in` input overrides it.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("render_mode"),
+                label: "Render Mode",
+                ty: ParamType::Enum,
+                default: ParamValue::Enum(0),
+                range: Some((0.0, (manifold_node_engine::scene::render_mode::RENDER_MODE_LABELS.len() - 1) as f32)),
+                enum_values: manifold_node_engine::scene::render_mode::RENDER_MODE_LABELS,
             },
             // RAYTRACING_DESIGN.md D14 (W0): per-scene RT toggle. Default
             // off — an untouched scene is byte-identical to before this

@@ -77,7 +77,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_uv_m00.slider"
+          "name_suffix": "_uv_m00.slider"
         }
       },
       "check": {
@@ -89,7 +89,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.10_roughness.slider"
+          "name_suffix": "_roughness.slider"
         }
       }
     }
@@ -98,7 +98,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_roughness.slider"
+          "name_suffix": "_roughness.slider"
         }
       },
       "gesture": {
@@ -118,7 +118,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value"
         }
       },
       "check": {
@@ -139,7 +139,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name_suffix": "_roughness.value"
         }
       },
       "check": {
@@ -151,7 +151,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_roughness.driver_btn"
+          "name_suffix": "_roughness.driver_btn"
         }
       },
       "gesture": {

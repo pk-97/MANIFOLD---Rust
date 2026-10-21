@@ -1815,7 +1815,7 @@ mod automation_clipboard_host_tests {
         }
     }
 
-    fn prepare_water_family(h: &mut Harness) -> (LayerId, u32, u32) {
+    fn prepare_water_family(h: &mut Harness) -> (LayerId, manifold_core::SceneNodeRef, manifold_core::SceneNodeRef, u32) {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
         let index = h.project.timeline.add_layer(
@@ -1844,7 +1844,7 @@ mod automation_clipboard_host_tests {
             .iter()
             .find_map(|object| match object {
                 SceneObjectVm::Known(row) if row.is_group && row.liquid_domain.is_some() => {
-                    Some(row.object_node_id)
+                    Some(row.address.clone())
                 }
                 _ => None,
             })
@@ -1854,14 +1854,14 @@ mod automation_clipboard_host_tests {
             .iter()
             .find_map(|object| match object {
                 SceneObjectVm::Known(row)
-                    if row.parent_group_id == Some(parent) && row.look_node().is_some() =>
+                    if row.parent.as_ref() == Some(&parent) && row.look_node().is_some() =>
                 {
-                    Some(row.object_node_id)
+                    Some((row.address.clone(), row.object_node_id))
                 }
                 _ => None,
             })
             .expect("Foam child");
-        (layer_id, parent, child)
+        (layer_id, parent, child.0, child.1)
     }
 
     fn drain_batch(h: &Harness, authoritative: &mut manifold_core::project::Project, service: &mut EditingService) {
@@ -2489,7 +2489,7 @@ mod automation_clipboard_host_tests {
     #[test]
     fn water_family_keyboard_edit_paths_hide_children_and_withhold_duplicate() {
         let mut h = Harness::new();
-        let (layer_id, parent, child) = prepare_water_family(&mut h);
+        let (layer_id, parent, child, child_doc_id) = prepare_water_family(&mut h);
         h.ui_root.scene_setup_panel.set_selection(
             layer_id.clone(),
             manifold_ui::panels::scene_setup_panel::SceneSelection::Object(child),
@@ -2511,7 +2511,7 @@ mod automation_clipboard_host_tests {
             assert!(matches!(h.ui_root.pending_keyboard_actions.pop(),
                 Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupParamChanged(
                     ref layer, _, node, ref param, 0.0)))
-                if *layer == layer_id && node == child && param == "visible"));
+                if *layer == layer_id && node == child_doc_id && param == "visible"));
             assert!(h.ui_root.pending_keyboard_actions.is_empty());
         }
 

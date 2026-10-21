@@ -4,13 +4,13 @@ use crate::object_modifier_transfer::ObjectModifierAction;
 use manifold_editing::commands::graph::RemoveMeshModifierCommand;
 use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
-fn owner(project: &Project, layer: &LayerId) -> u32 {
+fn owner(project: &Project, layer: &LayerId) -> manifold_core::SceneNodeRef {
     SceneVm::from_def(generator_graph(project, layer))
         .unwrap()
         .objects
         .iter()
         .find_map(|object| match object {
-            SceneObjectVm::Known(row) => Some(row.group_node_id.unwrap_or(row.object_node_id)),
+            SceneObjectVm::Known(row) => Some(row.modifier_owner.clone()),
             _ => None,
         })
         .unwrap()
@@ -49,7 +49,7 @@ fn imported_object_card_deformation_undo_remove_and_reopen() {
         .timeline
         .layers
         .push(imported_layer("Card Helmet", layer_id.as_str(), 0, path));
-    let owner_id = owner(&project, &layer_id);
+    let owner_ref = owner(&project, &layer_id);
     let out = Path::new("target/journey-proofs/object-card-ux");
     std::fs::create_dir_all(out).unwrap();
     let mut ct = headless_content_thread(Project::default(), 320, 180);
@@ -60,7 +60,7 @@ fn imported_object_card_deformation_undo_remove_and_reopen() {
     ct.handle_command(ContentCommand::SeekToBeat(Beats::ZERO));
     ct.handle_command(ContentCommand::ObjectModifier(ObjectModifierAction::Add {
         layer_id: layer_id.clone(),
-        owner_id,
+        owner: owner_ref.clone(),
         type_id: "node.bend_mesh".into(),
         after: None,
     }));
@@ -108,8 +108,7 @@ fn imported_object_card_deformation_undo_remove_and_reopen() {
     ct.handle_command(ContentCommand::ExecuteOnContent(Box::new(
         RemoveMeshModifierCommand::new(
             manifold_core::GraphTarget::Generator(layer_id.clone()),
-            Vec::new(),
-            owner_id,
+            owner_ref.clone(),
             doc_id,
             default,
         ),
@@ -159,8 +158,7 @@ fn imported_object_card_deformation_undo_remove_and_reopen() {
     ct.handle_command(ContentCommand::ExecuteOnContent(Box::new(
         RemoveMeshModifierCommand::new(
             manifold_core::GraphTarget::Generator(layer_id.clone()),
-            Vec::new(),
-            owner_id,
+            owner_ref.clone(),
             doc_id,
             default,
         ),
@@ -176,7 +174,7 @@ fn imported_object_card_deformation_undo_remove_and_reopen() {
         .map(str::to_owned);
     ct.handle_command(ContentCommand::ObjectModifier(ObjectModifierAction::Add {
         layer_id: layer_id.clone(),
-        owner_id,
+        owner: owner_ref.clone(),
         type_id: "node.bend_mesh".into(),
         after: None,
     }));

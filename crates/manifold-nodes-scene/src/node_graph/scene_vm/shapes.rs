@@ -35,8 +35,8 @@ pub enum FluidRole {
 /// Who declares a shape.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShapeOwner {
-    /// A scene object row, by its `object_node_id`.
-    Object(u32),
+    /// A scene object row, by its address.
+    Object(SceneNodeRef),
     /// A liquid domain node.
     LiquidDomain(NodeId),
     /// A fluid role source node.
@@ -96,11 +96,11 @@ pub struct SceneShapeVm {
     /// domain it acts on, else the world origin.
     pub anchor: [f32; 3],
     /// The scene panel row this shape selects, if any.
-    pub row: Option<u32>,
+    pub row: Option<SceneNodeRef>,
     pub pickable: bool,
 }
 
-use manifold_core::NodeId;
+use manifold_core::{NodeId, SceneNodeRef};
 
 pub(super) fn trace_shapes(
     root: &Level<'_>,
@@ -143,8 +143,8 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
         if !row.capabilities.transform || (row.transform.is_none() && !row.transform_chain_parseable) {
             continue;
         }
-        let frame = row.parent_group_id.and_then(|id| {
-            rows.iter().find(|parent| parent.object_node_id == id).and_then(|parent| parent.transform.as_ref())
+        let frame = row.parent.as_ref().and_then(|id| {
+            rows.iter().find(|parent| parent.address == *id).and_then(|parent| parent.transform.as_ref())
         });
         let frame = frame.map(|t| {
             crate::node_graph::primitives::render_scene::model_matrix(
@@ -162,14 +162,14 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
                 None => unplaced_params(decl),
             };
             out.push(SceneShapeVm {
-                owner: ShapeOwner::Object(row.object_node_id),
+                owner: ShapeOwner::Object(row.address.clone()),
                 index,
                 decl: decl.clone(),
                 params,
                 frame,
                 anchor: [0.0; 3],
-                row: Some(row.object_node_id),
-                pickable: row.visible_value && row.parent_group_id.is_none(),
+                row: Some(row.address.clone()),
+                pickable: row.visible_value && row.parent.is_none(),
             });
         }
     }
@@ -193,10 +193,10 @@ fn liquid_shapes(
         }
         seen.push(domain.node.clone());
         let Some(at) = locate_node(root, domain) else { continue };
-        let pickable = row.visible_value && row.parent_group_id.is_none();
+        let pickable = row.visible_value && row.parent.is_none();
         let first = out.len();
         let owner = ShapeOwner::LiquidDomain(at.node.node_id.clone());
-        node_shapes(&at, owner.clone(), Some(row.object_node_id), pickable, out);
+        node_shapes(&at, owner.clone(), Some(row.address.clone()), pickable, out);
         let param = |id: &str, default: f32| {
             (ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: id.to_owned() }, param_f32(at.node, id, default))
         };
@@ -205,7 +205,7 @@ fn liquid_shapes(
         // With the `domain` port unwired the solver runs its default cube,
         // sized by Domain Size alone; the cube still takes clicks and scales.
         let cube = checked && row.fluid_domain_transform.is_none();
-        if cube && let Some(shape) = cube_shape(&at, owner.clone(), Some(row.object_node_id), pickable) {
+        if cube && let Some(shape) = cube_shape(&at, owner.clone(), Some(row.address.clone()), pickable) {
             out.insert(first, shape);
         }
         let declared = |via: &str| out[first..].iter().position(|shape| shape.decl.via.as_deref() == Some(via)).map(|at| first + at);
@@ -263,7 +263,7 @@ fn liquid_shapes(
             let role_at = NodeAt { level: role_level, scope, node: role, parent };
             let owner = ShapeOwner::RoleSource { node: role.node_id.clone(), role: kind };
             let first = out.len();
-            shapes_of(&role_at, fluid_role_shape(index), owner, Some(row.object_node_id), pickable, out);
+            shapes_of(&role_at, fluid_role_shape(index), owner, Some(row.address.clone()), pickable, out);
             if kind == FluidRole::InitialFill {
                 // The liquid takes one; a second is refused by name.
                 site.column = site.column.or((first < out.len()).then_some(first));
@@ -293,10 +293,10 @@ fn swarm_shapes(root: &Level<'_>, rows: &[&super::SceneObjectKnownRow], out: &mu
             let row = rows.iter().find(|row| {
                 row.swarm.as_ref().and_then(|swarm| locate_node(root, swarm)).is_some_and(|at| at.node.id == node.id && at.scope == scope)
             });
-            let pickable = row.is_none_or(|row| row.visible_value && row.parent_group_id.is_none());
+            let pickable = row.is_none_or(|row| row.visible_value && row.parent.is_none());
             let parent = parent.as_ref().map(|(outer, group): &(Level<'_>, u32)| (Level { nodes: outer.nodes, wires: outer.wires }, *group));
             let at = NodeAt { level: Level { nodes: level.nodes, wires: level.wires }, scope: scope.clone(), node, parent };
-            node_shapes(&at, ShapeOwner::Swarm(node.node_id.clone()), row.map(|row| row.object_node_id), pickable, out);
+            node_shapes(&at, ShapeOwner::Swarm(node.node_id.clone()), row.map(|row| row.address.clone()), pickable, out);
         }
     }
 }
@@ -311,16 +311,16 @@ pub(super) struct NodeAt<'a> {
     pub parent: Option<(Level<'a>, u32)>,
 }
 
-fn node_shapes(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<u32>, pickable: bool, out: &mut Vec<SceneShapeVm>) {
+fn node_shapes(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<SceneNodeRef>, pickable: bool, out: &mut Vec<SceneShapeVm>) {
     shapes_of(at, scene_shape(&at.node.type_id), owner, row, pickable, out);
 }
 
-fn shapes_of(at: &NodeAt<'_>, decls: &[SceneShapeDecl], owner: ShapeOwner, row: Option<u32>, pickable: bool, out: &mut Vec<SceneShapeVm>) {
+fn shapes_of(at: &NodeAt<'_>, decls: &[SceneShapeDecl], owner: ShapeOwner, row: Option<SceneNodeRef>, pickable: bool, out: &mut Vec<SceneShapeVm>) {
     for (index, decl) in decls.iter().enumerate() {
         let Some(port) = decl.via.as_deref() else { continue };
         let Some(transform) = via_transform(at, port) else { continue };
         let Some(params) = transform_params(decl, &transform) else { continue };
-        out.push(SceneShapeVm { owner: owner.clone(), index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row, pickable });
+        out.push(SceneShapeVm { owner: owner.clone(), index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: row.clone(), pickable });
     }
 }
 
@@ -367,7 +367,7 @@ fn transform_params(decl: &SceneShapeDecl, t: &TransformVm) -> Option<Vec<ShapeP
 /// world origin, Domain Size on every side. Each side writes Domain Size,
 /// so the box scales uniformly; no param positions it, so its centre reads
 /// as driven and does not move.
-fn cube_shape(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<u32>, pickable: bool) -> Option<SceneShapeVm> {
+fn cube_shape(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<SceneNodeRef>, pickable: bool) -> Option<SceneShapeVm> {
     let (index, decl) = scene_shape(&at.node.type_id).iter().enumerate().find(|(_, decl)| decl.via.as_deref() == Some("domain"))?;
     let SceneShape::Box { center, size: sides, .. } = &decl.shape else { return None };
     let size = ParamAddr { scope_path: at.scope.clone(), node_doc_id: at.node.id, param_id: "domain_size".to_owned() };

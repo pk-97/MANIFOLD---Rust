@@ -1,6 +1,6 @@
 //! Transient editor navigation and frame-matched observations of the live scene.
 use manifold_core::{GraphTarget, NodeId};
-use {manifold_node_engine::runtime::frame_status::FrameRenderStatus, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_nodes_scene::node_graph::viewport_overlay::WorldLine, manifold_core::fluid_domain::FluidDomainSnapshot, manifold_node_engine::scene::scene_viewport::SceneViewportConfig, manifold_node_engine::scene::scene_viewport::SceneViewportHostError, manifold_node_engine::runtime::ModifierPreviewContext};
+use {manifold_node_engine::runtime::frame_status::FrameRenderStatus, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_core::fluid_domain::FluidDomainSnapshot, manifold_node_engine::scene::scene_viewport::SceneViewportConfig, manifold_node_engine::scene::scene_viewport::SceneViewportHostError, manifold_node_engine::runtime::ModifierPreviewContext};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -237,20 +237,11 @@ pub(crate) fn texture_handle() -> manifold_ui::node::TextureHandle {
 
 pub(crate) struct SceneViewportPaint<'a> {
     pub rect: manifold_ui::Rect,
-    pub frame: &'a SceneViewportFrame,
-    pub lines: &'a [WorldLine],
     /// The selection outline pass and this frame's mask (D-102).
     pub outline: Option<(&'a crate::selection_outline::SelectionOutline, &'a manifold_gpu::GpuTexture)>,
 }
 
 impl SceneViewportPaint<'_> {
-    /// The picture, then its lines. With an outline the caller splits the
-    /// two around the outline pass ([`Self::draw_image`], [`Self::draw_lines`]).
-    pub fn draw(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
-        self.draw_image(ui);
-        self.draw_lines(ui);
-    }
-
     pub fn draw_image(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
         use manifold_ui_paint::ui_renderer::Depth;
         let r = self.rect;
@@ -259,53 +250,6 @@ impl SceneViewportPaint<'_> {
         ui.draw_image_uv(r.x, r.y, r.width, r.height, texture_handle(), [0.0, 0.0, 1.0, 1.0], 0.0);
         ui.pop_immediate_clip();
         ui.pop_depth();
-    }
-
-    pub fn draw_lines(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
-        use manifold_ui_paint::ui_renderer::Depth;
-        let r = self.rect;
-        ui.push_depth(Depth(Depth::CONTENT.0 + 1));
-        ui.push_immediate_clip(r.x, r.y, r.width, r.height);
-        let config = self.frame.request.config;
-        draw_world_lines(ui, r, &config.camera.to_camera(), config.width, config.height, self.lines);
-        ui.pop_immediate_clip();
-        ui.pop_depth();
-    }
-}
-
-/// `line` projected through `camera` for a `width x height` render, mapped
-/// into `rect` (the pane that shows that render). The segment is clipped to
-/// the camera's near plane first, so a line running past or behind the camera
-/// keeps its visible part. `None` when all of it is behind.
-pub(crate) fn project_line(
-    camera: &manifold_node_engine::scene::camera::Camera,
-    width: u32,
-    height: u32,
-    rect: manifold_ui::Rect,
-    line: &WorldLine,
-) -> Option<[f32; 4]> {
-    let (a, b) = manifold_nodes_scene::node_graph::viewport_overlay::clip_to_near(camera, line.a, line.b)?;
-    let a = camera.project_to_pixel(a, width, height)?;
-    let b = camera.project_to_pixel(b, width, height)?;
-    let (sx, sy) = (rect.width / width.max(1) as f32, rect.height / height.max(1) as f32);
-    Some([rect.x + a.px * sx, rect.y + a.py * sy, rect.x + b.px * sx, rect.y + b.py * sy])
-}
-
-/// Draw world-space overlay lines over a pane showing a `width x height`
-/// render through `camera`. Callers own depth and clip.
-pub(crate) fn draw_world_lines(
-    ui: &mut manifold_ui_paint::ui_renderer::UIRenderer,
-    rect: manifold_ui::Rect,
-    camera: &manifold_node_engine::scene::camera::Camera,
-    width: u32,
-    height: u32,
-    lines: &[WorldLine],
-) {
-    for line in lines {
-        if let Some([x0, y0, x1, y1]) = project_line(camera, width, height, rect, line) {
-            let [r, g, b, a] = line.color;
-            ui.draw_line(x0, y0, x1, y1, 1.0, manifold_ui::node::Color32::new(r, g, b, a));
-        }
     }
 }
 

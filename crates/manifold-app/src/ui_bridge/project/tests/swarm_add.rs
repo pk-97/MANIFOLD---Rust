@@ -268,24 +268,24 @@ fn dispatched(project: &mut Project, action: ProjectAction) -> ContentCommand {
     rx.try_recv().expect("a queued edit")
 }
 
-/// The scene row index of the first swarm.
-fn swarm_row(def: &EffectGraphDef) -> u32 {
+/// The first swarm's object row, by address.
+fn swarm_row(def: &EffectGraphDef) -> manifold_core::SceneNodeRef {
     SceneVm::from_def(def)
         .unwrap()
         .objects
         .iter()
         .find_map(|object| match object {
-            SceneObjectVm::Known(row) if row.swarm.is_some() => Some(row.index as u32),
+            SceneObjectVm::Known(row) if row.swarm.is_some() => Some(row.address.clone()),
             _ => None,
         })
         .expect("a swarm row")
 }
 
 /// Duplicate the first swarm with its row's duplicate button.
-fn duplicate_swarm(project: &mut Project, editing: &mut EditingService, layer: &LayerId, render: u32) {
+fn duplicate_swarm(project: &mut Project, editing: &mut EditingService, layer: &LayerId) {
     let index = swarm_row(&effective_def(project, layer));
     let ContentCommand::SceneItem(action) =
-        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), render, index, 1))
+        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), index, 1))
     else { panic!("duplicate is a content-owned scene item edit") };
     let command = crate::scene_item_transfer::build_action(project, action).expect("the duplicate builds");
     editing.execute(command, project);
@@ -352,12 +352,12 @@ fn add_swarm_brings_an_attractor_and_gusts_and_leaves_the_world_alone() {
 /// and one undo brings both back.
 #[test]
 fn delete_swarm_takes_its_forces_and_one_undo_brings_both_back() {
-    let (mut project, layer, render) = scene_layer_project();
+    let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
     let with_swarm = effective_def(&project, &layer);
     let index = swarm_row(&with_swarm);
     let ContentCommand::ExecuteOnContent(command) =
-        dispatched(&mut project, ProjectAction::SceneSetupRemoveObject(layer.clone(), render, index))
+        dispatched(&mut project, ProjectAction::SceneSetupRemoveObject(layer.clone(), index))
     else { panic!("delete is a content-owned edit") };
     editing.execute(command, &mut project);
     assert_eq!(editing.take_rejection(), None, "the delete is accepted");
@@ -377,14 +377,11 @@ fn delete_swarm_takes_its_forces_and_one_undo_brings_both_back() {
 
     // The shipped preset's swarm deletes the same way.
     let preset = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Swarm")).unwrap();
-    let render = preset.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
     let mut project = Project::default();
     let idx = project.timeline.add_layer("Swarm", LayerType::Generator, PresetTypeId::new("Swarm"));
     let layer = project.timeline.layers[idx].layer_id.clone();
     let mut command = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(
         manifold_core::GraphTarget::Generator(layer.clone()),
-        Vec::new(),
-        render,
         swarm_row(preset.as_ref()),
         (*preset).clone(),
     );
@@ -398,10 +395,10 @@ fn delete_swarm_takes_its_forces_and_one_undo_brings_both_back() {
 /// one undo takes the copy and its forces away.
 #[test]
 fn duplicate_swarm_brings_its_own_forces() {
-    let (mut project, layer, render) = scene_layer_project();
+    let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
     let before = effective_def(&project, &layer);
-    duplicate_swarm(&mut project, &mut editing, &layer, render);
+    duplicate_swarm(&mut project, &mut editing, &layer);
     let def = effective_def(&project, &layer);
     let groups = swarm_groups(&def);
     assert_eq!(groups.len(), 2, "a second swarm");
@@ -423,7 +420,7 @@ fn duplicate_swarm_brings_its_own_forces() {
 /// their card rows away.
 #[test]
 fn duplicate_swarm_through_the_transaction_carries_the_sources_values_and_undoes_whole() {
-    let (mut project, layer, render) = scene_layer_project();
+    let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
     let before = effective_def(&project, &layer);
     let strength_row = |def: &EffectGraphDef, nth: usize| {
@@ -451,7 +448,7 @@ fn duplicate_swarm_through_the_transaction_carries_the_sources_values_and_undoes
     param.value = 33.0;
     param.base = 33.0;
 
-    duplicate_swarm(&mut project, &mut editing, &layer, render);
+    duplicate_swarm(&mut project, &mut editing, &layer);
     let def = effective_def(&project, &layer);
     let groups = swarm_groups(&def);
     assert_eq!(groups.len(), 2, "a second swarm");
@@ -476,10 +473,10 @@ fn duplicate_swarm_through_the_transaction_carries_the_sources_values_and_undoes
 
 /// Duplicate the first swarm `copies` times in one step; `Err` carries the
 /// refusal, from the build or from the edit.
-fn duplicate_swarm_copies(project: &mut Project, editing: &mut EditingService, layer: &LayerId, render: u32, copies: u32) -> Result<(), String> {
+fn duplicate_swarm_copies(project: &mut Project, editing: &mut EditingService, layer: &LayerId, copies: u32) -> Result<(), String> {
     let index = swarm_row(&effective_def(project, layer));
     let ContentCommand::SceneItem(action) =
-        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), render, index, copies))
+        dispatched(project, ProjectAction::SceneSetupDuplicateObject(layer.clone(), index, copies))
     else { panic!("duplicate is a content-owned scene item edit") };
     let command = crate::scene_item_transfer::build_action(project, action)?;
     editing.execute(command, project);
@@ -490,10 +487,10 @@ fn duplicate_swarm_copies(project: &mut Project, editing: &mut EditingService, l
 /// swarm alone, and one undo takes every copy and force away.
 #[test]
 fn duplicate_swarm_three_copies_gives_each_its_own_forces_and_undoes_in_one_step() {
-    let (mut project, layer, render) = scene_layer_project();
+    let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
     let before = effective_def(&project, &layer);
-    duplicate_swarm_copies(&mut project, &mut editing, &layer, render, 3).expect("three copies fit");
+    duplicate_swarm_copies(&mut project, &mut editing, &layer, 3).expect("three copies fit");
     let def = effective_def(&project, &layer);
     let groups = swarm_groups(&def);
     assert_eq!(groups.len(), 4, "the source and three copies");
@@ -511,10 +508,10 @@ fn duplicate_swarm_three_copies_gives_each_its_own_forces_and_undoes_in_one_step
 /// graph untouched.
 #[test]
 fn duplicate_swarm_five_copies_is_refused_whole_on_the_force_slot_limit() {
-    let (mut project, layer, render) = scene_layer_project();
+    let (mut project, layer, _) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
     let before = effective_def(&project, &layer);
-    let refusal = duplicate_swarm_copies(&mut project, &mut editing, &layer, render, 5).expect_err("five copies do not fit");
+    let refusal = duplicate_swarm_copies(&mut project, &mut editing, &layer, 5).expect_err("five copies do not fit");
     assert_eq!(effective_def(&project, &layer), before, "the graph is unchanged");
     assert!(refusal.contains("Duplicating needs 15 force slots and this scene has 13 free: a scene holds at most 16 forces"), "{refusal}");
     assert!(editing.undo(&mut project), "the swarm insert is still the last step");
@@ -647,7 +644,7 @@ fn paste_swarm_brings_its_own_forces_with_the_sources_values() {
 
     for destination in [layer.clone(), other] {
         let before = effective_def(&project, &destination);
-        let clipboard = SceneItemClipboard::capture(&project, &layer, render, SceneItemKind::Object, swarm_row(&def)).expect("a swarm copies");
+        let clipboard = SceneItemClipboard::capture(&project, &layer, SceneItemKind::Object, &swarm_row(&def)).expect("a swarm copies");
         let paste = SceneItemAction::Paste { layer: destination.clone(), scene: render, clipboard: Box::new(clipboard) };
         editing.execute(build_action(&project, paste).expect("the paste builds"), &mut project);
         assert_eq!(editing.take_rejection(), None);
@@ -685,9 +682,9 @@ fn paste_swarm_brings_its_own_forces_with_the_sources_values() {
 fn a_duplicated_swarm_holds_formation_after_two_seconds() {
     use manifold_node_engine::particles::Particle;
     const SIZE: u32 = 64;
-    let (mut project, layer, render) = scene_layer_project();
+    let (mut project, layer, _render) = scene_layer_project();
     let mut editing = insert_swarm(&mut project, &layer);
-    duplicate_swarm(&mut project, &mut editing, &layer, render);
+    duplicate_swarm(&mut project, &mut editing, &layer);
     let def = effective_def(&project, &layer);
     let moves: Vec<manifold_core::NodeId> = swarm_groups(&def)
         .iter()

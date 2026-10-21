@@ -81,6 +81,7 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
         split_at_markers: false,
+        include_gizmos: false,
         metadata: Vec::new(),
     };
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
@@ -248,6 +249,7 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
                 audio_start_beat: 0.0,
                 audio_encoder_delay: 0.0,
                 split_at_markers: false,
+                include_gizmos: false,
                 metadata: Vec::new(),
             };
             let (observation_tx, observation_rx) = unbounded();

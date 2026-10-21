@@ -13,7 +13,6 @@ pub const ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON: &str = include_str!("../.
 pub const ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECONHIT_JSON: &str = include_str!("../../assets/scene-modifier-presets/OrderedReconHit.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECON_JSON: &str = include_str!("../../assets/scene-modifier-presets/OrderedRecon.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_RADIALFORCE_JSON: &str = include_str!("../../assets/scene-modifier-presets/RadialForce.json");
-pub const ASSETS_SCENE_MODIFIER_PRESETS_RENDERMODE_JSON: &str = include_str!("../../assets/scene-modifier-presets/RenderMode.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_SCENEFOG_JSON: &str = include_str!("../../assets/scene-modifier-presets/SceneFog.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_SCENELOOP_JSON: &str = include_str!("../../assets/scene-modifier-presets/SceneLoop.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON: &str = include_str!("../../assets/scene-modifier-presets/Shatter.json");

@@ -98,7 +98,7 @@ The integration plan still names incomplete recording/provenance and collected-t
 
 **D5. One derived scene-object model selects all physics cards and actions.** Core analyzes authored structure; app projects immutable rows into UI-owned types. ParamSurface owns every manifest-backed control and its modulation. Action chrome remains ordinary shared scene-panel chrome. Rejected: a Water panel, a physics inspector tree, or UI imports from core/renderer.
 
-**D6. Identity, visibility, enablement, and deletion are separate.** Stable scoped NodeIds identify authoring objects. Engine handles are runtime-only. Hide preserves simulation; disabling a rigid body retains its authored configuration; deleting Water removes its owned graph and exposures and detaches external roles atomically. Child visibility is independent. No family duplication, including keyboard/context dispatch.
+**D6. Identity, visibility, enablement, and deletion are separate.** Stable scoped NodeIds identify authoring objects. Engine handles are runtime-only. Hide preserves simulation; disabling a rigid body retains its authored configuration; deleting Water removes its owned graph and exposures and detaches external roles atomically. Child visibility is independent. No family duplication, including keyboard/context dispatch. A body joins a Physics World through one numbered membership wire, its `body` output into the world's `body_k` or `copies_k`; its pose, instances, count and force live on the body (`pose`, `instances`, `active_count`, `acceleration`), and the world's per-body ports are compiled slots only (`manifold_core::physics_members` is the one place that knows the port grammar).
 
 **D7. Preserve the numerical and temporal contracts.** Beats and the host tempo map remain transport authority. Existing clock/interval/coupling code supplies typed seconds to engines. Preserve one owner and one completed publication per stamp, body mass/inertia inside the incompressible solve, and matched whitewater/liquid captures. Rejected: render-delta stepping, a UI clock, and advancing a shared rigid world independently in each object group.
 
@@ -477,6 +477,8 @@ A Physics World is a reconfigurable node, like Render Scene. Two params size its
 - `bodies` (1–256, default 64): `body_k`, `body_acceleration_k` and `pose_k`.
 - `copy_groups` (0–32, default 1): `copies_k`, `copies_acceleration_k`, `instances_k` and `active_count_k`.
 
+Only `body_k` and `copies_k` are authored. A body wired into one of them reads its pose, or its instances and count, from its own `pose`, `instances` and `active_count` outputs, and takes a force on its own `acceleration` input. At graph build `load::physics_members::compile` turns those alias wires into the world's numbered ports; a body with no world passes its authored transform through `pose` and drops the rest. Validate refuses an authored wire on any other numbered world port. Inside an import group the object reads the in-group body's `pose` directly, so the group has no `pose` input, only a `body` output that carries the membership wire. Duplicate and Paste copy these wires through one copier (`copy_scene_item_wires`), which gives each copy the world's next free number.
+
 Copy group k copies the body wired into `copies_k`. Every body and every group's copies share one Box3D world, one solver and one clock, so they all collide. The world makes at most 4000 copies across its groups (`MAX_COPIES`, the measured budget); groups fill in port order, a later group makes what fits, and the rest is reported as not made: `copies_not_made` on the engine, per world on the setup check's report (`ContentState::setup_fits`, latched like the liquid warnings), and on the card under the copies bodies' Count rows, last group first: "N copies not made; the world's copy pool is full" (`SetupProblemKind::CopiesNotMade`). It warns in any scene, with water or without.
 
 That body's spawner sets the group's layout, live (`physics::copy_layout`):
@@ -495,7 +497,7 @@ The caps are `PHYSICS_WORLD_MAX_BODIES` and `PHYSICS_WORLD_MAX_COPY_GROUPS` in f
 
 Enable, duplicate, paste and Shatter take body slots from core `BodySlots`, then `fit_world_bodies` grows the world's `bodies` count to cover every wired slot in the same edit. Nothing shrinks it. A world with all 256 slots taken refuses.
 
-On stage, a change to `bodies` or `copy_groups` restarts the world: every body and copy goes back to its authored pose and the clock to zero, as any change of which bodies exist already does.
+On stage, a change to `bodies` or `copy_groups` restarts the world: every body and copy goes back to its authored pose and the clock to zero. A body added to a free slot (Enable Physics, Duplicate, Paste) joins the running world at its authored pose instead, and the rebuild the edit causes carries the world over (`physics_carry`); removing a body or changing an installed body's shape, scale or collider still restarts it. A liquid-coupled world restarts on any of these.
 
 A compound body is capped by its own part ports, not by the world: at most `RIGID_BODY_MAX_PARTS` (64) material parts, the length of the rigid body's `part_k` table. Enable Physics refuses a larger import by name and leaves the graph as it loaded.
 
