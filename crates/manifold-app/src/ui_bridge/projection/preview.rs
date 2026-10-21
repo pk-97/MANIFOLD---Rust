@@ -354,8 +354,8 @@ mod tests {
         ui
     }
 
-    /// A point drag on one of three lanes refills that lane and leaves the
-    /// other two screens as they were.
+    /// A point drag on one of three lanes refills that lane, leaves the
+    /// other two screens as they were, and matches a whole rebuild.
     #[test]
     fn lane_drag_with_three_lanes_updates_one() {
         let (mut project, targets) = three_lane_project();
@@ -390,5 +390,7 @@ mod tests {
         let steady = thread_work_snapshot().since(&work);
         assert_eq!(steady.get(WorkKind::LanePreviewUpdate), 1);
         assert_eq!(steady.get(WorkKind::FrameAlloc), 0, "a steady lane drag allocates nothing");
+        let rebuilt = lane_ui(&project, &targets);
+        assert_eq!(screens(&ui), screens(&rebuilt), "the in-place result is what a whole rebuild makes");
     }
 }

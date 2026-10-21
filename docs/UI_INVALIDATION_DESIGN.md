@@ -423,7 +423,7 @@ These are the contract. If the freshness check fails, the missing input is added
 | Projection | Runs when these inputs move |
 |---|---|
 | `sync_project_data` | Layers, Clips, Automation, Markers, Settings (time signature, `projection/timeline.rs` :345); automation view (lanes toggle, order, hidden, pins, chosen params); queued layer reveal. A selection or active-layer change does not run it: the selection push repaints the highlight (P7c) |
-| Trigger catalog (`sync_trigger_catalog`, P7c) | Layers, Effects. Runs before `sync_project_data`, whose layer headers label from it |
+| Trigger catalog (`sync_trigger_catalog`, P7c) | Layers, Effects. Refreshes the open picker and rewrites the layer headers' trigger chips in place; runs before `sync_project_data`, whose rebuilt headers label from it |
 | `sync_inspector_data` | Layers, Effects, Mappings, Clips, Automation (the lane dot :1505 and `external_attachment`, `projection/material.rs` :294, which keeps mapped rows on the scene card: BUG-pmbd3.7 (Scene card hides mapped rows) under BUG-pmbd3 (3D scene surfaces epic)), Led, AudioSetup, EmbeddedPresets, Settings (bpm and frame rate for driver timing, `projection/inspector.rs` :101); selection identity; active layer; automation view; the selected point's lane (`automation_point_lane`, :116, P7c); runtime latch and LED-presence sequences; Scene selection; queued Scene-tab and trigger-response reveals |
 | Audio Setup device list (`sync_audio_dock`, only while the dock is open) | AudioSetup, Layers (send rows name their feeding layers), Effects (consumer rows list the audio mods); audio directory version; dock view (opening fills it) — the CoreAudio query runs only then |
 | `sync_clip_positions` | Clips, Layers (all clips); preview (dragged clips and split pieces only, in place) |
@@ -733,108 +733,50 @@ Order: P1 → P2 → P3a → P3b → P4a → P4b → P4c → P4d → P4e → P5a
 
 ### P7a — A drag preview touches only what it drags (D12 completed)
 
-D12 says a preview change updates the dragged items only. As built it does not.
-A clip preview runs `sync_clip_positions`, which re-projects every clip in the
-project with fresh strings (`ui_frame.rs` :607, `projection/timeline.rs` :501).
-A lane preview runs `sync_automation_lane_geometry`, which re-projects every lane
-on every layer and rebuilds every lane screen (`timeline.rs` :554,
-`viewport.rs` :607, :1033). Cost per mouse move scales with the whole show,
-not the gesture. Closes BUG-w3csc (drags rebuild the timeline per mouse move).
-
 - **Rule:** a preview move updates exactly the clips and lanes the
-  `GesturePreview` recorded, in place, and nothing else. The full projection
-  runs once, on commit or cancel, as now.
-- **Clips:** `Viewport` keeps a clip-id index built in `set_clips`. A preview
-  move writes start, duration, in-point and layer for each recorded clip
-  through it. A layer change also moves the entry between layer buckets and
-  recomputes its colour. An audio clip recomputes its waveform breakpoints.
-  Its name is never recomputed.
-- **Lanes:** `Viewport` replaces only the recorded lanes' entries and
-  rebuilds only their lane screens. The other lanes' screens are untouched.
-- **No allocation in a steady drag:** each in-place update reuses the entry's
-  buffers, clearing and refilling them. The one lane copy sent to the content
-  thread (`send_automation_preview`) stays, one per move.
-- **Counters:** each in-place update records its own work kind
-  (`WorkKind::ClipPreviewUpdate`, `WorkKind::LanePreviewUpdate`). The full
-  kinds (`ClipProjection`, `LaneProjection`) record only on commit.
+  `GesturePreview` recorded, in place, and nothing else. The whole projection
+  (`sync_clip_positions`, `sync_automation_lane_geometry`) runs on commit,
+  cancel, snapshot acceptance, and as the fallback when the viewport cannot
+  show the gesture in place (a clip or lane it does not hold, a placeholder
+  lane, a clip count that differs).
+- **Contract:** the viewport keeps a clip-id index built in `set_clips`; a
+  preview writes through it (`project_clip_preview`, `project_lane_preview` in
+  `projection/preview.rs`), reusing the entry's buffers, so a steady drag
+  allocates nothing. Work kinds `ClipPreviewUpdate` and `LanePreviewUpdate`
+  count the in-place path; `ClipProjection` and `LaneProjection` count only the
+  whole one.
 - **Forbidden:** a second clip or lane model beside `ViewportClip` and
-  `UiAutomationLane`; a dirty flag. The input is the preview version
-  already in `FrameInputs.preview`.
-
-**Read-back:** this section, D5, D7 and D12, `gesture_preview.rs`,
-`frame_plan.rs` (preview planning), `ui_frame.rs` (the projection pass),
-`projection/timeline.rs`, and `viewport.rs` (`set_clips`,
-`set_automation_lanes`, `rebuild_automation_lane_screens`).
-
-**Gate:** clippy on `manifold-app`, `manifold-ui` and `manifold-foundation`;
-scoped nextest; flows `work-clip-drag`, `work-clip-trim` and
-`work-automation-point-drag`. Per move, those flows show zero `ClipProjection`
-and `LaneProjection` and one update per dragged item. Their `FrameAlloc`
-ceilings are re-recorded down. The `work-automation-point-drag` known-red entry
-in `scripts/ui-flows/manifest.json` is deleted because the flow passes.
-New CPU tests: a clip drag on a 500-clip project updates one entry and leaves
-the other 499 bit-identical; a lane drag with three lanes rebuilds one screen.
-Negative: `rg 'ClipPreview\)' crates/manifold-app/src/ui_frame.rs` shows no
-call into `sync_clip_positions`.
-
-- **As built (lane/drag-preview-inplace):** `apply_frame_plan` takes the `UiEdits` and hands it to `between`, so the projection pass reads the `GesturePreview`. A clip preview runs `project_clip_preview` (`projection/preview.rs`): each recorded clip's start, duration, in-point and layer go into its entry through `TimelineViewportPanel::preview_clip_mut`; a layer change moves the entry (`move_clip_to_layer`, `swap_remove`, so bucket order is free) and recomputes its colour, flags and, for audio, its breakpoints (`audio_waveform_breakpoints_into`). A lane preview runs `project_lane_preview`: `update_automation_lane` refills the lane's points (`preview_lane_points_into`, the same translation the full path uses) and rebuilds that one lane screen through `fill_lane_geometry`, the code `rebuild_automation_lane_screens` also runs (both in `viewport/lane_screens.rs`). The whole projections run on commit, cancel, snapshot acceptance, and when the in-place path declines: a project clip count that differs from the viewport's (a region-move split), a clip or lane the viewport does not hold, or a placeholder lane. `clip_drag` no longer re-projects every frame; it runs the in-place write, which does nothing when nothing differs. Counts (before to after, per flow window): `work-clip-drag` ClipProjection 120 to 3, FrameAlloc 6778 to 2994, ClipPreviewUpdate 32; `work-clip-trim` 61 to 3, 4690 to 2612, 27; `work-region-move` 61 to 2, 3691 to 1875, 32; `work-marquee` 62 to 3, 4781 to 2706, 59; `work-automation-point-drag` LaneProjection 64 to 7, FrameAlloc 4251 to 2814, LanePreviewUpdate 57 (the flow is green and out of the known-red list). The remaining ClipProjection and LaneProjection are the press and commit syncs.
+  `UiAutomationLane`; a dirty flag. The input is the preview version in
+  `FrameInputs.preview`.
 
 ### P7b — The timeline grid is drawn once, on the GPU
 
-Measured 2026-10-21 on the Liveschool show (52 layers, 706 px tracks, 2x). On a
-zoom or horizontal scroll frame, `repaint_dirty_layers` (`viewport.rs` :767)
-repaints the grid bitmap of all 52 layers, off-screen layers included, and
-`app_render.rs` :2503 uploads all of them. That is 42.9 MB and about 85% of a
-4.8 ms frame, and it grows with layer height times width, not with clips. The
-grid is a pure function of the viewport and is the same for every layer
-(`bitmap_renderer.rs` module doc), so 52 CPU copies of it are the bug.
-
-- **Rule:** the layer grid is GPU lines from `timing_grid_lines`, the walker
-  the ruler and the automation lanes already share. They are emitted once per
-  frame for the visible tracks rect, under the clip bodies, in the pass that
-  already draws the lane grids. The layer-0 top separator goes in the same
-  pass. No CPU pixel buffer, no texture upload, no per-layer copy.
-- **Deleted:** `LayerBitmapRenderer`, `paint_grid_lines`, `shift_buffer`,
-  `repaint_dirty_layers`, `dirty_layer_iter`, `layer_bitmap_gpu.rs` and the
-  upload loop. `timing_grid_policy`, `timing_grid_lines` and
-  `TimingGridLineKind` stay and move to a module named for the grid.
-- **Forbidden:** a shader change. If the existing rect or line instances can't
-  draw a 1- or 2-physical-pixel line, stop and report. A cache of the grid in
-  any form.
-- **Gate:** a scripted pixel diff of a headless timeline render, before and
-  after, at three zoom levels, with zero differing pixels outside clip bodies
-  (or a stated threshold if line antialiasing differs). `work-zoom` and
-  `work-follow-scroll` show no `GridBitmapRepaint` and fall in `FrameAlloc`;
-  re-record their ceilings down. Negative:
-  `rg 'LayerBitmapRenderer|layer_bitmap_gpu|repaint_dirty_layers' crates/`
-  returns zero hits.
-
-- **As built (lane/gpu-timeline-grid):** `emit_timeline_grid` (`manifold-ui-paint/src/timeline_grid_draw.rs`) queues one `draw_grid_line` per `timing_grid_lines` line across the visible layer rows, plus the layer-0 separator rect one depth above the lines, in its own prepare/render cycle (pass 4a of `render_main_ui_passes`, `ui_frame.rs`) before the clip bodies. It is its own cycle, not the lane-grid overlay pass, because a line draws over a clip body at one depth and the grid must sit under it. `Viewport::timeline_grid_view` hands it the tracks rect, scroll beat, pixels per beat, beats per bar, render scale and layer 0's top; `timeline_grid_rows` yields the visible row spans (no allocation). Each line is snapped to a whole physical column from the tracks edge before the renderer's own rounding, so a .5 boundary cannot flip it. No shader changed; `draw_grid_line` already draws exact 1- and 2-physical-pixel lines. Deleted: `LayerBitmapRenderer`, `paint_grid_lines`, `shift_buffer`, `repaint_dirty_layers`, `dirty_layer_iter`, `layer_bitmap_rects`, the per-layer renderer vector, the upload loop, `WorkKind::GridBitmapRepaint` and its ceilings. `timing_grid_policy`, `timing_grid_lines`, `TimingGridLineKind` and `TimingGridPolicy` moved to `manifold-ui/src/timing_grid.rs`; `clip_overlaps_region` to `viewport/model.rs`. `layer_bitmap_gpu.rs` is not gone: the overview strip, collapsed-group summaries and the LED band still upload CPU bitmaps through it, so it became `panel_bitmap_gpu.rs` (`PanelBitmapGpu`) with no grid role. The frame planner had no grid-only work kind. Headless renders now show the grid; they never uploaded the layer bitmaps before. Against a baseline with that upload added, the new grid is not pixel-identical: the old quad resampled a `round(width * scale)` column texture onto the tracks rect, so some lines were missing, bars were one pixel wide at times, and zoomed frames sat one physical pixel left of the ruler ticks. The new lines match the ruler. `work-zoom` and `work-follow-scroll` lose `GridBitmapRepaint` (119 and 7 to 0); `FrameAlloc` does not fall (2397 and 150, the same as main, so both stay known red against their 2363 and 148 ceilings), because the harness work window never covered the render passes. The 42.9 MB per-frame upload was in the live frame and is gone.
+- **Rule:** the track grid is GPU lines from `timing_grid_lines`, the walker
+  the ruler and the automation lanes share, emitted once per frame for the
+  visible tracks rect under the clip bodies, with the layer-0 top separator.
+  No CPU pixel buffer, no texture upload, no per-layer copy, no cache of the
+  grid in any form.
+- **Contract:** `emit_timeline_grid` (`timeline_grid_draw.rs`) queues
+  `draw_grid_line`, which snaps every grid line, track or lane, to a physical
+  pixel in one place in the renderer. `Viewport::timeline_grid_view` and
+  `timeline_grid_rows` feed it without allocating.
+- **Forbidden:** a shader change. If the existing line instances cannot draw a
+  1- or 2-physical-pixel line, stop and report.
 
 ### P7c — Commit and zoom pay only for what moved
 
-Same measurement. The press and release frames of every drag run
-`sync_project_data`. Each takes about 7 ms, nearly all in
-`TriggerRoutingCatalog::project` (`projection/trigger_routing.rs`), which is
-the 12 to 18 ms spike at the start and end of a drag. On each zoom and scroll
-frame, all three chrome bars relayout (about 4%) because the zoom label sits in
-the chrome push. The overview walks every clip for the max beat (5 to 8% of a
-zoom frame). A clip drag move inserts into a hash map in
-`Timeline::resolve_clip_location`.
-
-- **Rule:** each of these keys on its own inputs. The trigger catalog runs
-  only when the parts it reads move: instances, their manifests and trigger
-  sources, never `Clips`. The press frame of a drag stamps nothing that
-  reaches it. The zoom label is its own keyed in-place push, the way
-  `ClockPush` is, and a zoom or scroll runs no chrome layout. The overview's
-  max beat is cached on clip data and read on scroll and zoom.
-  `resolve_clip_location` stops allocating on a hit.
-- **Gate:** `work-clip-drag` and `work-automation-point-drag` show the trigger
-  catalog only where the gesture changed trigger inputs (never), and no
-  `ProjectSync` on press. `work-zoom` shows zero chrome layouts. Ceilings are
-  re-recorded down.
-
-- **As built (lane/commit-zoom-cost):** (1) The press frame of a drag ran `ProjectSync` on two inputs: `selection_identity` and `active_layer` (a clip press) and `automation_view` carrying the selected point's lane (a point press). `sync_project_data` reads the selection only for the layer highlight, which `push_selection` already writes, so identity and active layer left its row; the point's lane split out of `automation_view` into `automation_point_lane` (`UIState::point_lane_view`), read by the inspector row alone. `TriggerRoutingCatalog::project` is its own `Projection::TriggerCatalog` keyed on Layers and Effects (`sync_trigger_catalog`; `sync_project_all` for load, harness and editor-window callers that need both), with a `TriggerCatalogProjection` work counter; it runs before the project sync because the layer headers label from it, and refreshes an open target picker. A clip move or automation commit no longer runs it. (2) `Projection::ZoomLabelPush` (`push_zoom_label`, `HeaderPanel::set_zoom_label` writes the keyed label in place from a held scratch string, allocation-free); `zoom_bits` left the chrome push. The chrome layouts that remained on zoom came from `apply_ui_frame_invalidations` returning true for an in-place scroll or translate, which made every push run as if its nodes had been replaced (chrome, selection, live values); it now returns true only when a region was built or rebuilt. (3) The overview's max beat is read from `overview_max_beat`, recomputed only while `overview_clips_dirty` (set by `set_clips`, `preview_clip_mut`, `move_clip_to_layer`, `set_tracks`). (4) `Timeline::resolve_clip_location` accepts a validated cache hit without rebuilding even when the cache is marked dirty; only a miss on a dirty cache, or a stale entry, rebuilds. Counts (main to now, same 41-flow batch): `work-zoom` ChromeLayout 51 to 0, ValuePush 17 to 0, FrameAlloc 2397 to 86; `work-follow-scroll` ChromeLayout 3 to 0, FrameAlloc 150 to 14; `work-clip-drag` ProjectSync 3 to 2, FrameAlloc 2994 to 2702; `work-automation-point-drag` ProjectSync 3 to 2, FrameAlloc 2814 to 2136 (LanePreviewUpdate 57 to 58: the press now previews the lane in place instead of re-projecting it); `work-select-click` ProjectSync 1 to 0, FrameAlloc 685 to 468; `work-scrollbar-drag` FrameAlloc 8379 to 414. The remaining ProjectSync in a drag is the commit. New cost: a clip-trigger shape commit (`work-trigger-shape`) runs the catalog twice because `SetLayerClipTriggerCommand` declares Effects for non-sensitivity edits (FrameAlloc 3100 to 3226).
+- **Rule:** each projection keys on its own inputs. The trigger catalog
+  (`sync_trigger_catalog`, `Projection::TriggerCatalog`) runs on Layers and
+  Effects only, never Clips; it refreshes an open target picker and rewrites
+  the layer headers' trigger chips in place. The zoom label is its own keyed
+  in-place push (`Projection::ZoomLabelPush`, `push_zoom_label`), and a zoom or
+  scroll runs no chrome layout. The overview's max beat is held while the clip
+  data is unchanged. `Timeline::resolve_clip_location` accepts a validated
+  cache hit without rebuilding.
+- **Contract:** `sync_project_data` reads no selection for the layer
+  highlight; `push_selection` is its only writer. A press frame stamps nothing
+  that reaches the trigger catalog or the project sync.
+- **Forbidden:** an invalidation flag for any of these; add an input.
 
 After P6: the structural-sharing design (section 9, BUG-qzea6 (design structural sharing of project parts)).
 

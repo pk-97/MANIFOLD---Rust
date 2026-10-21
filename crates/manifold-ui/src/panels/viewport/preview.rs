@@ -88,37 +88,60 @@ mod tests {
         panel
     }
 
-    /// The overview normalises by the last clip end. A scroll or zoom reads
-    /// the value held since the clip data last moved; it always equals a full
-    /// walk.
-    #[test]
-    fn overview_max_beat_matches_a_full_walk() {
+    fn laid_out() -> TimelineViewportPanel {
         let mut panel = panel();
-        panel.set_clips(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)]);
-        panel.repaint_overview();
-        assert_eq!(panel.overview_max_beat, 12.0);
-        assert_eq!(panel.overview_max_beat, panel.clips_end_beat());
+        panel.prepare_layout(&crate::layout::ScreenLayout::new(1920.0, 1080.0));
+        panel
+    }
 
-        // A scroll and a zoom leave the clip data alone and read the held value.
+    fn overview(panel: &mut TimelineViewportPanel) -> Vec<Color32> {
+        panel.repaint_overview();
+        panel.overview_bitmap().expect("the strip repainted").0.to_vec()
+    }
+
+    /// What a fresh panel, which walks every clip, paints for these clips.
+    fn walked(clips: Vec<ViewportClip>, scroll: f32, zoom: Option<f32>) -> Vec<Color32> {
+        let mut panel = laid_out();
+        panel.set_clips(clips);
+        panel.set_scroll(scroll, 0.0);
+        if let Some(z) = zoom {
+            panel.set_zoom(z);
+        }
+        overview(&mut panel)
+    }
+
+    /// The overview normalises by the last clip end. A scroll or zoom reuses
+    /// the end held since the clip data last moved; the strip always matches
+    /// one painted from a full walk.
+    #[test]
+    fn overview_matches_a_full_walk() {
+        let mut panel = laid_out();
+        panel.set_clips(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)]);
+        assert_eq!(overview(&mut panel), walked(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)], 0.0, None));
+
+        // A scroll and a zoom leave the clip data alone.
         panel.set_scroll(8.0, 0.0);
-        panel.repaint_overview();
         panel.set_zoom(40.0);
-        panel.repaint_overview();
-        assert_eq!(panel.overview_max_beat, 12.0);
+        assert_eq!(
+            overview(&mut panel),
+            walked(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+        );
 
         // A preview move that extends the end is seen on the next repaint.
         let id: ClipId = "a".into();
         panel.preview_clip_mut(&id).unwrap().start_beat = Beats::from_f32(30.0);
-        panel.repaint_overview();
-        assert_eq!(panel.overview_max_beat, 34.0);
-        assert_eq!(panel.overview_max_beat, panel.clips_end_beat());
+        assert_eq!(
+            overview(&mut panel),
+            walked(vec![clip("a", 0, 30.0, 4.0), clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+        );
 
-        // A move to another layer keeps the end; set_clips again shrinks it.
+        // A move to another layer; then set_clips again shrinks the end.
         assert!(panel.move_clip_to_layer(&id, 1));
-        panel.repaint_overview();
-        assert_eq!(panel.overview_max_beat, 34.0);
+        assert_eq!(
+            overview(&mut panel),
+            walked(vec![clip("a", 1, 30.0, 4.0), clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+        );
         panel.set_clips(vec![clip("b", 1, 4.0, 8.0)]);
-        panel.repaint_overview();
-        assert_eq!(panel.overview_max_beat, 12.0);
+        assert_eq!(overview(&mut panel), walked(vec![clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0)));
     }
 }

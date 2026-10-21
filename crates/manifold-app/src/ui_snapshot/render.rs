@@ -380,7 +380,7 @@ pub fn render_graph_editor_to_png(
         }
         _ => None,
     };
-    crate::ui_bridge::sync_project_all(&mut ui_root, project, active_idx, selection);
+    crate::ui_bridge::sync_project_all(&mut ui_root, project, selection);
     // No `ContentState` exists on this path (a bare fixture `Project`, no
     // playback engine) — the graph-editor lane render never has latch data,
     // so it can only ever show the red "automated" dot, never the gray

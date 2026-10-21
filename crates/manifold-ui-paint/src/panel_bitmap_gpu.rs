@@ -117,7 +117,7 @@ fn select_layer_quads(
     (selected, cap_hit)
 }
 
-/// Manages GPU textures for all layer bitmaps and renders them as positioned quads.
+/// Manages GPU textures for the panel bitmaps and renders them as positioned quads.
 pub struct PanelBitmapGpu {
     textures: Vec<Option<LayerTexture>>,
     pipeline: GpuRenderPipeline,
