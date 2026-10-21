@@ -12,6 +12,9 @@ use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission, with_admission_snapshot};
 
+#[path = "cliftest_tests.rs"]
+mod cliftest;
+
 #[path = "force_tests.rs"]
 mod forces;
 

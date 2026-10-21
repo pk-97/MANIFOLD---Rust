@@ -184,7 +184,6 @@ fn duplicate_scene_object_edit(
             fluid::duplicate_scene_object_fluid_roles(&mut candidate, source_id, cloned_group, &map)
                 .map_err(|message| SceneGraphEditError { at: None, message })?;
         }
-        clone_string_bindings(&mut candidate, &map);
         remaps.extend(clone_sections::clone_scene_bindings(&mut candidate, &map));
         maps.push(map);
     }
@@ -373,29 +372,6 @@ fn source_render_outputs(wires: &[EffectGraphWire], source_id: u32, render_id: u
     outputs.sort_unstable();
     outputs.dedup_by_key(|(index, _)| *index);
     outputs
-}
-
-/// Clone every string binding (the importer's Model File path, one entry
-/// per file-dependent node) whose target the copy cloned, retargeted at the
-/// copy (BUG-212 (duplicate drops the model file)). Same id, label and
-/// default, so one Model File still drives every copy.
-fn clone_string_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) {
-    let Some(meta) = def.preset_metadata.as_mut() else { return };
-    let copies: Vec<StringBindingDef> = meta
-        .string_bindings
-        .iter()
-        .filter_map(|binding| {
-            let BindingTarget::Node { node_id, param } = &binding.target else { return None };
-            let (_, new_id) = node_id_map.iter().find(|(old, _)| old == node_id)?;
-            Some(StringBindingDef {
-                id: binding.id.clone(),
-                label: binding.label.clone(),
-                default_value: binding.default_value.clone(),
-                target: BindingTarget::Node { node_id: new_id.clone(), param: param.clone() },
-            })
-        })
-        .collect();
-    meta.string_bindings.extend(copies);
 }
 
 /// One physics copy: the id allocators it draws from and where it goes.

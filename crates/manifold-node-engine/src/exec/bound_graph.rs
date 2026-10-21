@@ -155,9 +155,9 @@ impl BoundGraph {
         let shadowed_def_params = def
             .map(|d| find_shadowed_def_params(d, &bindings, graph))
             .unwrap_or_default();
-        let mut cache = LastAppliedCache::new();
-        cache.seed_from_bindings(&bindings);
         apply_binding_defaults(&bindings, graph, None);
+        let mut cache = LastAppliedCache::new();
+        cache.seed_from_graph(&bindings, graph);
         Self {
             bindings,
             cache,
@@ -942,6 +942,26 @@ mod tests {
             "and the def value really does stand — the detector agrees with \
              apply_binding_defaults rather than second-guessing it (BUG-ji6q)",
         );
+    }
+
+    /// BUG-c48e6 (import scale): the node holds an import fit factor (55.3)
+    /// while its mirrored card says 1.0, its default. The first apply must
+    /// still write 1.0: what renders is what the card says, whatever the
+    /// build left on the node. A node that already holds the default stays
+    /// skipped, so a card at rest writes nothing.
+    #[test]
+    fn a_card_at_its_default_still_reaches_a_node_holding_something_else() {
+        let (mut graph, feedback) = graph_with_baked_scale(55.3);
+        let mut binding = scale_binding(feedback, 1.0);
+        binding.default_mirrors_node_param = true;
+        let mut bound = BoundGraph::new(vec![binding], &mut graph, None);
+        assert_eq!(scale_of(&graph, feedback), ParamValue::Float(55.3), "a mirror never plants");
+        bound.apply(&mut graph, &ParamManifest::from_params(vec![slot("amount", 1.0, true)]));
+        assert_eq!(scale_of(&graph, feedback), ParamValue::Float(1.0), "the card value reaches the node");
+
+        let (mut graph, feedback) = graph_with_baked_scale(1.0);
+        let bound = BoundGraph::new(vec![scale_binding(feedback, 1.0)], &mut graph, None);
+        assert_eq!(bound.cache.entries, vec![crate::param_binding::BindingCacheEntry::Applied(1.0)]);
     }
 
     /// Trigger bindings carry a monotonic counter, not a value anyone holds, so a

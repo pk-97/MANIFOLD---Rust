@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, SerializedParamValue,
 };
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
@@ -218,26 +218,6 @@ impl SceneItemAction {
     }
 }
 
-fn remapped_target(target: &BindingTarget, ids: &HashMap<NodeId, NodeId>) -> Option<BindingTarget> {
-    let BindingTarget::Node { node_id, param } = target else {
-        return None;
-    };
-    Some(BindingTarget::Node {
-        node_id: ids.get(node_id)?.clone(),
-        param: param.clone(),
-    })
-}
-
-fn unique(existing: &mut HashSet<String>, base: &str) -> String {
-    let mut value = base.to_string();
-    let mut suffix = 2;
-    while !existing.insert(value.clone()) {
-        value = format!("{base}_{suffix}");
-        suffix += 1;
-    }
-    value
-}
-
 fn node_by_stable_id<'a>(nodes: &'a [EffectGraphNode], id: &NodeId) -> Option<&'a EffectGraphNode> {
     for node in nodes {
         if node.node_id == *id {
@@ -293,6 +273,9 @@ fn rewrite_label(label: String, rewrites: &[(String, String)]) -> String {
     label
 }
 
+/// Paste's half of the one metadata copier
+/// ([`manifold_editing::binding_transfer::transfer_bindings`]): the copy's
+/// card rows get fresh ids, sections and labels renamed after its handles.
 fn transfer_metadata(
     source: &EffectGraphDef,
     destination: &mut EffectGraphDef,
@@ -306,60 +289,9 @@ fn transfer_metadata(
         .preset_metadata
         .as_mut()
         .ok_or("Destination scene has no parameter metadata")?;
-    let mut taken: HashSet<String> = dest
-        .params
-        .iter()
-        .map(|p| p.id.clone())
-        .chain(dest.string_params.iter().map(|p| p.id.clone()))
-        .collect();
-    // The shared scene projection resolves cloned bindings by stable target
-    // when their IDs carry the existing `_duplicate` suffix convention.
-    let mut remaps = HashMap::new();
-    for binding in &source.bindings {
-        if let Some(target) = remapped_target(&binding.target, ids) {
-            let id = remaps
-                .entry(binding.id.clone())
-                .or_insert_with(|| unique(&mut taken, &format!("{}_duplicate", binding.id)))
-                .clone();
-            let mut copy = binding.clone();
-            copy.id = id;
-            copy.target = target;
-            copy.label = rewrite_label(copy.label, handle_rewrites);
-            dest.bindings.push(copy);
-        }
-    }
-    for binding in &source.string_bindings {
-        if let Some(target) = remapped_target(&binding.target, ids) {
-            let id = remaps
-                .entry(binding.id.clone())
-                .or_insert_with(|| unique(&mut taken, &format!("{}_duplicate", binding.id)))
-                .clone();
-            let mut copy = binding.clone();
-            copy.id = id;
-            copy.target = target;
-            copy.label = rewrite_label(copy.label, handle_rewrites);
-            dest.string_bindings.push(copy);
-        }
-    }
-    for spec in &source.params {
-        if let Some(id) = remaps.get(&spec.id) {
-            let mut copy = spec.clone();
-            copy.id = id.clone();
-            copy.section = copy
-                .section
-                .map(|section| rewrite_label(section, handle_rewrites));
-            dest.params.push(copy);
-        }
-    }
-    for spec in &source.string_params {
-        if let Some(id) = remaps.get(&spec.id) {
-            let mut copy = spec.clone();
-            copy.id = id.clone();
-            copy.name = rewrite_label(copy.name, handle_rewrites);
-            dest.string_params.push(copy);
-        }
-    }
-    Ok(remaps.into_iter().collect())
+    let node_map: Vec<(NodeId, NodeId)> = ids.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+    let relabel = |text: &str, _: &NodeId| rewrite_label(text.to_string(), handle_rewrites);
+    Ok(manifold_editing::binding_transfer::transfer_bindings(source, dest, &node_map, &relabel))
 }
 
 /// How the copied item is named.
@@ -766,6 +698,7 @@ pub(crate) fn build_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::effect_graph_def::BindingTarget;
     use std::collections::{BTreeMap, BTreeSet};
 
     use manifold_core::effect_graph_def::{

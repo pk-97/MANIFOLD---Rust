@@ -91,6 +91,16 @@ impl SceneGraphTransaction {
             .ok_or_else(|| error("Owner graph does not resolve"))?
             .clone();
         let result = edit(&before_resolved)?;
+        // A binding id names one value: an edit that would bind two values
+        // under one id is refused, never saved (typed identity D5).
+        if let Some(identity) = manifold_core::binding_identity::added_errors(
+            before_resolved.preset_metadata.as_ref(),
+            result.graph.preset_metadata.as_ref(),
+        )
+        .first()
+        {
+            return Err(error(&identity.to_string()));
+        }
         // Removed or remapped params carry their controls, lanes included; a
         // metadata change alone rebuilds the card manifest.
         let touches = if !result.removed_param_ids.is_empty() || !result.parameter_id_remaps.is_empty() {

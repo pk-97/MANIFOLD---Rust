@@ -163,6 +163,15 @@ inventory::submit! {
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
+    migrate_scene_exposures_moving(def, &mut Vec::new())
+}
+
+/// [`migrate_scene_exposures`], also naming every card default its repair
+/// moved, for the project loader to move the card values sitting on them.
+pub fn migrate_scene_exposures_moving(
+    def: &mut EffectGraphDef,
+    moves: &mut Vec<manifold_core::scene_exposure::DefaultMove>,
+) -> bool {
     if manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(def) {
         return false;
     }
@@ -170,10 +179,11 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
     let compound = compound::migrate(def);
     let fluid_objects = fluid_objects::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
-    let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
+    let migrated = manifold_core::scene_exposure::migrate_scene_exposures_moving(
         def,
         &SCENE_VOCABULARY,
         section_name_for_node,
+        moves,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
     let light_titles = migrate_light_titles(def);
