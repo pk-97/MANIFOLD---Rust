@@ -131,12 +131,12 @@ fn add_swarm_takes_scene_forces_like_the_preset() {
 }
 
 /// An inserted swarm follows every Physics World control exactly as water
-/// does: World Speed drives its Speed and World Reset, a card trigger every
-/// clip trigger fires, restarts it (D-107); it falls under World gravity,
+/// does: World Speed drives its Speed and World Reset, a card trigger,
+/// restarts it (D-107); it falls under World gravity,
 /// and the World's Gravity card control drives the source it falls by
 /// (D-109). Its own Speed is not a dead card control.
 #[test]
-fn add_swarm_restarts_on_a_clip_trigger_and_follows_world_speed_and_gravity() {
+fn add_swarm_follows_world_speed_reset_and_gravity() {
     let (mut project, layer, _) = scene_layer_project();
     insert_swarm(&mut project, &layer);
     let def = effective_def(&project, &layer);
@@ -165,7 +165,7 @@ fn add_swarm_restarts_on_a_clip_trigger_and_follows_world_speed_and_gravity() {
         let param = params.get(&binding.id).expect("the World control is a layer param");
         assert_eq!(param.spec.is_trigger, port == "reset");
         if port == "reset" {
-            assert_eq!(param.clip_trigger_source, manifold_core::params::ClipTriggerSource::OwnLayer, "every clip trigger fires World Reset");
+            assert_eq!(param.clip_trigger_source, manifold_core::params::ClipTriggerSource::OwnLayer, "a clip-launch mapping on World Reset listens to the layer's own clips, as on any trigger");
         }
     }
     assert!(
@@ -419,6 +419,162 @@ fn duplicate_swarm_brings_its_own_forces() {
 
     assert!(editing.undo(&mut project));
     assert_eq!(effective_def(&project, &layer).scene_modifiers, before.scene_modifiers);
+}
+
+/// Every card value of `layer` after half a second of playback, with a
+/// mapping on each of `mapped` set to fire on clip launches, and one clip
+/// launched at the start when `launch`.
+fn played(project: &Project, layer: &LayerId, mapped: &[String], launch: bool) -> Vec<(String, f32)> {
+    use manifold_core::audio_mod::{AudioFeature, ParameterAudioMod};
+    use manifold_core::audio_trigger::TriggerFireMode;
+    let mut project = project.clone();
+    let index = project.timeline.layers.iter().position(|candidate| &candidate.layer_id == layer).unwrap();
+    let owner = &mut project.timeline.layers[index];
+    if launch {
+        owner.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats(4.0)));
+    }
+    let host = owner.gen_params_mut().unwrap();
+    for id in mapped {
+        let mut mapping = ParameterAudioMod::new(id.clone().into(), manifold_core::AudioSendId::new("none"), AudioFeature::default());
+        mapping.trigger_mode = Some(TriggerFireMode::ClipEdge);
+        host.audio_mods_mut().push(mapping);
+    }
+    let mut engine = manifold_playback::engine::PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.set_state(manifold_core::types::PlaybackState::Playing);
+    for frame in 0..30u64 {
+        let step = engine.transport_clock().step().0;
+        let _ = engine.tick(manifold_playback::engine::TickContext {
+            frames: 1,
+            realtime_now: manifold_core::Seconds(frame as f64 * step),
+            frame_count: frame,
+        });
+    }
+    let (_, owner) = engine.project().unwrap().timeline.find_layer_by_id(layer).unwrap();
+    owner.gen_params().unwrap().params.iter().map(|param| (param.id().to_owned(), param.value)).collect()
+}
+
+/// Physics restarts only when the performer fires Reset. A clip launched on
+/// the layer leaves a new swarm and its World exactly as no launch does:
+/// World Reset and the forces' Impulses are plain triggers, which no clip
+/// fires on its own. The card button fires World Reset, and so does a clip
+/// launch once the performer maps Reset to clip launches.
+#[test]
+fn a_clip_launch_leaves_a_new_swarm_alone_until_reset_is_mapped_to_it() {
+    let (mut project, layer, _) = scene_layer_project();
+    let mut editing = insert_swarm(&mut project, &layer);
+    let def = effective_def(&project, &layer);
+    let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+    let reset = def
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &world.node_id && param == "reset"))
+        .expect("World Reset is on the card")
+        .id
+        .clone();
+    let value = |values: &[(String, f32)], id: &str| values.iter().find(|(param, _)| param == id).unwrap().1;
+
+    assert_eq!(played(&project, &layer, &[], true), played(&project, &layer, &[], false), "a launch with no mapping changes nothing");
+
+    let mapped = std::slice::from_ref(&reset);
+    let (launched, still) = (played(&project, &layer, mapped, true), played(&project, &layer, mapped, false));
+    assert_eq!(value(&launched, &reset), value(&still, &reset) + 1.0, "a clip-launch mapping on Reset fires it once per launch");
+
+    let base = |project: &Project| project.timeline.find_layer_by_id(&layer).unwrap().1.gen_params().unwrap().get_base_param(&reset);
+    let fired_from = base(&project);
+    editing.execute(
+        Box::new(manifold_editing::commands::effects::FireGraphParamCommand::new(manifold_core::GraphTarget::Generator(layer.clone()), reset.clone())),
+        &mut project,
+    );
+    assert_eq!(editing.take_rejection(), None);
+    assert_eq!(base(&project), fired_from + 1.0, "the card button fires World Reset");
+}
+
+/// A scene holds 16 forces. Adding a swarm, which brings three, to a scene
+/// with fewer free slots is refused with a message naming the limit, and
+/// the scene is left as it was.
+#[test]
+fn add_swarm_past_the_scenes_force_slots_is_refused_and_leaves_the_scene_alone() {
+    let (mut project, layer, _) = scene_layer_project();
+    for _ in 0..5 {
+        insert_swarm(&mut project, &layer);
+    }
+    let full = effective_def(&project, &layer);
+    assert_eq!(full.scene_modifiers.len(), 15);
+    let action = crate::ui_bridge::project::insert_template_action(&project, layer.clone(), manifold_core::scene_surface::SceneTemplateKind::Swarm);
+    let ContentCommand::GraphEditRejected(message) = dispatched(&mut project, action) else {
+        panic!("the sixth swarm is refused on insert");
+    };
+    assert!(message.contains("needs 3 force slots") && message.contains("1 free") && message.contains("at most 16 forces"), "{message}");
+    assert_eq!(effective_def(&project, &layer), full, "the scene is unchanged");
+}
+
+/// Copying a swarm and pasting it, into its own scene or another layer's,
+/// gives the copy its own three forces aimed at it alone with the source's
+/// values, and one undo takes the copy and its forces away.
+#[test]
+fn paste_swarm_brings_its_own_forces_with_the_sources_values() {
+    use crate::scene_item_transfer::{SceneItemAction, SceneItemClipboard, SceneItemKind, build_action};
+    let (mut project, layer, render) = scene_layer_project();
+    let mut editing = insert_swarm(&mut project, &layer);
+    let def = effective_def(&project, &layer);
+    let attractor = def
+        .scene_modifiers
+        .iter()
+        .find(|instance| instance.graph.preset_metadata.as_ref().unwrap().id.as_str() == "Attractor")
+        .unwrap()
+        .id
+        .clone();
+    let strength = def
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id } if *modifier_id == attractor && param_id == "strength"))
+        .unwrap()
+        .id
+        .clone();
+    let index = project.timeline.layers.iter().position(|candidate| candidate.layer_id == layer).unwrap();
+    let param = project.timeline.layers[index].gen_params_mut().unwrap().params.get_mut(&strength).unwrap();
+    param.value = 33.0;
+    param.base = 33.0;
+    let other_index = project.timeline.add_layer("Scene 2", LayerType::Generator, PresetTypeId::new("Scene"));
+    let other = project.timeline.layers[other_index].layer_id.clone();
+
+    for destination in [layer.clone(), other] {
+        let before = effective_def(&project, &destination);
+        let clipboard = SceneItemClipboard::capture(&project, &layer, render, SceneItemKind::Object, swarm_row(&def)).expect("a swarm copies");
+        let paste = SceneItemAction::Paste { layer: destination.clone(), scene: render, clipboard: Box::new(clipboard) };
+        editing.execute(build_action(&project, paste).expect("the paste builds"), &mut project);
+        assert_eq!(editing.take_rejection(), None);
+
+        let pasted = effective_def(&project, &destination);
+        let groups = swarm_groups(&pasted);
+        let copy = groups.last().unwrap();
+        assert_eq!(forces_on(&pasted, copy), SWARM_FORCES, "the copy has its own forces");
+        assert_eq!(pasted.scene_modifiers.len(), before.scene_modifiers.len() + SWARM_FORCES.len());
+        let copied_attractor = pasted.scene_modifiers[before.scene_modifiers.len()].id.clone();
+        let copied_strength = pasted
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id } if *modifier_id == copied_attractor && param_id == "strength"))
+            .unwrap()
+            .id
+            .clone();
+        let (_, host) = project.timeline.find_layer_by_id(&destination).unwrap();
+        assert_eq!(host.gen_params().unwrap().params.get(&copied_strength).unwrap().value, 33.0, "the copy's Attractor keeps the source's Strength");
+
+        assert!(editing.undo(&mut project));
+        assert_eq!(effective_def(&project, &destination).scene_modifiers, before.scene_modifiers, "one undo takes the copy's forces away");
+        assert_eq!(swarm_groups(&effective_def(&project, &destination)).len(), swarm_groups(&before).len());
+    }
 }
 
 /// A duplicated swarm holds its formation: after 2 s under World gravity the

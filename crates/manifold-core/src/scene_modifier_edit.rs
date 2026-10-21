@@ -48,6 +48,10 @@ pub enum SceneModifierEditError {
     InvalidSchema {
         error: crate::scene_modifier_preset::SceneModifierSchemaError,
     },
+    /// Every force slot of the owner is taken.
+    ForceSlotsFull {
+        limit: usize,
+    },
 }
 
 impl fmt::Display for SceneModifierEditError {
@@ -87,6 +91,9 @@ impl fmt::Display for SceneModifierEditError {
                 write!(f, "retarget changed the saved frame for `{target}`")
             }
             Self::InvalidSchema { error } => error.fmt(f),
+            Self::ForceSlotsFull { limit } => {
+                write!(f, "a scene holds at most {limit} forces, and all {limit} slots are in use")
+            }
         }
     }
 }
@@ -168,6 +175,13 @@ pub fn insert_scene_modifier(
         });
     }
     validate(&instance.graph)?;
+    // Refused when written, so a full scene never saves a force it cannot expand.
+    let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+    if !crate::scene_modifier_math_view::is_math_view_recipe(&instance.graph)
+        && crate::scene_modifier_preset::force_slots_used(&owner.scene_modifiers) >= limit
+    {
+        return Err(SceneModifierEditError::ForceSlotsFull { limit });
+    }
     let mut graph = owner.clone();
     graph.version = graph.version.max(3);
     let id = instance.id.clone();
@@ -1292,6 +1306,20 @@ mod tests {
             Err(SceneModifierEditError::IndexOutOfRange { .. })
         ));
         assert_eq!(graph, snapshot);
+    }
+
+    /// An owner's sixteen force slots are checked when a force is written,
+    /// so every path that adds one (the Forces menu, a template, a paste) is
+    /// refused at the seventeenth and leaves the owner as it was.
+    #[test]
+    fn scene_modifier_edit_insert_refuses_past_the_force_slots() {
+        let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+        let full = (0..limit).fold(owner(), |graph, index| insert(&graph, &format!("force_{index}")));
+        let snapshot = full.clone();
+        let refused = insert_scene_modifier(&full, limit, recipe("one_more"));
+        assert!(matches!(refused, Err(SceneModifierEditError::ForceSlotsFull { limit: 16 })), "{refused:?}");
+        assert!(refused.unwrap_err().to_string().contains("at most 16 forces"));
+        assert_eq!(full, snapshot);
     }
 
     fn preparation_owner() -> EffectGraphDef {

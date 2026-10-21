@@ -31,7 +31,7 @@ const fn take(world: &'static str, input: &'static str) -> WorldControlInput {
 
 /// Every Physics World control a simulation takes (a liquid, a swarm): its
 /// gravity, its still air (D-114), and its clock, so the node follows World
-/// Speed and restarts on World Reset, which clip triggers fire.
+/// Speed and restarts on World Reset.
 pub const WORLD_INPUTS: [WorldControlInput; 6] = [
     take("gravity_x", "gravity_x"),
     take("gravity_y", "gravity"),
@@ -265,9 +265,8 @@ pub(crate) fn share_world_controls(
             // The World's card control also drives the new value source: one
             // control, two targets. The World's own param stays the first
             // target, so it still describes the control (a trigger stays a
-            // trigger every clip trigger fires; its scene facts stay the
-            // World's). Its ID, calibration, conversion and modulation
-            // routing are kept.
+            // trigger; its scene facts stay the World's). Its ID,
+            // calibration, conversion and modulation routing are kept.
             let bindings = &mut def.preset_metadata.as_mut().ok_or("Scene has no card")?.bindings;
             let mut index = 0;
             while index < bindings.len() {

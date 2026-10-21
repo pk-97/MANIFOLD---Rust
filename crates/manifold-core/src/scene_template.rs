@@ -298,6 +298,15 @@ pub fn insert_scene_template_preparing(
     if bare_outputs.is_none() && (template.group.type_id != GROUP_TYPE_ID || template.group.group.is_none()) {
         return Err(fail("Scene template is not a group"));
     }
+    let needed = template.physics.forces.iter().filter(|recipe| !crate::scene_modifier_math_view::is_math_view_recipe(recipe)).count();
+    let limit = crate::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS;
+    let free = limit.saturating_sub(crate::scene_modifier_preset::force_slots_used(&graph.scene_modifiers));
+    if needed > free {
+        let name = if template.metadata.display_name.is_empty() { "This" } else { template.metadata.display_name.as_str() };
+        return Err(at(&format!(
+            "{name} needs {needed} force slots and this scene has {free} free: a scene holds at most {limit} forces"
+        )));
+    }
     let mut candidate = graph.clone();
     let mut handles = HashSet::new();
     collect_handles(&candidate.nodes, &mut handles);

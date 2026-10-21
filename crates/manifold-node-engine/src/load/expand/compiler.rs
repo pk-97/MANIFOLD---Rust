@@ -148,13 +148,7 @@ fn prepare_scene_modifiers_impl(
     // instances are bounded by their own surveyed budget (see
     // `scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`), so a full legacy
     // migration of 16 carriers (16 stripped carriers + 16 views) prepares.
-    let stage_carrying = owner
-        .scene_modifiers
-        .iter()
-        .filter(|m| {
-            !manifold_core::scene_modifier_math_view::is_math_view_recipe(&m.graph)
-        })
-        .count();
+    let stage_carrying = manifold_core::scene_modifier_preset::force_slots_used(&owner.scene_modifiers);
     if stage_carrying > manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "sceneModifiers".into(),

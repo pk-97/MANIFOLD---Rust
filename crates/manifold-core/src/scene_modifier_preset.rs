@@ -122,6 +122,12 @@ pub enum SceneTargetSelection {
 /// [`crate::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`].
 pub const MAX_STAGE_CARRYING_MODIFIERS: usize = 16;
 
+/// How many of an owner's force slots `modifiers` take: every modifier but a
+/// Math View.
+pub fn force_slots_used(modifiers: &[SceneModifierInstanceDef]) -> usize {
+    modifiers.iter().filter(|m| !crate::scene_modifier_math_view::is_math_view_recipe(&m.graph)).count()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneModifierInstanceDef {
