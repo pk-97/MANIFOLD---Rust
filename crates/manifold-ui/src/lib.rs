@@ -65,7 +65,7 @@ pub use param_surface::{
     ColourGroup, MaterialColour, MaterialFeature, MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole,
     ModifierCardInfo, ModifierPickerEntry, ObjectModifierCardInfo, ParamRow, ParamSurface,
     RowMapping, RowSpec, RowValue,
-    RgbChannel, RgbMembers, SamplerComponent, SceneRowAddr, UvComponent,
+    RgbChannel, RgbMembers, SamplerComponent, UvComponent,
 };
 pub use node::*;
 pub use panels::clip_chrome::ClipChromePanel;

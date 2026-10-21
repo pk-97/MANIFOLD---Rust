@@ -12,6 +12,7 @@ use manifold_core::effect_graph_def::{
     PresetMetadata,
 };
 use manifold_core::project::Project;
+use manifold_core::{SceneNodeRef, SceneNodeRefExt};
 use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
@@ -65,9 +66,10 @@ fn resolve_level<'a>(
 /// the object's `vertices` input directly.
 pub(super) fn resolve_modifier_owner(
     def: &EffectGraphDef,
-    scope_path: &[u32],
-    owner_id: u32,
+    owner: &SceneNodeRef,
 ) -> Option<(Vec<u32>, u32, bool)> {
+    let (scope_path, owner_id) = owner.resolve_doc_path(def)?;
+    let scope_path = scope_path.as_slice();
     let (nodes, _) = resolve_level(def, scope_path)?;
     let owner = nodes.iter().find(|node| node.id == owner_id)?;
     if owner.type_id == GROUP_TYPE_ID {
@@ -309,8 +311,7 @@ pub(super) fn splice_modifier_into_chain_at(
 #[derive(Debug)]
 pub struct InsertMeshModifierCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    group_node_id: u32,
+    owner: SceneNodeRef,
     type_id: String,
     /// `None` = append at the end of the stack (D6 default); `Some(0)` =
     /// just after the mesh source.
@@ -338,8 +339,7 @@ pub struct InsertMeshModifierCommand {
 impl InsertMeshModifierCommand {
     pub fn new(
         target: GraphTarget,
-        scope_path: Vec<u32>,
-        group_node_id: u32,
+        owner: SceneNodeRef,
         type_id: String,
         position: Option<usize>,
         modifier_metadata: Vec<NodeParamMetadata>,
@@ -351,8 +351,7 @@ impl InsertMeshModifierCommand {
         );
         Self {
             target,
-            scope_path,
-            group_node_id,
+            owner,
             type_id,
             position,
             modifier_metadata,
@@ -400,7 +399,7 @@ impl Command for InsertMeshModifierCommand {
             .map(|owner| owner.graph.clone());
         let base = previous_graph.clone().flatten().unwrap_or_else(|| self.catalog_default.clone());
         let Some((scope, terminal, group_output)) =
-            resolve_modifier_owner(&base, &self.scope_path, self.group_node_id)
+            resolve_modifier_owner(&base, &self.owner)
         else {
             self.rejection = Some("Modifier owner is unavailable");
             return;
@@ -490,7 +489,7 @@ impl Command for InsertMeshModifierCommand {
         } else {
             let Some((scope, _, _)) = project
                 .graph_for_target(&self.target, None)
-                .and_then(|def| resolve_modifier_owner(def, &self.scope_path, self.group_node_id))
+                .and_then(|def| resolve_modifier_owner(def, &self.owner))
             else { return; };
             let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
                 def.preset_metadata = pmeta;
@@ -520,8 +519,7 @@ impl Command for InsertMeshModifierCommand {
 #[derive(Debug)]
 pub struct RemoveMeshModifierCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    group_node_id: u32,
+    owner: SceneNodeRef,
     modifier_node_id: u32,
     catalog_default: EffectGraphDef,
     prev: Option<RemoveModifierSnapshot>,
@@ -531,15 +529,13 @@ pub struct RemoveMeshModifierCommand {
 impl RemoveMeshModifierCommand {
     pub fn new(
         target: GraphTarget,
-        scope_path: Vec<u32>,
-        group_node_id: u32,
+        owner: SceneNodeRef,
         modifier_node_id: u32,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
             target,
-            scope_path,
-            group_node_id,
+            owner,
             modifier_node_id,
             catalog_default,
             prev: None,
@@ -568,7 +564,7 @@ impl Command for RemoveMeshModifierCommand {
         let Some(base) = previous_graph.clone().flatten() else {
             self.rejection = Some("Modifier graph is unavailable"); return;
         };
-        let Some((scope, terminal, group_output)) = resolve_modifier_owner(&base, &self.scope_path, self.group_node_id) else {
+        let Some((scope, terminal, group_output)) = resolve_modifier_owner(&base, &self.owner) else {
             self.rejection = Some("Modifier owner is unavailable"); return;
         };
         let Some((nodes, wires)) = resolve_level(&base, &scope) else {
@@ -616,7 +612,7 @@ impl Command for RemoveMeshModifierCommand {
         };
         if matches!(pgraph, Some(Some(_))) {
             let Some((scope, _, _)) = project.graph_for_target(&self.target, None)
-                .and_then(|def| resolve_modifier_owner(def, &self.scope_path, self.group_node_id)) else { return; };
+                .and_then(|def| resolve_modifier_owner(def, &self.owner)) else { return; };
             let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
                 def.preset_metadata = pmeta;
                 if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
@@ -648,8 +644,7 @@ impl Command for RemoveMeshModifierCommand {
 #[derive(Debug)]
 pub struct MoveMeshModifierCommand {
     target: GraphTarget,
-    scope_path: Vec<u32>,
-    group_node_id: u32,
+    owner: SceneNodeRef,
     modifier_node_id: u32,
     new_position: usize,
     catalog_default: EffectGraphDef,
@@ -660,16 +655,14 @@ pub struct MoveMeshModifierCommand {
 impl MoveMeshModifierCommand {
     pub fn new(
         target: GraphTarget,
-        scope_path: Vec<u32>,
-        group_node_id: u32,
+        owner: SceneNodeRef,
         modifier_node_id: u32,
         new_position: usize,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
             target,
-            scope_path,
-            group_node_id,
+            owner,
             modifier_node_id,
             new_position,
             catalog_default,
@@ -691,7 +684,7 @@ impl Command for MoveMeshModifierCommand {
         let Some(base) = project.graph_for_target(&self.target, None).cloned() else {
             self.rejection = Some("Modifier graph is unavailable"); return;
         };
-        let Some((scope, terminal, group_output)) = resolve_modifier_owner(&base, &self.scope_path, self.group_node_id) else {
+        let Some((scope, terminal, group_output)) = resolve_modifier_owner(&base, &self.owner) else {
             self.rejection = Some("Modifier owner is unavailable"); return;
         };
         let Some((nodes, wires)) = resolve_level(&base, &scope) else {
@@ -726,7 +719,7 @@ impl Command for MoveMeshModifierCommand {
             return;
         };
         let Some(def) = project.graph_for_target(&self.target, None) else { return; };
-        let Some((scope, _, _)) = resolve_modifier_owner(def, &self.scope_path, self.group_node_id) else { return; };
+        let Some((scope, _, _)) = resolve_modifier_owner(def, &self.owner) else { return; };
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;

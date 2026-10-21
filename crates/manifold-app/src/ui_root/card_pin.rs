@@ -92,7 +92,6 @@ mod tests {
             value: manifold_ui::RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
             modulation: manifold_ui::RowMod::default(),
             mapping: manifold_ui::RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: true },
-            scene_addr: None,
             rgb_members: None,
             modulator_stored: false,
             audio: Default::default(),

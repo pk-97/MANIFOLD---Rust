@@ -507,7 +507,6 @@ fn param_surface(
                 value: RowValue { base: p.base, effective: p.value, exposed: p.exposed, driven: false },
                 modulation: RowMod::default(),
                 mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
-                scene_addr: None,
                 rgb_members: None,
                 modulator_stored: stored,
                 audio: Default::default(),
@@ -874,10 +873,9 @@ pub(crate) fn modifier_surfaces(
                     | manifold_core::scene_modifier_preset::SceneEndpoint::Acceleration
             ))
         });
-        let mut rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
+        let rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
             (enabled_row_in_body || id != recipe.enabled_param)
                 && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
-        for row in &mut rows { row.scene_addr = None; }
         Some(ParamSurface {
             kind: ParamCardKind::Effect,
             title: manifold_nodes_scene::node_graph::scene_items::scene_modifier_display_name(def, instance)

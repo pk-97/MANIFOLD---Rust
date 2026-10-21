@@ -303,8 +303,7 @@ fn insert_modifier_appends_to_empty_stack_and_undo_restores() {
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         None,
         Vec::new(),
@@ -353,8 +352,7 @@ fn insert_modifier_stamps_exposures_and_undo_redo_are_stable() {
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         None,
         vec![scene_param_meta("amount", "Amount")],
@@ -422,8 +420,7 @@ fn insert_undo_restores_an_original_none_graph() {
     let target = GraphTarget::Effect(fx.clone());
     let mut cmd = InsertMeshModifierCommand::new(
         target.clone(),
-        vec![],
-        1,
+        node_at(&catalog, &[], 1),
         "node.bend_mesh".to_string(),
         None,
         Vec::new(),
@@ -448,8 +445,7 @@ fn insert_modifier_on_migrated_shape_splices_at_group_output_and_undo_restores()
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         None,
         Vec::new(),
@@ -510,8 +506,7 @@ fn remove_and_move_modifier_on_migrated_shape_splice_at_group_output_and_undo_re
 
     let mut remove_cmd = RemoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         ids0[1], // remove the middle (twist)
         mirror_catalog_default(),
     );
@@ -530,8 +525,7 @@ fn remove_and_move_modifier_on_migrated_shape_splice_at_group_output_and_undo_re
 
     let mut move_cmd = MoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         ids0[2], // move taper (last) to the front
         0,
         mirror_catalog_default(),
@@ -558,8 +552,7 @@ fn insert_modifier_at_position_zero_lands_just_after_mesh_source() {
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         Some(0),
         Vec::new(),
@@ -605,8 +598,7 @@ fn insert_modifier_default_position_appends_at_the_end() {
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         None,
         Vec::new(),
@@ -649,8 +641,7 @@ fn insert_modifier_in_nested_group_composes_scope_path() {
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![50],
-        1,
+        node_at(graph_of(&project, &fx), &[50], 1),
         "node.rotate_3d".to_string(),
         None,
         Vec::new(),
@@ -685,8 +676,7 @@ fn insert_modifier_refuses_on_unparseable_chain() {
 
     let mut cmd = InsertMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         None,
         Vec::new(),
@@ -713,8 +703,7 @@ fn bare_object_modifier_commands_use_scene_object_vertices_and_restore() {
     let before = graph_of(&project, &fx).clone();
     let mut insert = InsertMeshModifierCommand::new(
         target.clone(),
-        vec![],
-        90,
+        node_at(graph_of(&project, &fx), &[], 90),
         "node.taper_mesh".to_string(),
         Some(1),
         Vec::new(),
@@ -743,8 +732,7 @@ fn bare_object_modifier_commands_use_scene_object_vertices_and_restore() {
 
     let mut remove = RemoveMeshModifierCommand::new(
         target.clone(),
-        vec![],
-        90,
+        node_at(graph_of(&project, &fx), &[], 90),
         inserted_id,
         mirror_catalog_default(),
     );
@@ -764,8 +752,7 @@ fn inserted_modifier_ids_are_unique_across_grouped_and_bare_objects() {
     let target = GraphTarget::Effect(fx.clone());
     let mut grouped = InsertMeshModifierCommand::new(
         target.clone(),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         "node.bend_mesh".to_string(),
         None,
         Vec::new(),
@@ -788,8 +775,7 @@ fn inserted_modifier_ids_are_unique_across_grouped_and_bare_objects() {
 
     let mut bare = InsertMeshModifierCommand::new(
         target,
-        vec![],
-        190,
+        node_at(graph_of(&project, &fx), &[], 190),
         "node.twist_mesh".to_string(),
         None,
         Vec::new(),
@@ -813,8 +799,7 @@ fn remove_modifier_prunes_exposure_side_wire_and_automation_atomically() {
     let target = GraphTarget::Effect(fx.clone());
     let mut insert = InsertMeshModifierCommand::new(
         target.clone(),
-        vec![],
-        90,
+        node_at(graph_of(&project, &fx), &[], 90),
         "node.bend_mesh".to_string(),
         None,
         vec![scene_param_meta("amount", "Amount")],
@@ -851,8 +836,7 @@ fn remove_modifier_prunes_exposure_side_wire_and_automation_atomically() {
 
     let mut remove = RemoveMeshModifierCommand::new(
         target.clone(),
-        vec![],
-        90,
+        node_at(graph_of(&project, &fx), &[], 90),
         inserted.id,
         mirror_catalog_default(),
     );
@@ -899,8 +883,7 @@ fn remove_modifier_middle_of_stack_rejoins_wire_and_undo_restores() {
 
     let mut cmd = RemoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         middle_id,
         mirror_catalog_default(),
     );
@@ -950,8 +933,7 @@ fn remove_modifier_at_first_and_last_positions_and_undo_restores() {
     // Remove the FIRST modifier — mesh source must now feed the second directly.
     let mut cmd_first = RemoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         ids0[0],
         mirror_catalog_default(),
     );
@@ -968,8 +950,7 @@ fn remove_modifier_at_first_and_last_positions_and_undo_restores() {
     // Remove the LAST modifier — its predecessor must now feed group_output directly.
     let mut cmd_last = RemoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         ids0[1],
         mirror_catalog_default(),
     );
@@ -997,8 +978,7 @@ fn move_modifier_reorders_stack_and_undo_restores() {
     // Move taper (currently last) to position 0 — just after the mesh source.
     let mut cmd = MoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         ids0[2],
         0,
         mirror_catalog_default(),
@@ -1031,8 +1011,7 @@ fn move_modifier_to_the_end_and_undo_restores() {
     // Move bend (currently first) to the end.
     let mut cmd = MoveMeshModifierCommand::new(
         GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
+        node_at(graph_of(&project, &fx), &[], 1),
         ids0[0],
         1, // one slot remains (twist) once bend is detached — "end" is position 1
         mirror_catalog_default(),

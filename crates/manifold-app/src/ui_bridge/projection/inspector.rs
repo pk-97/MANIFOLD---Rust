@@ -489,7 +489,8 @@ pub fn sync_inspector_data(
                                             } else {
                                                 match def.as_ref().map(|def| {
                                                     manifold_editing::commands::graph::scene_object_physics_eligibility(
-                                                        def, &known.address,
+                                                        def,
+                                                        manifold_core::scene_slots::SceneSlot { render_id: vm.scene_root_node_id, index: known.index as u32 },
                                                     )
                                                 }) {
                                                     Some(Ok(())) => (true, None),
@@ -554,7 +555,7 @@ pub fn sync_inspector_data(
                                                 index: *index,
                                                 node: known.address.clone(),
                                                 object_node_id: *object_node_id,
-                                                group_node_id: *group_node_id,
+                                                modifier_owner: known.modifier_owner.clone(),
                                                 is_group: *is_group,
                                                 parent: known.parent.clone(),
                                                 name: name.clone(),
@@ -577,7 +578,7 @@ pub fn sync_inspector_data(
                                                 physics_available,
                                                 physics_unavailable_reason,
                                                 physics_free_body_slots: physics.as_ref().and(def.as_ref()).and_then(|def| {
-                                                    manifold_editing::commands::graph::physics_free_body_slots(def, &world_slots, &known.address)
+                                                    manifold_editing::commands::graph::physics_free_body_slots(def, &world_slots, manifold_core::scene_slots::SceneSlot { render_id: vm.scene_root_node_id, index: known.index as u32 })
                                                 }),
                                                 physics_imported: *physics_imported,
                                                 fluid_roles: if known.parent.is_none() {
@@ -586,7 +587,8 @@ pub fn sync_inspector_data(
                                                 } else { Ok(Vec::new()) },
                                                 fluid_role_available: known.parent.is_none() && def.as_ref().is_some_and(|def| {
                                                     manifold_editing::commands::graph::scene_fluid_role_eligibility(
-                                                        def, &known.address,
+                                                        def,
+                                                        manifold_core::scene_slots::SceneSlot { render_id: vm.scene_root_node_id, index: known.index as u32 },
                                                     ).is_ok()
                                                 }),
                                                 lattice: known.fluid_domain.map(|layout| {
@@ -808,8 +810,22 @@ pub fn sync_inspector_data(
                                 }
                                 surface
                             });
+                            let known_objects: Vec<_> = objects
+                                .iter()
+                                .filter_map(|object| match object {
+                                    ObjectRowVm::Known(row) => Some((row.node.clone(), row.parent.clone())),
+                                    ObjectRowVm::Custom { .. } => None,
+                                })
+                                .collect();
+                            let known_lights: Vec<_> = lights
+                                .iter()
+                                .filter_map(|light| match light {
+                                    manifold_ui::panels::scene_setup_panel::LightRowVm::Known(row) => Some(row.node.clone()),
+                                    manifold_ui::panels::scene_setup_panel::LightRowVm::Custom { .. } => None,
+                                })
+                                .collect();
                             let tree_items =
-                                super::scene::scene_item_vms(def.as_ref(), &items, &objects, &lights, object_ids, &|id| {
+                                super::scene::scene_item_vms(def.as_ref(), &items, &known_objects, &known_lights, object_ids, &|id| {
                                     gen_inst.and_then(|gp| gp.params.get(id)).and_then(|param| param.spec.scene)
                                 });
                             SceneSetupState::Live(Box::new(SceneSetupVm {

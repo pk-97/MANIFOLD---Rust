@@ -859,8 +859,7 @@ pub(super) fn scene_object_physics_plan(
 
 /// Pure eligibility shared with the scene projection.  It deliberately runs
 /// the same source, fluid-role, world, and body-slot checks as Enable.
-pub fn scene_object_physics_eligibility(def: &EffectGraphDef, object: &SceneNodeRef) -> Result<(), String> {
-    let slot = manifold_core::scene_slots::object_slot(def, object)?;
+pub fn scene_object_physics_eligibility(def: &EffectGraphDef, slot: manifold_core::scene_slots::SceneSlot) -> Result<(), String> {
     scene_object_physics_plan(def, slot.render_id, slot.index).map(|_| ())
 }
 

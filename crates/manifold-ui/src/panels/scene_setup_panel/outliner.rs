@@ -104,7 +104,6 @@ impl ScenePanel {
 }
 
 const OUTLINER_KEY_BASE: u64 = 90_000_000;
-const OUTLINER_EYE_KEY_BASE: u64 = 91_000_000;
 const GROUP_HEADER_KEY_BASE: u64 = 93_000_000;
 const GROUP_ADD_KEY_BASE: u64 = 93_000_100;
 const KEY_PHYSICS_ENABLE: u64 = 93_000_200;
@@ -123,6 +122,11 @@ fn outliner_row_key(sel: &SceneSelection) -> u64 {
         SceneSelection::Physics(id) => crate::param_surface::stable_key(&format!("scene.physics.{id}")),
         SceneSelection::Source(id) => crate::param_surface::stable_key(&format!("scene.source.{id}")),
     }
+}
+
+/// The visibility eye of an object row: the whole hash, so two rows never share a widget.
+pub(super) fn outliner_eye_key(object: &SceneNodeRef) -> u64 {
+    crate::param_surface::stable_key(&format!("scene.eye.{}", ref_text(object)))
 }
 
 fn outliner_group_toggle_key(group: &SceneNodeRef) -> u64 {
@@ -430,7 +434,7 @@ impl ScenePanel {
                 ROW_H,
                 if value.driven { driven_label_style() } else { btn_style() },
                 eye_glyph(value.value),
-                OUTLINER_EYE_KEY_BASE + (crate::param_surface::stable_key(&ref_text(id)) >> 48),
+                outliner_eye_key(id),
             );
             tree.set_name(eye_id, format!("scene_setup.object_eye.{}", value.addr.node_doc_id));
             if !value.driven {

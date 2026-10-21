@@ -214,8 +214,7 @@ impl Command for AssignSceneFluidRoleCommand {
 /// Pure eligibility used by the scene projection. It intentionally excludes
 /// domain and destination-slot checks, which belong to the command's full
 /// preflight because they depend on the selected fluid and current wires.
-pub fn scene_fluid_role_eligibility(def: &EffectGraphDef, object: &SceneNodeRef) -> Result<(), String> {
-    let slot = manifold_core::scene_slots::object_slot(def, object)?;
+pub fn scene_fluid_role_eligibility(def: &EffectGraphDef, slot: manifold_core::scene_slots::SceneSlot) -> Result<(), String> {
     discover_role_object(def, slot.render_id, slot.index).map(|_| ())
 }
 

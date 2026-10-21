@@ -30,6 +30,7 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
         controls: Vec::new(),
         capabilities: manifold_core::scene_object_model::SceneObjectCapabilities { transform: true, ..Default::default() },
         group_node_id: None,
+        modifier_owner: object_ref(id),
         name: "Obj".to_string(),
         visible_addr: addr("visible"),
         visible_value: true,

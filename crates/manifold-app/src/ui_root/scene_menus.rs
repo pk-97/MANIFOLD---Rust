@@ -71,7 +71,7 @@ impl UIRoot {
                 self.open_dropdown_typed(items, *anchor);
                 true
             }
-            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(layer_id, group_node_id, button_node_id)) => {
+            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(layer_id, owner, button_node_id)) => {
                 let trigger = self.tree.get_bounds(*button_node_id);
                 let items: Vec<DropdownItem> = manifold_ui::panels::scene_setup_panel::MESH_MODIFIER_CHOICES
                     .iter()
@@ -85,7 +85,7 @@ impl UIRoot {
                         }
                         DropdownItem::new(label).with_action(PanelAction::Project(ProjectAction::SceneSetupAddModifier(
                             layer_id.clone(),
-                            *group_node_id,
+                            owner.clone(),
                             (*type_id).to_string(),
                         )))
                     })

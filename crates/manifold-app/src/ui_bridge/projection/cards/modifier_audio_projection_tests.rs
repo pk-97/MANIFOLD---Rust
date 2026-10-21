@@ -21,7 +21,6 @@ fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
     assert!(!surface.rows.is_empty());
     for row in &surface.rows {
         assert!(host.params.get(row.id.as_ref()).is_some());
-        assert!(row.scene_addr.is_none());
         assert_eq!(row.audio.active, row.id.as_ref() == strength);
     }
     let info = surface.modifier.as_ref().unwrap();

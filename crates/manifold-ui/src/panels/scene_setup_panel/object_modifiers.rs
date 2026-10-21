@@ -61,8 +61,7 @@ impl ScenePanel {
                 let address = ObjectModifierCardInfo {
                     layer_id: vm.layer_id.clone(),
                     object: object.node.clone(),
-                    object_id: object.object_node_id,
-                    group_node_id: object.group_node_id,
+                    owner: object.modifier_owner.clone(),
                     node_doc_id: modifier.node_doc_id,
                 };
                 configs.push((surface, address));
@@ -135,7 +134,7 @@ impl ScenePanel {
     /// Return the graph owner for the currently selected object, including an
     /// object whose modifier stack is empty. Clipboard and keyboard actions
     /// use this owner address rather than inferring it from a visible card.
-    pub fn object_modifier_destination(&self) -> Option<(LayerId, u32)> {
+    pub fn object_modifier_destination(&self) -> Option<(LayerId, SceneNodeRef)> {
         let SceneSetupState::Live(vm) = &self.state else { return None };
         let SceneSelection::Object(selected) = self.resolve_selection_readonly(vm) else {
             return None;
@@ -144,7 +143,7 @@ impl ScenePanel {
             ObjectRowVm::Known(row) if row.node == selected => Some(row.as_ref()),
             _ => None,
         })?;
-        Some((vm.layer_id.clone(), object.group_node_id.unwrap_or(object.object_node_id)))
+        Some((vm.layer_id.clone(), object.modifier_owner.clone()))
     }
 
     /// Select a projected modifier after a context-menu or paste action. The
@@ -153,7 +152,7 @@ impl ScenePanel {
     pub fn select_object_modifier_by_address(
         &mut self,
         layer_id: &LayerId,
-        owner_id: u32,
+        owner: &SceneNodeRef,
         node_doc_id: u32,
         tree: &mut UITree,
     ) -> bool {
@@ -165,7 +164,7 @@ impl ScenePanel {
             let Some(address) = card.object_modifier_info() else { return false };
             address.layer_id == *layer_id
                 && address.object == object
-                && address.group_node_id.unwrap_or(address.object_id) == owner_id
+                && address.owner == *owner
                 && address.node_doc_id == node_doc_id
         }) else {
             return false;
@@ -429,7 +428,7 @@ impl ScenePanel {
         let _ = self.object_modifier_cards[source].handle_drag_end(tree);
         vec![PanelAction::Project(ProjectAction::SceneSetupMoveModifier(
             drag.identity.layer_id,
-            drag.identity.group_node_id.unwrap_or(drag.identity.object_id),
+            drag.identity.owner,
             drag.identity.node_doc_id,
             new_position as u32,
         ))]
@@ -686,7 +685,6 @@ mod tests {
                     ableton_range: None,
                     mappable: true,
                 },
-                scene_addr: None,
                 rgb_members: None,
                 modulator_stored: false,
             }],
@@ -699,8 +697,7 @@ mod tests {
         ObjectModifierCardInfo {
             layer_id: LayerId::new("layer-1"),
             object: SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new(format!("object{object_id}")) },
-            object_id,
-            group_node_id: Some(42),
+            owner: SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new("group42") },
             node_doc_id,
         }
     }
@@ -764,8 +761,8 @@ mod tests {
         let actions = card.handle_click(card.modifier_remove_node_id().unwrap(), &tree);
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupRemoveModifier(layer, 42, 71))]
-                if *layer == LayerId::new("layer-1")
+            [PanelAction::Project(ProjectAction::SceneSetupRemoveModifier(layer, owner, 71))]
+                if *layer == LayerId::new("layer-1") && owner.node.as_str() == "group42"
         ));
     }
 
@@ -788,8 +785,8 @@ mod tests {
         let actions = panel.end_object_modifier_drag(&mut tree);
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupMoveModifier(layer, 42, 70, 1))]
-                if *layer == LayerId::new("layer-1")
+            [PanelAction::Project(ProjectAction::SceneSetupMoveModifier(layer, owner, 70, 1))]
+                if *layer == LayerId::new("layer-1") && owner.node.as_str() == "group42"
         ));
 
         panel.object_modifier_drag = Some(ObjectModifierDrag {
@@ -823,8 +820,8 @@ mod tests {
 
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupMoveModifier(layer, 42, 70, 1))]
-                if *layer == LayerId::new("layer-1")
+            [PanelAction::Project(ProjectAction::SceneSetupMoveModifier(layer, owner, 70, 1))]
+                if *layer == LayerId::new("layer-1") && owner.node.as_str() == "group42"
         ));
     }
 
@@ -861,8 +858,8 @@ mod tests {
         );
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupMoveModifier(layer, 42, 70, 1))]
-                if *layer == LayerId::new("layer-1")
+            [PanelAction::Project(ProjectAction::SceneSetupMoveModifier(layer, owner, 70, 1))]
+                if *layer == LayerId::new("layer-1") && owner.node.as_str() == "group42"
         ));
 
         panel.object_modifier_drag = Some(ObjectModifierDrag {

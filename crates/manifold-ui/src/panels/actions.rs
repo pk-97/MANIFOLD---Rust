@@ -292,20 +292,20 @@ pub enum ProjectAction {
     /// parameters to frame the selected object and writes them through the same
     /// param-change path every other slider uses.
     SceneSetupFrameSelected(LayerId, SceneNodeRef),
-    /// P5 "Add modifier" chip: `(layer_id, group_node_id, type_id)`.
+    /// P5 "Add modifier" chip: `(layer_id, owner, type_id)`.
     /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
     /// at the end of the object's stack (no position picker in v1 — D6's
     /// default: "end of stack, just before the group output").
-    SceneSetupAddModifier(LayerId, u32, String),
-    /// P5 modifier-row remove button: `(layer_id, group_node_id,
+    SceneSetupAddModifier(LayerId, SceneNodeRef, String),
+    /// P5 modifier-row remove button: `(layer_id, owner,
     /// modifier_node_id)`. Dispatches `RemoveMeshModifierCommand`.
-    SceneSetupRemoveModifier(LayerId, u32, u32),
-    /// P5 modifier-row up/down reorder: `(layer_id, group_node_id,
+    SceneSetupRemoveModifier(LayerId, SceneNodeRef, u32),
+    /// P5 modifier-row up/down reorder: `(layer_id, owner,
     /// modifier_node_id, new_position)`. Dispatches
     /// `MoveMeshModifierCommand` — `new_position` is resolved by the panel
     /// from the row's own live index in the Vm's stack order (one hop
     /// forward or back): the live count is read off the Vm.
-    SceneSetupMoveModifier(LayerId, u32, u32, u32),
+    SceneSetupMoveModifier(LayerId, SceneNodeRef, u32, u32),
     /// per-row "✕" in the Objects section: `(layer_id, object)`. Dispatches the new
     /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupInsertTemplate`.
     SceneSetupRemoveObject(LayerId, SceneNodeRef),
@@ -945,7 +945,7 @@ pub enum RootAction {
     /// `&UITree` in `handle_event`), listing the SAME
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
-    SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
+    SceneSetupAddModifierClicked(LayerId, SceneNodeRef, crate::node::NodeId),
     /// Any Scene tab group's "+": the app opens the one Add menu
     /// (`scene_setup_actions::add_menu`) at the clicked button, starting on
     /// that group's entries.

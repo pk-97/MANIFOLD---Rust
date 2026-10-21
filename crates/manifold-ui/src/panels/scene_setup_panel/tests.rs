@@ -8,6 +8,10 @@
         SceneNodeRef { scope: Vec::new(), node: FoundationNodeId::new(format!("object{id}")) }
     }
 
+    pub(super) fn group_ref(id: u32) -> SceneNodeRef {
+        SceneNodeRef { scope: Vec::new(), node: FoundationNodeId::new(format!("group{id}")) }
+    }
+
     pub(super) fn light_ref(id: u32) -> SceneNodeRef {
         SceneNodeRef { scope: Vec::new(), node: FoundationNodeId::new(format!("light{id}")) }
     }
@@ -204,7 +208,7 @@
                     index: 0,
                     node: object_ref(40),
                     object_node_id: 40,
-                    group_node_id: Some(42),
+                    modifier_owner: group_ref(42),
                     is_group: false,
                     parent: None,
                     name: "Azalea".to_string(),
@@ -286,7 +290,7 @@
         let mut parent = (*child).clone();
         parent.index = 0;
         parent.object_node_id = 42;
-        parent.group_node_id = Some(42);
+        parent.modifier_owner = group_ref(42);
         parent.is_group = true;
         parent.parent = None;
         parent.node = object_ref(42);
@@ -301,7 +305,7 @@
         let mut child = (*child).clone();
         child.index = 0;
         child.object_node_id = 43;
-        child.group_node_id = Some(42);
+        child.modifier_owner = group_ref(42);
         child.is_group = false;
         child.parent = Some(object_ref(42));
         child.node = object_ref(43);
@@ -621,7 +625,7 @@
         copied.index = 1;
         copied.object_node_id = 41;
         copied.node = object_ref(41);
-        copied.group_node_id = Some(43);
+        copied.modifier_owner = group_ref(43);
         copied.name = "Object 2".to_string();
         copied.modifiers[0].node_doc_id = 71;
         copied.modifiers[0].parameter_ids = vec!["71_amount".to_string()];
@@ -657,7 +661,7 @@
         second.index = 1;
         second.object_node_id = 41;
         second.node = object_ref(41);
-        second.group_node_id = Some(43);
+        second.modifier_owner = group_ref(43);
         second.name = "Object 2".to_string();
         vm.objects = vec![
             ObjectRowVm::Known(first.clone()),
@@ -918,7 +922,7 @@
         let ObjectRowVm::Known(mut second) = vm.objects[0].clone() else { panic!("known fixture"); };
         second.object_node_id = 200;
         second.node = object_ref(200);
-        second.group_node_id = Some(201);
+        second.modifier_owner = group_ref(201);
         vm.objects.push(ObjectRowVm::Known(second));
         panel.configure(live(vm));
         let mut tree = UITree::new();
@@ -926,7 +930,7 @@
         let (node, _) = panel.outliner_row_ids.iter()
             .find(|(_, selection)| selection == &SceneSelection::Object(object_ref(200))).unwrap();
         assert!(panel.select_outliner_node(*node));
-        assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), 201)));
+        assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), group_ref(201))));
         assert!(panel.selected_object_modifier().is_none());
     }
 
@@ -957,6 +961,22 @@
         assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, object, name))) if object == second_ref && name == "Azalea 2"));
         assert!(matches!(panel.remove_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupRemoveObject(_, object))) if object == second_ref));
         assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, object))) if object == second_ref));
+    }
+
+    /// The eye button is keyed by the full address hash: a 16-bit key shares
+    /// with another row in a big scene and one eye then hides a different object.
+    #[test]
+    fn outliner_eye_keys_never_repeat_across_a_big_scene() {
+        let mut seen = std::collections::HashSet::new();
+        for import in 0..80 {
+            for part in 0..80 {
+                let object = SceneNodeRef {
+                    scope: vec![FoundationNodeId::new(format!("import{import}"))],
+                    node: FoundationNodeId::new(format!("part{part}")),
+                };
+                assert!(seen.insert(outliner::outliner_eye_key(&object)), "{object:?} shares an eye key");
+            }
+        }
     }
 
     #[test]
@@ -1113,7 +1133,6 @@
                     ableton_range: None,
                     mappable: false,
                 },
-                    scene_addr: None,
                     rgb_members: None,
                     modulator_stored: false,
             }],
@@ -1774,12 +1793,12 @@
                 name: "add modifier",
                 select: |_| {},
                 locate: |p, _| {
-                    let (id, group) = p.add_modifier_button_id.expect("one Add Modifier button renders");
-                    assert_eq!(group, 42);
+                    let (id, group) = p.add_modifier_button_id.clone().expect("one Add Modifier button renders");
+                    assert_eq!(group, group_ref(42));
                     id
                 },
                 expect: |_, id, a| matches!(a,
-                    [PanelAction::Root(RootAction::SceneSetupAddModifierClicked(l, 42, n))] if layer_1(l) && *n == id),
+                    [PanelAction::Root(RootAction::SceneSetupAddModifierClicked(l, owner, n))] if layer_1(l) && *owner == group_ref(42) && *n == id),
             },
             ButtonCase {
                 name: "remove object",

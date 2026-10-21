@@ -158,3 +158,42 @@ fn graph_editor_paste_of_a_group_gives_every_inner_node_a_new_stable_id() {
     collect(&original.nodes, &mut seen_before, &mut none_before);
     assert_eq!(seen_after, seen_before, "undo takes every id the paste added");
 }
+
+/// The ids of the modifier nodes in the body of group `group`, in node order.
+fn modifier_ids_in_group(def: &EffectGraphDef, group: u32) -> Vec<u32> {
+    let body = def.nodes.iter().find(|node| node.id == group).unwrap().group.as_deref().unwrap();
+    body.nodes.iter().filter(|node| node.type_id == "node.bend_mesh").map(|node| node.id).collect()
+}
+
+#[test]
+fn modifier_commands_edit_the_import_their_owner_address_names() {
+    let graph = two_imports_sharing_inner_ids();
+    // The owner is the scene object inside the second import: it sits one
+    // group down, and the first import holds an object with the same id.
+    let second_object = node_at(&graph, &[20], 14);
+    assert_eq!(second_object.resolve_doc_path(&graph), Some((vec![20], 14)));
+    let (mut project, fx) = project_with_graph(graph);
+    let target = GraphTarget::Effect(fx.clone());
+
+    let mut insert = InsertMeshModifierCommand::new(
+        target.clone(), second_object.clone(), "node.bend_mesh".into(), None, Vec::new(), mirror_catalog_default(),
+    );
+    insert.execute(&mut project);
+    assert!(insert.was_applied(), "{:?}", insert.rejection_reason());
+    let after_insert = graph_of(&project, &fx).clone();
+    assert!(modifier_ids_in_group(&after_insert, 10).is_empty(), "the first import is untouched");
+    let [added] = modifier_ids_in_group(&after_insert, 20)[..] else { panic!("one modifier in the second import") };
+
+    let mut remove = RemoveMeshModifierCommand::new(target.clone(), second_object.clone(), added, mirror_catalog_default());
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
+    assert!(modifier_ids_in_group(graph_of(&project, &fx), 20).is_empty());
+    remove.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &after_insert);
+
+    let gone = node_at(&after_insert, &[20], 99);
+    let mut stale = RemoveMeshModifierCommand::new(target, gone, added, mirror_catalog_default());
+    stale.execute(&mut project);
+    assert!(!stale.was_applied(), "an owner that is not in the scene refuses");
+    assert_eq!(graph_of(&project, &fx), &after_insert);
+}

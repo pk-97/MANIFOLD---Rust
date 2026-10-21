@@ -553,25 +553,32 @@ fn place(ctx: &mut DispatchCtx, layer: &LayerId, target: &GizmoTarget) -> Option
 /// object, a liquid domain, a water's own fluid source and a swarm box select
 /// their object row.
 pub(crate) fn scene_selection(scene: &SceneVm, target: &GizmoTarget) -> Option<SceneSelection> {
-    if let ShapeOwner::RoleSource { node, .. } = &target.id.owner
-        && scene.objects.iter().any(|object| {
-            matches!(object, SceneObjectVm::Known(row) if row.placed_sources.iter().any(|source| &source.node == node))
-        })
-    {
+    if let Some(node) = placed_source(scene, target) {
         return Some(SceneSelection::Source(node.clone()));
     }
-    match target.kind {
-        GizmoTargetKind::Force => match &target.id.owner {
-            ShapeOwner::Force(node) => Some(SceneSelection::Force(node.clone())),
-            ShapeOwner::Object(_) | ShapeOwner::LiquidDomain(_) | ShapeOwner::RoleSource { .. } | ShapeOwner::Swarm(_) => None,
-        },
-        GizmoTargetKind::Object
-        | GizmoTargetKind::FluidDomain
-        | GizmoTargetKind::Inflow
-        | GizmoTargetKind::Drain
-        | GizmoTargetKind::Collider
-        | GizmoTargetKind::Swarm => target.row.clone().map(SceneSelection::Object),
+    match (&target.kind, &target.id.owner) {
+        (GizmoTargetKind::Force, ShapeOwner::Force(node)) => Some(SceneSelection::Force(node.clone())),
+        _ => selected_object(scene, target).cloned().map(SceneSelection::Object),
     }
+}
+
+/// The role source a target stands for, when its object row places it.
+fn placed_source<'a>(scene: &SceneVm, target: &'a GizmoTarget) -> Option<&'a NodeId> {
+    let ShapeOwner::RoleSource { node, .. } = &target.id.owner else { return None };
+    scene
+        .objects
+        .iter()
+        .any(|object| matches!(object, SceneObjectVm::Known(row) if row.placed_sources.iter().any(|source| &source.node == node)))
+        .then_some(node)
+}
+
+/// The object row a target selects, without allocating: what the preview
+/// outline reads every frame.
+pub(crate) fn selected_object<'a>(scene: &SceneVm, target: &'a GizmoTarget) -> Option<&'a manifold_core::SceneNodeRef> {
+    if placed_source(scene, target).is_some() || target.kind == GizmoTargetKind::Force {
+        return None;
+    }
+    target.row.as_ref()
 }
 
 /// The knob behind `write`: a host card, a card bound to the node param, or

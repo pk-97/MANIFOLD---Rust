@@ -756,7 +756,7 @@ impl ContentThread {
     fn publish_object_modifier_selection(
         &mut self,
         layer_id: LayerId,
-        owner_id: u32,
+        owner: manifold_core::SceneNodeRef,
         node_doc_id: u32,
     ) {
         let sequence = self
@@ -767,7 +767,7 @@ impl ContentThread {
             crate::content_state::ObjectModifierSelectionUpdate {
                 sequence,
                 layer_id,
-                owner_id,
+                owner,
                 node_doc_id,
             }),
         );
@@ -1097,23 +1097,17 @@ impl ContentThread {
                 }
             }
             ContentCommand::ObjectModifier(action) => {
-                let (layer_id, owner_id) = match &action {
-                    crate::object_modifier_transfer::ObjectModifierAction::Add {
-                        layer_id, owner_id, ..
-                    }
-                    | crate::object_modifier_transfer::ObjectModifierAction::Paste {
-                        layer_id, owner_id, ..
-                    }
-                    | crate::object_modifier_transfer::ObjectModifierAction::Duplicate {
-                        layer_id, owner_id, ..
-                    } => (layer_id.clone(), *owner_id),
+                let (layer_id, owner) = match &action {
+                    crate::object_modifier_transfer::ObjectModifierAction::Add { layer_id, owner, .. }
+                    | crate::object_modifier_transfer::ObjectModifierAction::Paste { layer_id, owner, .. }
+                    | crate::object_modifier_transfer::ObjectModifierAction::Duplicate { layer_id, owner, .. } => (layer_id.clone(), owner.clone()),
                 };
                 let previous_ids = self
                     .engine
                     .project()
                     .and_then(|project| {
                         crate::object_modifier_transfer::modifier_node_ids(
-                            project, &layer_id, owner_id,
+                            project, &layer_id, &owner,
                         )
                         .ok()
                     });
@@ -1131,12 +1125,12 @@ impl ContentThread {
                             && let Some(project) = self.engine.project()
                             && let Ok(current_ids) =
                                 crate::object_modifier_transfer::modifier_node_ids(
-                                    project, &layer_id, owner_id,
+                                    project, &layer_id, &owner,
                                 )
                             && let Some(node_doc_id) =
                                 newly_added_object_modifier_id(&previous_ids, &current_ids)
                         {
-                            self.publish_object_modifier_selection(layer_id, owner_id, node_doc_id);
+                            self.publish_object_modifier_selection(layer_id, owner, node_doc_id);
                         }
                     }
                     Err(message) => self.report_graph_edit_rejection(message),

@@ -216,7 +216,7 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
     if let Some(update) = &content_state.object_modifier_selection_update {
         if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
             ui.scene_setup_panel.select_object_modifier_by_address(
-                &update.layer_id, update.owner_id, update.node_doc_id, tree,
+                &update.layer_id, &update.owner, update.node_doc_id, tree,
             );
             ui.last_object_modifier_selection_sequence = Some(update.sequence);
         }

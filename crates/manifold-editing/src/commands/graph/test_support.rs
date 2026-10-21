@@ -651,9 +651,9 @@ pub(super) fn assign_role(
 }
 
 pub(super) fn physics_eligibility(def: &EffectGraphDef, render: u32, index: u32) -> Result<(), String> {
-    scene_object_physics_eligibility(def, &object_at(def, render, index))
+    scene_object_physics_eligibility(def, manifold_core::scene_slots::SceneSlot { render_id: render, index })
 }
 
 pub(super) fn role_eligibility(def: &EffectGraphDef, render: u32, index: u32) -> Result<(), String> {
-    scene_fluid_role_eligibility(def, &object_at(def, render, index))
+    scene_fluid_role_eligibility(def, manifold_core::scene_slots::SceneSlot { render_id: render, index })
 }

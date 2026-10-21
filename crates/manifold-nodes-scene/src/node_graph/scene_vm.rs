@@ -249,6 +249,9 @@ pub struct SceneObjectKnownRow {
     /// wired directly to `object_k` (D1's first-class "hand-built graph, no
     /// group" case).
     pub group_node_id: Option<u32>,
+    /// The node the row's modifier chain hangs off: its group, else the
+    /// object itself. Every object-modifier edit names it.
+    pub modifier_owner: SceneNodeRef,
     pub name: String,
     pub visible_addr: ParamAddr,
     pub visible_value: bool,
@@ -985,6 +988,7 @@ fn trace_objects(
                 parent.object = group_node.node_id.clone();
                 parent.address = model.object.clone();
                 parent.group_node_id = Some(group_node.id);
+                parent.modifier_owner = model.object.clone();
                 parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
                 parent.visible_addr.param_id = "parent_visible".into();
                 parent.visible_value = inner.node(parent.visible_addr.node_doc_id)
@@ -1059,6 +1063,20 @@ fn trace_objects(
 }
 
 /// The level holding the node at `doc_path` (group doc ids, then its own).
+/// The address of the node at `doc_path` (document ids, root first).
+fn doc_path_ref(root: &Level<'_>, doc_path: &[u32]) -> Option<SceneNodeRef> {
+    let (last, groups) = doc_path.split_last()?;
+    let mut level = Level { nodes: root.nodes, wires: root.wires };
+    let mut scope = Vec::with_capacity(groups.len());
+    for id in groups {
+        let group = level.node(*id)?;
+        scope.push(group.node_id.clone());
+        let body = group.group.as_deref()?;
+        level = Level { nodes: &body.nodes, wires: &body.wires };
+    }
+    Some(SceneNodeRef { scope, node: level.node(*last)?.node_id.clone() })
+}
+
 fn locate_doc_path<'a>(root: &Level<'a>, doc_path: &[u32]) -> Option<(Level<'a>, &'a EffectGraphNode)> {
     let (last, groups) = doc_path.split_last()?;
     let mut level = Level { nodes: root.nodes, wires: root.wires };
@@ -1480,6 +1498,10 @@ fn trace_scene_object(
         object_node_id,
         object: node.node_id.clone(),
         address: model.object.clone(),
+        modifier_owner: {
+            let owner_path = if group_node_id.is_some() { &model.doc_path[..model.doc_path.len().saturating_sub(1)] } else { &model.doc_path[..] };
+            doc_path_ref(root, owner_path).unwrap_or_else(|| model.object.clone())
+        },
         kind: model.kind,
         controls: model.controls.clone(),
         capabilities: model.capabilities,

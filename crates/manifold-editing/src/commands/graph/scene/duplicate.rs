@@ -88,16 +88,15 @@ impl Command for DuplicateSceneObjectCommand {
     }
 }
 
-/// Free body slots in the Physics World that `object` (in a root-level scene)
+/// Free body slots in the Physics World that the object at `slot`
 /// simulates in; `None` when that object has no standard
 /// physics. The card reads it to say why a copy count cannot fit; `worlds`
 /// is read once per sync for every card.
 pub fn physics_free_body_slots(
     graph: &EffectGraphDef,
     worlds: &WorldBodySlots,
-    object: &SceneNodeRef,
+    slot: manifold_core::scene_slots::SceneSlot,
 ) -> Option<u32> {
-    let slot = manifold_core::scene_slots::object_slot(graph, object).ok()?;
     let (render_scene_node_id, object_index) = (slot.render_id, slot.index);
     let source = object_producer_id(&graph.wires, render_scene_node_id, object_index)?;
     match physics_scene_object_match(&graph.nodes, &graph.wires, render_scene_node_id, object_index, source) {

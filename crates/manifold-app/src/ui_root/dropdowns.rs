@@ -1869,7 +1869,7 @@ impl UIRoot {
             PanelAction::Root(RootAction::ObjectModifierCardRightClicked(address)) => {
                 self.object_cards_have_focus = true;
                 self.scene_setup_panel.select_object_modifier_by_address(
-                    &address.layer_id, address.group_node_id.unwrap_or(address.object_id),
+                    &address.layer_id, &address.owner,
                     address.node_doc_id, &mut self.tree,
                 );
                 let items = card_edit_menu_items(self.object_modifier_clipboard.is_some(), false, false);

@@ -398,11 +398,9 @@ pub struct ObjectKnownRow {
     /// The `node.scene_object`'s own doc id, for the id-addressed modifier
     /// and skin writes. Never an identity.
     pub object_node_id: u32,
-    /// `Some` when wrapped in a group (the importer/Add Object's template
-    /// shape) — the rename sweep's group target. `None` for a bare
-    /// ungrouped scene_object (D1's first-class "hand-built graph, no
-    /// group" case).
-    pub group_node_id: Option<u32>,
+    /// The node the row's modifier chain hangs off: its group, else the
+    /// object itself.
+    pub modifier_owner: SceneNodeRef,
     /// A virtual compound parent row. Parent rows precede their physical
     /// children in the renderer's flat preorder list.
     pub is_group: bool,
@@ -908,7 +906,6 @@ fn placeholder_param_info() -> ParamRow {
             ableton_range: None,
             mappable: false,
         },
-        scene_addr: None,
         rgb_members: None,
         modulator_stored: false,
     }
@@ -1075,7 +1072,7 @@ pub struct ScenePanel {
     /// is addable (was `modifier_add_ids: Vec<(NodeId, u32, String)>`, one
     /// entry per chip — the click now opens the shared dropdown instead of
     /// resolving directly, so there's at most one entry and no `type_id`).
-    add_modifier_button_id: Option<(NodeId, u32)>,
+    add_modifier_button_id: Option<(NodeId, SceneNodeRef)>,
     /// P4b: `(button_node_id, scene_object_id, SkinRowVm)` for the Skin row's
     /// source picker. The click opens the shared dropdown; selection dispatches
     /// `SceneSetupSkinSourceSet`.
@@ -1925,7 +1922,7 @@ impl ScenePanel {
         inner_w: f32,
         cy: f32,
         ordinal: usize,
-        group_node_id: u32,
+        owner: SceneNodeRef,
     ) -> f32 {
         let btn_id = tree.add_button_keyed(
             Some(self.content_parent),
@@ -1937,7 +1934,7 @@ impl ScenePanel {
             "+ Add Modifier",
             modifier_add_button_key(ordinal),
         );
-        self.add_modifier_button_id = Some((btn_id, group_node_id));
+        self.add_modifier_button_id = Some((btn_id, owner));
         cy + ROW_H
     }
 
@@ -2152,8 +2149,8 @@ impl ScenePanel {
                             object.clone(),
                             current_name.clone(),
                         )));
-                    } else if let Some((_, group_node_id)) =
-                        self.add_modifier_button_id.filter(|(id, _)| *id == *node_id)
+                    } else if let Some((_, owner)) =
+                        self.add_modifier_button_id.clone().filter(|(id, _)| *id == *node_id)
                     {
                         // UX-P2 (D6): the button doesn't resolve a choice
                         // itself — it asks the app to open the shared
@@ -2162,7 +2159,7 @@ impl ScenePanel {
                         // SAME `SceneSetupAddModifier` each old chip did.
                         actions.push(PanelAction::Root(RootAction::SceneSetupAddModifierClicked(
                             vm.layer_id.clone(),
-                            group_node_id,
+                            owner,
                             *node_id,
                         )));
                     } else if let Some((_, scene_object_id, skin)) =

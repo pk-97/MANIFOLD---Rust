@@ -1783,7 +1783,6 @@ mod tests {
                 ableton_range: None,
                 mappable: false,
             },
-            scene_addr: None,
             rgb_members: None,
             modulator_stored: false,
         }

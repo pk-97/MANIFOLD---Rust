@@ -19,7 +19,7 @@ impl AppInputHost<'_> {
             let Some(address) = selected.as_ref() else { return true; };
             match ObjectModifierClipboard::capture(
                 &self.project, &address.layer_id,
-                address.group_node_id.unwrap_or(address.object_id), address.node_doc_id,
+                &address.owner, address.node_doc_id,
             ) {
                 Ok(clipboard) => {
                     self.ui_root.object_modifier_clipboard = Some(clipboard);
@@ -43,8 +43,7 @@ impl AppInputHost<'_> {
                 };
                 ContentCommand::send(self.content_tx, ContentCommand::ExecuteOnContent(Box::new(
                     manifold_editing::commands::graph::RemoveMeshModifierCommand::new(
-                        target, Vec::new(), address.group_node_id.unwrap_or(address.object_id),
-                        address.node_doc_id, default,
+                        target, address.owner.clone(), address.node_doc_id, default,
                     ),
                 )));
             }
@@ -53,19 +52,19 @@ impl AppInputHost<'_> {
                 ContentCommand::send(self.content_tx, ContentCommand::ObjectModifier(
                     ObjectModifierAction::Duplicate {
                         layer_id: address.layer_id,
-                        owner_id: address.group_node_id.unwrap_or(address.object_id),
+                        owner: address.owner.clone(),
                         node_doc_id: address.node_doc_id,
                     },
                 ));
             }
             CardEditAction::Paste => {
                 let Some(clipboard) = self.ui_root.object_modifier_clipboard.clone() else { return true; };
-                let Some((layer_id, owner_id)) = self.ui_root.scene_setup_panel.object_modifier_destination() else {
+                let Some((layer_id, owner)) = self.ui_root.scene_setup_panel.object_modifier_destination() else {
                     return true;
                 };
                 ContentCommand::send(self.content_tx, ContentCommand::ObjectModifier(
                     ObjectModifierAction::Paste {
-                        layer_id, owner_id, after: selected.map(|address| address.node_doc_id), clipboard: Box::new(clipboard),
+                        layer_id, owner, after: selected.map(|address| address.node_doc_id), clipboard: Box::new(clipboard),
                     },
                 ));
             }

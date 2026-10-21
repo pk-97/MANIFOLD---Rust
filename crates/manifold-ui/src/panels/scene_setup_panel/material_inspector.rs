@@ -1004,7 +1004,7 @@ impl ScenePanel {
                 inner_w,
                 cy,
                 self.row_key(&row.node),
-                row.group_node_id.unwrap_or(row.object_node_id),
+                row.modifier_owner.clone(),
             );
         } else if row.capabilities.modifiers {
             tree.add_label(

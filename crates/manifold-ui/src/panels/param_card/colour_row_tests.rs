@@ -36,7 +36,6 @@ fn row(id: &'static str, name: &str, value: f32) -> ParamRow {
         clip_trigger: None,
         modulation: RowMod::default(),
         mapping: RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: false },
-        scene_addr: None,
         rgb_members: None,
         modulator_stored: false,
     }

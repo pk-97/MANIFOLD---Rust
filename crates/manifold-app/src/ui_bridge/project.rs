@@ -1028,22 +1028,21 @@ pub(super) fn dispatch_project(
         // the P1/P2 arms above — no new mutation path, just the three named
         // composites `InsertMeshModifierCommand`/`RemoveMeshModifierCommand`/
         // `MoveMeshModifierCommand`.
-        ProjectAction::SceneSetupAddModifier(layer_id, group_node_id, type_id) => {
+        ProjectAction::SceneSetupAddModifier(layer_id, owner, type_id) => {
             ContentCommand::send(content_tx, ContentCommand::ObjectModifier(
                 crate::object_modifier_transfer::ObjectModifierAction::Add {
-                    layer_id: layer_id.clone(), owner_id: *group_node_id,
+                    layer_id: layer_id.clone(), owner: owner.clone(),
                     type_id: type_id.clone(), after: None,
                 },
             ));
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
+        ProjectAction::SceneSetupRemoveModifier(layer_id, owner, modifier_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::RemoveMeshModifierCommand::new(
                     target,
-                    Vec::new(),
-                    *group_node_id,
+                    owner.clone(),
                     *modifier_node_id,
                     default,
                 );
@@ -1053,7 +1052,7 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneSetupMoveModifier(
             layer_id,
-            group_node_id,
+            owner,
             modifier_node_id,
             new_position,
         ) => {
@@ -1061,8 +1060,7 @@ pub(super) fn dispatch_project(
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::MoveMeshModifierCommand::new(
                     target,
-                    Vec::new(),
-                    *group_node_id,
+                    owner.clone(),
                     *modifier_node_id,
                     *new_position as usize,
                     default,
@@ -2781,11 +2779,14 @@ mod tests {
             .expect("Scene has at least one named object group")
             .id;
 
+        let group_ref = manifold_core::SceneNodeRef {
+            scope: Vec::new(),
+            node: def.nodes.iter().find(|n| n.id == group_node_id).unwrap().node_id.clone(),
+        };
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
         let mut cmd = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
             target,
-            Vec::new(),
-            group_node_id,
+            group_ref,
             "node.twist_mesh".to_string(),
             None,
             manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
