@@ -1215,7 +1215,7 @@ impl RowHost {
         };
         let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
         let mut buf = super::state::ParamValueText::default();
-        let text = super::state::param_value_text(
+        let text = super::state::param_value_text_fit(
             &mut buf,
             value,
             spec.min,
@@ -1223,6 +1223,7 @@ impl RowHost {
             spec.is_angle,
             spec.value_labels.as_deref(),
             spec.unit,
+            super::state::CARD_VALUE_CHARS,
         );
         crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), text);
         crate::slider::BitmapSlider::mark_past_end(tree, ids, super::state::past_slider_end(value, spec));

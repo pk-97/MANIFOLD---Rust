@@ -1,0 +1,6 @@
+[
+  {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button","under_name":"inspector"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"ScrollTo":{"target":{"Query":{"text":"Density"}}}},
+  {"Assert":{"selector":{"Query":{"text":"Density"}},"check":"Exists"}},
+  "Snapshot"
+]

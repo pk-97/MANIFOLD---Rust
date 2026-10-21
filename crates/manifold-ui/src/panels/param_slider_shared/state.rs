@@ -520,22 +520,68 @@ pub fn param_value_text<'a>(
     value_labels: Option<&'a [String]>,
     unit: Option<manifold_foundation::scene_surface::Unit>,
 ) -> &'a str {
-    use std::fmt::Write;
     if let Some(labels) = value_labels {
         return &labels[label_index(val, min, labels.len())];
     }
+    write_value(buf, val, whole_numbers, is_angle, unit, 2, true);
+    buf.as_str()
+}
+
+/// Characters a card slider's value box holds: its width over the body
+/// font's estimated glyph width, less a margin.
+pub(crate) const CARD_VALUE_CHARS: usize =
+    ((crate::slider::VALUE_BOX_W - 4.0) / (FONT_SIZE as f32 * crate::draw::CHAR_W_RATIO)) as usize;
+
+fn write_value(
+    buf: &mut ParamValueText,
+    val: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
+    decimals: usize,
+    with_unit: bool,
+) {
+    use std::fmt::Write;
     buf.clear();
     let _ = if is_angle {
         // `val` is radians; the user always sees and edits degrees.
         write!(buf, "{:.0}°", val.to_degrees())
     } else {
-        let suffix = unit.map_or("", |unit| unit.suffix());
+        let suffix = if with_unit { unit.map_or("", |unit| unit.suffix()) } else { "" };
         if whole_numbers {
             write!(buf, "{}{suffix}", val.round() as i32)
         } else {
-            write!(buf, "{:.2}{suffix}", val)
+            write!(buf, "{val:.decimals$}{suffix}")
         }
     };
+}
+
+/// [`param_value_text`] that never exceeds `max_chars`, so a value box never
+/// clips a digit: fewer decimals first, then the unit, then a compact
+/// thousands form. A value label is returned whole (its box elides it).
+#[allow(clippy::too_many_arguments)]
+pub fn param_value_text_fit<'a>(
+    buf: &'a mut ParamValueText,
+    val: f32,
+    min: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    value_labels: Option<&'a [String]>,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
+    max_chars: usize,
+) -> &'a str {
+    if let Some(labels) = value_labels {
+        return &labels[label_index(val, min, labels.len())];
+    }
+    for (decimals, with_unit) in [(2, true), (1, true), (0, true), (2, false), (1, false), (0, false)] {
+        write_value(buf, val, whole_numbers, is_angle, unit, decimals, with_unit);
+        if buf.as_str().chars().count() <= max_chars {
+            return buf.as_str();
+        }
+    }
+    use std::fmt::Write;
+    buf.clear();
+    let _ = if val.abs() >= 1.0e6 { write!(buf, "{:.1}M", val / 1.0e6) } else { write!(buf, "{:.1}k", val / 1.0e3) };
     buf.as_str()
 }
 
@@ -757,5 +803,27 @@ mod fine_scrub_tests {
     fn fine_scrub_zero_width_track_is_a_no_op() {
         assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, false), 25.0);
         assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, true), 25.0);
+    }
+}
+
+#[cfg(test)]
+mod value_fit_tests {
+    use super::*;
+    use manifold_foundation::scene_surface::Unit;
+
+    fn fit(val: f32, unit: Option<Unit>) -> String {
+        let mut buf = ParamValueText::default();
+        param_value_text_fit(&mut buf, val, 0.0, false, false, None, unit, CARD_VALUE_CHARS).to_owned()
+    }
+
+    /// A long density no longer loses its leading digit to the value box.
+    #[test]
+    fn a_long_value_keeps_every_digit_and_fits_the_box() {
+        for (value, unit) in [(1000.0, Some(Unit::KilogramsPerCubicMetre)), (20.0, Some(Unit::MillionCells)), (12345678.0, None), (4.0, Some(Unit::Metres))] {
+            assert!(fit(value, unit).chars().count() <= CARD_VALUE_CHARS, "{}", fit(value, unit));
+        }
+        assert_eq!(fit(1000.0, Some(Unit::KilogramsPerCubicMetre)), "1000.00");
+        assert_eq!(fit(4.0, Some(Unit::Metres)), "4.00 m", "a short value keeps its unit");
+        assert_eq!(fit(12345678.0, None), "12345678", "an integer that fits keeps all digits");
     }
 }

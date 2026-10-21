@@ -2042,13 +2042,16 @@ pub(crate) fn build_param_row(
 
     let shown_value = display_value.unwrap_or(info.spec.default);
     let shown_norm = BitmapSlider::value_to_normalized(shown_value, info.spec.min, info.spec.max);
-    let val_text = format_param_value(
+    let mut val_buf = ParamValueText::default();
+    let val_text = param_value_text_fit(
+        &mut val_buf,
         shown_value,
         info.spec.min,
         info.spec.whole_numbers,
         info.spec.is_angle,
         info.spec.value_labels.as_deref(),
         info.spec.unit,
+        CARD_VALUE_CHARS,
     );
     let default_norm = BitmapSlider::value_to_normalized(info.spec.default, info.spec.min, info.spec.max);
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
@@ -2152,7 +2155,7 @@ pub(crate) fn build_param_row(
         slider_rect,
         &info.spec.name,
         shown_norm,
-        &val_text,
+        val_text,
         slider_colors,
         label_width,
         // Reset marker at the DEFAULT position — the reset target, not the
