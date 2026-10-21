@@ -308,6 +308,7 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.matter_face_component",
         "node.face_sample_component",
         manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID,
+        "node.fluid_role_source",
         "node.liquid_fill",
         "node.liquid_state",
         "node.liquid_stats",

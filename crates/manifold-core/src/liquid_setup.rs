@@ -31,6 +31,9 @@ pub enum ColumnOutcome {
 pub struct SetupFit {
     pub fill_capped: bool,
     pub column: ColumnOutcome,
+    /// The particle pool is full and an inflow wanted more: the inflow is
+    /// held back until water drains. Reported by the solver as it runs.
+    pub pool_full: bool,
 }
 
 impl SetupFit {

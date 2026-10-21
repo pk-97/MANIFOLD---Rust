@@ -23,6 +23,19 @@ pub enum FluidRoleKind {
     Collider,
 }
 
+impl FluidRoleKind {
+    /// Every kind in its Role menu order, the index a role wire carries.
+    pub const ALL: [Self; 4] = [Self::InitialFill, Self::Inflow, Self::Outflow, Self::Collider];
+
+    pub fn from_index(index: u32) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub const fn index(self) -> u32 {
+        self as u32
+    }
+}
+
 /// Distance lattice nodes along the longest local axis of a role's geometry.
 /// About 34³ nodes with padding: under a second of CPU for a 1,000-triangle
 /// mesh on the worker (GPU_MPM_SOLVER_DESIGN.md D16).
