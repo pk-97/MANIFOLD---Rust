@@ -500,17 +500,65 @@ fn a_re_enabled_audio_mod_carries_no_hop_from_before_it_was_off() {
 }
 
 /// A frame a transport jump landed on hands no hop from before the jump to
-/// the samples after it.
+/// the samples after it, and all of its own hops to the replay that opens
+/// at the jump's target, where a sample before the first hop reads that
+/// first hop. Once that replay ran, frames carry only their latest hop, and
+/// a second call in one tick (a Fire, then the frame) carries what the
+/// first carried.
 #[test]
-fn a_transport_jump_drops_the_carried_hop() {
+fn a_transport_jump_drops_the_carried_hop_and_hands_its_own_to_the_opening() {
     let mut inputs = empty_snapshot();
     inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
-    // The jump's frame delivers no hop of its own.
     inputs.set_hops(Some(&modulated(true, &[])));
     assert_eq!(inputs.heard("speed", 0.02), Some(0.9));
-    inputs.drop_hop_carry();
-    assert_eq!(inputs.heard("speed", 0.02), None);
+    inputs.jump_hops(true);
+    assert_eq!(inputs.heard("speed", 0.02), None, "the hop from before the jump reached a sample after it");
     inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])));
-    assert_eq!(inputs.heard("speed", 0.85), None, "the hop from before the jump reached a sample after it");
+    assert_eq!(inputs.heard("speed", 0.85), Some(0.3), "the opening reads the first hop after the jump");
+    let mut inputs = empty_snapshot();
+    inputs.set_hops(Some(&modulated(true, &[(0.01, 0.9)])));
+    inputs.set_hops(Some(&modulated(true, &[(0.85, 0.7), (0.86, 0.6)])));
+    inputs.jump_hops(true);
+    inputs.set_hops(Some(&modulated(true, &[(0.9, 0.3)])));
+    assert_eq!(inputs.heard("speed", 0.855), Some(0.7), "the opening replay reads the jump frame's hops at their own times");
+    assert_eq!(inputs.heard("speed", 0.87), Some(0.6));
     assert_eq!(inputs.heard("speed", 0.9), Some(0.3));
+    inputs.hops_replayed();
+    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])));
+    assert_eq!(inputs.heard("speed", 0.855), None, "a later frame carries only the latest hop");
+    assert_eq!(inputs.heard("speed", 0.92), Some(0.3));
+    inputs.set_hops(Some(&modulated(true, &[(0.95, 0.1)])));
+    assert_eq!(inputs.heard("speed", 0.92), Some(0.3), "a second call in one tick keeps the first's carry");
+}
+
+/// A Fire handled after a forward seek, before the seek's frame renders,
+/// lands at the latest observation: the skipped span is never replayed, and
+/// the next replay opens at the seek's target, at every rate.
+#[test]
+fn a_fire_after_a_forward_seek_never_replays_the_skipped_span() {
+    const TARGET: f64 = 0.9137;
+    let interval = Seconds(manifold_physics::clock::TICK);
+    for fps in [30_u32, 60, 120, 144] {
+        for offline in [false, true] {
+            let step = || if offline { SimStep::export(interval) } else { SimStep::live(interval) };
+            let fps_f = f64::from(fps);
+            let mut runtime = runtime();
+            runtime.set_sim_step(step());
+            for k in 0..=(0.5 * fps_f).round() as u32 {
+                frame(&mut runtime, f64::from(k) / fps_f, 1.0, 0.0);
+            }
+            let landed = (TARGET * fps_f - 2e-7).ceil() / fps_f;
+            runtime.set_sim_step(step().with_transport_target(Some(Seconds(TARGET))));
+            let source = FrameTime { seconds: Seconds(landed), beats: Beats(landed * 2.0), delta: Seconds::ZERO, frame_count: 1 };
+            runtime.water().observe_physics_at_source(source).unwrap();
+            let mut seen = OBSERVATIONS.with_borrow_mut(std::mem::take);
+            seen.extend(frame(&mut runtime, landed, 1.0, 1.0));
+            runtime.set_sim_step(step());
+            let next = frame(&mut runtime, landed + 1.0 / fps_f, 1.0, 1.0);
+            let at = |sample: &Observation| sample.time.seconds.0;
+            let skipped = seen.iter().chain(&next).find(|sample| at(sample) > 0.5 + 1e-12 && at(sample) < TARGET - 1e-12);
+            assert!(skipped.is_none(), "{fps} fps, offline {offline}: a sample in the skipped span at {:?}", skipped.map(at));
+            assert_eq!(at(&next[0]), TARGET, "{fps} fps, offline {offline}: the replay opens at the seek's target");
+        }
+    }
 }

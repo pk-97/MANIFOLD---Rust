@@ -68,7 +68,8 @@ pub struct TransportClock {
     hold_next: bool,
     /// Net frames the index moved on the last advance.
     last_advance: i64,
-    /// The frame the last placement landed on, and the time it aimed at.
+    /// The frame the newest placement no frame has rendered yet landed on,
+    /// and the time it aimed at.
     placed: Option<(i64, Seconds)>,
 }
 
@@ -167,15 +168,27 @@ impl TransportClock {
     fn reanchored(&mut self, target: Seconds) {
         self.hold_next = false;
         self.last_advance = 0;
+        // Play right after a seek re-anchors on the frame the seek landed on,
+        // at that frame's own time: the seek's target still stands.
+        let target = match self.placed {
+            Some((index, held)) if index == self.index && target == self.time() => held,
+            _ => target,
+        };
         self.placed = Some((self.index, target));
     }
 
-    /// The time the last placement (a seek, play from a cue, a locate) aimed
-    /// at, while the clock still sits on the frame it landed on. Physics
-    /// starts its tick grid there after a jump, so the grid is the same at
-    /// any frame rate.
+    /// The time the newest placement (a seek, play from a cue, a locate)
+    /// aimed at, until a frame renders it, however far the transport moved
+    /// since. Physics starts its tick grid there after a jump, so the grid
+    /// is the same at any frame rate.
     pub fn placement_target(&self) -> Option<Seconds> {
-        self.placed.filter(|(index, _)| *index == self.index).map(|(_, target)| target)
+        self.placed.map(|(_, target)| target)
+    }
+
+    /// The placement target for the frame being rendered, once: later frames
+    /// get none.
+    pub fn take_placement_target(&mut self) -> Option<Seconds> {
+        self.placed.take().map(|(_, target)| target)
     }
 
     /// The index the next playing advance of `frames` lands on (the seek

@@ -456,11 +456,15 @@ impl PlaybackEngine {
     pub fn current_state(&self) -> PlaybackState {
         self.current_state
     }
-    /// The time the last seek, locate or play from a cue aimed at, while the
-    /// transport sits on the frame it landed on; physics starts its tick grid
-    /// there after a jump.
+    /// The time the newest seek, locate or play from a cue aimed at, until a
+    /// frame renders it; physics starts its tick grid there after a jump.
     pub fn transport_target(&self) -> Option<Seconds> {
         self.clock.placement_target()
+    }
+
+    /// [`Self::transport_target`] for the frame being rendered, once.
+    pub fn take_transport_target(&mut self) -> Option<Seconds> {
+        self.clock.take_placement_target()
     }
     pub fn current_time_double(&self) -> f64 {
         self.clock.time().0
@@ -4163,6 +4167,27 @@ mod tests {
             assert_eq!(pulses.len(), 1);
             assert!(pulses[0].epoch > failure.epoch);
         }).unwrap();
+    }
+
+    /// Seek then Play in one tick: the seek's target reaches the first frame
+    /// rendered after it, at every rate, and only that one.
+    #[test]
+    fn a_seek_then_play_in_one_tick_keeps_the_target_for_the_rendered_frame() {
+        const TARGET: Seconds = Seconds(600.9137);
+        for fps in [30.0_f32, 60.0, 120.0, 144.0] {
+            let mut project = Project::default();
+            project.settings.frame_rate = fps;
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project);
+            engine.seek_to(TARGET);
+            engine.play();
+            let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+            engine.reclaim_tick_result(result);
+            assert!(engine.current_time_double() > TARGET.0, "{fps} fps: the frame is past the one the seek landed on");
+            assert_eq!(engine.transport_target(), Some(TARGET), "{fps} fps: play lost the seek's target");
+            assert_eq!(engine.take_transport_target(), Some(TARGET), "{fps} fps");
+            assert_eq!(engine.transport_target(), None, "{fps} fps: the rendered frame took it");
+        }
     }
 
     #[test]

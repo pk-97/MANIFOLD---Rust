@@ -123,6 +123,10 @@ pub struct SimulationClock {
     /// at that same transport does not replace it: one rule evaluates Speed
     /// at a tick start whether or not a frame ends there.
     sampled_at: Option<f64>,
+    /// The newest placement's target and the transport its frame landed on,
+    /// while the transport stays there: a restart for any reason on that
+    /// frame starts its grid at the target.
+    placement: Option<(f64, f64)>,
 }
 
 /// A clone advances on its own, so it never inherits the original's identity:
@@ -506,17 +510,30 @@ impl SimulationClock {
             .previous_reset
             .is_some_and(|previous| previous != reset);
         self.previous_reset = Some(reset);
-        let restarted =
-            !self.started || rate_changed || setup_changed || reset_edge || transport < self.last_transport - BACKWARD_SEEK;
+        // A placement reaches one frame. Its target stands while the
+        // transport stays on the frame that took it.
+        let target = self.transport_target.filter(|&target| target.is_finite() && target <= transport + 1e-6);
+        match target {
+            Some(target) => self.placement = Some((target, transport)),
+            None => {
+                if self.placement.is_some_and(|(_, landed)| landed != transport) {
+                    self.placement = None;
+                }
+            }
+        }
+        // A seek back is decided by its target, not by where its frame
+        // landed: one shorter than a frame may land on the frame it left.
+        let restarted = !self.started
+            || rate_changed
+            || setup_changed
+            || reset_edge
+            || transport < self.last_transport - BACKWARD_SEEK
+            || target.is_some_and(|target| target < self.last_transport - BACKWARD_SEEK);
         // A seek forward keeps the simulation and starts a fresh grid at its
         // target: the skipped span is neither simulated nor dropped, and the
         // boundaries from the target to this frame run next frame, as after a
         // restart, so where the frame landed decides nothing.
-        let seek_origin = if restarted {
-            None
-        } else {
-            self.transport_target.filter(|&target| target.is_finite() && target > self.last_transport && target <= transport + 1e-6)
-        };
+        let seek_origin = if restarted { None } else { target.filter(|&target| target > self.last_transport) };
         let mut held = false;
         // Within an epoch the target never moves back past the last frame's.
         // Accepted work ends on a Sim Rate boundary in both modes: equal clock
@@ -525,10 +542,10 @@ impl SimulationClock {
         // frames jitter. A partial interval stays owed until its boundary.
         let speed = f64::from(speed);
         let transport_first = if restarted { 0 } else { self.transport_done };
-        // A restart on the frame a transport jump landed on starts its grid at
-        // the jump's target, which no frame rate moves.
+        // A restart on the frame a placement landed on starts its grid at the
+        // placement's target, which no frame rate moves.
         let origin = if restarted {
-            self.transport_target.filter(|&target| target.is_finite() && target <= transport + 1e-6).unwrap_or(transport)
+            self.placement.map_or(transport, |(target, _)| target)
         } else {
             self.transport_origin
         };

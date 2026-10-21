@@ -58,7 +58,7 @@ impl GeneratorRenderer {
             self.wait(layer, param, source)
         } else {
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo) {
+            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo, self.sim_step) {
                 Ok(ImpulseFire::NotReady) => self.wait(layer, param, source),
                 Ok(_) => Ok(()),
                 Err(error) => Err(error),
@@ -100,7 +100,7 @@ impl GeneratorRenderer {
             }
             let fire = &self.waiting_fires[index];
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, &fire.param, fire.source, project_tempo) {
+            match try_fire(state, &mut self.next_physics_event, layer, &fire.param, fire.source, project_tempo, self.sim_step) {
                 Ok(ImpulseFire::NotReady) => return,
                 Ok(_) => {}
                 Err(error) => self.scene_impulse_diagnostics.refuse(&error),
@@ -189,6 +189,7 @@ fn try_fire(
     param: &str,
     source: FrameTime,
     project_tempo: Option<&ProjectTempo>,
+    step: manifold_node_engine::exec::effect_node::SimStep,
 ) -> Result<ImpulseFire, String> {
     let Some(state) = state else {
         return Ok(ImpulseFire::NotReady);
@@ -220,5 +221,8 @@ fn try_fire(
     state.generator.apply_param_values(&params.params);
     state.generator.set_source_instance(Some(params));
     state.generator.set_project_tempo(project_tempo);
+    // This frame's step, so a Fire past a jump its frame has yet to render
+    // sees the jump's target.
+    state.generator.set_sim_step(step);
     state.generator.fire_scene_impulse(param, source, next_sequence)
 }

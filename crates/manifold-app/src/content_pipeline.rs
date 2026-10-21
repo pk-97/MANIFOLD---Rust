@@ -2233,7 +2233,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         } else {
             manifold_node_engine::exec::effect_node::SimStep::live(interval).with_live_load(Some(load))
         }
-        .with_transport_target(engine.transport_target());
+        .with_transport_target(engine.take_transport_target());
         self.apply_sim_step(engine, sim_step);
         let _t_frame = std::time::Instant::now();
 

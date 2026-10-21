@@ -28,6 +28,8 @@ use std::{borrow::Cow, cell::RefCell};
 thread_local! {
     /// Every tick the clock ran, as its simulated interval's bits.
     static TICKS: RefCell<Vec<(u64, u64)>> = const { RefCell::new(Vec::new()) };
+    /// Replay samples the clock observed since the last seek's frame.
+    static SAMPLES: RefCell<usize> = const { RefCell::new(0) };
 }
 
 const LIQUID: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
@@ -81,6 +83,7 @@ impl EffectNode for TickedClock {
         let speed = ctx.scalar_or_param("speed", 1.0);
         self.1.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
         if ctx.sim_step.authored_sample_only {
+            SAMPLES.with_borrow_mut(|samples| *samples += 1);
             self.1.observe_speed(now, speed);
             return;
         }
@@ -234,10 +237,10 @@ fn level(end_sample: u64) -> f32 {
 /// Hops stamped with their transport time, as a producer with a transport
 /// mapping stamps them live and in export. Physics reads each hop at that
 /// time; live input placed by the wall clock lands wherever the audio clock
-/// puts it, which no frame rate decides.
-fn hops(range: std::ops::Range<u64>) -> AudioFeatureSnapshot {
+/// puts it, which no frame rate decides. A seek starts a new `epoch`.
+fn hops(range: std::ops::Range<u64>, epoch: u64) -> AudioFeatureSnapshot {
     let mut batch = AudioHopBatch::with_capacity(64);
-    batch.begin(1);
+    batch.begin(epoch);
     for hop in range {
         let end_sample = hop * HOP;
         let mut features = SendFeatures::default();
@@ -245,7 +248,7 @@ fn hops(range: std::ops::Range<u64>) -> AudioFeatureSnapshot {
         batch
             .push(AudioFeatureHop {
                 stamp: AudioHopStamp {
-                    epoch: 1,
+                    epoch,
                     end_sample,
                     sample_rate: SAMPLE_RATE,
                     source_time: None,
@@ -277,12 +280,19 @@ fn play(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = (f64, 
     let (mut latches, mut gestures) = (AutomationLatches::default(), AutomationGestures::default());
     let mode = if offline { AutomationSamplingMode::Export } else { AutomationSamplingMode::Playback };
     let mut next_hop = 1;
+    let mut epoch = 1;
     let mut previous: Option<f64> = None;
     for (frame, (seconds, target)) in frames.enumerate() {
         let beat = Beats((seconds + 1e-7 / f64::from(fps)) * BPM / 60.0);
         manifold_playback::automation::evaluate_all_automation_with_mode(&mut project, beat, &mut latches, false, &mut gestures, mode);
+        // Audio follows the transport: after a seek it plays on from the
+        // target, its first hop ending after it.
+        if let Some(target) = target {
+            epoch += 1;
+            next_hop = (target * f64::from(SAMPLE_RATE) / HOP as f64).floor() as u64 + 1;
+        }
         let delivered = (seconds * f64::from(SAMPLE_RATE) / HOP as f64 + 1e-9).floor() as u64 + 1;
-        let audio = if case == Case::LaneWithAudio { hops(next_hop..delivered.max(next_hop)) } else { AudioFeatureSnapshot::default() };
+        let audio = if case == Case::LaneWithAudio { hops(next_hop..delivered.max(next_hop), epoch) } else { AudioFeatureSnapshot::default() };
         next_hop = delivered.max(next_hop);
         manifold_playback::modulation::evaluate_modulation(
             &mut project,
@@ -300,6 +310,7 @@ fn play(case: Case, fps: u32, offline: bool, frames: impl Iterator<Item = (f64, 
         runtime.apply_param_values(&generator.params);
         if target.is_some() {
             TICKS.with_borrow_mut(Vec::clear);
+            SAMPLES.with_borrow_mut(|samples| *samples = 0);
         }
         let step = if offline { SimStep::export(Seconds(TICK)) } else { SimStep::live(Seconds(TICK)) };
         runtime.set_sim_step(step.with_transport_target(target.map(Seconds)));
@@ -374,62 +385,101 @@ fn speed_steps_on_tick_starts_land_on_that_tick_at_30_60_120_144_fps_live_and_ex
     }
 }
 
-/// Plays 0.6 s, seeks back to a time on no frame grid, and plays a second
-/// more. Returns the ticks run after the seek.
-fn after_seek(fps: u32, offline: bool) -> Vec<(u64, u64)> {
-    const TARGET: f64 = 0.2137;
+/// Plays to `until`, seeks to `target`, and plays just over a second from the
+/// frame the seek lands on: the first at or after the target, `late` frames
+/// on when Play follows the seek in the same tick. Returns the ticks run
+/// from that frame on.
+fn jump(case: Case, fps: u32, offline: bool, until: f64, target: f64, late: u32) -> Vec<(u64, u64)> {
     let fps_f = f64::from(fps);
-    let before = (0..=(0.6 * fps_f).round() as u32).map(|frame| (f64::from(frame) / fps_f, None));
-    // The transport lands on the first frame at or after the target.
-    let landed = (TARGET * fps_f - 2e-7).ceil() as u32;
-    let after = (landed..=((TARGET + 1.0) * fps_f).floor() as u32)
-        .map(move |frame| (f64::from(frame) / fps_f, (frame == landed).then_some(TARGET)));
-    play(Case::Lane, fps, offline, before.chain(after))
+    let before = (0..=(until * fps_f).round() as u32).map(move |frame| (f64::from(frame) / fps_f, None));
+    let landed = (target * fps_f - 2e-7).ceil() as u32 + late;
+    let after = (landed..=((target + 1.05) * fps_f).floor() as u32)
+        .map(move |frame| (f64::from(frame) / fps_f, (frame == landed).then_some(target)));
+    play(case, fps, offline, before.chain(after))
 }
 
-/// After a seek, ticks start on the grid from the seek's target and take
-/// Speed there, so they match bit for bit at every rate.
-#[test]
-fn ticks_after_a_seek_match_at_30_60_120_144_fps_live_and_export() {
-    let reference = after_seek(60, true);
-    assert!(reference.len() >= 59, "a second of ticks after the seek: {}", reference.len());
-    let first = f64::from_bits(reference[0].0);
-    assert_eq!(first, 0.0, "the restart starts simulated time");
+/// Every rate, live and exported, runs the reference's ticks after a jump,
+/// over a second of shared ticks.
+fn assert_same_after_jump(reference: &[(u64, u64)], run: impl Fn(u32, bool) -> Vec<(u64, u64)>) {
+    assert!(reference.len() >= 59, "a second of ticks after the jump: {}", reference.len());
     for fps in [30, 60, 120, 144] {
         for offline in [false, true] {
-            let ticks = after_seek(fps, offline);
+            let ticks = run(fps, offline);
             let shared = ticks.len().min(reference.len());
-            assert!(shared >= 59, "{fps} fps, offline {offline}: {} ticks after the seek", ticks.len());
-            assert!(ticks[..shared] == reference[..shared], "{fps} fps, offline {offline}: ticks after the seek differ");
+            assert!(shared >= 59, "{fps} fps, offline {offline}: {} ticks after the jump", ticks.len());
+            assert!(ticks[..shared] == reference[..shared], "{fps} fps, offline {offline}: ticks after the jump differ");
         }
     }
 }
 
-/// Plays half a second, seeks forward to a time on no frame grid, and plays
-/// a second more. Returns the ticks run from the seek's frame on.
-fn after_forward_seek(fps: u32, offline: bool) -> Vec<(u64, u64)> {
-    const TARGET: f64 = 0.9137;
-    let fps_f = f64::from(fps);
-    let before = (0..=(0.5 * fps_f).round() as u32).map(|frame| (f64::from(frame) / fps_f, None));
-    let landed = (TARGET * fps_f - 2e-7).ceil() as u32;
-    let after = (landed..=((TARGET + 1.0) * fps_f).floor() as u32)
-        .map(move |frame| (f64::from(frame) / fps_f, (frame == landed).then_some(TARGET)));
-    play(Case::Lane, fps, offline, before.chain(after))
+/// After a seek back to a time on no frame grid, ticks start on the grid
+/// from the seek's target and take Speed there, so they match bit for bit
+/// at every rate.
+#[test]
+fn ticks_after_a_seek_match_at_30_60_120_144_fps_live_and_export() {
+    let back = |fps, offline| jump(Case::Lane, fps, offline, 0.6, 0.2137, 0);
+    let reference = back(60, true);
+    assert_eq!(f64::from_bits(reference[0].0), 0.0, "the restart starts simulated time");
+    assert_same_after_jump(&reference, back);
 }
 
 /// A forward seek keeps the simulation and starts the tick grid at the
 /// seek's target, so the ticks after it match bit for bit at every rate.
 #[test]
 fn ticks_after_a_forward_seek_match_at_30_60_120_144_fps_live_and_export() {
-    let reference = after_forward_seek(60, true);
-    assert!(reference.len() >= 59, "a second of ticks after the seek: {}", reference.len());
+    let forward = |fps, offline| jump(Case::Lane, fps, offline, 0.5, 0.9137, 0);
+    let reference = forward(60, true);
     assert!(f64::from_bits(reference[0].0) > 0.0, "the seek keeps the simulated time");
+    assert_same_after_jump(&reference, forward);
+}
+
+/// An audio-modulated Speed reads the same hop at a jump's target whatever
+/// frame the jump landed on, so the ticks after it match at every rate.
+#[test]
+fn audio_modulated_ticks_after_a_forward_seek_match_at_30_60_120_144_fps_live_and_export() {
+    let forward = |fps, offline| jump(Case::LaneWithAudio, fps, offline, 0.5, 0.9137, 0);
+    let reference = forward(60, true);
+    let lane = jump(Case::Lane, 60, true, 0.5, 0.9137, 0);
+    assert!(reference[0] != lane[0], "the first tick after the seek hears the audio");
+    assert_same_after_jump(&reference, forward);
+}
+
+/// The same after a seek back: the restarted simulation's first ticks hear
+/// the audio from the target on, at every rate.
+#[test]
+fn audio_modulated_ticks_after_a_seek_back_match_at_30_60_120_144_fps_live_and_export() {
+    let back = |fps, offline| jump(Case::LaneWithAudio, fps, offline, 0.6, 0.2137, 0);
+    let reference = back(60, true);
+    let lane = jump(Case::Lane, 60, true, 0.6, 0.2137, 0);
+    assert!(reference[0] != lane[0], "the first tick after the seek hears the audio");
+    assert_same_after_jump(&reference, back);
+}
+
+/// A seek back by less than a frame restarts at its target at every rate,
+/// even where the transport lands on the frame it left.
+#[test]
+fn a_seek_back_shorter_than_a_frame_restarts_at_30_60_120_144_fps_live_and_export() {
+    let back = |fps, offline| jump(Case::Lane, fps, offline, 1.0 / 3.0, 0.32, 0);
+    let reference = back(60, true);
+    assert_eq!(f64::from_bits(reference[0].0), 0.0, "the seek restarts simulated time");
+    assert_same_after_jump(&reference, back);
+}
+
+/// Seek then Play in one tick: the target reaches the frame after the one
+/// the seek landed on. A ten-minute jump runs no replay across the skipped
+/// span, and the ticks after it match at every rate.
+#[test]
+fn a_long_jump_reaching_a_later_frame_replays_nothing_skipped_at_30_60_120_144_fps_live_and_export() {
+    const TARGET: f64 = 600.9137;
+    let late = |fps, offline| jump(Case::Lane, fps, offline, 0.5, TARGET, 1);
+    let reference = late(60, true);
+    assert!(f64::from_bits(reference[0].0) < 1.0, "the skipped ten minutes are never simulated");
     for fps in [30, 60, 120, 144] {
         for offline in [false, true] {
-            let ticks = after_forward_seek(fps, offline);
-            let shared = ticks.len().min(reference.len());
-            assert!(shared >= 59, "{fps} fps, offline {offline}: {} ticks after the seek", ticks.len());
-            assert!(ticks[..shared] == reference[..shared], "{fps} fps, offline {offline}: ticks after the forward seek differ");
+            late(fps, offline);
+            let samples = SAMPLES.with_borrow(|samples| *samples);
+            assert!(samples < 2_000, "{fps} fps, offline {offline}: {samples} replay samples after a long jump");
         }
     }
+    assert_same_after_jump(&reference, late);
 }
