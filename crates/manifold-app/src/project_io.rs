@@ -542,6 +542,7 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         let layer_id = layer.layer_id.clone();
         let Some(host) = layer.gen_params_mut() else { continue; };
         if host.graph.is_none() { continue; }
+        let mut default_moves = Vec::new();
         {
             let graph = host.graph.as_mut().expect("graph checked above");
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
@@ -550,7 +551,12 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
                 Ok(false) => {}
                 Err(error) => notices.push(error),
             }
-            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(graph);
+            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures_moving(graph, &mut default_moves);
+            // A binding id names one value: a saved id that binds several
+            // files splits into one id per file (typed identity D5).
+            if let Some(meta) = graph.preset_metadata.as_mut() {
+                notices.extend(manifold_core::binding_identity::repair(meta));
+            }
             let report = manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
             notices.extend(report.diagnostics);
         }
@@ -565,6 +571,9 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
             manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         }
         host.refresh_manifest_from_graph();
+        // A card value that sat on a default the repair moved rendered the
+        // node's value; it moves too, so the card shows what renders.
+        manifold_nodes_scene::node_graph::gltf_import::move_repaired_card_values(host, &default_moves);
         // Carried embedded values become host base values now that the
         // minted view bindings exist in the manifest.
         for (macro_id, value) in pending_base_values {

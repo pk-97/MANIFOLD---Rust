@@ -15,7 +15,7 @@
 //!
 //! Layering: drawn AFTER the clip bodies (`clip_draw`) and BEFORE the overlays +
 //! names, in its own pass. Reuses the same textured-quad pipeline as
-//! `layer_bitmap_gpu` (rounded corners are respected by insetting the waveform
+//! `panel_bitmap_gpu` (rounded corners are respected by insetting the waveform
 //! horizontally by the clip radius, so bars never reach the rounded corners).
 
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use manifold_gpu::{
 use manifold_ui::node::{Color32, Rect};
 use manifold_ui::panels::viewport::ClipScreenRect;
 
-/// Vertex for a textured quad (matches `layer_bitmap_gpu::BitmapVertex`).
+/// Vertex for a textured quad (matches `panel_bitmap_gpu::BitmapVertex`).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ContentVertex {

@@ -42,7 +42,6 @@
         "ChromeLayout": 12,
         "ClipProjection": 4,
         "FrameAlloc": 8678,
-        "GridBitmapRepaint": 12,
         "InspectorSync": 4,
         "LaneProjection": 8,
         "OverviewRepaint": 4,
@@ -69,7 +68,6 @@
         "ChromeLayout": 9,
         "ClipProjection": 2,
         "FrameAlloc": 2136,
-        "GridBitmapRepaint": 14,
         "InspectorSync": 3,
         "LanePreviewUpdate": 58,
         "LaneProjection": 5,
@@ -100,7 +98,6 @@
         "ClipPreviewUpdate": 32,
         "ClipProjection": 2,
         "FrameAlloc": 2702,
-        "GridBitmapRepaint": 14,
         "InspectorSync": 3,
         "LaneProjection": 5,
         "OverviewRepaint": 34,
@@ -116,7 +113,6 @@
         "ClipPreviewUpdate": 27,
         "ClipProjection": 2,
         "FrameAlloc": 2320,
-        "GridBitmapRepaint": 14,
         "InspectorSync": 3,
         "LaneProjection": 5,
         "OverviewRepaint": 29,
@@ -155,7 +151,6 @@
       "inspector_drag_moves_dock": {
         "ChromeLayout": 3,
         "FrameAlloc": 623,
-        "GridBitmapRepaint": 27,
         "InPlaceUpdate": 3,
         "OverviewRepaint": 1,
         "RegionRebuild": 1,
@@ -219,7 +214,6 @@
       "follow_2s": {
         "DriverScan": 1,
         "FrameAlloc": 14,
-        "GridBitmapRepaint": 7,
         "InPlaceUpdate": 1,
         "OverviewRepaint": 1,
         "SlotInvalidate": 2
@@ -237,7 +231,6 @@
       "resize_1s": {
         "ChromeLayout": 180,
         "FrameAlloc": 72302,
-        "GridBitmapRepaint": 180,
         "InPlaceUpdate": 180,
         "OverviewRepaint": 60,
         "RegionRebuild": 60,
@@ -248,7 +241,6 @@
     "work-lane-resize": {
       "resize_1s": {
         "FrameAlloc": 6217,
-        "GridBitmapRepaint": 58,
         "InPlaceUpdate": 59,
         "LaneProjection": 60,
         "SlotInvalidate": 118
@@ -265,7 +257,6 @@
         "ChromeLayout": 6,
         "ClipProjection": 2,
         "FrameAlloc": 1455,
-        "GridBitmapRepaint": 14,
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 2,
@@ -291,7 +282,6 @@
         "ClipPreviewUpdate": 59,
         "ClipProjection": 2,
         "FrameAlloc": 2414,
-        "GridBitmapRepaint": 14,
         "InspectorSync": 3,
         "LaneProjection": 5,
         "OverviewRepaint": 61,
@@ -355,7 +345,6 @@
         "ClipPreviewUpdate": 32,
         "ClipProjection": 2,
         "FrameAlloc": 1803,
-        "GridBitmapRepaint": 14,
         "InspectorSync": 2,
         "LaneProjection": 5,
         "OverviewRepaint": 34,
@@ -368,7 +357,6 @@
     "work-scrollbar-drag": {
       "drag_1s": {
         "FrameAlloc": 414,
-        "GridBitmapRepaint": 413,
         "InPlaceUpdate": 59,
         "OverviewRepaint": 59,
         "SlotInvalidate": 118
@@ -445,7 +433,6 @@
     "work-zoom": {
       "zoom_30_notches": {
         "FrameAlloc": 86,
-        "GridBitmapRepaint": 119,
         "InPlaceUpdate": 17,
         "OverviewRepaint": 17,
         "SlotInvalidate": 34

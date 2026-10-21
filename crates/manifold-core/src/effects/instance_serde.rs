@@ -545,6 +545,21 @@ pub(super) fn build_param_manifest(
             }
         }
     }
+    // One param per id (BUG-jxy0p): a repeated spec, or a renamed entry
+    // landing on an id already present, merges into the first entry, which
+    // is the one the saved value reached.
+    let mut seen = ahash::AHashSet::new();
+    entries.retain(|p| {
+        let first = seen.insert(p.id().to_string());
+        if !first {
+            eprintln!(
+                "[manifold-core] param id {:?} on {effect_type:?} is declared twice; \
+                 keeping one (the saved value)",
+                p.id()
+            );
+        }
+        first
+    });
     // The user's choices sit on top of whatever described the control.
     for p in entries.iter_mut() {
         let choices = std::mem::take(&mut p.choices);

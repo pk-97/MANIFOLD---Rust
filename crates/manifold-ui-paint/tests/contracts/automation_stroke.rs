@@ -17,8 +17,8 @@ fn automation_stroke_has_antialiased_edges_and_continuous_centre() {
         ui.begin_frame();
         ui.draw_rect(0.0, 0.0, 256.0, 128.0, Color32::new(0, 0, 0, 255));
         ui.draw_aa_line(24.0, 24.0, 220.0, 76.0, 2.0, Color32::new(255, 255, 255, 255));
-        ui.draw_grid_line(8.25, 90.0, 8.25, 110.0, manifold_ui::bitmap_renderer::TimingGridLineKind::Bar);
-        ui.draw_grid_line(12.25, 90.0, 12.25, 110.0, manifold_ui::bitmap_renderer::TimingGridLineKind::Beat);
+        ui.draw_grid_line(8.25, 90.0, 8.25, 110.0, manifold_ui::timing_grid::TimingGridLineKind::Bar);
+        ui.draw_grid_line(12.25, 90.0, 12.25, 110.0, manifold_ui::timing_grid::TimingGridLineKind::Beat);
         // Renderer coordinates and viewport dimensions are logical pixels;
         // only the target/readback dimensions scale to physical pixels.
         assert!(ui.prepare(&device, 256, 128, f64::from(scale)));

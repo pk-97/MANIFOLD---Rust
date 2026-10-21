@@ -352,7 +352,8 @@ fn prepare_scene_modifiers_impl(
     }
     // This also rejects collisions between generated IDs and authored host IDs.
     FlatSceneIndex::build(&flat)?;
-    let mut prepared = bindings::seed_local_defaults(&flat)?;
+    let is_host = |id: &NodeId| host_handles.contains_key(id.as_str());
+    let mut prepared = bindings::seed_local_defaults(&flat, &is_host)?;
     let routes = routes::build_routes(owner, &prepared, &leaf_maps, &target_maps)?;
     super::fragment_cuts::apply(&mut prepared, &mut binding_sources)?;
     shatter::prepare(owner, &mut prepared, &index, &routes, &mut binding_sources, registry)?;
@@ -1414,7 +1415,7 @@ manifold_core::testkit_visible! {
         instance: &SceneModifierInstanceDef,
         targets: &[SceneNodeRef],
     ) -> Result<LeafMap, SceneModifierExpandError> {
-        let local = bindings::seed_local_defaults(&instance.graph)?;
+        let local = bindings::seed_local_defaults(&instance.graph, &|_| false)?;
         let recipe = local
             .preset_metadata
             .as_ref()

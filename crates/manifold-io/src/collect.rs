@@ -1432,6 +1432,45 @@ mod tests {
         );
     }
 
+    /// Collect All on a three-file merged import lists all three files once
+    /// the load repair gives each file its own id (typed identity D5). The
+    /// old one-id shape collected only the spec's file, so the other two
+    /// went missing on another machine.
+    #[test]
+    fn a_three_file_merged_import_collects_three_files() {
+        let files = ["/mnt/m/cliff.gltf", "/mnt/m/moss.glb", "/mnt/m/rock.glb"];
+        let bind = |node_id: &str, path: &str| StringBindingDef {
+            id: "model_file".to_string(),
+            label: "Model File".to_string(),
+            default_value: path.to_string(),
+            target: BindingTarget::Node { node_id: NodeId::new(node_id), param: "path".to_string() },
+        };
+        let mut embedded = path_preset(
+            "cliftest",
+            vec![sp("model_file", files[0], true)],
+            files.iter().enumerate().map(|(k, path)| bind(&format!("mesh_{k}"), path)).collect(),
+            (0..3).map(|k| node(&format!("mesh_{k}"), "node.gltf_mesh_source")).collect(),
+        );
+        let meshes = |project: &Project| {
+            collect_asset_paths(project).into_iter().filter(|r| r.kind == AssetKind::Mesh).count()
+        };
+        let layer = || {
+            let mut layer = Layer::new_generator("Cliff".into(), PresetTypeId::new("cliftest"), 0);
+            layer.clips.push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(16.0)));
+            layer
+        };
+        let mut before = Project::default();
+        before.upsert_embedded_preset(embedded.clone());
+        before.timeline.layers.push(layer());
+        assert_eq!(meshes(&before), 1, "the one-id shape hides two files");
+
+        manifold_core::binding_identity::repair(embedded.def.preset_metadata.as_mut().unwrap());
+        let mut after = Project::default();
+        after.upsert_embedded_preset(embedded);
+        after.timeline.layers.push(layer());
+        assert_eq!(meshes(&after), 3);
+    }
+
     #[test]
     fn clip_override_wins_over_def_default() {
         let (mut project, _folder_layer_id, _audio_layer_id) = project_with_all_families();

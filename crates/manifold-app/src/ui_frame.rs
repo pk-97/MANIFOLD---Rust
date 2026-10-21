@@ -120,7 +120,7 @@
 //!    panels, the VQT waterfall) did NOT individually check
 //!    `self.ui_renderer`'s presence — only pass 4b (clip bodies) and pass 5
 //!    did. Verified behavior-preserving, not a silent narrowing: `app.rs`
-//!    sets `ui_renderer`/`layer_bitmap_gpu`/`clip_content_gpu`/
+//!    sets `ui_renderer`/`panel_bitmap_gpu`/`clip_content_gpu`/
 //!    `clip_thumb_gpu`/`blit_pipeline`/`blit_sampler` together in ONE
 //!    GPU-init block (:1865-1993) and clears them together in ONE teardown
 //!    block (:2888-2893) — they are never independently `Some`/`None` of
@@ -134,7 +134,7 @@ use manifold_gpu::{GpuDevice, GpuRenderPipeline, GpuSampler, GpuTexture};
 use manifold_ui_paint::clip_content_gpu::ClipContentGpu;
 use manifold_ui_paint::clip_draw::ClipBody;
 use manifold_ui_paint::clip_thumb_gpu::{ClipThumbGpu, ThumbQuad};
-use manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu;
+use manifold_ui_paint::panel_bitmap_gpu::PanelBitmapGpu;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_spectral::{ScopeColumn, Spectrogram, SpectrogramConfig};
@@ -677,7 +677,7 @@ pub(crate) fn clear_painted_dirt(ui_root: &mut UIRoot, painted: &[manifold_ui_pa
 /// Composites the main-window UI for one frame into `offscreen`:
 /// `render_dirty_panels` (atlas, LoadOp::Load) + clear-to-black +
 /// full-atlas blit + optional video-band blit. Does NOT acquire or present a
-/// drawable, and does NOT draw the timeline-track passes (grid bitmaps, clip
+/// drawable, and does NOT draw the timeline-track passes (grid lines, clip
 /// bodies, waveforms, overlays) — those stay in `present_all_windows`,
 /// unchanged, on their own encoder after this call returns.
 /// `video` is the compositor output for the video band; `None` in the
@@ -861,7 +861,7 @@ pub(crate) type LandingFlash = (f32, Beats, usize, usize);
 /// be absent (no open modal → no overlay pass, etc.).
 pub(crate) struct MainUiPassInputs<'a> {
     // Pass 4a grid + 4c lane/overview/collapsed bitmaps.
-    pub layer_bitmap_gpu: Option<&'a mut LayerBitmapGpu>,
+    pub panel_bitmap_gpu: Option<&'a mut PanelBitmapGpu>,
     // Pass 4b clip bodies — resolved WITH live drag lift/settle/ghost/
     // split-flick (harness: plain rects, no drag). `clip_rects` carries the
     // SAME drag-adjusted rects reused by waveforms/thumbnails/names so the
@@ -926,7 +926,7 @@ pub(crate) fn render_main_ui_passes(
     inputs: MainUiPassInputs<'_>,
 ) {
     let MainUiPassInputs {
-        mut layer_bitmap_gpu,
+        mut panel_bitmap_gpu,
         clip_bodies,
         clip_rects,
         mut clip_content_gpu,
@@ -948,20 +948,24 @@ pub(crate) fn render_main_ui_passes(
     let sf = scale as f32;
     let mut encoder = device.create_encoder("Frame");
 
-    // Pass 4a: Per-layer grid bitmaps (grid + top separator), under the clip
-    // bodies — opaque bodies occlude the grid, it shows through the gaps.
-    let layer_rects = ui_root.viewport.layer_bitmap_rects();
-    if let Some(bg_gpu) = layer_bitmap_gpu.as_mut()
-        && !layer_rects.is_empty()
-    {
-        bg_gpu.render_layers(device, &mut encoder, offscreen, logical_w, logical_h, &layer_rects);
+    // Pass 4a: the track grid (lines + layer-0 top separator) as GPU lines,
+    // under the clip bodies — opaque bodies occlude the grid, it shows through
+    // the gaps. Its own prepare/render cycle so the clip pass stays separate.
+    let tracks = ui_root.viewport.get_tracks_rect();
+    if let Some(grid) = ui_root.viewport.timeline_grid_view() {
+        {
+            let mut scissor = ui_renderer.lane_content_scissor(tracks);
+            manifold_ui_paint::timeline_grid_draw::emit_timeline_grid(&mut scissor, &grid, ui_root.viewport.timeline_grid_rows());
+        }
+        if ui_renderer.prepare(device, logical_w, logical_h, scale) {
+            ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+        }
     }
 
     // Pass 4b: GPU clip bodies — rounded gradient tiles with a lift-on-select
     // shadow, in their own UIRenderer prepare/render cycle (reusing the shared
     // SDF rect pipeline). `clip_bodies` is the caller's resolved visible-clip
     // list, so only on-screen clips cost anything.
-    let tracks = ui_root.viewport.get_tracks_rect();
     if !clip_bodies.is_empty() {
         {
             // D7 lane-content choke point — see
@@ -1000,7 +1004,7 @@ pub(crate) fn render_main_ui_passes(
     // These are separate regions (below / beside the tracks, or collapsed group
     // rows that carry no clips), so their z-order vs the clips is moot — they
     // ride the same single layer-bitmap instance as the grid, indices 1000+.
-    if let Some(bitmap_gpu) = layer_bitmap_gpu.as_mut() {
+    if let Some(bitmap_gpu) = panel_bitmap_gpu.as_mut() {
         let mut rects: Vec<(usize, manifold_ui::node::Rect)> = Vec::new();
 
         let ov_rect = ui_root.viewport.overview_rect();

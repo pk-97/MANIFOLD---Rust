@@ -1840,7 +1840,7 @@ mod overlay_fidelity_proof {
         frame_timer: &'a crate::frame_timer::FrameTimer,
     ) -> MainUiPassInputs<'a> {
         MainUiPassInputs {
-            layer_bitmap_gpu: None,
+            panel_bitmap_gpu: None,
             clip_bodies: &[],
             clip_rects: &[],
             clip_content_gpu: None,

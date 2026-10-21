@@ -208,6 +208,24 @@ pub struct SelectionRegion {
     pub end_layer: usize,
 }
 
+/// Whether a clip at `layer_index` spanning `[clip_start, clip_end)` falls inside
+/// `region`. Mirrors `EditingService::get_clips_in_region` exactly: inclusive
+/// layer range `[start_layer, end_layer]` and half-open beat overlap
+/// (`clip_start < region.end && clip_end > region.start`). Keeping this identical
+/// is what makes the marquee highlight WYSIWYG with what an op resolves. Public
+/// so the GPU clip emitter (app_render) styles marquee-covered clips identically.
+pub fn clip_overlaps_region(
+    region: &SelectionRegion,
+    layer_index: usize,
+    clip_start: f32,
+    clip_end: f32,
+) -> bool {
+    layer_index >= region.start_layer
+        && layer_index <= region.end_layer
+        && clip_start < region.end_beat.as_f32()
+        && clip_end > region.start_beat.as_f32()
+}
+
 /// Per-layer track info for the viewport.
 ///
 /// Track *height* is intentionally NOT a field here — it is owned solely by the
@@ -820,4 +838,36 @@ mod automation_lane_geometry_tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod clip_overlap_tests {
+    use super::*;
+
+    #[test]
+    fn clip_overlaps_region_matches_get_clips_in_region_semantics() {
+        // Region [4,8) beats over layers 1..=3 — same bounds form as
+        // EditingService::get_clips_in_region.
+        let region = SelectionRegion {
+            start_beat: Beats(4.0),
+            end_beat: Beats(8.0),
+            start_layer: 1,
+            end_layer: 3,
+        };
+        // Inside: layer in range, beats overlap.
+        assert!(clip_overlaps_region(&region, 2, 6.0, 7.0));
+        // Half-open end: a clip starting exactly at end_beat is excluded.
+        assert!(!clip_overlaps_region(&region, 2, 8.0, 12.0));
+        // Half-open start: a clip ending exactly at start_beat is excluded.
+        assert!(!clip_overlaps_region(&region, 2, 0.0, 4.0));
+        // A clip ending just past start_beat is included.
+        assert!(clip_overlaps_region(&region, 2, 3.0, 4.5));
+        // Layer range inclusive at both ends.
+        assert!(clip_overlaps_region(&region, 1, 6.0, 7.0));
+        assert!(clip_overlaps_region(&region, 3, 6.0, 7.0));
+        // Outside the layer range is excluded.
+        assert!(!clip_overlaps_region(&region, 0, 6.0, 7.0));
+        assert!(!clip_overlaps_region(&region, 4, 6.0, 7.0));
+    }
+
 }

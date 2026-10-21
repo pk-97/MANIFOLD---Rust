@@ -47,8 +47,6 @@ pub enum WorkKind {
     PerformHudBuild,
     /// One overview strip repaint.
     OverviewRepaint,
-    /// One per-layer grid bitmap repaint.
-    GridBitmapRepaint,
     /// Chrome (transport, header, footer) view build and layout.
     ChromeLayout,
     /// One text measure that missed every cache (today: every uncached measure).
@@ -89,7 +87,7 @@ pub enum WorkKind {
     FrameAlloc,
 }
 
-pub const WORK_KIND_COUNT: usize = 36;
+pub const WORK_KIND_COUNT: usize = 35;
 
 impl WorkKind {
     pub const ALL: [WorkKind; WORK_KIND_COUNT] = [
@@ -109,7 +107,6 @@ impl WorkKind {
         WorkKind::EditorTreeBuild,
         WorkKind::PerformHudBuild,
         WorkKind::OverviewRepaint,
-        WorkKind::GridBitmapRepaint,
         WorkKind::ChromeLayout,
         WorkKind::TextMeasureMiss,
         WorkKind::DriverScan,
@@ -154,7 +151,6 @@ impl WorkKind {
             WorkKind::EditorTreeBuild => "EditorTreeBuild",
             WorkKind::PerformHudBuild => "PerformHudBuild",
             WorkKind::OverviewRepaint => "OverviewRepaint",
-            WorkKind::GridBitmapRepaint => "GridBitmapRepaint",
             WorkKind::ChromeLayout => "ChromeLayout",
             WorkKind::TextMeasureMiss => "TextMeasureMiss",
             WorkKind::DriverScan => "DriverScan",

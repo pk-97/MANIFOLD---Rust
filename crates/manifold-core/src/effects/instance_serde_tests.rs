@@ -599,3 +599,33 @@ fn legacy_audio_trigger_with_no_gate_param_is_dropped_not_guessed() {
     let inst = deserialize_generator_instance(&mut de).unwrap();
     assert!(inst.audio_mods.is_none(), "no gate param means nothing to migrate onto");
 }
+
+/// BUG-jxy0p (duplicate param ids at load): a saved graph that declares one
+/// card id twice, and a renamed entry (`old` to `amount`) landing on that id,
+/// load as one param holding the saved value. A debug build used to panic in
+/// `ParamManifest::from_params`; a release build kept two params.
+#[test]
+fn a_rename_landing_on_a_repeated_id_loads_one_param() {
+    let spec = r#"{"id": "amount", "name": "Amount", "min": 0.0, "max": 10.0, "defaultValue": 1.0}"#;
+    let json = format!(
+        r#"{{
+        "generatorType": "TestGenDuplicateIds",
+        "graph": {{
+            "version": 2,
+            "presetMetadata": {{
+                "id": "TestGenDuplicateIds", "displayName": "Dup", "category": "Test", "oscPrefix": "dup",
+                "params": [{spec}, {spec}],
+                "bindings": [],
+                "paramAliases": [{{"old": "old", "new": "amount"}}]
+            }},
+            "nodes": [],
+            "wires": []
+        }},
+        "params": {{"old": {{"value": 7.0, "exposed": true}}}}
+    }}"#
+    );
+    let mut de = serde_json::Deserializer::from_str(&json);
+    let inst = deserialize_generator_instance(&mut de).unwrap();
+    let amounts: Vec<f32> = inst.params.iter().filter(|p| p.id() == "amount").map(|p| p.value).collect();
+    assert_eq!(amounts, vec![7.0]);
+}

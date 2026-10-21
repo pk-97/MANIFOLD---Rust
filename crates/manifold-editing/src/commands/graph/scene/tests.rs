@@ -15,6 +15,7 @@ use manifold_core::types::LayerType;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, insert_scene_template};
 
+mod clip_string_overrides;
 mod force_targets;
 mod rigid_boundary;
 
@@ -2904,7 +2905,8 @@ fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_
         .iter()
         .find(|b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == clone_mesh.node_id))
         .expect("a string_bindings entry targets the clone's fresh NodeId");
-    assert_eq!(clone_binding.id, "model_file");
+    // D-117: the copy is independent; its own Model File starts at the same path.
+    assert_eq!(clone_binding.id, "model_file_duplicate");
     assert_eq!(
         clone_binding.default_value, "assets/hero.glb",
         "same default_value as the source entry"
@@ -3531,6 +3533,7 @@ fn import_model_into_scene_command_bumps_objects_adds_nodes_wires_and_undo_resto
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         mirror_catalog_default(),
     );
     cmd.execute(&mut project);
@@ -3629,6 +3632,7 @@ fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
         2,
         vec![new_param],
         vec![new_binding],
+        Vec::new(),
         Vec::new(),
         mirror_catalog_default(),
     );
@@ -3938,6 +3942,7 @@ fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
         2,
         vec![new_param],
         vec![new_binding],
+        Vec::new(),
         Vec::new(),
         mirror_catalog_default(),
     );

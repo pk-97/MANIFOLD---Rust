@@ -61,36 +61,3 @@ pub(super) fn max_local_k_recursive(nodes: &[EffectGraphNode]) -> Option<u32> {
         })
         .fold(None, |acc, v| Some(acc.map_or(v, |a: u32| a.max(v))))
 }
-
-/// the largest KNOWN `source_bbox_radius` (BUG-194's
-/// import-time provenance param, stamped on every `node.gltf_mesh_source`/
-/// `node.gltf_skinned_mesh_source` this session's importer creates) among
-/// every mesh-source node already in the target def, searched recursively
-/// (mesh-source nodes live inside each object's group, same nesting
-/// `max_node_id_recursive` walks). `-1.0` (the "unknown" sentinel — a
-/// hand-built node the importer never touched) is excluded, never treated
-/// as a real radius of zero. `None` when the def has no mesh-source node
-/// with a known radius at all (a hand-built scene with no glTF import in
-/// its history) — the caller falls back to the orbit-camera proxy.
-pub(super) fn max_known_source_bbox_radius(nodes: &[EffectGraphNode]) -> Option<f32> {
-    nodes
-        .iter()
-        .filter_map(|n| {
-            let own = matches!(
-                n.type_id.as_str(),
-                "node.gltf_mesh_source" | "node.gltf_skinned_mesh_source"
-            )
-            .then(|| match n.params.get("source_bbox_radius") {
-                Some(SerializedParamValue::Float { value }) if *value >= 0.0 => Some(*value),
-                _ => None,
-            })
-            .flatten();
-            let inner = n.group.as_ref().and_then(|g| max_known_source_bbox_radius(&g.nodes));
-            match (own, inner) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (Some(a), None) => Some(a),
-                (None, b) => b,
-            }
-        })
-        .fold(None, |acc, v| Some(acc.map_or(v, |a: f32| a.max(v))))
-}
