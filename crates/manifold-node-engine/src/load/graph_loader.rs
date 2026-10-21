@@ -346,7 +346,7 @@ pub(crate) fn has_retired_params(def: &EffectGraphDef) -> bool {
 /// catalog preset that never passed project load migrates the same way
 /// project load does. Each step runs only on a graph that needs it, so the
 /// common current document stays borrowed.
-pub(crate) fn migrate_graph_shape(def: Cow<'_, EffectGraphDef>) -> Cow<'_, EffectGraphDef> {
+pub fn migrate_graph_shape(def: Cow<'_, EffectGraphDef>) -> Cow<'_, EffectGraphDef> {
     let mut def = def;
     if manifold_core::phong_migration::contains_phong_materials(&def) {
         manifold_core::phong_migration::migrate_phong_to_pbr(def.to_mut());

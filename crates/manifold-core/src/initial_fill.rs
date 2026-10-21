@@ -12,7 +12,6 @@ use crate::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     GroupInterface, InterfacePortDef, SerializedParamValue,
 };
-use crate::flatten::HANDLE_DELIM;
 use crate::fluid_domain::MAX_FLUID_ROLES;
 use crate::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use crate::NodeId;
@@ -233,17 +232,8 @@ fn place_initial_fill(
     // handles with this one.
     let handle = (1..)
         .map(|n| if n == 1 { INITIAL_FILL_NAME.to_owned() } else { format!("{INITIAL_FILL_NAME} {n}") })
-        .find(|handle| {
-            let inside = format!("{handle}{HANDLE_DELIM}");
-            nodes.iter().all(|node| node.handle.as_deref().is_none_or(|h| h != handle && !h.starts_with(&inside)))
-        })
+        .find(|handle| nodes.iter().all(|node| node.handle.as_deref() != Some(handle)))
         .expect("an unused handle");
-    // A level a flatten already produced carries group paths in its handles,
-    // which a second flatten refuses: the fill goes in as the nodes the
-    // flatten would have made.
-    if nodes.iter().any(|node| node.handle.as_deref().is_some_and(|h| h.contains(HANDLE_DELIM))) {
-        return place_flat_initial_fill(nodes, wires, (to_node, to_port), (body, outer), &handle);
-    }
     let mut group = bare_node(group_id, GROUP_TYPE_ID, fresh_id(&format!("{anchor_id}_initial_fill"), taken), Some(&handle));
     group.editor_pos = anchor_pos.map(|(x, y)| (x - 260.0, y + 160.0));
     group.group = Some(Box::new(body));
@@ -256,46 +246,6 @@ fn place_initial_fill(
 }
 
 
-
-/// An Initial Fill as the plain nodes a flatten of its group would make, for a
-/// level already flat: the moved transform and the role source under
-/// `handle/`, wired as the group's body is. Returns the role source's doc id.
-fn place_flat_initial_fill(
-    nodes: &mut Vec<EffectGraphNode>,
-    wires: &mut Vec<EffectGraphWire>,
-    (to_node, to_port): (u32, String),
-    (body, outer): (GroupDef, Option<(u32, String)>),
-    handle: &str,
-) -> u32 {
-    let inside = |inner: Option<String>| inner.map(|inner| format!("{handle}{HANDLE_DELIM}{inner}"));
-    let mut moved = None;
-    let mut role = None;
-    for node in body.nodes {
-        match node.type_id.as_str() {
-            TRANSFORM_3D_TYPE_ID => moved = Some(node),
-            FLUID_ROLE_SOURCE_TYPE_ID => role = Some(node),
-            _ => {}
-        }
-    }
-    let mut role = role.expect("the fill body holds a role source");
-    role.id = nodes.iter().map(|node| node.id).chain(moved.as_ref().map(|node| node.id)).max().unwrap_or(0) + 1;
-    role.handle = inside(role.handle.take());
-    let role_id = role.id;
-    let (from_node, from_port) = match (moved, outer) {
-        (Some(mut node), _) => {
-            node.handle = inside(node.handle.take());
-            let from = node.id;
-            nodes.push(node);
-            (from, "transform".to_owned())
-        }
-        (None, Some(outer)) => outer,
-        (None, None) => unreachable!("a fill is a moved transform or a port read"),
-    };
-    nodes.push(role);
-    wires.push(EffectGraphWire { from_node, from_port, to_node: role_id, to_port: "transform".into() });
-    wires.push(EffectGraphWire { from_node: role_id, from_port: "role".into(), to_node, to_port });
-    role_id
-}
 
 /// The Initial Fill group's body: the transform (moved in, or read through
 /// a `transform` input), the role source over its box, and the output.
@@ -519,40 +469,6 @@ mod tests {
         let ids: BTreeSet<u32> = body.nodes.iter().map(|node| node.id).collect();
         assert_eq!(ids.len(), body.nodes.len(), "the body's doc ids are distinct");
         crate::flatten::flatten_groups(&graph).expect("the layer flattens");
-    }
-
-    /// A document a flatten already produced (its handles carry the group
-    /// path) takes the fill as plain nodes: a group added there would be
-    /// flattened again and refuse the '/' in the handles already built. This
-    /// is what a preset sees when it is flattened before it is instantiated.
-    #[test]
-    fn a_flattened_level_takes_the_fill_without_a_group() {
-        for shared in [false, true] {
-            let mut nodes = vec![
-                json!({"id": 1, "nodeId": "domain", "typeId": GPU_FLIP_DOMAIN_TYPE_ID, "handle": "Water/Domain"}),
-                column(2),
-                json!({"id": 6, "nodeId": "lattice", "typeId": "node.scene_object", "handle": "Water/Liquid Surface/Lattice Box"}),
-            ];
-            let mut wires = vec![wire(2, "transform", 1, INITIAL_VOLUME_PORT)];
-            if shared {
-                nodes.push(json!({"id": 7, "nodeId": "box", "typeId": "node.scene_object"}));
-                wires.push(wire(2, "transform", 7, "transform"));
-            }
-            let mut graph = def(json!({"version": 3, "nodes": nodes, "wires": wires}));
-            assert!(migrate_initial_volume(&mut graph));
-            assert!(graph.nodes.iter().all(|node| node.group.is_none()), "no group in a flattened level");
-            let flat = crate::flatten::flatten_groups(&graph).expect("the migrated level flattens");
-            let role = flat.nodes.iter().find(|node| node.type_id == FLUID_ROLE_SOURCE_TYPE_ID).expect("the role source");
-            assert_eq!(role.handle.as_deref(), Some("Initial Fill/Initial Fill"));
-            assert_eq!(role.params["role"], SerializedParamValue::Enum { value: INITIAL_FILL_ROLE });
-            let ids: BTreeSet<u32> = flat.nodes.iter().map(|node| node.id).collect();
-            assert_eq!(ids.len(), flat.nodes.len(), "doc ids are unique");
-            assert!(flat.wires.contains(&wire(role.id, "role", 1, "role_0")));
-            let column = flat.nodes.iter().find(|node| node.node_id.as_str() == "initial_column").expect("the column survives");
-            assert!(flat.wires.contains(&wire(column.id, "transform", role.id, "transform")), "the column places the fill");
-            assert_eq!(column.handle.as_deref().is_some_and(|h| h.starts_with("Initial Fill/")), !shared, "a lone column moves in, a shared one stays");
-            assert!(!migrate_initial_volume(&mut graph), "a second load changes nothing");
-        }
     }
 
     /// Two waters on one level get two fills with their own names, and a
