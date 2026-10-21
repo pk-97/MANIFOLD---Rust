@@ -81,7 +81,10 @@ pub(crate) fn build_change(
             let source_graph = source_graph
                 .as_ref()
                 .expect("selected modifiers require a source graph");
-            crate::scene_modifier_transfer::transfer(
+            // A failed transfer leaves `candidate_host` untouched, so the
+            // swap still happens and the modifiers the new generator cannot
+            // use are dropped in the same undo step.
+            if let Err(reason) = crate::scene_modifier_transfer::transfer(
                 source_host,
                 source_graph,
                 candidate_host,
@@ -90,7 +93,12 @@ pub(crate) fn build_change(
                     .expect("selected modifiers have a destination graph"),
                 &selected,
                 true,
-            )?;
+            ) {
+                log::info!(
+                    "[generator_change] dropping {} scene modifier(s) the new generator cannot use: {reason}",
+                    selected.len()
+                );
+            }
         }
         candidate_host.clone()
     };

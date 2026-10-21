@@ -281,6 +281,16 @@ mod tests {
     }
 
     #[test]
+    fn scene_generator_is_offered_by_the_browser() {
+        let metadata = loaded_preset_metadata(PresetKind::Generator);
+        let scene = metadata
+            .iter()
+            .find(|m| m.id.as_str() == "Scene")
+            .expect("Scene is a bundled generator");
+        assert!(scene.available, "the generator browser lists only available presets");
+    }
+
+    #[test]
     fn bundled_scene_modifier_catalog_enumerates_playable_stock_recipes() {
         let ids: Vec<String> = bundled_preset_type_ids(PresetKind::SceneModifier)
             .map(|t| t.as_str().to_string())

@@ -6,7 +6,7 @@
     "displayName": "Scene",
     "category": "Geometry",
     "oscPrefix": "scene",
-    "available": false,
+    "available": true,
     "isLineBased": false,
     "params": [],
     "bindings": []

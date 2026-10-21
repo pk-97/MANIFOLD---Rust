@@ -629,10 +629,6 @@ mod tests {
         assert_eq!(host.params.get(&amount).unwrap().base, 0.37);
         assert_eq!(host.drivers.as_ref().unwrap().len(), 1);
         assert_eq!(host.drivers.as_ref().unwrap()[0].param_id.as_ref(), amount);
-        assert!(
-            crate::generator_change::build_change(&project, id, PresetTypeId::new("Plasma"))
-                .is_err()
-        );
         assert_eq!(
             project
                 .graph_target_owner(&target)
@@ -659,5 +655,36 @@ mod tests {
                 .as_str(),
             "PhysicsBoxes"
         );
+    }
+
+    #[test]
+    fn swarm_swap_to_non_scene_generator_drops_modifiers_in_one_undo_step() {
+        let mut project = Project::default();
+        let mut layer = Layer::new_generator("Swarm".into(), PresetTypeId::new("Swarm"), 0);
+        let id = layer.layer_id.clone();
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Swarm"))
+            .unwrap()
+            .as_ref()
+            .clone();
+        assert!(!graph.scene_modifiers.is_empty(), "Swarm ships with scene modifiers");
+        layer.gen_params_mut().unwrap().graph = Some(graph);
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
+        project.timeline.layers.push(layer);
+        let target = GraphTarget::Generator(id.clone());
+        let modifiers_before = project.graph_target_owner(&target).unwrap().graph.as_ref().unwrap().scene_modifiers.len();
+
+        let mut service = EditingService::new();
+        let command = crate::generator_change::build_change(&project, id, PresetTypeId::new("Plasma"))
+            .expect("changing generators must always build");
+        service.execute(crate::scene_modifier_edit::with_admission(command), &mut project);
+        assert_eq!(service.take_rejection(), None);
+        let host = project.graph_target_owner(&target).unwrap();
+        assert_eq!(host.generator_type().as_str(), "Plasma");
+        assert!(host.graph.as_ref().is_none_or(|g| g.scene_modifiers.is_empty()));
+
+        assert!(service.undo(&mut project));
+        let host = project.graph_target_owner(&target).unwrap();
+        assert_eq!(host.generator_type().as_str(), "Swarm");
+        assert_eq!(host.graph.as_ref().unwrap().scene_modifiers.len(), modifiers_before);
     }
 }
