@@ -93,7 +93,7 @@ impl TimelineViewportPanel {
 
         let total = tex_w * tex_h;
 
-        if self.total_clip_count() == 0 || self.tracks.is_empty() {
+        if self.clip_total() == 0 || self.tracks.is_empty() {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
             self.overview_upload = true;

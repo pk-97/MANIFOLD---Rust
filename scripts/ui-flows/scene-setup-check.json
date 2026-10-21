@@ -8,6 +8,8 @@
   {"ScrollTo":{"target":{"Query":{"name":"param_row.30_fill_height.value"}}}},
   {"Assert":{"selector":{"Query":{"text":"Fill is above the top; capped at the top"}},"check":{"Count":1}}},
   "Snapshot",
+  {"Pointer":{"target":{"Query":{"name":"scene_setup.objects.group_toggle"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"name":"scene_tree.item","text":"Water 1 Initial Fill"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"SetParam":{"param":{"GeneratorParam":{"param":"31_pos_x"}},"value":2.5}},
   {"ScrollTo":{"target":{"Query":{"name":"param_row.31_pos_x.value"}}}},
   {"Assert":{"selector":{"Query":{"text":"Column leaves the domain; clipped to it"}},"check":{"Count":1}}},

@@ -470,7 +470,7 @@ mod tests {
         let rows = card("WaterDamBreakGpuFlip");
         assert_eq!(
             sections(&rows),
-            ["Camera", "Water", "Obstacle", "Lighting", "Look"],
+            ["Camera", "Water", "Obstacle", "Initial Fill", "Lighting", "Look"],
         );
         assert_eq!(names_in(&rows, "Water"), ["Physics View", "Speed", "Reset"]);
         for (id, _) in manifold_nodes_water::presets::gpu_flip::MESHER_CONTROLS {

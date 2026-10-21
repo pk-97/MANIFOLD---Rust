@@ -64,7 +64,7 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   branch, runs `scripts/landing_gate.py --repo <worktree path>`, merges
   `--no-ff` into main, closes the beads, pushes and deletes the landed branch,
   with per-step exit checks. The lead reviews and makes the named-red call;
-  push happens only after a green gate or an explicit `--named-red BUG-id
+  push happens only after a green gate or an explicit `--named-red BUG-id=TEST
   --reason` over a gate that ran every check (`landing_gate.py` exit
   `CHECKS_RED`; a refusal or crash never lands). Merge, verdict and
   bead-close commits and the one push run under a landing lock shared by

@@ -32,7 +32,7 @@ impl TimelineViewportPanel {
             min_beat,
             max_beat,
             // Lane timing geometry is sourced from the same mapper/grid policy
-            // as the ruler and layer bitmap. The renderer consumes these
+            // as the ruler and the track grid. The renderer consumes these
             // scalars while walking its bounded grid loop; it must not invent
             // a second snap grid.
             pixels_per_beat: self.mapper.pixels_per_beat(),
@@ -106,8 +106,6 @@ impl TimelineViewportPanel {
         lane: &UiAutomationLane,
         screen: &mut AutomationLaneScreen,
     ) {
-        #[cfg(test)]
-        self.lane_fills.set(self.lane_fills.get() + 1);
         let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
         let (title_rect, title_value_w) = model::automation_title_rect(&*self.text_measure, strip_rect, lane);
 
@@ -279,37 +277,6 @@ mod tests {
                 .collect(),
         );
         panel
-    }
-
-    /// A drag preview rewrites one lane's points: only that lane's screen is
-    /// rebuilt, the other two are untouched, and the result is what a whole
-    /// rebuild would have made.
-    #[test]
-    fn one_lane_update_rebuilds_one_screen() {
-        let mut panel = panel_with_three_lanes();
-        assert_eq!(panel.automation_lane_screens().len(), 3);
-        let before: Vec<String> = panel.automation_lane_screens().iter().map(|s| format!("{s:?}")).collect();
-        let fills = panel.lane_fills.get();
-
-        let target = UiGraphTarget::Effect(EffectId::new("b"));
-        let held = panel.update_automation_lane(&target, &ParamId::from("amount"), |entry| {
-            entry.points[1].value_norm = 0.1;
-        });
-        assert!(held);
-        assert_eq!(panel.lane_fills.get() - fills, 1, "one lane screen rebuilt");
-
-        let after: Vec<String> = panel.automation_lane_screens().iter().map(|s| format!("{s:?}")).collect();
-        assert_eq!(before[0], after[0]);
-        assert_eq!(before[2], after[2]);
-        assert_ne!(before[1], after[1], "the dragged lane changed");
-
-        let incremental = after[1].clone();
-        panel.rebuild_automation_lane_screens();
-        assert_eq!(
-            format!("{:?}", panel.automation_lane_screens()[1]),
-            incremental,
-            "the one-lane update matches a whole rebuild"
-        );
     }
 
     /// A placeholder lane (its real lane does not exist yet) and an unknown

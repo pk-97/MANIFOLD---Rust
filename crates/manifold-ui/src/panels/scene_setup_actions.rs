@@ -3,7 +3,7 @@
 //! template for the scene kinds, the existing scene modifier path for forces.
 
 use manifold_foundation::NodeId;
-use manifold_foundation::scene_surface::SceneTemplateKind;
+use manifold_foundation::scene_surface::{SceneItemKind, SceneTemplateKind, SourceRole};
 
 use crate::ProjectAction;
 
@@ -24,7 +24,7 @@ pub struct AddMenuItem {
 type Entry = (SceneGroup, String, Option<PanelAction>, Option<String>);
 
 /// The menu for `vm`, in display order: the entries of group `first`, then
-/// every other entry in the fixed order Object, Plane, Light, Water, Swarm, Inflow,
+/// every other entry in the fixed order Object, Plane, Light, Water, Swarm, Initial Fill, Inflow,
 /// Drain, Collider, the forces, Import Model. A fluid source goes into the
 /// water `selected` is or sits under, else the scene's only water.
 pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSelection>) -> Vec<AddMenuItem> {
@@ -45,13 +45,21 @@ pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSel
     ];
     let water = source_water(vm, selected);
     for (kind, label) in [
+        (SceneTemplateKind::InitialFill, "Initial Fill"),
         (SceneTemplateKind::Inflow, "Inflow"),
         (SceneTemplateKind::Drain, "Drain"),
         (SceneTemplateKind::Collider, "Collider"),
     ] {
-        entries.push(match &water {
-            Ok(water) => entry(SceneGroup::Objects, label, insert(kind, Some(water.clone()))),
-            Err(reason) => (SceneGroup::Objects, label.to_owned(), None, Some((*reason).to_owned())),
+        // A water starts from one Initial Fill.
+        let refused = match &water {
+            Ok(water) if kind == SceneTemplateKind::InitialFill && has_initial_fill(vm, water) => {
+                Err("The water already has an Initial Fill")
+            }
+            other => other.clone(),
+        };
+        entries.push(match refused {
+            Ok(water) => entry(SceneGroup::Objects, label, insert(kind, Some(water))),
+            Err(reason) => (SceneGroup::Objects, label.to_owned(), None, Some(reason.to_owned())),
         });
     }
     for force in &vm.force_picker {
@@ -86,6 +94,14 @@ pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSel
 
 /// The liquid domain a fluid source from the menu goes into: the water the
 /// selection is or sits under, else the only water, else why there is none.
+/// Whether `water` lists an Initial Fill under one of its rows.
+fn has_initial_fill(vm: &SceneSetupVm, water: &NodeId) -> bool {
+    let Some(domain) = vm.fluid_domains.iter().find(|domain| &domain.node == water) else { return false };
+    vm.items.iter().any(|item| {
+        item.kind == SceneItemKind::Source(SourceRole::InitialFill) && item.parent.is_some_and(|row| domain.rows.contains(&row))
+    })
+}
+
 fn source_water(vm: &SceneSetupVm, selected: Option<&SceneSelection>) -> Result<NodeId, &'static str> {
     let row = match selected {
         Some(SceneSelection::Object(id)) => Some(*id),

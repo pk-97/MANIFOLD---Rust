@@ -32,7 +32,11 @@ impl LiquidPreset {
     /// register their own probe nodes. Product callers use [`Self::build`].
     pub fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
         let build = |error: String| ExtentError::Build(error);
-        let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(def, registry)
+        // Old shapes migrate while the groups are still groups: `into_graph`
+        // migrates too, but a flattened document's handles carry group paths
+        // that a group added by a migration could not be flattened with.
+        let def = manifold_node_engine::load::graph_loader::migrate_graph_shape(std::borrow::Cow::Borrowed(def));
+        let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(&def, registry)
             .map_err(|error| build(error.to_string()))?;
         let flat = manifold_core::flatten::flatten_groups(&expanded).map_err(|error| build(error.to_string()))?;
         let graph = flat.into_graph(registry, &Default::default()).map_err(|error| build(format!("{error:?}")))?;

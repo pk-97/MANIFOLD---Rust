@@ -34,9 +34,11 @@ impl Rig {
         let def = effective_def(&project, &layer);
         let water = rows(&def).into_iter().filter(|row| row.is_group && row.liquid_domain.is_some()).last().expect("the added water");
         let family = def.nodes.iter().find(|node| Some(node.id) == water.group_node_id).and_then(|node| node.group.as_deref()).unwrap();
+        // The column's transform sits inside the water's Initial Fill group.
         let column = family
             .nodes
             .iter()
+            .flat_map(|node| std::iter::once(node).chain(node.group.iter().flat_map(|body| body.nodes.iter())))
             .find(|node| node.node_id.as_str().starts_with("initial_column"))
             .expect("the water's initial column")
             .node_id

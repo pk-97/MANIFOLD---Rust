@@ -10,15 +10,12 @@ use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::matter::REACTION_WORDS;
 use crate::primitives::matter_domain::matter_geometry;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::walked_roles;
 
 fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let geometry = matter_geometry(
-        |name, default| x.scalar(name, default),
-        x.params(),
-        x.transform("domain"),
-        x.transform("initial_volume"),
-    )
-    .map_err(Verdict::Refused)?;
+    let (fill, _) = walked_roles(x, "Matter")?;
+    let geometry =
+        matter_geometry(|name, default| x.scalar(name, default), x.params(), x.transform("domain"), fill).map_err(Verdict::Refused)?;
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }

@@ -548,7 +548,12 @@ use serde_json::{Value, json};
                 if omitted(from) || omitted(to) || particle_view && to == "water_object" &&
                     ["vertices", "indices", "instances", "instance_count"].contains(&w.to_port.as_str()) {
                     None
-                } else { Some((from, w.from_port.as_str(), to, w.to_port.as_str())) }
+                } else {
+                    // The fill takes the first free role: past the collider
+                    // where a preset has one.
+                    let port = if from == "domain_initial_fill" { "role" } else { w.to_port.as_str() };
+                    Some((from, w.from_port.as_str(), to, port))
+                }
             }).collect();
             (serde_json::to_value(nodes).unwrap(), serde_json::to_value(wires).unwrap())
         }
@@ -556,12 +561,10 @@ use serde_json::{Value, json};
         let water = body.nodes.iter_mut().find(|node| node.node_id.as_str() == "water_object").unwrap();
         assert_eq!(water.handle.as_deref(), Some(""), "Add Fluid owns the bare fluid handle");
         water.handle = Some("Water".into());
-        for (id, handle) in [("domain", "Simulation"), ("initial_column", "Initial Volume")] {
-            let node = body.nodes.iter_mut().find(|node| node.node_id.as_str() == id).unwrap();
-            assert_eq!(node.handle.as_deref(), Some(handle));
-            // These handles belong to insertion; the preset recipe leaves them unnamed.
-            node.handle = None;
-        }
+        let domain = body.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").unwrap();
+        assert_eq!(domain.handle.as_deref(), Some("Simulation"));
+        // This handle belongs to insertion; the preset recipe leaves it unnamed.
+        domain.handle = None;
         for (def, particles, obstacle) in [
             (render_def(WaterScene::dam_break(64)), false, true),
             (particle_view_def(), true, true),

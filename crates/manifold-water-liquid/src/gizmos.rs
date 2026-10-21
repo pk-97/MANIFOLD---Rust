@@ -27,7 +27,7 @@ pub struct SetupReport {
 }
 
 impl SetupReport {
-    /// The geometry was taken. `column` is the initial volume's centre and
+    /// The geometry was taken. `column` is the Initial Fill's centre and
     /// size as this frame ran them.
     pub fn accept(&mut self, fit: SetupFit, column: Option<([f32; 3], [f32; 3])>) {
         self.fit = fit;
