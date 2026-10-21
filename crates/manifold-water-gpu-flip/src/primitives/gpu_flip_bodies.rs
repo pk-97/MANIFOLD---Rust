@@ -30,7 +30,7 @@
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::gpu_flip_pressure::Sink;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 pub(crate) use manifold_water_liquid::coupling::REACTION_FLOATS;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_bodies.wgsl");
@@ -40,8 +40,8 @@ const SUM_FLOATS: u64 = 16;
 /// Floats one partial slot holds (six used).
 const PARTIAL_FLOATS: u64 = 8;
 // Owner codes hold a body index in a byte per axis.
-const _: () = assert!(MAX_FLUID_ROLES <= 255);
-const SUM_BYTES: u64 = MAX_FLUID_ROLES as u64 * SUM_FLOATS * 4;
+const _: () = assert!(MAX_LIQUID_BODIES <= 255);
+const SUM_BYTES: u64 = MAX_LIQUID_BODIES as u64 * SUM_FLOATS * 4;
 
 /// The pressure solver's fine-level tile buffers the passes read their
 /// cells and partial slots through: the gate triples, the flags, the lists.
@@ -414,8 +414,8 @@ manifold_core::testkit_visible! {
 /// Why a step's dynamic bodies are refused, or None: every body's owner code
 /// must fit a byte, and the reaction must hold every body.
 pub(crate) fn body_refusal(count: u32, reaction: Option<&GpuBuffer>) -> Option<String> {
-    if count as usize > MAX_FLUID_ROLES {
-        return Some(format!("{count} bodies exceed the {MAX_FLUID_ROLES} a liquid holds"));
+    if count as usize > MAX_LIQUID_BODIES {
+        return Some(format!("{count} bodies exceed the {MAX_LIQUID_BODIES} a liquid holds"));
     }
     let need = u64::from(count) * REACTION_FLOATS as u64 * 4;
     match reaction {

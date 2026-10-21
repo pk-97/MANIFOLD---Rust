@@ -13,15 +13,16 @@ use crate::bodies::LiquidBodies;
 const UNIFORM_ARROW_SHARE: f32 = 0.25;
 
 /// A liquid domain's snapshot: Ready once a setup was accepted and the
-/// liquid is neither failed nor holding on a pending input.
-pub fn domain_snapshot(accepted: Option<FluidDomainLayout>, failed: bool, pending: bool, epoch: u64) -> FluidDomainSnapshot {
+/// liquid is neither failed nor holding on a pending input. `uncoupled` counts
+/// the coupled world's bodies past what the liquid holds.
+pub fn domain_snapshot(accepted: Option<FluidDomainLayout>, failed: bool, pending: bool, epoch: u64, uncoupled: usize) -> FluidDomainSnapshot {
     let state = match (accepted, failed, pending) {
         (_, true, _) => FluidDomainState::Failed,
         (None, ..) => FluidDomainState::Initializing,
         (_, _, true) => FluidDomainState::PendingInputs,
         _ => FluidDomainState::Ready,
     };
-    FluidDomainSnapshot { epoch, state, accepted_layout: accepted }
+    FluidDomainSnapshot { epoch, state, accepted_layout: accepted, uncoupled_bodies: uncoupled as u32 }
 }
 
 /// Bodies, regions and forces into `out`. A sampled grid field has no
@@ -95,7 +96,7 @@ mod tests {
     #[test]
     fn a_domain_is_ready_only_once_accepted_and_running() {
         let layout = Some(FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 });
-        let state = |accepted, failed, pending| domain_snapshot(accepted, failed, pending, 1).state;
+        let state = |accepted, failed, pending| domain_snapshot(accepted, failed, pending, 1, 0).state;
         assert_eq!(state(layout, false, false), FluidDomainState::Ready);
         assert_eq!(state(None, false, false), FluidDomainState::Initializing);
         assert_eq!(state(layout, false, true), FluidDomainState::PendingInputs);

@@ -388,6 +388,7 @@ mod tests {
                 epoch: 1,
                 state: FluidDomainState::Initializing,
                 accepted_layout: None,
+                uncoupled_bodies: 0,
             },
         ));
         observations.record(

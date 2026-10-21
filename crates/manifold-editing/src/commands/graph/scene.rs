@@ -1301,8 +1301,8 @@ fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Opti
         .map(|w| w.from_node)
 }
 
-/// The most bodies a world takes: the cap on one compound object's parts.
-const PHYSICS_BODY_SLOTS: u32 = manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES;
+/// The most material parts one compound rigid body takes: its `part_k` ports.
+const COMPOUND_MAX_PARTS: u32 = manifold_core::scene_surface::RIGID_BODY_MAX_PARTS;
 
 fn graph_level<'a>(
     def: &'a EffectGraphDef,

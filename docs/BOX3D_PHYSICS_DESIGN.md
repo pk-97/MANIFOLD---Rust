@@ -119,8 +119,8 @@ Physics Solids demo. The original larger design remains a roadmap.
   scene with one Physics World creates the same linked chain as a loose Dynamic cube
   starting at Y=2; a full world rejects the edit. Remove Object treats the
   Physics Boxes instanced copies chain as one owned collection and preserves
-  the shared world and other bodies. Duplicate rejects that collection because
-  the world has only one copies input and output. Nested physics ownership and
+  the shared world and other bodies. Duplicate rejects that collection: a copy
+  group is made bigger by its count, not by duplicating it. Nested physics ownership and
   malformed custom wiring reject visibly and atomically; nested nonphysical
   scene objects remain editable. The graph editor can wire an intentional
   nonphysical Scene Object beside the shared Physics World; ordinary Add
@@ -223,7 +223,7 @@ their existing layout. Shatter keeps using internal fragments under the parent.
 
 Shatter is a modifier added through the existing picker after enabling Physics.
 Its Pieces preparation control selects 2–32 internal fragments, subject to the
-world's 64 body slots and at least one piece per material part. Pieces are
+world's free body slots (up to 256) and at least one piece per material part. Pieces are
 distributed across material parts by triangle count. Preparation preserves original
 triangles and attributes; it does not remesh or add cut caps. Source settings stay
 locked while the modifier captures them. Deformed/skinned sources are unsupported.
