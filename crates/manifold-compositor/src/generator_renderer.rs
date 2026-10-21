@@ -394,6 +394,27 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Every generator layer that rendered in the last `render_all`, with
+    /// its fluid domains' snapshots: the setup check's run-time report reads
+    /// what each solver did with the fill it ran. `domains` is the caller's
+    /// buffer, refilled per layer.
+    pub fn each_rendered_fluid_domains(
+        &self,
+        domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
+        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)]),
+    ) {
+        for (layer_id, state) in &self.layer_generators {
+            if state.rendered_pass != Some(self.render_pass) {
+                continue;
+            }
+            domains.clear();
+            state.generator.write_fluid_domains_watched(domains);
+            if !domains.is_empty() {
+                each(layer_id, domains);
+            }
+        }
+    }
+
     /// What the Scene panel's gizmo overlay needs from `layer_id`'s scene:
     /// its accepted fluid domains, light positions and physics setup shapes
     /// (appended) and the scene node and camera it rendered through. `None`

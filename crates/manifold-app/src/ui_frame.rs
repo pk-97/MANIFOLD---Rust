@@ -407,6 +407,12 @@ pub(crate) fn gather_frame_inputs(
         // D16). Both counters only grow, so their sum moves when either does.
         inspector_view: ui_root.inspector.view_version().wrapping_add(ui_root.scene_setup_panel.view_version()),
         scene_selection: ui_root.scene_setup_panel.selection_version(),
+        setup_check: planner.setup_check.input(
+            chrome.project,
+            edits.stamps.parts(),
+            [active_layer.as_ref(), ui_root.scene_setup_panel.live_layer_id()],
+            &content_state.setup_fits,
+        ),
         inspector_reveal: ui_root.inspector_reveal_version(),
         layer_reveal: ui_root.layer_reveal_version(),
         dock_view: ui_root.audio_setup_panel.view_version(),
@@ -515,6 +521,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     if inspector_sync && let Some(ed) = editor_ui_root.as_deref_mut() {
         let idx = active_idx(project, active_layer);
         ed.chain_failures = push.content_state.chain_failures.clone();
+        ed.setup_fits.clone_from(&push.content_state.setup_fits);
         project_editor_inspector(ed, project, idx, selection, latched, led_preview);
     }
 

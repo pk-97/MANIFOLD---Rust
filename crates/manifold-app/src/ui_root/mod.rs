@@ -133,6 +133,9 @@ pub struct UIRoot {
     pub tree: UITree,
     /// Read-only content-clock BPM for the frame-aligned driver readout.
     pub driver_bpm: Option<manifold_core::Bpm>,
+    /// What the solvers capped, clipped or refused on the layers that
+    /// rendered (`ContentState::setup_fits`): the cards' run-time setup check.
+    pub setup_fits: crate::setup_check::SetupFitReport,
     /// Failed effect-chain builds from the content thread, for the inspector.
     pub chain_failures: crate::content_state::ChainFailures,
     pub input: UIInputSystem,
@@ -513,6 +516,7 @@ impl UIRoot {
                 tree
             },
             driver_bpm: None,
+            setup_fits: std::sync::Arc::from([]),
             chain_failures: std::sync::Arc::from([]),
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
@@ -1845,6 +1849,7 @@ mod tick_parity_tests {
                     section: None,
                     material_role: None,
                     inactive_reason: None,
+                    setup_warning: None,
                     scene: None,
                     limit: Default::default(),
                     disabled: None,

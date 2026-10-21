@@ -50,10 +50,15 @@ pub(crate) fn project_authored_params(
     if !matches!(target, GraphTarget::Generator(_)) {
         return Some(());
     }
-    let Some(metadata) = def.preset_metadata.as_mut() else {
+    let Some(owner) = project.graph_target_owner(target) else {
         return Some(());
     };
-    let Some(owner) = project.graph_target_owner(target) else {
+    fold_card_values(def, owner)
+}
+
+/// Fold `owner`'s card values into the node params their bindings drive.
+pub(crate) fn fold_card_values(def: &mut EffectGraphDef, owner: &manifold_core::effects::PresetInstance) -> Option<()> {
+    let Some(metadata) = def.preset_metadata.as_mut() else {
         return Some(());
     };
 
