@@ -15,7 +15,7 @@ use std::time::Instant;
 use crate::anim::{AnimF32, Transient};
 use crate::automation_drag::{
     DragResolver, ResolveInput, apply_value, clamp_group_beat_delta, clamp_single_beat,
-    quantise_whole_number, room_to_unselected,
+    room_to_unselected, shared_norm_delta,
 };
 use crate::automation_hit_tester::{self, AutomationFeedback, AutomationHit, AutomationOperation};
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
@@ -2212,9 +2212,8 @@ impl InteractionOverlay {
     }
 
     /// Live-preview an in-progress automation point drag (`DragMode::
-    /// AutomationPoint`). Re-derives beat/value fresh from the current
-    /// screen geometry each frame (not incrementally). Value changes are
-    /// relative to the grab position, so the point does not jump to the pointer.
+    /// AutomationPoint`). Value changes are relative to the grab position, so
+    /// the point does not jump to the pointer.
     fn handle_automation_drag(
         &mut self,
         pos: Vec2,
@@ -2349,10 +2348,10 @@ impl InteractionOverlay {
         }
     }
 
-    /// Live-preview an in-progress vertical segment drag. Re-derives both
-    /// endpoints' values fresh from the normalized delta since grab each
-    /// frame. A shared clamp keeps the segment's value delta identical at
-    /// both ends when either endpoint reaches its parameter boundary.
+    /// Live-preview an in-progress vertical segment drag. Both endpoints'
+    /// values come from the resolver's travel since the grab; a shared clamp
+    /// keeps the value delta identical at both ends when either reaches its
+    /// parameter boundary.
     fn handle_automation_segment_vertical_drag(
         &mut self,
         pos: Vec2,
@@ -2380,22 +2379,15 @@ impl InteractionOverlay {
         };
         let resolved = state.resolver.resolve(&input);
         let state = state.clone();
-        let range = (lane.param_max - lane.param_min).max(f32::EPSILON);
-        let left_original_norm = (state.left_original_value - lane.param_min) / range;
-        let right_original_norm = (state.right_original_value - lane.param_min) / range;
         // A shared clamp keeps the value delta identical at both ends when
         // either endpoint reaches its parameter boundary.
-        let min_delta = -left_original_norm.min(right_original_norm);
-        let max_delta = (1.0 - left_original_norm).min(1.0 - right_original_norm);
-        let delta_norm = resolved.norm_delta.clamp(min_delta, max_delta);
-        let left_norm = (left_original_norm + delta_norm).clamp(0.0, 1.0);
-        let right_norm = (right_original_norm + delta_norm).clamp(0.0, 1.0);
-        let mut left_value = lane.param_min + left_norm * range;
-        let mut right_value = lane.param_min + right_norm * range;
-        if lane.whole_numbers && delta_norm != 0.0 {
-            left_value = quantise_whole_number(left_value, lane.param_min, lane.param_max);
-            right_value = quantise_whole_number(right_value, lane.param_min, lane.param_max);
-        }
+        let (min, max) = (lane.param_min, lane.param_max);
+        let delta_norm = shared_norm_delta(
+            [state.left_original_value, state.right_original_value].into_iter().map(|v| (v, min, max)),
+            resolved.norm_delta,
+        );
+        let left_value = apply_value(state.left_original_value, delta_norm, min, max, lane.whole_numbers);
+        let right_value = apply_value(state.right_original_value, delta_norm, min, max, lane.whole_numbers);
 
         host.set_automation_segment_drag_preview(
             &state.target,
@@ -2610,38 +2602,16 @@ impl InteractionOverlay {
         ));
         // Clamp the shared normalized delta against the whole selection, so
         // one endpoint reaching a bound does not squash the selected shape.
-        let mut min_delta = f32::NEG_INFINITY;
-        let mut max_delta = f32::INFINITY;
-        for point in &state.points {
-            let range = (point.param_max - point.param_min).max(f32::EPSILON);
-            let original_norm = (point.original_value - point.param_min) / range;
-            // Display/runtime snapshots can contain periodic or otherwise
-            // out-of-range values. Clamp the constraint input so a zero
-            // vertical delta never rewrites such a value merely because it
-            // lies outside the lane's display range.
-            let bounded_norm = original_norm.clamp(0.0, 1.0);
-            min_delta = min_delta.max(-bounded_norm);
-            max_delta = max_delta.min(1.0 - bounded_norm);
-        }
-        let delta_norm = resolved.norm_delta.clamp(min_delta, max_delta);
+        let delta_norm = shared_norm_delta(
+            state.points.iter().map(|p| (p.original_value, p.param_min, p.param_max)),
+            resolved.norm_delta,
+        );
         let unchanged = beat_delta.0 == 0.0 && delta_norm == 0.0;
 
         for point in &mut state.points {
-            let range = (point.param_max - point.param_min).max(f32::EPSILON);
-            let orig_norm = (point.original_value - point.param_min) / range;
-            let mut new_value = if unchanged || delta_norm == 0.0 {
-                // Preserve the captured raw value exactly. Some parameters
-                // legitimately sit outside their display range, and a
-                // normalize/denormalize round trip would alter them.
-                point.original_value
-            } else {
-                point.param_min + (orig_norm + delta_norm) * range
-            };
-            if point.whole_numbers && !unchanged && delta_norm != 0.0 {
-                new_value = quantise_whole_number(new_value, point.param_min, point.param_max);
-            }
             point.last_beat = point.original_beat + beat_delta;
-            point.last_value = new_value;
+            point.last_value =
+                apply_value(point.original_value, delta_norm, point.param_min, point.param_max, point.whole_numbers);
         }
         let snapshots = &self.automation_lane_snapshots;
         for (lane_index, lane) in state.lanes.iter_mut().enumerate() {
@@ -2661,7 +2631,7 @@ impl InteractionOverlay {
 
             // Transform selected source tuples in their original positions.
             // Unselected points are never removed: a drop onto an exact twin
-            // keeps both, as the commit does (`for_group_keeping_twins`).
+            // keeps both, as the commit does (`for_group`).
             // Stable ordering preserves equal-beat order: a point moved right
             // stays before a stationary endpoint, and a point moved left
             // stays after it.

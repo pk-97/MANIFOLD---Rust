@@ -1310,7 +1310,6 @@ impl Runner {
         );
         data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
         ui.update();
-        ui.viewport.repaint_dirty_layers();
         ui.viewport.repaint_overview();
         self.editor_frame(data, fresh);
         render.gate.mark();
@@ -3192,7 +3191,7 @@ impl Runner {
             tex_h,
             f64::from(super::SCALE),
             crate::ui_frame::MainUiPassInputs {
-                layer_bitmap_gpu: Some(&mut bitmap_gpu),
+                panel_bitmap_gpu: Some(&mut bitmap_gpu),
                 clip_bodies: &clip_bodies,
                 clip_rects: &clip_rects,
                 clip_content_gpu: None,

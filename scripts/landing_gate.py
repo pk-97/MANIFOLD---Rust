@@ -107,6 +107,7 @@ import gpu_scope
 import cpu_scope
 import diff_scope
 import gate_passes
+import gate_policy
 import gate_readiness
 from gate_workspace import Workspace
 
@@ -671,7 +672,9 @@ def _main(stack):
         return 1
     if ignored_paths:
         print(f"[scope] excluded {len(ignored_paths)} docs/comment-only file(s)")
-    readiness = gate_readiness.plan(repo, paths, base_sha)
+    # Excluded docs still feed the repo-scan tests (gate_policy.REPO_SCAN_ROWS).
+    scan_docs = [path for path in ignored_paths if gate_policy.repo_scan_doc(path)]
+    readiness = gate_readiness.plan(repo, paths, base_sha, scan_paths=scan_docs)
     packages, dependents = readiness['packages'], readiness['dependents']
     cpu_plan = readiness['cpu'] or cpu_scope.Plan()
     plan = readiness['gpu'] or gpu_scope.Plan()
@@ -802,7 +805,7 @@ def _main(stack):
         print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
         return status
 
-    if not paths:
+    if not paths and not cpu_plan.selections():
         if args.cheap:
             return finish_cheap(results)
         if expensive_blocked(args, results):

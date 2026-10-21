@@ -1288,6 +1288,47 @@ fn automation_segment_vertical_drag_rounds_on_stepped_lanes() {
     assert_eq!(right.2.fract(), 0.0);
 }
 
+/// A segment whose endpoints sit past opposite lane edges (periodic or
+/// otherwise out-of-range values) must not panic on a drag, and zero value
+/// travel must leave both endpoints and the history alone.
+fn out_of_range_segment_drag(values: (f32, f32), dy: f32) -> GestureTestHost {
+    use crate::view::UiAutomationPoint;
+    let mut panel = build_viewport_with_lane_range(vec![
+        UiAutomationPoint { beat: Beats(4.0), value_norm: (values.0 / 10.0).clamp(0.0, 1.0), shape: UiSegmentShape::Linear, past_end: false },
+        UiAutomationPoint { beat: Beats(8.0), value_norm: (values.1 / 10.0).clamp(0.0, 1.0), shape: UiSegmentShape::Linear, past_end: false },
+    ], false, 10.0, false);
+    let mut host = GestureTestHost::new(&["layer-0"]);
+    host.automation_original_points = Some(vec![
+        (Beats(4.0), values.0, UiSegmentShape::Linear), (Beats(8.0), values.1, UiSegmentShape::Linear),
+    ]);
+    let mut state = UIState::new();
+    let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+    let lanes = panel.automation_lane_screens();
+    let (d0, d1) = (lanes[0].dots[0], lanes[0].dots[1]);
+    let press = Vec2::new((d0.x + d1.x) / 2.0, (d0.y + d1.y) / 2.0);
+    overlay.on_begin_drag(press, &mut host, &mut state, &panel);
+    assert_eq!(overlay.drag_mode(), DragMode::AutomationSegmentDrag);
+    overlay.on_drag(press + Vec2::new(0.0, dy), &mut host, &mut state, &mut panel);
+    overlay.on_end_drag(&mut host);
+    host
+}
+
+#[test]
+fn segment_drag_with_endpoints_past_both_edges_does_not_panic() {
+    // Normalised -0.2 and 1.3 on a 0..10 lane.
+    let host = out_of_range_segment_drag((-2.0, 13.0), -30.0);
+    for (_, _, left, right) in &host.automation_segment_drag_commits {
+        assert_eq!(left.2, left.1);
+        assert_eq!(right.2, right.1);
+    }
+}
+
+#[test]
+fn zero_travel_segment_drag_with_an_out_of_range_endpoint_moves_nothing() {
+    let host = out_of_range_segment_drag((-2.0, 5.0), 0.0);
+    assert!(host.automation_segment_drag_commits.is_empty(), "no travel, no history entry");
+}
+
 #[test]
 fn automation_point_drag_moves_only_the_selected_raw_value_at_a_coincident_beat() {
     let mut panel = build_viewport_with_coincident_automation();

@@ -722,11 +722,11 @@ pub(crate) fn write_led_exit_path_label(
 
 // Re-export public functions from sub-modules
 pub use state_sync::{
-    LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state, push_chrome, push_clock, push_frame, push_live, push_selection,
+    LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state, push_chrome, push_clock, push_zoom_label, push_frame, push_live, push_selection,
     sync_automation_lane_geometry,
     sync_clip_positions, sync_driver_readouts, sync_markers,
     sync_scene_outliner_eyes,
-    sync_audio_dock, sync_inspector_data, sync_project_data, sync_track_layout,
+    sync_audio_dock, sync_inspector_data, sync_project_all, sync_project_data, sync_track_layout, sync_trigger_catalog,
 };
 #[cfg(feature = "ui-snapshot")]
 pub use state_sync::push_state;

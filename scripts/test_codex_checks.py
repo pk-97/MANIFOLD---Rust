@@ -9,12 +9,19 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import codex_checks
 import cpu_scope
+import gate_policy
 import run_ui_flows
 import gpu_scope
 from gate_workspace import Workspace
 
 
 class PlannerTests(unittest.TestCase):
+    def setUp(self):
+        # Exact-plan assertions below are about the tooling and package scopes; the
+        # repo-scan rows (test_landing_gate.RepoScanSelectionTests) add their own legs.
+        rows = [row for row in cpu_scope.PREFIX_ROWS if row not in gate_policy.REPO_SCAN_ROWS]
+        self.enterContext(patch.object(cpu_scope, "PREFIX_ROWS", rows))
+
     def test_worktree_safety_checks_are_selected(self):
         repo = Path(__file__).resolve().parents[1]
         for path in ("scripts/agent-worktree.py", "scripts/test_agent_worktree.py"):

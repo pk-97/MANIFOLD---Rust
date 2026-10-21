@@ -5,7 +5,7 @@ pub mod automation;
 pub mod automation_drag;
 pub mod automation_hit_tester;
 pub mod bitmap_painter;
-pub mod bitmap_renderer;
+pub mod timing_grid;
 pub mod chrome;
 pub mod clip_hit_tester;
 pub mod color;
@@ -52,7 +52,6 @@ pub use automation::{
     AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo, ResolveError,
     ResolvedTarget, SelectorQuery, interpolate_drag, resolve, resolve_all,
 };
-pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
 pub use dock::{Dock, DockDrawKey, DockEdge};
 pub use mini_timeline::{MiniClip, MiniLayerLabel, MiniTimeline};

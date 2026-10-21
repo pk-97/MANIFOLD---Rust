@@ -11,7 +11,7 @@ use manifold_gpu::{
 use crate::native_text::NativeTextRenderer;
 
 use manifold_ui::node::*;
-use manifold_ui::bitmap_renderer::TimingGridLineKind;
+use manifold_ui::timing_grid::TimingGridLineKind;
 use manifold_ui::transform2d::Affine2;
 use manifold_ui::tree::{TraversalEvent, UITree};
 
