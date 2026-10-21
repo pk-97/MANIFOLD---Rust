@@ -559,8 +559,7 @@ pub struct BareEnvironmentRow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnvironmentVm {
-    /// `bake_environment` with an `hdri_source` wired into its `hdri` input
-    /// (the importer's shape), or a bundled preset's sky switch.
+    /// `bake_environment` with an `hdri_source` wired into its `hdri` input.
     Importer(Box<ImporterEnvironmentRow>),
     /// A bare `node.bake_environment`, no HDRI source.
     Bare(Box<BareEnvironmentRow>),
@@ -1696,30 +1695,6 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
     let Some(node) = level.node(node_id) else {
         return EnvironmentVm::None;
     };
-
-    // A bundled preset with its own sky option: a switch between the bake
-    // (in_0) and an exposed `hdri_source` (in_1). The importer no longer
-    // builds this; the bake's HDRI mode replaced it.
-    if node.type_id == SWITCH_TEXTURE_TYPE_ID {
-        let bake = level
-            .producer(node.id, "in_0")
-            .and_then(|(n, _)| level.node(n))
-            .filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID);
-        let hdri = level.producer(node.id, "in_1").and_then(|(gain_id, _)| {
-            let gain_node = level.node(gain_id).filter(|n| n.type_id == EXPOSURE_TYPE_ID)?;
-            let (hdri_id, _) = level.producer(gain_node.id, "in")?;
-            level.node(hdri_id).filter(|n| n.type_id == HDRI_SOURCE_TYPE_ID)
-        });
-        if let (Some(bake), Some(hdri)) = (bake, hdri) {
-            return EnvironmentVm::Importer(Box::new(ImporterEnvironmentRow {
-                bake_node_id: bake.id,
-                hdri_node_id: hdri.id,
-                hdri_file_value: param_string(hdri, "path").unwrap_or_default(),
-                background_node_ids: Vec::new(),
-            }));
-        }
-        return EnvironmentVm::Custom { node_doc_id: node.id };
-    }
 
     if node.type_id == BAKE_ENVIRONMENT_TYPE_ID {
         let hdri = level
