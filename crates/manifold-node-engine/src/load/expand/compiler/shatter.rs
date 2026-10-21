@@ -430,6 +430,7 @@ pub(super) fn prepare(
                 .expect("scene exists")
                 .params
                 .insert("objects".into(), float(object_count as f32));
+            manifold_core::physics_body_slots::fit_world_bodies(&mut def.nodes, &def.wires, world);
         }
     }
     Ok(())

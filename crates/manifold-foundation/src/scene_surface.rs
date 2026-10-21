@@ -261,13 +261,25 @@ pub struct SceneObjectCapabilities {
     pub modifiers: bool,
 }
 
-/// A Physics World's body slots. Core asserts at compile time that the
-/// runtime body capacity (`RigidImpulseTargets::BODY_CAPACITY`) matches.
-pub const PHYSICS_WORLD_BODY_SLOTS: u32 = 64;
+/// The most individually wired bodies one Physics World takes. Its `bodies`
+/// count sizes its body and pose ports up to this. Core asserts at compile
+/// time that the runtime hit mask (`RigidImpulseTargets::BODY_CAPACITY`)
+/// holds exactly this many.
+pub const PHYSICS_WORLD_MAX_BODIES: u32 = 256;
 
-/// The most copies one Duplicate makes, of any object: one per body slot, so
-/// every copy of a physics object can carry its own body.
-pub const MAX_DUPLICATE_COPIES: u32 = PHYSICS_WORLD_BODY_SLOTS;
+/// The most copy groups one Physics World takes; its `copy_groups` count
+/// sizes its copy-group ports up to this.
+pub const PHYSICS_WORLD_MAX_COPY_GROUPS: u32 = 32;
+
+/// A Physics World's `bodies` when none is saved, which is every world
+/// saved before the count existed.
+pub const PHYSICS_WORLD_DEFAULT_BODIES: u32 = 64;
+
+/// A Physics World's `copy_groups` when none is saved.
+pub const PHYSICS_WORLD_DEFAULT_COPY_GROUPS: u32 = 1;
+
+/// The most copies one Duplicate makes, of any object.
+pub const MAX_DUPLICATE_COPIES: u32 = 64;
 
 /// Why `copies` copies of a physics object cannot fit a world with `free`
 /// body slots; `None` when they fit.

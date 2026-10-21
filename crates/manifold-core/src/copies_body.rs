@@ -1,10 +1,12 @@
 //! The physics box spawner lives on the copies body. A `node.rigid_body`
-//! wired into a `node.physics_world`'s `copies` input is the prototype the
-//! world copies, and it carries the copy count, spacing, columns and
-//! arrangement. Those controls show only on a copies body, so a scene with
-//! no boxes has no box sliders, and any scene gets boxes by wiring a body
-//! into `copies`. This module names that role for the scene stamp and moves
-//! the controls off the world for graphs saved before they lived here.
+//! wired into a `node.physics_world`'s copy-group input `copies_k` is the
+//! prototype that group copies, and it carries the copy count, spacing,
+//! columns and arrangement. Those controls show only on a copies body, so a
+//! scene with no boxes has no box sliders, and any scene gets boxes by
+//! wiring a body into a copy-group input. This module names that role for
+//! the scene stamp and brings saved graphs to today's shape: spawner
+//! controls move off the world, and a world's single copy group takes the
+//! numbered port names of group 0.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,9 +14,22 @@ use crate::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, Ef
 
 pub const PHYSICS_WORLD_TYPE_ID: &str = "node.physics_world";
 pub const RIGID_BODY_TYPE_ID: &str = "node.rigid_body";
-/// The world input whose body is copied.
-pub const COPIES_PORT: &str = "copies";
+/// Copy group `k`'s body input is `copies_k`.
+pub const COPIES_PORT_PREFIX: &str = "copies_";
+/// Copy group 0's body input.
+pub const FIRST_COPIES_PORT: &str = "copies_0";
 const BODY_OUTPUT: &str = "body";
+/// A world's copy-group ports before it took a group count, and the
+/// group-0 names they now have: two inputs, then two outputs.
+const LEGACY_GROUP_INPUTS: [(&str, &str); 2] =
+    [("copies", "copies_0"), ("copies_acceleration", "copies_acceleration_0")];
+const LEGACY_GROUP_OUTPUTS: [(&str, &str); 2] =
+    [("instances", "instances_0"), ("active_count", "active_count_0")];
+
+/// The copy group whose body input `port` is: `copies_k` is group `k`.
+pub fn copy_group_of_input(port: &str) -> Option<usize> {
+    port.strip_prefix(COPIES_PORT_PREFIX)?.parse().ok()
+}
 /// The spawner's params, on the copies body today and on the world before.
 /// Each is also a scalar input of the same name.
 pub const COPY_PARAMS: [&str; 4] = ["copy_count", "copy_spacing", "copy_columns", "copy_layout"];
@@ -25,13 +40,13 @@ pub fn is_copies_body_param(type_id: &str, param: &str) -> bool {
     type_id == RIGID_BODY_TYPE_ID && COPY_PARAMS.contains(&param)
 }
 
-/// Whether the node with doc id `node` feeds a Physics World's `copies`
+/// Whether the node with doc id `node` feeds a Physics World's copy-group
 /// input in this graph level.
 pub fn is_copies_body(node: u32, nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> bool {
     wires.iter().any(|w| {
         w.from_node == node
             && w.from_port == BODY_OUTPUT
-            && w.to_port == COPIES_PORT
+            && copy_group_of_input(&w.to_port).is_some()
             && nodes.iter().any(|n| n.id == w.to_node && n.type_id == PHYSICS_WORLD_TYPE_ID)
     })
 }
@@ -39,7 +54,8 @@ pub fn is_copies_body(node: u32, nodes: &[EffectGraphNode], wires: &[EffectGraph
 /// What [`migrate_world_copies`] did to one graph.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorldCopiesMigration {
-    /// The graph carried spawner controls on a Physics World and lost them.
+    /// The graph carried spawner controls or a pre-count copy-group port on
+    /// a Physics World and lost them.
     pub changed: bool,
     /// A world's controls moved onto its copies body.
     pub moved: bool,
@@ -48,9 +64,10 @@ pub struct WorldCopiesMigration {
     pub no_copies_body: bool,
 }
 
-/// Whether `def` still carries spawner controls on a Physics World: a
+/// Whether `def` still carries spawner controls on a Physics World (a
 /// stored or exposed copy param, a wire into a copy input, or a card that
-/// drives one. Lets the common load borrow the document instead of cloning.
+/// drives one) or a wire on a world's pre-count copy-group port. Lets the
+/// common load borrow the document instead of cloning.
 pub fn carries_world_copies(def: &EffectGraphDef) -> bool {
     if any_world_copies(&def.nodes, &def.wires) {
         return true;
@@ -64,13 +81,15 @@ pub fn carries_world_copies(def: &EffectGraphDef) -> bool {
             .is_some_and(|m| m.bindings.iter().any(|b| world_copy_target(&worlds, &b.target)))
 }
 
-/// Move every Physics World's spawner controls onto the body wired into its
-/// `copies` input: stored values, exposure, wires into the copy inputs and
-/// the cards that drive them, keeping each card's id so a saved card value
-/// still reaches it. Whatever the body already has wins; nothing on the
-/// body is overwritten. A world that copies no body loses its controls,
-/// which never did anything. Runs only on a graph that still carries them,
-/// so it is idempotent.
+/// Rename every Physics World's pre-count copy-group ports to group 0's
+/// (`copies` to `copies_0`, `instances` to `instances_0`, and so on), then
+/// move its spawner controls onto the body wired into `copies_0`: stored
+/// values, exposure, wires into the copy inputs and the cards that drive
+/// them, keeping each card's id so a saved card value still reaches it.
+/// Whatever the body already has wins; nothing on the body is overwritten.
+/// A world that copies no body loses its controls, which never did
+/// anything. Runs only on a graph that still carries either, so it is
+/// idempotent.
 pub fn migrate_world_copies(def: &mut EffectGraphDef) -> WorldCopiesMigration {
     if !carries_world_copies(def) {
         return WorldCopiesMigration::default();
@@ -134,10 +153,22 @@ fn migrate_level(
     report: &mut WorldCopiesMigration,
 ) {
     let worlds: Vec<u32> = nodes.iter().filter(|n| n.type_id == PHYSICS_WORLD_TYPE_ID).map(|n| n.id).collect();
+    for wire in wires.iter_mut() {
+        let (port, legacy) = if worlds.contains(&wire.to_node) {
+            (&mut wire.to_port, &LEGACY_GROUP_INPUTS)
+        } else if worlds.contains(&wire.from_node) {
+            (&mut wire.from_port, &LEGACY_GROUP_OUTPUTS)
+        } else {
+            continue;
+        };
+        if let Some((_, renamed)) = legacy.iter().find(|(old, _)| port == old) {
+            *port = (*renamed).to_string();
+        }
+    }
     for world in worlds {
         let body = wires
             .iter()
-            .find(|w| w.to_node == world && w.to_port == COPIES_PORT)
+            .find(|w| w.to_node == world && w.to_port == FIRST_COPIES_PORT)
             .map(|w| w.from_node)
             .filter(|id| nodes.iter().any(|n| n.id == *id && n.type_id == RIGID_BODY_TYPE_ID));
         let Some(world_index) = nodes.iter().position(|n| n.id == world) else { continue };
@@ -219,7 +250,12 @@ fn any_world_copies(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> boo
         (n.type_id == PHYSICS_WORLD_TYPE_ID
             && COPY_PARAMS.iter().any(|p| n.params.contains_key(*p) || n.exposed_params.contains(*p)))
             || n.group.as_ref().is_some_and(|g| any_world_copies(&g.nodes, &g.wires))
-    }) || wires.iter().any(|w| COPY_PARAMS.contains(&w.to_port.as_str()) && is_world(w.to_node))
+    }) || wires.iter().any(|w| {
+        (is_world(w.to_node)
+            && (COPY_PARAMS.contains(&w.to_port.as_str())
+                || LEGACY_GROUP_INPUTS.iter().any(|(old, _)| w.to_port == *old)))
+            || (is_world(w.from_node) && LEGACY_GROUP_OUTPUTS.iter().any(|(old, _)| w.from_port == *old))
+    })
 }
 
 impl crate::project::Project {
@@ -378,9 +414,53 @@ mod tests {
     }
 
     #[test]
+    fn a_world_s_single_copy_group_takes_group_zero_s_port_names() {
+        let mut def = old_boxes(true);
+        def.wires.extend([
+            EffectGraphWire { from_node: 40, from_port: "instances".into(), to_node: 7, to_port: "instances".into() },
+            EffectGraphWire { from_node: 40, from_port: "active_count".into(), to_node: 7, to_port: "instance_count".into() },
+            EffectGraphWire { from_node: 5, from_port: "field".into(), to_node: 40, to_port: "copies_acceleration".into() },
+            // Another node's ports of the same names stay.
+            EffectGraphWire { from_node: 5, from_port: "instances".into(), to_node: 7, to_port: "copies".into() },
+        ]);
+        assert!(migrate_world_copies(&mut def).changed);
+        let has = |from: u32, from_port: &str, to: u32, to_port: &str| {
+            def.wires.iter().any(|w| w.from_node == from && w.from_port == from_port && w.to_node == to && w.to_port == to_port)
+        };
+        assert!(has(121, "body", 40, "copies_0"));
+        assert!(has(40, "instances_0", 7, "instances"));
+        assert!(has(40, "active_count_0", 7, "instance_count"));
+        assert!(has(5, "field", 40, "copies_acceleration_0"));
+        assert!(has(5, "instances", 7, "copies"), "only a world's ports are renamed");
+        assert!(!carries_world_copies(&def));
+        let migrated = def.clone();
+        assert_eq!(migrate_world_copies(&mut def), WorldCopiesMigration::default(), "idempotent");
+        assert_eq!(def, migrated);
+
+        // A world saved with no spawner controls still takes the new names.
+        let mut quiet: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "nodes": [
+                {"id": 40, "nodeId": "world", "typeId": "node.physics_world"},
+                {"id": 121, "nodeId": "box_body", "typeId": "node.rigid_body"}
+            ],
+            "wires": [{"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies"}]
+        }))
+        .unwrap();
+        assert!(carries_world_copies(&quiet));
+        let report = migrate_world_copies(&mut quiet);
+        assert_eq!(report, WorldCopiesMigration { changed: true, moved: false, no_copies_body: false });
+        assert_eq!(quiet.wires[0].to_port, "copies_0");
+    }
+
+    #[test]
     fn only_a_body_wired_into_copies_is_a_copies_body() {
-        let def = old_boxes(true);
+        let mut def = old_boxes(true);
+        migrate_world_copies(&mut def);
         assert!(is_copies_body(121, &def.nodes, &def.wires));
+        assert_eq!(copy_group_of_input("copies_7"), Some(7));
+        assert_eq!(copy_group_of_input("copies_acceleration_0"), None);
+        assert_eq!(copy_group_of_input("copies"), None);
         assert!(!is_copies_body(5, &def.nodes, &def.wires));
         assert!(is_copies_body_param("node.rigid_body", "copy_count"));
         assert!(!is_copies_body_param("node.physics_world", "copy_count"));

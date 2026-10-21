@@ -110,7 +110,7 @@ mod tests {
             bounce: 0.0,
             ..RigidBody::default()
         });
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let open = manifold_water_liquid::coupling::DomainWalls::default();
         let mut owner = LiquidRigidOwner::new(&scene, open, colliders, 3, None).expect("owner");
         let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };

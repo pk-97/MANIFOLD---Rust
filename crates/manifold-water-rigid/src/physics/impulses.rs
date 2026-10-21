@@ -6,7 +6,7 @@ use manifold_physics::{
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
 
-use super::{RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS};
+use super::{RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, MAX_TARGETS};
 
 /// A resolved scene-space delta velocity retained by value until its fixed
 /// tick begins. The field is sampled at each recipient's current center of
@@ -17,49 +17,53 @@ pub struct ResolvedRigidImpulse {
     pub targets: RigidImpulseTargets,
 }
 
-/// A borrowed sum of all impulse fields targeting one recipient class during
-/// one fixed tick. It keeps the hot path allocation-free while allowing one
-/// `apply_fields_by_target` batch to use a distinct sum for each slot.
+/// One hit recipient: a body slot or a copy group.
+#[derive(Clone, Copy)]
+pub(crate) enum ImpulseRecipient {
+    Body(usize),
+    Group(usize),
+}
+
+impl ImpulseRecipient {
+    fn selected_by(self, targets: RigidImpulseTargets) -> bool {
+        match self {
+            Self::Body(body) => targets.contains_body(body),
+            Self::Group(group) => targets.contains_group(group),
+        }
+    }
+}
+
+/// A borrowed sum of all impulse fields targeting one recipient during one
+/// fixed tick. It keeps the hot path allocation-free while allowing one
+/// `apply_fields_by_target` batch to use a distinct sum for each recipient.
 pub(crate) struct ImpulseSumField<'a> {
     events: &'a [AppliedEvent<ResolvedRigidImpulse>],
-    body: Option<usize>,
-    copies: bool,
+    recipient: ImpulseRecipient,
 }
 
 impl<'a> ImpulseSumField<'a> {
-    pub(crate) fn for_body(events: &'a [AppliedEvent<ResolvedRigidImpulse>], body: usize) -> Self {
-        Self {
-            events,
-            body: Some(body),
-            copies: false,
-        }
-    }
-
-    pub(crate) fn for_copies(events: &'a [AppliedEvent<ResolvedRigidImpulse>]) -> Self {
-        Self {
-            events,
-            body: None,
-            copies: true,
-        }
+    pub(crate) fn new(
+        events: &'a [AppliedEvent<ResolvedRigidImpulse>],
+        recipient: ImpulseRecipient,
+    ) -> Self {
+        Self { events, recipient }
     }
 
     pub(crate) fn has_events(&self) -> bool {
-        self.events.iter().any(|event| {
-            self.body
-                .is_some_and(|body| event.value.targets.contains_body(body))
-                || (self.copies && event.value.targets.copies)
-        })
+        self.events
+            .iter()
+            .any(|event| self.recipient.selected_by(event.value.targets))
     }
 }
 
 impl VectorField for ImpulseSumField<'_> {
     fn sample(&self, position: [f32; 3]) -> [f32; 3] {
         let mut sum = [0.0; 3];
-        for event in self.events.iter().filter(|event| {
-            self.body
-                .is_some_and(|body| event.value.targets.contains_body(body))
-                || (self.copies && event.value.targets.copies)
-        }) {
+        for event in self
+            .events
+            .iter()
+            .filter(|event| self.recipient.selected_by(event.value.targets))
+        {
             let sample = event.value.field.sample(position);
             for component in 0..3 {
                 sum[component] += sample[component];
@@ -190,20 +194,25 @@ impl RigidSimulation {
         targets: RigidImpulseTargets,
     ) -> Result<(), String> {
         if targets.is_empty() {
-            return Err("Physics: impulse targets must select a body or copies".into());
+            return Err("Physics: impulse targets must select a body or a copy group".into());
         }
-        for index in 0..MAX_BODIES {
-            if targets.contains_body(index) && self.handles[index].is_none() {
+        for index in targets.bodies() {
+            if self.handles.get(index).is_none_or(Option::is_none) {
                 return Err(format!(
                     "Physics: impulse target body slot {index} is absent"
                 ));
             }
         }
-        if targets.copies && self.active_copy_count == 0 {
-            return Err("Physics: impulse target copies has no active copies".into());
+        for group in targets.groups() {
+            if self.groups.get(group).is_none_or(|state| state.active() == 0) {
+                return Err(format!(
+                    "Physics: impulse target copy group {group} has no active copies"
+                ));
+            }
         }
         Ok(())
     }
+
 
     pub(super) fn reset_impulse_runtime(&mut self, epoch: u64) -> Result<(), String> {
         if let Some(queue) = self.impulse_queue.as_mut() {
@@ -241,25 +250,30 @@ impl RigidSimulation {
         Ok(tick)
     }
 
+
     pub(super) fn apply_impulse_tick(&mut self) -> Result<(), String> {
         if self.impulse_tick_events.is_empty() {
             return Ok(());
         }
         let events = &self.impulse_tick_events;
-        let sum_fields: [_; TARGET_SLOTS] = std::array::from_fn(|index| {
-            if index == MAX_BODIES {
-                ImpulseSumField::for_copies(events)
-            } else {
-                ImpulseSumField::for_body(events, index)
-            }
+        let bodies = self.handles.len();
+        let sum_fields: [_; MAX_TARGETS] = std::array::from_fn(|index| {
+            ImpulseSumField::new(
+                events,
+                if index < bodies {
+                    ImpulseRecipient::Body(index)
+                } else {
+                    ImpulseRecipient::Group(index - bodies)
+                },
+            )
         });
-        let inputs: [FieldInput<'_>; TARGET_SLOTS] = std::array::from_fn(|index| FieldInput {
+        let inputs: [FieldInput<'_>; MAX_TARGETS] = std::array::from_fn(|index| FieldInput {
             field: &sum_fields[index],
             acceleration: 0.0,
             delta_velocity: 1.0,
         });
         let handles = &self.handles;
-        let copy_handles = &self.copy_handles[..self.active_copy_count];
+        let groups = &self.groups;
         let result = {
             let world = self.world.as_mut().expect("world constructed above");
             let recipients = handles
@@ -270,13 +284,15 @@ impl RigidSimulation {
                         .filter(|_| sum_fields[index].has_events())
                         .map(|handle| (handle, std::slice::from_ref(&inputs[index])))
                 })
-                .chain(
-                    copy_handles
+                .chain(groups.iter().enumerate().flat_map(|(group, state)| {
+                    let target = bodies + group;
+                    let hit = sum_fields[target].has_events();
+                    let input = std::slice::from_ref(&inputs[target]);
+                    state.handles[..if hit { state.active() } else { 0 }]
                         .iter()
                         .flatten()
-                        .filter(|_| sum_fields[MAX_BODIES].has_events())
-                        .map(|&handle| (handle, std::slice::from_ref(&inputs[MAX_BODIES]))),
-                );
+                        .map(move |&handle| (handle, input))
+                }));
             world
                 .apply_fields_by_target(recipients, FIXED_TICK)
                 .map_err(|error| error.to_string())

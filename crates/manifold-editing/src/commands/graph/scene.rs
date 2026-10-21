@@ -39,6 +39,8 @@ mod fluid_object_lifecycle_tests;
 pub use fluid::*;
 pub use duplicate::{physics_free_body_slots, DuplicateSceneObjectCommand};
 pub use manifold_core::physics_body_slots::{BodySlots, WorldBodySlots};
+use manifold_core::copies_body::copy_group_of_input;
+use manifold_core::physics_body_slots::fit_world_bodies;
 
 /// The card metadata a scene def gets when a scene edit stamps exposures
 /// into a def that has none.
@@ -430,10 +432,9 @@ impl Command for RemoveSceneObjectCommand {
                     .iter()
                     .copied()
                     .collect::<std::collections::HashSet<_>>();
-                let field_port = if physics.copies {
-                    "copies_acceleration".to_string()
-                } else {
-                    format!("body_acceleration_{}", physics.body_slot)
+                let field_port = match physics.copy_group {
+                    Some(group) => format!("copies_acceleration_{group}"),
+                    None => format!("body_acceleration_{}", physics.body_slot),
                 };
                 nodes.retain(|node| !owned.contains(&node.id));
                 wires.retain(|wire| {
@@ -1300,9 +1301,8 @@ fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Opti
         .map(|w| w.from_node)
 }
 
-// The graph schema is sparse (only occupied ports are serialized), so a
-// larger world does not change existing documents.
-const PHYSICS_BODY_SLOTS: u32 = manifold_core::scene_surface::PHYSICS_WORLD_BODY_SLOTS;
+/// The most bodies a world takes: the cap on one compound object's parts.
+const PHYSICS_BODY_SLOTS: u32 = manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES;
 
 fn graph_level<'a>(
     def: &'a EffectGraphDef,

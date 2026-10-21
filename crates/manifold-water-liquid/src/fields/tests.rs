@@ -550,7 +550,7 @@ fn liquid_impulse_refusals_are_named() {
     let stamp = impulses.stamp(0.0, 0).unwrap();
     let rigid = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0; 3]).unwrap(),
-        target: ImpulseTarget::Rigid(RigidImpulseTargets { bodies: 1, copies: false }),
+        target: ImpulseTarget::Rigid(RigidImpulseTargets::body(0).unwrap()),
     };
     assert!(impulses.enqueue(stamp, rigid, None).unwrap_err().contains("coupled rigid world"));
 }

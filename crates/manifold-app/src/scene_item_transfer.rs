@@ -473,7 +473,7 @@ fn paste(
                     let slot = slots.first_free().ok_or("Physics World has no free body slots")?;
                     slots.take(slot);
                     let old = input.to_port.trim_start_matches("body_");
-                    for prefix in ["body_", "pose_", "instances_"] {
+                    for prefix in ["body_", "pose_"] {
                         physics_ports.insert(
                             (source.id, format!("{prefix}{old}")),
                             format!("{prefix}{slot}"),
@@ -563,6 +563,11 @@ fn paste(
         if !reused_world {
             graph.wires.push(copy);
         }
+    }
+    // A pasted body past the world's body count grows the count.
+    let worlds: Vec<u32> = graph.nodes.iter().filter(|node| node.type_id == "node.physics_world").map(|node| node.id).collect();
+    for world in worlds {
+        manifold_core::physics_body_slots::fit_world_bodies(&mut graph.nodes, &graph.wires, world);
     }
     let node = graph
         .nodes
@@ -1482,13 +1487,27 @@ mod tests {
         let busy = source_project.graph_target_owner(&GraphTarget::Generator(busy_layer)).unwrap().graph.as_ref().unwrap();
         assert!(busy.wires.iter().any(|wire| wire.to_port == "body_16"));
 
+        // A world with all 64 of its bodies taken grows to take the paste.
+        let grown_layer = add_transfer_layer(&mut source_project, "Grown physics", "physics-grown", false);
+        source_project
+            .graph_target_owner_mut(&GraphTarget::Generator(grown_layer.clone()))
+            .unwrap()
+            .graph = Some(physics_graph(64));
+        let paste = SceneItemAction::Paste { layer: grown_layer.clone(), scene: 1, clipboard: Box::new(clipboard.clone()) };
+        editing.execute(build_action(&source_project, paste).expect("a 64-body world grows"), &mut source_project);
+        assert!(editing.take_rejection().is_none());
+        let grown = source_project.graph_target_owner(&GraphTarget::Generator(grown_layer)).unwrap().graph.as_ref().unwrap();
+        assert!(grown.wires.iter().any(|wire| wire.to_port == "body_64"));
+        let world = grown.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+        assert_eq!(manifold_core::physics_body_slots::world_bodies(world), 65);
+
         let full_layer =
             add_transfer_layer(&mut source_project, "Full physics", "physics-full", false);
         source_project
             .graph_target_owner_mut(&GraphTarget::Generator(full_layer.clone()))
             .unwrap()
             .graph = Some(physics_graph(
-                manifold_core::scene_surface::PHYSICS_WORLD_BODY_SLOTS as usize,
+                manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES as usize,
             ));
         let before = serde_json::to_value(
             source_project

@@ -856,7 +856,7 @@
       "fromNode": 121,
       "fromPort": "body",
       "toNode": 40,
-      "toPort": "copies"
+      "toPort": "copies_0"
     },
     {
       "fromNode": 121,
@@ -884,13 +884,13 @@
     },
     {
       "fromNode": 40,
-      "fromPort": "instances",
+      "fromPort": "instances_0",
       "toNode": 124,
       "toPort": "instances"
     },
     {
       "fromNode": 40,
-      "fromPort": "active_count",
+      "fromPort": "active_count_0",
       "toNode": 124,
       "toPort": "instance_count"
     },

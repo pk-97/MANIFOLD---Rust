@@ -511,10 +511,7 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
             },
             ResolvedNodeImpulse {
                 field: FieldValue::uniform([1.0, 0.0, 0.0]).unwrap(),
-                target: ImpulseTarget::Rigid(RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                }),
+                target: ImpulseTarget::Rigid(RigidImpulseTargets::body(0).unwrap()),
             },
         )
         .unwrap();

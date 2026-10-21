@@ -1,35 +1,21 @@
 use super::*;
 use manifold_physics::{input::EventStamp, TickStamp};
 
-fn bodies() -> [Option<RigidBody>; MAX_BODIES] {
-    let mut bodies = std::array::from_fn(|_| None);
+fn bodies() -> Vec<Option<RigidBody>> {
+    let mut bodies = vec![None; 64];
     bodies[0] = Some(RigidBody::default());
     bodies
 }
 
 fn advance<C: StepCoupling>(
     simulation: &mut RigidSimulation,
-    bodies: [Option<RigidBody>; MAX_BODIES],
+    bodies: Vec<Option<RigidBody>>,
     time: f64,
     coupling: &mut C,
 ) -> Result<(), String> {
-    let mut targeted: [Option<FieldValue>; TARGET_SLOTS] = std::array::from_fn(|_| None);
+    let mut targeted: Vec<Option<FieldValue>> = vec![None; 65];
     targeted[0] = Some(FieldValue::uniform([0.0, 0.0, 4.0]).unwrap());
-    simulation.advance_with_coupling(
-        bodies,
-        None,
-        0.0,
-        1.25,
-        16.0,
-        0.0,
-        [0.0, -2.0, 0.0],
-        Seconds(time),
-        1.0,
-        0.0,
-        Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()),
-        &targeted,
-        coupling,
-    )
+    simulation.advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -2.0, 0.0], Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()), &targeted), Seconds(time), 1.0, 0.0, coupling)
 }
 
 struct Probe {
@@ -167,27 +153,13 @@ impl SubstepExchange for CaptureFrame<'_> {
 
 fn advance_capture<C: StepCoupling>(
     simulation: &mut RigidSimulation,
-    bodies: [Option<RigidBody>; MAX_BODIES],
+    bodies: Vec<Option<RigidBody>>,
     prototype: Option<RigidBody>,
     time: f64,
     speed: f32,
     coupling: &mut C,
 ) -> Result<(), String> {
-    simulation.advance_with_coupling(
-        bodies,
-        prototype,
-        2.0,
-        1.25,
-        2.0,
-        0.0,
-        [0.0; 3],
-        Seconds(time),
-        speed,
-        0.0,
-        None,
-        &[],
-        coupling,
-    )
+    simulation.advance_with_coupling(&copies_scene(&bodies, prototype, 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]), Seconds(time), speed, 0.0, coupling)
 }
 
 fn fixture() -> (RigidSimulation, Probe) {
@@ -212,10 +184,7 @@ fn fixture() -> (RigidSimulation, Probe) {
             },
             ResolvedRigidImpulse {
                 field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
-                targets: RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets: targets(1, false),
             },
         )
         .unwrap();
@@ -263,7 +232,7 @@ fn scene_physics_coupled_substeps_reuse_forces_and_consume_edge_once() {
 #[test]
 fn scene_physics_coupling_failure_retains_published_pose_and_latches() {
     let (mut simulation, mut probe) = fixture();
-    let published = simulation.poses;
+    let published = simulation.poses.clone();
     probe.fail_finish = true;
     let error = advance(&mut simulation, bodies(), FIXED_TICK.0, &mut probe).unwrap_err();
     assert!(error.contains("fixture finish failure"));
@@ -281,7 +250,7 @@ fn scene_physics_coupling_failure_retains_published_pose_and_latches() {
 
 #[test]
 fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
-    let mut bodies = std::array::from_fn(|_| None);
+    let mut bodies = vec![None; 64];
     let animated = RigidBody {
         kind: 2,
         transform: Transform { pos: [-2.0, 0.0, 0.0], ..Transform::default() },
@@ -302,7 +271,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     )
     .unwrap();
     let body = simulation.handles[0].unwrap();
-    let copies: Vec<_> = simulation.copy_handles[..simulation.active_copy_count]
+    let copies: Vec<_> = simulation.native_copy_handles(0)
         .iter()
         .copied()
         .flatten()
@@ -361,7 +330,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     assert_eq!(capture.publications.len(), 2);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
-    for (pose, offset) in simulation.copy_poses.iter().zip(&copy_offsets) {
+    for (pose, offset) in simulation.group_poses(0).iter().zip(&copy_offsets) {
         assert!((pose.pos[0] - (5.0 + offset)).abs() < 1.0e-5);
     }
 
@@ -394,7 +363,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     for (captured, expected) in capture.publications[2]
         .copy_positions
         .iter()
-        .zip(&simulation.copy_poses[..simulation.active_copy_count])
+        .zip(&simulation.group_poses(0)[..simulation.active_copies(0)])
     {
         for (&actual, expected) in captured.iter().zip(expected.pos) {
             assert!((actual - expected).abs() < 1.0e-5);
@@ -404,7 +373,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
 
 #[test]
 fn scene_physics_coupling_capture_failure_does_not_publish() {
-    let mut bodies = std::array::from_fn(|_| None);
+    let mut bodies = vec![None; 64];
     bodies[0] = Some(RigidBody::default());
     let mut simulation = RigidSimulation::default();
     let mut uncoupled = Uncoupled;
@@ -438,7 +407,7 @@ fn scene_physics_coupling_capture_failure_does_not_publish() {
         &mut capture,
     )
     .unwrap();
-    let published = simulation.poses;
+    let published = simulation.poses.clone();
     let captured = capture.publications[0].body_position;
     capture.fail_finish = true;
     let error = advance_capture(
@@ -542,7 +511,7 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), Seconds::ZERO, 1.0, 0.0)
         .unwrap();
     let handle = simulation.handles[0].unwrap();
     let world = simulation.world.as_ref().unwrap();
@@ -604,30 +573,13 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
             },
             ResolvedRigidImpulse {
                 field: FieldValue::uniform([1.0, 0.0, 0.0]).unwrap(),
-                targets: RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets: targets(1, false),
             },
         )
         .unwrap();
     for &time in times {
         simulation
-            .advance_with_coupling(
-                bodies.clone(),
-                None,
-                0.0,
-                1.25,
-                16.0,
-                0.0,
-                [0.0; 3],
-                Seconds(time),
-                1.0,
-                0.0,
-                None,
-                &[],
-                &mut companion,
-            )
+            .advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), Seconds(time), 1.0, 0.0, &mut companion)
             .unwrap();
     }
     assert_eq!(companion.stamps.len(), 3);

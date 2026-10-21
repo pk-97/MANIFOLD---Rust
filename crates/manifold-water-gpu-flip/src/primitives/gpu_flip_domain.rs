@@ -714,7 +714,11 @@ impl PhysicsNode for GpuFlipDomain {
             return;
         }
         self.set_coupled_physics(true);
-        self.coupled.observation = observation.cloned();
+        // Refill the retained inputs in place: a steady frame never reallocates.
+        match (observation, &mut self.coupled.observation) {
+            (Some(source), Some(retained)) => retained.clone_from(source),
+            (source, retained) => *retained = source.cloned(),
+        }
         self.coupled.colliders = colliders;
         self.coupled.error = error.map(str::to_owned);
     }

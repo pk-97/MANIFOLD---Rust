@@ -2,7 +2,7 @@ use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, IMPULSE_CAPACITY, MAX_BODIES};
+use crate::physics::{copies_scene, targets, ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, IMPULSE_CAPACITY};
 use manifold_node_engine::scene::transform::Transform;
 
 const DT: f64 = 1.0 / 60.0;
@@ -17,15 +17,15 @@ fn body(position: [f32; 3]) -> RigidBody {
     }
 }
 
-fn one_body(position: [f32; 3]) -> [Option<RigidBody>; MAX_BODIES] {
-    let mut bodies = std::array::from_fn(|_| None);
+fn one_body(position: [f32; 3]) -> Vec<Option<RigidBody>> {
+    let mut bodies = vec![None; 64];
     bodies[0] = Some(body(position));
     bodies
 }
 
-fn initialize(simulation: &mut RigidSimulation, bodies: &[Option<RigidBody>; MAX_BODIES]) {
+fn initialize(simulation: &mut RigidSimulation, bodies: &[Option<RigidBody>]) {
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
         .unwrap();
 }
 
@@ -60,7 +60,7 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
         .contains("epoch"));
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(5.0), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(5.0), 1.0, 0.0)
         .unwrap();
     let epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(
@@ -73,14 +73,14 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
     );
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(6.0), 2.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         simulation.impulse_stamp(Seconds(6.0), 2).unwrap().time,
         Seconds(1.0)
     );
     simulation
-        .advance(bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         simulation.impulse_stamp(Seconds(6.0), 3).unwrap().time,
@@ -94,7 +94,7 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
     let mut bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
         .unwrap();
     assert!(simulation.impulse_stamp(Seconds::ZERO, 0).is_ok());
 
@@ -105,13 +105,13 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
     body.shape = (body.shape + 1) % 5;
     simulation.set_step(SimStep::default().authored_sample());
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0), 1.0, 0.0)
         .unwrap();
     simulation.set_step(SimStep::default());
     assert!(simulation.impulse_stamp(Seconds(2.0), 2).is_err());
 
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0), 1.0, 0.0)
         .unwrap();
     let stamp = simulation.impulse_stamp(Seconds(2.0), 3).unwrap();
     assert_eq!(stamp.time, Seconds::ZERO);
@@ -129,17 +129,14 @@ fn rigid_impulses_multiple_hits_sum_into_native_position() {
                 stamp(epoch, 0.0, sequence),
                 payload(
                     [1.0, 0.0, 0.0],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false,
-                    },
+                    targets(1, false),
                 ),
             )
             .unwrap();
     }
 
     simulation
-        .advance(bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation.poses[0].pos[0] > 0.01,
@@ -170,21 +167,18 @@ fn rigid_impulses_half_open_boundary_and_late_assignment() {
             stamp(epoch, DT, 0),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets(1, false),
             ),
         )
         .unwrap();
     assert_eq!(planned.tick, 1);
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
         .unwrap();
     let applied = receipts(&mut simulation);
     assert_eq!(applied.len(), 1);
@@ -194,20 +188,17 @@ fn rigid_impulses_half_open_boundary_and_late_assignment() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     initialize(&mut late, &bodies);
     let epoch = late.impulse_epoch().unwrap();
-    late.advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+    late.advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     late.enqueue_impulse(
         stamp(epoch, 0.25 * DT, 0),
         payload(
             [1.0, 0.0, 0.0],
-            RigidImpulseTargets {
-                bodies: 1,
-                copies: false,
-            },
+            targets(1, false),
         ),
     )
     .unwrap();
-    late.advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+    late.advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
         .unwrap();
     let applied = receipts(&mut late);
     assert_eq!(applied.len(), 1);
@@ -220,10 +211,7 @@ fn rigid_impulses_capture_field_and_targets_by_value() {
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let epoch = simulation.impulse_epoch().unwrap();
-    let mut targets = RigidImpulseTargets {
-        bodies: 1,
-        copies: false,
-    };
+    let mut targets = targets(1, false);
     simulation
         .enqueue_impulse(
             stamp(epoch, 0.0, 0),
@@ -233,14 +221,14 @@ fn rigid_impulses_capture_field_and_targets_by_value() {
             },
         )
         .unwrap();
-    targets.bodies = 0;
+    targets = RigidImpulseTargets::default();
     assert!(targets.is_empty());
     simulation
-        .advance(bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[0] > 0.02);
     let applied = receipts(&mut simulation);
-    assert_eq!(applied[0].value.targets.bodies, 1);
+    assert_eq!(applied[0].value.targets, RigidImpulseTargets::body(0).unwrap());
 }
 
 #[test]
@@ -254,15 +242,12 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
             stamp(first_epoch, 0.0, 0),
             payload(
                 [3.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets(1, false),
             ),
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 1.0)
         .unwrap();
     let second_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(second_epoch, first_epoch + 1);
@@ -271,20 +256,17 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
             stamp(first_epoch, 0.0, 1),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false
-                }
+                targets(1, false)
             ),
         )
         .is_err());
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 1.0)
         .unwrap();
     let third_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(third_epoch, second_epoch + 1);
@@ -293,10 +275,7 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
             stamp(second_epoch, 0.0, 0),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false
-                }
+                targets(1, false)
             ),
         )
         .is_err());
@@ -309,47 +288,24 @@ fn rigid_impulses_target_body_and_copies_in_one_batch() {
     let prototype = body([2.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance_with_copies(
-            bodies.clone(),
-            Some(prototype.clone()),
-            1.0,
-            1.25,
-            16.0,
-            [0.0; 3],
-            Seconds::ZERO,
-            1.0,
-            0.0,
-        )
+        .advance_scene(&copies_scene(&bodies, Some(prototype.clone()), 1.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), Seconds::ZERO, 1.0, 0.0)
         .unwrap();
-    let copy_origin = simulation.copy_poses[0].pos[0];
+    let copy_origin = simulation.group_poses(0)[0].pos[0];
     let epoch = simulation.impulse_epoch().unwrap();
     simulation
         .enqueue_impulse(
             stamp(epoch, 0.0, 0),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: true,
-                },
+                targets(1, true),
             ),
         )
         .unwrap();
     simulation
-        .advance_with_copies(
-            bodies,
-            Some(prototype),
-            1.0,
-            1.25,
-            16.0,
-            [0.0; 3],
-            Seconds(DT),
-            1.0,
-            0.0,
-        )
+        .advance_scene(&copies_scene(&bodies, Some(prototype), 1.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!((simulation.poses[0].pos[0] + 2.0 - DT as f32).abs() < 1e-5);
-    assert!((simulation.copy_poses[0].pos[0] - copy_origin - DT as f32).abs() < 1e-5);
+    assert!((simulation.group_poses(0)[0].pos[0] - copy_origin - DT as f32).abs() < 1e-5);
     assert_eq!(
         simulation.poses[1].pos[0], 10.0,
         "untargeted peer must stay still"
@@ -357,7 +313,7 @@ fn rigid_impulses_target_body_and_copies_in_one_batch() {
     let world = simulation.world.as_ref().unwrap();
     for handle in [
         simulation.handles[0].unwrap(),
-        simulation.copy_handles[0].unwrap(),
+        simulation.native_copy_handles(0)[0].unwrap(),
     ] {
         assert!((world.linear_velocity(handle).unwrap()[0] - 1.0).abs() < 1e-5);
     }
@@ -375,23 +331,20 @@ fn rigid_impulses_pause_retains_pending_input() {
             stamp(epoch, 0.0, 0),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets(1, false),
             ),
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 0.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds::ZERO, 0.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
@@ -412,19 +365,16 @@ fn rigid_impulses_high_velocity_applies_once_across_microsteps() {
             stamp(epoch, 0.0, 0),
             payload(
                 [30.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 3,
-                    copies: false,
-                },
+                targets(3, false),
             ),
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(
         simulation
-            .configure_fast_bodies(&bodies, None, [0.0; 3], None, None, DT)
+            .configure_fast_bodies(&bodies, &[None], [0.0; 3], None, None, DT)
             .unwrap()
             > 1,
         "this fixture must select native microsteps"
@@ -448,7 +398,7 @@ fn rigid_impulses_full_history_refuses_one_hit_and_keeps_stepping() {
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let epoch = simulation.impulse_epoch().unwrap();
-    let targets = RigidImpulseTargets { bodies: 1, copies: false };
+    let targets = targets(1, false);
     for sequence in 0..256 {
         simulation.enqueue_impulse(stamp(epoch, 0.0, sequence), payload([0.0; 3], targets)).unwrap();
     }
@@ -456,14 +406,14 @@ fn rigid_impulses_full_history_refuses_one_hit_and_keeps_stepping() {
     assert!(error.contains("refused"), "{error}");
     // One refusal latches nothing: the world keeps stepping and every
     // admitted hit lands once.
-    simulation.advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0).unwrap();
     assert_eq!(simulation.impulse_readiness(), Ok(true));
     // Undrained receipts still hold their slots.
     assert!(simulation.enqueue_impulse(stamp(epoch, DT, 257), payload([0.0; 3], targets)).is_err());
     assert_eq!(receipts(&mut simulation).len(), 256);
     // Drained, the history frees and the next hit is admitted and lands once.
     simulation.enqueue_impulse(stamp(epoch, DT, 258), payload([0.0; 3], targets)).unwrap();
-    simulation.advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0).unwrap();
+    simulation.advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0).unwrap();
     let landed: Vec<_> = receipts(&mut simulation).iter().map(|event| event.source.sequence).collect();
     assert_eq!(landed, [258]);
 }
@@ -479,10 +429,7 @@ fn rigid_impulses_invalid_target_preserves_producer_sequence() {
             stamp(epoch, 0.0, 7),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1 << 1,
-                    copies: false
-                }
+                targets(1 << 1, false)
             ),
         )
         .is_err());
@@ -491,15 +438,12 @@ fn rigid_impulses_invalid_target_preserves_producer_sequence() {
             stamp(epoch, 0.0, 7),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets(1, false),
             ),
         )
         .unwrap();
     simulation
-        .advance(bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
@@ -519,23 +463,20 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
             stamp(first_epoch, 0.0, 0),
             ResolvedRigidImpulse {
                 field: overflowing_field,
-                targets: RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets: targets(1, false),
             },
         )
         .unwrap();
     assert!(simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .is_err());
     assert_eq!(receipts(&mut simulation).len(), 1);
     assert!(simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
         .is_err());
 
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 1.0)
         .unwrap();
     let second_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(second_epoch, first_epoch + 1);
@@ -544,15 +485,12 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
             stamp(second_epoch, 0.0, 0),
             payload(
                 [1.0, 0.0, 0.0],
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                targets(1, false),
             ),
         )
         .unwrap();
     simulation
-        .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
@@ -568,25 +506,22 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
         let stamp = simulation
             .impulse_stamp(Seconds(transport), sequence)
             .unwrap();
-        let targets = RigidImpulseTargets {
-            bodies: 1,
-            copies: false,
-        };
+        let targets = targets(1, false);
         simulation
             .enqueue_impulse(stamp, payload([4.0, 0.0, 0.0], targets))
             .unwrap();
     };
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     // Paused: the transport repeats.
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     strike(&mut simulation, DT, 0);
     // Simulation Speed 0 while the transport keeps running.
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 0.0, 0.0)
+        .advance(&bodies, [0.0; 3], Seconds(2.0 * DT), 0.0, 0.0)
         .unwrap();
     strike(&mut simulation, 2.0 * DT, 1);
     assert_eq!(
@@ -610,13 +545,7 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
 
     for frame in 3..8 {
         simulation
-            .advance(
-                bodies.clone(),
-                [0.0; 3],
-                Seconds(frame as f64 * DT),
-                1.0,
-                0.0,
-            )
+            .advance(&bodies, [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
             .unwrap();
     }
     assert!(
@@ -638,7 +567,7 @@ fn explosion_impulse_lands_once_per_fire() {
     let explosion = manifold_physics::FieldValue::radial([0.0, 4.0, 0.0], 3.0, 1.0)
         .and_then(|field| field.scaled(8.0))
         .unwrap();
-    let targets = RigidImpulseTargets { bodies: 1, copies: false };
+    let targets = targets(1, false);
     simulation
         .enqueue_impulse(stamp(epoch, 0.0, 0), ResolvedRigidImpulse { field: explosion, targets })
         .unwrap();
@@ -648,7 +577,7 @@ fn explosion_impulse_lands_once_per_fire() {
     let mut landed = Vec::new();
     for frame in 1..=6 {
         simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
+            .advance(&bodies, [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
             .unwrap();
         landed.extend(receipts(&mut simulation));
         // 8 × (1 − 1.5 / 3): outward along +x, no matter how many ticks follow.

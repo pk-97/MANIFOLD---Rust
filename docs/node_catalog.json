@@ -32489,7 +32489,7 @@
           "type": "RigidBody"
         },
         {
-          "name": "copies",
+          "name": "copies_0",
           "required": false,
           "type": "RigidBody"
         },
@@ -32849,7 +32849,7 @@
           "type": "VectorField"
         },
         {
-          "name": "copies_acceleration",
+          "name": "copies_acceleration_0",
           "required": false,
           "type": "VectorField"
         }
@@ -33114,11 +33114,11 @@
         },
         {
           "capacity": "fixed:4000",
-          "name": "instances",
+          "name": "instances_0",
           "type": "Array"
         },
         {
-          "name": "active_count",
+          "name": "active_count_0",
           "type": "f32"
         },
         {
@@ -33186,9 +33186,39 @@
             "4"
           ],
           "type": "float"
+        },
+        {
+          "contract": {
+            "max": "256",
+            "min": "1",
+            "reason": "count"
+          },
+          "default": "64",
+          "label": "Bodies",
+          "name": "bodies",
+          "range": [
+            "1",
+            "256"
+          ],
+          "type": "int"
+        },
+        {
+          "contract": {
+            "max": "32",
+            "min": "0",
+            "reason": "count"
+          },
+          "default": "1",
+          "label": "Copy Groups",
+          "name": "copy_groups",
+          "range": [
+            "0",
+            "32"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixty-four independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; an optional continuous acceleration field contributes m/s² at each native microstep. Reset restores the authored starting poses and copy layout.",
+      "purpose": "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. The bodies param (1–256, default 64) sets how many individually wired body descriptions it takes; the copy_groups param (0–32, default 1) sets how many copies bodies it lays out as reset-latched copies, all sharing contacts and one budget of 4000 copies. Gravity and simulation speed are live controls; an optional continuous acceleration field contributes m/s² at each native microstep. Reset restores the authored starting poses and copy layouts.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Simulate colliding objects together under gravity, global and per-body acceleration fields, with speed and reset controls.",

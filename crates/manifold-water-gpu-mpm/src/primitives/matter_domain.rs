@@ -731,7 +731,11 @@ impl PhysicsNode for MatterDomain {
             return;
         }
         self.set_coupled_physics(true);
-        self.coupled.observation = observation.cloned();
+        // Refill the retained inputs in place: a steady frame never reallocates.
+        match (observation, &mut self.coupled.observation) {
+            (Some(source), Some(retained)) => retained.clone_from(source),
+            (source, retained) => *retained = source.cloned(),
+        }
         self.coupled.colliders = colliders;
         self.coupled.error = error.map(str::to_owned);
     }
@@ -1231,7 +1235,7 @@ mod sim_rate_tests {
             ..RigidBody::default()
         });
         let mut owner = LiquidRigidOwner::new(
-            &scene, DomainWalls::default(), RigidImpulseTargets { bodies: 1, copies: false }, 3, None,
+            &scene, DomainWalls::default(), RigidImpulseTargets::body(0).unwrap(), 3, None,
         ).unwrap();
         let mut words = [0i32; 4 * REACTION_WORDS as usize];
         for (tick, scale) in [exchange.scale, next].into_iter().enumerate() {

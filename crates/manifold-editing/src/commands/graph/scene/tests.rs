@@ -1740,7 +1740,7 @@ fn physics_scene_commands_reject_shared_pose_atomically() {
 #[test]
 fn duplicate_physics_scene_object_rejects_full_world_atomically() {
     let mut graph = physics_scene_graph();
-    for slot in 1..64 {
+    for slot in 1..manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES {
         let id = 2_000 + slot;
         graph.nodes.push(EffectGraphNode {
             id,
@@ -2512,7 +2512,7 @@ fn shipped_physics_copies_refuse_partial_scene_edits() {
     let mut graph = graph;
     graph
         .wires
-        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count"));
+        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count_0"));
     let (mut project, fx) = project_with_graph(graph.clone());
     let mut duplicate = duplicate_object(&project, 
         GraphTarget::Effect(fx.clone()),
@@ -2554,17 +2554,17 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
             )),
             1,
             vec![
-                ("instances", "instances"),
-                ("active_count", "instance_count"),
-                ("", "copies"),
+                ("instances_0", "instances"),
+                ("active_count_0", "instance_count"),
+                ("", "copies_0"),
             ],
         ),
     ] {
         let mut graph: EffectGraphDef = serde_json::from_str(source).unwrap();
         graph.wires.retain(|wire| {
             !detached_outputs.iter().any(|(from_port, to_port)| {
-                if *to_port == "copies" {
-                    wire.to_node == 40 && wire.to_port == "copies"
+                if *to_port == "copies_0" {
+                    wire.to_node == 40 && wire.to_port == "copies_0"
                 } else {
                     wire.from_node == 40 && wire.from_port == *from_port && wire.to_port == *to_port
                 }
@@ -2649,7 +2649,7 @@ fn shipped_physics_copies_remove_as_one_owned_object_and_undoes() {
     );
     assert!(!def.wires.iter().any(|wire| {
         (wire.from_node == 40
-            && (wire.from_port == "instances" || wire.from_port == "active_count"))
+            && (wire.from_port == "instances_0" || wire.from_port == "active_count_0"))
             || wire.from_node == 121
             || wire.to_node == 121
     }));

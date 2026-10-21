@@ -72,9 +72,9 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
         (101, "body", 40, "body_0"),
         (141, "body", 40, "body_1"),
         (161, "body", 40, "body_2"),
-        (121, "body", 40, "copies"),
-        (40, "instances", 124, "instances"),
-        (40, "active_count", 124, "instance_count"),
+        (121, "body", 40, "copies_0"),
+        (40, "instances_0", 124, "instances"),
+        (40, "active_count_0", 124, "instance_count"),
     ] {
         assert!(def.wires.iter().any(|w| w.from_node == from
             && w.from_port == port
@@ -89,7 +89,7 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
 #[test]
 fn physics_boxes_contacts_deflect_the_pile_sideways() {
     use manifold_core::Seconds;
-    use manifold_water_rigid::physics::{MAX_BODIES, RigidBody, RigidSimulation};
+    use manifold_water_rigid::physics::{CopySpawn, RigidBody, RigidSceneInputs, RigidSimulation};
     use manifold_node_engine::scene::transform::Transform;
 
     let def: EffectGraphDef = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
@@ -118,35 +118,31 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         wall: false,
         spawn: Default::default(),
     };
-    let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
+    let mut scene = RigidSceneInputs { gravity: [0.0, -9.81, 0.0], ..RigidSceneInputs::default() };
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
-        bodies[slot] = Some(body(id));
+        scene.bodies[slot] = Some(body(id));
     }
-    let prototype = Some(body(121));
+    scene.groups[0] = Some(RigidBody {
+        spawn: CopySpawn {
+            count: scalar(121, "copy_count"),
+            spacing: scalar(121, "copy_spacing"),
+            columns: scalar(121, "copy_columns"),
+            layout: scalar(121, "copy_layout"),
+        },
+        ..body(121)
+    });
     let mut sim = RigidSimulation::default();
     let advance = |sim: &mut RigidSimulation, frame| {
-        sim.advance_with_copy_layout(
-            bodies.clone(),
-            prototype.clone(),
-            scalar(121, "copy_count"),
-            scalar(121, "copy_spacing"),
-            scalar(121, "copy_columns"),
-            scalar(121, "copy_layout"),
-            [0.0, -9.81, 0.0],
-            Seconds(f64::from(frame) / 60.0),
-            1.0,
-            0.0,
-        )
-        .unwrap();
+        sim.advance_scene(&scene, Seconds(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
     };
     advance(&mut sim, 0);
-    let initial = sim.copy_poses[..sim.active_copy_count].to_vec();
+    let initial = sim.group_poses(0).to_vec();
     for frame in 1..=240 {
         advance(&mut sim, frame);
     }
     let deflected = initial
         .iter()
-        .zip(&sim.copy_poses)
+        .zip(sim.group_poses(0))
         .filter(|(a, b)| {
             let dx = b.pos[0] - a.pos[0];
             let dz = b.pos[2] - a.pos[2];
@@ -158,7 +154,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         "contacts must scatter boxes, not just drop an unchanged grid: {deflected}"
     );
     assert!(
-        sim.copy_poses[..sim.active_copy_count]
+        sim.group_poses(0)
             .iter()
             .all(|pose| pose.pos.iter().all(|v| v.is_finite()) && pose.pos[1] > -1.0)
     );

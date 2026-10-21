@@ -30,11 +30,19 @@ use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
 use manifold_node_engine::scene::transform::Transform;
 
+/// Where a coupled body's controls come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    /// A wired scene body slot.
+    Body(usize),
+    /// A copy of copy group k, which takes its copies body's controls.
+    Group(usize),
+}
+
 /// One coupled Box3D body, in row order.
 struct Coupled {
     handle: BodyHandle,
-    /// Scene body slot; None for a copy, which takes the prototype's controls.
-    slot: Option<usize>,
+    source: Source,
     /// The largest face of the body's local hull box.
     face_area: f32,
     friction: f32,
@@ -191,41 +199,50 @@ impl LiquidRigidOwner {
         rigid.advance_worker(&walled, Seconds::ZERO, 0, &mut Uncoupled)?;
         let layout = CoupledRigidLayout::new(&rigid, &walled);
         let world = rigid.native_world().ok_or("Liquid coupling: the rigid world was not prepared")?;
-        let (handles, copies) = rigid.native_handles();
-        let selected: Vec<(BodyHandle, Option<usize>)> = handles
+        let selected: Vec<(BodyHandle, Source)> = rigid
+            .native_handles()
             .iter()
             .enumerate()
             .filter(|(index, _)| colliders.contains_body(*index))
-            .filter_map(|(index, handle)| handle.map(|handle| (handle, Some(index))))
-            .chain(copies.iter().flatten().filter(|_| colliders.copies).map(|&handle| (handle, None)))
+            .filter_map(|(index, handle)| handle.map(|handle| (handle, Source::Body(index))))
+            .chain(colliders.groups().flat_map(|group| {
+                rigid.native_copy_handles(group).iter().flatten().map(move |&handle| (handle, Source::Group(group)))
+            }))
             .collect();
         let reuse = reuse.filter(|owner| owner.matches(inputs, walls, colliders));
-        let known = |slot: Option<usize>| {
+        let known = |source: Source| {
             reuse.and_then(|owner| {
                 owner
                     .bodies
                     .iter()
                     .zip(&owner.geometries)
-                    .find(|(body, _)| body.slot == slot)
+                    .find(|(body, _)| body.source == source)
                     .map(|(body, geometry)| (Arc::clone(geometry), body.face_area))
             })
         };
         let mut bodies = Vec::with_capacity(selected.len());
         let mut geometries = Vec::with_capacity(selected.len());
-        let mut prototype: Option<(Arc<PreparedFluidGeometry>, f32)> = None;
-        for (handle, slot) in selected {
-            let (geometry, face_area) = match (known(slot), slot, &prototype) {
-                (Some(known), _, _) => known,
-                (None, None, Some((geometry, area))) => (Arc::clone(geometry), *area),
-                _ => {
+        // A group's copies share one hull, built for its first copy.
+        let mut group_hull: Option<(usize, Arc<PreparedFluidGeometry>, f32)> = None;
+        for (handle, source) in selected {
+            let cached = match source {
+                Source::Group(group) => group_hull
+                    .as_ref()
+                    .filter(|(cached, _, _)| *cached == group)
+                    .map(|(_, geometry, area)| (Arc::clone(geometry), *area)),
+                Source::Body(_) => None,
+            };
+            let (geometry, face_area) = match known(source).or(cached) {
+                Some(known) => known,
+                None => {
                     let built = hull_geometry(world, handle)?;
-                    if slot.is_none() {
-                        prototype = Some((Arc::clone(&built.0), built.1));
+                    if let Source::Group(group) = source {
+                        group_hull = Some((group, Arc::clone(&built.0), built.1));
                     }
                     built
                 }
             };
-            bodies.push(Coupled { handle, slot, face_area, friction: 0.0 });
+            bodies.push(Coupled { handle, source, face_area, friction: 0.0 });
             geometries.push(geometry);
         }
         let mut frame = CoupledRigidFrame::default();
@@ -390,9 +407,9 @@ impl LiquidRigidOwner {
 
     fn update_friction(&mut self, inputs: &RigidSceneInputs) {
         for body in &mut self.bodies {
-            let source = match body.slot {
-                Some(slot) => inputs.bodies[slot].as_ref(),
-                None => inputs.prototype.as_ref(),
+            let source = match body.source {
+                Source::Body(slot) => inputs.bodies[slot].as_ref(),
+                Source::Group(group) => inputs.groups[group].as_ref(),
             };
             body.friction = source.map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
         }
@@ -641,7 +658,7 @@ mod tests {
     fn liquid_coupled_body_rests_on_the_domain_floor() {
         let scene = scene();
         let walls = DomainWalls { min: [-1.2, 0.0, -1.2], size: [2.4; 3], closed: 0b11_1111 };
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner = LiquidRigidOwner::new(&scene, walls, colliders, 1, None).expect("owner");
         for tick in 0..(3.0 / TICK) as u64 {
             owner.set_pending(PendingTick { tick, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)), offline: true });
@@ -664,7 +681,7 @@ mod tests {
         let mut scene = scene.clone();
         scene.gravity = [s * 9.81, -(1.0 + load) * 9.81, 0.0];
         let walls = DomainWalls { min: [-1.2, 0.0, -1.2], size: [2.4; 3], closed: 0b11_1111 };
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner = LiquidRigidOwner::new(&scene, walls, colliders, 1, None).expect("owner");
         let mut start = 0.0;
         for tick in 0..(2.5 / TICK) as u64 {
@@ -754,7 +771,7 @@ mod tests {
         inputs.bodies[1] = inputs.bodies[0].clone();
         inputs.bodies[1].as_mut().unwrap().transform.pos[0] = 10.0;
         inputs.bodies[0].as_mut().unwrap().kind = 2;
-        let colliders = RigidImpulseTargets { bodies: 3, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap().union(RigidImpulseTargets::body(1).unwrap());
         let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, 1, None).unwrap();
         owner.set_step(manifold_water_rigid::physics::SimStep::live(Seconds(TICK)));
         // More than one live frame's budget has already completed before
@@ -790,7 +807,7 @@ mod tests {
     #[test]
     fn liquid_coupled_reaction_reaches_the_body() {
         let scene = scene();
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, 3, None).expect("owner");
         owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds((0) as f64 * TICK), manifold_core::Seconds(TICK)), offline: true });
         owner
@@ -810,7 +827,7 @@ mod tests {
     #[test]
     fn liquid_coupled_float_reaction_decodes_to_body_impulse() {
         let scene = scene();
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, 3, None).expect("owner");
         let mut reaction = [0.0f32; 2 * REACTION_FLOATS];
         reaction[REACTION_FLOATS + 1] = 32.0;
@@ -852,7 +869,7 @@ mod tests {
             body.transform.rot_euler = [0.0, 1.3 * angle, 0.0];
             scene
         };
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let run = |fps: f64| {
             let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, 1, None).expect("owner");
             let (mut clock, mut scenes) = (LiquidClock::default(), TickSamples::default());
@@ -906,7 +923,7 @@ mod tests {
     fn liquid_coupled_three_tick_reactions_are_ordered_and_required() {
         let mut scene = scene();
         scene.gravity = [0.0; 3];
-        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, 1, None).unwrap();
         let mut velocity = 0.0;
         for tick in 0..3 {

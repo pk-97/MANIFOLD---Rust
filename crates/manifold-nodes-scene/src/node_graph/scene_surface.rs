@@ -233,6 +233,9 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
+        // Port counts: an allocation grows them, and the copies card sets the
+        // group count, so neither is a slider.
+        "bodies" | "copy_groups" => hidden(PhysicsWorld),
         _ => return None,
     })
 }

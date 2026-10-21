@@ -938,6 +938,7 @@ pub fn enable_physics_edit(
         def.wires.push(scene_build_wire(body_id, "body", world_id, &format!("body_{body_slot}")));
         body_node_id
     };
+    fit_world_bodies(&mut def.nodes, &def.wires, world_id);
     let string_binding = source_string_binding(&def, &parts.source, body_node_id.clone());
     let world = (!world_exists)
         .then(|| def.nodes.iter().find(|node| node.id == world_id).cloned())

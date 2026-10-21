@@ -25,11 +25,14 @@ pub struct TickSamples<T> {
     /// Transport times the replay must sample before the next frame, with
     /// their ticks, ascending.
     requests: Vec<(f64, u64)>,
+    /// Values of forgotten ticks, refilled with `clone_from` for the next
+    /// ones, so a value that owns storage is not reallocated every tick.
+    spare: Vec<T>,
 }
 
 impl<T> Default for TickSamples<T> {
     fn default() -> Self {
-        Self { ticks: VecDeque::new(), previous_endpoint: None, requests: Vec::new() }
+        Self { ticks: VecDeque::new(), previous_endpoint: None, requests: Vec::new(), spare: Vec::new() }
     }
 }
 
@@ -85,10 +88,13 @@ impl<T: Clone> TickSamples<T> {
                         *recorded = tick;
                         held.clone_from(value);
                     }
-                    None => self.previous_endpoint = Some((tick, value.clone())),
+                    None => {
+                        let held = reuse(&mut self.spare, value);
+                        self.previous_endpoint = Some((tick, held));
+                    }
                 }
-            } else {
-                self.previous_endpoint = None;
+            } else if let Some((_, held)) = self.previous_endpoint.take() {
+                self.spare.push(held);
             }
         }
         self.settle_now(clock, value);
@@ -139,13 +145,15 @@ impl<T: Clone> TickSamples<T> {
     /// Forget ticks before `tick`.
     pub fn prune_before(&mut self, tick: u64) {
         while self.ticks.front().is_some_and(|(recorded, _)| *recorded < tick) {
-            self.ticks.pop_front();
+            if let Some((_, value)) = self.ticks.pop_front() {
+                self.spare.push(value);
+            }
         }
     }
 
     pub fn clear(&mut self) {
-        self.ticks.clear();
-        self.previous_endpoint = None;
+        self.spare.extend(self.ticks.drain(..).map(|(_, value)| value));
+        self.spare.extend(self.previous_endpoint.take().map(|(_, value)| value));
     }
 
     /// A later observation of the same boundary replaces its held value.
@@ -153,8 +161,22 @@ impl<T: Clone> TickSamples<T> {
         let at = self.ticks.partition_point(|(recorded, _)| *recorded < tick);
         match self.ticks.get_mut(at) {
             Some((recorded, held)) if *recorded == tick => held.clone_from(value),
-            _ => self.ticks.insert(at, (tick, value.clone())),
+            _ => {
+                let held = reuse(&mut self.spare, value);
+                self.ticks.insert(at, (tick, held));
+            }
         }
+    }
+}
+
+/// `value`, written into a spare when there is one.
+fn reuse<T: Clone>(spare: &mut Vec<T>, value: &T) -> T {
+    match spare.pop() {
+        Some(mut held) => {
+            held.clone_from(value);
+            held
+        }
+        None => value.clone(),
     }
 }
 

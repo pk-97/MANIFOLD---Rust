@@ -194,7 +194,7 @@ fn physics_boundary_rigid_duplicate_count_refuses_a_full_world() {
     let world = worlds(graph_of_generator(&project, &layer))[0];
     let host = project.graph_target_owner_mut(&target).unwrap();
     let def = host.graph.as_mut().unwrap();
-    for slot in 3..64 {
+    for slot in 3..manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES {
         def.wires.push(super::super::scene_build_wire(999, "body", world, &format!("body_{slot}")));
     }
     let full = def.clone();
@@ -205,7 +205,14 @@ fn physics_boundary_rigid_duplicate_count_refuses_a_full_world() {
     let mut two = DuplicateSceneObjectCommand::new(&project, target, vec![], 0, 0, 2, &graph).unwrap();
     two.execute(&mut project);
     assert!(two.was_applied(), "{:?}", two.rejection_reason());
-    assert_eq!(filled_slots(graph_of_generator(&project, &layer), world).len(), 64);
+    let result = graph_of_generator(&project, &layer);
+    assert_eq!(filled_slots(result, world).len(), manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES as usize);
+    let world_node = result.nodes.iter().find(|node| node.id == world).unwrap();
+    assert_eq!(
+        manifold_core::physics_body_slots::world_bodies(world_node),
+        manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES,
+        "the copies grew the world to its last slot"
+    );
 }
 
 /// A copy carries its source's drivers but not its Ableton mappings: one Live

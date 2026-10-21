@@ -463,6 +463,27 @@ Saved projects remain graph+metadata+instance state. No family registry or proje
 | Shatter | Keep modifier recipe/preparation/compiler; use common transaction/model capabilities. | Small after P1/P3, but requires a real imported-body acceptance case. No solver abstraction or fragment rows invented. |
 | GPU numerical separation | Isolate budgets/data, then FLIP and whitewater cores. | Highest cost; G1a adds types/checks without moves. G1b/G2/G3 remain deferred with source conformance before moves. Generated atom pipelines are supplied as prepared data; they cannot be replaced with copied shaders. Preserve numerical kernels, fusion, clock, and capture ABI. This work does not block F1b/F2. |
 
+### 5.5 Copy groups
+
+A Physics World is a reconfigurable node, like Render Scene. Two params size its port families when the graph is built or a count is edited, never per tick:
+
+- `bodies` (1–256, default 64): `body_k`, `body_acceleration_k` and `pose_k`.
+- `copy_groups` (0–32, default 1): `copies_k`, `copies_acceleration_k`, `instances_k` and `active_count_k`.
+
+Copy group k copies the body wired into `copies_k`. That body's spawner (count, spacing, columns, arrangement) sets the group's layout, read at first build, reset and backwards seek. Every body and every group's copies share one Box3D world, one solver and one clock, so they all collide. The world makes at most 4000 copies across its groups (`MAX_COPIES`, the measured budget); groups fill in port order, a later group makes what fits, and `copies_not_made` reports the rest.
+
+A hit or a coupled liquid selects its recipients with `RigidImpulseTargets`, a fixed bitset of 256 bodies and 32 groups. The engine sizes its per-body and per-group storage from the input lengths: a count change is a topology change and rebuilds the world, and a steady tick never allocates.
+
+The caps are `PHYSICS_WORLD_MAX_BODIES` and `PHYSICS_WORLD_MAX_COPY_GROUPS` in foundation `scene_surface`, asserted against the bitset in core. A saved world with no count loads as 64 bodies and one group, and its old `copies`, `copies_acceleration`, `instances` and `active_count` ports load as group 0's (`copies_body::migrate_world_copies`), so an old show plays bit-identically (`physics::parity_tests`).
+
+Enable, duplicate, paste and Shatter take body slots from core `BodySlots`, then `fit_world_bodies` grows the world's `bodies` count to cover every wired slot in the same edit. Nothing shrinks it. A world with all 256 slots taken refuses.
+
+Three lanes build this:
+
+- **CG0:** the reconfigurable world, the caps, the bitset and the load migration.
+- **CG1:** live layouts.
+- **CG2:** the copies card, the gizmo and Make Copies.
+
 ## 6. Invariants and enforcement
 
 Tests below are required deliverables, not claims of tests already passing. Prefix new focused tests with `physics_boundary_` so phase scope is explicit.
@@ -555,7 +576,7 @@ Rerun each search at entry; a changed count needs an updated seam brief before e
 - **Seam:** command constructors remain public entry points; their execute bodies stop owning before/after graph snapshots and instead execute the prepared transaction. Helper graph construction remains pure and returns nodes/edits; no renderer object is stored in a command. The before/after transaction seam is P1, not a new rigid API.
 - **Gate/scope:** focused editing/core/app rigid tests, existing split/physics sibling filters. Negative gate: the migrated commands contain no `prev_graph`, `after_instance`, or direct `project` graph assignment outside the transaction. Existing saved loose and grouped rigid fixtures round-trip and modulate enabled/body controls after reload.
 - **Demo:** L3 extend `scene-physics-controls` and rerun `scene-physics-duplicate-paused`: enable, adjust bounce, disable/re-enable, split/undo, duplicate a paused rigid object, undo/redo, and resume in the shared world. Gesture: duplicate while paused then resume; exactly one new body and no new world. Forbidden: per-object worlds, deletion on disable, new locks, coupling changes.
-- **As built:** split is retired (Shatter replaced it), so `physics_boundary_rigid_split_undo` does not exist. There is no structural Disable command: the switch writes the body's `enabled` through `apply_scene_param_write`, which keeps each param's declared type and refuses a non-finite value. The switch builds on the content thread (`SceneItemAction::SetPhysics`). Rigid add is Add Object plus the switch. `enabled` is a Hidden switch (D6), so it has no card to modulate; the reload gate is met for the body's card controls and the switch state (`physics_boundary_rigid_reload_keeps_the_switch_and_card_controls`). The header copy button and Cmd+D send one copy; the object card's "Copies [−] N [+] Duplicate" row sends N, from 1 to `MAX_DUPLICATE_COPIES` for any object. Both build `DuplicateSceneObjectCommand` on the content thread through `SceneItemAction::DuplicateObject`; lights keep the clipboard paste. A copy (object, force or modifier) carries its source's drivers, envelopes, audio mods and automation, never its Ableton mappings; only a move keeps them (`manifold_editing::param_routes`). A switch click that changes nothing is refused. Body capacity is one constant, `PHYSICS_WORLD_BODY_SLOTS`, which core asserts against the runtime body mask; enable, duplicate, paste and Shatter all allocate through core's `BodySlots`. Duplicate refuses modifier-local scenes and anything the scene-object model marks not duplicable. Flows: `scene-physics-switch`, `scene-physics-duplicate-count`.
+- **As built:** split is retired (Shatter replaced it), so `physics_boundary_rigid_split_undo` does not exist. There is no structural Disable command: the switch writes the body's `enabled` through `apply_scene_param_write`, which keeps each param's declared type and refuses a non-finite value. The switch builds on the content thread (`SceneItemAction::SetPhysics`). Rigid add is Add Object plus the switch. `enabled` is a Hidden switch (D6), so it has no card to modulate; the reload gate is met for the body's card controls and the switch state (`physics_boundary_rigid_reload_keeps_the_switch_and_card_controls`). The header copy button and Cmd+D send one copy; the object card's "Copies [−] N [+] Duplicate" row sends N, from 1 to `MAX_DUPLICATE_COPIES` for any object. Both build `DuplicateSceneObjectCommand` on the content thread through `SceneItemAction::DuplicateObject`; lights keep the clipboard paste. A copy (object, force or modifier) carries its source's drivers, envelopes, audio mods and automation, never its Ableton mappings; only a move keeps them (`manifold_editing::param_routes`). A switch click that changes nothing is refused. Body capacity and allocation follow section 5.5 (Copy groups). Duplicate refuses modifier-local scenes and anything the scene-object model marks not duplicable. Flows: `scene-physics-switch`, `scene-physics-duplicate-count`.
 
 ### P6b — Imported graph commit and collider preparation
 
