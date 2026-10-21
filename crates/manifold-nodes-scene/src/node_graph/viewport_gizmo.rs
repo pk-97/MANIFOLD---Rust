@@ -131,7 +131,8 @@ pub enum GizmoTargetKind {
 impl GizmoTargetKind {
     pub fn of(owner: &ShapeOwner) -> Self {
         match owner {
-            ShapeOwner::Object(_) => Self::Object,
+            // A world declares no shape, so no target is ever one.
+            ShapeOwner::Object(_) | ShapeOwner::World(_) => Self::Object,
             ShapeOwner::LiquidDomain(_) => Self::FluidDomain,
             ShapeOwner::RoleSource { role, .. } => match role {
                 FluidRole::Inflow => Self::Inflow,

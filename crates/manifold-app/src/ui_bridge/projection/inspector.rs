@@ -803,6 +803,11 @@ pub fn sync_inspector_data(
                                         crate::setup_check::runtime_fits(&ui.setup_fits, &layer_id),
                                         &mut problems,
                                     );
+                                    manifold_nodes_scene::node_graph::scene_vm::copies_problems(
+                                        &manifold_nodes_scene::node_graph::scene_vm::copies_anchors(d),
+                                        crate::setup_check::runtime_fits(&ui.setup_fits, &layer_id),
+                                        &mut problems,
+                                    );
                                     crate::setup_check::mark_rows(&mut surface.rows, &problems, d);
                                 }
                                 surface

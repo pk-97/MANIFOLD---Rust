@@ -495,3 +495,32 @@ fn bodies_the_water_cannot_take_warn_on_the_water() {
     assert_eq!(observations.report.iter().map(|entry| entry.uncoupled_bodies).collect::<Vec<_>>(), [7]);
     assert_eq!(rig.problems_with(&observations.report), vec![SetupProblemKind::BodiesNotCoupled(7)]);
 }
+
+/// Physics Boxes has no water, yet a world short of copies warns on the Box
+/// Count row of its card.
+#[test]
+fn copies_not_made_warn_on_the_count_row_of_a_scene_with_no_water() {
+    let def: manifold_core::effect_graph_def::EffectGraphDef =
+        serde_json::from_str(include_str!("../../../../../manifold-nodes/assets/generator-presets/PhysicsBoxes.json")).unwrap();
+    let mut layer = manifold_core::layer::Layer::new_generator("Boxes".into(), PresetTypeId::new("PhysicsBoxes"), 0);
+    let fx = layer.gen_params_mut().unwrap();
+    fx.graph = Some(def.clone());
+    fx.refresh_manifest_from_graph();
+    let inst = layer.gen_params().unwrap();
+    let entry = SetupFitEntry {
+        layer: layer.layer_id.clone(),
+        node: NodeId::new("physics_demo_40"),
+        fit: SetupFit::default(),
+        refusal: None,
+        copies_not_made: 96,
+        uncoupled_bodies: 0,
+    };
+    let report = [entry];
+    let problems = crate::setup_check::problems_of(&def, inst, crate::setup_check::runtime_fits(&report, &layer.layer_id));
+    assert_eq!(problems.iter().map(|problem| problem.kind.clone()).collect::<Vec<_>>(), [SetupProblemKind::CopiesNotMade(96)]);
+
+    let mut surface = gen_params_to_surface(inst, layer.layer_id.as_str(), None, &[], SurfaceVisibility::All, (manifold_core::Bpm(120.0), 4.0));
+    crate::setup_check::mark_rows(&mut surface.rows, &problems, &def);
+    let warning = surface.rows.iter().find(|row| row.id.as_ref() == "40_copy_count").and_then(|row| row.spec.setup_warning.clone());
+    assert_eq!(warning.as_deref(), Some("96 copies not made; the world's copy pool is full"));
+}

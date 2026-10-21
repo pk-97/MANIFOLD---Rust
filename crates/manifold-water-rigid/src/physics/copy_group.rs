@@ -34,10 +34,6 @@ pub(crate) struct CopyGroup {
 }
 
 impl CopyGroup {
-    pub fn active(&self) -> usize {
-        self.active
-    }
-
     /// Size the group for a fresh world built from `prototype`.
     pub fn reset_for(&mut self, prototype: Option<&RigidBody>) {
         self.handles.clear();

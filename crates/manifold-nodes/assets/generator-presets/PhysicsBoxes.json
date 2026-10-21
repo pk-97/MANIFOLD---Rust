@@ -159,7 +159,7 @@
       "id": 40,
       "nodeId": "physics_demo_40",
       "typeId": "node.physics_world",
-      "handle": "Boxes \u2014 Apply Count with Reset",
+      "handle": "Box World",
       "params": {},
       "exposedParams": [
         "reset"

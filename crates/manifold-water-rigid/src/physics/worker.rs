@@ -260,7 +260,7 @@ impl RigidSimulation {
 
     /// Copy group `group`'s installed active copies.
     pub fn native_copy_handles(&self, group: usize) -> &[Option<BodyHandle>] {
-        self.groups.get(group).map_or(&[], |state| &state.handles[..state.active()])
+        self.groups.get(group).map_or(&[], |state| &state.handles[..state.active])
     }
 
     fn native_topology_matches(&self, inputs: &RigidSceneInputs) -> bool {

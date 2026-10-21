@@ -178,6 +178,6 @@ fn physics_boxes_render_motion_and_a_live_count() {
         step.set(live);
     }
     eprintln!(
-        "Physics Boxes: 256 -> pending 32 -> Reset 32 -> Reset 0 -> Reset 4000 verified; images /tmp/physics_boxes_initial.png and /tmp/physics_boxes_dropped.png"
+        "Physics Boxes: 256 -> live 32 -> Reset 32 -> 0 -> 4000 verified; images /tmp/physics_boxes_initial.png and /tmp/physics_boxes_dropped.png"
     );
 }

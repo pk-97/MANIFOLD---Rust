@@ -54,7 +54,10 @@ use liquid::locate_node;
 use manifold_core::scene_object_model::{SceneObjectCapabilities, SceneObjectModel, SceneObjectRowKind, scene_object_models, scene_object_models_in};
 use manifold_foundation::scene_surface::SourceRole;
 mod setup_check;
-pub use setup_check::{RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, problems_with_runtime};
+pub use setup_check::{
+    CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, copies_anchors, copies_problems,
+    problems_with_runtime,
+};
 mod shapes;
 #[cfg(test)]
 pub(crate) use shapes::object_shapes;

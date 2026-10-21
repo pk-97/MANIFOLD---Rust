@@ -3,9 +3,13 @@
 //! (SCENE_SETUP_PROGRAMME.md section 3 B3, BUG-gm927 part 1). One list per
 //! scene, built with the `SceneVm`; the card's warning line and the red
 //! outline in the viewport both read it, and the rule is
-//! `manifold_core::liquid_setup`, the same fit the solvers fill from.
+//! `manifold_core::liquid_setup`, the same fit the solvers fill from. A
+//! Physics World's copies its pool could not make warn on the same cards,
+//! under the copies bodies' Count rows ([`copies_problems`]).
 
 use manifold_core::NodeId;
+use manifold_core::copies_body::{PHYSICS_WORLD_TYPE_ID, RIGID_BODY_TYPE_ID, copy_group_of_input};
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot};
 use manifold_core::liquid_setup::{
     AxisFit, BoxFit, ColumnOutcome, FillFit, LATTICE_PADDING_CELLS, SetupFit, axis_fits, fit_box, fit_fill_height,
@@ -13,6 +17,9 @@ use manifold_core::liquid_setup::{
 use manifold_foundation::scene_surface::SceneShape;
 
 use super::{FluidRole, ParamAddr, SceneShapeVm, ShapeOwner, ShapeWrite};
+
+/// A copies body's Count param.
+const COPY_COUNT: &str = "copy_count";
 
 /// What does not fit. Each names the defined behaviour the solver applies,
 /// so the warning says what was changed.
@@ -34,6 +41,9 @@ pub enum SetupProblemKind {
     /// The coupled world has more bodies than the liquid holds; the water
     /// neither pushes nor flows round this many.
     BodiesNotCoupled(u32),
+    /// A Physics World's copy groups ask for more copies than its pool
+    /// holds; the groups past the cap make fewer.
+    CopiesNotMade(u32),
 }
 
 impl SetupProblemKind {
@@ -48,6 +58,8 @@ impl SetupProblemKind {
             Self::SourceOutside(role) => format!("{} is outside the domain; it does nothing", role.title()),
             Self::BodiesNotCoupled(1) => "1 body not coupled; the water passes through it".to_owned(),
             Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; the water passes through them"),
+            Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
+            Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
         }
     }
 }
@@ -291,9 +303,9 @@ impl SetupAnchor {
     }
 }
 
-/// What one liquid domain's solver reported about the setup it ran: the
-/// cards read it from the content thread's fit report, the gizmo hosts from
-/// the frame's domain snapshots.
+/// What one liquid domain's solver, or one Physics World's copy pool,
+/// reported about the setup it ran: the cards read it from the content
+/// thread's fit report, the gizmo hosts from the frame's domain snapshots.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeFit<'a> {
     pub node: &'a NodeId,
@@ -305,6 +317,8 @@ pub struct RuntimeFit<'a> {
     pub column_box: Option<([f32; 3], [f32; 3])>,
     /// Coupled-world bodies past what the liquid holds.
     pub uncoupled_bodies: u32,
+    /// A world's copies past what its pool holds.
+    pub copies_not_made: u32,
 }
 
 impl<'a> RuntimeFit<'a> {
@@ -316,7 +330,67 @@ impl<'a> RuntimeFit<'a> {
             layout: snapshot.accepted_layout.as_ref(),
             column_box: snapshot.column_box,
             uncoupled_bodies: snapshot.uncoupled_bodies,
+            copies_not_made: 0,
         }
+    }
+}
+
+/// A Physics World that copies bodies, and the rows its copy shortfall
+/// warns under: each copies body's Count, last group first. The pool fills
+/// groups in port order, so the last ones go short.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopiesAnchor {
+    pub world: NodeId,
+    pub counts: Vec<ParamAddr>,
+}
+
+/// Every world in `def` that copies a body, at any group depth. Reads wires
+/// alone, so a value change never moves one.
+pub fn copies_anchors(def: &EffectGraphDef) -> Vec<CopiesAnchor> {
+    let mut out = Vec::new();
+    collect_copies_anchors(&def.nodes, &def.wires, &mut Vec::new(), &mut out);
+    out
+}
+
+fn collect_copies_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], scope: &mut Vec<u32>, out: &mut Vec<CopiesAnchor>) {
+    for world in nodes.iter().filter(|n| n.type_id == PHYSICS_WORLD_TYPE_ID) {
+        let mut groups: Vec<(usize, u32)> = wires
+            .iter()
+            .filter(|w| w.to_node == world.id)
+            .filter_map(|w| Some((copy_group_of_input(&w.to_port)?, w.from_node)))
+            .filter(|(_, body)| nodes.iter().any(|n| n.id == *body && n.type_id == RIGID_BODY_TYPE_ID))
+            .collect();
+        if groups.is_empty() {
+            continue;
+        }
+        groups.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        let counts = groups
+            .into_iter()
+            .map(|(_, body)| ParamAddr { scope_path: scope.clone(), node_doc_id: body, param_id: COPY_COUNT.to_owned() })
+            .collect();
+        out.push(CopiesAnchor { world: world.node_id.clone(), counts });
+    }
+    for node in nodes {
+        if let Some(group) = &node.group {
+            scope.push(node.id);
+            collect_copies_anchors(&group.nodes, &group.wires, scope, out);
+            scope.pop();
+        }
+    }
+}
+
+/// Each world's copies its pool could not make, as one warning under its
+/// Count rows, appended to `out`. A world declares no shape, so the
+/// viewport outlines nothing.
+pub fn copies_problems<'a>(anchors: &[CopiesAnchor], runtime: impl IntoIterator<Item = RuntimeFit<'a>>, out: &mut Vec<SetupProblem>) {
+    for report in runtime.into_iter().filter(|report| report.copies_not_made > 0) {
+        let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == report.node) else { continue };
+        out.push(SetupProblem {
+            owner: ShapeOwner::World(anchor.world.clone()),
+            kind: SetupProblemKind::CopiesNotMade(report.copies_not_made),
+            params: anchor.counts.clone(),
+            bounds: None,
+        });
     }
 }
 
@@ -632,6 +706,7 @@ mod tests {
             layout: None,
             column_box: None,
             uncoupled_bodies: count,
+            copies_not_made: 0,
         };
         assert!(runtime(&anchors, &[], report(0)).is_empty());
         let problems = runtime(&anchors, &[], report(12));
@@ -657,6 +732,7 @@ mod tests {
             layout: Some(&layout()),
             column_box: Some(ran),
             uncoupled_bodies: 0,
+            copies_not_made: 0,
         };
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
@@ -668,7 +744,7 @@ mod tests {
     fn a_refusal_with_nothing_to_outline_still_warns_the_card() {
         let anchors = [anchor()];
         let node = NodeId::new("water");
-        let report = RuntimeFit { node: &node, fit: SetupFit::default(), refusal: Some("Fluid: too big"), layout: None, column_box: None, uncoupled_bodies: 0 };
+        let report = RuntimeFit { node: &node, fit: SetupFit::default(), refusal: Some("Fluid: too big"), layout: None, column_box: None, uncoupled_bodies: 0, copies_not_made: 0 };
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::DomainRefused("Fluid: too big".to_owned()));
@@ -689,11 +765,59 @@ mod tests {
         };
         let ran = ([4.0; 3], [5.0; 3]);
         let report =
-            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran), uncoupled_bodies: 0 };
+            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran), uncoupled_bodies: 0, copies_not_made: 0 };
         let problems = runtime(&anchors, std::slice::from_ref(&authored), report);
         assert_eq!(problems.len(), 1, "one column, one warning: {problems:?}");
         assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
         assert_eq!(problems[0].bounds, Some(ran));
         assert_eq!(problems[0].params, authored.params, "the authored row order stays");
+    }
+
+    /// A world short of copies warns under its copies bodies' Count rows,
+    /// last group first, inside the group that holds it.
+    #[test]
+    fn copies_not_made_warn_under_the_count_rows_last_group_first() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "nodes": [{"id": 9, "nodeId": "boxes", "typeId": "group", "group": {
+                "interface": {"inputs": [], "outputs": []},
+                "nodes": [
+                    {"id": 40, "nodeId": "world", "typeId": "node.physics_world"},
+                    {"id": 121, "nodeId": "a", "typeId": "node.rigid_body"},
+                    {"id": 131, "nodeId": "b", "typeId": "node.rigid_body"},
+                    {"id": 5, "nodeId": "lfo", "typeId": "node.lfo"}
+                ],
+                "wires": [
+                    {"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies_0"},
+                    {"fromNode": 131, "fromPort": "body", "toNode": 40, "toPort": "copies_1"},
+                    {"fromNode": 5, "fromPort": "out", "toNode": 40, "toPort": "copies_2"}
+                ]
+            }}],
+            "wires": []
+        }))
+        .expect("a world in a group");
+        let anchors = copies_anchors(&def);
+        let count = |body: u32| ParamAddr { scope_path: vec![9], node_doc_id: body, param_id: "copy_count".to_owned() };
+        assert_eq!(anchors, [CopiesAnchor { world: NodeId::new("world"), counts: vec![count(131), count(121)] }]);
+
+        let world = NodeId::new("world");
+        let report = |copies_not_made| RuntimeFit {
+            node: &world,
+            fit: SetupFit::default(),
+            refusal: None,
+            layout: None,
+            column_box: None,
+            uncoupled_bodies: 0,
+            copies_not_made,
+        };
+        let mut out = Vec::new();
+        copies_problems(&anchors, [report(0)], &mut out);
+        assert!(out.is_empty());
+        copies_problems(&anchors, [report(250)], &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].owner, ShapeOwner::World(world.clone()));
+        assert_eq!(out[0].params, anchors[0].counts);
+        assert_eq!((out[0].kind.message(), out[0].bounds), ("250 copies not made; the world's copy pool is full".to_owned(), None));
+        assert_eq!(SetupProblemKind::CopiesNotMade(1).message(), "1 copy not made; the world's copy pool is full");
     }
 }

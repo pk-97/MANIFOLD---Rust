@@ -45,6 +45,9 @@ pub enum ShapeOwner {
     Force(NodeId),
     /// A swarm's forces node, whose box its forces are laid over.
     Swarm(NodeId),
+    /// A Physics World. It declares no shape; it owns the warning for
+    /// copies its pool could not make.
+    World(NodeId),
 }
 
 /// Where a shape param is written.

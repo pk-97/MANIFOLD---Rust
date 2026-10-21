@@ -25,7 +25,7 @@ use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_node_engine::param_binding::convert_param_value;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_nodes_scene::node_graph::scene_vm::{
-    ParamAddr, RuntimeFit, SceneVm, SetupAnchor, SetupProblem, problems_with_runtime,
+    CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupAnchor, SetupProblem, copies_anchors, copies_problems, problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
@@ -243,24 +243,27 @@ pub(crate) fn runtime_fits<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) 
         layout: None,
         column_box: None,
         uncoupled_bodies: entry.uncoupled_bodies,
+        copies_not_made: entry.copies_not_made,
     })
 }
 
 /// The problems of the scene `def` is, with `inst`'s card values folded into
 /// the params they drive so shapes sit where the knobs put them, plus what
-/// the solvers reported (`runtime`). Empty for a graph with no liquid domain,
-/// which builds no scene model at all.
+/// the solvers and copy pools reported (`runtime`). A graph with no liquid
+/// domain builds no scene model; its worlds still warn of unmade copies.
 pub(crate) fn problems_of<'a>(def: &EffectGraphDef, inst: &PresetInstance, runtime: impl IntoIterator<Item = RuntimeFit<'a>>) -> Vec<SetupProblem> {
-    if liquid_domains_in(&def.nodes).is_empty() {
-        return Vec::new();
-    }
-    let mut authored = def.clone();
-    if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
-        authored = def.clone();
-    }
-    let Some(vm) = SceneVm::from_def(&authored) else { return Vec::new() };
+    let runtime: Vec<RuntimeFit<'a>> = runtime.into_iter().collect();
     let mut out = Vec::new();
-    problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime, &mut out);
+    if !liquid_domains_in(&def.nodes).is_empty() {
+        let mut authored = def.clone();
+        if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
+            authored = def.clone();
+        }
+        if let Some(vm) = SceneVm::from_def(&authored) {
+            problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime.iter().copied(), &mut out);
+        }
+    }
+    copies_problems(&copies_anchors(def), runtime, &mut out);
     out
 }
 
@@ -338,26 +341,34 @@ impl BoundParam {
 }
 
 /// One layer's scene model, built once per graph, with the card params that
-/// move its setup shapes.
+/// move its setup shapes, and the worlds that copy bodies.
 struct SlotModel {
-    vm: SceneVm,
+    /// `None` for a graph with no liquid domain.
+    vm: Option<SceneVm>,
     bound: Vec<BoundParam>,
+    copies: Vec<CopiesAnchor>,
 }
 
 impl SlotModel {
-    /// `None` for a graph with no liquid domain, which has no setup to check.
+    /// `None` for a graph with neither a liquid domain nor a world that
+    /// copies bodies, which has no setup to check.
     fn build(def: &EffectGraphDef, inst: &PresetInstance) -> Option<Self> {
-        if liquid_domains_in(&def.nodes).is_empty() {
+        let copies = copies_anchors(def);
+        let vm = (!liquid_domains_in(&def.nodes).is_empty())
+            .then(|| {
+                let mut authored = def.clone();
+                if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
+                    authored = def.clone();
+                }
+                SceneVm::from_def(&authored)
+            })
+            .flatten();
+        if vm.is_none() && copies.is_empty() {
             return None;
         }
-        let mut authored = def.clone();
-        if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
-            authored = def.clone();
-        }
-        let vm = SceneVm::from_def(&authored)?;
         let metadata = def.preset_metadata.as_ref();
         let mut bound: Vec<BoundParam> = Vec::new();
-        for (addr, structural) in vm.setup_params() {
+        for (addr, structural) in vm.iter().flat_map(SceneVm::setup_params) {
             if bound.iter().any(|known| &known.addr == addr) {
                 continue;
             }
@@ -385,7 +396,7 @@ impl SlotModel {
                 structural,
             });
         }
-        Some(Self { vm, bound })
+        Some(Self { vm, bound, copies })
     }
 
     /// The bound card values of one kind, hashed without allocating.
@@ -494,8 +505,8 @@ impl SlotCheck {
             let values = self.model_values(inst, false);
             if moved || values != self.values {
                 self.values = values;
-                match &self.model {
-                    Some(model) => model.vm.recheck_setup(&|addr| model.value(inst, addr), &mut self.authored, &mut self.anchors),
+                match self.model.as_ref().and_then(|model| Some((model, model.vm.as_ref()?))) {
+                    Some((model, vm)) => vm.recheck_setup(&|addr| model.value(inst, addr), &mut self.authored, &mut self.anchors),
                     None => {
                         self.authored.clear();
                         self.anchors.clear();
@@ -510,6 +521,9 @@ impl SlotCheck {
         }
         self.report = Some(report.clone());
         problems_with_runtime(&self.anchors, &self.authored, runtime_fits(report, &layer.layer_id), &mut self.problems);
+        if let Some(model) = &self.model {
+            copies_problems(&model.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
+        }
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);

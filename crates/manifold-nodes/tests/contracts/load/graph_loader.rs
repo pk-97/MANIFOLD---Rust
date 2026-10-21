@@ -1,5 +1,5 @@
 mod tests {
-    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphWire, SerializedParamValue};
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::load::graph_loader::{
         has_retired_params, instantiate_def, BoundaryHandling, GraphBuildError, HandleScope,
@@ -536,7 +536,7 @@ mod tests {
         }
     }
 
-    const WORLD_HANDLE: &str = "Boxes \u{2014} Apply Count with Reset";
+    const WORLD_HANDLE: &str = "Box World";
     const BOX_BODY_HANDLE: &str = "Box Body";
 
     /// The bundled Physics Boxes as it was saved before the box spawner
@@ -665,6 +665,42 @@ mod tests {
         assert!(["sun_x", "sun_y", "sun_z"].iter().all(|p| env.params.get(*p).is_none()));
         let feeds: Vec<_> = graph.wires().iter().filter(|w| w.to == (id("environment"), "sun")).map(|w| w.from.0).collect();
         assert_eq!(feeds, vec![id("sun")], "the Sun light feeds the sky");
+        assert_spawner_on_the_body(graph);
+    }
+
+    fn build(def: EffectGraphDef, what: &str) -> manifold_node_engine::runtime::PresetRuntime {
+        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(def, &registry(), None, false)
+            .unwrap_or_else(|e| panic!("{what} must build: {e:?}"))
+    }
+
+    /// A copies body the load leaves as it was still builds: its metres
+    /// Spacing, which the body no longer declares, counts box sizes.
+    #[test]
+    fn an_old_copies_body_left_as_it_was_still_builds() {
+        let mut def = old_physics_boxes();
+        let transform = def.nodes.iter_mut().find(|n| n.node_id == "physics_demo_120").unwrap();
+        transform.params.insert("scale_y".into(), SerializedParamValue::Float { value: 2.0 });
+        let runtime = build(def, "a body with a stretched transform");
+        let graph = &runtime.graph;
+        let body = graph.get_node(graph.node_id_by_handle(BOX_BODY_HANDLE).unwrap()).unwrap();
+        assert!(body.params.get("copy_spacing").is_none());
+        assert_eq!(body.params.get("copy_size_spacing"), Some(&ParamValue::Float(1.06375)), "1.85 m at the X scale");
+    }
+
+    /// A box transform that also places another node is split so that node
+    /// keeps the turn; the copy takes a handle of its own, since the loader
+    /// registers every handle once.
+    #[test]
+    fn a_shared_box_transform_splits_and_still_builds() {
+        let mut def = old_physics_boxes();
+        def.wires.push(EffectGraphWire { from_node: 120, from_port: "transform".into(), to_node: 124, to_port: "transform".into() });
+        let runtime = build(def, "a shared box transform");
+        let graph = &runtime.graph;
+        let id = |handle: &str| graph.node_id_by_handle(handle).unwrap_or_else(|| panic!("{handle}"));
+        let rot_x = |handle: &str| graph.get_node(id(handle)).unwrap().params.get("rot_x").cloned();
+        assert_eq!(rot_x("Box Transform"), Some(ParamValue::Float(0.08)), "the other node keeps its turned transform");
+        assert_eq!(rot_x("Box Transform copies"), Some(ParamValue::Float(0.0)));
+        assert!(graph.wires().iter().any(|w| w.from.0 == id("Box Transform copies") && w.to == (id(BOX_BODY_HANDLE), "transform")));
         assert_spawner_on_the_body(graph);
     }
 }

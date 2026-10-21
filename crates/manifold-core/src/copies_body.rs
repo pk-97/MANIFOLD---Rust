@@ -50,6 +50,8 @@ const METRES_SPACING: &str = "copy_spacing";
 const SIZE_SPACING: &str = "copy_size_spacing";
 const COPY_LAYOUT: &str = "copy_layout";
 const COPY_TURN: [&str; 3] = ["copy_turn_x", "copy_turn_y", "copy_turn_z"];
+/// A copies body's params whose old card drivers act differently now.
+const LIVE_PARAMS: [&str; 6] = ["copy_count", "copy_layout", "copy_columns", "copy_turn_x", "copy_turn_y", "copy_turn_z"];
 const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
 const TRANSFORM_INPUT: &str = "transform";
 const SOURCE_INPUT: &str = "source";
@@ -58,6 +60,10 @@ const ROTATION_INPUTS: [&str; 3] = ["rot_x", "rot_y", "rot_z"];
 const SCALE_INPUTS: [&str; 3] = ["scale_x", "scale_y", "scale_z"];
 /// The metres spacing a copies body had when none was stored.
 const OLD_DEFAULT_METRES: f32 = 1.25;
+/// A copies body's Spacing default and range, in multiples of the copy's
+/// size. The load writes the default where a copy's old size is unknown.
+pub const SIZE_SPACING_DEFAULT: f32 = 1.1;
+pub const SIZE_SPACING_RANGE: (f32, f32) = (1.0, 20.0);
 /// The Layout labels, by stored value. Pile was relabelled Scatter and keeps 1.
 pub const COPY_LAYOUT_LABELS: [&str; 4] = ["Grid", "Scatter", "Line", "Ring"];
 pub const COPY_LAYOUT_SCATTER: u32 = 1;
@@ -150,6 +156,11 @@ pub struct WorldCopiesMigration {
     /// Copy groups the load leaves as they were, each with why: their old
     /// look cannot be rebuilt from the saved graph.
     pub kept: Vec<String>,
+    /// Cards on an old group's Count, Layout, Columns, Copy Turn or
+    /// transform. They now act at the next physics step: Count, Layout and
+    /// Columns used to wait for Reset, and a transform change moved the
+    /// copies at frame time and kept their speed.
+    pub live_cards: Vec<String>,
 }
 
 /// Where a converted copy group reads one of the values its size depends on.
@@ -169,21 +180,48 @@ impl Lookup {
     }
 }
 
-/// The card that carried a converted copy group's Spacing in metres, and
-/// where its layout, shape and scale come from.
+/// Where an old copy group's layout, shape and scale come from: what its
+/// metres Spacing step was.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SpacingCard {
-    pub card: String,
+pub struct CopySize {
     pub layout: Lookup,
     pub shape: Lookup,
     pub scale: Lookup,
+}
+
+impl CopySize {
+    fn unit(&self, card: &impl Fn(&str) -> Option<f32>) -> f32 {
+        old_unit(self.layout.resolve(card), self.shape.resolve(card), self.scale.resolve(card))
+    }
+
+    /// The Spacing multiple `metres` becomes; [`SIZE_SPACING_DEFAULT`] when
+    /// the copy's old size is unknown.
+    fn multiple(size: Option<&Self>, metres: f32, card: &impl Fn(&str) -> Option<f32>) -> f32 {
+        size.map_or(SIZE_SPACING_DEFAULT, |size| size_multiple(metres, size.unit(card)))
+    }
+}
+
+/// The card that carried an old copy group's Spacing in metres, and its
+/// copy size when the saved graph says it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpacingCard {
+    pub card: String,
+    pub size: Option<CopySize>,
 }
 
 impl SpacingCard {
     /// The Spacing multiple a show's saved `metres` becomes, reading that
     /// show's own card values through `card`.
     pub fn convert(&self, metres: f32, card: impl Fn(&str) -> Option<f32>) -> f32 {
-        size_multiple(metres, old_unit(self.layout.resolve(&card), self.shape.resolve(&card), self.scale.resolve(&card)))
+        CopySize::multiple(self.size.as_ref(), metres, &card)
+    }
+
+    /// The scale card this show's conversion reads, if any.
+    pub fn scale_card(&self) -> Option<&str> {
+        match self.size.as_ref().map(|size| &size.scale) {
+            Some(Lookup::Card { id, .. }) => Some(id),
+            _ => None,
+        }
     }
 }
 
@@ -197,9 +235,16 @@ fn old_unit(layout: f32, shape: f32, scale: f32) -> f32 {
 /// A copies body from before copy groups, found at its graph level.
 struct LegacyBody {
     body: NodeId,
+    /// The Transform node that sized its copies and turned each one; none
+    /// when nothing feeds its transform (scale one, no turn).
     transform: Option<NodeId>,
     name: String,
+    /// Why its old look cannot be rebuilt; it is then left as it was, bar
+    /// Spacing, which always counts copy sizes.
     kept: Option<&'static str>,
+    /// Whether the saved graph says the copy's size: not for an imported
+    /// mesh, nor a transform from something other than a Transform node.
+    sized: bool,
 }
 
 /// Whether `def` still carries spawner controls on a Physics World (a
@@ -234,7 +279,10 @@ pub fn carries_world_copies(def: &EffectGraphDef) -> bool {
 /// - its Layout card names the four layouts, Pile keeping 1 as Scatter.
 ///
 /// A body whose old look cannot be rebuilt is left as it was and named in
-/// [`WorldCopiesMigration::kept`]. Runs only on a graph that still carries a
+/// [`WorldCopiesMigration::kept`], except that its Spacing counts copy sizes
+/// like every body's (the param has no metres form any more): the same
+/// metres where the saved graph says the copy's size, else
+/// [`SIZE_SPACING_DEFAULT`]. Runs only on a graph that still carries a
 /// pre-count port or world controls, so it is idempotent.
 pub fn migrate_world_copies(def: &mut EffectGraphDef) -> WorldCopiesMigration {
     if !carries_world_copies(def) {
@@ -245,7 +293,11 @@ pub fn migrate_world_copies(def: &mut EffectGraphDef) -> WorldCopiesMigration {
     let mut bodies = BTreeMap::new();
     let mut legacy = Vec::new();
     let mut splits = Vec::new();
-    migrate_level(&mut def.nodes, &mut def.wires, &mut bodies, &mut legacy, &mut splits, &mut report);
+    // Every handle and stable id in the graph: the loader registers handles
+    // graph-wide, so a split transform's copy needs names no node has.
+    let mut names = BTreeSet::new();
+    collect_names(&def.nodes, &mut names);
+    migrate_level(&mut def.nodes, &mut def.wires, &mut bodies, &mut legacy, &mut splits, &mut names, &mut report);
 
     if let Some(meta) = def.preset_metadata.as_mut() {
         let mut bound: BTreeSet<(String, String)> = meta
@@ -302,6 +354,7 @@ fn migrate_level(
     bodies: &mut BTreeMap<String, Option<crate::NodeId>>,
     legacy: &mut Vec<LegacyBody>,
     splits: &mut Vec<(NodeId, NodeId)>,
+    names: &mut BTreeSet<String>,
     report: &mut WorldCopiesMigration,
 ) {
     let worlds: Vec<u32> = nodes.iter().filter(|n| n.type_id == PHYSICS_WORLD_TYPE_ID).map(|n| n.id).collect();
@@ -377,14 +430,14 @@ fn migrate_level(
         }
     }
     for body in legacy_bodies {
-        if let Some(found) = prepare_legacy_body(nodes, wires, body, splits) {
+        if let Some(found) = prepare_legacy_body(nodes, wires, body, splits, names) {
             legacy.push(found);
         }
     }
     for node in nodes.iter_mut() {
         if let Some(group) = node.group.as_mut() {
             let group = &mut **group;
-            migrate_level(&mut group.nodes, &mut group.wires, bodies, legacy, splits, report);
+            migrate_level(&mut group.nodes, &mut group.wires, bodies, legacy, splits, names, report);
         }
     }
 }
@@ -397,29 +450,42 @@ fn prepare_legacy_body(
     wires: &mut Vec<EffectGraphWire>,
     body: u32,
     splits: &mut Vec<(NodeId, NodeId)>,
+    names: &mut BTreeSet<String>,
 ) -> Option<LegacyBody> {
     let body_node = nodes.iter().find(|n| n.id == body && n.type_id == RIGID_BODY_TYPE_ID)?;
     let name = body_node.handle.clone().unwrap_or_else(|| body_node.node_id.to_string());
     let body_stable = body_node.node_id.clone();
     let wired_into = |node: u32, ports: &[&str]| wires.iter().any(|w| w.to_node == node && ports.contains(&w.to_port.as_str()));
-    let transform = wires
-        .iter()
-        .find(|w| w.to_node == body && w.to_port == TRANSFORM_INPUT)
-        .map(|w| w.from_node)
-        .filter(|id| nodes.iter().any(|n| n.id == *id && n.type_id == TRANSFORM_TYPE_ID));
-    let kept = match transform {
-        None => Some("its transform does not come from a Transform node"),
-        Some(_) if wired_into(body, &[SOURCE_INPUT]) => Some("it copies an imported mesh, whose size is not known at load"),
-        Some(_) if wired_into(body, &[METRES_SPACING]) => Some("its Spacing is wired in metres"),
-        Some(_) if wired_into(body, &[SHAPE_PARAM]) => Some("its Shape is wired"),
-        Some(id) if wired_into(id, &SCALE_INPUTS) => Some("its Scale is wired"),
+    let fed = wires.iter().find(|w| w.to_node == body && w.to_port == TRANSFORM_INPUT).map(|w| w.from_node);
+    let transform = fed.filter(|id| nodes.iter().any(|n| n.id == *id && n.type_id == TRANSFORM_TYPE_ID));
+    let foreign = fed.is_some() && transform.is_none();
+    let sourced = wired_into(body, &[SOURCE_INPUT]);
+    let kept = if foreign {
+        Some("its transform does not come from a Transform node")
+    } else if sourced {
+        Some("it copies an imported mesh, whose size is not known at load")
+    } else if wired_into(body, &[METRES_SPACING]) {
+        Some("its Spacing is wired in metres")
+    } else if wired_into(body, &[SHAPE_PARAM]) {
+        Some("its Shape is wired")
+    } else if transform.is_some_and(|id| wired_into(id, &SCALE_INPUTS)) {
+        Some("its Scale is wired")
+    } else if transform.is_some_and(|id| !uniform_scale(nodes, id)) {
         // A layout steps by the copy's size along each axis; old Spacing was
         // the same metres on all three.
-        Some(id) if !uniform_scale(nodes, id) => Some("its Scale differs between axes"),
-        Some(_) => None,
+        Some("its Scale differs between axes")
+    } else {
+        None
     };
+    // Spacing has no metres form any more; a wire into it now counts sizes.
+    for wire in wires.iter_mut().filter(|w| w.to_node == body && w.to_port == METRES_SPACING) {
+        wire.to_port = SIZE_SPACING.to_string();
+    }
+    let sized = !foreign && !sourced;
+    let stable_of = |nodes: &[EffectGraphNode], id: u32| nodes.iter().find(|n| n.id == id).map(|n| n.node_id.clone());
     let Some(mut transform) = transform.filter(|_| kept.is_none()) else {
-        return Some(LegacyBody { body: body_stable, transform: None, name, kept });
+        let transform = transform.and_then(|id| stable_of(&nodes[..], id));
+        return Some(LegacyBody { body: body_stable, transform, name, kept, sized });
     };
     let shared = wires
         .iter()
@@ -427,11 +493,9 @@ fn prepare_legacy_body(
     if shared {
         let original = nodes.iter().find(|n| n.id == transform).expect("transform found above").clone();
         let id = nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
-        let mut stable = format!("{}_copies", original.node_id);
-        while nodes.iter().any(|n| n.node_id.as_str() == stable) {
-            stable.push('_');
-        }
-        let copy = EffectGraphNode { id, node_id: NodeId::new(&stable), ..original.clone() };
+        let stable = unique_name(names, format!("{}_copies", original.node_id), "_");
+        let handle = original.handle.as_ref().map(|handle| unique_name(names, format!("{handle} copies"), " "));
+        let copy = EffectGraphNode { id, node_id: NodeId::new(&stable), handle, ..original.clone() };
         splits.push((original.node_id.clone(), copy.node_id.clone()));
         nodes.push(copy);
         // The body's own transform keeps every driver of the original.
@@ -449,8 +513,31 @@ fn prepare_legacy_body(
             wire.to_port = (*turn).to_string();
         }
     }
-    let transform_stable = nodes.iter().find(|n| n.id == transform).expect("transform exists").node_id.clone();
-    Some(LegacyBody { body: body_stable, transform: Some(transform_stable), name, kept: None })
+    let transform = stable_of(&nodes[..], transform);
+    Some(LegacyBody { body: body_stable, transform, name, kept: None, sized })
+}
+
+/// `wanted`, or `wanted` then `separator` and the first free number,
+/// recorded as taken.
+fn unique_name(names: &mut BTreeSet<String>, wanted: String, separator: &str) -> String {
+    let mut name = wanted.clone();
+    let mut number = 2;
+    while names.contains(&name) {
+        name = format!("{wanted}{separator}{number}");
+        number += 1;
+    }
+    names.insert(name.clone());
+    name
+}
+
+fn collect_names(nodes: &[EffectGraphNode], names: &mut BTreeSet<String>) {
+    for node in nodes {
+        names.extend(node.handle.iter().cloned());
+        names.insert(node.node_id.to_string());
+        if let Some(group) = &node.group {
+            collect_names(&group.nodes, names);
+        }
+    }
 }
 
 /// The value and card half of converting each legacy copies body: Copy
@@ -481,15 +568,13 @@ fn convert_copy_groups(
         }
     }
     for found in legacy {
-        let (Some(transform), None) = (&found.transform, found.kept) else {
-            report.kept.push(format!(
-                "Copies: \"{}\" was left as it was because {}; its copies may sit differently.",
+        match found.kept {
+            Some(why) => report.kept.push(format!(
+                "Copies: \"{}\" was left as it was because {why}; its copies may sit differently.",
                 found.name,
-                found.kept.unwrap_or("it has no transform"),
-            ));
-            continue;
-        };
-        report.converted += 1;
+            )),
+            None => report.converted += 1,
+        }
         let card = |def: &EffectGraphDef, node: &NodeId, param: &str| -> Option<(String, f32)> {
             def.preset_metadata.as_ref()?.bindings.iter().find_map(|b| match &b.target {
                 BindingTarget::Node { node_id, param: p } if node_id == node && p == param => {
@@ -507,7 +592,9 @@ fn convert_copy_groups(
         };
 
         // Copy Turn: the rotation turned each copy; the group is unturned.
+        let turned = found.transform.as_ref().filter(|_| found.kept.is_none());
         for (axis, turn) in COPY_TURN.iter().enumerate() {
+            let Some(transform) = turned else { break };
             let rotation = ROTATION_INPUTS[axis];
             let value = stored(def, transform, rotation).unwrap_or(0.0);
             let bound = card(def, transform, rotation);
@@ -539,20 +626,21 @@ fn convert_copy_groups(
             }
         }
 
-        // Spacing: the same metres, as a multiple of the copy's size.
-        let layout = lookup(def, &found.body, COPY_LAYOUT, 0.0);
-        let shape = lookup(def, &found.body, SHAPE_PARAM, 1.0);
-        let scale = lookup(def, transform, SCALE_INPUTS[0], 1.0);
-        let defaults = |id: &str| [&layout, &shape, &scale].iter().find_map(|l| match l {
-            Lookup::Card { id: card, value } if card == id => Some(*value),
-            _ => None,
+        // Spacing: the same metres, as a multiple of the copy's size. A
+        // transform that is not a Transform node, or a body with none, sizes
+        // its copy at scale one.
+        let size = found.sized.then(|| CopySize {
+            layout: lookup(def, &found.body, COPY_LAYOUT, 0.0),
+            shape: lookup(def, &found.body, SHAPE_PARAM, 1.0),
+            scale: found.transform.as_ref().map_or(Lookup::Value(1.0), |t| lookup(def, t, SCALE_INPUTS[0], 1.0)),
         });
-        let unit = old_unit(layout.resolve(&defaults), shape.resolve(&defaults), scale.resolve(&defaults));
+        let graph_values = |_: &str| None;
+        let multiple = |metres: f32| CopySize::multiple(size.as_ref(), metres, &graph_values);
         let spacing_card = card(def, &found.body, METRES_SPACING);
         if let Some(body) = find_node_mut(&mut def.nodes, &found.body) {
             let metres = body.params.remove(METRES_SPACING).as_ref().and_then(scalar_value).unwrap_or(OLD_DEFAULT_METRES);
             let metres = spacing_card.as_ref().map_or(metres, |(_, default)| *default);
-            body.params.insert(SIZE_SPACING.to_string(), SerializedParamValue::Float { value: size_multiple(metres, unit) });
+            body.params.insert(SIZE_SPACING.to_string(), SerializedParamValue::Float { value: multiple(metres) });
             if body.exposed_params.remove(METRES_SPACING) {
                 body.exposed_params.insert(SIZE_SPACING.to_string());
             }
@@ -565,15 +653,15 @@ fn convert_copy_groups(
                     && param == METRES_SPACING
                 {
                     *param = SIZE_SPACING.to_string();
-                    binding.default_value = size_multiple(binding.default_value, unit);
+                    binding.default_value = multiple(binding.default_value);
                 }
             }
             for spec in meta.params.iter_mut().filter(|p| &p.id == id) {
-                spec.min = size_multiple(spec.min, unit);
-                spec.max = size_multiple(spec.max, unit);
-                spec.default_value = size_multiple(spec.default_value, unit);
+                (spec.min, spec.max) =
+                    if size.is_some() { (multiple(spec.min), multiple(spec.max)) } else { SIZE_SPACING_RANGE };
+                spec.default_value = multiple(spec.default_value);
             }
-            report.spacing_cards.push(SpacingCard { card: id.clone(), layout: layout.clone(), shape, scale });
+            report.spacing_cards.push(SpacingCard { card: id.clone(), size: size.clone() });
         }
         // Layout: Pile keeps 1 and reads Scatter; Line and Ring join it.
         let layout_cards: BTreeSet<String> = meta
@@ -585,6 +673,13 @@ fn convert_copy_groups(
         for spec in meta.params.iter_mut().filter(|p| layout_cards.contains(&p.id)) {
             spec.max = (COPY_LAYOUT_LABELS.len() - 1) as f32;
             spec.value_labels = COPY_LAYOUT_LABELS.iter().map(|label| (*label).to_string()).collect();
+        }
+        for binding in &meta.bindings {
+            let BindingTarget::Node { node_id, param } = &binding.target else { continue };
+            let live = (node_id == &found.body && LIVE_PARAMS.contains(&param.as_str())) || found.transform.as_ref() == Some(node_id);
+            if live && !report.live_cards.contains(&binding.id) {
+                report.live_cards.push(binding.id.clone());
+            }
         }
     }
 }
@@ -704,19 +799,20 @@ impl crate::project::Project {
                 notes.insert(format!("\"{name}\": {kept}"));
             }
         }
-        /// Convert one instance's saved Spacing card values, reading its own cards.
-        fn convert_cards(fx: &mut PresetInstance, cards: &[SpacingCard], notes: &mut BTreeSet<String>) {
-            for spacing in cards {
+        fn modulated(fx: &PresetInstance, id: &str) -> bool {
+            fx.drivers.iter().flatten().any(|d| d.param_id == id)
+                || fx.envelopes.iter().flatten().any(|e| e.param_id == id)
+                || fx.audio_mods.iter().flatten().any(|m| m.param_id == id)
+        }
+        /// Convert one instance's saved Spacing card values, reading its own
+        /// cards, and name the modulated cards that now act differently.
+        fn convert_cards(fx: &mut PresetInstance, outcome: &WorldCopiesMigration, notes: &mut BTreeSet<String>) {
+            for spacing in &outcome.spacing_cards {
                 if fx.params.get(&spacing.card).is_none() {
                     continue;
                 }
                 let metres = fx.get_base_param(&spacing.card);
-                let modulated = [Some(&spacing.card), card_id(&spacing.scale)].into_iter().flatten().any(|id| {
-                    fx.drivers.iter().flatten().any(|d| d.param_id == id.as_str())
-                        || fx.envelopes.iter().flatten().any(|e| e.param_id == id.as_str())
-                        || fx.audio_mods.iter().flatten().any(|m| m.param_id == id.as_str())
-                });
-                if modulated {
+                if [Some(spacing.card.as_str()), spacing.scale_card()].into_iter().flatten().any(|id| modulated(fx, id)) {
                     notes.insert(format!(
                         "Copies: a modulated Scale or Spacing card ({}) now spaces copies by their size; \
                          they match the old look only at the saved value.",
@@ -727,11 +823,12 @@ impl crate::project::Project {
                 let multiple = spacing.convert(metres, read);
                 fx.write_base_param(&spacing.card, multiple);
             }
-        }
-        fn card_id(lookup: &Lookup) -> Option<&String> {
-            match lookup {
-                Lookup::Card { id, .. } => Some(id),
-                Lookup::Value(_) => None,
+            for card in outcome.live_cards.iter().filter(|card| modulated(fx, card)) {
+                notes.insert(format!(
+                    "Copies: a modulated card ({card}) on the copies' Count, Layout, Columns, turn or \
+                     transform now acts at the next physics step: Count, Layout and Columns no longer \
+                     wait for Reset, and a transform change puts the copies back in formation at rest."
+                ));
             }
         }
 
@@ -748,7 +845,7 @@ impl crate::project::Project {
             if let Some(id) = preset.id().cloned()
                 && outcome.converted > 0
             {
-                converted.push((id, preset.def.clone(), outcome.spacing_cards));
+                converted.push((id, preset.def.clone(), outcome));
             }
         }
         self.for_each_preset_instance_mut(|fx| {
@@ -760,13 +857,13 @@ impl crate::project::Project {
                     if outcome.changed {
                         fx.refresh_manifest_from_graph();
                     }
-                    convert_cards(fx, &outcome.spacing_cards, &mut notes);
+                    convert_cards(fx, &outcome, &mut notes);
                 }
                 None => {
-                    if let Some((_, def, cards)) = converted.iter().find(|(id, _, _)| id == fx.effect_type()) {
+                    if let Some((_, def, outcome)) = converted.iter().find(|(id, _, _)| id == fx.effect_type()) {
                         fx.graph = Some(def.clone());
                         fx.refresh_manifest_from_graph();
-                        convert_cards(fx, cards, &mut notes);
+                        convert_cards(fx, outcome, &mut notes);
                         notes.insert(format!(
                             "Copies: a \"{}\" layer now plays the copy of the scene this file saved, so its \
                              boxes stay as they were; it no longer follows changes to the stock scene.",
@@ -792,6 +889,12 @@ mod tests {
     use crate::effect_graph_def::SerializedParamValue;
     use crate::preset_def::PresetKind;
     use crate::project::{EmbeddedOrigin, EmbeddedPreset, Project};
+
+    /// The metres a body's Spacing puts between unit cubes in Scatter.
+    fn spaced_metres(body: &EffectGraphNode) -> f32 {
+        let multiple = body.params.get("copy_size_spacing").and_then(scalar_value).expect("Spacing counts copy sizes");
+        multiple * spacing_unit(true, platonic_width(1, 1.0))[0]
+    }
 
     /// A Physics Boxes graph from before the spawner moved: the four
     /// controls stored on the world, Count exposed on a card, Spacing wired.
@@ -841,11 +944,11 @@ mod tests {
         assert!(world.params.contains_key("speed") && world.exposed_params.contains("reset"), "the world keeps its own");
         let body = def.nodes.iter().find(|n| n.node_id == "box_body").unwrap();
         assert_eq!(body.params.get("copy_count"), Some(&SerializedParamValue::Float { value: 256.0 }));
-        assert_eq!(body.params.get("copy_spacing"), Some(&SerializedParamValue::Float { value: 1.85 }));
+        assert!((spaced_metres(body) - 1.85).abs() < 1e-6, "Spacing counts the cube's size and keeps its metres");
         assert_eq!(body.params.get("copy_columns"), Some(&SerializedParamValue::Float { value: 24.0 }));
         assert_eq!(body.params.get("copy_layout"), Some(&SerializedParamValue::Enum { value: 1 }));
         assert!(body.exposed_params.contains("copy_count"));
-        assert!(def.wires.iter().any(|w| w.from_node == 5 && w.to_node == 121 && w.to_port == "copy_spacing"), "the wire follows");
+        assert!(def.wires.iter().any(|w| w.from_node == 5 && w.to_node == 121 && w.to_port == "copy_size_spacing"), "the wire follows");
         let meta = def.preset_metadata.as_ref().unwrap();
         let count = meta.bindings.iter().find(|b| b.id == "40_copy_count").expect("the card keeps its id");
         assert!(matches!(&count.target, BindingTarget::Node { node_id, param } if node_id == "box_body" && param == "copy_count"));
@@ -878,7 +981,7 @@ mod tests {
         migrate_world_copies(&mut def);
         let body = def.nodes.iter().find(|n| n.node_id == "box_body").unwrap();
         assert_eq!(body.params.get("copy_count"), Some(&SerializedParamValue::Float { value: 9.0 }));
-        assert_eq!(def.wires.iter().filter(|w| w.to_port == "copy_spacing").count(), 1, "no double wire");
+        assert_eq!(def.wires.iter().filter(|w| w.to_port == "copy_size_spacing").count(), 1, "no double wire");
     }
 
     #[test]
@@ -978,7 +1081,6 @@ mod tests {
         let body = def.nodes.iter().find(|n| n.node_id == "box_body").unwrap();
         for (param, value) in [
             ("copy_count", SerializedParamValue::Float { value: 256.0 }),
-            ("copy_spacing", SerializedParamValue::Float { value: 1.85 }),
             ("copy_columns", SerializedParamValue::Float { value: 24.0 }),
             ("copy_layout", SerializedParamValue::Enum { value: 1 }),
         ] {
@@ -987,12 +1089,13 @@ mod tests {
         let meta = def.preset_metadata.as_ref().unwrap();
         assert!(meta.bindings.iter().any(|b| b.id == "40_copy_count"
             && matches!(&b.target, BindingTarget::Node { node_id, param } if node_id == "box_body" && param == "copy_count")));
-        // This body has no transform, so it stays as it was and the report says so.
+        assert!((spaced_metres(body) - 1.85).abs() < 1e-6);
+        // Nothing feeds this body's transform: an unturned cube at scale one.
         let notes = &p.load_report.migration_notes;
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!(notes.iter().all(|n| n.contains("\"Box Scene\"")));
         assert!(notes.iter().any(|n| n.contains("onto its copies body")));
-        assert!(notes.iter().any(|n| n.contains("left as it was")));
+        assert!(notes.iter().any(|n| n.contains("live copy group")));
 
         let migrated = p.embedded_presets[0].def.clone();
         p.on_after_deserialize();

@@ -144,20 +144,68 @@ fn shapes_the_load_cannot_rebuild_are_left_as_they_were_and_named() {
     stretched.nodes.iter_mut().find(|n| n.id == 120).unwrap().params.insert("scale_y".into(), SerializedParamValue::Float { value: 2.0 });
     let mut sourced = old_pile(&[]);
     sourced.wires.push(EffectGraphWire { from_node: 5, from_port: "out".into(), to_node: 121, to_port: "source".into() });
-    let mut loose = old_pile(&[]);
-    loose.wires.retain(|w| w.to_port != "transform");
-    for (mut def, why) in [
-        (wired("scale_x"), "Scale is wired"),
-        (stretched, "differs between axes"),
-        (sourced, "imported mesh"),
-        (loose, "Transform node"),
+    let mut foreign = old_pile(&[]);
+    foreign.wires.retain(|w| w.to_port != "transform");
+    foreign.wires.push(EffectGraphWire { from_node: 5, from_port: "out".into(), to_node: 121, to_port: "transform".into() });
+    // Where the saved graph says the copy's size, Spacing keeps its metres;
+    // where it does not, it takes the default multiple.
+    let pile_metres = Some(1.85);
+    for (mut def, why, metres) in [
+        (wired("scale_x"), "Scale is wired", pile_metres),
+        (stretched, "differs between axes", pile_metres),
+        (sourced, "imported mesh", None),
+        (foreign, "Transform node", None),
     ] {
         let report = migrate_world_copies(&mut def);
         assert_eq!(report.converted, 0, "{why}");
         assert!(report.kept.iter().any(|line| line.contains(why)), "{why}: {:?}", report.kept);
         assert_eq!(value(&def, "box_xf", "rot_x"), Some(0.08), "{why}: left as it was");
-        assert_eq!(value(&def, "box_body", "copy_spacing"), Some(1.85), "{why}");
+        assert_eq!(value(&def, "box_body", "copy_spacing"), None, "{why}: the param has no metres form");
+        let spacing = value(&def, "box_body", "copy_size_spacing").unwrap();
+        match metres {
+            Some(metres) => assert!((spacing * pile_unit() - metres).abs() < 1e-6, "{why}: {spacing}"),
+            None => assert_eq!(spacing, SIZE_SPACING_DEFAULT, "{why}"),
+        }
     }
+}
+
+#[test]
+fn a_body_with_nothing_on_its_transform_converts_as_an_unturned_copy_at_scale_one() {
+    let mut def = old_pile(&[]);
+    def.wires.retain(|w| w.to_port != "transform");
+    let report = migrate_world_copies(&mut def);
+    assert_eq!((report.converted, report.kept.len()), (1, 0));
+    let spacing = value(&def, "box_body", "copy_size_spacing").unwrap();
+    assert!((spacing * spacing_unit(true, platonic_width(1, 1.0))[0] - 1.85).abs() < 1e-6);
+    assert_eq!(COPY_TURN.map(|p| value(&def, "box_body", p)), [None; 3]);
+    assert_eq!(value(&def, "box_xf", "rot_x"), Some(0.08), "an unwired transform is not the copies'");
+}
+
+#[test]
+fn a_spacing_card_of_unknown_size_takes_the_default_multiple() {
+    let mut def = old_pile(&[("40_copy_spacing", "world", "copy_spacing", 1.85)]);
+    def.wires.push(EffectGraphWire { from_node: 5, from_port: "out".into(), to_node: 121, to_port: "source".into() });
+    let report = migrate_world_copies(&mut def);
+    assert_eq!(target(&def, "40_copy_spacing"), ("box_body", "copy_size_spacing"));
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let spec = meta.params.iter().find(|p| p.id == "40_copy_spacing").unwrap();
+    assert_eq!((spec.min, spec.max, spec.default_value), (SIZE_SPACING_RANGE.0, SIZE_SPACING_RANGE.1, SIZE_SPACING_DEFAULT));
+    let card = meta.bindings.iter().find(|b| b.id == "40_copy_spacing").unwrap();
+    assert_eq!(card.default_value, SIZE_SPACING_DEFAULT);
+    assert_eq!(report.spacing_cards, [SpacingCard { card: "40_copy_spacing".into(), size: None }]);
+    assert_eq!(report.spacing_cards[0].convert(3.0, |_| None), SIZE_SPACING_DEFAULT, "a show's saved metres too");
+}
+
+#[test]
+fn a_split_transform_s_copy_takes_a_handle_no_node_has() {
+    let mut def = old_pile(&[]);
+    for (id, handle) in [(120, "Box Transform"), (7, "Box Transform copies")] {
+        def.nodes.iter_mut().find(|n| n.id == id).unwrap().handle = Some(handle.into());
+    }
+    def.wires.push(EffectGraphWire { from_node: 120, from_port: "transform".into(), to_node: 7, to_port: "transform".into() });
+    migrate_world_copies(&mut def);
+    assert_eq!(node(&def, "box_xf").handle.as_deref(), Some("Box Transform"));
+    assert_eq!(node(&def, "box_xf_copies").handle.as_deref(), Some("Box Transform copies 2"));
 }
 
 /// A pile saved with its Spacing and Scale on cards, in a layer graph of
@@ -211,4 +259,28 @@ fn a_tracking_layer_takes_the_file_s_converted_preset_as_its_own() {
     assert_eq!(value(def, "box_body", "copy_turn_x"), Some(0.08));
     assert_eq!(target(def, "40_copy_spacing"), ("box_body", "copy_size_spacing"));
     assert!(project.load_report.migration_notes.iter().any(|n| n.contains("no longer follows")), "{:?}", project.load_report.migration_notes);
+}
+
+/// Count, Layout and Columns used to wait for Reset, and a transform change
+/// moved the copies at frame time keeping their speed. A show that modulates
+/// one of them now plays it live, and the load report says so.
+#[test]
+fn a_modulated_count_card_is_named_as_now_live() {
+    use crate::effects::ParameterDriver;
+    use crate::types::{BeatDivision, DriverWaveform};
+
+    let def = old_pile(&[("40_copy_count", "world", "copy_count", 64.0), ("120_pos_x", "box_xf", "pos_x", 0.0)]);
+    let mut project = Project::default();
+    let mut layer =
+        crate::layer::Layer::new_generator("Pile".into(), crate::preset_type_id::PresetTypeId::from_string("Pile".into()), 0);
+    let fx = layer.gen_params_mut().unwrap();
+    fx.graph = Some(def);
+    fx.refresh_manifest_from_graph();
+    fx.drivers = Some(vec![ParameterDriver::new("40_copy_count", BeatDivision::Quarter, DriverWaveform::Sine)]);
+    project.timeline.layers.push(layer);
+    project.on_after_deserialize();
+
+    let notes = &project.load_report.migration_notes;
+    assert!(notes.iter().any(|n| n.contains("40_copy_count") && n.contains("wait for Reset")), "{notes:?}");
+    assert!(!notes.iter().any(|n| n.contains("120_pos_x")), "an unmodulated card is not named: {notes:?}");
 }

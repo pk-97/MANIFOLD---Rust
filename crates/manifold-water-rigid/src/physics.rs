@@ -186,7 +186,7 @@ pub struct CopySpawn {
 
 impl Default for CopySpawn {
     fn default() -> Self {
-        Self { count: 100.0, spacing: 1.1, columns: 16.0, layout: 0.0, turn: [0.0; 3] }
+        Self { count: 100.0, spacing: manifold_core::copies_body::SIZE_SPACING_DEFAULT, columns: 16.0, layout: 0.0, turn: [0.0; 3] }
     }
 }
 
@@ -581,12 +581,12 @@ impl RigidSimulation {
 
     /// Copy group `group`'s active copies.
     pub fn active_copies(&self, group: usize) -> usize {
-        self.groups.get(group).map_or(0, CopyGroup::active)
+        self.groups.get(group).map_or(0, |state| state.active)
     }
 
     /// Active copies across every copy group.
     pub fn total_active_copies(&self) -> usize {
-        self.groups.iter().map(CopyGroup::active).sum()
+        self.groups.iter().map(|state| state.active).sum()
     }
 
     /// Copies the groups asked for that the world's `MAX_COPIES` left unmade
@@ -1301,7 +1301,7 @@ impl RigidSimulation {
                 });
             }
             let kind_became_dynamic = prototype.kind == 1 && old.is_some_and(|old| old.kind != 1);
-            for index in 0..state.active() {
+            for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
                 };
@@ -1779,7 +1779,7 @@ impl RigidSimulation {
             let prototype = &edit.body;
             let Some(arrangement) = state.arrangement else { continue };
             let placed = Arrangement { origin: prototype.transform.pos, rotation: prototype.transform.rot_euler, ..arrangement };
-            for index in 0..state.active() {
+            for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
                 };
@@ -1867,7 +1867,7 @@ impl RigidSimulation {
             Some((before, after, alpha)) => Some(self.targeted_fields.span(before, after, alpha)?),
             None => None,
         };
-        let any_copies = self.groups.iter().any(|state| state.active() > 0);
+        let any_copies = self.groups.iter().any(|state| state.active > 0);
         let world = self.world.as_mut().expect("world constructed above");
         let mut fast_count = 0;
         let mut fast_steps = 1;
@@ -1941,7 +1941,7 @@ impl RigidSimulation {
             }
         }
         for (group, (prototype, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate() {
-            let active = state.active();
+            let active = state.active;
             let Some(prototype) = prototype.as_ref().filter(|body| body.enabled && body.kind == 1) else {
                 state.bullet_enabled[..active].fill(false);
                 continue;
@@ -2019,7 +2019,7 @@ impl RigidSimulation {
             let Some(arrangement) = state.arrangement else { continue };
             let placed = Arrangement { origin: prototype.transform.pos, rotation: prototype.transform.rot_euler, ..arrangement };
             let world = self.world.as_mut().expect("world constructed above");
-            for index in 0..state.active() {
+            for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
                 };
@@ -2087,7 +2087,7 @@ impl RigidSimulation {
             .filter_map(|(index, handle)| handle.map(|handle| (handle, inputs[index].as_slice())))
             .chain(self.groups.iter().enumerate().flat_map(|(group, state)| {
                 let input = inputs[body_count + group].as_slice();
-                state.handles[..state.active()]
+                state.handles[..state.active]
                     .iter()
                     .flatten()
                     .map(move |&handle| (handle, input))
@@ -2110,7 +2110,7 @@ impl RigidSimulation {
         // Box3D bullet CCD does not sweep Animated motion. Smaller outer
         // steps put fast moving/rotating colliders into contact with Dynamics.
         const MAX_MICROSTEPS: usize = 512;
-        let group_active = |group: usize| self.groups.get(group).is_some_and(|state| state.active() > 0);
+        let group_active = |group: usize| self.groups.get(group).is_some_and(|state| state.active > 0);
         let dynamic_extent = bodies
             .iter()
             .enumerate()

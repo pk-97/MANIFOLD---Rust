@@ -204,7 +204,7 @@ impl RigidSimulation {
             }
         }
         for group in targets.groups() {
-            if self.groups.get(group).is_none_or(|state| state.active() == 0) {
+            if self.groups.get(group).is_none_or(|state| state.active == 0) {
                 return Err(format!(
                     "Physics: impulse target copy group {group} has no active copies"
                 ));
@@ -288,7 +288,7 @@ impl RigidSimulation {
                     let target = bodies + group;
                     let hit = sum_fields[target].has_events();
                     let input = std::slice::from_ref(&inputs[target]);
-                    state.handles[..if hit { state.active() } else { 0 }]
+                    state.handles[..if hit { state.active } else { 0 }]
                         .iter()
                         .flatten()
                         .map(move |&handle| (handle, input))
