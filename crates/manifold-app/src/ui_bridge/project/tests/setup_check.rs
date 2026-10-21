@@ -446,3 +446,62 @@ fn the_fit_report_is_reallocated_only_on_change() {
     let released = record(&rig, &[(water, snapshot(SetupFit::default()))]);
     assert!(released.is_empty(), "an edit releases the latch");
 }
+
+impl Rig {
+    /// The domain box's side the scene model reads now.
+    fn domain_extent(&self) -> [f32; 3] {
+        let mut def = effective_def(&self.project, &self.layer);
+        let (_, layer) = self.project.timeline.find_layer_by_id(&self.layer).unwrap();
+        crate::scene_gizmo::fold_card_values(&mut def, layer.gen_params().unwrap()).expect("card values fold into the graph");
+        let water = rows(&def).into_iter().filter(|row| row.is_group && row.liquid_domain.is_some()).last().expect("the water");
+        water.fluid_domain.expect("the unwired domain's cube").size
+    }
+}
+
+/// The inserted water has no domain transform, so `domain_size` is the one
+/// value that sizes its box; its card row binds to that param.
+#[test]
+fn the_water_card_has_a_domain_size_row_bound_to_the_real_size() {
+    let rig = Rig::new();
+    let def = effective_def(&rig.project, &rig.layer);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let id = binding(&def, &rig.domain, "domain_size");
+    let spec = meta.params.iter().find(|spec| spec.id == id).expect("the Domain Size row");
+    assert_eq!(spec.name, "Domain Size");
+    assert!(spec.section.as_deref().is_some_and(|section| section.ends_with(" - Simulation")), "{:?}", spec.section);
+    assert_eq!((spec.min, spec.max), (0.5, 20.0));
+    let (_, layer) = rig.project.timeline.find_layer_by_id(&rig.layer).unwrap();
+    let size = layer.gen_params().unwrap().get_base_param(&id);
+    assert_eq!(rig.domain_extent(), [size; 3], "the row's value is the box's side");
+    let feeds_domain = |wire: &manifold_core::effect_graph_def::EffectGraphWire| wire.to_port == "domain";
+    let in_family = def.nodes.iter().filter_map(|node| node.group.as_deref()).flat_map(|group| &group.wires);
+    assert!(!in_family.chain(&def.wires).any(feeds_domain), "no second size source feeds the domain");
+    for ignored in ["emission", "inflow_speed"] {
+        assert!(!meta.bindings.iter().any(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == ignored)));
+    }
+}
+
+/// A slider drag is one undo step; the box follows it and the setup check
+/// rechecks on every size edit.
+#[test]
+fn dragging_domain_size_is_one_undo_step_and_resizes_the_domain() {
+    let mut rig = Rig::new();
+    let domain = rig.domain.clone();
+    rig.set(&domain, "fill_height", 3.0);
+    assert_eq!(rig.problems(), Vec::new(), "a 3 m fill fits the 4 m box");
+    let def = effective_def(&rig.project, &rig.layer);
+    let id = binding(&def, &domain, "domain_size");
+    let before = rig.project.clone();
+    let mut service = EditingService::new();
+    let target = manifold_core::GraphTarget::Generator(rig.layer.clone());
+    let command = manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, id.clone(), 4.0, 2.0);
+    service.execute(Box::new(command), &mut rig.project);
+    assert_eq!(service.take_rejection(), None);
+    assert_eq!(rig.domain_extent(), [2.0; 3]);
+    assert!(rig.problems().contains(&SetupProblemKind::FillCapped), "the fill now pokes through the lower top");
+    assert!(service.undo(&mut rig.project));
+    assert_eq!(rig.domain_extent(), [4.0; 3]);
+    assert_eq!(rig.problems(), Vec::new());
+    assert_eq!(effective_def(&rig.project, &rig.layer), effective_def(&before, &rig.layer));
+    assert!(!service.undo(&mut rig.project), "the drag was exactly one step");
+}
