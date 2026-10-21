@@ -73,7 +73,7 @@ fn bare_world(g: f32, air_resistance: f32) -> serde_json::Value {
         .map(|param| param["id"].clone())
         .filter(|id| id.as_str().is_some_and(|id| id.starts_with("sceneModifier:") && id.ends_with("\"enabled\"]")))
         .collect();
-    assert_eq!(enabled.len(), 2, "the swarm brings an Attractor and gusts");
+    assert_eq!(enabled.len(), 3, "the swarm brings an Attractor, a Radial Force and gusts");
     set_card(&mut doc, &enabled, 0.0);
     for modifier in doc["sceneModifiers"].as_array_mut().unwrap() {
         for stage in modifier["graph"]["nodes"].as_array_mut().unwrap() {

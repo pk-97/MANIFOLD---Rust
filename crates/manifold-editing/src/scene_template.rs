@@ -8,7 +8,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
 use manifold_core::scene_graph_edit::SceneGraphEditError;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
-use manifold_core::scene_template::{SceneTemplate, insert_scene_template};
+use manifold_core::scene_template::{PrepareForce, SceneTemplate, insert_scene_template, insert_scene_template_preparing};
 
 use crate::command::Command;
 use crate::scene_transaction::{SceneGraphRejection, SceneGraphTransaction};
@@ -34,6 +34,24 @@ impl InsertSceneTemplateCommand {
         Ok(Self {
             transaction: SceneGraphTransaction::prepare(project, target, catalog_default, "Add to Scene", |graph| {
                 insert_scene_template(graph, &scene, water.as_ref(), &template)
+            })?,
+        })
+    }
+
+    /// [`Self::new`] for a template that may bring forces, each prepared by
+    /// `prepare` as the Forces menu prepares one.
+    pub fn new_preparing(
+        project: &Project,
+        target: GraphTarget,
+        scene: SceneNodeRef,
+        water: Option<SceneNodeRef>,
+        template: SceneTemplate,
+        catalog_default: &EffectGraphDef,
+        prepare: &PrepareForce<'_>,
+    ) -> Result<Self, SceneGraphEditError> {
+        Ok(Self {
+            transaction: SceneGraphTransaction::prepare(project, target, catalog_default, "Add to Scene", |graph| {
+                insert_scene_template_preparing(graph, &scene, water.as_ref(), &template, prepare)
             })?,
         })
     }

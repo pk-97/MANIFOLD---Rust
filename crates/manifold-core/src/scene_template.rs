@@ -8,7 +8,7 @@
 //! port type, and merges the exposures. The result is one candidate graph:
 //! nothing is written until the caller commits it.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::NodeId;
 use crate::effect_graph_def::{
@@ -60,16 +60,29 @@ pub struct SceneTemplate {
     pub physics: TemplatePhysics,
 }
 
-/// The physics a template brings: settings for a World it creates, and the
-/// forces its object comes with.
+/// The physics a template brings: the forces its object comes with. A
+/// template never sets the Physics World, so a scene looks the same whatever
+/// order its parts were added in.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TemplatePhysics {
-    /// Physics World params set on the World insertion creates when the
-    /// scene has none; a scene's existing World keeps its own.
-    pub new_world: BTreeMap<String, SerializedParamValue>,
-    /// Force recipes attached to the inserted object alone, in order.
+    /// Force recipes attached to the inserted object alone, in order. They
+    /// belong to the object: deleting it removes them, duplicating it copies
+    /// them onto the copy.
     pub forces: Vec<EffectGraphDef>,
 }
+
+/// Prepares one force recipe against the graph it joins, as the Forces menu
+/// does: `(owner, recipe, id, scene, targets)` to the instance to insert.
+/// Core cannot run initializers or resolve mesh frames, so the caller that
+/// can passes this in.
+pub type PrepareForce<'a> = dyn Fn(
+        &EffectGraphDef,
+        &EffectGraphDef,
+        NodeId,
+        SceneNodeRef,
+        crate::scene_modifier_preset::SceneTargetSelection,
+    ) -> Result<crate::scene_modifier_preset::SceneModifierInstanceDef, String>
+    + 'a;
 
 fn fail(message: impl Into<String>) -> SceneGraphEditError {
     SceneGraphEditError { at: None, message: message.into() }
@@ -257,12 +270,27 @@ fn numbered_handle(prefix: &str, from: u32, taken: &HashSet<String>) -> String {
 /// template whose outputs are fluid roles (an Inflow, a Drain, a Collider)
 /// goes inside its water instead: beside the liquid domain `water` names,
 /// each role output wired into that domain's next free role input. Returns
-/// one candidate graph, or the reason nothing could be built.
+/// one candidate graph, or the reason nothing could be built. A template
+/// that brings forces needs [`insert_scene_template_preparing`].
 pub fn insert_scene_template(
     graph: &EffectGraphDef,
     scene: &SceneNodeRef,
     water: Option<&SceneNodeRef>,
     template: &SceneTemplate,
+) -> Result<SceneGraphEdit, SceneGraphEditError> {
+    insert_scene_template_preparing(graph, scene, water, template, &|_, _, _, _, _| {
+        Err("This insertion cannot prepare a template's forces".into())
+    })
+}
+
+/// [`insert_scene_template`], with the template's forces prepared by
+/// `prepare` against the graph they join and attached to its object alone.
+pub fn insert_scene_template_preparing(
+    graph: &EffectGraphDef,
+    scene: &SceneNodeRef,
+    water: Option<&SceneNodeRef>,
+    template: &SceneTemplate,
+    prepare: &PrepareForce<'_>,
 ) -> Result<SceneGraphEdit, SceneGraphEditError> {
     let at = |message: &str| SceneGraphEditError { at: Some(scene.clone()), message: message.into() };
     // A bare node (a light) inserts as itself: no group, one declared output.
@@ -334,11 +362,10 @@ pub fn insert_scene_template(
     }
     merge_exposures(&mut candidate, template, &remap, group_doc, &handle)?;
     if let Some(taker) = taker {
-        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &taker, &template.physics.new_world)
-            .map_err(fail)?;
+        crate::scene_world_controls::share_world_controls(&mut candidate, group_doc, &taker).map_err(fail)?;
     }
     if !template.physics.forces.is_empty() {
-        candidate = attach_forces(candidate, scene, &group_node_id, &template.physics.forces)?;
+        candidate = attach_forces(candidate, scene, &group_node_id, &template.physics.forces, prepare)?;
     }
     Ok(SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: Vec::new() })
 }
@@ -350,6 +377,7 @@ fn attach_forces(
     scene: &SceneNodeRef,
     group: &crate::NodeId,
     forces: &[EffectGraphDef],
+    prepare: &PrepareForce<'_>,
 ) -> Result<EffectGraphDef, SceneGraphEditError> {
     let at = |message: String| SceneGraphEditError { at: Some(scene.clone()), message };
     let objects = crate::scene_index::FlatSceneIndex::build(&graph)
@@ -361,14 +389,8 @@ fn attach_forces(
     };
     for (index, recipe) in forces.iter().enumerate() {
         let id = crate::NodeId::new(format!("{group}_force_{index}"));
-        let instance = crate::scene_modifier_preset::SceneModifierInstanceDef {
-            id,
-            scene: scene.clone(),
-            targets: crate::scene_modifier_preset::SceneTargetSelection::Explicit { objects: vec![object.clone()] },
-            mesh_frames: Vec::new(),
-            legacy_math_view_carrier: None,
-            graph: Box::new(recipe.clone()),
-        };
+        let targets = crate::scene_modifier_preset::SceneTargetSelection::Explicit { objects: vec![object.clone()] };
+        let instance = prepare(&graph, recipe, id, scene.clone(), targets).map_err(at)?;
         let end = graph.scene_modifiers.len();
         graph = crate::scene_modifier_edit::insert_scene_modifier(&graph, end, instance)
             .map_err(|error| at(error.to_string()))?

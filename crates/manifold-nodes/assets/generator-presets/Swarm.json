@@ -501,7 +501,7 @@
       "params": {
         "air_resistance": {
           "type": "Float",
-          "value": 1.0
+          "value": 0.0
         },
         "gravity_x": {
           "type": "Float",
@@ -569,7 +569,7 @@
       "params": {
         "value": {
           "type": "Float",
-          "value": 1.0
+          "value": 0.0
         }
       },
       "typeId": "node.value"
@@ -5171,7 +5171,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "44_air_resistance",
         "label": "Air Resistance",
         "target": {
@@ -5185,7 +5185,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "44_air_resistance",
         "label": "Air Resistance",
         "target": {
@@ -5289,7 +5289,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 18.0,
+        "defaultValue": 20.0,
         "id": "sceneModifier:[\"group_43_force_0\",\"strength\"]",
         "label": "Pull",
         "target": {
@@ -5341,12 +5341,142 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 1.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"direction_x\"]",
-        "label": "Direction X",
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"center_x\"]",
+        "label": "Centre X",
         "target": {
           "kind": "sceneModifier",
           "modifierId": "group_43_force_1",
+          "paramId": "center_x"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"center_y\"]",
+        "label": "Centre Y",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "center_y"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"center_z\"]",
+        "label": "Centre Z",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "center_z"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.5,
+        "id": "sceneModifier:[\"group_43_force_1\",\"radius\"]",
+        "label": "Radius",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "radius"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"falloff\"]",
+        "label": "Falloff",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "falloff"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"curve\"]",
+        "label": "Falloff Curve",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "curve"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 20.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"strength\"]",
+        "label": "Strength",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "strength"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 2.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"impulse_strength\"]",
+        "label": "Impulse Size",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "impulse_strength"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"fire\"]",
+        "label": "Impulse",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_1",
+          "paramId": "fire"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "sceneModifier:[\"group_43_force_2\",\"enabled\"]",
+        "label": "Enabled",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_2",
+          "paramId": "enabled"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "sceneModifier:[\"group_43_force_2\",\"direction_x\"]",
+        "label": "Direction X",
+        "target": {
+          "kind": "sceneModifier",
+          "modifierId": "group_43_force_2",
           "paramId": "direction_x"
         }
       },
@@ -5355,11 +5485,11 @@
           "type": "Float"
         },
         "defaultValue": 0.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"direction_y\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"direction_y\"]",
         "label": "Direction Y",
         "target": {
           "kind": "sceneModifier",
-          "modifierId": "group_43_force_1",
+          "modifierId": "group_43_force_2",
           "paramId": "direction_y"
         }
       },
@@ -5368,11 +5498,11 @@
           "type": "Float"
         },
         "defaultValue": 0.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"direction_z\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"direction_z\"]",
         "label": "Direction Z",
         "target": {
           "kind": "sceneModifier",
-          "modifierId": "group_43_force_1",
+          "modifierId": "group_43_force_2",
           "paramId": "direction_z"
         }
       },
@@ -5380,12 +5510,12 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 1.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"speed\"]",
+        "defaultValue": 0.5,
+        "id": "sceneModifier:[\"group_43_force_2\",\"speed\"]",
         "label": "Speed",
         "target": {
           "kind": "sceneModifier",
-          "modifierId": "group_43_force_1",
+          "modifierId": "group_43_force_2",
           "paramId": "speed"
         }
       },
@@ -5394,11 +5524,11 @@
           "type": "Float"
         },
         "defaultValue": 5.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"turbulence\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"turbulence\"]",
         "label": "Turbulence",
         "target": {
           "kind": "sceneModifier",
-          "modifierId": "group_43_force_1",
+          "modifierId": "group_43_force_2",
           "paramId": "turbulence"
         }
       },
@@ -5406,12 +5536,12 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 1.2000000476837158,
-        "id": "sceneModifier:[\"group_43_force_1\",\"turbulence_size\"]",
+        "defaultValue": 0.800000011920929,
+        "id": "sceneModifier:[\"group_43_force_2\",\"turbulence_size\"]",
         "label": "Gust Size",
         "target": {
           "kind": "sceneModifier",
-          "modifierId": "group_43_force_1",
+          "modifierId": "group_43_force_2",
           "paramId": "turbulence_size"
         }
       },
@@ -5420,11 +5550,11 @@
           "type": "Float"
         },
         "defaultValue": 3.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"air_resistance\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"air_resistance\"]",
         "label": "Air Resistance",
         "target": {
           "kind": "sceneModifier",
-          "modifierId": "group_43_force_1",
+          "modifierId": "group_43_force_2",
           "paramId": "air_resistance"
         }
       }
@@ -11012,7 +11142,8 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 1.0,
+        "cardVisible": false,
+        "defaultValue": 0.0,
         "id": "44_air_resistance",
         "isToggle": false,
         "isTrigger": false,
@@ -11160,7 +11291,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 18.0,
+        "defaultValue": 20.0,
         "id": "sceneModifier:[\"group_43_force_0\",\"strength\"]",
         "isToggle": false,
         "isTrigger": false,
@@ -11239,8 +11370,205 @@
         "wholeNumbers": false
       },
       {
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"center_x\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": -100.0,
+        "name": "Centre X",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "setup",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"center_y\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": -100.0,
+        "name": "Centre Y",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "setup",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"center_z\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": -100.0,
+        "name": "Centre Z",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "setup",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.5,
+        "id": "sceneModifier:[\"group_43_force_1\",\"radius\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": 0.009999999776482582,
+        "name": "Radius",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "setup",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
         "defaultValue": 1.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"direction_x\"]",
+        "id": "sceneModifier:[\"group_43_force_1\",\"falloff\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 8.0,
+        "min": 0.0,
+        "name": "Falloff",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "setup",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"curve\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Falloff Curve",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "setup",
+          "switch": null
+        },
+        "valueLabels": [
+          "Edge",
+          "Inverse"
+        ],
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 20.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"strength\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 20.0,
+        "min": -20.0,
+        "name": "Strength",
+        "scene": {
+          "band": "forces",
+          "cardLabel": "param",
+          "cardOrder": 1,
+          "gate": null,
+          "group": "force",
+          "role": "performance",
+          "switch": null
+        },
+        "tooltip": "Gravity is 9.8 m/s²",
+        "unit": "metresPerSecondSquared",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 2.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"impulse_strength\"]",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 20.0,
+        "min": -20.0,
+        "name": "Impulse Size",
+        "scene": {
+          "band": "forces",
+          "cardLabel": "param",
+          "cardOrder": 3,
+          "gate": null,
+          "group": "force",
+          "role": "performance",
+          "switch": null
+        },
+        "unit": "metresPerSecond",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "id": "sceneModifier:[\"group_43_force_1\",\"fire\"]",
+        "isToggle": false,
+        "isTrigger": true,
+        "max": 16777216.0,
+        "min": 0.0,
+        "name": "Impulse",
+        "scene": {
+          "band": "forces",
+          "cardLabel": "param",
+          "cardOrder": 2,
+          "gate": null,
+          "group": "force",
+          "role": "performance",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.0,
+        "id": "sceneModifier:[\"group_43_force_2\",\"enabled\"]",
+        "isToggle": true,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Enabled",
+        "scene": {
+          "band": "forces",
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "force",
+          "role": "performance",
+          "switch": null
+        },
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.0,
+        "id": "sceneModifier:[\"group_43_force_2\",\"direction_x\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 1.0,
@@ -11259,7 +11587,7 @@
       },
       {
         "defaultValue": 0.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"direction_y\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"direction_y\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 1.0,
@@ -11278,7 +11606,7 @@
       },
       {
         "defaultValue": 0.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"direction_z\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"direction_z\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 1.0,
@@ -11296,8 +11624,8 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 1.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"speed\"]",
+        "defaultValue": 0.5,
+        "id": "sceneModifier:[\"group_43_force_2\",\"speed\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 50.0,
@@ -11317,7 +11645,7 @@
       },
       {
         "defaultValue": 5.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"turbulence\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"turbulence\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 50.0,
@@ -11337,8 +11665,8 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 1.2000000476837158,
-        "id": "sceneModifier:[\"group_43_force_1\",\"turbulence_size\"]",
+        "defaultValue": 0.800000011920929,
+        "id": "sceneModifier:[\"group_43_force_2\",\"turbulence_size\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 100.0,
@@ -11358,7 +11686,7 @@
       },
       {
         "defaultValue": 3.0,
-        "id": "sceneModifier:[\"group_43_force_1\",\"air_resistance\"]",
+        "id": "sceneModifier:[\"group_43_force_2\",\"air_resistance\"]",
         "isToggle": false,
         "isTrigger": false,
         "max": 20.0,
@@ -11447,7 +11775,7 @@
                   "params": {
                     "strength": {
                       "type": "Float",
-                      "value": 18.0
+                      "value": 20.0
                     }
                   },
                   "typeId": "node.scale_vector_field"
@@ -11734,7 +12062,7 @@
               "convert": {
                 "type": "Float"
               },
-              "defaultValue": 18.0,
+              "defaultValue": 20.0,
               "id": "strength",
               "label": "Pull",
               "target": {
@@ -11901,7 +12229,7 @@
               "wholeNumbers": true
             },
             {
-              "defaultValue": 18.0,
+              "defaultValue": 20.0,
               "id": "strength",
               "isToggle": false,
               "isTrigger": false,
@@ -12046,6 +12374,652 @@
     },
     {
       "graph": {
+        "name": "Radial Force",
+        "nodes": [
+          {
+            "group": {
+              "interface": {
+                "inputs": [],
+                "outputs": [
+                  {
+                    "name": "field",
+                    "portType": "VectorField"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "handle": "force_field",
+                  "id": 1,
+                  "nodeId": "force_field",
+                  "params": {
+                    "center_x": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "center_y": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "center_z": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "curve": {
+                      "type": "Enum",
+                      "value": 0
+                    },
+                    "falloff": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "radius": {
+                      "type": "Float",
+                      "value": 1.5
+                    }
+                  },
+                  "typeId": "node.radial_vector_field"
+                },
+                {
+                  "handle": "force_strength",
+                  "id": 2,
+                  "nodeId": "force_strength",
+                  "params": {
+                    "strength": {
+                      "type": "Float",
+                      "value": 20.0
+                    }
+                  },
+                  "typeId": "node.scale_vector_field"
+                },
+                {
+                  "handle": "force_enabled",
+                  "id": 3,
+                  "nodeId": "force_enabled",
+                  "params": {
+                    "value": {
+                      "type": "Float",
+                      "value": 1.0
+                    }
+                  },
+                  "typeId": "node.value"
+                },
+                {
+                  "handle": "force_gate",
+                  "id": 4,
+                  "nodeId": "force_gate",
+                  "params": {
+                    "strength": {
+                      "type": "Float",
+                      "value": 1.0
+                    }
+                  },
+                  "typeId": "node.scale_vector_field"
+                },
+                {
+                  "handle": "force_impulse_strength",
+                  "id": 6,
+                  "nodeId": "force_impulse_strength",
+                  "params": {
+                    "strength": {
+                      "type": "Float",
+                      "value": 2.0
+                    }
+                  },
+                  "typeId": "node.scale_vector_field"
+                },
+                {
+                  "handle": "force_impulse_gate",
+                  "id": 7,
+                  "nodeId": "force_impulse_gate",
+                  "params": {
+                    "strength": {
+                      "type": "Float",
+                      "value": 1.0
+                    }
+                  },
+                  "typeId": "node.scale_vector_field"
+                },
+                {
+                  "handle": "output",
+                  "id": 5,
+                  "nodeId": "force_source_output",
+                  "typeId": "system.group_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "out",
+                  "toNode": 2,
+                  "toPort": "field"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "field"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "strength"
+                },
+                {
+                  "fromNode": 1,
+                  "fromPort": "out",
+                  "toNode": 6,
+                  "toPort": "field"
+                },
+                {
+                  "fromNode": 6,
+                  "fromPort": "out",
+                  "toNode": 7,
+                  "toPort": "field"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 7,
+                  "toPort": "strength"
+                },
+                {
+                  "fromNode": 4,
+                  "fromPort": "out",
+                  "toNode": 5,
+                  "toPort": "field"
+                }
+              ]
+            },
+            "handle": "ForceSourceStage",
+            "id": 1,
+            "nodeId": "force_source_stage",
+            "typeId": "group"
+          },
+          {
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "previous",
+                    "portType": "VectorField"
+                  },
+                  {
+                    "name": "field",
+                    "portType": "VectorField"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "acceleration",
+                    "portType": "VectorField"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "handle": "previous",
+                  "id": 1,
+                  "nodeId": "group_previous",
+                  "typeId": "system.group_input"
+                },
+                {
+                  "handle": "field",
+                  "id": 2,
+                  "nodeId": "group_field",
+                  "typeId": "system.group_input"
+                },
+                {
+                  "handle": "force_add",
+                  "id": 3,
+                  "nodeId": "force_add",
+                  "typeId": "node.add_vector_fields"
+                },
+                {
+                  "handle": "output",
+                  "id": 4,
+                  "nodeId": "force_apply_output",
+                  "typeId": "system.group_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "previous",
+                  "toNode": 3,
+                  "toPort": "a"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "field",
+                  "toNode": 3,
+                  "toPort": "b"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "acceleration"
+                }
+              ]
+            },
+            "handle": "ForceApplyStage",
+            "id": 2,
+            "nodeId": "force_apply_stage",
+            "typeId": "group"
+          }
+        ],
+        "presetMetadata": {
+          "available": true,
+          "bindings": [
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 1.0,
+              "id": "enabled",
+              "label": "Enabled",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_enabled",
+                "param": "value"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 0.0,
+              "id": "center_x",
+              "label": "Centre X",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_field",
+                "param": "center_x"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 0.0,
+              "id": "center_y",
+              "label": "Centre Y",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_field",
+                "param": "center_y"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 0.0,
+              "id": "center_z",
+              "label": "Centre Z",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_field",
+                "param": "center_z"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 1.5,
+              "id": "radius",
+              "label": "Radius",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_field",
+                "param": "radius"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 1.0,
+              "id": "falloff",
+              "label": "Falloff",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_field",
+                "param": "falloff"
+              }
+            },
+            {
+              "convert": {
+                "type": "EnumRound"
+              },
+              "defaultValue": 0.0,
+              "id": "curve",
+              "label": "Falloff Curve",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_field",
+                "param": "curve"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 20.0,
+              "id": "strength",
+              "label": "Strength",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_strength",
+                "param": "strength"
+              }
+            },
+            {
+              "convert": {
+                "type": "Float"
+              },
+              "defaultValue": 2.0,
+              "id": "impulse_strength",
+              "label": "Impulse Size",
+              "target": {
+                "kind": "node",
+                "nodeId": "force_impulse_strength",
+                "param": "strength"
+              }
+            }
+          ],
+          "category": "Forces",
+          "displayName": "Radial Force",
+          "id": "RadialForce",
+          "isLineBased": false,
+          "oscPrefix": "radial_force",
+          "params": [
+            {
+              "defaultValue": 1.0,
+              "id": "enabled",
+              "isToggle": true,
+              "isTrigger": false,
+              "max": 1.0,
+              "min": 0.0,
+              "name": "Enabled",
+              "scene": {
+                "band": "forces",
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "performance",
+                "switch": null
+              },
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 0.0,
+              "id": "center_x",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 100.0,
+              "min": -100.0,
+              "name": "Centre X",
+              "scene": {
+                "band": null,
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "setup",
+                "switch": null
+              },
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 0.0,
+              "id": "center_y",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 100.0,
+              "min": -100.0,
+              "name": "Centre Y",
+              "scene": {
+                "band": null,
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "setup",
+                "switch": null
+              },
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 0.0,
+              "id": "center_z",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 100.0,
+              "min": -100.0,
+              "name": "Centre Z",
+              "scene": {
+                "band": null,
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "setup",
+                "switch": null
+              },
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 1.5,
+              "id": "radius",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 100.0,
+              "min": 0.009999999776482582,
+              "name": "Radius",
+              "scene": {
+                "band": null,
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "setup",
+                "switch": null
+              },
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 1.0,
+              "id": "falloff",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 8.0,
+              "min": 0.0,
+              "name": "Falloff",
+              "scene": {
+                "band": null,
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "setup",
+                "switch": null
+              },
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 0.0,
+              "id": "curve",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 1.0,
+              "min": 0.0,
+              "name": "Falloff Curve",
+              "scene": {
+                "band": null,
+                "cardLabel": "param",
+                "cardOrder": 0,
+                "gate": null,
+                "group": "force",
+                "role": "setup",
+                "switch": null
+              },
+              "valueLabels": [
+                "Edge",
+                "Inverse"
+              ],
+              "wholeNumbers": true
+            },
+            {
+              "defaultValue": 20.0,
+              "id": "strength",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 20.0,
+              "min": -20.0,
+              "name": "Strength",
+              "scene": {
+                "band": "forces",
+                "cardLabel": "param",
+                "cardOrder": 1,
+                "gate": null,
+                "group": "force",
+                "role": "performance",
+                "switch": null
+              },
+              "tooltip": "Gravity is 9.8 m/s²",
+              "unit": "metresPerSecondSquared",
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 2.0,
+              "id": "impulse_strength",
+              "isToggle": false,
+              "isTrigger": false,
+              "max": 20.0,
+              "min": -20.0,
+              "name": "Impulse Size",
+              "scene": {
+                "band": "forces",
+                "cardLabel": "param",
+                "cardOrder": 3,
+                "gate": null,
+                "group": "force",
+                "role": "performance",
+                "switch": null
+              },
+              "unit": "metresPerSecond",
+              "wholeNumbers": false
+            },
+            {
+              "defaultValue": 0.0,
+              "id": "fire",
+              "isToggle": false,
+              "isTrigger": true,
+              "max": 16777216.0,
+              "min": 0.0,
+              "name": "Impulse",
+              "scene": {
+                "band": "forces",
+                "cardLabel": "param",
+                "cardOrder": 2,
+                "gate": null,
+                "group": "force",
+                "role": "performance",
+                "switch": null
+              },
+              "wholeNumbers": false
+            }
+          ],
+          "sceneModifier": {
+            "enabledParam": "enabled",
+            "impulses": [
+              {
+                "field": {
+                  "node": "force_impulse_gate",
+                  "scope": [
+                    "force_source_stage"
+                  ]
+                },
+                "paramId": "fire",
+                "port": "out"
+              }
+            ],
+            "schemaVersion": 1,
+            "singleton": false,
+            "stages": [
+              {
+                "group": "force_source_stage",
+                "scope": "scene"
+              },
+              {
+                "group": "force_apply_stage",
+                "inputs": [
+                  {
+                    "port": "previous",
+                    "source": {
+                      "previous": {
+                        "endpoint": "acceleration"
+                      }
+                    }
+                  },
+                  {
+                    "port": "field",
+                    "source": {
+                      "stageOutput": {
+                        "port": "field",
+                        "stage": "force_source_stage"
+                      }
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "endpoint": "acceleration",
+                    "port": "acceleration"
+                  }
+                ],
+                "scope": "eachObject"
+              }
+            ]
+          },
+          "shape": {
+            "center": [
+              "center_x",
+              "center_y",
+              "center_z"
+            ],
+            "kind": "point_radius",
+            "radius": "radius"
+          }
+        },
+        "version": 3,
+        "wires": []
+      },
+      "id": "group_43_force_1",
+      "scene": {
+        "node": "scene",
+        "scope": []
+      },
+      "targets": {
+        "explicit": {
+          "objects": [
+            {
+              "node": "swarm_object_41",
+              "scope": [
+                "group_43"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "graph": {
         "name": "Wind",
         "nodes": [
           {
@@ -12103,7 +13077,7 @@
                   "params": {
                     "size": {
                       "type": "Float",
-                      "value": 1.2000000476837158
+                      "value": 0.800000011920929
                     }
                   },
                   "typeId": "node.turbulence_vector_field"
@@ -12205,7 +13179,7 @@
                   "params": {
                     "value": {
                       "type": "Float",
-                      "value": 1.0
+                      "value": 0.5
                     }
                   },
                   "typeId": "node.value"
@@ -12453,7 +13427,7 @@
               "convert": {
                 "type": "Float"
               },
-              "defaultValue": 1.0,
+              "defaultValue": 0.5,
               "id": "speed",
               "label": "Speed",
               "target": {
@@ -12479,7 +13453,7 @@
               "convert": {
                 "type": "Float"
               },
-              "defaultValue": 1.2000000476837158,
+              "defaultValue": 0.800000011920929,
               "id": "turbulence_size",
               "label": "Gust Size",
               "target": {
@@ -12585,7 +13559,7 @@
               "wholeNumbers": false
             },
             {
-              "defaultValue": 1.0,
+              "defaultValue": 0.5,
               "id": "speed",
               "isToggle": false,
               "isTrigger": false,
@@ -12626,7 +13600,7 @@
               "wholeNumbers": false
             },
             {
-              "defaultValue": 1.2000000476837158,
+              "defaultValue": 0.800000011920929,
               "id": "turbulence_size",
               "isToggle": false,
               "isTrigger": false,
@@ -12719,7 +13693,7 @@
         "version": 3,
         "wires": []
       },
-      "id": "group_43_force_1",
+      "id": "group_43_force_2",
       "scene": {
         "node": "scene",
         "scope": []

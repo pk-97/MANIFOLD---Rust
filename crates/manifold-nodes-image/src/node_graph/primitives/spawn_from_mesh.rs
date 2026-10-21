@@ -88,7 +88,7 @@ manifold_node_engine::primitive! {
             label: "Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
-            // A performer's slider; capacity bounds what it can reach.
+            // The card's slider; typed values and wires go past it, up to capacity.
             range: Some((0.0, 100_000.0)),
             enum_values: &[],
         },

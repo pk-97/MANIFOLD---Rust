@@ -418,6 +418,14 @@ fn resolve_target_param(
     })
 }
 
+/// `carrier`'s `out` wire feeds `node`'s own `input`.
+fn feeds_input(graph: &crate::graph::Graph, carrier: &NodeId, node: &NodeId, input: &str) -> bool {
+    let (Some(from), Some(to)) = (graph.instance_by_node_id(carrier), graph.instance_by_node_id(node)) else {
+        return false;
+    };
+    graph.wires_from(from).any(|wire| wire.from.1 == "out" && wire.to.0 == to && wire.to.1 == input)
+}
+
 manifold_core::testkit_visible! {
 /// D8 card lints (GRAPH_TOOLING_DESIGN P4) — the checks beyond
 /// `check_bindings_resolve` that make sure a card never lies to the
@@ -524,13 +532,18 @@ pub(crate) fn check_card_lints(
     }
 
     // (d) ERROR — is_trigger card param bound to a non-trigger-typed
-    // inner param. A `node.value` that is not the control's first target
-    // only carries the counter on its wire to the ports it feeds (a shared
-    // World Reset reaching a simulation, `scene_world_controls`); the first
-    // target describes the control (SCENE_SURFACES_DESIGN.md D22 (a fan-out
-    // is described by its first binding)).
+    // inner param. The one exception is the value a trigger input shadows:
+    // a `node.value` after the first target whose `out` wire feeds the first
+    // target's own input of that name carries the counter on its wire (a
+    // shared World Reset, `scene_world_controls`); the first target
+    // describes the control (SCENE_SURFACES_DESIGN.md D22 (a fan-out is
+    // described by its first binding)).
     if let Some(graph) = graph {
         for param in meta.params.iter().filter(|p| p.is_trigger) {
+            let first = meta.bindings.iter().find(|b| b.id == param.id).and_then(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => Some((node_id, param.as_str())),
+                _ => None,
+            });
             for (index, binding) in meta.bindings.iter().filter(|b| b.id == param.id).enumerate() {
                 let BindingTarget::Node { node_id, param: inner } = &binding.target else {
                     continue;
@@ -538,7 +551,9 @@ pub(crate) fn check_card_lints(
                 let Some(resolved) = resolve_target_param(graph, node_id, inner) else {
                     continue; // reported by (a).
                 };
-                let carrier = index > 0 && resolved.type_id == "node.value";
+                let carrier = index > 0
+                    && resolved.type_id == "node.value"
+                    && first.is_some_and(|(node, input)| feeds_input(graph, node_id, node, input));
                 if resolved.param_def.ty != ParamType::Trigger && !carrier {
                     errors.push(ValidationIssue {
                         node_id: None,
@@ -723,6 +738,7 @@ mod tests {
         purpose: "Internal lint(h) test fixture — not registered in production.",
         inputs: {
             in: Texture2D required,
+            next: ScalarF32 optional,
         },
         outputs: {
             out: Texture2D,
@@ -1015,12 +1031,16 @@ mod tests {
         );
     }
 
-    /// (d) — a trigger whose first target is a trigger may also feed a
-    /// `node.value` that carries the counter on its wire (a shared World
-    /// Reset); a `node.value` as the first target still errs.
+    /// (d) — a trigger whose first target is a trigger may also feed the
+    /// `node.value` that input shadows: one whose `out` wire feeds the first
+    /// target's own input of that name (a shared World Reset). A value wired
+    /// anywhere else, or unwired, or first, still errs.
     #[test]
-    fn card_lint_trigger_may_feed_a_value_carrier_after_its_trigger() {
-        let def = |first: &str, second: &str| {
+    fn card_lint_trigger_may_feed_only_the_value_its_input_shadows() {
+        let def = |first: &str, second: &str, wired_to: Option<u32>| {
+            let wires = wired_to.map_or(String::new(), |node| {
+                format!(r#"{{"fromNode": 1, "fromPort": "out", "toNode": {node}, "toPort": "next"}}"#)
+            });
             parse(&format!(
                 r#"{{
                   "version": 2,
@@ -1034,18 +1054,24 @@ mod tests {
                   }},
                   "nodes": [
                     {{"id": 0, "nodeId": "folder", "typeId": "node.__range_contract_fixture"}},
-                    {{"id": 1, "nodeId": "carrier", "typeId": "node.value"}}
+                    {{"id": 1, "nodeId": "carrier", "typeId": "node.value"}},
+                    {{"id": 2, "nodeId": "other", "typeId": "node.__range_contract_fixture"}}
                   ],
-                  "wires": []
+                  "wires": [{wires}]
                 }}"#,
                 if first == "folder" { "next" } else { "value" },
                 if second == "folder" { "next" } else { "value" },
             ))
         };
-        let (errors, _) = lint(&def("folder", "carrier"));
-        assert!(errors.is_empty(), "a carrier after the trigger is clean: {errors:?}");
-        let (errors, _) = lint(&def("carrier", "folder"));
-        assert!(errors.iter().any(|e| e.message.contains("not a trigger-typed param")), "{errors:?}");
+        let refused = |errors: &[ValidationIssue]| errors.iter().any(|e| e.message.contains("not a trigger-typed param"));
+        let (errors, _) = lint(&def("folder", "carrier", Some(0)));
+        assert!(errors.is_empty(), "the value the trigger input shadows is clean: {errors:?}");
+        let (errors, _) = lint(&def("folder", "carrier", None));
+        assert!(refused(&errors), "an unwired value errs: {errors:?}");
+        let (errors, _) = lint(&def("folder", "carrier", Some(2)));
+        assert!(refused(&errors), "a value wired into another node's input errs: {errors:?}");
+        let (errors, _) = lint(&def("carrier", "folder", Some(0)));
+        assert!(refused(&errors), "a value as the first target errs: {errors:?}");
     }
 
     /// (e) ERROR — duplicate non-empty osc_suffix across one card's params.

@@ -21,7 +21,7 @@ pub(crate) enum SceneGraphRejection {
 /// Copy every host-side value and modulation entry addressed by a source
 /// modifier macro. The graph candidate has already minted the destination
 /// metadata; this keeps duplication's runtime state in the same transaction.
-fn duplicate_runtime_parameter_state(
+pub(crate) fn duplicate_runtime_parameter_state(
     host: &mut manifold_core::effects::PresetInstance,
     remaps: &[(String, String)],
 ) {

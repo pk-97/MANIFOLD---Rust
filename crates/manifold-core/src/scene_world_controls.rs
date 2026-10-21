@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::NodeId;
 use crate::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, SerializedParamValue,
+    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     InterfacePortDef,
 };
 use crate::param_lookup::stamped_node_params;
@@ -165,14 +165,12 @@ fn next_id(def: &EffectGraphDef) -> Result<u32, &'static str> {
 
 /// Wire the World controls `taker` declares to it, inside the root-level
 /// group `group_id`, creating the World when the scene has none. A liquid
-/// domain must take every World control. A World created here takes
-/// `new_world`'s params over its defaults. A graph where a control cannot be
+/// domain must take every World control. A graph where a control cannot be
 /// found is left untouched and refused.
 pub(crate) fn share_world_controls(
     def: &mut EffectGraphDef,
     group_id: u32,
     taker: &WorldControlTaker,
-    new_world: &BTreeMap<String, SerializedParamValue>,
 ) -> Result<(), &'static str> {
     if crate::liquid_domain::is_liquid_domain(&taker.type_id) && taker.inputs != WORLD_INPUTS {
         return Err("This liquid does not take the Physics World's controls");
@@ -192,13 +190,10 @@ pub(crate) fn share_world_controls(
         let mut taken = HashSet::new();
         handles(&def.nodes, &mut taken);
         let handle = unique_handle("Physics World", &taken);
-        if new_world.keys().any(|name| !metadata.iter().any(|m| &m.name == name)) {
-            return Err("A template sets a param the Physics World does not have");
-        }
         let params = metadata
             .iter()
             .filter(|m| WORLD_INPUTS.iter().any(|input| input.world == m.name))
-            .map(|m| (m.name.clone(), new_world.get(&m.name).unwrap_or(&m.default_value).clone()))
+            .map(|m| (m.name.clone(), m.default_value.clone()))
             .collect();
         let world = build_node(def, id, WORLD_TYPE_ID, Some(handle), params);
         def.nodes.push(world);

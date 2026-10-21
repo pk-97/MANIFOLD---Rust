@@ -108543,7 +108543,7 @@
           "name": "Air Drag"
         },
         {
-          "default": "1",
+          "default": "0",
           "id": "44_air_resistance",
           "max": "4",
           "min": "0",
@@ -108599,7 +108599,7 @@
           "name": "Falloff Curve"
         },
         {
-          "default": "18",
+          "default": "20",
           "id": "sceneModifier:[\"group_43_force_0\",\"strength\"]",
           "max": "20",
           "min": "-20",
@@ -108627,50 +108627,120 @@
           "name": "Enabled"
         },
         {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"center_x\"]",
+          "max": "100",
+          "min": "-100",
+          "name": "Centre X"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"center_y\"]",
+          "max": "100",
+          "min": "-100",
+          "name": "Centre Y"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"center_z\"]",
+          "max": "100",
+          "min": "-100",
+          "name": "Centre Z"
+        },
+        {
+          "default": "1.5",
+          "id": "sceneModifier:[\"group_43_force_1\",\"radius\"]",
+          "max": "100",
+          "min": "0.01",
+          "name": "Radius"
+        },
+        {
           "default": "1",
-          "id": "sceneModifier:[\"group_43_force_1\",\"direction_x\"]",
+          "id": "sceneModifier:[\"group_43_force_1\",\"falloff\"]",
+          "max": "8",
+          "min": "0",
+          "name": "Falloff"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"curve\"]",
+          "max": "1",
+          "min": "0",
+          "name": "Falloff Curve"
+        },
+        {
+          "default": "20",
+          "id": "sceneModifier:[\"group_43_force_1\",\"strength\"]",
+          "max": "20",
+          "min": "-20",
+          "name": "Strength"
+        },
+        {
+          "default": "2",
+          "id": "sceneModifier:[\"group_43_force_1\",\"impulse_strength\"]",
+          "max": "20",
+          "min": "-20",
+          "name": "Impulse Size"
+        },
+        {
+          "default": "0",
+          "id": "sceneModifier:[\"group_43_force_1\",\"fire\"]",
+          "max": "16777216",
+          "min": "0",
+          "name": "Impulse"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_2\",\"enabled\"]",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "1",
+          "id": "sceneModifier:[\"group_43_force_2\",\"direction_x\"]",
           "max": "1",
           "min": "-1",
           "name": "Direction X"
         },
         {
           "default": "0",
-          "id": "sceneModifier:[\"group_43_force_1\",\"direction_y\"]",
+          "id": "sceneModifier:[\"group_43_force_2\",\"direction_y\"]",
           "max": "1",
           "min": "-1",
           "name": "Direction Y"
         },
         {
           "default": "0",
-          "id": "sceneModifier:[\"group_43_force_1\",\"direction_z\"]",
+          "id": "sceneModifier:[\"group_43_force_2\",\"direction_z\"]",
           "max": "1",
           "min": "-1",
           "name": "Direction Z"
         },
         {
-          "default": "1",
-          "id": "sceneModifier:[\"group_43_force_1\",\"speed\"]",
+          "default": "0.5",
+          "id": "sceneModifier:[\"group_43_force_2\",\"speed\"]",
           "max": "50",
           "min": "0",
           "name": "Speed"
         },
         {
           "default": "5",
-          "id": "sceneModifier:[\"group_43_force_1\",\"turbulence\"]",
+          "id": "sceneModifier:[\"group_43_force_2\",\"turbulence\"]",
           "max": "50",
           "min": "0",
           "name": "Turbulence"
         },
         {
-          "default": "1.2",
-          "id": "sceneModifier:[\"group_43_force_1\",\"turbulence_size\"]",
+          "default": "0.8",
+          "id": "sceneModifier:[\"group_43_force_2\",\"turbulence_size\"]",
           "max": "100",
           "min": "0.05",
           "name": "Gust Size"
         },
         {
           "default": "3",
-          "id": "sceneModifier:[\"group_43_force_1\",\"air_resistance\"]",
+          "id": "sceneModifier:[\"group_43_force_2\",\"air_resistance\"]",
           "max": "20",
           "min": "0",
           "name": "Air Resistance"

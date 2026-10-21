@@ -239,9 +239,8 @@ fn physics_world(param: &str) -> Option<SceneParamFacts> {
         }
         "speed" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
         "air_drag" => setup(PhysicsWorld).limit(AT_LEAST_ZERO),
-        // Still air every consumer's Air Drag acts against (D-114), on the
-        // card so a swarm's terminal speed can be found from its Air Drag.
-        "air_resistance" => card(PhysicsWorld, CardBand::Scene, 2).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
+        // Still air every consumer's Air Drag acts against (D-114).
+        "air_resistance" => setup(PhysicsWorld).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
         _ => return None,
     })
 }

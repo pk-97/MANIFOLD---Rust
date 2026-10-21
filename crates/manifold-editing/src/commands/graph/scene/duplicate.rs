@@ -498,6 +498,24 @@ impl Command for DuplicateSceneObjectCommand {
             }
             clone_sections::clone_scene_bindings(&mut candidate, &node_id_map);
         }
+        // Modifiers aimed only at the source belong to it; the copy gets its own.
+        let mut modifier_remaps = Vec::new();
+        if let Some(source) = scene_object_ref(&baseline, &scope, render_id, src_k) {
+            match manifold_core::scene_modifier_edit::copy_object_modifiers(
+                &candidate,
+                &source,
+                &node_id_map,
+            ) {
+                Ok(edit) => {
+                    candidate = edit.graph;
+                    modifier_remaps = edit.parameter_id_remaps;
+                }
+                Err(error) => {
+                    self.rejection = Some(format!("Duplicate Object: {error}"));
+                    return;
+                }
+            }
+        }
         let values = match project.graph_target_owner(&self.target)
             .ok_or_else(|| "Duplicate Object parameter owner is unavailable".to_string())
             .and_then(|owner| clone_values::prepare(owner, &self.catalog_default, &self.target, &candidate, &node_id_map))
@@ -513,6 +531,9 @@ impl Command for DuplicateSceneObjectCommand {
         {
             self.rejection = Some("Duplicate Object target is unavailable".into());
             return;
+        }
+        if let Some(instance) = project.graph_target_owner_mut(&self.target) {
+            crate::scene_transaction::duplicate_runtime_parameter_state(instance, &modifier_remaps);
         }
         refresh_target_manifest(project, &self.target);
         self.prev_graph = Some(previous_graph);
