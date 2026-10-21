@@ -1,6 +1,6 @@
 # UI Invalidation — work runs only when its inputs change
 
-**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P6 built. Owed: the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
+**Status:** SHIPPED · 2026-10-15 · Opus 5.5 · P1 through P6 built. Owed: P7a (section 7 (Phasing), drag previews touch only the dragged items); the UI half of the live idle trace is Peter's check (no headless path); the content thread still allocates from the state channel, BUG-8wmor (state channel block every 31 frames), and in dev builds from objc2, BUG-8k17w (objc2 encoding checks in dev builds). Next: section 9, BUG-qzea6 (design structural sharing of project parts).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -728,6 +728,52 @@ Order: P1 → P2 → P3a → P3b → P4a → P4b → P4c → P4d → P4e → P5a
 - **Close-out (lane/ui-inval-p6-allocs):** CLAUDE.md carries the planner rule as an invariant. The superseded names (`needs_rebuild`, `MutateProjectLive`, `structural()`, `notify_external_change`, `truncate_from`) are swept from live docs, skills and memory; archives, landing notes, the frozen bug ledger and this doc's own history keep them, and the effect-chain `needs_rebuild` locals are a different thing. The content-thread skill describes the one `MutateProject`, `ProjectEdit`, `tick_write` and the UI's `DispatchCtx::mutate`/`execute`. The input matrix's chrome push now lays the bars out as `apply_frame_plan` does; since P5b it pushed without a layout, so its DRAW-button check had been red under `ui-snapshot`. The runner counts the playing step's label as harness work. Ceilings re-recorded for every work flow on the merged tree.
 
 - **As built (lane/ui-perf-leftovers), P6 leftovers:** A resized chrome bar or split handle takes its new rect in place (`FramePlan::resize`, `UIRoot::follow_resize`); the audio dock translates when the inspector beside it resizes (`AudioSetupPanel::follow_translate`, `ScrollContainer::translate`; its hidden band meters wait at the scope's corner so they move with it). The inspector still rebuilds on any rect change: it lays every card out at its width while it builds, so an in-place width change needs a relayout path in every card kind. The layer headers' left edge never moves (the effect browser width is never set), so their horizontal relayout is not built. Playing frames: the content thread publishes the modulation capture from a pool of three shared buffers (`ModSnapshotPool`), copying into one the UI has dropped; the live push writes macro labels, Ableton displays, mapping descriptions and the LED exit label into retained strings, and slider and macro value text on the stack (`scratch::StackText`, which the perform HUD's shown text now is too); the param card's label check compares before it clones. Graph editor: `apply_live_values` refills a retained id index and writes values over the shown strings; the node-preview map refills in place (`GraphCanvas::refill_node_preview_src`); the node inspector keeps its strings while its node, diagnostic and snapshot hold and moves only the port values (`update_node_inspector_io`). Counts (before → after): `work-inspector-resize` 180 region rebuilds → 60 (the inspector); `work-modulated-step` 561 allocations → 1; `work-node-param-drag` 628 → 283; slider drag 2787 → 489. The editor's live-preview paths have no runner coverage (BUG-8kjs4 (UI runner: canvas graph edits, editor text fields and editor shortcuts)); the live trace is the check.
+
+### P7a — A drag preview touches only what it drags (D12 completed)
+
+D12 says a preview change updates the dragged items only. As built it does not.
+A clip preview runs `sync_clip_positions`, which re-projects every clip in the
+project with fresh strings (`ui_frame.rs` :607, `projection/timeline.rs` :501).
+A lane preview runs `sync_automation_lane_geometry`, which re-projects every lane
+on every layer and rebuilds every lane screen (`timeline.rs` :554,
+`viewport.rs` :607, :1033). Cost per mouse move scales with the whole show,
+not the gesture. Closes BUG-w3csc (drags rebuild the timeline per mouse move).
+
+- **Rule:** a preview move updates exactly the clips and lanes the
+  `GesturePreview` recorded, in place, and nothing else. The full projection
+  runs once, on commit or cancel, as now.
+- **Clips:** `Viewport` keeps a clip-id index built in `set_clips`. A preview
+  move writes start, duration, in-point and layer for each recorded clip
+  through it. A layer change also moves the entry between layer buckets and
+  recomputes its colour. An audio clip recomputes its waveform breakpoints.
+  Its name is never recomputed.
+- **Lanes:** `Viewport` replaces only the recorded lanes' entries and
+  rebuilds only their lane screens. The other lanes' screens are untouched.
+- **No allocation in a steady drag:** each in-place update reuses the entry's
+  buffers, clearing and refilling them. The one lane copy sent to the content
+  thread (`send_automation_preview`) stays, one per move.
+- **Counters:** each in-place update records its own work kind
+  (`WorkKind::ClipPreviewUpdate`, `WorkKind::LanePreviewUpdate`). The full
+  kinds (`ClipProjection`, `LaneProjection`) record only on commit.
+- **Forbidden:** a second clip or lane model beside `ViewportClip` and
+  `UiAutomationLane`; a dirty flag. The input is the preview version
+  already in `FrameInputs.preview`.
+
+**Read-back:** this section, D5, D7 and D12, `gesture_preview.rs`,
+`frame_plan.rs` (preview planning), `ui_frame.rs` (the projection pass),
+`projection/timeline.rs`, and `viewport.rs` (`set_clips`,
+`set_automation_lanes`, `rebuild_automation_lane_screens`).
+
+**Gate:** clippy on `manifold-app`, `manifold-ui` and `manifold-foundation`;
+scoped nextest; flows `work-clip-drag`, `work-clip-trim` and
+`work-automation-point-drag`. Per move, those flows show zero `ClipProjection`
+and `LaneProjection` and one update per dragged item. Their `FrameAlloc`
+ceilings are re-recorded down. The `work-automation-point-drag` known-red entry
+in `scripts/ui-flows/manifest.json` is deleted because the flow passes.
+New CPU tests: a clip drag on a 500-clip project updates one entry and leaves
+the other 499 bit-identical; a lane drag with three lanes rebuilds one screen.
+Negative: `rg 'ClipPreview\)' crates/manifold-app/src/ui_frame.rs` shows no
+call into `sync_clip_positions`.
 
 After P6: the structural-sharing design (section 9, BUG-qzea6 (design structural sharing of project parts)).
 
