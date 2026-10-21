@@ -1457,9 +1457,10 @@ impl Command for AddSceneEnvironmentCommand {
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let env_id = max_node_id_over(&def.nodes).checked_add(1)?;
+                let hdri_id = env_id.checked_add(1)?;
                 let prev_metadata = def.preset_metadata.clone();
 
-                let (env_id, env_node_id, env_node_params, prev) = {
+                let (env_id, env_node_id, env_node_params, hdri_node_id, prev) = {
                     let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                     let prev = (nodes.clone(), wires.clone());
 
@@ -1491,7 +1492,21 @@ impl Command for AddSceneEnvironmentCommand {
                     nodes.push(env_node);
                     wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
 
-                    (env_id, env_node_id, env_node_params, prev)
+                    // The HDRI mode reads this node. Its path stays empty until
+                    // the performer picks a file on the Lighting card's HDRI
+                    // File row, so the bake never sits on a mode with no source.
+                    let mut hdri_node = scene_build_node(
+                        hdri_id,
+                        "node.hdri_source",
+                        Some("hdri".to_string()),
+                        BTreeMap::new(),
+                    );
+                    hdri_node.editor_pos = Some((pos.0, pos.1 + 120.0));
+                    let hdri_node_id = hdri_node.node_id.clone();
+                    nodes.push(hdri_node);
+                    wires.push(scene_build_wire(hdri_id, "out", env_id, "hdri"));
+
+                    (env_id, env_node_id, env_node_params, hdri_node_id, prev)
                 };
 
                 // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
@@ -1511,6 +1526,25 @@ impl Command for AddSceneEnvironmentCommand {
                     &self.env_metadata,
                     &env_node_params,
                 );
+                // The HDRI File row: a file-picker string param bound to the
+                // hdri node's path, the shape the importer authors, so the
+                // Lighting card resolves it through the one string-param lookup.
+                meta.string_params.retain(|p| p.id != "hdri_file");
+                meta.string_bindings.retain(|b| b.id != "hdri_file");
+                meta.string_params.push(StringParamSpecDef {
+                    id: "hdri_file".to_string(),
+                    name: "HDRI File".to_string(),
+                    default_value: String::new(),
+                    is_file_picker: true,
+                    use_dropdown: false,
+                    is_file_path: true,
+                });
+                meta.string_bindings.push(StringBindingDef {
+                    id: "hdri_file".to_string(),
+                    label: "HDRI File".to_string(),
+                    default_value: String::new(),
+                    target: BindingTarget::Node { node_id: hdri_node_id, param: "path".to_string() },
+                });
 
                 Some((prev, prev_metadata))
             });

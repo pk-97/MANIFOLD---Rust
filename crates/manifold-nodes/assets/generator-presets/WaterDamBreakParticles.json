@@ -447,34 +447,6 @@
       "typeId": "node.hdri_source"
     },
     {
-      "handle": "Sky Exposure",
-      "id": 473,
-      "nodeId": "sky_exposure",
-      "params": {
-        "gain": {
-          "type": "Float",
-          "value": 2.0
-        }
-      },
-      "typeId": "node.exposure"
-    },
-    {
-      "handle": "Environment Select",
-      "id": 474,
-      "nodeId": "environment_select",
-      "params": {
-        "num_inputs": {
-          "type": "Int",
-          "value": 2
-        },
-        "selector": {
-          "type": "Float",
-          "value": 0.0
-        }
-      },
-      "typeId": "node.switch_texture"
-    },
-    {
       "group": {
         "interface": {
           "inputs": [
@@ -2584,12 +2556,12 @@
         ]
       },
       "handle": "Water",
-      "id": 475,
+      "id": 473,
       "nodeId": "water_family",
       "typeId": "group"
     },
     {
-      "id": 476,
+      "id": 474,
       "nodeId": "obstacle_transform",
       "params": {
         "pos_x": {
@@ -2620,7 +2592,7 @@
       "typeId": "node.transform_3d"
     },
     {
-      "id": 477,
+      "id": 475,
       "nodeId": "obstacle_collider",
       "params": {
         "radius": {
@@ -2640,13 +2612,13 @@
     },
     {
       "handle": "Obstacle Mesh",
-      "id": 478,
+      "id": 476,
       "nodeId": "obstacle_mesh",
       "typeId": "node.cube_mesh"
     },
     {
       "handle": "Obstacle Material",
-      "id": 479,
+      "id": 477,
       "nodeId": "obstacle_material",
       "params": {
         "ambient": {
@@ -2678,7 +2650,7 @@
     },
     {
       "handle": "Obstacle",
-      "id": 480,
+      "id": 478,
       "nodeId": "obstacle_object",
       "typeId": "node.scene_object"
     }
@@ -2768,19 +2740,6 @@
           "kind": "node",
           "nodeId": "domain",
           "param": "reset"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "environment_mode",
-        "label": "Environment",
-        "target": {
-          "kind": "node",
-          "nodeId": "environment_select",
-          "param": "selector"
         }
       },
       {
@@ -3051,22 +3010,6 @@
         "min": 0.0,
         "name": "Reset",
         "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 0.0,
-        "formatString": "F0",
-        "id": "environment_mode",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Environment",
-        "section": "Lighting",
-        "valueLabels": [
-          "Studio",
-          "HDRI"
-        ],
         "wholeNumbers": true
       },
       {
@@ -3381,83 +3324,71 @@
     {
       "fromNode": 435,
       "fromPort": "envmap",
-      "toNode": 474,
-      "toPort": "in_0"
-    },
-    {
-      "fromNode": 472,
-      "fromPort": "out",
-      "toNode": 473,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 473,
-      "fromPort": "out",
-      "toNode": 474,
-      "toPort": "in_1"
-    },
-    {
-      "fromNode": 474,
-      "fromPort": "out",
       "toNode": 463,
       "toPort": "envmap"
     },
     {
-      "fromNode": 475,
+      "fromNode": 472,
+      "fromPort": "out",
+      "toNode": 435,
+      "toPort": "hdri"
+    },
+    {
+      "fromNode": 473,
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_0"
     },
     {
-      "fromNode": 475,
+      "fromNode": 473,
       "fromPort": "object_1",
       "toNode": 463,
       "toPort": "object_7"
     },
     {
-      "fromNode": 475,
+      "fromNode": 473,
       "fromPort": "object_2",
       "toNode": 463,
       "toPort": "object_9"
     },
     {
-      "fromNode": 475,
+      "fromNode": 473,
       "fromPort": "object_3",
       "toNode": 463,
       "toPort": "object_8"
     },
     {
-      "fromNode": 476,
+      "fromNode": 474,
       "fromPort": "transform",
-      "toNode": 477,
+      "toNode": 475,
       "toPort": "transform"
     },
     {
-      "fromNode": 477,
+      "fromNode": 475,
       "fromPort": "role",
-      "toNode": 475,
+      "toNode": 473,
       "toPort": "role_0"
     },
     {
-      "fromNode": 478,
+      "fromNode": 476,
       "fromPort": "vertices",
-      "toNode": 480,
+      "toNode": 478,
       "toPort": "vertices"
     },
     {
-      "fromNode": 479,
+      "fromNode": 477,
       "fromPort": "out",
-      "toNode": 480,
+      "toNode": 478,
       "toPort": "material"
     },
     {
-      "fromNode": 476,
+      "fromNode": 474,
       "fromPort": "transform",
-      "toNode": 480,
+      "toNode": 478,
       "toPort": "transform"
     },
     {
-      "fromNode": 480,
+      "fromNode": 478,
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"

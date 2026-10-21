@@ -74,6 +74,9 @@ const BAKE_ENVIRONMENT_TYPE_ID: &str = "node.bake_environment";
 const HDRI_SOURCE_TYPE_ID: &str = "node.hdri_source";
 const EXPOSURE_TYPE_ID: &str = "node.exposure";
 const SWITCH_TEXTURE_TYPE_ID: &str = "node.switch_texture";
+const CAMERA_SKY_TYPE_ID: &str = "node.camera_sky";
+const BLUR_TYPE_ID: &str = "node.blur";
+const OVER_TYPE_ID: &str = "node.over";
 const SWITCH_MESH_TYPE_ID: &str = "node.switch_mesh";
 const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
 const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
@@ -463,7 +466,7 @@ pub enum MaterialVm {
 /// primitive's Enum-typed params (`node.light`'s `LIGHT_MODES` /
 /// `SHADOW_SOFTNESS_LABELS`); their value is the raw enum index — the panel
 /// owns the display-label mapping (it can't depend on this crate's
-/// constants, same DTO-boundary convention as `EnvironmentRowVm::mode_is_hdri`).
+/// constants).
 /// `light_size` is P9's Contact-softness-only knob (REALTIME_3D_DESIGN.md) —
 /// always resolved and always writable (D4: "parameter dependency, not
 /// conditional UI"), regardless of the current `shadow_softness_value`.
@@ -539,16 +542,16 @@ pub enum CameraVm {
 /// panel renders sliders, which need a live position, not just a target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImporterEnvironmentRow {
-    /// The `node.switch_texture` selector's own doc id (the "mode" chip).
-    pub switch_node_id: u32,
-    /// The `node.bake_environment`'s doc id (the Softbox intensity/fill
-    /// params).
+    /// The `node.bake_environment`'s doc id (Mode, Intensity, Fill).
     pub bake_node_id: u32,
     /// The `node.hdri_source`'s doc id — its `path` param isn't manifest/
     /// slider-backed (a file path, not a numeric row), so only the resolved
     /// display string is carried, not an addr.
     pub hdri_node_id: u32,
     pub hdri_file_value: String,
+    /// The sky chain drawn behind the scene (camera sky, blur, exposure, over
+    /// and the switch that turns it on), so the World item owns its controls.
+    pub background_node_ids: Vec<u32>,
 }
 
 /// Payload for [`EnvironmentVm::Bare`].
@@ -559,10 +562,9 @@ pub struct BareEnvironmentRow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnvironmentVm {
-    /// The importer's shape: `switch_texture` selecting between
-    /// `bake_environment` (Softbox) and `hdri_source`→`exposure` (HDRI).
+    /// `bake_environment` with an `hdri_source` wired into its `hdri` input.
     Importer(Box<ImporterEnvironmentRow>),
-    /// A bare `node.bake_environment`, no HDRI switch.
+    /// A bare `node.bake_environment`, no HDRI source.
     Bare(Box<BareEnvironmentRow>),
     /// Some other producer wired into `envmap` — honest custom row.
     Custom { node_doc_id: u32 },
@@ -1697,42 +1699,54 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
         return EnvironmentVm::None;
     };
 
-    if node.type_id == SWITCH_TEXTURE_TYPE_ID {
-        // Importer shape: in_0 = bake_environment, in_1 = exposure(hdri_source).
-        let bake = level
-            .producer(node.id, "in_0")
-            .and_then(|(n, _)| level.node(n))
-            .filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID);
-        let hdri_chain = level.producer(node.id, "in_1").and_then(|(gain_id, _)| {
-            let gain_node = level.node(gain_id).filter(|n| n.type_id == EXPOSURE_TYPE_ID)?;
-            let (hdri_id, _) = level.producer(gain_node.id, "in")?;
-            let hdri_node = level.node(hdri_id).filter(|n| n.type_id == HDRI_SOURCE_TYPE_ID)?;
-            Some(hdri_node.id)
-        });
-        if let (Some(bake), Some(hdri_id)) = (bake, hdri_chain) {
-            let hdri_file_value = level
-                .node(hdri_id)
-                .and_then(|n| n.params.get("path"))
-                .and_then(|v| match v {
-                    SerializedParamValue::String { value } => Some(value.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            return EnvironmentVm::Importer(Box::new(ImporterEnvironmentRow {
-                switch_node_id: node.id,
-                bake_node_id: bake.id,
-                hdri_node_id: hdri_id,
-                hdri_file_value,
-            }));
-        }
-        return EnvironmentVm::Custom { node_doc_id: node.id };
-    }
-
     if node.type_id == BAKE_ENVIRONMENT_TYPE_ID {
-        return EnvironmentVm::Bare(Box::new(BareEnvironmentRow { node_doc_id: node.id }));
+        let hdri = level
+            .producer(node.id, "hdri")
+            .and_then(|(id, _)| level.node(id))
+            .filter(|n| n.type_id == HDRI_SOURCE_TYPE_ID);
+        let Some(hdri) = hdri else {
+            return EnvironmentVm::Bare(Box::new(BareEnvironmentRow { node_doc_id: node.id }));
+        };
+        return EnvironmentVm::Importer(Box::new(ImporterEnvironmentRow {
+            bake_node_id: node.id,
+            hdri_node_id: hdri.id,
+            hdri_file_value: param_string(hdri, "path").unwrap_or_default(),
+            background_node_ids: background_chain(level, hdri.id),
+        }));
     }
 
     EnvironmentVm::Custom { node_doc_id: node.id }
+}
+
+/// The sky chain behind the scene: from the camera sky the HDRI feeds, along
+/// the blur, exposure and over it passes through, to the switch that turns it
+/// on. Only those atoms are followed, so the walk never leaves the chain.
+fn background_chain(level: &Level, hdri_id: u32) -> Vec<u32> {
+    let in_chain = |id: u32| {
+        level.node(id).is_some_and(|node| {
+            matches!(
+                node.type_id.as_str(),
+                CAMERA_SKY_TYPE_ID | BLUR_TYPE_ID | EXPOSURE_TYPE_ID | OVER_TYPE_ID | SWITCH_TEXTURE_TYPE_ID
+            )
+        })
+    };
+    let mut chain = Vec::new();
+    let mut pending: Vec<u32> = level
+        .wires
+        .iter()
+        .filter(|w| w.from_node == hdri_id && level.node(w.to_node).is_some_and(|n| n.type_id == CAMERA_SKY_TYPE_ID))
+        .map(|w| w.to_node)
+        .collect();
+    while let Some(id) = pending.pop() {
+        if chain.contains(&id) {
+            continue;
+        }
+        chain.push(id);
+        if level.node(id).is_some_and(|n| n.type_id != SWITCH_TEXTURE_TYPE_ID) {
+            pending.extend(level.wires.iter().filter(|w| w.from_node == id && in_chain(w.to_node)).map(|w| w.to_node));
+        }
+    }
+    chain
 }
 
 fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm {
@@ -2108,23 +2122,30 @@ mod tests {
         let lens = node(2, CAMERA_LENS_TYPE_ID, Some("lens"));
         let envmap = node(3, BAKE_ENVIRONMENT_TYPE_ID, Some("envmap"));
         let hdri = node(4, HDRI_SOURCE_TYPE_ID, Some("hdri"));
-        let gain = node(5, EXPOSURE_TYPE_ID, Some("hdri_gain"));
-        let select = node(6, SWITCH_TEXTURE_TYPE_ID, Some("env_select"));
+        let sky = node(5, CAMERA_SKY_TYPE_ID, Some("bg_sky"));
+        let gain = node(6, EXPOSURE_TYPE_ID, Some("bg_gain"));
+        let over = node(11, OVER_TYPE_ID, Some("bg_over"));
+        let select = node(12, SWITCH_TEXTURE_TYPE_ID, Some("bg_select"));
         let atmo = node(7, ATMOSPHERE_TYPE_ID, Some("atmosphere"));
         let sun = with_param(node(8, LIGHT_TYPE_ID, Some("sun")), "cast_shadows", SerializedParamValue::Float { value: 1.0 });
         let out = node(20, "system.final_output", None);
         def(
-            vec![cam, lens, envmap, hdri, gain, select, atmo, sun, scene, out],
+            vec![cam, lens, envmap, hdri, sky, gain, over, select, atmo, sun, scene, out],
             vec![
                 wire(1, "out", 2, "camera"),
                 wire(2, "out", 10, "camera"),
-                wire(3, "envmap", 6, "in_0"),
-                wire(4, "out", 5, "in"),
-                wire(5, "out", 6, "in_1"),
-                wire(6, "out", 10, "envmap"),
+                wire(4, "out", 3, "hdri"),
+                wire(3, "envmap", 10, "envmap"),
+                wire(4, "out", 5, "sky"),
+                wire(2, "out", 5, "camera"),
+                wire(5, "out", 6, "in"),
+                wire(6, "out", 11, "bottom"),
+                wire(10, "color", 11, "top"),
+                wire(10, "color", 12, "in_0"),
+                wire(11, "out", 12, "in_1"),
                 wire(7, "atmosphere", 10, "atmosphere"),
                 wire(8, "out", 10, "light_0"),
-                wire(10, "color", 20, "in"),
+                wire(12, "out", 20, "in"),
             ],
         )
     }
@@ -2135,7 +2156,11 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         match vm.environment {
             EnvironmentVm::Importer(row) => {
+                assert_eq!(row.bake_node_id, 3);
                 assert_eq!(row.hdri_node_id, 4);
+                let mut chain = row.background_node_ids.clone();
+                chain.sort_unstable();
+                assert_eq!(chain, vec![5, 6, 11, 12], "the sky chain, ending at the switch");
             }
             other => panic!("expected Importer shape, got {other:?}"),
         }

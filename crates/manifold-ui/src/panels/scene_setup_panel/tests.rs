@@ -1860,3 +1860,91 @@
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(highlighted(&panel, &tree).is_empty(), "no row highlights");
     }
+
+mod aim_sun_tests {
+    use super::*;
+
+    /// With an HDRI file set, Lighting offers "Aim Sun at HDRI"; its click
+    /// carries the layer and the file. With no file there is nothing to aim at.
+    #[test]
+    fn lighting_offers_aim_sun_only_with_a_file() {
+        let build = |hdri_file: &str| {
+            let mut vm = azalea_shaped_vm();
+            vm.environment = EnvironmentRowVm::Importer {
+                intensity: mrow(RowValue { addr: RowAddr::root(1, "intensity"), value: 1.0, min: 0.0, max: 4.0, driven: false, exposed: false }),
+                fill: mrow(RowValue { addr: RowAddr::root(1, "fill"), value: 0.0, min: 0.0, max: 2.0, driven: false, exposed: false }),
+                hdri_file: hdri_file.to_string(),
+                hdri_param: Some(0),
+            };
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(live(vm));
+            panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Lighting);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+            (panel, tree)
+        };
+
+        let (panel, _) = build("");
+        assert!(panel.aim_sun_id.is_none(), "no file, nothing to aim at");
+
+        let (mut panel, mut tree) = build("/skies/sunrise.exr");
+        let (id, file) = panel.aim_sun_id.clone().expect("the button renders");
+        assert_eq!(file, "/skies/sunrise.exr");
+        assert_eq!(tree.name_of(id), Some("scene_setup.lighting.aim_sun"));
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(layer, path))]
+                if layer_1(layer) && path == "/skies/sunrise.exr"
+        ), "{actions:?}");
+    }
+}
+
+mod background_rows {
+    use super::*;
+    use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, Modes};
+
+    /// Lighting always shows the Background switch; Blur and Brightness read
+    /// only while it is on.
+    #[test]
+    fn lighting_shows_background_blur_and_brightness_only_while_it_is_on() {
+        let shown = |background: f32| {
+            let (mut vm, mut surface) = world_transform_vm();
+            set_item_ids(&mut vm, SceneSelection::Lighting, &["bg_enabled", "bg_blur", "bg_brightness"]);
+            let template = surface.rows[0].clone();
+            let mut rows = Vec::new();
+            for (id, switch, gate) in [
+                ("bg_enabled", Some(Feature::Background), None),
+                ("bg_blur", None, Some(Gate::Only(Feature::Background, Modes(0b10)))),
+                ("bg_brightness", None, Some(Gate::Only(Feature::Background, Modes(0b10)))),
+            ] {
+                let mut row = scene_row(&template, id, ControlGroup::Environment);
+                if let Some(scene) = row.spec.scene.as_mut() {
+                    scene.switch = switch;
+                    scene.gate = gate;
+                }
+                if id == "bg_enabled" {
+                    row.value.base = background;
+                }
+                rows.push(row);
+            }
+            surface.rows = rows;
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(live(vm));
+            panel.configure_params(Some(surface));
+            panel.set_selection(LayerId::new("layer-1"), SceneSelection::Lighting);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1200.0));
+            panel.properties_card.rows.iter().map(|row| row.id.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(shown(0.0), ["bg_enabled"]);
+        assert_eq!(shown(1.0), ["bg_enabled", "bg_blur", "bg_brightness"]);
+    }
+}

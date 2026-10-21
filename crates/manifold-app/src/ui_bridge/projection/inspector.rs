@@ -658,15 +658,6 @@ pub fn sync_inspector_data(
                             let environment = match vm.environment {
                                 manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
-                                        // BUG-260's dead-chip case (design
-                                        // doc section 3b.9): reads through
-                                        // `display_value` like every other
-                                        // row so a bound "selector" still
-                                        // shows correctly; still not a
-                                        // clickable RowValue — unchanged
-                                        // pre-existing behavior, not this
-                                        // lane's scope.
-                                        mode_is_hdri: display_value(&[], e.switch_node_id, "selector", 0.0) != 0.0,
                                         intensity: mrow(
                                             e.bake_node_id,
                                             "intensity",

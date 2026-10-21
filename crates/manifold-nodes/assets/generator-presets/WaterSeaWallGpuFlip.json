@@ -2325,34 +2325,6 @@
       "typeId": "node.hdri_source"
     },
     {
-      "handle": "Sky Exposure",
-      "id": 473,
-      "nodeId": "sky_exposure",
-      "params": {
-        "gain": {
-          "type": "Float",
-          "value": 2.0
-        }
-      },
-      "typeId": "node.exposure"
-    },
-    {
-      "handle": "Environment Select",
-      "id": 474,
-      "nodeId": "environment_select",
-      "params": {
-        "num_inputs": {
-          "type": "Int",
-          "value": 2
-        },
-        "selector": {
-          "type": "Float",
-          "value": 0.0
-        }
-      },
-      "typeId": "node.switch_texture"
-    },
-    {
       "handle": "Whitewater",
       "id": 475,
       "nodeId": "whitewater",
@@ -2993,19 +2965,6 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.0,
-        "id": "environment_mode",
-        "label": "Environment",
-        "target": {
-          "kind": "node",
-          "nodeId": "environment_select",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
         "defaultMirrorsNodeParam": true,
         "defaultValue": 0.10000000149011612,
         "id": "water_attenuation",
@@ -3292,22 +3251,6 @@
         "min": 0.0,
         "name": "Surface Detail",
         "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 0.0,
-        "formatString": "F0",
-        "id": "environment_mode",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Environment",
-        "section": "Lighting",
-        "valueLabels": [
-          "Studio",
-          "HDRI"
-        ],
         "wholeNumbers": true
       },
       {
@@ -4462,24 +4405,6 @@
     {
       "fromNode": 435,
       "fromPort": "envmap",
-      "toNode": 474,
-      "toPort": "in_0"
-    },
-    {
-      "fromNode": 472,
-      "fromPort": "out",
-      "toNode": 473,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 473,
-      "fromPort": "out",
-      "toNode": 474,
-      "toPort": "in_1"
-    },
-    {
-      "fromNode": 474,
-      "fromPort": "out",
       "toNode": 463,
       "toPort": "envmap"
     },
@@ -5262,6 +5187,12 @@
       "fromPort": "out",
       "toNode": 471,
       "toPort": "in"
+    },
+    {
+      "fromNode": 472,
+      "fromPort": "out",
+      "toNode": 435,
+      "toPort": "hdri"
     }
   ]
 }

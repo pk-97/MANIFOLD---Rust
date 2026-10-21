@@ -84,13 +84,14 @@ fn scene_insertions_allocate_ids_across_nested_groups() {
         };
         command.execute(&mut project);
         let edited = graph_of(&project, &effect);
-        assert_eq!(max_node_id_over(&edited.nodes), 101, "insertion {kind}");
+        let expected_max = if kind == 1 { 102 } else { 101 };
+        assert_eq!(max_node_id_over(&edited.nodes), expected_max, "insertion {kind}");
         let after = edited.clone();
         command.undo(&mut project);
         assert_eq!(graph_of(&project, &effect), &graph);
         command.execute(&mut project);
         // New stable IDs are allowed on redo; document addresses remain unique.
-        assert_eq!(max_node_id_over(&graph_of(&project, &effect).nodes), 101);
+        assert_eq!(max_node_id_over(&graph_of(&project, &effect).nodes), expected_max);
         assert_eq!(graph_of(&project, &effect).nodes.len(), after.nodes.len());
     }
 }
@@ -4009,4 +4010,34 @@ fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
     assert!(in_manifest(&project), "merged control in the live manifest after execute");
     cmd.undo(&mut project);
     assert!(!in_manifest(&project), "merged control gone from the live manifest after undo");
+}
+
+#[test]
+fn add_environment_brings_an_hdri_source_and_its_file_row() {
+    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+    let before = graph_of(&project, &fx).clone();
+    let mut cmd = AddSceneEnvironmentCommand::new(
+        GraphTarget::Effect(fx.clone()), vec![], 0, (10.0, 20.0), Vec::new(), mirror_catalog_default(),
+    );
+    cmd.execute(&mut project);
+
+    let def = graph_of(&project, &fx);
+    let bake = find_typed(def, "node.bake_environment");
+    let hdri = find_typed(def, "node.hdri_source");
+    assert!(
+        def.wires.iter().any(|w| w.from_node == hdri.id && w.from_port == "out" && w.to_node == bake.id && w.to_port == "hdri"),
+        "the HDRI source feeds the bake's hdri input"
+    );
+    let meta = def.preset_metadata.as_ref().expect("metadata stamped");
+    assert_eq!(meta.string_params.len(), 1);
+    assert_eq!(meta.string_params[0].id, "hdri_file");
+    assert!(meta.string_params[0].is_file_picker);
+    assert!(
+        meta.string_bindings.iter().any(|b| b.id == "hdri_file"
+            && matches!(&b.target, BindingTarget::Node { node_id, param } if *node_id == hdri.node_id && param == "path")),
+        "hdri_file writes the HDRI source's path"
+    );
+
+    cmd.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &before, "undo removes the source and its file row");
 }

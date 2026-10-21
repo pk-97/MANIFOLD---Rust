@@ -1984,6 +1984,11 @@
           "name": "sun",
           "required": false,
           "type": "Light"
+        },
+        {
+          "name": "hdri",
+          "required": false,
+          "type": "Texture2D"
         }
       ],
       "label": "Bake Environment (equirect)",
@@ -2053,13 +2058,14 @@
           "default": "0",
           "enum_values": [
             "Gradient",
-            "Softbox"
+            "Softbox",
+            "HDRI"
           ],
           "label": "Mode",
           "name": "mode",
           "range": [
             "0",
-            "1"
+            "2"
           ],
           "type": "enum"
         },
@@ -2140,7 +2146,7 @@
           "type": "bool"
         }
       ],
-      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. `mode = HDRI` outputs the wired `hdri` texture (a node.hdri_source) times `intensity`, at the file's own resolution; with nothing wired it bakes black. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
@@ -54812,7 +54818,7 @@
         {
           "default": "1",
           "id": "1_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -58306,7 +58312,7 @@
         {
           "default": "0",
           "id": "32_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -80327,7 +80333,7 @@
         {
           "default": "1",
           "id": "3_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -89758,7 +89764,7 @@
         {
           "default": "1",
           "id": "3_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -103834,7 +103840,7 @@
         {
           "default": "1",
           "id": "3_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -113118,7 +113124,7 @@
         {
           "default": "1",
           "id": "3_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -118452,7 +118458,7 @@
         {
           "default": "1",
           "id": "3_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -121373,7 +121379,7 @@
         {
           "default": "1",
           "id": "3_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -122195,7 +122201,7 @@
         {
           "default": "1",
           "id": "435_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -136484,7 +136490,7 @@
         {
           "default": "1",
           "id": "2_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -146335,7 +146341,7 @@
         {
           "default": "1",
           "id": "435_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -160372,7 +160378,7 @@
         {
           "default": "1",
           "id": "2_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -170202,7 +170208,7 @@
         {
           "default": "1",
           "id": "435_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -184617,7 +184623,7 @@
         {
           "default": "1",
           "id": "435_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
@@ -200831,7 +200837,7 @@
         {
           "default": "1",
           "id": "2_mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         },
