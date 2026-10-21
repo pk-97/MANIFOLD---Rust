@@ -120,31 +120,48 @@ pub fn sync_track_layout(ui: &mut UIRoot, project: &Project, selection: &Selecti
 }
 
 /// The trigger source and target choices, projected from the layers and
-/// effect instances alone (`Projection::TriggerCatalog`). It runs before
-/// `sync_project_data`, whose layer headers label themselves from it, and
-/// refreshes an open target picker.
+/// effect instances alone (`Projection::TriggerCatalog`). It refreshes an
+/// open target picker and rewrites each trigger lane's header chip in place.
+/// `sync_project_data` labels from it too, so it runs first.
 pub fn sync_trigger_catalog(ui: &mut UIRoot, project: &Project) {
     record_work(WorkKind::TriggerCatalogProjection);
     ui.trigger_routing = TriggerRoutingCatalog::project(project);
+    let routing = &ui.trigger_routing;
+    let mut labels = project
+        .timeline
+        .layers
+        .iter()
+        .map(|l| (l.layer_id.as_str(), routing.targets_label(&l.layer_id)));
+    ui.layer_headers.sync_trigger_labels(&mut ui.tree, &mut labels);
     ui.refresh_trigger_target_picker();
 }
 
-/// Both projections, for callers outside the frame plan (load, harness and
-/// editor-window setup) that need a whole fresh timeline.
+/// The whole timeline projection, for callers outside the frame plan (load,
+/// harness and editor-window setup): the catalog, the structure, the
+/// clips and lanes the frame plan re-projects on its own. The selection push
+/// (`push_selection`) is separate.
 pub fn sync_project_all(
     ui: &mut UIRoot,
     project: &Project,
-    active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
     sync_trigger_catalog(ui, project);
-    sync_project_data(ui, project, active_layer, selection);
+    sync_project_data(ui, project, selection);
+    sync_clip_positions(ui, project);
+    sync_automation_lane_geometry(
+        ui,
+        project,
+        selection.automation_mode_visible(),
+        selection.chosen_automation_params(),
+        selection.automation_lane_order(),
+        selection.hidden_automation_lanes(),
+        selection.pinned_automation_lanes(),
+    );
 }
 
 pub fn sync_project_data(
     ui: &mut UIRoot,
     project: &Project,
-    active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
     record_work(WorkKind::ProjectSync);
@@ -235,7 +252,7 @@ pub fn sync_project_data(
                         .audio_setup
                         .send_for_layer(&layer.layer_id)
                         .map(|s| s.label.clone()),
-                    is_selected: selection.is_layer_active(&layer.layer_id),
+                    is_selected: false,
                     color: manifold_ui::node::Color32::from_f32(
                         layer.layer_color.r,
                         layer.layer_color.g,
@@ -245,10 +262,6 @@ pub fn sync_project_data(
                 }
             })
             .collect();
-        let active_layer_id = active_layer
-            .and_then(|i| project.timeline.layers.get(i))
-            .map(|l| l.layer_id.clone());
-        ui.layer_headers.set_active_layer(active_layer_id);
         ui.layer_headers.set_layers(layers);
 
         // Track data → TimelineViewportPanel
@@ -306,61 +319,6 @@ pub fn sync_project_data(
 
         // (CoordinateMapper Y-layout already rebuilt above, before layer headers)
 
-        // Clip data → TimelineViewportPanel
-        let mut viewport_clips = Vec::new();
-        for (i, layer) in project.timeline.layers.iter().enumerate() {
-            for (clip_idx, clip) in layer.clips.iter().enumerate() {
-                let is_gen = layer.layer_type == LayerType::Generator;
-                let name = clip_display_name(layer, clip, clip_idx + 1, &project.video_library);
-                use manifold_ui::panels::viewport::ViewportClip;
-                let clip_color = clip_base_color(layer, clip, 1.0);
-                viewport_clips.push(ViewportClip {
-                    clip_id: clip.id.clone(),
-                    layer_index: i,
-                    start_beat: clip.start_beat,
-                    duration_beats: clip.duration_beats,
-                    name: name.into(),
-                    color: clip_color,
-                    is_muted: clip.is_muted,
-                    is_locked: false,
-                    is_generator: is_gen,
-                    is_audio: layer.is_audio(),
-                    waveform: if layer.is_audio() {
-                        ui.audio_waveforms.renderer(&clip.id)
-                    } else {
-                        None
-                    },
-                    in_point_seconds: clip.in_point.0 as f32,
-                    waveform_breakpoints: audio_waveform_breakpoints(clip, project),
-                });
-            }
-        }
-        ui.viewport.set_clips(viewport_clips);
-
-        // Automation lane data → viewport (P4, `docs/AUTOMATION_LANES_DESIGN.md`
-        // section 7). Gated on the same flag `layers_to_ui_for_layout` used above, so
-        // the Y-layout and the lane list can never disagree about whether
-        // lanes are showing this frame.
-        let mut viewport_lanes = Vec::new();
-        if selection.automation_mode_visible() {
-            use manifold_ui::panels::viewport::ViewportAutomationLane;
-            for (i, layer) in project.timeline.layers.iter().enumerate() {
-                if layer.is_collapsed || layer.is_group() {
-                    continue;
-                }
-                let chosen = selection.chosen_automation_params().get(&layer.layer_id);
-                for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
-                    layer,
-                    chosen,
-                    selection.automation_lane_order(),
-                    selection.hidden_automation_lanes(),
-                    selection.pinned_automation_lanes(),
-                ) {
-                    viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
-                }
-            }
-        }
-        ui.viewport.set_automation_lanes(viewport_lanes);
 
         // Timeline markers → viewport
         ui.viewport
