@@ -15,7 +15,7 @@ use manifold_node_engine::testkit::atom::{FACE_FLOATS, assert_close, face_grid_l
 use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_water_liquid::primitives::liquid_stats::with_stats_layout;
+use manifold_water_liquid::primitives::liquid_stats::{INFLOW_BIRTHS_TAIL, with_stats_layout};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
 use manifold_water_liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports, unpack_supports};
@@ -2668,6 +2668,25 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     }
     let live_after = written.iter().filter(|p| p.position_radius[3] > 0.0).count();
     assert_eq!(live_after, capacity, "the count is the live prefix plus the emitted, up to the pool");
+
+    // The tally: the births and the two the full pool refused, summed over
+    // the tick's substeps from zero at its first, into stats words 28 and 29
+    // (the solver tail from INFLOW_BIRTHS_TAIL), so a full pool is reported.
+    let tail = INFLOW_BIRTHS_TAIL as usize;
+    let tally = |step_in_tick: i32, before: [u32; 2]| -> [u32; 2] {
+        let mut words = vec![0u32; tail + 2];
+        words[tail..].copy_from_slice(&before);
+        let got: Vec<u32> = Pass::new()
+            .bind(1, &ranges)
+            .bind(37, &scan)
+            .bind(47, &[0u32, 0, 1000, 0])
+            .bind(22, &words)
+            .run("emit_tally", &StepParams { step_in_tick, ..params }, 22, tail + 2, 1);
+        [got[tail], got[tail + 1]]
+    };
+    let births = (capacity - sorted.len()) as u32;
+    assert_eq!(tally(0, [5, 7]), [births, 2], "the first substep starts the tick's tally at zero");
+    assert_eq!(tally(1, [5, 7]), [5 + births, 9], "a later substep adds to it");
 
     // Jitter factor 1, the region a full cell deep everywhere: each emitted
     // particle moves uniformly up to a quarter cell each way, keyed by site

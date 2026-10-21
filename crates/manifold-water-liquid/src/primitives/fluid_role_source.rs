@@ -5,6 +5,8 @@
 manifold_core::testkit_visible! {
 pub(crate) mod geometry;
 }
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+mod extent;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -26,6 +28,7 @@ const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Exact Mesh"];
 /// World metres: how thick an open surface is as a solid.
 const DEFAULT_SHELL_THICKNESS: f32 = 0.05;
 const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collider"];
+const _: () = assert!(FLUID_ROLE_KINDS.len() == FluidRoleKind::ALL.len());
 
 manifold_core::testkit_visible! {
     testkit {
@@ -358,14 +361,8 @@ impl Primitive for FluidRoleSource {
         if let Err(error) = validate_transform(transform, "body transform") {
             return self.fail(ctx, error);
         }
-        let role = match resolve_index(ctx, "role", 1, FLUID_ROLE_KINDS.len() as u32) {
-            Ok(value) => match value {
-                0 => FluidRoleKind::InitialFill,
-                1 => FluidRoleKind::Inflow,
-                2 => FluidRoleKind::Outflow,
-                3 => FluidRoleKind::Collider,
-                _ => unreachable!(),
-            },
+        let role = match wired_f32(ctx, "role").and_then(|wired| role_kind(wired, ctx.params.get("role"))) {
+            Ok(role) => role,
             Err(error) => return self.fail(ctx, error),
         };
         let enabled = match resolve_bool(ctx, "enabled", true) {
@@ -806,10 +803,16 @@ fn resolve_index(
     default: u32,
     count: u32,
 ) -> Result<u32, String> {
-    let value = if let Some(value) = wired_f32(ctx, name)? {
+    index_from(wired_f32(ctx, name)?, ctx.params.get(name), name, default, count)
+}
+
+/// An enum index from its wire, else its param, else `default`; refused by
+/// name outside `0..count`.
+fn index_from(wired: Option<f32>, param: Option<&ParamValue>, name: &str, default: u32, count: u32) -> Result<u32, String> {
+    let value = if let Some(value) = wired {
         value
     } else {
-        match ctx.params.get(name) {
+        match param {
             Some(ParamValue::Enum(value)) => *value as f32,
             Some(ParamValue::Float(value)) => *value,
             None => default as f32,
@@ -828,6 +831,14 @@ fn resolve_index(
     }
     Ok(value as u32)
 }
+
+/// The role this source plays, from the `role` wire or param. The node and
+/// its extent rule both read it here.
+fn role_kind(wired: Option<f32>, param: Option<&ParamValue>) -> Result<FluidRoleKind, String> {
+    let index = index_from(wired, param, "role", 1, FluidRoleKind::ALL.len() as u32)?;
+    Ok(FluidRoleKind::ALL[index as usize])
+}
+
 
 fn resolve_bool(
     ctx: &EffectNodeContext<'_, '_>,
