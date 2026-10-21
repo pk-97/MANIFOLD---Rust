@@ -1699,7 +1699,6 @@ impl Application {
         }
         ws.viewport_rect = ws.viewport_session.is_some()
             .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
-        ws.viewport_overlay_lines.clear();
         ws.viewport_outline.clear();
         if let Some(session) = ws.viewport_session.as_ref() {
             show_image = session.displayed.as_ref().is_some_and(|frame| frame.has_image());
@@ -1711,33 +1710,13 @@ impl Application {
                 info.has_image = show_image;
                 info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
             }
-            // The selected shape's handles over THIS frame's scene, through
-            // the one composition entry the main preview also calls; mid-drag
-            // they follow the live knob values the drag writes. Domain boxes
-            // are the ones the solver accepted for the displayed frame.
-            use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, compose_lines};
+            // The selected shape's outline slots and pick targets over the
+            // authored scene. The handle lines are the content thread's, built
+            // from the scene it renders (`gizmo_overlay.rs`).
             let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), &ws.viewport_selected);
             if let Some(drawn) = drawn {
                 drawn.outline(&mut ws.viewport_outline);
             }
-            let displayed = session.displayed.as_ref().filter(|frame| frame.has_image());
-            let shown = displayed.map(|frame| &frame.domains);
-            let config = session.displayed_config().unwrap_or(session.config);
-            ws.viewport_problems.update(viewport_def.scene.as_ref(), shown);
-            compose_lines(
-                &GizmoChrome {
-                    view: crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height),
-                    lights: &[],
-                    domains: shown.map_or(&[][..], |domains| &domains[..]),
-                    live_columns: displayed.map_or(&[][..], |frame| &frame.live_columns[..]),
-                    physics: &[],
-                    problems: ws.viewport_problems.problems(),
-                    selection: drawn.map_or(&crate::physics_overlay::NO_SELECTION, |drawn| &drawn.selection),
-                    mode: ws.viewport_gizmo_mode,
-                    fade_handles: false,
-                },
-                &mut ws.viewport_overlay_lines,
-            );
         }
 
         // The graph-editor panel is now just the node-output inspector + the

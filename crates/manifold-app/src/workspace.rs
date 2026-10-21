@@ -115,11 +115,6 @@ pub struct Workspace {
     /// (editor state per `docs/REALTIME_3D_DESIGN.md` section 5's "Forbidden"
     /// list: "viewport/gizmo state in `manifold-core`").
     pub viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode,
-    /// The editor viewport's chrome this frame (`viewport_gizmo::compose_lines`),
-    /// reused so a steady frame allocates nothing.
-    pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
-    /// The editor viewport's setup problems, for its red boxes.
-    pub viewport_problems: crate::setup_check::GizmoProblems,
     /// The main output preview's gizmo host (main window only).
     pub preview_gizmo: crate::physics_overlay::PreviewGizmo,
     /// The main output preview's preview-only navigation (main window
@@ -186,8 +181,6 @@ impl Workspace {
             viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::default(),
             // The grid, a domain box and the largest handle set fit without
             // a display-frame reallocation.
-            viewport_overlay_lines: Vec::with_capacity(crate::physics_overlay::CHROME_LINES),
-            viewport_problems: Default::default(),
             preview_gizmo: Default::default(),
             preview_navigation: Default::default(),
             gizmo_layer_sent: None,

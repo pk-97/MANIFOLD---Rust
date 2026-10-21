@@ -1,55 +1,177 @@
-//! Where gizmo lines are drawn. The UI composes the lines (it owns the
-//! selection and the handles) and sends them as a [`GizmoOverlay`]; the
-//! content thread draws them through the one gizmo pass
-//! (`manifold_nodes_scene::node_graph::gizmo_pass`) onto the workspace
-//! preview, the scene viewport frame and, when the export asks, the export
-//! frame, testing them against the scene's own depth in the picked draw
-//! mode. Never into the output picture the show sends out.
+//! Where gizmo lines are drawn. The UI sends a [`GizmoOverlay`]: which scene
+//! to draw chrome for, what is selected and the handle mode. It sends no
+//! lines. The content thread builds them in the frame that renders the
+//! scene, from its own project and that frame's solver reports, so a handle
+//! and the object it moves always come from one snapshot and cannot drift
+//! apart mid-drag. The UI keeps only the pointer-hit math. The lines go
+//! through the one gizmo pass (`manifold_nodes_scene::node_graph::gizmo_pass`)
+//! onto the workspace preview, the scene viewport frame and, when the export
+//! asks, the export frame, tested against the scene's own depth in the
+//! picked draw mode. Never into the output picture the show sends out.
 
 use std::sync::Arc;
 
-use manifold_core::LayerId;
+use manifold_core::change::{ChangeSet, Part, PartStamps};
+use manifold_core::project::Project;
+use manifold_core::{GraphTarget, LayerId};
 use manifold_foundation::scene_surface::GizmoDrawMode;
+use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoSelection, GizmoTargetId, GizmoView, compose_lines};
 use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+use manifold_ui::panels::scene_setup_panel::SceneSelection;
 
+use crate::physics_overlay::{NO_SELECTION, SharedDomains, effect_follows};
 use crate::scene_viewport::ViewportHost;
 
-/// What the UI wants drawn, as last sent. Equal lines share one `Arc`, so
-/// comparing is a pointer check.
-#[derive(Debug, Clone, Default)]
+/// What is selected, as the host that owns the handles knows it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum GizmoPicks {
+    /// The Scene panel's selected items, and the shapes picked on the
+    /// preview among them.
+    Panel { items: Arc<[SceneSelection]>, picked: Arc<[GizmoTargetId]> },
+    /// The graph editor viewport's picked shapes.
+    Ids(Arc<[GizmoTargetId]>),
+}
+
+/// The handles one host wants over its scene.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GizmoRequest {
+    pub mode: GizmoMode,
+    pub picks: GizmoPicks,
+}
+
+impl GizmoRequest {
+    /// The Scene panel's selection. Slices equal to `kept`'s are shared with
+    /// it, so a steady frame allocates nothing and compares by content.
+    pub fn panel(mode: GizmoMode, items: &[SceneSelection], picked: &[GizmoTargetId], kept: Option<&Self>) -> Self {
+        let (kept_items, kept_picked) = match kept.map(|kept| &kept.picks) {
+            Some(GizmoPicks::Panel { items, picked }) => (Some(items), Some(picked)),
+            _ => (None, None),
+        };
+        Self { mode, picks: GizmoPicks::Panel { items: share(kept_items, items), picked: share(kept_picked, picked) } }
+    }
+
+    /// The graph editor viewport's picked shapes.
+    pub fn ids(mode: GizmoMode, ids: &[GizmoTargetId], kept: Option<&Self>) -> Self {
+        let kept_ids = match kept.map(|kept| &kept.picks) {
+            Some(GizmoPicks::Ids(ids)) => Some(ids),
+            _ => None,
+        };
+        Self { mode, picks: GizmoPicks::Ids(share(kept_ids, ids)) }
+    }
+}
+
+/// `items` as a shared slice, the same one as `kept` when nothing moved.
+fn share<T: Clone + PartialEq>(kept: Option<&Arc<[T]>>, items: &[T]) -> Arc<[T]> {
+    match kept {
+        Some(kept) if kept.as_ref() == items => Arc::clone(kept),
+        _ => Arc::from(items),
+    }
+}
+
+/// What the UI wants drawn, as last sent.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct GizmoOverlay {
     pub mode: GizmoDrawMode,
     /// The scene the Scene panel shows, with Show gizmos on or off: the
     /// export draws this scene's gizmos when it includes them.
     pub scene_layer: Option<LayerId>,
-    /// Lines for the output preview, with the scene layer they belong to.
-    pub output: Option<(LayerId, Arc<[WorldLine]>)>,
-    /// Lines for the scene viewport frame, with the host that shows it.
-    pub viewport: Option<(ViewportHost, Arc<[WorldLine]>)>,
+    /// The handles for the output preview, with the scene layer they belong to.
+    pub output: Option<(LayerId, GizmoRequest)>,
+    /// The handles for the scene viewport frame, with the host that shows it.
+    pub viewport: Option<(ViewportHost, GizmoRequest)>,
 }
 
-impl PartialEq for GizmoOverlay {
-    fn eq(&self, other: &Self) -> bool {
-        self.mode == other.mode
-            && self.scene_layer == other.scene_layer
-            && match (&self.output, &other.output) {
-                (None, None) => true,
-                (Some((a, lines_a)), Some((b, lines_b))) => a == b && Arc::ptr_eq(lines_a, lines_b),
-                _ => false,
-            }
-            && match (&self.viewport, &other.viewport) {
-                (None, None) => true,
-                (Some((a, lines_a)), Some((b, lines_b))) => a == b && Arc::ptr_eq(lines_a, lines_b),
-                _ => false,
-            }
+/// Parts that decide whether an effect follows the scene layer.
+const CHAIN_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Settings]);
+
+/// What one frame's solvers and camera reported, borrowed from where the
+/// frame recorded it.
+pub(crate) struct FrameChrome<'a> {
+    pub view: GizmoView,
+    pub lights: &'a [[f32; 3]],
+    pub domains: &'a SharedDomains,
+    pub live_columns: &'a [Option<([f32; 3], [f32; 3])>],
+    pub physics: &'a [manifold_core::physics_gizmo::PhysicsGizmo],
+}
+
+/// The handles' targets for the selection last composed, kept while the
+/// scene, the request and the effect chain hold.
+struct Chosen {
+    scene: Arc<SceneVm>,
+    request: GizmoRequest,
+    chain: u64,
+    selection: GizmoSelection,
+    fade: bool,
+}
+
+/// One host's lines, built on the content thread from its project.
+#[derive(Default)]
+pub(crate) struct SceneLines {
+    scene: crate::editor_graph_cache::EditorGraphCache,
+    problems: crate::setup_check::GizmoProblems,
+    chosen: Option<Chosen>,
+    lines: Vec<WorldLine>,
+}
+
+impl SceneLines {
+    /// The chrome of `target`'s scene and the handles of `request`, over the
+    /// scene as `project` holds it now and the frame's own reports. Rebuilds
+    /// the scene and the targets only when what they read moved.
+    pub fn compose(
+        &mut self,
+        project: &Project,
+        stamps: &PartStamps,
+        target: &GraphTarget,
+        request: &GizmoRequest,
+        frame: FrameChrome<'_>,
+    ) -> &[WorldLine] {
+        let scene = self.scene.viewport_def(project, Some(target), stamps).scene;
+        let chain = stamps.key(CHAIN_PARTS);
+        let stale = match (&self.chosen, &scene) {
+            (Some(chosen), Some(scene)) => !Arc::ptr_eq(&chosen.scene, scene) || chosen.request != *request || chosen.chain != chain,
+            (None, None) => false,
+            _ => true,
+        };
+        if stale {
+            self.chosen = scene.clone().map(|scene| {
+                let (selection, fade) = match &request.picks {
+                    GizmoPicks::Panel { items, picked } => {
+                        let fade = matches!(target, GraphTarget::Generator(layer) if effect_follows(project, layer));
+                        (GizmoSelection::new(&scene, crate::scene_gizmo::selected_targets(&scene, items, picked)), fade)
+                    }
+                    GizmoPicks::Ids(ids) => (GizmoSelection::of_ids(&scene, ids), false),
+                };
+                Chosen { scene, request: request.clone(), chain, selection, fade }
+            });
+        }
+        self.problems.update(scene.as_ref(), Some(frame.domains));
+        let (selection, fade_handles) = self.chosen.as_ref().map_or((&NO_SELECTION, false), |chosen| (&chosen.selection, chosen.fade));
+        compose_lines(
+            &GizmoChrome {
+                view: frame.view,
+                lights: frame.lights,
+                domains: frame.domains,
+                live_columns: frame.live_columns,
+                physics: frame.physics,
+                problems: self.problems.problems(),
+                selection,
+                mode: request.mode,
+                fade_handles,
+            },
+            &mut self.lines,
+        );
+        &self.lines
     }
-}
 
-/// `lines` as a shared slice, the same one as `kept` when nothing moved.
-pub(crate) fn intern(kept: &Option<Arc<[WorldLine]>>, lines: &[WorldLine]) -> Arc<[WorldLine]> {
-    match kept {
-        Some(kept) if kept.as_ref() == lines => Arc::clone(kept),
-        _ => Arc::from(lines),
+    pub fn lines(&self) -> &[WorldLine] {
+        &self.lines
+    }
+
+    /// Where the handles sit in the lines last composed.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub fn handle_origin(&self) -> Option<[f32; 3]> {
+        self.chosen.as_ref()?.selection.handles.as_ref().map(|target| target.origin)
     }
 }
 
@@ -58,23 +180,24 @@ pub(crate) use capture::GizmoCapture;
 
 #[cfg(target_os = "macos")]
 mod capture {
-    use std::cell::RefCell;
-
     use manifold_compositor::generator_renderer::GeneratorRenderer;
-    use manifold_core::LayerId;
+    use manifold_core::change::PartStamps;
+    use manifold_core::project::Project;
+    use manifold_core::{GraphTarget, LayerId};
     use manifold_foundation::scene_surface::GizmoDrawMode;
     use manifold_gpu::{GpuDevice, GpuEncoder, GpuTexture};
     use manifold_node_engine::scene::camera::Camera;
     use manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass;
     use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoView, compose_lines};
     use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+    use std::cell::RefCell;
 
-    use super::GizmoOverlay;
+    use super::{FrameChrome, GizmoOverlay, SceneLines};
     use crate::physics_overlay::PhysicsOverlayFrame;
-    use crate::scene_viewport::ViewportHost;
+    use crate::scene_viewport::{SceneViewportFrame, ViewportHost};
 
-    /// The content thread's gizmo state: the standing overlay, the gizmo
-    /// pass, and the depth the scenes kept this frame.
+    /// The content thread's gizmo state: the standing overlay, the lines
+    /// built this frame, the gizmo pass, and the depth the scenes kept.
     #[derive(Default)]
     pub(crate) struct GizmoCapture {
         overlay: GizmoOverlay,
@@ -86,10 +209,25 @@ mod capture {
         /// Set while an export includes gizmos.
         exporting: bool,
         scratch: Vec<WorldLine>,
+        /// The output scene's graph target, kept so a frame clones nothing.
+        output_target: Option<GraphTarget>,
+        output: SceneLines,
+        /// True when `output` holds this frame's lines.
+        output_ready: bool,
+        viewport: SceneLines,
+        viewport_ready: bool,
     }
 
     impl GizmoCapture {
         pub fn set(&mut self, overlay: GizmoOverlay) {
+            let layer = overlay.output.as_ref().map(|(layer, _)| layer);
+            let kept = match &self.output_target {
+                Some(GraphTarget::Generator(kept)) => Some(kept),
+                _ => None,
+            };
+            if kept != layer {
+                self.output_target = layer.map(|layer| GraphTarget::Generator(layer.clone()));
+            }
             self.overlay = overlay;
         }
 
@@ -139,24 +277,75 @@ mod capture {
             generators.zip(viewport_layer).and_then(|(g, layer)| g.scene_viewport_gizmo_depth(layer).cloned())
         }
 
-        /// The output preview's lines over `target`, through the camera the
-        /// scene rendered with. Nothing when the lines belong to another
-        /// scene than the frame.
-        pub fn draw_output(&self, device: &GpuDevice, enc: &mut GpuEncoder, target: &GpuTexture, frame: Option<&PhysicsOverlayFrame>) {
-            let (Some((layer, lines)), Some(frame)) = (self.overlay.output.as_ref(), frame) else { return };
+        /// This frame's output lines, built from the project the frame
+        /// rendered and the frame's own camera, lights, domains and physics
+        /// shapes. `size` is the output the camera rendered at. Nothing when
+        /// the request belongs to another scene than the frame.
+        pub fn compose_output(&mut self, project: Option<&Project>, stamps: &PartStamps, frame: Option<&PhysicsOverlayFrame>, size: (u32, u32)) {
+            self.output_ready = false;
+            let (Some(project), Some((layer, request)), Some(frame), Some(target)) = (project, self.overlay.output.as_ref(), frame, self.output_target.as_ref()) else { return };
             if &frame.layer != layer {
                 return;
             }
-            self.pass.borrow_mut().draw(device, enc, target, self.frame_depth.as_ref(), &frame.camera, lines, self.overlay.mode);
+            self.output.compose(
+                project,
+                stamps,
+                target,
+                request,
+                FrameChrome {
+                    view: GizmoView::new(frame.camera, size.0, size.1),
+                    lights: &frame.lights,
+                    domains: &frame.domains,
+                    live_columns: &frame.live_columns,
+                    physics: &frame.gizmos,
+                },
+            );
+            self.output_ready = true;
+        }
+
+        /// This frame's viewport lines, built from the project the frame
+        /// rendered. The output preview's navigated view carries the output
+        /// frame's lights, solver reports and physics shapes (`output`), the
+        /// graph editor's carries its own frame's domains.
+        pub fn compose_viewport(
+            &mut self,
+            project: Option<&Project>,
+            stamps: &PartStamps,
+            frame: &SceneViewportFrame,
+            output: Option<&PhysicsOverlayFrame>,
+        ) {
+            self.viewport_ready = false;
+            let (Some(project), Some((host, request))) = (project, self.overlay.viewport.as_ref()) else { return };
+            let scene = &frame.request;
+            if *host != scene.host {
+                return;
+            }
+            let view = GizmoView::new(scene.config.camera.to_camera(), scene.config.width, scene.config.height);
+            let chrome = match scene.host {
+                ViewportHost::OutputPreview => {
+                    let Some(output) = output.filter(|output| matches!(&scene.target, GraphTarget::Generator(layer) if layer == &output.layer)) else { return };
+                    FrameChrome { view, lights: &output.lights, domains: &output.domains, live_columns: &output.live_columns, physics: &output.gizmos }
+                }
+                ViewportHost::GraphEditor => FrameChrome { view, lights: &[], domains: &frame.domains, live_columns: &frame.live_columns, physics: &[] },
+            };
+            self.viewport.compose(project, stamps, &scene.target, request, chrome);
+            self.viewport_ready = true;
+        }
+
+        /// The output preview's lines over `target`, through the camera the
+        /// scene rendered with.
+        pub fn draw_output(&self, device: &GpuDevice, enc: &mut GpuEncoder, target: &GpuTexture, frame: Option<&PhysicsOverlayFrame>) {
+            let (true, Some(frame)) = (self.output_ready, frame) else { return };
+            self.pass.borrow_mut().draw(device, enc, target, self.frame_depth.as_ref(), &frame.camera, self.output.lines(), self.overlay.mode);
         }
 
         /// The viewport frame's lines over `target`, when `host` shows them.
         pub fn draw_viewport(&self, device: &GpuDevice, enc: &mut GpuEncoder, target: &GpuTexture, host: ViewportHost, depth: Option<&GpuTexture>, camera: &Camera) {
-            let Some((lines_host, lines)) = self.overlay.viewport.as_ref() else { return };
-            if *lines_host != host {
+            let Some((lines_host, _)) = self.overlay.viewport.as_ref() else { return };
+            if !self.viewport_ready || *lines_host != host {
                 return;
             }
-            self.pass.borrow_mut().draw(device, enc, target, depth, camera, lines, self.overlay.mode);
+            self.pass.borrow_mut().draw(device, enc, target, depth, camera, self.viewport.lines(), self.overlay.mode);
         }
 
         /// The export frame's lines: the scene's own chrome, grid, lights,
@@ -181,26 +370,38 @@ mod capture {
             );
             self.pass.borrow_mut().draw(device, enc, target, self.frame_depth.as_ref(), &frame.camera, &self.scratch, self.overlay.mode);
         }
+
+        /// Where this frame's output handles sit.
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        pub fn output_handle_origin(&self) -> Option<[f32; 3]> {
+            self.output_ready.then(|| self.output.handle_origin()).flatten()
+        }
+
+        /// Where this frame's viewport handles sit.
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        pub fn viewport_handle_origin(&self) -> Option<[f32; 3]> {
+            self.viewport_ready.then(|| self.viewport.handle_origin()).flatten()
+        }
     }
 }
 
 impl crate::app::Application {
-    /// Send the gizmo lines and draw mode when they move: the output
-    /// preview's lines while Show gizmos is on, and the scene viewport's from
-    /// whichever host owns it (the preview while it navigates, else the graph
-    /// editor). The lines are the ones last composed for what is on screen.
+    /// Send what the gizmos should show when it moves: the draw mode, the
+    /// output preview's handles while Show gizmos is on, and the scene
+    /// viewport's from whichever host owns it (the preview while it
+    /// navigates, else the graph editor). Only the selection goes: the
+    /// content thread builds the lines in the frame that renders the scene.
     pub(crate) fn sync_gizmo_overlay(&mut self) {
         let panel = &self.ws.ui_root.scene_setup_panel;
         let (mode, scene_layer) = (panel.gizmo_draw_mode(), panel.live_layer_id().cloned());
-        let kept_output = self.ws.gizmo_sent.output.as_ref().map(|(_, lines)| Arc::clone(lines));
-        let kept_viewport = self.ws.gizmo_sent.viewport.as_ref().map(|(_, lines)| Arc::clone(lines));
-        let preview = self.ws.preview_gizmo.composed_lines();
+        let kept = &self.ws.gizmo_sent;
+        let preview = self.ws.preview_gizmo.shown().map(|frame| (frame.layer.clone(), self.ws.preview_gizmo.request(panel, kept.output.as_ref().map(|(_, request)| request))));
         let (output, viewport) = if self.ws.preview_navigation.active() {
-            (None, preview.map(|lines| (ViewportHost::OutputPreview, intern(&kept_viewport, lines))))
+            (None, preview.map(|(_, request)| (ViewportHost::OutputPreview, request)))
         } else {
-            let output = self.ws.preview_gizmo.shown().zip(preview).map(|(frame, lines)| (frame.layer.clone(), intern(&kept_output, lines)));
             let editor = self.graph_editor.as_ref().filter(|ed| ed.viewport_session.is_some());
-            (output, editor.map(|ed| (ViewportHost::GraphEditor, intern(&kept_viewport, &ed.viewport_overlay_lines))))
+            let editor = editor.map(|ed| (ViewportHost::GraphEditor, GizmoRequest::ids(ed.viewport_gizmo_mode, &ed.viewport_selected, kept.viewport.as_ref().map(|(_, request)| request))));
+            (preview, editor)
         };
         let overlay = GizmoOverlay { mode, scene_layer, output, viewport };
         if overlay == self.ws.gizmo_sent {

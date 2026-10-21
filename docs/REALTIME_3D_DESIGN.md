@@ -118,8 +118,13 @@ between this doc and execution.
     has a positioned runtime shape. The frame never carries declared shapes.
   - *Handles of the selected item* come from its shape declaration
     (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model))
-    over `SceneVm` built from the UI's project snapshot, at the authored values
-    the knob shows. No host keeps editor-side domain state.
+    over `SceneVm` built from the content thread's own project, at the authored
+    values the knob shows. The UI sends the selection and the handle mode, never
+    lines: the content thread builds all chrome and handles in the frame that
+    renders the scene (`gizmo_overlay.rs`), so a handle and the object it moves
+    come from one snapshot and cannot drift apart mid-drag. The UI keeps the
+    pointer-hit math (pick, grip, drag). No host keeps editor-side domain
+    state.
 
   Handles keep one size on screen: a handle is `HANDLE_VIEW_FRACTION` of the
   view height long at any distance or field of view, turned into world length

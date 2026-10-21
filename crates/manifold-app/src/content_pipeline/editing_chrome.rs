@@ -122,5 +122,19 @@ mod gizmos {
             self.gizmos.draw_export(&device, &mut enc, &target, Some(&frame));
             enc.commit();
         }
+
+        /// The newest frame's output handle origin and the camera it rendered
+        /// with: the proof that handles and picture share one frame.
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        pub fn output_gizmo_probe(&self) -> Option<([f32; 3], manifold_node_engine::scene::camera::Camera)> {
+            let frame = self.physics_overlay.frames.iter().flatten().max_by_key(|frame| frame.frame)?;
+            Some((self.gizmos.output_handle_origin()?, frame.camera))
+        }
+
+        /// Where the viewport frame's handles sit.
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        pub fn viewport_gizmo_origin(&self) -> Option<[f32; 3]> {
+            self.gizmos.viewport_handle_origin()
+        }
     }
 }

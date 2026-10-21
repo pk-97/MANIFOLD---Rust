@@ -41,7 +41,7 @@ impl RunnerGizmo {
     /// so the newest entry is the one shown.
     pub(super) fn present(&mut self, ui: &UIRoot, data: &SceneData, stamps: &manifold_core::change::PartStamps) {
         self.host.show(data.content.physics_overlay_frames[0].as_ref(), preview_dims(&data.project), None);
-        let _ = self.host.compose(&data.project, &ui.scene_setup_panel, stamps);
+        let _ = self.host.refresh(&data.project, &ui.scene_setup_panel, stamps);
         self.grips = preview_fit(ui, &data.project).map_or_else(Vec::new, |fit| self.host.grips(fit));
     }
 }

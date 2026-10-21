@@ -2,10 +2,10 @@
 //! (`docs/REALTIME_3D_DESIGN.md` D7a). Editor chrome only: the content
 //! thread reports, per output surface, the camera the panel's scene rendered
 //! through, its light positions, its accepted fluid domains and the physics
-//! shapes it simulated ([`PhysicsOverlayFrame`]); [`PreviewGizmo`] draws
-//! them with the selected item's handles through the gizmo core's one
-//! composition entry, and picks and drags through the same core and scrub
-//! path as the graph editor's viewport. Nothing here feeds the render.
+//! shapes it simulated ([`PhysicsOverlayFrame`]). The content thread draws
+//! them with the selected item's handles (`gizmo_overlay.rs`); [`PreviewGizmo`]
+//! is the UI half: it picks and drags through the same core and scrub path as
+//! the graph editor's viewport. Nothing here feeds the render.
 
 use std::sync::Arc;
 
@@ -16,8 +16,7 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoSelection, GizmoTargetId, compose_lines};
-use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoMode, GizmoSelection, GizmoTargetId};
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{Rect, Vec2};
 
@@ -51,11 +50,6 @@ pub(crate) fn share_domains(scratch: &mut [(NodeId, FluidDomainSnapshot)], share
 }
 type Lights = [[f32; 3]];
 type Gizmos = [PhysicsGizmo];
-
-/// Lines a graph-editor frame reserves up front: the ground grid, a domain
-/// box, the largest handle set, and the selected domain's cell grid at its
-/// line budget. A host buffer may still grow past it (physics shapes).
-pub(crate) const CHROME_LINES: usize = 128 + manifold_nodes_scene::node_graph::viewport_overlay::LATTICE_LINE_BUDGET;
 
 /// What one output surface's scene was rendered with.
 #[derive(Clone)]
@@ -111,10 +105,6 @@ pub(crate) struct PreviewGizmo {
     navigated: Option<GizmoView>,
     scene: crate::editor_graph_cache::EditorGraphCache,
     target: Option<(TargetKey, GizmoSelection, bool)>,
-    lines: Vec<WorldLine>,
-    /// The shown scene's setup problems with what the shown frame's solvers
-    /// reported, for the red boxes.
-    problems: crate::setup_check::GizmoProblems,
     /// Render slots of the selected object, for its outline (D-102); empty
     /// while an effect moves the picture off the scene.
     outline: Vec<u32>,
@@ -143,10 +133,15 @@ impl PreviewGizmo {
         &self.outline
     }
 
-    /// The chrome and handles last composed for the frame on screen, or
-    /// `None` while no frame matches the picture.
-    pub fn composed_lines(&self) -> Option<&[WorldLine]> {
-        self.shown.as_ref().map(|_| self.lines.as_slice())
+    /// The handles to show over the shown scene: the panel's selection, the
+    /// shapes picked here and the handle mode. The content thread builds the
+    /// lines from this against the scene it renders.
+    pub fn request(
+        &self,
+        panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
+        kept: Option<&crate::gizmo_overlay::GizmoRequest>,
+    ) -> crate::gizmo_overlay::GizmoRequest {
+        crate::gizmo_overlay::GizmoRequest::panel(self.mode, panel.live_selected(), &self.picked, kept)
     }
 
     /// Moves when the mode or the picked shape changes.
@@ -190,17 +185,17 @@ impl PreviewGizmo {
         Some(self.navigated.unwrap_or(GizmoView::new(frame.camera, *width, *height)))
     }
 
-    /// The shown frame's chrome and the selected item's handles, through
-    /// the gizmo core's composition entry, with the camera to project them
-    /// through. Rebuilds the handles only when what they read moved.
-    pub fn compose(
+    /// Follow the shown frame: the selected item's handle targets for picks
+    /// and drags, and its outline slots. The gizmo lines are not made here:
+    /// the content thread builds them from the scene it renders
+    /// (`gizmo_overlay.rs`). True while a frame is shown.
+    pub fn refresh(
         &mut self,
         project: &Project,
         panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
         parts: &PartStamps,
-    ) -> Option<(&[WorldLine], GizmoView)> {
-        let view = self.view()?;
-        let (frame, _) = self.shown.as_ref()?;
+    ) -> bool {
+        let Some((frame, _)) = self.shown.as_ref() else { return false };
         let layer = frame.layer.clone();
         let target = GraphTarget::Generator(layer.clone());
         let scene = self.scene.viewport_def(project, Some(&target), parts).scene;
@@ -225,22 +220,7 @@ impl PreviewGizmo {
                 self.outline.clear();
             }
         }
-        let (frame, _) = self.shown.as_ref()?;
-        let (selection, fade_handles) = self.target.as_ref().map_or((&NO_SELECTION, &false), |(_, selection, fade)| (selection, fade));
-        self.problems.update(self.target.as_ref().map(|(key, ..)| &key.0), Some(&frame.domains));
-        let chrome = GizmoChrome {
-            view,
-            lights: &frame.lights,
-            domains: &frame.domains,
-            live_columns: &frame.live_columns,
-            physics: &frame.gizmos,
-            problems: self.problems.problems(),
-            selection,
-            mode: self.mode,
-            fade_handles: *fade_handles,
-        };
-        compose_lines(&chrome, &mut self.lines);
-        Some((&self.lines, view))
+        true
     }
 
     /// A left press at `pos` in the window; `extend` (Shift) adds the
@@ -399,7 +379,7 @@ impl manifold_ui::hit_targets::HitTargets for GizmoHitTargets<'_> {
 
 /// D-69: an enabled effect on the scene layer, a group it sits in, or the
 /// master chain moves the picture off the scene.
-fn effect_follows(project: &Project, layer: &LayerId) -> bool {
+pub(crate) fn effect_follows(project: &Project, layer: &LayerId) -> bool {
     let enabled = |effects: &[manifold_core::effects::PresetInstance]| effects.iter().any(|fx| fx.enabled);
     let mut next = Some(layer.clone());
     // A parent chain is at most every layer long.

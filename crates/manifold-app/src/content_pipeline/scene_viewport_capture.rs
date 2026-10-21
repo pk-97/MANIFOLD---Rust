@@ -38,6 +38,25 @@ pub(super) struct ViewportCopy {
     /// the gizmo pass when a draw mode asked for it.
     camera: manifold_node_engine::scene::camera::Camera,
     depth: Option<manifold_gpu::GpuTexture>,
+    /// The frame as observed: its request (target, size, camera) and the
+    /// domains the solvers accepted, for the gizmo lines of this same frame.
+    frame: crate::scene_viewport::SceneViewportFrame,
+}
+
+#[cfg(target_os = "macos")]
+impl ViewportCopy {
+    /// Build this frame's gizmo lines from the project the frame rendered,
+    /// before the copy draws them. `output` is the output surface's frame,
+    /// whose lights and physics shapes the navigated output preview shows.
+    pub(super) fn compose_gizmos(
+        &self,
+        gizmos: &mut crate::gizmo_overlay::GizmoCapture,
+        project: Option<&manifold_core::project::Project>,
+        stamps: &manifold_core::change::PartStamps,
+        output: Option<&crate::physics_overlay::PhysicsOverlayFrame>,
+    ) {
+        gizmos.compose_viewport(project, stamps, &self.frame, output);
+    }
 }
 
 impl SceneViewportCapture {
@@ -104,7 +123,8 @@ impl SceneViewportCapture {
         let host = request.host;
         let camera = request.config.camera.to_camera();
         self.observations.record(slot, frame, generation, request, status);
-        Some(ViewportCopy { source: texture, target: self.textures[slot].clone()?, host, camera, depth: None })
+        let frame = self.observations.frames[slot].clone()?;
+        Some(ViewportCopy { source: texture, target: self.textures[slot].clone()?, host, camera, depth: None, frame })
     }
 
     /// The bridge takes the owning host's view size (D7a). Both sides
