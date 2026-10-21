@@ -953,7 +953,7 @@ impl Application {
         if !self.ws.ui_root.background_input_blocked()
             && let Some(feedback) = &self.selection.automation_feedback
         {
-            self.cursor_manager.set(feedback.operation.into());
+            self.cursor_manager.set(TimelineCursor::from(feedback));
             return;
         }
 

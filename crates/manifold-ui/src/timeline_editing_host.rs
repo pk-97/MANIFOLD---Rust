@@ -304,11 +304,15 @@ pub trait TimelineEditingHost {
     /// Insert a breakpoint at `beat` while preserving the sampled curve on
     /// both sides of the insertion. Returns the raw PARAM-RANGE value stored
     /// at the inserted point for immediate selection by the overlay.
+    /// `outside_shape` is the outgoing shape of a point inserted before the
+    /// first or after the last point: the lane's default (Hold on whole-number
+    /// lanes, Linear otherwise). Inside a segment the sampled curve is kept.
     fn insert_automation_point_on_curve(
         &mut self,
         target: &UiGraphTarget,
         param_id: &ParamId,
         beat: Beats,
+        outside_shape: UiSegmentShape,
     ) -> Option<f32>;
 
     /// Live-preview a point drag: directly mutates the point currently at
