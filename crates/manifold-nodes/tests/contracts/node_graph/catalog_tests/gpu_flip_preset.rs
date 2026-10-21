@@ -157,6 +157,50 @@ use serde_json::{Value, json};
         }
     }
 
+    /// The pool the domain gives an inflow costs the rendered water about
+    /// 1 GB (BUG-3zq4r, inflow runs out): each slot's bytes across every
+    /// particle buffer, from two pools the walk sizes. The domain sizes the
+    /// pool, so the walk takes the fill's own count with its wire cut.
+    #[test]
+    fn gpu_flip_auto_inflow_pool_is_about_a_gigabyte() {
+        use manifold_water_gpu_flip::primitives::gpu_flip_domain::AUTO_INFLOW_SLOTS;
+        fn set_slots(nodes: &mut [EffectGraphNode], wires: &mut Vec<EffectGraphWire>, slots: i32) {
+            let fills: Vec<u32> = nodes.iter().filter(|node| node.type_id == "node.liquid_fill").map(|node| node.id).collect();
+            wires.retain(|wire| !(fills.contains(&wire.to_node) && wire.to_port == "particle_capacity"));
+            for node in nodes {
+                if node.type_id == "node.liquid_fill" {
+                    node.params.insert("particle_capacity".into(), serde_json::from_value(json!({"type": "Int", "value": slots})).unwrap());
+                }
+                if let Some(group) = node.group.as_mut() {
+                    set_slots(&mut group.nodes, &mut group.wires, slots);
+                }
+            }
+        }
+        let bytes = |slots: i32| {
+            let mut def = render_def(WaterScene::dam_break(64));
+            set_slots(&mut def.nodes, &mut def.wires, slots);
+            walked(&def, false, "pool slots").scene_bytes
+        };
+        let per_slot = (bytes(3_000_000) - bytes(1_000_000)) as f64 / 2_000_000.0;
+        let pool = per_slot * f64::from(AUTO_INFLOW_SLOTS);
+        println!("GPU FLIP auto inflow pool: {per_slot:.0} bytes a slot, {:.2} GB", pool / 1e9);
+        assert!((0.5e9..1.5e9).contains(&pool), "{pool} bytes");
+        // The walk reports the pool the allocator gets: the obstacle turned
+        // into an Inflow grows the fill's count to the inflow pool.
+        let scene = WaterScene::dam_break(64);
+        let collider = render_def(scene);
+        let mut inflow = collider.clone();
+        find_node_mut(&mut inflow.nodes, "obstacle_collider")
+            .expect("obstacle collider")
+            .params
+            .insert("role".into(), serde_json::from_value(json!({"type": "Enum", "value": 1})).unwrap());
+        let grown = walked(&inflow, false, "inflow").scene_bytes - walked(&collider, false, "collider").scene_bytes;
+        let expected = per_slot * (f64::from(AUTO_INFLOW_SLOTS) - scene.particles() as f64);
+        println!("GPU FLIP inflow walk: {grown} bytes more, {expected:.0} expected");
+        assert!((grown as f64 - expected).abs() < 1e-3 * expected, "{grown} bytes, {expected:.0} expected");
+    }
+
+
     /// Full array and held-buffer accounting at the shipped resolution. This
     /// excludes textures and later mesh growth; it is not a frame-time proof.
     #[test]

@@ -31,6 +31,9 @@ pub enum SetupProblemKind {
     SourceClipped(FluidRole),
     /// A source or collider is wholly outside; it does nothing.
     SourceOutside(FluidRole),
+    /// The particle pool is full and an inflow wants more: the inflow is
+    /// held back until water drains. Only the solver sees it.
+    PoolFull,
 }
 
 impl SetupProblemKind {
@@ -43,6 +46,7 @@ impl SetupProblemKind {
             Self::ColumnOutside => "Column is outside the domain; no water".to_owned(),
             Self::SourceClipped(role) => format!("{} leaves the domain; the rest is unused", role.title()),
             Self::SourceOutside(role) => format!("{} is outside the domain; it does nothing", role.title()),
+            Self::PoolFull => "Water pool is full; the inflow is held back. Add a Drain or lower Resolution".to_owned(),
         }
     }
 }
@@ -356,10 +360,16 @@ pub fn problems_with_runtime<'a>(
         if let Some(kind) = column {
             add(kind, &anchor.column, report.column_box.or(anchor.column_bounds));
         }
+        let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
         if let Some(reason) = report.refusal {
             let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
-            let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
             add(SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
+        }
+        if report.fit.pool_full {
+            // The pool holds a fixed number of sites, so a coarser lattice
+            // holds more water; Resolution is the domain's, beside Fill Height.
+            let resolution = ParamAddr { param_id: "resolution".to_owned(), ..anchor.fill.clone() };
+            add(SetupProblemKind::PoolFull, &[resolution, anchor.fill.clone()], layout_box.or(anchor.domain_bounds));
         }
     }
 }
@@ -610,7 +620,7 @@ mod tests {
         let ran = ([2.5, 0.0, -0.5], [3.5, 1.0, 0.5]);
         let report = RuntimeFit {
             node: &node,
-            fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside },
+            fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false },
             refusal: None,
             layout: Some(&layout()),
             column_box: Some(ran),
@@ -646,11 +656,30 @@ mod tests {
         };
         let ran = ([4.0; 3], [5.0; 3]);
         let report =
-            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside }, refusal: None, layout: None, column_box: Some(ran) };
+            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false }, refusal: None, layout: None, column_box: Some(ran) };
         let problems = runtime(&anchors, std::slice::from_ref(&authored), report);
         assert_eq!(problems.len(), 1, "one column, one warning: {problems:?}");
         assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
         assert_eq!(problems[0].bounds, Some(ran));
         assert_eq!(problems[0].params, authored.params, "the authored row order stays");
+    }
+
+    /// BUG-3zq4r (inflow runs out): a pool too full for an inflow is never
+    /// silent. It warns on Resolution (then Fill Height) and outlines the
+    /// domain the solver ran.
+    #[test]
+    fn a_full_pool_warns_on_resolution() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        let fit = SetupFit { pool_full: true, ..SetupFit::default() };
+        let report = RuntimeFit { node: &node, fit, refusal: None, layout: Some(&layout()), column_box: None };
+        let problems = runtime(&anchors, &[], report);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].kind, SetupProblemKind::PoolFull);
+        assert_eq!(problems[0].params[0].param_id, "resolution");
+        assert_eq!(problems[0].params[1], anchors[0].fill);
+        let layout = layout();
+        assert_eq!(problems[0].bounds, Some((layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d]))));
+        assert!(problems[0].kind.message().contains("inflow is held back"));
     }
 }
