@@ -19,7 +19,7 @@
   {"ScrollTo": {"target": {"Query": {"name": "scene_setup.properties.physics"}}}},
   {"Pointer": {"target": {"Query": {"name": "scene_setup.properties.physics"}}, "gesture": {"Click": {"modifiers": {}}}}},
   {"Assert": {"selector": {"Query": {"name": "scene_setup.properties.physics"}}, "check": {"TextEquals": "Disable"}}},
-  {"Assert": {"selector": {"Query": {"text": "Density", "under_name": "scene_setup"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Mass", "under_name": "scene_setup"}}, "check": "Exists"}},
 
   {"ScrollTo": {"target": {"Query": {"name": "scene_tree.add.Objects"}}}},
   {"Pointer": {"target": {"Query": {"name": "scene_tree.add.Objects"}}, "gesture": {"Click": {"modifiers": {}}}}},

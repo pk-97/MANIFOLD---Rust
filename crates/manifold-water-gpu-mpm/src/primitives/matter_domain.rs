@@ -1257,7 +1257,7 @@ mod sim_rate_tests {
         let mut scene = RigidSceneInputs { gravity: [0.0; 3], ..RigidSceneInputs::default() };
         scene.bodies[0] = Some(RigidBody {
             transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
-            density: 500.0,
+            mass: 50.0,
             ..RigidBody::default()
         });
         let mut owner = LiquidRigidOwner::new(

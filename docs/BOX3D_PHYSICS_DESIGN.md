@@ -56,12 +56,13 @@ Physics Solids demo. The original larger design remains a roadmap.
   and cameras remain authoritative.
 - Transport seconds advance fixed 1/60-second ticks with four solver substeps.
   A stationary clock or zero speed holds motion. Reset, backward time, and the
-  existing runtime state-clear path restore authored starting poses. Shape, scale
-  or body membership changes rebuild the world. Density/contact-property edits preserve
+  existing runtime state-clear path restore authored starting poses. A shape or scale
+  change, or removing a body, rebuilds the world; a body added to a free slot joins the live world at its
+  authored pose without one. Mass/contact-property edits preserve
   current motion; editing a starting position/rotation repositions that body.
-- A body is authored by density (kg/m³, default 600). Mass is density times the
-  signed volume of the installed hull, derived at install, so mass follows size.
-  2026-10-02: the old `mass` param was size-blind; project load (1.17.0) drops it.
+- A body is authored by mass (kg, default 600), whatever its size. Density is derived
+  as mass over the installed hull volume where the engine needs it (a released fragment).
+  Shows saved with a Density card load at the default mass; there is no migration.
   Preview processes fixed ticks for up to one project-frame CPU interval per world,
   checked between native steps, then yields to rendering and command processing.
   Only completed ticks leave the accumulator: all unfinished ticks and fractional
@@ -92,7 +93,7 @@ Physics Solids demo. The original larger design remains a roadmap.
   accepted prefix and stops stepping with a restart/bake diagnostic until reset
   or a setup rebuild. It no longer grows without a bound. Timestamped external
   modulation capture remains P5 work in `FLUID_ENGINE_INTEGRATION_PLAN.md`.
-- The Physics Solids preset exposes each body's shape, motion, density, friction and
+- The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.
   Demo objects are root-scope; physics discovery through arbitrary nested groups

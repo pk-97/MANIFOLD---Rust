@@ -22,6 +22,7 @@ use std::{borrow::Cow, cell::Cell};
 mod source_tests;
 mod scene_routes_tests;
 mod rubble_blast_tests;
+mod world_edit_tests;
 
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }

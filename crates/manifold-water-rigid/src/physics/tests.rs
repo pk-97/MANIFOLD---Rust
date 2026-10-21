@@ -20,12 +20,12 @@ fn body(position: [f32; 3]) -> RigidBody {
     }
 }
 
-/// Mass follows size: Enable Physics on the Dam Break obstacle wires its
+/// Mass is the card value, not the size: Enable Physics on the Dam Break obstacle wires its
 /// unit `cube_mesh` source into the body, so the hull is the drawn box at
-/// scale (0.6, 1.16, 0.85): about 0.59 m³, about 354 kg at 600 kg/m³.
+/// scale (0.6, 1.16, 0.85): about 0.59 m³, and still 600 kg as the card says.
 /// Box3D reports that mass back.
 #[test]
-fn dam_break_obstacle_mass_is_density_times_hull_volume() {
+fn dam_break_obstacle_mass_is_the_card_mass_whatever_the_hull_volume() {
     let scale = [0.6, 1.16, 0.85];
     let points: Vec<_> = manifold_node_engine::scene::mesh_source::MeshSource::Cube { size: 1.0 }
         .load_vertices()
@@ -50,7 +50,7 @@ fn dam_break_obstacle_mass_is_density_times_hull_volume() {
         (volume - box_volume).abs() < 1e-3 * box_volume,
         "hull {volume} m³ vs box {box_volume} m³"
     );
-    let mass = DEFAULT_DENSITY * volume;
+    let mass = DEFAULT_MASS_KG;
     let reported = 1.0 / world.dynamics(handle).unwrap().inverse_mass;
     assert!(
         (reported - mass).abs() < 1e-3 * mass,
@@ -96,7 +96,7 @@ fn uniform_field_is_mass_independent() {
     let field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
     let light_body = one_body([0.0, 8.0, 0.0]);
     let mut heavy_body = one_body([10.0, 8.0, 0.0]);
-    heavy_body[0].as_mut().unwrap().density *= 7.0;
+    heavy_body[0].as_mut().unwrap().mass *= 7.0;
     let mut light = RigidSimulation::default();
     let mut heavy = RigidSimulation::default();
     light
@@ -595,7 +595,7 @@ fn zero_speed_finishes_preceding_interval_and_holds_until_resume() {
 }
 
 #[test]
-fn disabled_body_keeps_authored_pose_and_restores_contacts_when_enabled() {
+fn disabled_body_keeps_authored_pose_and_joins_the_running_world_when_enabled() {
     let mut bodies = vec![None; 64];
     bodies[0] = Some(RigidBody {
         enabled: false,
@@ -626,7 +626,7 @@ fn disabled_body_keeps_authored_pose_and_restores_contacts_when_enabled() {
         .advance(&bodies, GRAVITY, PlayedTime::from_played(3.0), 1.0, 0.0)
         .unwrap();
     assert!(simulation.poses[0].pos[1].abs() < 1.0e-5);
-    assert!(simulation.poses[1].pos[1] > 0.5);
+    assert!(simulation.poses[1].pos[1] < 0.0, "the crate that already fell is not reset by the new ground");
 }
 
 #[test]
@@ -988,7 +988,7 @@ fn material_edit_preserves_the_current_falling_pose() {
     let mut edited = bodies;
     let mut edited_body = edited[0].clone().unwrap();
     edited_body.friction = 0.9;
-    edited_body.density *= 2.0;
+    edited_body.mass *= 2.0;
     edited_body.bounce = 0.4;
     edited[0] = Some(edited_body);
     simulation
@@ -1041,7 +1041,7 @@ fn multi_hull_geometry_rebuilds_on_reset_and_material_edits_keep_pose() {
     let mut edited = bodies.clone();
     let mut edited_body = edited[0].take().expect("body exists");
     edited_body.friction = 0.9;
-    edited_body.density *= 2.0;
+    edited_body.mass *= 2.0;
     edited_body.collider = Some(geometry.clone());
     edited[0] = Some(edited_body);
     simulation
@@ -1065,7 +1065,7 @@ fn all_scaled_platonic_hulls_settle_on_the_ground() {
             ..Transform::default()
         },
         kind: 0,
-        density: 0.0,
+        mass: 0.0,
         ..RigidBody::default()
     });
     for (index, x) in [-8.0, -4.0, 0.0, 4.0, 8.0].into_iter().enumerate() {

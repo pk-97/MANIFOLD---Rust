@@ -225,7 +225,7 @@
           "type": "Enum",
           "value": 0
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -339,7 +339,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -453,7 +453,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -567,7 +567,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -681,7 +681,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },
@@ -795,7 +795,7 @@
           "type": "Enum",
           "value": 1
         },
-        "density": {
+        "mass": {
           "type": "Float",
           "value": 600.0
         },

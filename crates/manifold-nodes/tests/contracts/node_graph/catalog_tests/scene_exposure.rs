@@ -65,14 +65,14 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
 
         const UNITS: [Unit; 11] = [
             Unit::Metres, Unit::MetresPerSecond, Unit::MetresPerSecondSquared,
-            Unit::KilogramsPerCubicMetre, Unit::Ev, Unit::Pixels, Unit::MillionCells,
+            Unit::Kilograms, Unit::Ev, Unit::Pixels, Unit::MillionCells,
             Unit::Seconds, Unit::Nanometres, Unit::Beats, Unit::PerSecond,
         ];
         // A new unit must join UNITS before this compiles.
         fn _every_unit_listed(unit: Unit) {
             match unit {
                 Unit::Metres | Unit::MetresPerSecond | Unit::MetresPerSecondSquared
-                | Unit::KilogramsPerCubicMetre | Unit::Ev | Unit::Pixels | Unit::MillionCells
+                | Unit::Kilograms | Unit::Ev | Unit::Pixels | Unit::MillionCells
                 | Unit::Seconds | Unit::Nanometres | Unit::Beats | Unit::PerSecond => {}
             }
         }

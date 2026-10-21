@@ -598,8 +598,8 @@ impl BoxScene {
             set_node_param(&mut def, "box_start", &format!("rot_{axis}"), float(self.rotation[i]));
             set_node_param(&mut def, "box_start", &format!("scale_{axis}"), float(scale));
         }
-        // The body takes density; the cube's volume is edge³.
-        set_node_param(&mut def, "box_body", "density", float(self.mass / self.edge.powi(3)));
+        // The body takes its mass in kg.
+        set_node_param(&mut def, "box_body", "mass", float(self.mass));
         def
     }
 }

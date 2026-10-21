@@ -16,7 +16,7 @@ use manifold_core::effects::{ParamConvert, PresetInstance};
 use manifold_core::project::{EmbeddedPreset, Project};
 use manifold_core::preset_def::PresetKind;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_rigid::physics::{CopySpawn, DEFAULT_DENSITY, RigidBody, RigidSceneInputs, RigidSimulation};
+use manifold_water_rigid::physics::{CopySpawn, DEFAULT_MASS_KG, RigidBody, RigidSceneInputs, RigidSimulation};
 
 const WORLD: &str = "node.physics_world";
 const BODY_SLOTS: usize = 64;
@@ -149,7 +149,7 @@ impl Values<'_> {
             enabled: self.get(id, "enabled").unwrap_or(1.0) >= 0.5,
             shape: self.get(id, "shape").unwrap_or(1.0) as u32,
             kind: self.get(id, "motion").unwrap_or(1.0) as u32,
-            density: self.get(id, "density").unwrap_or(DEFAULT_DENSITY),
+            mass: self.get(id, "mass").unwrap_or(DEFAULT_MASS_KG),
             friction: self.get(id, "friction").unwrap_or(0.5),
             bounce: self.get(id, "bounce").unwrap_or(0.15),
             spawn: self.spawn(id),
@@ -234,8 +234,9 @@ fn mirage_physics_plays_as_it_did_on_main() {
 }
 
 #[test]
-fn box3d_testing_fills_the_copy_pool_and_plays_as_it_did_on_main() {
+fn box3d_testing_fills_the_copy_pool_and_plays_its_default_mass() {
     let played = play("box3DTesting.manifold");
     assert_eq!((played.made, played.not_made), (4_000, 0));
-    assert_eq!(played.digest, 0x0d0b_9bc5_3009_5639, "box3DTesting left main's trajectory");
+    // The saved bodies carry a density, which no longer exists: each takes the default mass in kg.
+    assert_eq!(played.digest, 0xccb7_e05e_b4c8_69b2, "box3DTesting left its trajectory");
 }
