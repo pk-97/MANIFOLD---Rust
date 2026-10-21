@@ -563,6 +563,7 @@ impl Primitive for GpuFlipDomain {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
+        self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
@@ -578,7 +579,7 @@ impl Primitive for GpuFlipDomain {
                 Err(error) => ctx.error(error),
             }
             self.bodies.observe_sample(&self.clock, ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
-            self.coupled.scenes.observe(&self.clock, ctx.time.seconds.0, None);
+            self.coupled.scenes.observe_staged(&self.clock, ctx.time.seconds.0);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -705,12 +706,12 @@ impl PhysicsNode for GpuFlipDomain {
         error: Option<&str>,
         authored_sample_only: bool,
     ) {
-        // A replay sample records the scene at a tick's start; a pending one
-        // records nothing, and `run` closes the sample.
+        // A replay sample hands the scene over before this domain observes
+        // the sample's Speed; `run` records it once Speed names the tick. A
+        // pending one records nothing.
         if authored_sample_only {
-            if let Some(observation) = observation.filter(|_| error.is_none()) {
-                self.coupled.scenes.observe(&self.clock, observation.transport.0, Some(&observation.inputs));
-            }
+            let scene = observation.filter(|_| error.is_none()).map(|observation| &observation.inputs);
+            self.coupled.scenes.stage(scene);
             return;
         }
         self.set_coupled_physics(true);

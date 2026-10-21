@@ -273,6 +273,7 @@ impl Primitive for SwarmForces {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.clock.set_live_load(ctx.sim_step.load().map(|load| LiveLoad { previous: load.previous, budget: load.budget }));
+        self.clock.set_transport_target(ctx.sim_step.transport_target.map(|target| target.0));
         // A physics sample reads the field at a tick's start; it never
         // advances time.
         if ctx.sim_step.authored_sample_only {

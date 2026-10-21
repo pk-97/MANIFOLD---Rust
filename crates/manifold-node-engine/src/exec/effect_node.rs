@@ -79,6 +79,11 @@ pub struct SimStep {
     /// Let a bounded historical input batch advance the native simulation.
     /// Honoured only in export; live preview stays observe-only.
     pub history_drain: bool,
+    /// The time the transport jumped to (a seek, a loop, play from a cue)
+    /// when this frame is the frame the jump landed on, at or after it;
+    /// None otherwise. A simulation restarting on this frame starts its tick
+    /// grid there, so the grid after a jump is the same at any frame rate.
+    pub transport_target: Option<Seconds>,
 }
 
 impl SimStep {
@@ -93,6 +98,7 @@ impl SimStep {
             live_load: None,
             authored_sample_only: false,
             history_drain: false,
+            transport_target: None,
         }
     }
 
@@ -119,6 +125,10 @@ impl SimStep {
 
     pub fn draining_history(self) -> Self {
         Self { history_drain: true, ..self }
+    }
+
+    pub fn with_transport_target(self, target: Option<Seconds>) -> Self {
+        Self { transport_target: target, ..self }
     }
 
     pub fn offline(self) -> bool {

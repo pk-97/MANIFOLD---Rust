@@ -456,6 +456,12 @@ impl PlaybackEngine {
     pub fn current_state(&self) -> PlaybackState {
         self.current_state
     }
+    /// The time the last seek, locate or play from a cue aimed at, while the
+    /// transport sits on the frame it landed on; physics starts its tick grid
+    /// there after a jump.
+    pub fn transport_target(&self) -> Option<Seconds> {
+        self.clock.placement_target()
+    }
     pub fn current_time_double(&self) -> f64 {
         self.clock.time().0
     }

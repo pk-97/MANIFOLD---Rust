@@ -436,6 +436,12 @@ pub struct RigidSimulation {
     advancement_policy: AdvancementPolicy,
     /// The owner's simulation step for the next advance; see [`Self::set_step`].
     step: SimStep,
+    /// Transport times the history replay samples before the next frame, from
+    /// [`Self::request_samples`]: authored inputs are recorded only there.
+    requests: Vec<f64>,
+    /// A history replay drives this world's inputs. Without one (a direct
+    /// caller), each frame records its own inputs.
+    replay_driven: bool,
 }
 
 impl Default for RigidSimulation {
@@ -489,6 +495,8 @@ impl Default for RigidSimulation {
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
             step: SimStep::default(),
+            requests: Vec::new(),
+            replay_driven: false,
         }
     }
 }
@@ -499,6 +507,7 @@ impl RigidSimulation {
     pub fn set_step(&mut self, step: SimStep) {
         self.step = step;
         self.clock.set_live_load(live_load(step));
+        self.clock.set_transport_target(step.transport_target.map(|target| target.0));
     }
 
     /// [`Self::set_step`] for chained construction in tests and tools.
@@ -868,14 +877,13 @@ impl RigidSimulation {
                 let authored_time = self.clock.observe_speed(now.0, speed);
                 let elapsed_simulation = authored_time - self.authored_time;
                 self.ensure_targeted_history(targeted_fields)?;
-                self.record_authored_sample(
-                    authored_time,
-                    bodies.clone(),
-                    prototype.clone(),
-                    gravity,
-                    acceleration_field.clone(),
-                    targeted_fields,
-                )?;
+                // A world no replay asks for samples keeps every observation,
+                // as the full frame does.
+                if self.replay_driven {
+                    self.record_requested_samples(now.0, &bodies, prototype.as_ref(), gravity, acceleration_field.as_ref(), targeted_fields)?;
+                } else {
+                    self.record_authored_sample(authored_time, bodies, prototype, gravity, acceleration_field, targeted_fields)?;
+                }
                 self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
                 self.last_time = Some(now);
@@ -1049,14 +1057,21 @@ impl RigidSimulation {
         let elapsed_simulation = authored_time - self.authored_time;
         let stationary_edit = elapsed_simulation == 0.0;
         self.ensure_targeted_history(targeted_fields)?;
-        self.record_authored_sample(
-            authored_time,
-            bodies.clone(),
-            prototype.clone(),
-            gravity,
-            acceleration_field.clone(),
-            targeted_fields,
-        )?;
+        self.record_requested_samples(now.0, &bodies, prototype.as_ref(), gravity, acceleration_field.as_ref(), targeted_fields)?;
+        // Under a replay, inputs are knotted only at the times it was asked to
+        // sample, which no frame rate moves; a held frame still records an
+        // edit made while time stands still.
+        let held_frame = clock_frame.as_ref().is_some_and(|frame| frame.held);
+        if self.advancement_policy.is_worker() || !self.replay_driven || held_frame {
+            self.record_authored_sample(
+                authored_time,
+                bodies.clone(),
+                prototype.clone(),
+                gravity,
+                acceleration_field.clone(),
+                targeted_fields,
+            )?;
+        }
         self.authored_time = authored_time;
         self.held.observe(now.0, speed, self.step.authored_sample_only);
         let accumulated = self.accumulator + elapsed_simulation;
@@ -1765,6 +1780,47 @@ impl RigidSimulation {
             }
             self.deferred_copy_animated_edit = None;
         }
+        Ok(())
+    }
+
+    /// Transport times in `(from, until]` the physics history replay must
+    /// sample before the next frame: every Sim Rate boundary a tick may start
+    /// or end at and every replay grid point, so inputs are recorded only at
+    /// times no frame rate moves. Each boundary goes to one frame's window.
+    pub fn request_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.replay_driven = true;
+        self.requests.clear();
+        let requests = &mut self.requests;
+        self.clock.tick_starts(from, until, |transport| requests.push(transport));
+        let rate = manifold_physics::clock::REPLAY_RATE;
+        let last = (until * rate + 1e-6).floor();
+        let mut point = (from * rate + 1e-6).floor() + 1.0;
+        while point <= last {
+            requests.push(point / rate);
+            point += 1.0;
+        }
+        requests.sort_unstable_by(f64::total_cmp);
+        requests.dedup();
+        out.extend_from_slice(requests);
+    }
+
+    /// Record the inputs a sample at transport `now` reached for each pending
+    /// request, at the simulated time of the request itself.
+    fn record_requested_samples(
+        &mut self,
+        now: f64,
+        bodies: &[Option<RigidBody>; MAX_BODIES],
+        prototype: Option<&RigidBody>,
+        gravity: [f32; 3],
+        acceleration_field: Option<&FieldValue>,
+        targeted_fields: Option<&[Option<FieldValue>]>,
+    ) -> Result<(), String> {
+        let reached = self.requests.partition_point(|&transport| transport <= now + 1e-9);
+        for index in 0..reached {
+            let time = self.clock.simulation_at(self.requests[index], live_load(self.step));
+            self.record_authored_sample(time, bodies.clone(), prototype.cloned(), gravity, acceleration_field.cloned(), targeted_fields)?;
+        }
+        self.requests.drain(..reached);
         Ok(())
     }
 

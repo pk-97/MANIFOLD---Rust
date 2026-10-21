@@ -5,7 +5,8 @@
 //! at, runs the authored ancestry at exactly those times, and hands each
 //! result to [`TickSamples::observe`]. Once the clock has advanced,
 //! [`TickSamples::settle`] adds this frame's own value for a tick that starts
-//! now. A tick nobody sampled is an error, never a guess.
+//! now and that no sample reached. A tick nobody sampled is an error, never
+//! a guess.
 
 use std::collections::VecDeque;
 
@@ -19,18 +20,47 @@ pub struct TickSamples<T> {
     /// The value at each tick's start, ascending by tick, from the oldest
     /// tick still needed.
     ticks: VecDeque<(u64, T)>,
+    /// The value closing a tick on a boundary where Speed 0 starts no tick,
+    /// under the ordinal of the tick that follows once Speed resumes.
+    closings: VecDeque<(u64, T)>,
     /// A closing endpoint before discarded transport reanchored the next
     /// tick's start under the same ordinal.
     previous_endpoint: Option<(u64, T)>,
     /// Transport times the replay must sample before the next frame: every
     /// boundary a coming tick may start at, ascending.
     requests: Vec<f64>,
+    /// A sample's value handed over before its owner observed that sample's
+    /// Speed, with whether one is held.
+    staged: Option<T>,
+    has_staged: bool,
 }
 
 impl<T> Default for TickSamples<T> {
     fn default() -> Self {
-        Self { ticks: VecDeque::new(), previous_endpoint: None, requests: Vec::new() }
+        Self {
+            ticks: VecDeque::new(),
+            closings: VecDeque::new(),
+            previous_endpoint: None,
+            requests: Vec::new(),
+            staged: None,
+            has_staged: false,
+        }
     }
+}
+
+/// How the frame's own value joins the samples in [`TickSamples::settle`].
+#[derive(Clone, Copy, PartialEq)]
+enum Settle {
+    /// A restart: every tick starting by now takes it, since no sample of
+    /// this epoch reached them yet; a later replay sample replaces it.
+    Restart,
+    /// The tick starting now was moved here by a reanchor: the frame's value
+    /// replaces any sample of its old start.
+    Reanchor,
+    /// A tick starting now that no sample reached takes it; a replay sample
+    /// at the same boundary stands, so one rule evaluates a tick start
+    /// whether or not a frame ends there.
+    Fill,
 }
 
 impl<T: Clone> TickSamples<T> {
@@ -48,12 +78,13 @@ impl<T: Clone> TickSamples<T> {
 
     /// A replay sample at transport `now`, after `clock` observed this
     /// sample's Speed: `value` belongs to the tick starting at each requested
-    /// boundary reached, named by the clock now that Speed there is known (a
-    /// boundary at Speed 0 starts no tick). The replay samples each request
-    /// exactly; the closing sample takes one rounding past the frame. `None`
-    /// (an input still pending) records nothing, so those ticks stay unsampled.
+    /// boundary reached, named by the clock now that Speed there is known. A
+    /// boundary at Speed 0 starts no tick; when it ends one, `value` is that
+    /// tick's end. The replay samples each request exactly; the closing
+    /// sample takes one a rounding past the frame. `None` (an input still
+    /// pending) records nothing, so those ticks stay unsampled.
     pub fn observe(&mut self, clock: &SimulationClock, now: f64, value: Option<&T>) {
-        let reached = self.requests.partition_point(|&transport| transport <= now);
+        let reached = self.requests.partition_point(|&transport| transport <= now + NOW);
         if reached == 0 {
             return;
         }
@@ -61,7 +92,9 @@ impl<T: Clone> TickSamples<T> {
         if let Some(value) = value {
             for &transport in &requests[..reached] {
                 if let Some(tick) = clock.tick_at(transport) {
-                    self.record(tick, value);
+                    record(&mut self.ticks, tick, value);
+                } else if let Some(tick) = clock.tick_closing_at(transport) {
+                    record(&mut self.closings, tick, value);
                 }
             }
         }
@@ -69,15 +102,38 @@ impl<T: Clone> TickSamples<T> {
         self.requests = requests;
     }
 
+    /// Hold `value` for the sample in progress, handed over before its owner
+    /// has observed this sample's Speed. [`Self::observe_staged`] records it
+    /// once Speed there is known, so no tick is named ahead of it.
+    pub fn stage(&mut self, value: Option<&T>) {
+        self.has_staged = value.is_some();
+        if let Some(value) = value {
+            match &mut self.staged {
+                Some(held) => held.clone_from(value),
+                None => self.staged = Some(value.clone()),
+            }
+        }
+    }
+
+    /// [`Self::observe`] the staged value (nothing if none was staged), after
+    /// `clock` observed this sample's Speed; the stage empties.
+    pub fn observe_staged(&mut self, clock: &SimulationClock, now: f64) {
+        let staged = std::mem::take(&mut self.staged);
+        let value = staged.as_ref().filter(|_| self.has_staged);
+        self.observe(clock, now, value);
+        self.staged = staged;
+        self.has_staged = false;
+    }
+
     /// Call right after `clock` advanced to `frame`, with this frame's value.
-    /// A restart forgets every sample. The value belongs to any tick starting
-    /// now; every other start was or will be sampled by the replay.
-    /// `None` (nothing wired) forgets every sample.
+    /// A restart forgets every sample. The value belongs to a tick starting
+    /// now that no sample reached; every other start was or will be sampled
+    /// by the replay. `None` (nothing wired) forgets every sample.
     pub fn settle(&mut self, clock: &SimulationClock, frame: &ClockFrame, value: Option<&T>) {
         let Some(value) = value.filter(|_| !frame.restarted) else {
             self.clear();
             if let (true, Some(value)) = (frame.restarted, value) {
-                self.settle_now(clock, value);
+                self.settle_now(clock, value, Settle::Restart);
             }
             return;
         };
@@ -96,15 +152,20 @@ impl<T: Clone> TickSamples<T> {
                 self.previous_endpoint = None;
             }
         }
-        self.settle_now(clock, value);
+        self.settle_now(clock, value, if frame.reanchored { Settle::Reanchor } else { Settle::Fill });
     }
 
-    fn settle_now(&mut self, clock: &SimulationClock, value: &T) {
+    fn settle_now(&mut self, clock: &SimulationClock, value: &T, settle: Settle) {
         let now = clock.transport();
         let mut tick = clock.ticks_done();
         while let Some(start) = clock.tick_start(tick).filter(|&start| start <= now + NOW) {
-            if (start - now).abs() <= NOW {
-                self.record(tick, value);
+            let starts_now = (start - now).abs() <= NOW;
+            let sampled = self.get(tick).is_some();
+            match settle {
+                Settle::Restart => record(&mut self.ticks, tick, value),
+                Settle::Reanchor if starts_now => record(&mut self.ticks, tick, value),
+                Settle::Fill if starts_now && !sampled => record(&mut self.ticks, tick, value),
+                _ => {}
             }
             tick += 1;
         }
@@ -128,17 +189,22 @@ impl<T: Clone> TickSamples<T> {
         self.span(tick, 1).ok().and_then(|mut span| span.next()).map(|(_, value)| value)
     }
 
-    /// The closing value at `tick`, before any discarded transport gap.
+    /// The value closing the tick before `tick`: its end before any
+    /// discarded transport gap or Speed 0 stretch, else `tick`'s start.
     pub fn endpoint(&self, tick: u64) -> Option<&T> {
         self.previous_endpoint.as_ref().filter(|(recorded, _)| *recorded == tick)
-            .map(|(_, value)| value).or_else(|| self.get(tick))
+            .map(|(_, value)| value)
+            .or_else(|| find(&self.closings, tick))
+            .or_else(|| self.get(tick))
     }
 
     /// A fresh authored start at the same simulation time as the end of a
-    /// discarded transport gap. The previous endpoint must settle first.
+    /// discarded transport gap or a Speed 0 stretch. The previous endpoint
+    /// must settle first.
     pub fn reanchored_start(&self, tick: u64) -> Option<&T> {
-        self.previous_endpoint.as_ref().filter(|(recorded, _)| *recorded == tick)
-            .and_then(|_| self.get(tick))
+        let closed = self.previous_endpoint.as_ref().is_some_and(|(recorded, _)| *recorded == tick)
+            || find(&self.closings, tick).is_some();
+        self.get(tick).filter(|_| closed)
     }
 
     /// Forget ticks before `tick`.
@@ -146,21 +212,30 @@ impl<T: Clone> TickSamples<T> {
         while self.ticks.front().is_some_and(|(recorded, _)| *recorded < tick) {
             self.ticks.pop_front();
         }
+        while self.closings.front().is_some_and(|(recorded, _)| *recorded < tick) {
+            self.closings.pop_front();
+        }
     }
 
     pub fn clear(&mut self) {
         self.ticks.clear();
+        self.closings.clear();
         self.previous_endpoint = None;
     }
+}
 
-    /// A later observation of the same boundary replaces its held value.
-    fn record(&mut self, tick: u64, value: &T) {
-        let at = self.ticks.partition_point(|(recorded, _)| *recorded < tick);
-        match self.ticks.get_mut(at) {
-            Some((recorded, held)) if *recorded == tick => held.clone_from(value),
-            _ => self.ticks.insert(at, (tick, value.clone())),
-        }
+/// A later observation of the same boundary replaces its held value.
+fn record<T: Clone>(samples: &mut VecDeque<(u64, T)>, tick: u64, value: &T) {
+    let at = samples.partition_point(|(recorded, _)| *recorded < tick);
+    match samples.get_mut(at) {
+        Some((recorded, held)) if *recorded == tick => held.clone_from(value),
+        _ => samples.insert(at, (tick, value.clone())),
     }
+}
+
+fn find<T>(samples: &VecDeque<(u64, T)>, tick: u64) -> Option<&T> {
+    let at = samples.partition_point(|(recorded, _)| *recorded < tick);
+    samples.get(at).filter(|(recorded, _)| *recorded == tick).map(|(_, value)| value)
 }
 
 #[cfg(test)]

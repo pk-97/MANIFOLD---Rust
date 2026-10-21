@@ -16,6 +16,9 @@ pub(crate) struct WaterRuntimeState {
     pub(crate) sample_steps: Option<Vec<bool>>,
     pub(crate) input_snapshot: Option<PhysicsInputSnapshot>,
     pub(crate) last_frame_time: Option<FrameTime>,
+    /// Where the next replay opens instead of at the last frame: the target of
+    /// a jump the last frame landed on, sampled there first.
+    pub(crate) replay_from: Option<FrameTime>,
     pub(crate) project_tempo: Option<ProjectTempo>,
 }
 
@@ -158,6 +161,7 @@ impl WaterRuntimeState {
             sample_steps,
             input_snapshot,
             last_frame_time: None,
+            replay_from: None,
             project_tempo: None,
         })
     }
@@ -171,5 +175,6 @@ impl WaterRuntimeState {
         self.impulse_identity = Arc::new(());
         self.reset_modifier_impulses();
         self.last_frame_time = None;
+        self.replay_from = None;
     }
 }

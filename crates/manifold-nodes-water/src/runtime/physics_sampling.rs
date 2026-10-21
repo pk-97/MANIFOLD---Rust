@@ -134,17 +134,26 @@ impl PhysicsInputSnapshot {
         self.automation_len = prior.automation_len;
     }
 
-    /// Copy the host instance's per-hop values for this frame.
+    /// Copy the host instance's per-hop values for this frame, after the latest
+    /// hop of earlier frames: a sample before this frame's first hop reads the
+    /// hop before it, never the value the host composed at the last frame.
     pub(super) fn set_hops(&mut self, instance: Option<&PresetInstance>) {
         self.hop_len = 0;
-        let mods = instance.and_then(|i| i.audio_mods.as_deref()).unwrap_or_default();
-        for m in mods.iter().filter(|m| !m.hop_timeline.values.is_empty()) {
-            if self.hop_len == self.hops.len() {
-                self.hops.push(Default::default());
+        let Some(instance) = instance.filter(|instance| instance.enabled) else { return };
+        let mods = instance.audio_mods.as_deref().unwrap_or_default();
+        for m in mods.iter().filter(|m| m.enabled) {
+            let held = self.hops[self.hop_len..].iter().position(|(id, _)| *id == m.param_id);
+            match held {
+                Some(offset) => self.hops.swap(self.hop_len, self.hop_len + offset),
+                None if self.hop_len == self.hops.len() => self.hops.push(Default::default()),
+                None => self.hops[self.hop_len].1.clear(),
             }
             let (id, values) = &mut self.hops[self.hop_len];
             id.clone_from(&m.param_id);
-            values.clone_from(&m.hop_timeline.values);
+            let carried = values.last().copied();
+            values.clear();
+            values.extend(carried);
+            values.extend_from_slice(&m.hop_timeline.values);
             self.hop_len += 1;
         }
     }
@@ -189,12 +198,15 @@ impl PhysicsInputSnapshot {
 
     /// Copy the host instance's automation lanes that drive a param this
     /// frame. A param that drivers or envelopes also write is left held: its
-    /// value composes on the host, at frame time only.
+    /// value composes on the host, at frame time only. A param an audio mod
+    /// also drives is left to its hops, which carry the lane at each hop's
+    /// beat.
     pub(super) fn set_automation(&mut self, instance: Option<&PresetInstance>) {
         self.automation_len = 0;
         let Some(instance) = instance.filter(|instance| instance.enabled) else { return };
         let drivers = instance.drivers.as_deref().unwrap_or_default();
         let envelopes = instance.envelopes.as_deref().unwrap_or_default();
+        let audio_mods = instance.audio_mods.as_deref().unwrap_or_default();
         for lane in instance.automation_lanes.iter().flatten().filter(|lane| lane.enabled) {
             let Some(param) = instance.params.get(lane.param_id.as_ref()).filter(|param| param.automated) else {
                 continue;
@@ -202,6 +214,7 @@ impl PhysicsInputSnapshot {
             let id = lane.param_id.as_ref();
             if drivers.iter().any(|driver| driver.enabled && driver.param_id.as_ref() == id)
                 || envelopes.iter().any(|envelope| envelope.enabled && envelope.param_id.as_ref() == id)
+                || audio_mods.iter().any(|audio| audio.enabled && audio.param_id.as_ref() == id)
             {
                 continue;
             }
@@ -544,26 +557,44 @@ impl super::WaterRuntimeState {
         ) else {
             return;
         };
-        // Automation reaches the frame at its exact beat, as it reaches every
+        // Automation reaches the frame at its sample beat, as it reaches every
         // sample, so a frame on a tick start agrees with the replay there.
         inputs.route_automation(bindings, plan);
-        inputs.write_frame_automation(graph, plan, bindings, exact_beat(self.project_tempo.as_ref(), current));
-        let Some(previous) = self.last_frame_time else {
+        inputs.write_frame_automation(graph, plan, bindings, sample_beat(self.project_tempo.as_ref(), current));
+        let opening = self.replay_from.take();
+        let Some(previous) = opening.or(self.last_frame_time).filter(|previous| {
+            let gap = current.seconds.0 - previous.seconds.0;
+            gap.is_finite() && gap > 0.0
+        }) else {
             inputs.capture(graph, plan, &self.project_tempo);
+            // A jump back (or a first frame) restarts the simulations with
+            // their tick grid at the jump's target. The next replay opens
+            // there, so the boundaries between it and this frame are sampled
+            // exactly, as at any frame rate. A paused frame keeps it pending.
+            let jumped = opening.or(self.last_frame_time).is_none_or(|previous| current.seconds.0 < previous.seconds.0);
+            let target = step.transport_target.map(|target| target.0).filter(|&target| target.is_finite() && target <= current.seconds.0 + 1e-6);
+            self.replay_from = match (jumped, target) {
+                (true, Some(target)) => Some(FrameTime {
+                    seconds: Seconds(target),
+                    beats: sample_beat(self.project_tempo.as_ref(), FrameTime { seconds: Seconds(target), ..current }),
+                    delta: Seconds::ZERO,
+                    frame_count: current.frame_count,
+                }),
+                (true, None) => None,
+                (false, _) => opening,
+            };
             return;
         };
         let gap = current.seconds.0 - previous.seconds.0;
-        if !gap.is_finite() || gap <= 0.0 {
-            inputs.capture(graph, plan, &self.project_tempo);
-            return;
-        }
         inputs.route_hops(bindings, plan);
         let drain_offline = step.offline();
-        if drain_offline {
+        if drain_offline && opening.is_none() {
             // An offline render may inherit a preview backlog. Drain the
             // already-observed prefix before inserting another sample into a
             // nearly-full history; the current edit must not reach that prefix.
+            // It reads the beat the previous closing sample read there.
             let sample = FrameTime {
+                beats: sample_beat(inputs.project_tempo.as_ref(), previous),
                 delta: Seconds::ZERO,
                 ..previous
             };
@@ -623,13 +654,26 @@ impl super::WaterRuntimeState {
         // GPU liquids and swarms sample exactly at their ticks' starts: each
         // tick's force comes from its own simulated time, whatever the
         // display rate.
+        // The standalone rigid world asks for its tick boundaries and the
+        // replay grid, its only input knots. An opening replay asks from just
+        // before its target, so the first tick's start is sampled there.
+        let request_from = previous.seconds.0 - if opening.is_some() { OPENING_REACH } else { 0.0 };
         inputs.tick_times.clear();
         for instance in graph.nodes_mut() {
             if let Some(ticked) = tick_sampled::get_mut(instance.node.as_mut()) {
-                ticked.request_physics_samples(previous.seconds.0, current.seconds.0, &mut inputs.tick_times);
+                ticked.request_physics_samples(request_from, current.seconds.0, &mut inputs.tick_times);
+            } else if let Some(native) = node::get_mut(instance.node.as_mut()) {
+                native.request_physics_samples(request_from, current.seconds.0, &mut inputs.tick_times);
             }
         }
-        inputs.tick_times.sort_by(f64::total_cmp);
+        inputs.tick_times.sort_unstable_by(f64::total_cmp);
+        if opening.is_some() {
+            let sample = FrameTime { beats: beat_at(previous.seconds.0 + SAMPLE_BEAT_OFFSET), delta: Seconds::ZERO, ..previous };
+            inputs.set_sample_time(sample);
+            inputs.apply_automation(bindings, sample.beats);
+            inputs.apply_hops(bindings, previous.seconds.0);
+            execute_physics_sample_frame(executor, graph, plan, sample, steps, &inputs.values, step);
+        }
         let mut tick_index = 0;
         let mut grid = (previous.seconds.0 * SAMPLE_RATE).floor() + 1.0;
         let mut last_time = previous.seconds.0;
@@ -657,7 +701,7 @@ impl super::WaterRuntimeState {
                 continue;
             }
             let sample = FrameTime {
-                beats: beat_at(time),
+                beats: beat_at(time + SAMPLE_BEAT_OFFSET),
                 seconds: Seconds(time),
                 delta: Seconds(time - last_time),
                 frame_count: current.frame_count,
@@ -681,34 +725,17 @@ impl super::WaterRuntimeState {
             }
             last_time = time;
         }
-        let closing_beat = if tempo.is_some() {
-            let held_beat = beat_at(current.seconds.0);
-            let unchanged_at_boundary = self.project_tempo.as_ref().is_some_and(|tempo| {
-                TempoMapConverter::seconds_to_beat_immut(
-                    tempo.map(),
-                    current.seconds,
-                    tempo.fallback_bpm(),
-                ) == held_beat
-            });
-            // External beat authority computes seconds from beats. Preserve
-            // that exact host stamp when both maps agree here: a floating-point
-            // roundtrip must not invent a discontinuity at the same second.
-            // Genuine tempo edits retain the old interval's left limit.
-            if unchanged_at_boundary {
-                current.beats
-            } else {
-                held_beat
-            }
-        } else {
-            current.beats
-        };
+        // The held map's beat at the frame, read at the samples' offset: the
+        // left limit of a tempo edit, and the beat a sample at this same time
+        // would take at any other frame rate.
+        let closing_beat = if tempo.is_some() { beat_at(current.seconds.0 + SAMPLE_BEAT_OFFSET) } else { current.beats };
         let closing = FrameTime {
             beats: closing_beat,
             delta: Seconds(current.seconds.0 - last_time),
             ..current
         };
         inputs.set_sample_time(closing);
-        inputs.apply_automation(bindings, exact_beat(self.project_tempo.as_ref(), current));
+        inputs.apply_automation(bindings, closing_beat);
         inputs.apply_hops(bindings, current.seconds.0);
         execute_physics_sample_frame(
             executor,
@@ -723,9 +750,21 @@ impl super::WaterRuntimeState {
     }
 }
 
-/// The beat at `time`'s seconds on the project tempo map, without the frame
-/// beat's sampling offset, so it depends on the time alone. Without a map the
-/// frame's own beat stands.
-fn exact_beat(tempo: Option<&ProjectTempo>, time: FrameTime) -> Beats {
-    tempo.map_or(time.beats, |tempo| TempoMapConverter::seconds_to_beat_immut(tempo.map(), time.seconds, tempo.fallback_bpm()))
+/// Seconds past a sample time its beat is read at: FRAME_EXACT_TRANSPORT_DESIGN
+/// D14's offset at the replay's rate. A step or edge exactly on a sample
+/// counts as reached, and every sample, the frame's own included, reads its
+/// beat the same way whatever the frame rate.
+const SAMPLE_BEAT_OFFSET: f64 = 1e-7 / manifold_physics::clock::REPLAY_RATE;
+
+/// How far before its target an opening replay asks for samples: well past
+/// any boundary's rounding, well short of the next boundary.
+const OPENING_REACH: f64 = 1e-6;
+
+/// The beat a physics sample at `time`'s seconds reads on the project tempo
+/// map, at [`SAMPLE_BEAT_OFFSET`], so it depends on the time alone. Without
+/// a map the frame's own beat stands.
+fn sample_beat(tempo: Option<&ProjectTempo>, time: FrameTime) -> Beats {
+    tempo.map_or(time.beats, |tempo| {
+        TempoMapConverter::seconds_to_beat_immut(tempo.map(), Seconds(time.seconds.0 + SAMPLE_BEAT_OFFSET), tempo.fallback_bpm())
+    })
 }

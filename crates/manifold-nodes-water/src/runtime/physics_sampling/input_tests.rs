@@ -219,13 +219,20 @@ fn tempo(points: &[(f64, f32)]) -> ProjectTempo {
     ProjectTempo::new(&map, Bpm(120.0))
 }
 
+/// The beat on `tempo` at `seconds`, read as a physics sample reads it.
+fn sample_beat_on(tempo: &ProjectTempo, seconds: f64) -> Beats {
+    TempoMapConverter::seconds_to_beat_immut(tempo.map(), Seconds(seconds + SAMPLE_BEAT_OFFSET), tempo.fallback_bpm())
+}
+
+/// Replay samples read the beat at their time plus the sample offset; the
+/// frame itself carries the host's beat.
 fn assert_tempo_samples(observations: &[Observation], tempo: &ProjectTempo) {
     for sample in observations {
-        let expected = TempoMapConverter::seconds_to_beat_immut(
-            tempo.map(),
-            sample.time.seconds,
-            tempo.fallback_bpm(),
-        );
+        let expected = if sample.authored_only {
+            sample_beat_on(tempo, sample.time.seconds.0)
+        } else {
+            TempoMapConverter::seconds_to_beat_immut(tempo.map(), sample.time.seconds, tempo.fallback_bpm())
+        };
         assert_eq!(sample.time.beats, expected);
         assert_eq!(sample.values[2], expected.0 as f32);
     }
@@ -266,7 +273,7 @@ fn physics_history_keeps_old_tempo_until_the_edit_observation() {
     let samples = frame(&mut runtime, 0.1, 9.0, 3.0);
     let (current, historical) = samples.split_last().unwrap();
     assert_tempo_samples(historical, &old);
-    assert_eq!(historical.last().unwrap().time.beats, Beats(0.2));
+    assert_eq!(historical.last().unwrap().time.beats, sample_beat_on(&old, 0.1));
     assert_eq!(current.time.beats, Beats(0.1));
     assert_tempo_samples(&frame(&mut runtime, 0.2, 10.0, 4.0), &edited);
 }
@@ -289,7 +296,8 @@ fn compatible_rebuild_keeps_held_tempo_and_synthetic_context_can_clear_it() {
     frame(&mut rebuilt, 0.1, 9.0, 3.0);
     let synthetic = frame(&mut rebuilt, 0.2, 9.0, 3.0);
     for sample in synthetic {
-        assert!((sample.time.beats.0 - sample.time.seconds.0 * 2.0).abs() < 1e-12);
+        // Within the sample offset: a sample's beat is read just past its time.
+        assert!((sample.time.beats.0 - sample.time.seconds.0 * 2.0).abs() < 1e-8);
     }
 }
 
@@ -311,7 +319,9 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
     };
     runtime.water().observe_physics_at_source(source).unwrap();
     let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
-    assert_tempo_samples(&samples, &tempo);
+    let (at_source, replayed) = samples.split_last().unwrap();
+    assert_tempo_samples(replayed, &tempo);
+    assert_eq!(at_source.time.beats, source.beats, "the source keeps its own beat stamp");
     assert_eq!(samples.last().unwrap().time.seconds, source.seconds);
     assert!(samples.iter().all(|sample| !sample.draining));
     runtime.set_sim_step(manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
@@ -339,8 +349,11 @@ fn source_older_than_the_latest_observation_lands_at_it() {
     assert!(samples.iter().all(|sample| sample.time.seconds == latest.seconds), "history never reopens");
 }
 
+/// The closing observation reads the held map's beat at the sample offset,
+/// as a replay sample at that time would at any frame rate; the source's
+/// own observation keeps the host's beat stamp.
 #[test]
-fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation() {
+fn closing_observation_reads_the_sample_beat_and_the_source_keeps_its_stamp() {
     let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(137.37));
     let beat = Beats(1_000_000.25);
     let seconds = TempoMapConverter::beat_to_seconds_immut(tempo.map(), beat, tempo.fallback_bpm());
@@ -369,10 +382,7 @@ fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation(
         let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
         let closing = &samples[samples.len() - 2];
         assert_eq!(closing.time.seconds, source.seconds);
-        assert_eq!(
-            closing.time.beats, source.beats,
-            "roundtrip drift must not produce a second clock stamp at the same second"
-        );
+        assert_eq!(closing.time.beats, sample_beat_on(&tempo, seconds.0));
         assert_eq!(samples.last().unwrap().time.beats, source.beats);
     }
 }

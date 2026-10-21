@@ -112,6 +112,17 @@ pub struct SimulationClock {
     /// This frame's live load, set by the owner before it observes or
     /// advances. None (export, tests, previews) keeps the two-interval cap.
     live_load: Option<LiveLoad>,
+    /// The transport target of the jump this frame landed on, set by the
+    /// owner with the live load. A restart starts its grid there.
+    transport_target: Option<f64>,
+    /// Boundaries the restarting frame had already reached when a restart
+    /// began its grid at an earlier transport target. The jump owes them,
+    /// not a late frame, so the live cap counts from there.
+    restart_reached: u64,
+    /// The transport of the latest replay observation. The frame's own Speed
+    /// at that same transport does not replace it: one rule evaluates Speed
+    /// at a tick start whether or not a frame ends there.
+    sampled_at: Option<f64>,
 }
 
 /// A clone advances on its own, so it never inherits the original's identity:
@@ -152,7 +163,16 @@ fn map_transport(anchors: &[SpeedAnchor], transport: f64) -> f64 {
 impl SimulationClock {
     /// Observe controls without accepting a render interval or consuming ticks.
     /// History/source capture and rendering share this exact time mapping.
+    /// A replay sample observes here; the frame's own observation at the
+    /// same transport, in [`Self::advance`], leaves it standing.
     pub fn observe_speed(&mut self, transport: f64, speed: f32) -> f64 {
+        if transport.is_finite() {
+            self.sampled_at = Some(transport);
+        }
+        self.anchor_speed(transport, speed)
+    }
+
+    fn anchor_speed(&mut self, transport: f64, speed: f32) -> f64 {
         if !transport.is_finite() || !speed.is_finite() || speed < 0.0 {
             return self.target_time;
         }
@@ -205,10 +225,29 @@ impl SimulationClock {
         live_cap_for(self.live_load)
     }
 
+    /// The boundary the live cap counts from: the last one accepted, or one
+    /// a restart had already reached at its first frame.
+    fn cap_from(&self) -> u64 {
+        self.transport_done.max(self.restart_reached)
+    }
+
+    /// The last boundary of this epoch's grid that `transport` has reached,
+    /// by the rounding `advance` accepts boundaries with; negative before
+    /// the origin.
+    fn reached_index(&self, transport: f64) -> f64 {
+        ((transport - self.transport_origin) / self.simulation_interval + 1e-9).floor()
+    }
+
     /// Set once per frame, before `simulation_at`, `tick_starts` or
     /// `advance`, so observers and `advance` agree on the cap.
     pub fn set_live_load(&mut self, load: Option<LiveLoad>) {
         self.live_load = load;
+    }
+
+    /// Set once per frame with the live load: the time the transport jumped
+    /// to when this frame is the one the jump landed on, else None.
+    pub fn set_transport_target(&mut self, target: Option<f64>) {
+        self.transport_target = target;
     }
 
     pub fn rate_changed(&self, interval: f64) -> bool {
@@ -233,7 +272,7 @@ impl SimulationClock {
         // accepted boundary instead of creating timestamps in discarded time.
         let transport = if self.started && !self.offline {
             transport.min(self.transport_origin
-                + (self.transport_done + live_cap_for(load)) as f64 * self.simulation_interval)
+                + (self.cap_from() + live_cap_for(load)) as f64 * self.simulation_interval)
         } else { transport };
         map_transport(&self.speed_history, transport)
     }
@@ -301,23 +340,24 @@ impl SimulationClock {
     /// tick at any of them; [`Self::tick_at`] names the tick once the
     /// boundary's own Speed is known. Live visits only the accepted
     /// intervals and their closing endpoint, never discarded time.
+    /// `from` and `until` reach a boundary by the rounding `advance` accepts
+    /// it with, so a boundary a rounding past a frame belongs to that frame
+    /// and to no other.
     pub fn tick_starts(&self, from: f64, until: f64, mut visit: impl FnMut(f64)) {
         if !self.started {
             return;
         }
-        let mut index = self.transport_done;
-        loop {
-            let transport = self.boundary(index);
-            if transport > until {
-                return;
-            }
-            if transport > from {
-                visit(transport);
-            }
-            if !self.offline && index - self.transport_done == self.live_cap() {
-                return;
-            }
-            index += 1;
+        let last = self.reached_index(until);
+        if last.is_nan() || last < 0.0 {
+            return;
+        }
+        let first = (self.reached_index(from) + 1.0).max(self.transport_done as f64) as u64;
+        let mut last = last as u64;
+        if !self.offline {
+            last = last.min(self.cap_from() + self.live_cap());
+        }
+        for index in first..=last {
+            visit(self.boundary(index));
         }
     }
 
@@ -327,6 +367,26 @@ impl SimulationClock {
     /// final. None when that interval runs at Speed 0, the boundary has
     /// already run, or `transport` is not a boundary of this epoch.
     pub fn tick_at(&self, transport: f64) -> Option<u64> {
+        let index = self.boundary_index(transport)?;
+        if index < self.transport_done || !self.interval_runs(index) {
+            return None;
+        }
+        Some(self.ticks_before(index))
+    }
+
+    /// The tick that would follow a tick ending at boundary `transport` where
+    /// no tick starts, because Speed there is 0: its value is that tick's
+    /// end. Same calling rule as [`Self::tick_at`].
+    pub fn tick_closing_at(&self, transport: f64) -> Option<u64> {
+        let index = self.boundary_index(transport)?;
+        if index <= self.transport_done || self.interval_runs(index) || !self.interval_runs(index - 1) {
+            return None;
+        }
+        Some(self.ticks_before(index))
+    }
+
+    /// The index of boundary `transport` of this epoch's grid, exactly.
+    fn boundary_index(&self, transport: f64) -> Option<u64> {
         if !self.started {
             return None;
         }
@@ -334,12 +394,13 @@ impl SimulationClock {
         if index.is_nan() || index < 0.0 || self.boundary(index as u64) != transport {
             return None;
         }
-        let index = index as u64;
-        if index < self.transport_done || !self.interval_runs(index) {
-            return None;
-        }
+        Some(index as u64)
+    }
+
+    /// Ticks run, and to run, before not-yet-run boundary `index`.
+    fn ticks_before(&self, index: u64) -> u64 {
         let earlier = (self.transport_done..index).filter(|&i| self.interval_runs(i)).count();
-        Some(self.ticks_done + earlier as u64)
+        self.ticks_done + earlier as u64
     }
 
     /// Transport time of Sim Rate boundary `index` of this epoch's grid, by
@@ -455,6 +516,13 @@ impl SimulationClock {
         // frames jitter. A partial interval stays owed until its boundary.
         let speed = f64::from(speed);
         let transport_first = if restarted { 0 } else { self.transport_done };
+        // A restart on the frame a transport jump landed on starts its grid at
+        // the jump's target, which no frame rate moves.
+        let origin = if restarted {
+            self.transport_target.filter(|&target| target.is_finite() && target <= transport + 1e-6).unwrap_or(transport)
+        } else {
+            self.transport_origin
+        };
         let transport_reached = if !restarted {
             (((transport - self.transport_origin) / self.simulation_interval + 1e-9).floor() as u64)
                 .max(self.transport_done)
@@ -462,9 +530,13 @@ impl SimulationClock {
             transport_first
         };
         let live_cap = (!offline).then(|| self.live_cap());
-        let transport_end = live_cap.map_or(transport_reached, |cap| transport_reached.min(transport_first + cap));
+        let cap_from = transport_first.max(self.restart_reached);
+        // A paused frame runs nothing, even the boundaries a jump to an
+        // earlier target left owed; they run once transport moves on.
+        let transport_reached = if !restarted && transport <= self.last_transport { transport_first } else { transport_reached };
+        let transport_end = live_cap.map_or(transport_reached, |cap| transport_reached.min(cap_from + cap));
         let accepted_transport = if restarted {
-            transport
+            origin
         } else {
             self.transport_origin + transport_end as f64 * self.simulation_interval
         };
@@ -480,16 +552,19 @@ impl SimulationClock {
             self.simulation_time = 0.0;
             self.dropped_seconds = 0.0;
             self.speed = speed;
-            self.transport_origin = transport;
-            self.last_accepted_transport = transport;
+            self.transport_origin = origin;
+            self.last_accepted_transport = origin;
             self.transport_done = 0;
+            self.restart_reached = self.reached_index(transport).max(0.0) as u64;
             self.speed_history.clear();
-            self.observe_speed(transport, speed as f32);
+            self.anchor_speed(origin, speed as f32);
         } else {
             // This frame's Speed applies from the next tick start; the
             // intervals already begun keep the speed of their own start.
             held = transport <= self.last_transport || speed <= 0.0;
-            self.observe_speed(transport, speed as f32);
+            if self.sampled_at != Some(transport) {
+                self.anchor_speed(transport, speed as f32);
+            }
             let reached = self.simulation_at(transport, self.live_load);
             if reached.is_finite() {
                 self.target_time = reached.max(self.target_time);
@@ -542,6 +617,7 @@ impl SimulationClock {
             self.speed_history.push(SpeedAnchor { transport, simulation: self.simulation_time, speed });
             self.transport_origin = transport;
             self.transport_done = 0;
+            self.restart_reached = 0;
             self.last_accepted_transport = transport;
             self.target_time = self.simulation_time;
         }
@@ -812,6 +888,45 @@ mod tests {
         assert_eq!(frame.ticks, 2);
         assert!((frame.interval(0).unwrap().duration().0 - interval).abs() < 1e-12, "the tick the step landed in keeps its speed");
         assert!((frame.interval(1).unwrap().duration().0 - 2.0 * interval).abs() < 1e-12, "the next tick runs at the new speed");
+    }
+
+    /// A replay sample at a tick start that a frame also ends on sets that
+    /// tick's Speed; the frame's own reading there, taken with its sampling
+    /// offset, does not replace it, so the tick runs as it would at a rate
+    /// whose frames miss that start.
+    #[test]
+    fn replay_speed_at_a_frame_tick_start_beats_the_frame_reading() {
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, TICK, 1.0, 0.0, false, true);
+        clock.observe_speed(TICK, 2.0);
+        clock.advance(TICK, TICK, 3.0, 0.0, false, true);
+        let frame = clock.advance(2.0 * TICK, TICK, 3.0, 0.0, false, true);
+        assert!((frame.interval(0).unwrap().duration().0 - 2.0 * TICK).abs() < 1e-15, "the replay's Speed at the shared start");
+    }
+
+    /// After a seek, a restart starts its grid at the seek's target, not at
+    /// the frame the transport landed on, and owes the boundaries between
+    /// them to the next frame without reading as an overload.
+    #[test]
+    fn restart_on_a_jump_starts_the_grid_at_its_target() {
+        for fps in [30.0_f64, 60.0, 144.0] {
+            let target: f64 = 0.2137;
+            let landed = (target * fps).ceil() / fps;
+            let mut clock = SimulationClock::default();
+            clock.advance(0.9, TICK, 1.0, 0.0, false, false);
+            clock.set_transport_target(Some(target));
+            let restart = clock.advance(landed, TICK, 1.0, 0.0, false, false);
+            assert!(restart.restarted && restart.ticks == 0 && restart.simulation_time == 0.0);
+            clock.set_transport_target(None);
+            let mut starts = Vec::new();
+            clock.tick_starts(target - 1e-6, landed + 1.0 / 30.0, |transport| starts.push(transport));
+            assert_eq!(starts[0], target, "{fps} fps: the first tick starts at the target");
+            assert!(starts.windows(2).all(|pair| ((pair[1] - pair[0]) - TICK).abs() < 1e-12));
+            let next = clock.advance(landed + 1.0 / 30.0, TICK, 1.0, 0.0, false, false);
+            assert!(!next.reanchored, "{fps} fps: the jump's owed boundaries are not an overload");
+            assert_eq!(next.interval(0).unwrap().start.0, 0.0);
+            assert_eq!(u64::from(next.ticks), ((landed + 1.0 / 30.0 - target) / TICK + 1e-9).floor() as u64);
+        }
     }
 
     /// Resuming from Speed 0 between tick starts: the tick containing the

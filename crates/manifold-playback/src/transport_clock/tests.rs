@@ -350,3 +350,22 @@ fn non_finite_and_absurd_input_is_safe() {
     clock.advance(u32::MAX);
     assert!(clock.time().0.is_finite());
 }
+
+// ── Placement target ─────────────────────────────────────────────────────────
+
+/// A seek reports the time it aimed at while the clock sits on the frame it
+/// landed on, at every rate, and stops once playback moves on.
+#[test]
+fn placement_target_is_the_seek_time_on_the_landed_frame_only() {
+    for fps in [30.0_f32, 60.0, 120.0, 144.0] {
+        let mut clock = playing_clock(fps);
+        clock.advance(20);
+        clock.seek_playing(Seconds(0.2137));
+        assert!(clock.time().0 >= 0.2137);
+        assert_eq!(clock.placement_target(), Some(Seconds(0.2137)), "{fps} fps");
+        clock.advance(1);
+        assert_eq!(clock.placement_target(), Some(Seconds(0.2137)), "{fps} fps: the held first frame is still the landed one");
+        clock.advance(1);
+        assert_eq!(clock.placement_target(), None, "{fps} fps");
+    }
+}

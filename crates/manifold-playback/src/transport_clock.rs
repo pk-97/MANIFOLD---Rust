@@ -68,6 +68,8 @@ pub struct TransportClock {
     hold_next: bool,
     /// Net frames the index moved on the last advance.
     last_advance: i64,
+    /// The frame the last placement landed on, and the time it aimed at.
+    placed: Option<(i64, Seconds)>,
 }
 
 impl TransportClock {
@@ -79,6 +81,7 @@ impl TransportClock {
             index: 0,
             hold_next: false,
             last_advance: 0,
+            placed: None,
         }
     }
 
@@ -132,7 +135,7 @@ impl TransportClock {
     pub fn locate(&mut self, t: Seconds) {
         if t.0.is_finite() {
             self.set_index(self.index_at_or_after(t));
-            self.reanchored();
+            self.reanchored(t);
         }
     }
 
@@ -140,7 +143,7 @@ impl TransportClock {
     pub fn seek_playing(&mut self, t: Seconds) {
         if t.0.is_finite() {
             self.set_index(self.index_at_or_after(t));
-            self.reanchored();
+            self.reanchored(t);
             self.hold_next = true;
         }
     }
@@ -149,20 +152,30 @@ impl TransportClock {
     pub fn locate_nearest(&mut self, t: Seconds) {
         if t.0.is_finite() {
             self.set_index(self.index_nearest(t));
-            self.reanchored();
+            self.reanchored(t);
         }
     }
 
     /// Stop, initialize: index 0, no hold.
     pub fn reset(&mut self) {
         self.index = 0;
-        self.reanchored();
+        self.reanchored(Seconds(0.0));
     }
 
-    /// Every placement ends here: it clears what belonged to the old anchor.
-    fn reanchored(&mut self) {
+    /// Every placement ends here: it clears what belonged to the old anchor
+    /// and remembers the time it aimed at.
+    fn reanchored(&mut self, target: Seconds) {
         self.hold_next = false;
         self.last_advance = 0;
+        self.placed = Some((self.index, target));
+    }
+
+    /// The time the last placement (a seek, play from a cue, a locate) aimed
+    /// at, while the clock still sits on the frame it landed on. Physics
+    /// starts its tick grid there after a jump, so the grid is the same at
+    /// any frame rate.
+    pub fn placement_target(&self) -> Option<Seconds> {
+        self.placed.filter(|(index, _)| *index == self.index).map(|(_, target)| target)
     }
 
     /// The index the next playing advance of `frames` lands on (the seek
@@ -199,7 +212,7 @@ impl TransportClock {
         self.fps = sanitize_fps(fps);
         self.step = step_for_fps(self.fps);
         self.set_index(self.index_at_or_after(t));
-        self.reanchored();
+        self.reanchored(t);
     }
 
     /// Switch to the export grid at `fps`, still anchored at song time 0 (D9, D17).
