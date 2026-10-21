@@ -126,6 +126,16 @@ between this doc and execution.
     pointer-hit math (pick, grip, drag). No host keeps editor-side domain
     state.
 
+  Gizmo lines have three draw modes, picked by the Gizmos mode button in the
+  Scene panel header: Occluded hides what sits behind geometry, On Top draws
+  everything, Ghost draws the hidden parts faded. The content thread draws the
+  lines in one pass over the finished picture, testing them against the
+  scene's own depth, which `render_scene` keeps only while a depth-testing mode
+  is picked. The lines go onto the workspace preview and the editor viewport
+  frame, never into the output texture; the UI composes them and sends one
+  overlay. Settings has Gizmos in Export (off by default): an export then draws
+  the Scene panel's scene chrome over each frame in the picked mode.
+
   Handles keep one size on screen: a handle is `HANDLE_VIEW_FRACTION` of the
   view height long at any distance or field of view, turned into world length
   at the origin's depth through the host's camera. The gizmo core computes it

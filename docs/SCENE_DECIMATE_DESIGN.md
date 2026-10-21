@@ -10,7 +10,7 @@ Decimate — quadric mesh simplification (meshoptimizer) — as a **modifier
 card**: applied to one object or a whole scene from the inspector, tuned by
 a ratio slider, enabled/bypassed, MIDI-mapped, serialized with the project.
 On stage this makes mesh density a performance axis and a look axis: drop a
-1.4M-tri photoscan to 10% on a pad, stack it under the Render Mode card for
+1.4M-tri photoscan to 10% on a pad, set the Scene panel Render Mode row for
 low-poly + wireframe/points looks, ride density off a stem.
 
 Peter's directives, verbatim:
@@ -203,7 +203,7 @@ silently.
 
 ### 3.2 The recipe
 
-`Decimate.json`, schema v3, shaped on `RenderMode.json`: `presetMetadata`
+`Decimate.json`, schema v3, shaped on `SceneFog.json`: `presetMetadata`
 id `Decimate`, `sceneModifier` with `enabledParam: "enabled"`, one stage,
 scope `EachObject`, targets `AllObjects` (the picker flips to `Explicit`
 for object-level), stage output `{port: vertices, endpoint: Vertices}`.
@@ -278,9 +278,9 @@ readback, cache.
 
 ### P2 — Recipe, card, targeting
 
-- **Entry state:** P1 landed. Re-verify `RenderMode.json` shape and
+- **Entry state:** P1 landed. Re-verify the `SceneFog.json` shape and
   `compiler.rs:605`.
-- **Read-back:** D1, D7; `RenderMode.json` whole; SCENE_RENDER_MODE_DESIGN.md
+- **Read-back:** D1, D7; `SceneFog.json` whole; SCENE_RENDER_MODE_DESIGN.md
   section 3 (The recipe); the Vertices attachment path in
   `compiler.rs:595-740`.
 - **Deliverables:** `assets/scene-modifier-presets/Decimate.json`; validator
