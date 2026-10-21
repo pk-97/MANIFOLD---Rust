@@ -348,8 +348,6 @@ fn transform_params(decl: &SceneShapeDecl, t: &TransformVm) -> Option<Vec<ShapeP
         .collect()
 }
 
-/// The params of a shape whose `via` node does not exist yet, at the
-/// identity transform: no offset or turn, unit size.
 /// The domain's default cube (`domain_layout` with no box), in place of the
 /// box its `domain` transform would declare: it sits on the floor at the
 /// world origin, Domain Size on every side. Each side writes Domain Size,
@@ -372,6 +370,8 @@ fn cube_shape(at: &NodeAt<'_>, owner: ShapeOwner, row: Option<u32>, pickable: bo
     Some(SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row, pickable })
 }
 
+/// The params of a shape whose `via` node does not exist yet, at the
+/// identity transform: no offset or turn, unit size.
 fn unplaced_params(decl: &SceneShapeDecl) -> Vec<ShapeParamVm> {
     let unit = match &decl.shape {
         SceneShape::Box { size, .. } => Some(size),
