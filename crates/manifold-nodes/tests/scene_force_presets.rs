@@ -762,7 +762,7 @@ fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> Ef
 /// its object in the render scene's next slot.
 fn graft_swarm(host: &EffectGraphDef) -> EffectGraphDef {
     let template = manifold_nodes_scene::node_graph::scene_templates::swarm_template(0, (0.0, 0.0)).expect("the stock swarm reads");
-    manifold_core::scene_template::insert_scene_template(host, &render_scene(host), None, &template)
+    manifold_core::scene_template::insert_scene_template_preparing(host, &render_scene(host), None, &template, &manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_template_force)
         .expect("the swarm inserts beside water and a physics world")
         .graph
 }

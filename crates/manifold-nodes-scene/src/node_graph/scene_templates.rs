@@ -8,12 +8,14 @@ use std::collections::BTreeMap;
 use manifold_core::NodeId;
 use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
     InterfacePortDef, PresetMetadata, RENDER_SCENE_TYPE_ID, SerializedParamValue,
 };
 use manifold_core::scene_object_model::scene_object_models;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, TemplatePhysics};
+
+use super::scene_modifier_authoring::stock_force;
 
 use super::scene_exposure::metadata_for_node_type;
 
@@ -282,77 +284,38 @@ pub fn swarm_template(slot: u32, centroid: (f32, f32)) -> Result<SceneTemplate, 
     Ok(template)
 }
 
-/// What a swarm brings (D-114): a World it creates has still air, so the
-/// swarm's Air Drag gives it a terminal speed; a gentle Attractor at the
-/// swarm's centre holds the cloud on screen under gravity, also in a World
-/// with no still air; still gusts keep it moving.
+/// What a swarm brings (D-114): an Attractor and a Radial Force at the world
+/// origin, where the swarm starts, and drifting gusts. Together the two
+/// radial forces are a goal spring (Houdini's POP Attract in spring mode):
+/// beyond the Radial Force's radius the Attractor pulls at full strength,
+/// inside it the push cancels the pull in proportion, so the pull grows with
+/// distance from the centre. Gravity sags the cloud about a metre below the
+/// centre; the gusts' Air Resistance relaxes every particle toward the gusts,
+/// so the cloud breathes and swirls but never leaves, at stock World gravity
+/// with no still air. The swarm never sets the Physics World.
 fn swarm_physics() -> Result<TemplatePhysics, String> {
     Ok(TemplatePhysics {
-        new_world: BTreeMap::from([("air_resistance".to_owned(), float(SWARM_AIR_RESISTANCE))]),
-        forces: vec![stock_force("Attractor", &SWARM_ATTRACTOR)?, stock_force("Wind", &SWARM_GUSTS)?],
+        forces: vec![
+            stock_force("Attractor", &SWARM_ATTRACTOR)?,
+            stock_force("RadialForce", &SWARM_CORE)?,
+            stock_force("Wind", &SWARM_GUSTS)?,
+        ],
     })
 }
 
-/// Drifting gusts that stir the cloud so it lives on rather than settling on
-/// the attractor's centre: the stock Wind with Turbulence on (Houdini's POP
-/// Attract with wind noise). A little Speed makes the gusts drift; still gusts
-/// leave the cloud on one fixed point.
-const SWARM_GUSTS: [(&str, f32); 4] = [("speed", 1.0), ("turbulence", 5.0), ("turbulence_size", 1.2), ("air_resistance", 3.0)];
+/// Drifting gusts that stir the cloud so it lives on: the stock Wind with
+/// Turbulence on (Houdini's POP Attract with wind noise). Swirls smaller than
+/// the cloud keep it from collapsing to a point; a slow Speed lets them
+/// drift; Air Resistance 3 is how strongly a particle follows them.
+const SWARM_GUSTS: [(&str, f32); 4] = [("speed", 0.5), ("turbulence", 5.0), ("turbulence_size", 0.8), ("air_resistance", 3.0)];
 
-/// The still air of a World a swarm creates, in 1/s.
-const SWARM_AIR_RESISTANCE: f32 = 1.0;
+/// The Attractor's full pull, stronger than gravity plus the gusts' push,
+/// so nothing escapes. Tuned on the CPU twin (`swarm_hold`) for a 60 s clip.
+const SWARM_ATTRACTOR: [(&str, f32); 4] = [("strength", 20.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)];
 
-/// The swarm's Attractor card, tuned by render to hold the cloud on screen
-/// under World gravity.
-const SWARM_ATTRACTOR: [(&str, f32); 4] = [("strength", 18.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)];
-
-/// A stock force recipe from the scene modifier catalog with `card` values
-/// as its card defaults, written through to the params they drive so the
-/// graph agrees with its card.
-fn stock_force(id: &str, card: &[(&str, f32)]) -> Result<EffectGraphDef, String> {
-    let catalog = manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG.load();
-    let json = catalog.json(id).ok_or_else(|| format!("The stock {id} force is missing"))?;
-    let mut recipe: EffectGraphDef =
-        serde_json::from_str(&json).map_err(|error| format!("The stock {id} force does not read: {error}"))?;
-    let metadata = recipe.preset_metadata.as_mut().ok_or_else(|| format!("The stock {id} force has no card"))?;
-    let mut targets = Vec::new();
-    for &(param, value) in card {
-        let spec = metadata
-            .params
-            .iter_mut()
-            .find(|spec| spec.id == param)
-            .ok_or_else(|| format!("The stock {id} force has no {param}"))?;
-        spec.default_value = value;
-        for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == param) {
-            binding.default_value = value;
-            if let BindingTarget::Node { node_id, param } = &binding.target {
-                targets.push((node_id.clone(), param.clone(), value));
-            }
-        }
-    }
-    for (node_id, param, value) in targets {
-        let slot = find_param(&mut recipe.nodes, &node_id, &param)
-            .ok_or_else(|| format!("The stock {id} force has no {node_id}.{param}"))?;
-        *slot = match slot {
-            SerializedParamValue::Enum { .. } => SerializedParamValue::Enum { value: value.round() as u32 },
-            _ => float(value),
-        };
-    }
-    Ok(recipe)
-}
-
-/// The param `param` of the node with stable id `node_id`, at any depth.
-fn find_param<'a>(nodes: &'a mut [EffectGraphNode], node_id: &NodeId, param: &str) -> Option<&'a mut SerializedParamValue> {
-    for node in nodes {
-        if node.node_id == *node_id {
-            return node.params.get_mut(param);
-        }
-        if let Some(found) = node.group.as_deref_mut().and_then(|body| find_param(&mut body.nodes, node_id, param)) {
-            return Some(found);
-        }
-    }
-    None
-}
+/// The soft core: an outward push equal to the Attractor at the centre,
+/// fading linearly to nothing at 1.5 m, so the pull inside is a spring.
+const SWARM_CORE: [(&str, f32); 4] = [("strength", 20.0), ("radius", 1.5), ("falloff", 1.0), ("curve", 0.0)];
 
 /// The Swarm preset's warm orange.
 #[cfg(any(test, feature = "testkit"))]
@@ -381,8 +344,9 @@ fn swarm_body(tint: manifold_core::Color, centroid: (f32, f32)) -> SceneTemplate
         built
     };
     let suffixed = |suffix: &str| Some(format!("{HANDLE_TOKEN} {suffix}"));
-    // Forces act only inside the bounds box, so it is wider than the 4 m start
-    // cube: a cloud the gusts stir stays inside it.
+    // The force lattice samples the forces inside the bounds box and holds its
+    // edge value outside it, so the box is wider than the 4 m start cube: the
+    // Attractor and the gusts keep their shape over the whole stirred cloud.
     let nodes = vec![
         named(
             BOUNDS,
@@ -556,7 +520,7 @@ pub fn swarm_preset_def() -> EffectGraphDef {
     let [r, g, b] = SWARM_PRESET_TINT;
     let mut template = swarm_body(manifold_core::Color::new(r, g, b, 1.0), (900.0, 200.0));
     template.physics = swarm_physics().expect("the stock swarm physics reads");
-    manifold_core::scene_template::insert_scene_template(&def, &scene, None, &template)
+    manifold_core::scene_template::insert_scene_template_preparing(&def, &scene, None, &template, &super::scene_modifier_authoring::prepare_template_force)
         .expect("the swarm inserts into its dressing")
         .graph
 }

@@ -460,8 +460,7 @@ mod tests {
         let rows = card("PhysicsSolids");
         assert_eq!(sections(&rows), ["Camera", "Physics", "Lighting", "Look"]);
         // No copies body, so no box Count: the spawner shows only when boxes exist.
-        // Still air sits after Reset (D-114).
-        assert_eq!(names_in(&rows, "Physics"), ["Reset", "Air Resistance"]);
+        assert_eq!(names_in(&rows, "Physics"), ["Reset"]);
         assert_eq!(names_in(&rows, "Lighting"), ["Exposure", "Environment", "Sun intensity", "Fill Light intensity"]);
         assert_eq!(names_in(&rows, "Look"), ["Depth of Field", "Focus Distance", "Motion Blur"], "details fold while off, focus dims");
     }

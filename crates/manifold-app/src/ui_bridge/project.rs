@@ -609,7 +609,15 @@ pub(super) fn dispatch_project(
                     Kind::Drain => source(templates::RoleSourceKind::Drain)?,
                     Kind::Collider => source(templates::RoleSourceKind::Collider)?,
                 };
-                manifold_editing::scene_template::InsertSceneTemplateCommand::new(project, target.clone(), scene, water, template, &default)
+                manifold_editing::scene_template::InsertSceneTemplateCommand::new_preparing(
+                    project,
+                    target.clone(),
+                    scene,
+                    water,
+                    template,
+                    &default,
+                    &manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_template_force,
+                )
                     .map_err(|error| error.message)
             })();
             match prepared {

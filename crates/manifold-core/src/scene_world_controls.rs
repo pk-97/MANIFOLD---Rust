@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::NodeId;
 use crate::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, SerializedParamValue,
+    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     InterfacePortDef,
 };
 use crate::param_lookup::stamped_node_params;
@@ -31,7 +31,7 @@ const fn take(world: &'static str, input: &'static str) -> WorldControlInput {
 
 /// Every Physics World control a simulation takes (a liquid, a swarm): its
 /// gravity, its still air (D-114), and its clock, so the node follows World
-/// Speed and restarts on World Reset, which clip triggers fire.
+/// Speed and restarts on World Reset.
 pub const WORLD_INPUTS: [WorldControlInput; 6] = [
     take("gravity_x", "gravity_x"),
     take("gravity_y", "gravity"),
@@ -165,14 +165,12 @@ fn next_id(def: &EffectGraphDef) -> Result<u32, &'static str> {
 
 /// Wire the World controls `taker` declares to it, inside the root-level
 /// group `group_id`, creating the World when the scene has none. A liquid
-/// domain must take every World control. A World created here takes
-/// `new_world`'s params over its defaults. A graph where a control cannot be
+/// domain must take every World control. A graph where a control cannot be
 /// found is left untouched and refused.
 pub(crate) fn share_world_controls(
     def: &mut EffectGraphDef,
     group_id: u32,
     taker: &WorldControlTaker,
-    new_world: &BTreeMap<String, SerializedParamValue>,
 ) -> Result<(), &'static str> {
     if crate::liquid_domain::is_liquid_domain(&taker.type_id) && taker.inputs != WORLD_INPUTS {
         return Err("This liquid does not take the Physics World's controls");
@@ -192,13 +190,10 @@ pub(crate) fn share_world_controls(
         let mut taken = HashSet::new();
         handles(&def.nodes, &mut taken);
         let handle = unique_handle("Physics World", &taken);
-        if new_world.keys().any(|name| !metadata.iter().any(|m| &m.name == name)) {
-            return Err("A template sets a param the Physics World does not have");
-        }
         let params = metadata
             .iter()
             .filter(|m| WORLD_INPUTS.iter().any(|input| input.world == m.name))
-            .map(|m| (m.name.clone(), new_world.get(&m.name).unwrap_or(&m.default_value).clone()))
+            .map(|m| (m.name.clone(), m.default_value.clone()))
             .collect();
         let world = build_node(def, id, WORLD_TYPE_ID, Some(handle), params);
         def.nodes.push(world);
@@ -270,9 +265,8 @@ pub(crate) fn share_world_controls(
             // The World's card control also drives the new value source: one
             // control, two targets. The World's own param stays the first
             // target, so it still describes the control (a trigger stays a
-            // trigger every clip trigger fires; its scene facts stay the
-            // World's). Its ID, calibration, conversion and modulation
-            // routing are kept.
+            // trigger; its scene facts stay the World's). Its ID,
+            // calibration, conversion and modulation routing are kept.
             let bindings = &mut def.preset_metadata.as_mut().ok_or("Scene has no card")?.bindings;
             let mut index = 0;
             while index < bindings.len() {

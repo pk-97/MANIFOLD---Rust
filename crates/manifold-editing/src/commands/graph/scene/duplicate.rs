@@ -186,6 +186,13 @@ fn duplicate_scene_object_edit(
         }
         clone_string_bindings(&mut candidate, &map);
         remaps.extend(clone_sections::clone_scene_bindings(&mut candidate, &map));
+        // Modifiers aimed only at the source belong to it; the copy gets its own.
+        if let Some(source) = super::scene_object_ref(graph, scope, render_id, source_index) {
+            let edit = manifold_core::scene_modifier_edit::copy_object_modifiers(&candidate, &source, &map)
+                .map_err(|error| refuse(&format!("Duplicate Object: {error}")))?;
+            candidate = edit.graph;
+            remaps.extend(edit.parameter_id_remaps);
+        }
         maps.push(map);
     }
     Ok((SceneGraphEdit { graph: candidate, removed_param_ids: Vec::new(), parameter_id_remaps: remaps }, maps))
