@@ -187,3 +187,47 @@ impl WaterRuntimeState {
         self.last_frame_time = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::NodeId;
+    use manifold_core::id::EffectId;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::runtime::extensions::RuntimeSlot;
+    use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
+
+    /// BUG-3zq4r (inflow runs out): a tick that refused inflow births marks
+    /// the snapshot of the domain whose clock feeds that liquid, so the
+    /// setup check shows Pool Full; a tick that refused none leaves it clear.
+    #[test]
+    fn a_refused_birth_marks_the_domain_pool_full() {
+        let registry = PrimitiveRegistry::with_builtin();
+        let state_with = |refused: u32| {
+            let mut graph = Graph::new();
+            let domain = graph.add_node(registry.construct("node.gpu_flip_domain").expect("domain"));
+            let liquid = graph.add_node(registry.construct("node.liquid_state").expect("liquid state"));
+            graph.connect((domain, "ticks"), (liquid, "ticks")).expect("the domain clocks the liquid");
+            let stats = LiquidTickStats { inflow_births: 3, inflow_refused: refused, ..LiquidTickStats::default() };
+            manifold_water_gpu_flip::primitives::retire_stats_for_test(graph.get_node_mut(liquid).expect("liquid").node.as_mut(), stats);
+            let node_map = [(NodeId::new("water"), domain), (NodeId::new("liquid"), liquid)];
+            let runtime = WaterRuntimeState {
+                impulse_identity: Arc::new(()),
+                scene_impulses: SceneImpulses::default(),
+                sample_steps: None,
+                input_snapshot: None,
+                last_frame_time: None,
+                project_tempo: None,
+            };
+            let effect = EffectId::new("water_effect");
+            let slot = RuntimeSlot { effect_id: &effect, legacy_index: 0, node_map: &node_map, card_prefix: "", def_content_key: 0, bindings: &[] };
+            let mut output = Vec::new();
+            runtime.write_fluid_domains(&graph, slot, &mut output);
+            assert_eq!(output.len(), 1, "one domain snapshot");
+            assert_eq!(output[0].0, NodeId::new("water"));
+            output[0].1.fit.pool_full
+        };
+        assert!(state_with(5), "refused births mark the pool full");
+        assert!(!state_with(0), "a tick with room leaves it clear");
+    }
+}
