@@ -27,6 +27,8 @@ pub enum WorkKind {
     SlotInvalidate,
     /// `sync_project_data`.
     ProjectSync,
+    /// `sync_trigger_catalog`: the trigger source and target choices.
+    TriggerCatalogProjection,
     /// `sync_inspector_data`.
     InspectorSync,
     /// `sync_clip_positions`.
@@ -85,7 +87,7 @@ pub enum WorkKind {
     FrameAlloc,
 }
 
-pub const WORK_KIND_COUNT: usize = 34;
+pub const WORK_KIND_COUNT: usize = 35;
 
 impl WorkKind {
     pub const ALL: [WorkKind; WORK_KIND_COUNT] = [
@@ -95,6 +97,7 @@ impl WorkKind {
         WorkKind::InPlaceUpdate,
         WorkKind::SlotInvalidate,
         WorkKind::ProjectSync,
+        WorkKind::TriggerCatalogProjection,
         WorkKind::InspectorSync,
         WorkKind::ClipProjection,
         WorkKind::LaneProjection,
@@ -138,6 +141,7 @@ impl WorkKind {
             WorkKind::InPlaceUpdate => "InPlaceUpdate",
             WorkKind::SlotInvalidate => "SlotInvalidate",
             WorkKind::ProjectSync => "ProjectSync",
+            WorkKind::TriggerCatalogProjection => "TriggerCatalogProjection",
             WorkKind::InspectorSync => "InspectorSync",
             WorkKind::ClipProjection => "ClipProjection",
             WorkKind::LaneProjection => "LaneProjection",

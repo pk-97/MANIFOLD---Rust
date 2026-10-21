@@ -176,7 +176,7 @@ pub(crate) struct UiFrameSignals {
 /// re-resolve them after a rebuild.
 ///
 /// `cache` is `Option<&mut UICacheManager>` — see module doc deviation #1.
-/// Returns whether any part of the tree was rebuilt, moved or scrolled.
+/// Returns whether any region was built or rebuilt, which replaced its nodes.
 pub(crate) fn apply_ui_frame_invalidations(
     ui_root: &mut UIRoot,
     mut cache: Option<&mut UICacheManager>,
@@ -257,7 +257,9 @@ pub(crate) fn apply_ui_frame_invalidations(
             regions.insert(region);
         }
     }
-    let rebuilt = rebuild_regions(ui_root, cache, regions) || scrolled || moved;
+    // Only a rebuild replaces nodes the pushes must write again; a scroll,
+    // zoom or translate keeps every node and its text.
+    let rebuilt = rebuild_regions(ui_root, cache, regions);
     // Nodes that moved in place slid under a still cursor; no rebuild
     // cleared their hover, so resolve it again where the pointer is.
     let cards_moved = ui_root.inspector.take_moved_in_place() | ui_root.scene_setup_panel.take_moved_in_place();
@@ -391,6 +393,7 @@ pub(crate) fn gather_frame_inputs(
         cursor: selection.cursor_version(),
         active_layer: planner.active_layer_version(active_layer),
         automation_view: selection.automation_view(),
+        automation_point_lane: selection.automation_point_lane(),
         lane_heights: selection.lane_heights_view(),
         chrome: crate::frame_plan::ChromeInputs {
             export_open: ui_root.export_progress.is_open(),
@@ -494,6 +497,10 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
             ed.sync_driver_bpm(project, bpm);
         }
     }
+    // Before the project projection: the layer headers label from it.
+    if projections.contains(Projection::TriggerCatalog) {
+        crate::ui_bridge::sync_trigger_catalog(ui_root, project);
+    }
     if project_sync {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_automation_lane_order(project, selection);
@@ -572,6 +579,10 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     // the same text.
     if replaced || projections.contains(Projection::ChromePush) || projections.contains(Projection::ClockPush) {
         crate::ui_bridge::push_clock(ui_root, project, push.content_state, push.transport_cache);
+    }
+    // The zoom label writes in place; the bars need no layout for it.
+    if replaced || projections.contains(Projection::ZoomLabelPush) {
+        crate::ui_bridge::push_zoom_label(ui_root);
     }
     // The bars show what the two pushes above wrote; they lay out only then.
     if replaced

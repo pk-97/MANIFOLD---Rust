@@ -287,8 +287,11 @@ pub(crate) struct FrameInputs {
     /// D14: the insert cursor.
     pub cursor: u64,
     pub active_layer: u64,
-    /// D19 (selected point's lane included).
+    /// D19: lanes toggle, order, visibility, pins and chosen params.
     pub automation_view: u64,
+    /// The selected point's lane (D8). Only the inspector shows it, so a
+    /// point press never reaches the timeline projections.
+    pub automation_point_lane: u64,
     /// Automation lane heights the timeline shows.
     pub lane_heights: u64,
     pub chrome: ChromeInputs,
@@ -398,6 +401,9 @@ pub(crate) fn plan_live(last: &LiveInputs, next: &LiveInputs, p: &mut Projection
 pub(crate) enum Projection {
     /// `sync_automation_lane_order` + `sync_project_data`.
     ProjectSync,
+    /// `TriggerRoutingCatalog::project`: the trigger source and target
+    /// choices, which only layers and effect instances move.
+    TriggerCatalog,
     /// `sync_inspector_data` (and the editor window's mirror of it).
     InspectorSync,
     /// The Audio Setup device query.
@@ -430,6 +436,9 @@ pub(crate) enum Projection {
     /// The header clock's text, in place: its label has a fixed width, so a
     /// new digit never moves the chrome layout.
     ClockPush,
+    /// The header zoom label's text, in place: its label has a fixed width, so
+    /// a zoom or scroll never lays the chrome out.
+    ZoomLabelPush,
     /// `sync_driver_bpm`, in place.
     DriverReadout,
     /// `dropdowns.rs` `sync_embedded_presets`.
@@ -518,6 +527,10 @@ impl FramePlan {
 // scalars and key only in-place pushes (D22).
 const PROJECT_SYNC_PARTS: ChangeSet =
     ChangeSet::of(&[Part::Layers, Part::Clips, Part::Automation, Part::Markers, Part::Settings]);
+// Layers: trigger lane names, owners and groups. Effects: which instances and
+// params exist and what their clip triggers target. A clip, a point, a value
+// or a selection moves none of it.
+const TRIGGER_CATALOG_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects]);
 const INSPECTOR_SYNC_PARTS: ChangeSet = ChangeSet::of(&[
     Part::Layers,
     Part::Effects,
@@ -564,18 +577,19 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     let runtime = &next.runtime;
     let p = &mut plan.projections;
 
-    if moved.intersects(PROJECT_SYNC_PARTS)
-        || selection_identity
-        || active_layer
-        || automation_view
-        || last.layer_reveal != next.layer_reveal
-    {
+    // A selection or active-layer change repaints the layer highlight through
+    // the selection push; it re-projects no layer or track.
+    if moved.intersects(PROJECT_SYNC_PARTS) || automation_view || last.layer_reveal != next.layer_reveal {
         p.insert(Projection::ProjectSync);
+    }
+    if moved.intersects(TRIGGER_CATALOG_PARTS) {
+        p.insert(Projection::TriggerCatalog);
     }
     if moved.intersects(INSPECTOR_SYNC_PARTS)
         || selection_identity
         || active_layer
         || automation_view
+        || last.automation_point_lane != next.automation_point_lane
         // The scene projection fills the Properties card for the selected
         // outliner item, and takes a queued row reveal.
         || last.scene_selection != next.scene_selection
@@ -617,15 +631,13 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     if selection_visual || cursor || active_layer {
         p.insert(Projection::SelectionPush);
     }
-    // The chrome push also shows the lanes toggle, the primary clip's chrome
-    // values and the zoom label.
-    if moved.intersects(CHROME_PARTS)
-        || last.chrome != next.chrome
-        || automation_view
-        || selection_identity
-        || last.zoom_bits != next.zoom_bits
-    {
+    // The chrome push also shows the lanes toggle and the primary clip's
+    // chrome values.
+    if moved.intersects(CHROME_PARTS) || last.chrome != next.chrome || automation_view || selection_identity {
         p.insert(Projection::ChromePush);
+    }
+    if last.zoom_bits != next.zoom_bits {
+        p.insert(Projection::ZoomLabelPush);
     }
     if last.clock_digits != next.clock_digits {
         p.insert(Projection::ClockPush);
@@ -820,7 +832,7 @@ fn plan_regions(
     let overlays = MainRegion::Overlays;
     if last.overlays != next.overlays
         || moved(overlays)
-        || (projections.contains(Projection::ProjectSync) && next.overlay_open)
+        || ((projections.contains(Projection::ProjectSync) || projections.contains(Projection::TriggerCatalog)) && next.overlay_open)
     {
         rebuild.insert(overlays);
     }
@@ -953,17 +965,45 @@ mod tests {
             assert!(runs(&plan(with_parts(&[part])), Projection::ProjectSync), "{part:?}");
         }
         let mut next = base();
-        next.selection_identity = 1;
-        assert!(runs(&plan(next), Projection::ProjectSync));
-        let mut next = base();
-        next.active_layer = 1;
-        assert!(runs(&plan(next), Projection::ProjectSync));
-        let mut next = base();
         next.automation_view = 1;
         assert!(runs(&plan(next), Projection::ProjectSync));
         for part in [Part::Effects, Part::Mappings, Part::Led, Part::AudioSetup, Part::EmbeddedPresets] {
             assert!(!runs(&plan(with_parts(&[part])), Projection::ProjectSync), "{part:?}");
         }
+        // A press selects and focuses; the selection push repaints the
+        // highlight, so no layer or track re-projects (P7c).
+        for edit in [
+            |i: &mut FrameInputs| i.selection_identity = 1,
+            |i: &mut FrameInputs| i.active_layer = 1,
+            |i: &mut FrameInputs| i.automation_point_lane = 1,
+        ] {
+            let mut next = base();
+            edit(&mut next);
+            let p = plan(next);
+            assert!(!runs(&p, Projection::ProjectSync) && !runs(&p, Projection::TriggerCatalog));
+        }
+    }
+
+    #[test]
+    fn row_trigger_catalog() {
+        // Layers: lane names, owners, groups. Effects: instances, params and
+        // clip-trigger targets.
+        for part in [Part::Layers, Part::Effects] {
+            assert!(runs(&plan(with_parts(&[part])), Projection::TriggerCatalog), "{part:?}");
+        }
+        // A clip move or commit, an automation commit, a value, a shape, a
+        // selection, a zoom and a drag preview never rebuild it.
+        for part in [Part::Clips, Part::Automation, Part::Markers, Part::Settings, Part::Values, Part::Shapes] {
+            assert!(!runs(&plan(with_parts(&[part])), Projection::TriggerCatalog), "{part:?}");
+        }
+        let mut next = base();
+        next.preview.clips = 1;
+        next.zoom_bits = 3;
+        next.selection_identity = 2;
+        assert!(!runs(&plan(next), Projection::TriggerCatalog));
+        // A clip move commit still re-projects the timeline, not the catalog.
+        let p = plan(with_parts(&[Part::Clips]));
+        assert!(runs(&p, Projection::ProjectSync) && !runs(&p, Projection::TriggerCatalog));
     }
 
     #[test]
@@ -1129,10 +1169,6 @@ mod tests {
         for part in [Part::Settings, Part::Mappings, Part::Layers, Part::Clips, Part::Effects] {
             assert!(runs(&plan(with_parts(&[part])), Projection::ChromePush), "{part:?}");
         }
-        // The zoom label.
-        let mut next = base();
-        next.zoom_bits = 1;
-        assert!(runs(&plan(next), Projection::ChromePush));
         // Each chrome input on its own.
         for edit in [
             |i: &mut FrameInputs| i.chrome.playing = true,
@@ -1154,6 +1190,25 @@ mod tests {
         let mut next = base();
         next.chrome.bpm_tenths = 1205;
         assert!(runs(&plan(next), Projection::ChromePush));
+    }
+
+    #[test]
+    fn row_zoom_label_push() {
+        // A zoom pushes the label alone: no chrome push, so no chrome bar
+        // lays out.
+        let mut next = base();
+        next.zoom_bits = 1;
+        let p = plan(next);
+        assert!(runs(&p, Projection::ZoomLabelPush));
+        assert!(!runs(&p, Projection::ChromePush));
+        for bar in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+            assert!(!p.in_place.contains(bar), "{bar:?}");
+        }
+        // A scroll alone moves no label.
+        let mut next = base();
+        next.scroll_x_px = 40;
+        next.scroll_x_bits = 7;
+        assert!(!runs(&plan(next), Projection::ZoomLabelPush));
     }
 
     #[test]

@@ -1786,7 +1786,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             .active_layer_id
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        crate::ui_bridge::sync_project_data(
+        crate::ui_bridge::sync_project_all(
             &mut self.ws.ui_root,
             &self.local_project,
             active_idx,

@@ -62,30 +62,31 @@ impl Timeline {
         self.clip_lookup_dirty = true;
     }
 
-    fn ensure_lookup(&mut self) {
-        if self.clip_lookup_dirty || self.clip_lookup.is_empty() {
-            self.rebuild_clip_lookup();
-        }
+    /// The cached location of a clip, when the cache still holds it there.
+    /// Allocates nothing.
+    fn cached_clip_location(&self, clip_id: &str) -> Option<(usize, usize)> {
+        let &(li, ci) = self.clip_lookup.get(clip_id)?;
+        self.layers
+            .get(li)
+            .and_then(|l| l.clips.get(ci))
+            .is_some_and(|c| c.id == clip_id)
+            .then_some((li, ci))
     }
 
     /// Resolve clip location: (layer_index, clip_index). Self-heals on miss.
+    ///
+    /// A cached entry that still points at the clip is right whether or not
+    /// the cache is marked dirty (a clip id is unique), so a hit never
+    /// rebuilds. Only a miss on a dirty or empty cache, or a stale entry,
+    /// rebuilds; a drag that marks the cache dirty on every move therefore
+    /// allocates nothing here.
     fn resolve_clip_location(&mut self, clip_id: &str) -> Option<(usize, usize)> {
-        self.ensure_lookup();
-        if let Some(&(li, ci)) = self.clip_lookup.get(clip_id) {
-            // Validate cache hit
-            if self
-                .layers
-                .get(li)
-                .and_then(|l| l.clips.get(ci))
-                .is_some_and(|c| c.id == clip_id)
-            {
-                return Some((li, ci));
-            }
-            // Cache stale — rebuild and retry
+        if let Some(found) = self.cached_clip_location(clip_id) {
+            return Some(found);
+        }
+        if self.clip_lookup_dirty || self.clip_lookup.is_empty() || self.clip_lookup.contains_key(clip_id) {
             self.rebuild_clip_lookup();
-            if let Some(&(li, ci)) = self.clip_lookup.get(clip_id) {
-                return Some((li, ci));
-            }
+            return self.cached_clip_location(clip_id);
         }
         None
     }
@@ -696,5 +697,55 @@ mod add_layer_tests {
             .gen_params()
             .expect("add_layer must seed gen_params on an LED layer (D12)");
         assert_eq!(genp.generator_type(), &PresetTypeId::new("LED Fill"));
+    }
+}
+
+#[cfg(test)]
+mod clip_lookup_tests {
+    use super::*;
+    use crate::clip::TimelineClip;
+    use crate::layer::Layer;
+    use crate::types::LayerType;
+
+    fn two_clip_timeline() -> (Timeline, ClipId, ClipId) {
+        let mut timeline = Timeline::default();
+        let mut layer = Layer::new("Clips".into(), LayerType::Video, 0);
+        let (a, b) = (TimelineClip::default(), TimelineClip::default());
+        let (ia, ib) = (a.id.clone(), b.id.clone());
+        layer.restore_clip(a);
+        layer.restore_clip(b);
+        timeline.layers.push(layer);
+        (timeline, ia, ib)
+    }
+
+    #[test]
+    fn a_hit_on_a_dirty_cache_does_not_rebuild() {
+        let (mut timeline, a, _) = two_clip_timeline();
+        timeline.rebuild_clip_lookup();
+        timeline.mark_clip_lookup_dirty();
+        assert!(timeline.find_clip_by_id_mut(a.as_str()).is_some());
+        assert!(timeline.clip_lookup_dirty, "a validated hit leaves the cache as it was");
+    }
+
+    #[test]
+    fn a_miss_or_a_moved_clip_on_a_dirty_cache_rebuilds() {
+        let (mut timeline, a, b) = two_clip_timeline();
+        timeline.rebuild_clip_lookup();
+        // A new clip the cache has not seen.
+        let fresh = TimelineClip::default();
+        let fresh_id = fresh.id.clone();
+        timeline.layers[0].restore_clip(fresh);
+        timeline.mark_clip_lookup_dirty();
+        assert!(timeline.find_clip_by_id_mut(fresh_id.as_str()).is_some());
+        assert!(!timeline.clip_lookup_dirty);
+        // A clip that changed places: the stale entry fails validation.
+        let moved = timeline.layers[0].remove_clip(&a).unwrap();
+        let mut other = Layer::new("Other".into(), LayerType::Video, 1);
+        other.restore_clip(moved);
+        timeline.layers.push(other);
+        timeline.mark_clip_lookup_dirty();
+        assert!(timeline.find_clip_by_id_mut(a.as_str()).is_some());
+        assert!(timeline.find_clip_by_id_mut(b.as_str()).is_some());
+        assert!(timeline.find_clip_by_id_mut("no such clip").is_none());
     }
 }

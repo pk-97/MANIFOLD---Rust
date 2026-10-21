@@ -17,7 +17,7 @@ pub use crate::ui_bridge::projection::cards::sync_card_values;
 pub use crate::ui_bridge::projection::driver_readouts::sync_driver_readouts;
 pub use crate::ui_bridge::projection::inspector::{sync_audio_dock, sync_inspector_data};
 pub use crate::ui_bridge::projection::scene::{sync_scene_outliner_eyes, sync_scene_row_values};
-pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_markers, sync_project_data, sync_track_layout};
+pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_markers, sync_project_all, sync_project_data, sync_track_layout, sync_trigger_catalog};
 pub use crate::ui_bridge::projection::transport::{TransportDisplayCache, check_auto_scroll};
 
 // Transport colors for play state.
@@ -142,6 +142,7 @@ pub fn push_state(
     drain_events(ui, content_state);
     push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
     push_clock(ui, project, content_state, transport_cache);
+    push_zoom_label(ui);
     push_selection(ui, project, active_layer, selection);
     push_frame(ui, project, content_state, active_layer);
     push_live(ui, project, content_state, active_layer, LiveGroups { values: true, shapes: true });
@@ -272,6 +273,13 @@ pub fn push_clock(
     let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
     let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
     ui.header.set_time_display(&mut ui.tree, display);
+}
+
+/// The header zoom label, in place: it follows the viewport zoom alone and
+/// has a fixed width, so a zoom lays no chrome out.
+pub fn push_zoom_label(ui: &mut UIRoot) {
+    let ppb = ui.viewport.pixels_per_beat();
+    ui.header.set_zoom_label(&mut ui.tree, ppb);
 }
 
 /// Transport, sync, header, footer, settings and layer-header chrome.
@@ -495,10 +503,6 @@ pub fn push_chrome(
             project_name.to_string()
         };
         ui.header.set_project_name(&header_name);
-        let ppb = ui.viewport.pixels_per_beat();
-        let decimals = if ppb >= 1.0 { 0 } else { 2 };
-        ui.header.set_zoom_label(&format!("{ppb:.decimals$} px/beat"));
-
         // Footer — quantize mode + FPS. (Resolution / render scale / tonemap
         // moved to the Settings popup; the footer keeps the live FPS readout.)
         ui.footer

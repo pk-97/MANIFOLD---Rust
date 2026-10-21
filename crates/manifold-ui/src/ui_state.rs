@@ -222,14 +222,16 @@ pub struct UIState {
     /// clamped by `set_automation_lane_height` and never serialized.
     automation_lane_heights: HashMap<(UiGraphTarget, ParamId), f32>,
 
-    /// D19: one version over mode visibility, lane order, hidden, pinned,
-    /// chosen params and the selected point's lane. Moves only on a change
-    /// the timeline shows.
+    /// D19: one version over mode visibility, lane order, hidden, pinned and
+    /// chosen params. Moves only on a change the timeline shows.
     automation_view: u64,
+    /// The selected point's lane (D8), apart from `automation_view`: only the
+    /// inspector shows it, so a point press moves no timeline projection.
+    point_lane_view: u64,
     /// Lane heights, apart from `automation_view`: a resize lays the rows
     /// out again in place and touches no lane list or inspector.
     lane_heights_view: u64,
-    /// The selected point's lane last folded into `automation_view` (D8).
+    /// The selected point's lane last folded into `point_lane_view` (D8).
     seen_point_lane: Option<AutomationLaneKey>,
 
     /// Session clipboard for automation breakpoints. Kept in UI state so it
@@ -301,6 +303,7 @@ impl UIState {
             pinned_automation_lanes: Vec::new(),
             automation_lane_heights: HashMap::new(),
             automation_view: 0,
+            point_lane_view: 0,
             lane_heights_view: 0,
             seen_point_lane: None,
             automation_clipboard: None,
@@ -393,10 +396,15 @@ impl UIState {
         }
     }
 
-    /// D19's version, with the selected point's lane folded in (D8): the
-    /// inspector shows that lane as the chosen param, so reselecting a point
-    /// in another lane is a view change; moving one inside its lane is not.
-    pub fn automation_view(&mut self) -> u64 {
+    /// D19's version: what the lane strips show.
+    pub fn automation_view(&self) -> u64 {
+        self.automation_view
+    }
+
+    /// The selected point's lane as a version (D8): the inspector shows that
+    /// lane as the chosen param, so reselecting a point in another lane is a
+    /// view change; moving one inside its lane is not. Read once a frame.
+    pub fn automation_point_lane(&mut self) -> u64 {
         let lane = self
             .selected_automation_point
             .as_ref()
@@ -404,10 +412,10 @@ impl UIState {
         if lane != self.seen_point_lane {
             self.seen_point_lane = lane;
             if self.automation_mode_visible {
-                self.automation_view += 1;
+                self.point_lane_view += 1;
             }
         }
-        self.automation_view
+        self.point_lane_view
     }
 
     /// Lane order, visibility, pins and chosen params only show
