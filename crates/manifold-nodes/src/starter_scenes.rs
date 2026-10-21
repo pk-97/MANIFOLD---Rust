@@ -27,9 +27,6 @@ pub const WATER_SCAN_PRESET: &str = "WaterInScan";
 pub const RUBBLE_PRESET: &str = "RubblePile";
 pub const SWARM_PRESET: &str = "SwarmCloud";
 
-/// World gravity the cloud opens with: the Attractor holds a swarm that is not
-/// also falling.
-const SWARM_GRAVITY: f64 = 0.0;
 /// The Burst: centred on the swarm, wide enough to take all of it.
 const SWARM_BURST: [(&str, f32); 5] = [("center_x", 0.0), ("center_y", 0.0), ("center_z", 0.0), ("radius", 5.0), ("impulse_strength", 14.0)];
 
@@ -303,11 +300,7 @@ fn add_hit(def: Value, id: &str, scene: SceneNodeRef, targets: SceneTargetSelect
     let recipe: EffectGraphDef = serde_json::from_str(&bundled_preset_json(&PresetTypeId::new("Explosion")).expect("Explosion is bundled")).expect("Explosion parses");
     let mut instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(&owner, &recipe, manifold_core::NodeId::new(id), scene, targets)
         .expect("the Explosion prepares against the scene");
-    let local = instance.graph.preset_metadata.as_mut().expect("Explosion metadata");
-    for &(param, value) in tuning {
-        local.params.iter_mut().find(|p| p.id == param).unwrap_or_else(|| panic!("Explosion has no param {param}")).default_value = value;
-        local.bindings.iter_mut().filter(|b| b.id == param).for_each(|b| b.default_value = value);
-    }
+    manifold_nodes_scene::node_graph::scene_modifier_authoring::tune_force_card(&mut instance.graph, tuning).unwrap_or_else(|error| panic!("the Explosion tunes: {error}"));
     let mut edited = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, owner.scene_modifiers.len(), instance).expect("the Explosion inserts").graph;
     let host = edited.preset_metadata.as_mut().expect("host metadata");
     let of_this = |b: &&manifold_core::effect_graph_def::BindingDef| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == id);
@@ -349,27 +342,7 @@ fn add_blast(def: Value, target: &str) -> Value {
     )
 }
 
-/// Set one Physics World control on its source node and on the card row that
-/// drives that node, so the file opens with the value and the card shows it.
-fn set_world_control(def: &mut Value, port: &str, value: f64) {
-    let nodes = def["nodes"].as_array().expect("nodes");
-    let world = nodes.iter().find(|n| n["typeId"] == "node.physics_world").expect("a Physics World")["id"].clone();
-    let source = def["wires"].as_array().expect("wires").iter().find(|w| w["toNode"] == world && w["toPort"] == port).unwrap_or_else(|| panic!("the World's {port} has a source"))["fromNode"].clone();
-    let node = def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["id"] == source).expect("the source node");
-    node["params"]["value"] = f(value);
-    let key = node["nodeId"].clone();
-    let meta = &mut def["presetMetadata"];
-    let ids: Vec<Value> = meta["bindings"].as_array().expect("bindings").iter().filter(|b| b["target"]["nodeId"] == key).map(|b| b["id"].clone()).collect();
-    assert!(!ids.is_empty(), "the World's {port} is on the card");
-    for b in meta["bindings"].as_array_mut().expect("bindings").iter_mut().filter(|b| ids.contains(&b["id"])) {
-        b["defaultValue"] = json!(value);
-    }
-    for p in meta["params"].as_array_mut().expect("params").iter_mut().filter(|p| ids.contains(&p["id"])) {
-        p["defaultValue"] = json!(value);
-    }
-}
-
-/// The shipped Swarm, kept together in still air, plus one performer hit: an
+/// The shipped Swarm, as it ships, plus one performer hit: an
 /// Explosion on the swarm with Burst on the card. The swarm comes whole from
 /// the public builder; nothing of it is copied here.
 pub fn swarm_cloud() -> Value {
@@ -379,7 +352,6 @@ pub fn swarm_cloud() -> Value {
         (force.scene.clone(), force.targets.clone())
     };
     let mut def = serde_json::to_value(swarm).expect("serialise");
-    set_world_control(&mut def, "gravity_y", SWARM_GRAVITY);
     let meta = &mut def["presetMetadata"];
     meta["id"] = json!(SWARM_PRESET);
     meta["displayName"] = json!("Swarm Cloud");

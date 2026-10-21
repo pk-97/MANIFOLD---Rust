@@ -1168,11 +1168,11 @@
                   "params": {
                     "center_x": {
                       "type": "Float",
-                      "value": 0.0
+                      "value": 3.0
                     },
                     "center_y": {
                       "type": "Float",
-                      "value": 0.0
+                      "value": 0.6000000238418579
                     },
                     "center_z": {
                       "type": "Float",
@@ -1188,7 +1188,7 @@
                     },
                     "radius": {
                       "type": "Float",
-                      "value": 3.0
+                      "value": 7.0
                     }
                   },
                   "typeId": "node.radial_vector_field"
@@ -1232,7 +1232,7 @@
                   "params": {
                     "strength": {
                       "type": "Float",
-                      "value": 8.0
+                      "value": 9.0
                     }
                   },
                   "typeId": "node.scale_vector_field"
