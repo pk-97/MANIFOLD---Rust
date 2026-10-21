@@ -90,6 +90,12 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
+        ProjectAction::ToggleExportGizmos => {
+            let cmd = manifold_editing::commands::settings::ToggleExportGizmosCommand::new(project.settings.export_gizmos);
+            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            project.execute(boxed);
+            DispatchResult::handled()
+        }
         ProjectAction::ToggleLiveRecording
         | ProjectAction::SelectAudioInputDevice
         | ProjectAction::SetAudioInputDevice(_)

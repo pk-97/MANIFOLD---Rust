@@ -2564,6 +2564,11 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
             build: |p| Box::new(ToggleSplitSectionsCommand::new(p.settings.split_at_markers)),
             applied: |p| p.settings.split_at_markers,
         },
+        SetterCase {
+            name: "export gizmos",
+            build: |p| Box::new(ToggleExportGizmosCommand::new(p.settings.export_gizmos)),
+            applied: |p| p.settings.export_gizmos,
+        },
         // Drivers, envelopes and audio mods
         SetterCase {
             name: "driver waveform",

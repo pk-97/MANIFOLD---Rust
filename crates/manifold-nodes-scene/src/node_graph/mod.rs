@@ -1,3 +1,4 @@
+pub mod gizmo_pass;
 pub mod material_inspector;
 pub mod scene_exposure;
 pub mod scene_items;

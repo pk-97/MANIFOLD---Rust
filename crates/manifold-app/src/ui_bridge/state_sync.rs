@@ -542,6 +542,7 @@ pub fn push_chrome(
         ui.settings_popup.set_hdr(project.settings.export_hdr);
         ui.settings_popup
             .set_split_sections(project.settings.split_at_markers);
+        ui.settings_popup.set_export_gizmos(project.settings.export_gizmos);
 
         // RT Quality panel — feed the current settings
         ui.rt_quality_panel.configure(project.settings.rt_quality);

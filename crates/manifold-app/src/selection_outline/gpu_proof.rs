@@ -149,12 +149,9 @@ fn a_far_selected_object_shows_readable_handles_and_its_outline() {
     let mut enc = device.create_encoder("d102 chrome");
     enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
     SelectionOutline::new(&device).draw(&mut enc, &composite, &mask, (0.0, 0.0, W as f32, H as f32), 1.0);
-    let mut ui = manifold_ui_paint::ui_renderer::UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
-    ui.begin_frame();
-    crate::scene_viewport::draw_world_lines(&mut ui, manifold_ui::Rect::new(0.0, 0.0, W as f32, H as f32), &camera, W, H, &lines);
-    if ui.prepare(&device, W, H, 1.0) {
-        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Load);
-    }
+    manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass::default().draw(
+        &device, &mut enc, &composite, None, &camera, &lines, manifold_foundation::scene_surface::GizmoDrawMode::OnTop,
+    );
     enc.commit_and_wait_completed();
 
     let shown = readback(&device, &composite);
@@ -303,6 +300,7 @@ fn an_export_with_a_selection_renders_no_mask() {
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
         split_at_markers: false,
+        include_gizmos: false,
         metadata: Vec::new(),
     };
     thread.run_export(config, &cmd_rx, &state_tx);
@@ -365,12 +363,9 @@ fn a_selected_water_domain_draws_its_solvers_cell_grid() {
     let composite = target(&device, "a3 composite");
     let mut enc = device.create_encoder("a3 chrome");
     enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
-    let mut ui = manifold_ui_paint::ui_renderer::UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
-    ui.begin_frame();
-    crate::scene_viewport::draw_world_lines(&mut ui, manifold_ui::Rect::new(0.0, 0.0, W as f32, H as f32), &camera, W, H, &lines);
-    if ui.prepare(&device, W, H, 1.0) {
-        ui.render(&mut enc, &composite, manifold_gpu::GpuLoadAction::Load);
-    }
+    manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass::default().draw(
+        &device, &mut enc, &composite, None, &camera, &lines, manifold_foundation::scene_surface::GizmoDrawMode::OnTop,
+    );
     enc.commit_and_wait_completed();
     let shown = readback(&device, &composite);
     let plain = readback(&device, &picture);
@@ -386,4 +381,101 @@ fn a_selected_water_domain_draws_its_solvers_cell_grid() {
         }
     }
     image::save_buffer("/tmp/a3_domain_lattice_after.png", &png, W, H, image::ExtendedColorType::Rgba8).expect("write png");
+}
+
+/// The content thread of a project whose one layer is [`SCENE`], warmed up.
+fn scene_thread(w: u32, h: u32) -> (crate::content_thread::ContentThread, manifold_core::LayerId, crossbeam_channel::Sender<crate::content_command::ContentCommand>, crate::content_state::StateTx) {
+    use crate::content_command::ContentCommand;
+    let mut project = manifold_core::project::Project::default();
+    (project.settings.output_width, project.settings.output_height) = (w as i32, h as i32);
+    let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::new("D102Scene"), 0);
+    let params = layer.gen_params_mut().expect("a generator layer");
+    params.graph = Some(serde_json::from_str(SCENE).expect("scene json"));
+    params.refresh_manifest_from_graph();
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats(0.0), manifold_core::Beats(4.0)));
+    let layer_id = layer.layer_id.clone();
+    project.timeline.layers.push(layer);
+    let mut thread = crate::headless_harness::headless_content_thread(project, w, h);
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    thread.run_warmup(&cmd_rx, &state_tx);
+    (thread, layer_id, cmd_tx, state_tx)
+}
+
+fn overlay(mode: manifold_foundation::scene_surface::GizmoDrawMode, layer: &manifold_core::LayerId) -> crate::gizmo_overlay::GizmoOverlay {
+    let line = manifold_nodes_scene::node_graph::viewport_overlay::WorldLine { a: [-5.0, 0.0, 0.0], b: [5.0, 0.0, 0.0], color: [40, 255, 40, 255] };
+    crate::gizmo_overlay::GizmoOverlay {
+        mode,
+        scene_layer: Some(layer.clone()),
+        output: Some((layer.clone(), std::sync::Arc::from([line]))),
+        viewport: None,
+    }
+}
+
+/// A draw mode that tests against depth makes the scene keep its depth for
+/// the gizmo pass; On Top never does, so the default costs nothing.
+#[test]
+fn only_the_depth_testing_modes_keep_scene_depth() {
+    use crate::content_command::ContentCommand;
+    use manifold_compositor::generator_renderer::GeneratorRenderer;
+    use manifold_foundation::scene_surface::GizmoDrawMode;
+    let (mut thread, layer_id, _keep, state_tx) = scene_thread(64, 64);
+    let kept = |thread: &crate::content_thread::ContentThread| {
+        thread.engine.renderers().iter()
+            .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
+            .is_some_and(|generators| generators.gizmo_depth(&layer_id).is_some())
+    };
+    thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
+    for (mode, expected) in [(GizmoDrawMode::OnTop, false), (GizmoDrawMode::Occluded, true), (GizmoDrawMode::Ghost, true), (GizmoDrawMode::OnTop, false)] {
+        thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay(mode, &layer_id))));
+        for _ in 0..3 {
+            thread.tick_frame(&state_tx);
+        }
+        assert_eq!(kept(&thread), expected, "{mode:?}");
+    }
+}
+
+/// An export that includes gizmos draws the scene's chrome over the finished
+/// frame, in the draw mode set.
+#[test]
+fn an_export_draws_the_scene_chrome_in_the_set_draw_mode() {
+    use crate::content_command::ContentCommand;
+    use manifold_foundation::scene_surface::GizmoDrawMode;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
+    const SIZE: (u32, u32) = (320, 180);
+    let (mut thread, layer_id, _keep, state_tx) = scene_thread(SIZE.0, SIZE.1);
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
+        scene_layer: Some(layer_id.clone()),
+        ..Default::default()
+    })));
+    let previous = thread.content_pipeline.begin_export_gizmos();
+    assert!(previous.is_some(), "the Scene panel's scene is the one exported");
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+    let read = |thread: &crate::content_thread::ContentThread| {
+        let pipeline = &thread.content_pipeline;
+        readback_raw_halves(pipeline.native_device().expect("native device"), pipeline.export_output_texture(), SIZE.0, SIZE.1)
+    };
+    let changed = |a: &[u8], b: &[u8]| a.chunks_exact(8).zip(b.chunks_exact(8)).filter(|(x, y)| x != y).count();
+    let base = read(&thread);
+    thread.content_pipeline.draw_export_gizmos();
+    let on_top = changed(&base, &read(&thread));
+    eprintln!("export gizmos: On Top changed {on_top} px");
+    assert!(on_top > 100, "the export frame carries the scene's chrome ({on_top} px)");
+
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
+        mode: GizmoDrawMode::Occluded,
+        scene_layer: Some(layer_id.clone()),
+        ..Default::default()
+    })));
+    for _ in 0..3 {
+        thread.tick_frame(&state_tx);
+    }
+    let fresh = read(&thread);
+    thread.content_pipeline.draw_export_gizmos();
+    let occluded = changed(&fresh, &read(&thread));
+    eprintln!("export gizmos: Occluded changed {occluded} px");
+    assert!(occluded > 0 && occluded <= on_top, "Occluded draws the visible part ({occluded} of {on_top} px)");
+    thread.content_pipeline.end_export_gizmos(previous);
 }

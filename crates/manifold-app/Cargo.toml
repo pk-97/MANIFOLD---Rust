@@ -31,6 +31,7 @@ manifold-nodes-water = { path = "../manifold-nodes-water" }
 manifold-nodes-image = { path = "../manifold-nodes-image" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
+manifold-foundation = { path = "../manifold-foundation" }
 manifold-editing = { path = "../manifold-editing" }
 manifold-ui = { path = "../manifold-ui" }
 manifold-ui-paint = { path = "../manifold-ui-paint" }
@@ -116,7 +117,6 @@ perf-soak = ["profiling"]
 
 [dev-dependencies]
 manifold-playback = { path = "../manifold-playback", features = ["testkit"] }
-manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-fluids = { path = "../manifold-fluids" }
 glam = "0.29.3"

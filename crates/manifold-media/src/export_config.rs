@@ -30,6 +30,9 @@ pub struct ExportConfig {
     /// Derived on the content thread from timeline markers; false means
     /// today's single-export behavior (docs/SECTION_EXPORT_DESIGN.md D4/D5).
     pub split_at_markers: bool,
+    /// Draw the Scene panel scene gizmos over every exported frame, in the
+    /// draw mode the Scene panel has. Off by default.
+    pub include_gizmos: bool,
     /// Header metadata as (key, value) pairs, passed to ffmpeg as `-metadata` during the
     /// audio mux. Video-only exports skip the mux and get none. Empty = none.
     pub metadata: Vec<(String, String)>,

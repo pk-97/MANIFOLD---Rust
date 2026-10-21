@@ -221,6 +221,7 @@ pub enum ProjectAction {
     CancelExport,
     ToggleHdr,
     ToggleSplitSections,
+    ToggleExportGizmos,
     ExportXml,
     ToggleLiveRecording,
     SelectAudioInputDevice,

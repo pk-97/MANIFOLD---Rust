@@ -145,6 +145,8 @@ pub struct Workspace {
     /// The outline slots last sent to the content thread (output, viewport);
     /// main window only.
     pub outline_sent: (Option<crate::selection_outline::OutlineSlots>, Option<crate::selection_outline::OutlineSlots>),
+    /// The gizmo overlay last sent to the content thread; main window only.
+    pub gizmo_sent: crate::gizmo_overlay::GizmoOverlay,
     /// The graph editor's frame planner state and atlas (P5c); unused by
     /// the main window.
     pub(crate) editor_frame: crate::editor_frame::EditorFrameState,
@@ -194,6 +196,7 @@ impl Workspace {
             viewport_gizmo_drag: None,
             viewport_outline: Vec::new(),
             outline_sent: (None, None),
+            gizmo_sent: Default::default(),
             editor_frame: Default::default(),
         }
     }

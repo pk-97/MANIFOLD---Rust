@@ -143,6 +143,12 @@ impl PreviewGizmo {
         &self.outline
     }
 
+    /// The chrome and handles last composed for the frame on screen, or
+    /// `None` while no frame matches the picture.
+    pub fn composed_lines(&self) -> Option<&[WorldLine]> {
+        self.shown.as_ref().map(|_| self.lines.as_slice())
+    }
+
     /// Moves when the mode or the picked shape changes.
     pub fn version(&self) -> u64 {
         self.version
@@ -509,47 +515,6 @@ impl PhysicsOverlayObservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_world_point_lands_on_its_pixel_in_the_preview() {
-        // A 16:9 show at 1920x1080 shown in a 320x180 preview at (10, 20).
-        let camera = Camera::orbit_perspective(0.7, 0.3, 6.0, std::f32::consts::FRAC_PI_3, 0.5, 0.0, 0.05, 200.0);
-        let (right, up, depth) = (1.0_f32, 0.5_f32, 3.0_f32);
-        let point = [0, 1, 2].map(|i| camera.pos[i] + depth * camera.fwd[i] + right * camera.right[i] + up * camera.up[i]);
-        let rect = manifold_ui::Rect::new(10.0, 20.0, 320.0, 180.0);
-        let line = WorldLine { a: point, b: point, color: [255; 4] };
-        let [x, y, ..] = crate::scene_viewport::project_line(&camera, 1920, 1080, rect, &line).unwrap();
-
-        // Hand derivation: perspective divide by depth, then NDC to the pane,
-        // y down. The horizontal extent scales with the show's aspect.
-        let half_h = (std::f32::consts::FRAC_PI_3 * 0.5).tan() * depth;
-        let ndc = [right / (half_h * 16.0 / 9.0), up / half_h];
-        let expected = [10.0 + (ndc[0] * 0.5 + 0.5) * 320.0, 20.0 + (0.5 - ndc[1] * 0.5) * 180.0];
-        assert!((x - expected[0]).abs() < 1e-3 && (y - expected[1]).abs() < 1e-3, "{x},{y} vs {expected:?}");
-    }
-
-    #[test]
-    fn a_camera_standing_inside_the_grid_keeps_every_line_along_its_view() {
-        // The show camera at (0, 2, 6) looking at the origin: every grid line
-        // running along z passes beside and behind it.
-        let camera = Camera::look_at([0.0, 2.0, 6.0], [0.0; 3], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_3, 0.05, 200.0);
-        let rect = manifold_ui::Rect::new(0.0, 0.0, 320.0, 180.0);
-        let grid = manifold_nodes_scene::node_graph::viewport_overlay::grid_lines(10.0, 1.0);
-        let along_z: Vec<_> = grid.iter().filter(|line| line.a[2] != line.b[2]).collect();
-        assert_eq!(along_z.len(), 21);
-        for line in &along_z {
-            let [x0, y0, x1, y1] = crate::scene_viewport::project_line(&camera, 1920, 1080, rect, line)
-                .unwrap_or_else(|| panic!("line {line:?} vanished"));
-            // The far end projects exactly as an unclipped point would.
-            let far = camera.project_to_pixel(line.a, 1920, 1080).unwrap();
-            assert!((x0 - far.px / 6.0).abs() < 1e-3 && (y0 - far.py / 6.0).abs() < 1e-3);
-            // The clipped near end runs toward the bottom of the picture.
-            assert!(y1.is_finite() && x1.is_finite() && y1 > y0);
-        }
-        // A line wholly behind the camera still draws nothing.
-        let behind = WorldLine { a: [-1.0, 0.0, 8.0], b: [1.0, 0.0, 8.0], color: [255; 4] };
-        assert!(crate::scene_viewport::project_line(&camera, 1920, 1080, rect, &behind).is_none());
-    }
 
     #[test]
     fn the_preview_fits_the_show_inside_the_video_area() {

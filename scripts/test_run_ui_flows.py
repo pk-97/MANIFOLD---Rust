@@ -381,7 +381,7 @@ class PathTriggerTests(unittest.TestCase):
             self.assertEqual(set(self.select(panel + name)), scene_ten, name)
         for name in ("material_inspector.rs", "material_menus.rs"):
             self.assertEqual(set(self.select(panel + name)), scene_ten | material, name)
-        self.assertEqual(set(self.select(panel + "panes.rs")), scene_ten | {"scene-two-panes"})
+        self.assertEqual(set(self.select(panel + "panes.rs")), scene_ten | {"scene-two-panes", "scene-header-draw-modes"})
         shared = "crates/manifold-ui/src/panels/param_slider_shared/"
         four = set(self.select(shared + "row_host.rs"))
         self.assertEqual(len(four), 4)

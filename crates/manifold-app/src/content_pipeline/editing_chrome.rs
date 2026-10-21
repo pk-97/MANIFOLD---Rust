@@ -82,3 +82,45 @@ mod outline {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+mod gizmos {
+    use super::super::ContentPipeline;
+    use crate::gizmo_overlay::GizmoOverlay;
+
+    impl ContentPipeline {
+        /// The gizmo lines and draw mode the UI wants on the preview and the
+        /// scene viewport (`gizmo_overlay.rs`).
+        pub fn set_gizmo_overlay(&mut self, overlay: GizmoOverlay) {
+            self.gizmos.set(overlay);
+        }
+
+        /// An export that includes gizmos draws the Scene panel's scene's:
+        /// report that scene while it runs, and give the overlay layer back
+        /// with [`Self::end_export_gizmos`]. `None` when there is no scene.
+        pub fn begin_export_gizmos(&mut self) -> Option<Option<manifold_core::LayerId>> {
+            let scene = self.gizmos.set_exporting(true)?;
+            let previous = self.physics_overlay.layer().cloned();
+            self.physics_overlay.set_layer(Some(scene));
+            Some(previous)
+        }
+
+        pub fn end_export_gizmos(&mut self, previous: Option<Option<manifold_core::LayerId>>) {
+            self.gizmos.set_exporting(false);
+            if let Some(previous) = previous {
+                self.physics_overlay.set_layer(previous);
+            }
+        }
+
+        /// Draw this export frame's gizmos over the finished frame, before
+        /// it is mapped for the encoder.
+        pub fn draw_export_gizmos(&mut self) {
+            let Some(device) = self.native_device.clone() else { return };
+            let Some(frame) = self.physics_overlay.frames.iter().flatten().max_by_key(|frame| frame.frame).cloned() else { return };
+            let target = self.compositor.output_texture().clone();
+            let mut enc = device.create_encoder("Export gizmos");
+            self.gizmos.draw_export(&device, &mut enc, &target, Some(&frame));
+            enc.commit();
+        }
+    }
+}

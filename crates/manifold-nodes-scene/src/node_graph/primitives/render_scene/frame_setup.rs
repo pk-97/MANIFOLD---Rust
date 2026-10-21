@@ -174,7 +174,10 @@ impl RenderScene {
             // shader and no shader changes.
             let material = match render_mode.mode {
                 manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME => wireframe_material(&render_mode),
-                manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID => clay_material(&render_mode),
+                manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID if envmap_wired.is_some() || *envmap_pending => {
+                    clay_material(&render_mode)
+                }
+                manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID => clay_material_without_envmap(&render_mode),
                 manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS => wireframe_material(&render_mode),
                 _ => material,
             };
@@ -580,7 +583,14 @@ impl RenderScene {
         // Scene-wide render mode (SCENE_RENDER_MODE_DESIGN.md D2). Unwired =
         // RenderMode::default() = mode Rendered = the raster pass draws
         // exactly as today, byte-identical to no render_mode input.
-        let render_mode = ctx.inputs.render_mode("render_mode").unwrap_or_default();
+        let render_mode = ctx.inputs.render_mode("render_mode").unwrap_or_else(|| {
+            use manifold_node_engine::scene::render_mode::{RENDER_MODE_POINTS, RENDER_MODE_RENDERED, RenderMode};
+            let mode = match ctx.params.get("render_mode") {
+                Some(ParamValue::Enum(mode)) => (*mode).min(RENDER_MODE_POINTS),
+                _ => RENDER_MODE_RENDERED,
+            };
+            RenderMode { mode, ..RenderMode::default() }
+        });
 
         // One light interpretation for surfaces and shafts: position/direction
         // plus mode, premultiplied colour plus caster slot, and range. Keep

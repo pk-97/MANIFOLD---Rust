@@ -1460,6 +1460,18 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// From the next render on, keep the scene's raw depth for the editor's
+    /// gizmo lines (the preview, the viewport and an export test them against
+    /// it). Editing chrome: the output never changes.
+    fn set_gizmo_depth(&mut self, _wanted: bool) {}
+
+    /// The raw reversed-Z depth the last render kept for
+    /// [`Self::set_gizmo_depth`]: `R32Float` at the scene's render size. `None`
+    /// when not asked for or the frame drew nothing.
+    fn gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_rays(
         &self,

@@ -218,6 +218,7 @@ pub struct Executor {
     scene_viewport_captured: bool,
     /// Render slots the viewport outlines (D-102); a new pass takes them.
     scene_viewport_selection: Vec<u32>,
+    scene_viewport_gizmo_depth: bool,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
     /// the active quality column (realtime vs export). Default = live constants
     /// so tests and non-RT graphs run unchanged. Set per frame via
@@ -600,6 +601,7 @@ impl Executor {
             scene_viewport: None,
             scene_viewport_captured: false,
             scene_viewport_selection: Vec::new(),
+            scene_viewport_gizmo_depth: false,
             rt_quality: crate::exec::effect_node::RtQuality::default(),
             sim_step: crate::exec::effect_node::SimStep::default(),
             sim_metrics: Default::default(),

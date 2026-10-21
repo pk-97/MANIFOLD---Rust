@@ -1944,10 +1944,8 @@ impl Application {
                 ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
                     .filter(|frame| frame.has_image())
                     .zip(ws.viewport_rect)
-                    .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint {
+                    .map(|(_, rect)| crate::scene_viewport::SceneViewportPaint {
                         rect,
-                        frame,
-                        lines: &ws.viewport_overlay_lines,
                         #[cfg(target_os = "macos")]
                         // Gated on this frame's selection, recomputed above.
                         outline: self.selection_outline.as_ref().zip(viewport_mask.as_ref().filter(|_| !ws.viewport_outline.is_empty())),

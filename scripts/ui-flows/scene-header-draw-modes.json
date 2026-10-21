@@ -1,0 +1,16 @@
+[
+  { "Pointer": { "target": { "Query": { "text": "Scene", "type": "Button", "under_name": "inspector" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.render_mode", "text": "Render: Rendered" } }, "check": "Exists" } },
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.gizmo_mode", "text": "Gizmos: On Top" } }, "check": "Exists" } },
+  { "Pointer": { "target": { "Query": { "name": "scene_setup.render_mode" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  "Snapshot",
+  { "Pointer": { "target": { "Query": { "text": "Wireframe" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  "Snapshot",
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.render_mode", "text": "Render: Wireframe" } }, "check": "Exists" } },
+  { "Pointer": { "target": { "Query": { "name": "scene_setup.gizmo_mode" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  "Snapshot",
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.gizmo_mode", "text": "Gizmos: Ghost" } }, "check": "Exists" } },
+  { "Pointer": { "target": { "Query": { "name": "scene_setup.gizmo_mode" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  "Snapshot",
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.gizmo_mode", "text": "Gizmos: Occluded" } }, "check": "Exists" } }
+]

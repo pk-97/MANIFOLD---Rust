@@ -355,6 +355,7 @@ impl Application {
         self.tick_sync_calibration();
         self.sync_gizmo_layer();
         self.sync_selection_outline();
+        self.sync_gizmo_overlay();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(

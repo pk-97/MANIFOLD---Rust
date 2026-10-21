@@ -1,4 +1,5 @@
 mod camera_conformance;
+mod gizmo_lines;
 mod render_scene_exposure;
 mod render_scene_fog;
 mod render_scene_glass;

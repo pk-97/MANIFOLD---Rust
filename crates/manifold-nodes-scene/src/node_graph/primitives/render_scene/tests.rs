@@ -410,7 +410,7 @@
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 10, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(node.parameters().len(), 11, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -893,6 +893,22 @@ fn render_mode_solid_substitutes_pbr_clay_material() {
         manifold_node_engine::scene::material::AlphaMode::Opaque,
         "clay is opaque coverage regardless of the object's own alpha mode"
     );
+}
+
+#[test]
+fn render_mode_solid_without_an_environment_needs_no_envmap() {
+    // A scene with no environment used to fall back to magenta under Solid,
+    // because the clay material was PBR. The fallback carries the same clay
+    // colour on a kind that asks for nothing wired.
+    let mode = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID,
+        clay_color: [0.7, 0.4, 0.2, 1.0],
+        ..Default::default()
+    };
+    assert!(clay_material(&mode).requires_envmap());
+    let material = clay_material_without_envmap(&mode);
+    assert!(!material.requires_envmap());
+    assert_eq!(material.base_color, mode.clay_color);
 }
 
 #[test]
