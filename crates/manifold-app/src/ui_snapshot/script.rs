@@ -1302,7 +1302,8 @@ impl Runner {
                 project_path: None,
                 transport_cache: &mut self.transport_cache,
             },
-            |_, _, _, _, _| {
+            &mut self.edits,
+            |_, _, _, _, _, _| {
                 use manifold_ui::interaction_overlay::DragMode;
                 matches!(overlay.drag_mode(), DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight)
             },
