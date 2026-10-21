@@ -15,7 +15,8 @@
 /// The runtime already reports the shadow at BUILD time
 /// (`ChainError::CardBindingShadowsDefParam`); this names it at WRITE time,
 /// where the author actually is. Mirrored defaults are excluded (they no
-/// longer plant — BUG-ji6q — so the node write stands). Root-level edits
+/// longer plant — BUG-ji6q — so the def keeps the write; the card value
+/// still reaches the node at the next apply). Root-level edits
 /// only: binding metadata addresses root node ids, and a scoped
 /// (group-internal) edit's numeric id doesn't resolve against them.
 /// Returns the loud message; the caller decides the channel.
@@ -248,7 +249,7 @@ mod tests {
         );
     }
 
-    /// Mirrored defaults never plant (BUG-ji6q), so the node write stands:
+    /// Mirrored defaults never plant (BUG-ji6q), so the def keeps the write:
     /// no redirect, the def takes the value.
     #[test]
     fn mirrored_default_stays_on_def_write_path() {
@@ -264,7 +265,7 @@ mod tests {
         assert_eq!(
             graph_of(&project, &fx).nodes[0].params.get("amount"),
             Some(&SerializedParamValue::Float { value: 0.5 }),
-            "mirrored binding: def write stands"
+            "mirrored binding: the def keeps the write"
         );
         assert!(
             (card_value_of(&project, &fx) - 0.0).abs() < 1e-6,
@@ -376,7 +377,7 @@ mod tests {
 
     /// BUG-1l7f: the write-site warning fires exactly for a param a card
     /// binding owns with an AUTHORED default — not for mirrored defaults
-    /// (BUG-ji6q: they don't plant, the node write stands), not for
+    /// (BUG-ji6q: they don't plant, the def keeps the write), not for
     /// unbound params.
     #[test]
     fn card_owned_write_warning_scopes_to_authored_defaults() {

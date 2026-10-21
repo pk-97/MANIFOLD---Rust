@@ -337,7 +337,7 @@ pub struct CardSlotWrite {
 /// The card slot that OWNS `param_key` on root node `node_doc_id`, when an
 /// authored-default binding targets it. Scoped to authored defaults for the
 /// same reason as the write-site warning: a mirrored default never plants
-/// (BUG-ji6q), so a node write there stands and rerouting would be wrong.
+/// (BUG-ji6q), so the def keeps a node write there and rerouting would be wrong.
 /// Root-level only — binding metadata addresses root node ids, and a
 /// group-internal numeric id doesn't resolve against them (mirrors
 /// `card_owned_write_warning`'s scope). `None` also when the binding's
