@@ -159,7 +159,9 @@ impl ScenePanel {
         self.panes.two = true;
         let cap = self.panes.tree_cap(self.panes.split);
         let start = self.begin_pane(tree, Pane::Tree, Rect::new(body.x, top, body.width, cap));
-        let end = self.build_outliner(tree, body.x + PAD, body.width - PAD * 2.0, top, vm, selected);
+        // Every selected row highlights; the active one's card shows below.
+        let highlighted = self.selected_of(&vm.layer_id).to_vec();
+        let end = self.build_outliner(tree, body.x + PAD, body.width - PAD * 2.0, top, vm, &highlighted);
         let content_h = end - top + ROW_GAP;
         self.panes.tree_content_h = content_h;
         self.panes.tree.set_viewport_height(tree, content_h.min(cap));
