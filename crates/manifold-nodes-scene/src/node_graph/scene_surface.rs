@@ -101,9 +101,11 @@ impl SceneParamFacts {
 /// `node.light`'s `mode` values (`LIGHT_MODES`): Sun 0, Point 1, Spot 2.
 const POINT_AND_SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b110));
 const SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b100));
-/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1.
-const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b01));
-const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b10));
+/// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1, HDRI 2.
+const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b001));
+const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b010));
+/// The Background switch's values: off 0, on 1.
+const BACKGROUND_ON: Gate = Gate::Only(Feature::Background, Modes(0b10));
 
 const AT_LEAST_ZERO: HardLimit = HardLimit::AtLeast(0.0);
 /// Field of view, 1° to 179°, in radians.
@@ -425,7 +427,8 @@ fn atmosphere(param: &str) -> Option<SceneParamFacts> {
 
 /// Gates follow `bake_equirect_envmap.wgsl`: the gradient branch reads only
 /// the horizon and variation, the softbox branch only the strips, sun disc
-/// and fill. Size and intensity apply in both.
+/// and fill. Intensity applies in all three modes, and the HDRI copy reads
+/// nothing else (its size is the file's).
 fn bake_environment(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Environment;
     Some(match param {
@@ -442,6 +445,21 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
         "uniform" => hidden(Environment),
         _ => return None,
     })
+}
+
+/// Where the importer's Background controls sit on the Scene tab: the
+/// Environment group, as setup rows. They drive nodes outside the scene
+/// vocabulary (the switch, blur and exposure of the sky chain), so the
+/// importer places them by card param id instead of by node type. Blur and
+/// Brightness read only while the Background switch is on.
+pub(crate) fn background_scene(param: &str) -> Option<SceneParamDesc> {
+    let facts = match param {
+        "bg_enabled" => setup(ControlGroup::Environment).switch(Feature::Background),
+        "bg_blur" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
+        "bg_brightness" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
+        _ => return None,
+    };
+    Some(facts.desc)
 }
 
 fn scene_object(param: &str) -> Option<SceneParamFacts> {

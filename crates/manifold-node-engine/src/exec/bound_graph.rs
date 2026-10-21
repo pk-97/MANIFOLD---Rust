@@ -101,7 +101,7 @@ pub struct BoundGraph {
 /// transforms, materials, lights, cameras, the `render_scene` RT toggles — keep
 /// the node value and are never reported here. What remains is every authored
 /// default: a preset's declared resting value, and an import's curated bindings
-/// (`env_mode`, `ssao_intensity`, the sun fan-outs, `env_intensity`).
+/// (`bg_enabled`, `ssao_intensity`, the sun fan-outs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShadowedDefParam {
     /// Stable id of the node whose param was overwritten.

@@ -46,7 +46,10 @@ pub(super) fn world_nodes(
 ) -> Vec<NodeId> {
     let mut ids = vec![scene_node.id];
     match environment {
-        EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
+        EnvironmentVm::Importer(e) => {
+            ids.push(e.bake_node_id);
+            ids.extend(e.background_node_ids.iter().copied());
+        }
         EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
         EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
     }
