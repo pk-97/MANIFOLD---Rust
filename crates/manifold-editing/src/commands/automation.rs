@@ -79,11 +79,14 @@ impl AddAutomationPointCommand {
     /// Construct an insertion at `beat` that samples the existing lane
     /// and splits the segment containing that beat. The ordinary [`Self::new`]
     /// constructor keeps its arbitrary-point semantics, including the caller's
-    /// value and outgoing shape.
+    /// value and outgoing shape. `outside_shape` is the outgoing shape of a point
+    /// inserted outside the authored range (the lane's default shape); inside a
+    /// segment the split keeps the sampled curve.
     pub fn new_on_curve(
         target: GraphTarget,
         param_id: impl Into<String>,
         beat: manifold_core::Beats,
+        outside_shape: SegmentShape,
     ) -> Self {
         Self {
             target,
@@ -91,7 +94,7 @@ impl AddAutomationPointCommand {
             point: AutomationPoint {
                 beat,
                 value: 0.0,
-                shape: manifold_core::effects::SegmentShape::Linear,
+                shape: outside_shape,
             },
             on_curve: true,
             previous_lane: None,
@@ -134,14 +137,9 @@ impl Command for AddAutomationPointCommand {
             prior_lane = found.map(|(_, lane)| lane.clone());
             prior_index = found.map(|(idx, _)| idx);
             lanes_were_none = inst.automation_lanes.is_none();
-            if self.on_curve
-                && prior_lane.as_ref().is_none_or(|lane| {
-                    !lane
-                        .points
-                        .windows(2)
-                        .any(|pair| pair[0].beat.0 < pair[1].beat.0)
-                })
-            {
+            // A curve insert samples the lane's own line, so it needs at least
+            // one point to sample; a lane with none has no line yet.
+            if self.on_curve && prior_lane.as_ref().is_none_or(|lane| lane.points.is_empty()) {
                 return false;
             }
             // A pre-automation slider edit is not an override of a future lane.
@@ -167,12 +165,10 @@ impl Command for AddAutomationPointCommand {
                                 / (lane.points[index + 1].beat.0 - left.beat.0)) as f32;
                             lane.points[index].shape = left.shape.subrange(0.0, t);
                             point.shape = left.shape.subrange(t, 1.0);
-                        } else {
-                            // Outside the authored range the sampler holds the
-                            // nearest endpoint value, so keep that extension
-                            // explicit in the inserted point's outgoing shape.
-                            point.shape = SegmentShape::Hold;
                         }
+                        // Outside the authored range the sampler holds the nearest
+                        // endpoint value and the point keeps the caller's
+                        // lane-default outgoing shape.
                         insert_sorted(&mut lane.points, point);
                     } else {
                         // Distinct values at one beat are independent breakpoints;
@@ -927,7 +923,7 @@ mod tests {
             .map(|beat| (beat, AutomationLane { param_id: "amount".into(), enabled: true, points: original.clone() }.value_at(Beats(beat))))
             .collect();
 
-        let mut command = AddAutomationPointCommand::new_on_curve(target, "amount", Beats(4.0));
+        let mut command = AddAutomationPointCommand::new_on_curve(target, "amount", Beats(4.0), SegmentShape::Linear);
         command.execute(&mut project);
         let inserted = lane_points(&project, &fx_id);
         assert_eq!(inserted.len(), 4);
@@ -984,7 +980,7 @@ mod tests {
                 let mut command = AddAutomationPointCommand::new_on_curve(
                     GraphTarget::Effect(fx_id.clone()),
                     "amount",
-                    Beats(4.0),
+                    Beats(4.0), SegmentShape::Linear,
                 );
                 command.execute(&mut project);
                 let inserted = lane_points(&project, &fx_id).to_vec();
@@ -1022,7 +1018,7 @@ mod tests {
         let mut command = AddAutomationPointCommand::new_on_curve(
             GraphTarget::Effect(fx_id.clone()),
             "amount",
-            Beats(4.0),
+            Beats(4.0), SegmentShape::Linear,
         );
         command.execute(&mut project);
         assert_eq!(lane_points(&project, &fx_id), original.as_slice());
@@ -1034,17 +1030,62 @@ mod tests {
     fn on_curve_add_without_a_segment_is_a_true_noop() {
         let (mut project, fx_id) = project_with_effect();
         let target = GraphTarget::Effect(fx_id.clone());
-        let mut missing = AddAutomationPointCommand::new_on_curve(target.clone(), "amount", Beats(2.0));
+        let mut missing = AddAutomationPointCommand::new_on_curve(target.clone(), "amount", Beats(2.0), SegmentShape::Linear);
         missing.execute(&mut project);
         assert!(!missing.was_applied());
         assert!(project.find_effect_by_id(&fx_id).unwrap().automation_lanes.is_none());
 
-        let original = vec![point(4.0, 0.4)];
-        install_lane(&mut project, &fx_id, original.clone());
-        let mut single = AddAutomationPointCommand::new_on_curve(target, "amount", Beats(2.0));
-        single.execute(&mut project);
-        assert!(!single.was_applied());
-        assert_eq!(lane_points(&project, &fx_id), original.as_slice());
+        install_lane(&mut project, &fx_id, vec![]);
+        let mut empty = AddAutomationPointCommand::new_on_curve(target, "amount", Beats(2.0), SegmentShape::Linear);
+        empty.execute(&mut project);
+        assert!(!empty.was_applied());
+        assert!(lane_points(&project, &fx_id).is_empty());
+    }
+
+    #[test]
+    fn on_curve_add_on_a_single_point_lane_holds_its_value_either_side() {
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        install_lane(&mut project, &fx_id, vec![point(4.0, 0.4)]);
+        for beat in [2.0, 7.0] {
+            let mut cmd = AddAutomationPointCommand::new_on_curve(target.clone(), "amount", Beats(beat), SegmentShape::Linear);
+            cmd.execute(&mut project);
+            assert!(cmd.was_applied());
+            let lane = project.find_effect_by_id(&fx_id).unwrap().automation_lanes.as_ref().unwrap()[0].clone();
+            assert_eq!(lane.value_at(Beats(beat)), 0.4);
+            assert!(lane.points.iter().any(|p| p.beat == Beats(beat) && p.value == 0.4));
+            cmd.undo(&mut project);
+            assert_eq!(lane_points(&project, &fx_id).len(), 1);
+        }
+    }
+
+    #[test]
+    fn on_curve_add_outside_the_range_takes_the_callers_default_shape() {
+        for shape in [SegmentShape::Linear, SegmentShape::Hold] {
+            let (mut project, fx_id) = project_with_effect();
+            let target = GraphTarget::Effect(fx_id.clone());
+            install_lane(&mut project, &fx_id, vec![point(4.0, 0.4), point(8.0, 0.6)]);
+            for beat in [2.0, 11.0] {
+                let mut cmd = AddAutomationPointCommand::new_on_curve(target.clone(), "amount", Beats(beat), shape);
+                cmd.execute(&mut project);
+                let inserted = lane_points(&project, &fx_id).iter().find(|p| p.beat == Beats(beat)).copied().unwrap();
+                assert_eq!(inserted.shape, shape, "beat {beat}");
+            }
+        }
+    }
+
+    #[test]
+    fn insert_before_the_first_point_then_raising_the_old_first_point_makes_a_ramp() {
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        install_lane(&mut project, &fx_id, vec![point(4.0, 0.4), point(8.0, 0.4)]);
+        let mut cmd = AddAutomationPointCommand::new_on_curve(target.clone(), "amount", Beats(2.0), SegmentShape::Linear);
+        cmd.execute(&mut project);
+        let mut raise = MoveAutomationPointCommand::new(target, "amount", point(4.0, 0.4), point(4.0, 0.9));
+        raise.execute(&mut project);
+        let lane = project.find_effect_by_id(&fx_id).unwrap().automation_lanes.as_ref().unwrap()[0].clone();
+        let mid = lane.value_at(Beats(3.0));
+        assert!(mid > 0.4 && mid < 0.9, "a ramp, not a step: {mid}");
     }
 
     #[test]
