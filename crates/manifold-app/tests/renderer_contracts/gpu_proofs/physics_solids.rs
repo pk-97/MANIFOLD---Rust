@@ -84,6 +84,9 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         .clone();
     // A fixed intact parent makes post-trigger falling evidence of release,
     // rather than merely the intact flower continuing its existing fall.
+    // The Motion card owns the value: a build writes the card onto the node,
+    // so Fixed is set on the card, not on the node alone (BUG-1a94z).
+    let mut body_ids = Vec::new();
     for group in enabled.nodes.iter_mut().filter_map(|n| n.group.as_mut()) {
         for body in group
             .nodes
@@ -92,6 +95,24 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         {
             body.params
                 .insert("motion".into(), SerializedParamValue::Enum { value: 0 });
+            body_ids.push(body.node_id.clone());
+        }
+    }
+    let enabled_metadata = enabled.preset_metadata.as_mut().expect("enabled metadata");
+    for binding in &mut enabled_metadata.bindings {
+        let on_motion = matches!(
+            &binding.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if param == "motion" && body_ids.contains(node_id)
+        );
+        if on_motion {
+            binding.default_value = 0.0;
+            enabled_metadata
+                .params
+                .iter_mut()
+                .find(|p| p.id == binding.id)
+                .expect("Motion card spec")
+                .default_value = 0.0;
         }
     }
     let authored_objects =
