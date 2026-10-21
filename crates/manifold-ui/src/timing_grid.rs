@@ -19,8 +19,7 @@ pub struct TimelineGridView {
     pub first_layer_top: Option<f32>,
 }
 
-
-/// The visible timing grid policy shared by bitmap layers, automation lanes,
+/// The visible timing grid policy shared by the track grid, automation lanes,
 /// and the ruler. The policy is expressed in beats; callers choose their own
 /// screen mapping so logical and physical render targets stay aligned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
