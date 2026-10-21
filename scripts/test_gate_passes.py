@@ -98,6 +98,10 @@ class CacheTests(unittest.TestCase):
         # This disposable workspace tests cache behavior, with its own smoke
         # selection; real repository proof ownership is covered by gpu_scope.
         self.enterContext(patch.object(gpu_scope, 'SMOKE_FILTERS', ['fixture_smoke::']))
+        # The disposable workspace has no manifold-core for the repo-scan rows.
+        import cpu_scope, gate_policy
+        self.enterContext(patch.object(cpu_scope, "PREFIX_ROWS", [
+            row for row in cpu_scope.PREFIX_ROWS if row not in gate_policy.REPO_SCAN_ROWS]))
         self.enterContext(patch.object(gpu_scope, 'learned_times_path',
                                        return_value=self.repo / '.git/gpu-test-times.json'))
         self.git('init', '-b', 'main')

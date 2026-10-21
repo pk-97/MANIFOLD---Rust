@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import cpu_scope
+import gate_policy
 import gate_readiness
 import gpu_scope
 import gate_workspace
@@ -118,7 +119,9 @@ class P1PlannerTests(unittest.TestCase):
 
     def test_self_contained_cli_without_tests_keeps_compile_checks_only(self):
         path = "crates/manifold-nodes/src/bin/freeze_profile.rs"
-        plan = cpu_scope.plan_for_paths([path], ROOT, self.workspace)
+        rows = [row for row in cpu_scope.PREFIX_ROWS if row not in gate_policy.REPO_SCAN_ROWS]
+        with patch.object(cpu_scope, "PREFIX_ROWS", rows):
+            plan = cpu_scope.plan_for_paths([path], ROOT, self.workspace)
         self.assertEqual(plan.selections(), {})
         self.assertIn("freeze-profile has no unit tests: compile/clippy only", plan.describe())
 
