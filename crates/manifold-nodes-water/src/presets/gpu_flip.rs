@@ -964,7 +964,7 @@ pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplat
         stamp_scene_node_exposures_into(&mut metadata.params, &mut metadata.bindings, node.id, &node.node_id, &label, &descriptors, &node.params);
     }
     metadata.display_name = "Water".into();
-    SceneTemplate { group: wrap_family(body, false), metadata }
+    SceneTemplate { group: wrap_family(body, false), metadata, physics: Default::default() }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]

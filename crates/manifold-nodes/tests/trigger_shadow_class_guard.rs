@@ -40,7 +40,6 @@ use manifold_nodes as _;
 use std::collections::HashSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::flatten::flatten_groups;
 use manifold_node_engine::trigger_shadow_lint::{DISCRETE_REPLACE_ALLOWLIST, find_trigger_driven_switch_value_node_ids, find_trigger_shadow_findings, is_allowlisted};
 use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG};
 
@@ -50,9 +49,9 @@ fn audit_def(
     violations: &mut Vec<String>,
     allowlist_hits: &mut HashSet<(String, String)>,
 ) {
-    let flat = match flatten_groups(def) {
+    let flat = match manifold_node_engine::load::expand::flatten_expanded(def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin()) {
         Ok(f) => f,
-        Err(e) => panic!("preset `{preset_id}`: flatten_groups failed: {e:?}"),
+        Err(e) => panic!("preset `{preset_id}`: flatten failed: {e:?}"),
     };
     // Every trigger-driven switch_value counts as "checked" for hygiene
     // purposes, whether or not it ends up shadowing anything — most

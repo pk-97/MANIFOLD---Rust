@@ -64,6 +64,8 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.render_scene",
     // The liquid's whitewater joins the water's Simulation controls (BUG-ejcb).
     "node.whitewater_step",
+    // A swarm's clock and force lattice: its Simulation controls.
+    "node.swarm_forces",
 ];
 
 /// Whether Scene Setup automatically exposes this node's detailed controls.
@@ -153,9 +155,16 @@ fn params_metadata(type_id: &str, params: &[ParamDef]) -> Vec<NodeParamMetadata>
         .collect()
 }
 
+/// The Physics World controls `type_id` declares it takes
+/// (`EffectNode::world_control_inputs`), for core's template insertion.
+pub fn world_inputs_for_node_type(type_id: &str) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    SCENE_EXPOSURE_REGISTRY.construct(type_id).map_or(&[], |node| node.world_control_inputs())
+}
+
 inventory::submit! {
     manifold_core::param_lookup::NodeParamSource {
         params_for_type: all_params_for_node_type,
+        world_inputs_for_type: world_inputs_for_node_type,
     }
 }
 

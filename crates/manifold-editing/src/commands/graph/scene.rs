@@ -299,14 +299,15 @@ impl Command for RemoveSceneObjectCommand {
             self.rejection = Some("Remove Object rejected: selected object changed".into());
             return;
         }
-        if deletion_breaks_explicit_modifier_target(
+        let aimed = scene_object_modifiers(
             &def,
             &self.scope_path,
             self.render_scene_node_id,
             self.object_index,
-        ) {
+        );
+        if !aimed.shared.is_empty() {
             self.rejection = Some(
-                "Object is explicitly targeted by a scene modifier; retarget or remove that modifier first".into(),
+                "A scene modifier aims at this object and others; retarget or remove that modifier first".into(),
             );
             return;
         }
@@ -480,9 +481,22 @@ impl Command for RemoveSceneObjectCommand {
             let removed_params = prune_scene_object_metadata(def, &removed_ids);
             Some(removed_params)
         })();
-        let Some(removed_param_ids) = result else {
+        let Some(mut removed_param_ids) = result else {
             return;
         };
+        // Modifiers aimed only at this object go with it, in this undo step.
+        if !aimed.owned.is_empty() {
+            match manifold_core::scene_modifier_edit::remove_scene_modifiers(&candidate, &aimed.owned) {
+                Ok(edit) => {
+                    candidate = edit.graph;
+                    removed_param_ids.extend(edit.removed_param_ids);
+                }
+                Err(error) => {
+                    self.rejection = Some(format!("Remove Object: {error}"));
+                    return;
+                }
+            }
+        }
         if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             *def = candidate.clone();
         })
@@ -792,7 +806,8 @@ impl Command for RemoveSceneSubmeshCommand {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
-        if deletion_breaks_explicit_modifier_target(def, &[], self.render_scene_node_id, self.physical_index) {
+        let aimed = scene_object_modifiers(def, &[], self.render_scene_node_id, self.physical_index);
+        if !aimed.owned.is_empty() || !aimed.shared.is_empty() {
             self.rejection = Some("Submesh is explicitly targeted by a scene modifier; retarget or remove that modifier first".into());
             return;
         }
@@ -993,54 +1008,47 @@ impl Command for DuplicateSceneSubmeshCommand {
     fn rejection_reason(&self) -> Option<&str> { self.rejection.as_deref() }
 }
 
-fn deletion_breaks_explicit_modifier_target(
+/// The object wired to `object_{object_index}`, as scene modifiers name it.
+fn scene_object_ref(
     def: &EffectGraphDef,
     scope: &[u32],
     render_id: u32,
     object_index: u32,
-) -> bool {
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-    if def.scene_modifiers.is_empty() {
-        return false;
-    }
+) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
     let mut nodes = def.nodes.as_slice();
     let mut wires = def.wires.as_slice();
     let mut path = Vec::with_capacity(scope.len());
     for id in scope {
-        let Some(node) = nodes.iter().find(|node| node.id == *id) else {
-            return false;
-        };
-        let Some(group) = node.group.as_deref() else {
-            return false;
-        };
+        let node = nodes.iter().find(|node| node.id == *id)?;
+        let group = node.group.as_deref()?;
         path.push(node.node_id.clone());
         nodes = &group.nodes;
         wires = &group.wires;
     }
     let port = format!("object_{object_index}");
-    let Some(wire) = wires
+    let wire = wires
         .iter()
-        .find(|wire| wire.to_node == render_id && wire.to_port == port)
-    else {
-        return false;
-    };
-    let Some(producer) = nodes.iter().find(|node| node.id == wire.from_node) else {
-        return false;
-    };
-    let removed = SceneNodeRef {
+        .find(|wire| wire.to_node == render_id && wire.to_port == port)?;
+    let producer = nodes.iter().find(|node| node.id == wire.from_node)?;
+    Some(manifold_core::scene_modifier_preset::SceneNodeRef {
         scope: path,
         node: producer.node_id.clone(),
-    };
-    def.scene_modifiers
-        .iter()
-        .any(|modifier| match &modifier.targets {
-            SceneTargetSelection::AllObjects => false,
-            SceneTargetSelection::Explicit { objects } => objects.iter().any(|object| {
-                object == &removed
-                    || (object.scope.starts_with(&removed.scope)
-                        && object.scope.get(removed.scope.len()) == Some(&removed.node))
-            }),
-        })
+    })
+}
+
+/// The modifiers explicitly aimed at the object wired to `object_index`.
+fn scene_object_modifiers(
+    def: &EffectGraphDef,
+    scope: &[u32],
+    render_id: u32,
+    object_index: u32,
+) -> manifold_core::scene_modifier_edit::ObjectModifiers {
+    if def.scene_modifiers.is_empty() {
+        return Default::default();
+    }
+    scene_object_ref(def, scope, render_id, object_index)
+        .map(|object| manifold_core::scene_modifier_edit::object_modifiers(def, &object))
+        .unwrap_or_default()
 }
 
 /// The remove-light gesture (BUG-193): the inverse of

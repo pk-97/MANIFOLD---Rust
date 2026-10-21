@@ -44,6 +44,10 @@ manifold_node_engine::primitive! {
         speed: ScalarF32 optional,
         reset: ScalarF32 optional,
         air_drag: ScalarF32 optional,
+        air_resistance: ScalarF32 optional,
+        gravity_x: ScalarF32 optional,
+        gravity: ScalarF32 optional,
+        gravity_z: ScalarF32 optional,
     },
     outputs: {
         ticks: ScalarF32,
@@ -65,7 +69,7 @@ manifold_node_engine::primitive! {
         param("air_drag", "Air Drag", ParamType::Float, 1.0, (0.0, 4.0)),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Wire a trigger counter into reset to restart on a clip trigger. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
+    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, air_resistance, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels) and its Air Drag acts against the World's still air (air_resistance, 1/s), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
     examples: ["Swarm"],
     picker: { label: "Swarm Forces", category: Atom },
     summary: "Runs a swarm's simulation clock and lays the scene's forces over its box.",
@@ -83,6 +87,23 @@ manifold_node_engine::primitive! {
         impulses: Vec<[f32; 4]> = Vec::new(),
         impulses_dirty: bool = false,
     },
+}
+
+/// The field the swarm feels: the scene's forces at its Air Drag, plus the
+/// World's gravity (`gravity_x`, `gravity`, `gravity_z`, metres per second
+/// squared), a uniform push every particle falls under (D-109). Unwired,
+/// gravity is zero: a swarm outside a Physics World feels none.
+fn felt(ctx: &EffectNodeContext<'_, '_>) -> Result<Option<FieldValue>, String> {
+    let field = felt_field(ctx, "Swarm Forces")?;
+    let gravity = ["gravity_x", "gravity", "gravity_z"].map(|port| ctx.scalar_or_param(port, 0.0));
+    if gravity == [0.0; 3] {
+        return Ok(field);
+    }
+    let falling = FieldValue::uniform(gravity).map_err(|error| format!("Swarm Forces: gravity: {error}"))?;
+    match field {
+        Some(field) => field.sum(&falling).map(Some).map_err(|error| format!("Swarm Forces: {error}")),
+        None => Ok(Some(falling)),
+    }
 }
 
 impl TickSampled for SwarmForces {
@@ -148,7 +169,7 @@ impl SwarmForces {
 
     fn compute(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<[f32; OUTPUTS.len()], String> {
         let lattice = Self::lattice(ctx)?;
-        let field = felt_field(ctx, "Swarm Forces")?;
+        let field = felt(ctx)?;
         let frame = self.clock.advance(
             ctx.time.seconds.0,
             ctx.sim_step.interval.0,
@@ -267,6 +288,12 @@ impl Primitive for SwarmForces {
         Some("acceleration_field")
     }
 
+    /// A swarm follows every Physics World control as water does: Speed and
+    /// Reset (D-107), gravity (D-109) and still air (D-114).
+    fn world_control_inputs(&self) -> &'static [manifold_node_engine::primitive::WorldControlInput] {
+        &manifold_node_engine::primitive::WORLD_INPUTS
+    }
+
     fn clear_state(&mut self) {
         self.clock.restart();
     }
@@ -277,7 +304,7 @@ impl Primitive for SwarmForces {
         // advances time.
         if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
-            match felt_field(ctx, "Swarm Forces") {
+            match felt(ctx) {
                 Ok(field) => self.forces.observe_sample(ctx.time.seconds.0, field.as_ref()),
                 Err(error) => ctx.error(error),
             }
@@ -485,6 +512,33 @@ mod tests {
         let first = slow.frames[1];
         assert_eq!([first.get("field_min_x"), first.get("field_min_y"), first.get("field_min_z")], [-2.0, 0.0, -2.0]);
         assert_eq!(first.get("field_spacing"), 0.25);
+    }
+
+    /// World gravity is a uniform push on every lattice node, added to the
+    /// scene's forces, and the lattice follows a change to it mid-run
+    /// (D-109). Unwired, a swarm feels none.
+    #[test]
+    fn swarm_falls_under_world_gravity_and_follows_a_change() {
+        let step = SimStep::export(Seconds(TICK));
+        let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 17);
+        let laid = |field: &FieldValue| {
+            let mut values = vec![[0.0; 4]; 2 * lattice.node_count()];
+            lattice.fill_forces(&mut values, |x| field.sample_force(x)).unwrap();
+            values
+        };
+        let earth = FieldValue::uniform([0.0, -9.81, 0.0]).unwrap();
+        let moon = FieldValue::uniform([0.0, -1.62, 0.0]).unwrap();
+        let mut rig = Rig::new(None, step);
+        let first = rig.play(60.0, 0.25, 0.0, &[("gravity", -9.81)]);
+        assert!(!first.lattices.is_empty() && first.lattices.iter().all(|values| *values == laid(&earth)), "the swarm falls at g");
+        let changed = rig.play(60.0, 0.25, 0.25 + TICK, &[("gravity", -1.62)]);
+        assert_eq!(changed.lattices.last().unwrap(), &laid(&moon), "a gravity change reaches the next tick");
+
+        let pushed = Rig::new(Some(vortex), step).play(60.0, 0.25, 0.0, &[("gravity", -9.81)]);
+        assert_eq!(pushed.lattices[5], laid(&vortex(0.0).sum(&earth).unwrap()), "gravity adds to the scene forces");
+
+        let weightless = Rig::new(None, step).play(60.0, 0.25, 0.0, &[]);
+        assert!(weightless.lattices.iter().all(|values| values.iter().all(|node| *node == [0.0; 4])), "unwired gravity is zero");
     }
 
     /// The card's Speed is the clock's: half speed halves each tick's

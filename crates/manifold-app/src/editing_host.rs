@@ -968,7 +968,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
         }
         let commands: Vec<Box<dyn Command>> = lanes.into_iter().map(|(target, param_id, points)| {
-            Box::new(MoveAutomationPointCommand::for_group(target, param_id.as_ref(), points))
+            Box::new(MoveAutomationPointCommand::for_group_keeping_twins(target, param_id.as_ref(), points))
                 as Box<dyn Command>
         }).collect();
         self.project.stamp(crate::gesture_preview::touches_of(&commands));

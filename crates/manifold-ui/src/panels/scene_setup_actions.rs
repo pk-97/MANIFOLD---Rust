@@ -24,7 +24,7 @@ pub struct AddMenuItem {
 type Entry = (SceneGroup, String, Option<PanelAction>, Option<String>);
 
 /// The menu for `vm`, in display order: the entries of group `first`, then
-/// every other entry in the fixed order Object, Plane, Light, Water, Inflow,
+/// every other entry in the fixed order Object, Plane, Light, Water, Swarm, Inflow,
 /// Drain, Collider, the forces, Import Model. A fluid source goes into the
 /// water `selected` is or sits under, else the scene's only water.
 pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSelection>) -> Vec<AddMenuItem> {
@@ -41,6 +41,7 @@ pub fn add_menu(vm: &SceneSetupVm, first: SceneGroup, selected: Option<&SceneSel
         entry(SceneGroup::Objects, "Plane", insert(SceneTemplateKind::Plane, None)),
         entry(SceneGroup::Lighting, "Light", insert(SceneTemplateKind::Light, None)),
         entry(SceneGroup::Objects, "Water", insert(SceneTemplateKind::Water, None)),
+        entry(SceneGroup::Objects, "Swarm", insert(SceneTemplateKind::Swarm, None)),
     ];
     let water = source_water(vm, selected);
     for (kind, label) in [

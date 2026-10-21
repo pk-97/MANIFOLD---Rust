@@ -105,6 +105,12 @@
       "drag-automation-point",
       "toggle-lanes"
     ],
+    "crates/manifold-nodes-scene/src/node_graph/scene_templates.rs": [
+      "scene-swarm-add"
+    ],
+    "crates/manifold-ui/src/panels/scene_setup_actions.rs": [
+      "scene-swarm-add"
+    ],
     "crates/manifold-app/src/scene_view_copy.rs": [
       "scene-use-this-view"
     ],
@@ -113,6 +119,7 @@
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
       "scene-setup-add-object",
+      "scene-swarm-add",
       "scene-setup-light-intensity-drag",
       "scene-setup-add-fog-drag",
       "scene-setup-modifier-stack",
@@ -414,6 +421,7 @@
     "rack-wet-dry": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
     "scene-setup-add-object": "gltfscene",
+    "scene-swarm-add": "gltfscene",
     "scene-setup-empty-states": "audiovisualizers",
     "scene-setup-heldout-merge-snapshot": "gltfscene",
     "scene-setup-light-intensity-drag": "gltfscene",

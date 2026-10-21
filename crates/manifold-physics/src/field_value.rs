@@ -197,6 +197,33 @@ impl FieldValue {
         self.push_unary(Operation::AirDrag(air_drag))
     }
 
+    /// The field one consumer feels, the same rule for every consumer
+    /// (D-114): the scene's `forces` plus the Physics World's still air, the
+    /// air felt at the consumer's `air_drag`. Still air is air at rest felt
+    /// at `air_resistance` (1/s), so with no wind a body under gravity
+    /// reaches a terminal speed (Houdini's POP Drag). In wind the two mix by
+    /// their rates, as several winds do. At `air_resistance` 0 the forces are
+    /// felt exactly as without still air.
+    pub fn felt_in_still_air(
+        forces: Option<&Self>,
+        air_resistance: f32,
+        air_drag: f32,
+    ) -> Result<Option<Self>, PhysicsError> {
+        if !air_resistance.is_finite() || air_resistance < 0.0 {
+            return Err(PhysicsError::InvalidInput("air resistance must be finite and non-negative"));
+        }
+        let field = if air_resistance == 0.0 {
+            forces.cloned()
+        } else {
+            let still = Self::uniform([0.0; 3])?.air(air_resistance)?;
+            Some(match forces {
+                Some(forces) => forces.sum(&still)?,
+                None => still,
+            })
+        };
+        field.map(|field| field.with_air_drag(air_drag)).transpose()
+    }
+
     /// The field with every entry that became air replaced by nothing. Air
     /// zeroes its entry's push, and nothing after it turns drag back into
     /// push, so what is left samples as this field felt at Air Drag 0.
